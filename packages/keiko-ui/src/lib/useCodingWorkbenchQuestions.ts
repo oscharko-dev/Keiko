@@ -11,6 +11,7 @@ import {
 } from "react";
 import type {
   CodingWorkbenchRuntimeQuestionRequest,
+  CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -118,11 +119,17 @@ export function useCodingWorkbenchQuestions(
     epoch,
     runId,
     revisionRef,
-    refreshSnapshot,
     consumedRef,
     setState,
   });
-  useQuestionResync({ active, runState, runtimeEventCount, bumpEpoch });
+  useQuestionResync({
+    active,
+    runId,
+    runState,
+    runtimeEventCount,
+    questionsVisible: state.questions.length > 0,
+    bumpEpoch,
+  });
   const context: QuestionContext | null =
     active && runId !== undefined
       ? {
@@ -146,6 +153,7 @@ export function useCodingWorkbenchQuestions(
 }
 
 const RESYNC_DEBOUNCE_MS = 400;
+const QUESTION_VISIBILITY_RETRY_DELAYS_MS = [500, 1_500, 3_000] as const;
 
 /**
  * Question state changes are pushed only as content-free runtime events (a question raised or
@@ -154,22 +162,44 @@ const RESYNC_DEBOUNCE_MS = 400;
  */
 function useQuestionResync(input: {
   readonly active: boolean;
+  readonly runId: string | undefined;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly runtimeEventCount: number;
+  readonly questionsVisible: boolean;
   readonly bumpEpoch: () => void;
 }): void {
-  const { active, runState, runtimeEventCount, bumpEpoch } = input;
-  const seenRef = useRef({ count: runtimeEventCount, state: runState });
+  const { active, runId, runState, runtimeEventCount, questionsVisible, bumpEpoch } = input;
+  const questionsVisibleRef = useRef(questionsVisible);
+  questionsVisibleRef.current = questionsVisible;
+  const seenRef = useRef<
+    | {
+        readonly count: number;
+        readonly runId: string | undefined;
+        readonly state: CodingWorkbenchRuntimeStateName | undefined;
+      }
+    | undefined
+  >(undefined);
   useEffect(() => {
+    const previous = seenRef.current;
+    const activated =
+      active &&
+      runId !== undefined &&
+      ((previous === undefined && runtimeEventCount > 0) ||
+        (previous !== undefined && previous.runId !== runId));
     const changed =
-      seenRef.current.count !== runtimeEventCount || seenRef.current.state !== runState;
-    seenRef.current = { count: runtimeEventCount, state: runState };
+      activated ||
+      (previous !== undefined &&
+        previous.runId === runId &&
+        (previous.count !== runtimeEventCount || previous.state !== runState));
+    seenRef.current = { count: runtimeEventCount, runId, state: runState };
     if (!active || !changed) return undefined;
-    const timer = setTimeout(bumpEpoch, RESYNC_DEBOUNCE_MS);
+    const timer = setTimeout(() => {
+      if (!questionsVisibleRef.current) bumpEpoch();
+    }, RESYNC_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [active, runState, runtimeEventCount, bumpEpoch]);
+  }, [active, runId, runState, runtimeEventCount, bumpEpoch]);
 }
 
 function isActive(
@@ -199,55 +229,146 @@ interface ListingInput {
   readonly epoch: number;
   readonly runId: string | undefined;
   readonly revisionRef: RefObject<number>;
-  readonly refreshSnapshot: () => Promise<void>;
   readonly consumedRef: RefObject<Set<string>>;
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchQuestionsState>>;
 }
 
 function useQuestionListing(input: ListingInput): void {
-  const { active, consumedRef, epoch, refreshSnapshot, runId, revisionRef, setState, terminal } =
-    input;
+  const { active, consumedRef, epoch, runId, revisionRef, setState, terminal } = input;
+  const coordinatorRef = useRef<ListingCoordinator | null>(null);
+  const resyncRef = useRef({ epoch, runId });
   useEffect(() => {
     if (!active || runId === undefined) {
+      coordinatorRef.current = null;
       setState(terminal ? { ...EMPTY_STATE, status: "terminal" } : EMPTY_STATE);
       return;
     }
-    let disposed = false;
-    const controller = new AbortController();
-    setState((current) =>
-      current.status === "ready" ? current : { ...current, status: "loading", errorCode: null },
-    );
-    void (async (): Promise<void> => {
-      try {
-        // #2478: order every list behind the boot pairing attempt (resolves immediately when no
-        // attempt started), so a freshly opened window cannot race its own redemption into a
-        // stale unpaired state.
-        await codingAppSessionPairingSettled();
-        const response = await listCodingWorkbenchRuntimeQuestions(
-          runId,
-          {
-            requestId: newCodingWorkbenchRuntimeRequestId(),
-            expectedRevision: revisionRef.current,
-          },
-          controller.signal,
-        );
-        if (response.session === "unpaired") {
-          // #2478: the server answered before touching the run, so the revision did not advance —
-          // no snapshot re-anchor is needed; surface the honest re-pair state instead.
-          if (!disposed) setState({ status: "unpaired", questions: [], errorCode: null });
-          return;
-        }
-        if (!disposed) setState(listedState(response.questions, consumedRef));
-        await refreshSnapshot();
-      } catch (error) {
-        if (!disposed && !controller.signal.aborted) setState(failureState(error));
-      }
-    })();
-    return () => {
-      disposed = true;
-      controller.abort();
+    const coordinator: ListingCoordinator = {
+      controller: new AbortController(),
+      environment: { consumedRef, revisionRef, runId, setState },
+      inFlight: false,
+      queued: false,
     };
-  }, [active, consumedRef, epoch, refreshSnapshot, runId, revisionRef, setState, terminal]);
+    coordinatorRef.current = coordinator;
+    startQuestionListing(coordinator, false);
+    return () => {
+      coordinator.controller.abort();
+      if (coordinatorRef.current === coordinator) coordinatorRef.current = null;
+    };
+  }, [active, consumedRef, runId, revisionRef, setState, terminal]);
+  useEffect(() => {
+    const previous = resyncRef.current;
+    resyncRef.current = { epoch, runId };
+    if (!active || previous.runId !== runId || previous.epoch === epoch) return;
+    const coordinator = coordinatorRef.current;
+    if (coordinator !== null && coordinator.environment.runId === runId) {
+      startQuestionListing(coordinator, true);
+    }
+  }, [active, epoch, runId]);
+}
+
+interface ListingEnvironment {
+  readonly consumedRef: RefObject<Set<string>>;
+  readonly revisionRef: RefObject<number>;
+  readonly runId: string;
+  readonly setState: Dispatch<SetStateAction<CodingWorkbenchQuestionsState>>;
+}
+
+interface ListingCoordinator {
+  readonly controller: AbortController;
+  readonly environment: ListingEnvironment;
+  inFlight: boolean;
+  queued: boolean;
+}
+
+interface ActiveListingInput extends ListingEnvironment {
+  readonly controller: AbortController;
+  readonly retryEmpty: boolean;
+}
+
+function startQuestionListing(coordinator: ListingCoordinator, retryEmpty: boolean): void {
+  if (coordinator.controller.signal.aborted) return;
+  if (coordinator.inFlight) {
+    coordinator.queued = true;
+    return;
+  }
+  coordinator.inFlight = true;
+  coordinator.environment.setState((current) =>
+    current.status === "ready" ? current : { ...current, status: "loading", errorCode: null },
+  );
+  void runQuestionListing({
+    ...coordinator.environment,
+    controller: coordinator.controller,
+    retryEmpty,
+  }).then((empty) => finishQuestionListing(coordinator, empty));
+}
+
+function finishQuestionListing(coordinator: ListingCoordinator, empty: boolean): void {
+  coordinator.inFlight = false;
+  if (coordinator.controller.signal.aborted || !empty) {
+    coordinator.queued = false;
+    return;
+  }
+  const queued = coordinator.queued;
+  coordinator.queued = false;
+  if (queued) startQuestionListing(coordinator, true);
+}
+
+async function runQuestionListing(input: ActiveListingInput): Promise<boolean> {
+  const { controller, setState } = input;
+  try {
+    // #2478: order every list behind boot pairing so a newly opened window cannot race its own
+    // redemption into a stale unpaired state.
+    await codingAppSessionPairingSettled();
+    for (let attempt = 0; !controller.signal.aborted; attempt += 1) {
+      const response = await listQuestionAttempt(input);
+      if (controller.signal.aborted) return false;
+      if (response.session === "unpaired") {
+        setState({ status: "unpaired", questions: [], errorCode: null });
+        return false;
+      }
+      setState(listedState(response.questions, input.consumedRef));
+      if (response.questions.length > 0) return false;
+      const retryDelay = QUESTION_VISIBILITY_RETRY_DELAYS_MS[attempt];
+      if (!input.retryEmpty || retryDelay === undefined) return true;
+      await waitForQuestionVisibility(retryDelay, controller.signal);
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) setState(failureState(error));
+  }
+  return false;
+}
+
+function listQuestionAttempt(
+  input: ActiveListingInput,
+): Promise<CodingWorkbenchRuntimeQuestionsChannelPayload> {
+  return listCodingWorkbenchRuntimeQuestions(
+    input.runId,
+    {
+      requestId: newCodingWorkbenchRuntimeRequestId(),
+      expectedRevision: input.revisionRef.current,
+    },
+    input.controller.signal,
+  );
+}
+
+function waitForQuestionVisibility(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function listedState(

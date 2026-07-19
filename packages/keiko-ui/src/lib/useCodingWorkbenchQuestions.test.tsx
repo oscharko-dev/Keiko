@@ -5,6 +5,7 @@ import { ApiError } from "./api";
 import {
   answerCodingWorkbenchRuntimeQuestion,
   listCodingWorkbenchRuntimeQuestions,
+  newCodingWorkbenchRuntimeRequestId,
   rejectCodingWorkbenchRuntimeQuestion,
 } from "./coding-workbench-runtime-api";
 import { useCodingWorkbenchQuestions } from "./useCodingWorkbenchQuestions";
@@ -13,7 +14,7 @@ vi.mock("./coding-workbench-runtime-api", () => ({
   answerCodingWorkbenchRuntimeQuestion: vi.fn(),
   listCodingWorkbenchRuntimeQuestions: vi.fn(),
   rejectCodingWorkbenchRuntimeQuestion: vi.fn(),
-  newCodingWorkbenchRuntimeRequestId: (): string => "ui-req",
+  newCodingWorkbenchRuntimeRequestId: vi.fn((): string => "ui-req"),
 }));
 
 // #2478: the list route serves the channel-carried payload with the session facet of the caller's
@@ -42,8 +43,20 @@ async function flush(): Promise<void> {
   await act(async () => Promise.resolve());
 }
 
-// A stable identity: the input is re-created every render, but refreshSnapshot is an effect
-// dependency, so it must not change between renders or the listing effect would loop forever.
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve = (_value: T): void => undefined;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+// A stable identity keeps mutation refresh assertions independent from incidental rerenders.
 const stableRefresh = vi.fn(() => Promise.resolve());
 
 function activeInput(
@@ -55,7 +68,7 @@ function activeInput(
 describe("useCodingWorkbenchQuestions", () => {
   afterEach(() => vi.clearAllMocks());
 
-  it("lists the run's questions and re-anchors the snapshot afterwards", async () => {
+  it("lists the run's questions without refreshing the revision-stable read", async () => {
     const refreshSnapshot = vi.fn(() => Promise.resolve());
     vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(pending);
     const view = renderHook(() => useCodingWorkbenchQuestions(activeInput(refreshSnapshot)));
@@ -67,7 +80,7 @@ describe("useCodingWorkbenchQuestions", () => {
       { requestId: "ui-req", expectedRevision: 3 },
       expect.any(AbortSignal),
     );
-    expect(refreshSnapshot).toHaveBeenCalled();
+    expect(refreshSnapshot).not.toHaveBeenCalled();
     view.unmount();
   });
 
@@ -78,6 +91,8 @@ describe("useCodingWorkbenchQuestions", () => {
     vi.useFakeTimers();
     try {
       vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(emptyActive)
+        .mockResolvedValueOnce(emptyActive)
         .mockResolvedValueOnce(emptyActive)
         .mockResolvedValueOnce(pending);
       const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
@@ -91,7 +106,289 @@ describe("useCodingWorkbenchQuestions", () => {
         await vi.advanceTimersByTimeAsync(400);
       });
       await flush();
+      expect(view.result.current).toMatchObject({ status: "empty", questions: [] });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      await flush();
+      expect(view.result.current).toMatchObject({ status: "empty", questions: [] });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_500);
+      });
+      await flush();
       expect(view.result.current).toMatchObject({ status: "ready", questions: pending.questions });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(4);
+      expect(newCodingWorkbenchRuntimeRequestId).toHaveBeenCalledTimes(4);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(4);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces same-run signals without aborting an in-flight list", async () => {
+    vi.useFakeTimers();
+    try {
+      const inFlight = deferred<Awaited<ReturnType<typeof listCodingWorkbenchRuntimeQuestions>>>();
+      vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(emptyActive)
+        .mockReturnValueOnce(inFlight.promise)
+        .mockResolvedValueOnce(pending);
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: activeInput(),
+      });
+      await flush();
+      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      const inFlightSignal = vi.mocked(listCodingWorkbenchRuntimeQuestions).mock.calls[1]?.[2];
+
+      view.rerender({ ...activeInput(), runtimeEventCount: 2 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
+      expect(inFlightSignal?.aborted).toBe(false);
+
+      await act(async () => {
+        inFlight.resolve(emptyActive);
+        await Promise.resolve();
+      });
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      await flush();
+
+      expect(view.result.current).toMatchObject({ status: "ready", questions: pending.questions });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(3);
+      expect(inFlightSignal?.aborted).toBe(false);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an initially empty run one-shot without polling", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(emptyActive);
+      const view = renderHook(() => useCodingWorkbenchQuestions(activeInput()));
+      await flush();
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(1);
+
+      for (const delay of [400, 500, 1_500, 3_000]) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(delay);
+        });
+        await flush();
+      }
+      expect(view.result.current).toMatchObject({ status: "empty", questions: [] });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(1);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resyncs when an active run first projects with runtime activity", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(emptyActive)
+        .mockResolvedValueOnce(pending);
+      const view = renderHook(() =>
+        useCodingWorkbenchQuestions({ ...activeInput(), runtimeEventCount: 1 }),
+      );
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      await flush();
+
+      expect(view.result.current).toMatchObject({ status: "ready", questions: pending.questions });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resyncs when an inactive workbench activates without a retained runtime event", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(emptyActive)
+        .mockResolvedValueOnce(pending);
+      const inactive: Parameters<typeof useCodingWorkbenchQuestions>[0] = {
+        ...activeInput(),
+        runId: undefined,
+        revision: undefined,
+        runState: undefined,
+      };
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: inactive,
+      });
+      await flush();
+      expect(listCodingWorkbenchRuntimeQuestions).not.toHaveBeenCalled();
+
+      view.rerender(activeInput());
+      await flush();
+      expect(view.result.current).toMatchObject({ status: "empty", questions: [] });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      await flush();
+
+      expect(view.result.current).toMatchObject({ status: "ready", questions: pending.questions });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps an empty resync at three visibility retries", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(emptyActive);
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: activeInput(),
+      });
+      await flush();
+      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      await flush();
+      for (const delay of [500, 1_500, 3_000]) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(delay);
+        });
+        await flush();
+      }
+
+      expect(view.result.current).toMatchObject({ status: "empty", questions: [] });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(5);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels bounded retries when the run changes", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(emptyActive)
+        .mockResolvedValueOnce(emptyActive)
+        .mockResolvedValueOnce(pending);
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: activeInput(),
+      });
+      await flush();
+      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      await flush();
+
+      view.rerender({ ...activeInput(), runId: "run-2", runtimeEventCount: 0 });
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(3);
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenLastCalledWith(
+        "run-2",
+        expect.any(Object),
+        expect.any(AbortSignal),
+      );
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels bounded retries on unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(emptyActive);
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: activeInput(),
+      });
+      await flush();
+      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      await flush();
+      view.unmount();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops bounded retries when the app session is unpaired", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(emptyActive)
+        .mockResolvedValueOnce({ session: "unpaired", questions: [] });
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: activeInput(),
+      });
+      await flush();
+      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      await flush();
+
+      expect(view.result.current.status).toBe("unpaired");
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops bounded retries when a resync request fails", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(emptyActive)
+        .mockRejectedValueOnce(new TypeError("offline"));
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: activeInput(),
+      });
+      await flush();
+      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      await flush();
+
+      expect(view.result.current.status).toBe("offline");
       expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
       view.unmount();
     } finally {

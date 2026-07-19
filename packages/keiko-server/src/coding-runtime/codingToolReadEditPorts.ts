@@ -22,7 +22,10 @@ const MAX_READ_BYTES = 65_536;
 type RepositoryReadRequest = CodingToolActionOf<"read">;
 type EditorChangesetRequest = CodingToolActionOf<"edit">;
 
-type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action">;
+type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action"> &
+  Partial<Pick<EditorAgentHttpClient, "listSessions">>;
+
+const EDITOR_SESSION_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
 
 export interface CodingToolReadEditPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
@@ -42,6 +45,7 @@ interface EditorActionContext {
   readonly sessionId: string;
   readonly authorityRef: EditorAgentGovernedAuthorityReference;
   readonly origin: "agent";
+  readonly workspaceRoot?: string | undefined;
   readonly workspaceId?: string | undefined;
   readonly workspaceRootDigest?: string | undefined;
   readonly expiresAt?: string | undefined;
@@ -137,6 +141,7 @@ interface PreparedEdit {
   readonly action: EditorAgentAction;
   readonly leaseRequest: CodingRuntimeEditorMutationLeaseRequest | undefined;
   readonly signal: AbortSignal;
+  readonly workspaceRoot: string | undefined;
 }
 
 async function executeEdit(
@@ -148,13 +153,59 @@ async function executeEdit(
   const prepared = prepareEdit(deps, request, signal, mutationGuard);
   if (prepared === undefined) return { status: "failed" };
   try {
-    const result = await deps.editorAgentClient.action(prepared.action, prepared.signal);
+    const action = await bindLiveEditorSession(
+      deps.editorAgentClient,
+      prepared.action,
+      prepared.workspaceRoot,
+      prepared.signal,
+    );
+    if (action === undefined) {
+      discardMutationLease(deps, prepared.leaseRequest);
+      return { status: "failed" };
+    }
+    const result = await deps.editorAgentClient.action(action, prepared.signal);
     const completed = result.ok && editorStatusCompleted(result.value.result.status);
     if (!completed) discardMutationLease(deps, prepared.leaseRequest);
     return editOutcome(completed);
   } catch {
+    discardMutationLease(deps, prepared.leaseRequest);
     return { status: "failed" };
   }
+}
+
+async function bindLiveEditorSession(
+  client: EditorAgentActionClient,
+  action: EditorAgentAction,
+  workspaceRoot: string | undefined,
+  signal: AbortSignal,
+): Promise<EditorAgentAction | undefined> {
+  if (client.listSessions === undefined || workspaceRoot === undefined) return action;
+  for (let attempt = 0; !signal.aborted; attempt += 1) {
+    const listed = await client.listSessions(signal);
+    if (!listed.ok) return undefined;
+    const session = listed.value.sessions.find(
+      (candidate) => candidate.workspaceRoot === workspaceRoot,
+    );
+    if (session !== undefined) return { ...action, sessionId: session.sessionId };
+    const delay = EDITOR_SESSION_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined || !(await waitForEditorSession(delay, signal))) return undefined;
+  }
+  return undefined;
+}
+
+function waitForEditorSession(delayMs: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function prepareEdit(
@@ -172,7 +223,12 @@ function prepareEdit(
   const action = changesetAction(request, changeset, context);
   const leaseRequest = registerMutationLease(deps, action, context, binding, mutationGuard);
   if (binding !== undefined && leaseRequest === undefined) return undefined;
-  return { action, leaseRequest, signal: signal ?? new AbortController().signal };
+  return {
+    action,
+    leaseRequest,
+    signal: signal ?? new AbortController().signal,
+    workspaceRoot: context.workspaceRoot,
+  };
 }
 
 function validatedChangeset(

@@ -9,5 +9,10 @@
     "incremental": true,
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "include": ["coding-runtime-2385-server.mts", "coding-runtime-2386-server.mts"]
+  "include": [
+    "coding-runtime-2385-server.mts",
+    "coding-runtime-2386-server.mts",
+    "coding-runtime-2483-real-binary-server.mts",
+    "coding-runtime-server-shared.mts"
+  ]
 }

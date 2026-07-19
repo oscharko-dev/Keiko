@@ -597,6 +597,33 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     void deps.dispose?.();
   });
 
+  it("exposes the content-free runtime mutation lease broker for qualified production runs", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-runtime-lease-broker-"),
+      env: {},
+      uiDbPath: join(tmp("ui-runtime-lease-broker-"), "keiko-ui.db"),
+      codingRuntimeStartConfirmationConsumer: { consume: () => undefined },
+      codingRuntimeProductionPorts: {
+        backend: {
+          createRun: (): never => {
+            throw new Error("backend must not be reached");
+          },
+        },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("editor must not be reached")),
+        },
+      },
+    });
+
+    expect(deps.codingRuntimeHostQualified).toBe(true);
+    expect(deps.runtimeMutationLease).toBeDefined();
+    void deps.dispose?.();
+  });
+
   it("wires production Local Knowledge encryption for heading metadata and retrieval citations", async () => {
     const uiDir = tmp("ui-lk-");
     const evidenceDir = tmp("ev-lk-");

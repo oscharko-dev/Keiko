@@ -74,6 +74,7 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
       sessionId: `runtime-${input.authorityRef.runId}`,
       authorityRef: input.authorityRef,
       origin: "agent",
+      workspaceRoot: input.workspaceRoot,
       workspaceId: input.liveFacts().binding.workspaceId,
       workspaceRootDigest: input.liveFacts().binding.workspaceRootDigest,
       expiresAt: input.authorityExpiresAt,

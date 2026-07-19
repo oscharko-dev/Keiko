@@ -204,7 +204,10 @@ import {
   type WorkspaceIndexProvider,
 } from "./workspace-index-provider.js";
 import type { AutonomousDeliveryConnectorExecutor } from "./coding-runtime/autonomousDeliveryPolicy.js";
-import type { CodingRuntimeEditorMutationLeasePort } from "./coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
+import {
+  createCodingRuntimeEditorMutationLeaseBroker,
+  type CodingRuntimeEditorMutationLeasePort,
+} from "./coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshotStore,
@@ -2912,6 +2915,9 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     codingRuntimeEvidenceAggregator,
     codingRuntimeDeploymentCeiling: codingRuntimeCeiling,
+    ...(args.options.codingRuntimeResolver === undefined && runtimeComposition.runtimeMutationLease
+      ? { runtimeMutationLease: runtimeComposition.runtimeMutationLease }
+      : {}),
     ...(codingRuntimeControlPlane
       ? {
           codingRuntimeOrchestrator: codingRuntimeControlPlane.orchestrator,
@@ -2984,6 +2990,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       try {
         await codingRuntimeControlPlane?.orchestrator.shutdown();
       } finally {
+        runtimeComposition.dispose?.();
         codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
         await shutdownHostLspPool();
         await dapProduction?.dispose();
@@ -3015,6 +3022,8 @@ function resolveCodingRuntimeDeploymentCeiling(
 interface ProductionRuntimeComposition {
   readonly resolver: ProductionCodingRuntimeResolver | undefined;
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
+  readonly dispose?: (() => void) | undefined;
 }
 
 interface ProductionRuntimePortResolution {
@@ -3096,6 +3105,7 @@ function productionRuntimeResolver(
   const confirmationConsumer =
     args.options.codingRuntimeStartConfirmationConsumer ??
     (resolution.activated ? createAuthenticatedSessionStartConfirmationPlane() : undefined);
+  const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
   const resolver = createProductionCodingRuntimeResolver({
     workspaceAuthority: {
       workspaceLifecycle,
@@ -3105,8 +3115,17 @@ function productionRuntimeResolver(
     },
     ...resolution.ports,
     verificationRunner,
+    runtimeMutationLeaseBroker,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
+  return qualifiedProductionRuntimeComposition(resolver, readiness, runtimeMutationLeaseBroker);
+}
+
+function qualifiedProductionRuntimeComposition(
+  resolver: ProductionCodingRuntimeResolver,
+  readiness: OpenCodeGatewayReadinessRegistry,
+  runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+): ProductionRuntimeComposition {
   return {
     resolver: {
       resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {
@@ -3117,6 +3136,10 @@ function productionRuntimeResolver(
       },
     },
     unavailableReason: undefined,
+    runtimeMutationLease: runtimeMutationLeaseBroker,
+    dispose: (): void => {
+      runtimeMutationLeaseBroker.dispose();
+    },
   };
 }
 

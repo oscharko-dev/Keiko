@@ -228,8 +228,8 @@ export function submitCodingWorkbenchRuntimeFollowUp(
 
 /**
  * List the run's required questions over the authenticated app-session channel (#2478). The server
- * advances its own revision on each list, so callers must re-anchor to a fresh snapshot before the
- * next revision-bound operation. An unpaired window receives the constant content-free
+ * keeps the run revision unchanged because listing is a read. An unpaired window receives the
+ * constant content-free
  * `{ session: "unpaired", questions: [] }` projection instead of an error.
  */
 export function listCodingWorkbenchRuntimeQuestions(

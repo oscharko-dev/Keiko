@@ -4,6 +4,7 @@ import {
   EDITOR_AGENT_SCHEMA_VERSION,
   type EditorAgentAction,
   type EditorAgentChangeset,
+  type EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 
@@ -24,6 +25,24 @@ function changeset(): EditorAgentChangeset {
   return {
     patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
     files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+  };
+}
+
+function editorSession(sessionId: string, workspaceRoot: string): EditorAgentSessionSnapshot {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    sessionId,
+    windowId: "editor",
+    workspaceRoot,
+    activePaneId: "pane-1",
+    panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+    dirtyFiles: [],
+    activeFile: "src/a.ts",
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: 1,
   };
 }
 
@@ -226,6 +245,148 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       adapterSignal,
     );
     expect(adapterSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("waits boundedly for the live Editor session in the governed workspace", async () => {
+    vi.useFakeTimers();
+    try {
+      const listSessions = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, value: { sessions: [] } })
+        .mockResolvedValueOnce({
+          ok: true,
+          value: { sessions: [editorSession("browser-session", "/managed/repo")] },
+        });
+      const action = vi.fn(() =>
+        Promise.resolve({
+          ok: true as const,
+          value: {
+            result: {
+              schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+              actionId: "edit-1",
+              sessionId: "browser-session",
+              status: "queued" as const,
+            },
+          },
+        }),
+      );
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action, listSessions },
+        resolveEditorActionContext: () => ({
+          sessionId: "runtime-run-1",
+          authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+          origin: "agent",
+          workspaceRoot: "/managed/repo",
+        }),
+      });
+
+      const outcome = ports.editorChangeset.execute(
+        { action: "edit", actionId: "edit-1", idempotencyKey: "edit-key", changeset: changeset() },
+        undefined,
+        { check: (): true => true },
+      );
+      await vi.advanceTimersByTimeAsync(500);
+
+      await expect(outcome).resolves.toEqual({ status: "completed" });
+      expect(listSessions).toHaveBeenCalledTimes(2);
+      expect(action).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "browser-session" }),
+        expect.any(AbortSignal),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed after the bounded session window when only another workspace is live", async () => {
+    vi.useFakeTimers();
+    try {
+      const listSessions = vi.fn(() =>
+        Promise.resolve({
+          ok: true as const,
+          value: { sessions: [editorSession("foreign-session", "/other/repo")] },
+        }),
+      );
+      const action = vi.fn();
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action, listSessions },
+        resolveEditorActionContext: () => ({
+          sessionId: "runtime-run-1",
+          authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+          origin: "agent",
+          workspaceRoot: "/managed/repo",
+        }),
+      });
+
+      const outcome = ports.editorChangeset.execute(
+        { action: "edit", actionId: "edit-1", idempotencyKey: "edit-key", changeset: changeset() },
+        undefined,
+        { check: (): true => true },
+      );
+      await vi.advanceTimersByTimeAsync(30_500);
+
+      await expect(outcome).resolves.toEqual({ status: "failed" });
+      expect(listSessions).toHaveBeenCalledTimes(7);
+      expect(action).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops session acquisition on a list failure or caller abort", async () => {
+    const action = vi.fn();
+    const failedList = vi.fn(() =>
+      Promise.resolve({
+        ok: false as const,
+        error: { kind: "route" as const, code: "UNAVAILABLE", message: "redacted" },
+      }),
+    );
+    const failedPorts = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action, listSessions: failedList },
+      resolveEditorActionContext: () => ({
+        sessionId: "runtime-run-1",
+        authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+        origin: "agent",
+        workspaceRoot: "/managed/repo",
+      }),
+    });
+
+    await expect(
+      failedPorts.editorChangeset.execute(
+        { action: "edit", actionId: "edit-1", idempotencyKey: "edit-key", changeset: changeset() },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed" });
+
+    const controller = new AbortController();
+    const emptyList = vi.fn(() => Promise.resolve({ ok: true as const, value: { sessions: [] } }));
+    const abortedPorts = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action, listSessions: emptyList },
+      resolveEditorActionContext: () => ({
+        sessionId: "runtime-run-2",
+        authorityRef: { runId: "run-2", envelopeDigest: DIGEST },
+        origin: "agent",
+        workspaceRoot: "/managed/repo",
+      }),
+    });
+    const aborted = abortedPorts.editorChangeset.execute(
+      { action: "edit", actionId: "edit-2", idempotencyKey: "edit-key-2", changeset: changeset() },
+      controller.signal,
+      { check: (): true => true },
+    );
+    await vi.waitFor(() => {
+      expect(emptyList).toHaveBeenCalledOnce();
+    });
+    controller.abort();
+
+    await expect(aborted).resolves.toEqual({ status: "failed" });
+    expect(failedList).toHaveBeenCalledOnce();
+    expect(action).not.toHaveBeenCalled();
   });
 
   it("rejects malformed changesets or a revoked final guard before queueing an editor action", async () => {

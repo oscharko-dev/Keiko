@@ -3,6 +3,7 @@ import type { EditorAgentGovernedAuthorityReference } from "@oscharko-dev/keiko-
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 
 const MAX_LIVE_LEASES = 64;
+const MAX_ACTIVE_LEASE_PORTS = 64;
 
 export interface CodingRuntimeEditorMutationLeaseRequest {
   readonly authorityRef: EditorAgentGovernedAuthorityReference;
@@ -17,6 +18,11 @@ export interface CodingRuntimeEditorMutationLeaseRequest {
 export interface CodingRuntimeEditorMutationLeasePort {
   readonly matches: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
   readonly claim: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
+}
+
+export interface CodingRuntimeEditorMutationLeaseBroker extends CodingRuntimeEditorMutationLeasePort {
+  readonly attach: (port: CodingRuntimeEditorMutationLeasePort) => (() => void) | undefined;
+  readonly dispose: () => void;
 }
 
 export interface CodingRuntimeEditorMutationLeaseRegistration {
@@ -41,8 +47,64 @@ export interface CodingRuntimeEditorMutationLeaseCoordinatorDeps {
   readonly cancelPendingByAuthorityRun: (runId: string) => number;
 }
 
+export function createCodingRuntimeEditorMutationLeaseBroker(): CodingRuntimeEditorMutationLeaseBroker {
+  const ports = new Set<CodingRuntimeEditorMutationLeasePort>();
+  let disposed = false;
+  return {
+    matches: (request): boolean => uniqueMatchingPort(ports, request, disposed) !== undefined,
+    claim: (request): boolean => claimMatchingPort(ports, request, disposed),
+    attach: (port): (() => void) | undefined => {
+      if (disposed || ports.size >= MAX_ACTIVE_LEASE_PORTS || ports.has(port)) return undefined;
+      ports.add(port);
+      let attached = true;
+      return (): void => {
+        if (!attached) return;
+        attached = false;
+        ports.delete(port);
+      };
+    },
+    dispose: (): void => {
+      disposed = true;
+      ports.clear();
+    },
+  };
+}
+
 interface LeaseRecord extends CodingRuntimeEditorMutationLeaseRegistration {
   readonly key: string;
+}
+
+function claimMatchingPort(
+  ports: ReadonlySet<CodingRuntimeEditorMutationLeasePort>,
+  request: CodingRuntimeEditorMutationLeaseRequest,
+  disposed: boolean,
+): boolean {
+  const port = uniqueMatchingPort(ports, request, disposed);
+  if (port === undefined) return false;
+  try {
+    return port.claim(request);
+  } catch {
+    return false;
+  }
+}
+
+function uniqueMatchingPort(
+  ports: ReadonlySet<CodingRuntimeEditorMutationLeasePort>,
+  request: CodingRuntimeEditorMutationLeaseRequest,
+  disposed: boolean,
+): CodingRuntimeEditorMutationLeasePort | undefined {
+  if (disposed) return undefined;
+  let matched: CodingRuntimeEditorMutationLeasePort | undefined;
+  try {
+    for (const port of ports) {
+      if (!port.matches(request)) continue;
+      if (matched !== undefined) return undefined;
+      matched = port;
+    }
+  } catch {
+    return undefined;
+  }
+  return matched;
 }
 
 export function createCodingRuntimeEditorMutationLeaseCoordinator(

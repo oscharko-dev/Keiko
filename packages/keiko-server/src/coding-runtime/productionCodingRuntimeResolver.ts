@@ -13,7 +13,10 @@ import {
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
-import { createCodingRuntimeEditorMutationLeaseCoordinator } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
+import {
+  createCodingRuntimeEditorMutationLeaseCoordinator,
+  type CodingRuntimeEditorMutationLeaseBroker,
+} from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   codingRuntimeStartConfirmationClaim,
   isConsumedRuntimeStartConfirmation,
@@ -97,6 +100,8 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly verificationRunner: ProductionManagedWorktreeToolInput["verificationRunner"];
   readonly confirmationConsumer?: CodingRuntimeStartConfirmationConsumer | undefined;
   readonly authorityRegistry?: EditorAgentAuthorityRegistry | undefined;
+  readonly runtimeMutationLeaseBroker?:
+    Pick<CodingRuntimeEditorMutationLeaseBroker, "attach"> | undefined;
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
@@ -254,6 +259,7 @@ function createRunRecord(
     onRuntimeEvent,
   );
   validateBackendLaunch(backend.launch, context);
+  const detachLease = attachRuntimeMutationLease(input, leases, invocationRegistry);
   return {
     manager: backend.manager,
     launch: backend.launch,
@@ -263,12 +269,36 @@ function createRunRecord(
       runtimeAuthorityLive(input, context, minted, authority),
     ),
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
-    dispose: async (): Promise<void> => {
-      leases.dispose();
-      invocationRegistry.dispose();
-      await backend.dispose?.();
-    },
+    dispose: createRunDisposer(detachLease, leases, invocationRegistry, backend),
   };
+}
+
+function createRunDisposer(
+  detachLease: (() => void) | undefined,
+  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
+  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
+  backend: QualifiedProductionRuntimeRun,
+): () => Promise<void> {
+  return async (): Promise<void> => {
+    detachLease?.();
+    leases.dispose();
+    invocationRegistry.dispose();
+    await backend.dispose?.();
+  };
+}
+
+function attachRuntimeMutationLease(
+  input: ProductionCodingRuntimeResolverInput,
+  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
+  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
+): (() => void) | undefined {
+  const broker = input.runtimeMutationLeaseBroker;
+  if (broker === undefined) return undefined;
+  const detach = broker.attach(leases.lease);
+  if (detach !== undefined) return detach;
+  leases.dispose();
+  invocationRegistry.dispose();
+  throw new Error("runtime-mutation-lease-broker-unavailable");
 }
 
 function createLeaseCoordinator(

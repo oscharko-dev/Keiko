@@ -1,28 +1,31 @@
-// Scripted-engine entry for the #2386 real-authority Code-task journey. Shared composition lives in
-// coding-runtime-server-shared.mts so the real-binary variant can reuse the same browser journey.
+// Real OpenCode 1.17.17 entry for #2483. Runtime resolution is deliberately absent from this
+// entry: the shared harness enables the macOS dev lane and buildUiHandlerDeps must discover the
+// staged approved payload through production discovery and production composition.
 
 import {
   AUTHORITY_APP_SESSION_LAUNCHER_SECRET,
-  AUTHORITY_DEFAULT_UI_PORT,
   AUTHORITY_EDITED_CONTENT,
   AUTHORITY_ORIGINAL_CONTENT,
   AUTHORITY_TARGET_RELATIVE_PATH,
   authorityManagedWorkspaceRoot,
   authorityRepositoryRoot,
-  authorityStateDir,
 } from "../support/coding-runtime-2386-authority.js";
+import {
+  REAL_BINARY_DEFAULT_UI_PORT,
+  realBinaryStateDir,
+} from "../support/coding-runtime-2483-real-binary.js";
 import { runCodingRuntimeJourneyServer } from "./coding-runtime-server-shared.mjs";
 
 await runCodingRuntimeJourneyServer({
-  fixtureId: "authority-2386",
-  fixtureLabel: "Authority 2386",
-  runtime: "scripted",
+  fixtureId: "real-binary-2483",
+  fixtureLabel: "Real binary 2483",
+  runtime: "production-discovery",
   includeQuestion: true,
-  defaultPort: AUTHORITY_DEFAULT_UI_PORT,
+  defaultPort: REAL_BINARY_DEFAULT_UI_PORT,
   originalContent: AUTHORITY_ORIGINAL_CONTENT,
   editedContent: AUTHORITY_EDITED_CONTENT,
   targetRelativePath: AUTHORITY_TARGET_RELATIVE_PATH,
-  stateDir: authorityStateDir,
+  stateDir: realBinaryStateDir,
   repositoryRoot: authorityRepositoryRoot,
   managedRoot: authorityManagedWorkspaceRoot,
   launcherSessionSecret: AUTHORITY_APP_SESSION_LAUNCHER_SECRET,

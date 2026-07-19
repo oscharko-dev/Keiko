@@ -16,6 +16,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
+  GatewayRequest,
   GatewayStreamChunk,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -23,6 +24,7 @@ import { applyPatch, inspectPatch } from "@oscharko-dev/keiko-tools";
 
 import { createOpenCodeGatewayReadinessRegistry } from "../../coding-sidecar-gateway.js";
 import { createFakeSessionPairingPort } from "../../coding-app-session/_support.js";
+import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../coding-app-session/launcherSessionPairingPort.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../../deps.js";
 import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
 import type { VerificationRunnerManager } from "../../editor/verificationRunner.js";
@@ -152,8 +154,14 @@ export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps 
 export interface DiscoveryBffDepsInput {
   readonly stateRoot: string;
   readonly workspaceLifecycle: WorkspaceLifecycleService;
+  readonly workspaceProvisioning?:
+    NonNullable<Parameters<typeof buildUiHandlerDeps>[0]["workspaceProvisioning"]> | undefined;
+  readonly workspaceReconciliation?:
+    NonNullable<Parameters<typeof buildUiHandlerDeps>[0]["workspaceReconciliation"]> | undefined;
   readonly script: ScriptState;
   readonly uiPort: number;
+  readonly launcherSessionSecret?: string | undefined;
+  readonly observeGatewayRequest?: ((request: GatewayRequest) => void) | undefined;
 }
 
 /**
@@ -173,21 +181,39 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
     KEIKO_UI_PORT: String(input.uiPort),
     KEIKO_CODING_RUNTIME_DEV_LANE: "1",
     KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery",
+    ...(input.launcherSessionSecret === undefined
+      ? {}
+      : { [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: input.launcherSessionSecret }),
   };
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(input.stateRoot, "evidence"),
     env,
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
+    ...(input.workspaceProvisioning === undefined
+      ? {}
+      : { workspaceProvisioning: input.workspaceProvisioning }),
     workspaceLifecycle: input.workspaceLifecycle,
+    ...(input.workspaceReconciliation === undefined
+      ? {}
+      : { workspaceReconciliation: input.workspaceReconciliation }),
     codingRuntimeServerPrincipal: () => "functional-operator",
-    sessionPairingPort: createFakeSessionPairingPort(),
+    ...(input.launcherSessionSecret === undefined
+      ? { sessionPairingPort: createFakeSessionPairingPort() }
+      : {}),
   });
-  return withScriptedModelSeams(deps, input.script);
+  return withScriptedModelSeams(deps, input.script, input.observeGatewayRequest);
 }
 
-function withScriptedModelSeams(deps: UiHandlerDeps, script: ScriptState): UiHandlerDeps {
-  const chat = (): Promise<NormalizedResponse> => Promise.resolve(scriptedResponse(script));
+function withScriptedModelSeams(
+  deps: UiHandlerDeps,
+  script: ScriptState,
+  observeGatewayRequest?: (request: GatewayRequest) => void,
+): UiHandlerDeps {
+  const chat = (request: GatewayRequest): Promise<NormalizedResponse> => {
+    observeGatewayRequest?.(request);
+    return Promise.resolve(scriptedResponse(script));
+  };
   return {
     ...deps,
     config: functionalGatewayConfig(),
@@ -195,11 +221,11 @@ function withScriptedModelSeams(deps: UiHandlerDeps, script: ScriptState): UiHan
     gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
-      async function* (): AsyncIterable<GatewayStreamChunk> {
+      async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
         // A real model streams its assistant content as deltas before the terminal chunk; the
         // gateway's SSE synthesis needs them to forward the content to OpenCode. Emitting only a
         // done chunk left the real binary with no assistant text to persist.
-        const response = await chat();
+        const response = await chat(request);
         if (response.content.length > 0) yield { type: "delta" as const, token: response.content };
         yield { type: "done" as const, response };
       },
