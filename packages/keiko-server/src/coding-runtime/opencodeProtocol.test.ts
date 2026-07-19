@@ -143,7 +143,7 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     });
   });
 
-  it("normalizes only the reviewed exact session.created.1 sync bridge event", () => {
+  it("normalizes reviewed sync bridge envelopes as content-free pull triggers", () => {
     const syncEvent = {
       type: "session.created.1",
       id: "evt_created",
@@ -152,24 +152,42 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       data: { sessionID: "ses_1", info: { id: "ses_1", title: "private title" } },
     };
     const frame = (payload: unknown): string => `data: ${JSON.stringify({ payload })}\n\n`;
-
-    expect(parseOpenCodeSse(frame({ type: "sync", id: "evt_created", syncEvent }))).toEqual({
+    const trigger = (id: string): unknown => ({
       ok: true,
-      value: [
-        {
-          event: "message",
-          data: { id: "evt_created", type: "sync", properties: {} },
-        },
-      ],
+      value: [{ event: "message", data: { id, type: "sync", properties: {} } }],
     });
+
+    expect(parseOpenCodeSse(frame({ type: "sync", id: "evt_created", syncEvent }))).toEqual(
+      trigger("evt_created"),
+    );
+    // Every other durable sync envelope stays a data-blind pull trigger — the private payload
+    // never survives normalization; row admission happens behind POST /sync/history.
+    const updated = {
+      type: "sync",
+      id: "evt_updated",
+      syncEvent: {
+        ...syncEvent,
+        id: "evt_updated",
+        type: "message.updated.1",
+        seq: 7,
+        data: { secret: "PRIVATE_SYNC_BODY" },
+      },
+    };
+    expect(parseOpenCodeSse(frame(updated))).toEqual(trigger("evt_updated"));
+    // The real v1.17.17 wraps session-scoped frames with routing keys.
+    expect(
+      parseOpenCodeSse(
+        `data: ${JSON.stringify({ directory: "/w", project: "global", payload: updated })}\n\n`,
+      ),
+    ).toEqual(trigger("evt_updated"));
+    expect(JSON.stringify(parseOpenCodeSse(frame(updated)))).not.toContain("PRIVATE_SYNC_BODY");
     for (const payload of [
       { type: "sync", id: "evt_mismatch", syncEvent },
       { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, extra: true } },
-      {
-        type: "sync",
-        id: "evt_created",
-        syncEvent: { ...syncEvent, type: "session.updated.1" },
-      },
+      { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, type: "" } },
+      { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, seq: -1 } },
+      { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, aggregateID: "prj_1" } },
+      { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, seq: 1 } },
       { type: "sync", id: "evt_created", syncEvent, extra: true },
     ]) {
       expect(parseOpenCodeSse(frame(payload)).ok).toBe(false);
