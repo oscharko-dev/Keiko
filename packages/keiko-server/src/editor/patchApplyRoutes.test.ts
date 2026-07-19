@@ -29,6 +29,10 @@ import type {
   PostApplyVerificationPreflightPort,
   PostApplyVerificationPort,
 } from "./postApplyVerification.js";
+import type {
+  EditorLocalHistoryCaptureInput,
+  EditorLocalHistoryStore,
+} from "./localHistory/localHistoryStore.js";
 
 let root: string;
 let store: UiStore;
@@ -62,6 +66,7 @@ function deps(
     env?: Record<string, string | undefined>;
     evidenceStore?: EvidenceStore;
     aiSettings?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
+    editorLocalHistoryStore?: EditorLocalHistoryStore | undefined;
   } = {},
 ): UiHandlerDeps {
   const aiSettings = input.aiSettings ?? { patchApply: true };
@@ -71,6 +76,7 @@ function deps(
     evidenceStore: input.evidenceStore ?? createInMemoryEvidenceStore(),
     env: input.env ?? {},
     editorSettingsControl: editorSettingsControl(aiSettings),
+    editorLocalHistoryStore: input.editorLocalHistoryStore,
   } as unknown as UiHandlerDeps;
 }
 
@@ -340,6 +346,32 @@ describe("POST /api/editor/patch-apply — scope and conflict guardrails", () =>
     );
     expect(wire(result).status).toBe("applied");
     expect(await readFile(join(root, "src/a.test.ts"), "utf8")).toBe("it('x', () => {});\n");
+  });
+
+  it("captures the final agent-applied file with the agent-apply origin", async () => {
+    const captures: EditorLocalHistoryCaptureInput[] = [];
+    const history = {
+      capture: (
+        input: EditorLocalHistoryCaptureInput,
+      ): ReturnType<EditorLocalHistoryStore["capture"]> => {
+        captures.push(input);
+        return { entry: {} as never, coalesced: false, prunedEntryCount: 0 };
+      },
+    } as unknown as EditorLocalHistoryStore;
+    const result = await handleEditorPatchApply(
+      postContext(body()),
+      deps({ env: ENABLED_NO_VERIFY, editorLocalHistoryStore: history }),
+      options(),
+    );
+
+    expect(wire(result).status).toBe("applied");
+    expect(captures).toHaveLength(1);
+    expect(captures[0]).toMatchObject({
+      realRoot: root,
+      relativePath: "src/a.test.ts",
+      content: "it('x', () => {});\n",
+      origin: "agent-apply",
+    });
   });
 
   it("rejects a write-conflict when the file changed after the patch was proposed", async () => {

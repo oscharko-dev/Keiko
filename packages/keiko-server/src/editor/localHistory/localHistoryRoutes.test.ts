@@ -1,0 +1,229 @@
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildRedactor, createInMemoryUiStore } from "../../index.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "../../coding-app-session/_support.js";
+import { createCodingAppSessionChannel } from "../../coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "../../coding-app-session/sessionCookie.js";
+import { createSessionRegistry } from "../../coding-app-session/sessionRegistry.js";
+import type { UiHandlerDeps } from "../../deps.js";
+import { API_ROUTES, type RouteContext } from "../../routes.js";
+import type { UiStore } from "../../store/index.js";
+import {
+  captureEditorLocalHistorySafely,
+  resolveEditorLocalHistoryRoot,
+} from "./localHistoryCapture.js";
+import {
+  createEditorLocalHistoryStore,
+  type EditorLocalHistoryStore,
+} from "./localHistoryStore.js";
+import {
+  handleDeleteEditorLocalHistory,
+  handleListEditorLocalHistory,
+  handlePinEditorLocalHistory,
+  handleReadEditorLocalHistory,
+} from "./localHistoryRoutes.js";
+
+const VAULT_KEY = Buffer.alloc(32, 0x29).toString("base64");
+let root: string;
+let stateDir: string;
+let store: UiStore;
+let history: EditorLocalHistoryStore;
+let deps: UiHandlerDeps;
+let sessionCookie: string;
+
+function context(
+  method: string,
+  path: string,
+  params: Record<string, string> = {},
+  body?: unknown,
+  withSession = true,
+): RouteContext {
+  const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body), "utf8")];
+  const req = Readable.from(chunks) as unknown as IncomingMessage;
+  (req as { method?: string }).method = method;
+  req.headers = withSession ? { cookie: sessionCookie } : {};
+  return {
+    req,
+    res: {} as unknown as ServerResponse,
+    params,
+    url: new URL(path, "http://localhost"),
+  };
+}
+
+beforeEach(() => {
+  root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-route-root-")));
+  stateDir = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-route-state-")));
+  mkdirSync(join(root, "src"));
+  writeFileSync(join(root, "src", "app.ts"), "checkpoint marker\n", "utf8");
+  store = createInMemoryUiStore();
+  store.createProject(root, "fixture");
+  history = createEditorLocalHistoryStore({
+    stateDir,
+    env: { KEIKO_EDITOR_LOCAL_HISTORY_KEY: VAULT_KEY },
+  });
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new Error("local-history route pairing failed");
+  sessionCookie = `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
+  deps = {
+    store,
+    redactor: buildRedactor({}),
+    editorLocalHistoryStore: history,
+    codingAppSessionChannel: channel,
+  } as unknown as UiHandlerDeps;
+});
+
+afterEach(() => {
+  store.close();
+  rmSync(root, { recursive: true, force: true });
+  rmSync(stateDir, { recursive: true, force: true });
+});
+
+function capture(): string {
+  const nowMs = Date.now();
+  captureEditorLocalHistorySafely({
+    deps,
+    realRoot: root,
+    relativePath: "src/app.ts",
+    absolutePath: join(root, "src", "app.ts"),
+    content: "checkpoint marker\n",
+    origin: "user-save",
+    nowMs,
+  });
+  const identity = resolveEditorLocalHistoryRoot(deps, root);
+  return history.list(identity, "src/app.ts", nowMs + 1)[0]?.entryRef ?? "missing";
+}
+
+describe("editor local-history routes", () => {
+  it("registers the list, read, pin, and delete route contract", () => {
+    const routes = API_ROUTES.filter((route) =>
+      route.pattern.startsWith("/api/editor/local-history"),
+    );
+    expect(routes.map((route) => [route.method, route.pattern])).toEqual([
+      ["GET", "/api/editor/local-history"],
+      ["GET", "/api/editor/local-history/:entryRef"],
+      ["PATCH", "/api/editor/local-history/:entryRef"],
+      ["DELETE", "/api/editor/local-history/:entryRef"],
+    ]);
+  });
+
+  it("lists, reads, pins, unpins, and deletes one authenticated file checkpoint", async () => {
+    const entryRef = capture();
+    const query = `?root=${encodeURIComponent(root)}&path=src/app.ts`;
+    const listed = await handleListEditorLocalHistory(
+      context("GET", `/api/editor/local-history${query}`),
+      deps,
+    );
+    expect(listed).toMatchObject({ status: 200, body: { entries: [{ entryRef }] } });
+
+    const entryQuery = `?root=${encodeURIComponent(root)}`;
+    const routeParams = { entryRef };
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}${entryQuery}`, routeParams),
+      deps,
+    );
+    expect(read).toMatchObject({
+      status: 200,
+      body: { entry: { entryRef, origin: "user-save" }, content: "checkpoint marker\n" },
+    });
+
+    const pinned = await handlePinEditorLocalHistory(
+      context("PATCH", `/api/editor/local-history/${entryRef}${entryQuery}`, routeParams, {
+        pinned: true,
+      }),
+      deps,
+    );
+    expect(pinned).toMatchObject({ status: 200, body: { entry: { pinned: true } } });
+
+    const unpinned = await handlePinEditorLocalHistory(
+      context("PATCH", `/api/editor/local-history/${entryRef}${entryQuery}`, routeParams, {
+        pinned: false,
+      }),
+      deps,
+    );
+    expect(unpinned).toMatchObject({ status: 200, body: { entry: { pinned: false } } });
+
+    const deleted = await handleDeleteEditorLocalHistory(
+      context("DELETE", `/api/editor/local-history/${entryRef}${entryQuery}`, routeParams),
+      deps,
+    );
+    expect(deleted).toEqual({ status: 200, body: { deleted: true } });
+    const missing = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}${entryQuery}`, routeParams),
+      deps,
+    );
+    expect(missing).toMatchObject({ status: 404, body: { error: { code: "ENTRY_NOT_FOUND" } } });
+  });
+
+  it("keeps route failures content-free", async () => {
+    const entryRef = capture();
+    const result = await handlePinEditorLocalHistory(
+      context(
+        "PATCH",
+        `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`,
+        { entryRef },
+        { pinned: "checkpoint marker" },
+      ),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(JSON.stringify(result.body)).not.toContain("checkpoint marker");
+  });
+
+  it("returns content-free projections before any lookup without an app session", async () => {
+    const entryRef = capture();
+    const listed = await handleListEditorLocalHistory(
+      context("GET", "/api/editor/local-history?root=/not-observable", {}, undefined, false),
+      deps,
+    );
+    const read = await handleReadEditorLocalHistory(
+      context(
+        "GET",
+        `/api/editor/local-history/${entryRef}?root=/not-observable`,
+        { entryRef },
+        undefined,
+        false,
+      ),
+      deps,
+    );
+    const pin = await handlePinEditorLocalHistory(
+      context(
+        "PATCH",
+        `/api/editor/local-history/${entryRef}?root=/not-observable`,
+        { entryRef },
+        undefined,
+        false,
+      ),
+      deps,
+    );
+    const deleted = await handleDeleteEditorLocalHistory(
+      context(
+        "DELETE",
+        `/api/editor/local-history/${entryRef}?root=/not-observable`,
+        { entryRef },
+        undefined,
+        false,
+      ),
+      deps,
+    );
+
+    expect(listed).toEqual({ status: 200, body: { session: "unpaired", entries: [] } });
+    expect(read).toMatchObject({ status: 404, body: { error: { code: "ENTRY_NOT_FOUND" } } });
+    expect(pin).toEqual(read);
+    expect(deleted).toEqual(read);
+    expect(
+      `${JSON.stringify(listed.body)}${JSON.stringify(read.body)}${JSON.stringify(pin.body)}${JSON.stringify(deleted.body)}`,
+    ).not.toContain("checkpoint marker");
+  });
+});
