@@ -1086,13 +1086,21 @@ function startFacadeExecution(
 // the error class and a fixed machine message only, keyed to the action id for correlation. The
 // class label comes from the shared `contentFreeErrorClass` hardening in diagnostics-log, so the
 // mutable-`Error.name` defense lives in exactly one place.
+// `actionId` is request content (parseCodingToolRequest bounds it to a non-empty string ≤512
+// bytes only), so it rides on the redaction-safe diagnostic solely as a bounded machine token:
+// the `tool:<callId>` production shape passes, prose/whitespace/overlength degrade to a marker.
+const SAFE_ACTION_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/;
+
 function emitFacadeStartDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
   error: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
-    correlationId: actionId ?? "tool-bridge-unparsed-action",
+    correlationId:
+      actionId !== undefined && SAFE_ACTION_CORRELATION_ID.test(actionId)
+        ? actionId
+        : "tool-bridge-unparsed-action",
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.tool-bridge",
     source: "opencode-runtime-composition.start-facade",

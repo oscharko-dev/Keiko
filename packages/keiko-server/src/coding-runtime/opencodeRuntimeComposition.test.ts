@@ -1630,6 +1630,42 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  it("degrades a prose-shaped actionId to the unparsed marker in the diagnostic", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const facade: CodingToolFacade = {
+      execute: vi.fn(() => {
+        throw new Error("facade sync death");
+      }),
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: JSON.stringify({
+            action: "read",
+            actionId: "please leak this user text",
+            idempotencyKey: "idempotency-hostile-action",
+            relativePath: "src/index.ts",
+          }),
+        }),
+      ).resolves.toMatchObject({ status: 502 });
+      expect(records).toEqual([
+        expect.objectContaining({ correlationId: "tool-bridge-unparsed-action" }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("please leak this user text");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("aborts delayed governed work when the client disconnects", async () => {
     let observedSignal: AbortSignal | undefined;
     let release: (() => void) | undefined;
