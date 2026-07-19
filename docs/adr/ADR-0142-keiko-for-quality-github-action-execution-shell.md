@@ -9,6 +9,16 @@ remains the canonical producer until the Action passes the live-probe equivalenc
 [`../qa/keiko-for-quality.md`](../qa/keiko-for-quality.md). This ADR records the decision and ships
 the proof-of-concept; the scope, cron, and liveness children of Epic #2504 complete the migration.
 
+**Cutover executed 2026-07-19.** All six live-probe conditions were proven on live pull requests
+(ledger: [`../qa/keiko-for-quality-action-evaluation.md`](../qa/keiko-for-quality-action-evaluation.md)
+"Live-probe gate results"). The Action carries the canonical check name and dashboard marker with
+the opt-in label gate disabled, under the documented `GITHUB_TOKEN` fallback (the aggregate is
+advisory and non-required, so App-bound producer identity is an upgrade path, not a precondition;
+adding `KFQ_APP_ID`/`KFQ_PRIVATE_KEY_PKCS8` restores it without code changes). The Worker cron,
+webhook, D1 database, and deployment are retired; rollback stays `wrangler deploy` from
+[`../../infrastructure/keiko-for-quality/`](../../infrastructure/keiko-for-quality/) plus reverting
+the workflow identity block.
+
 ## Amends
 
 This decision narrowly refines the operational runtime note in
