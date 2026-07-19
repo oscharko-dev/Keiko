@@ -405,7 +405,7 @@ describe("reconcileClaimEntailment", () => {
       scriptedJudge(),
     );
     expect(twoBad.unentailed.length).toBeGreaterThanOrEqual(oneBad.unentailed.length);
-    expect(twoBad.unentailed.length).toBe(2);
+    expect(twoBad.unentailed).toHaveLength(2);
   });
 
   it("honours the per-answer claim budget", async () => {

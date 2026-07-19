@@ -171,7 +171,7 @@ function ConfirmRow({
   readonly onCancel: () => void;
 }): ReactNode {
   return (
-    <div className="lkd-manual-refresh-confirm" role="group">
+    <div className="lkd-manual-refresh-confirm">
       <span>{t("manualPodRefresh.confirm.body")}</span>
       <button type="button" className="lk-btn lk-btn-ghost" onClick={onCancel}>
         {t("manualPodRefresh.confirm.cancel")}

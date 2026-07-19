@@ -54,7 +54,7 @@ describe("createGatewayManualFetcher — success + content classification", () =
       fetchImpl: fetchFake(200, { headers: { "content-type": "text/html" }, body }).fetchImpl,
     }).fetchManualPage(HTTP_TARGET, { maxBytes: 49 });
     expect(over.ok && over.truncated).toBe(true);
-    if (over.ok) expect(over.bytes.length).toBe(49);
+    if (over.ok) expect(over.bytes).toHaveLength(49);
   });
 
   it("passes the content type through unchanged (non-html classification is the runner's job)", async () => {
@@ -76,7 +76,7 @@ describe("createGatewayManualFetcher — success + content classification", () =
       OPTIONS,
     );
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.bytes.length).toBe(0);
+    if (result.ok) expect(result.bytes).toHaveLength(0);
   });
 });
 
@@ -119,7 +119,7 @@ describe("createGatewayManualFetcher — fail-closed matrix", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.redirected).toBe(true);
-      expect(result.bytes.length).toBe(0);
+      expect(result.bytes).toHaveLength(0);
     }
   });
 

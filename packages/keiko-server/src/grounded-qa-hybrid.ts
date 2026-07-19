@@ -1758,10 +1758,21 @@ async function answerAndAssemble(
   );
   ensureNotCancelled(ctx.signal);
   const [userMessage, assistantMessage] = persistHybridGroundedExchange(ctx, assistant.content);
-  return finalizeHybridAnswer(ctx, store, meta, selected, limits, assistant, reranker, {
-    userMessageId: userMessage.id,
-    assistantMessageId: assistantMessage.id,
+  return finalizeHybridAnswer(ctx, store, meta, {
+    selected,
+    limits,
+    assistant,
+    reranker,
+    ids: { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   });
+}
+
+interface HybridFinalizeInput {
+  readonly selected: readonly SelectedCandidate<HybridPayload>[];
+  readonly limits: ReturnType<typeof currentGroundingLimits>;
+  readonly assistant: GroundedAnswerResult;
+  readonly reranker: GroundedRerankerDiagnostics;
+  readonly ids: { readonly userMessageId: string; readonly assistantMessageId: string };
 }
 
 // Assemble the hybrid answer, run the entailment stage over its folder evidence (#2563), and attach
@@ -1770,12 +1781,9 @@ async function finalizeHybridAnswer(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
   meta: AnswerMeta,
-  selected: readonly SelectedCandidate<HybridPayload>[],
-  limits: ReturnType<typeof currentGroundingLimits>,
-  assistant: GroundedAnswerResult,
-  reranker: GroundedRerankerDiagnostics,
-  ids: { readonly userMessageId: string; readonly assistantMessageId: string },
+  input: HybridFinalizeInput,
 ): Promise<RouteResult> {
+  const { selected, limits, assistant, reranker, ids } = input;
   const folders = meta.folderResult.retrieved;
   const answer = assembleHybridAnswer(
     ctx,
