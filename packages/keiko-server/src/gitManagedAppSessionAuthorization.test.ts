@@ -178,22 +178,26 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it("never serves a paired caller's cached /api/git/summary to an unpaired caller (#2640)", async () => {
+  it("never serves a paired caller's cached /api/git/summary to an unpaired caller (#2640)", async (): Promise<void> => {
     // Regression: the summary response cache used to key only on the raw `root` query value and the
     // runner options, not on the app-session read authority. A paired caller populated the entry
     // and, within the 2s TTL, an unpaired caller received the paired projection instead of the
     // content-free unavailable one. The cache MUST partition by session so cross-session leakage
-    // is impossible without weakening the unpaired-caller answer.
-    const runner = vi
-      .fn<GitProcessRunner>()
-      .mockResolvedValueOnce(ok(`${managedWorktree}\n`))
-      .mockResolvedValueOnce(ok("# branch.head main\0# branch.ab +0 -0\0"))
-      .mockResolvedValueOnce(ok(""))
-      .mockResolvedValueOnce(ok(""));
+    // is impossible without weakening the unpaired-caller answer. The runner mock dispatches on the
+    // git subcommand rather than positional call order so behavior-preserving refactors of
+    // handleGitSummary's internal call sequence do not silently break this regression.
+    const runner = vi.fn<GitProcessRunner>((args) => {
+      if (args.includes("--show-toplevel")) return Promise.resolve(ok(`${managedWorktree}\n`));
+      if (args.includes("--porcelain=v2")) {
+        return Promise.resolve(ok("# branch.head main\0# branch.ab +0 -0\0"));
+      }
+      return Promise.resolve(ok(""));
+    });
     const dependencies = deps(runner);
     const path = `/api/git/summary?root=${encodeURIComponent(managedWorktree)}`;
 
     const paired = await handleGitSummary(route(path, pair(dependencies)), dependencies);
+    const runnerCallsAfterPaired = runner.mock.calls.length;
     const unpaired = await handleGitSummary(route(path), dependencies);
 
     expect(paired).toMatchObject({ status: 200, body: { available: true, branch: "main" } });
@@ -201,7 +205,11 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
       status: 200,
       body: { available: false, remotes: [], stagedCount: 0, unstagedCount: 0 },
     });
-    expect((unpaired.body as { branch?: unknown }).branch).toBeUndefined();
+    expect(unpaired.body).not.toHaveProperty("branch");
+    // The unpaired call must not have invoked the runner at all (either via cache-hit under the
+    // leak, or via resolveRepository's short-circuit under the fix). This bonus signal guards
+    // future refactors that might unwire the short-circuit path.
+    expect(runner.mock.calls).toHaveLength(runnerCallsAfterPaired);
   });
 
   it("leaves ordinary roots on the existing unauthenticated generic Git posture", async () => {

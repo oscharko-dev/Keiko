@@ -97,7 +97,16 @@ function cachedGitSummary(deps: UiHandlerDeps, key: string): GitSummaryCacheEntr
 
 function storeGitSummary(deps: UiHandlerDeps, key: string, value: Promise<RouteResult>): void {
   const byKey = gitSummaryCache.get(deps) ?? new Map<string, GitSummaryCacheEntry>();
-  byKey.set(key, { expiresAt: Date.now() + GIT_SUMMARY_CACHE_TTL_MS, value });
+  const now = Date.now();
+  // Opportunistic sweep on write. Reads only expire the exact key they look up, so partitioning
+  // the cache by session (issue #2640) — which multiplies key cardinality — would otherwise let
+  // one-shot entries linger past their TTL until the deps instance dies. The sweep is bounded by
+  // the current map size and only ever runs on the write path, so it stays proportional to real
+  // traffic.
+  for (const [existingKey, entry] of byKey) {
+    if (entry.expiresAt <= now) byKey.delete(existingKey);
+  }
+  byKey.set(key, { expiresAt: now + GIT_SUMMARY_CACHE_TTL_MS, value });
   gitSummaryCache.set(deps, byKey);
 }
 
