@@ -185,6 +185,37 @@ export function MultiRootEditorHost({
   updateCfgRef.current = updateCfg;
   useRemovedRootDisposal(manifest);
   useEffect(() => setSessions(parsedSessions), [parsedSessions]);
+  // openEditorFile targets an existing editor window by writing root/file/openFiles/layoutJson into
+  // its cfg. Per-root sessions take precedence over cfg, so once a root had a session that request
+  // was silently dropped and "open in editor" from search, Problems, history or an agent proposal
+  // did nothing. Adopt the request into the target root's session, then clear it from cfg so it is
+  // consumed exactly once and cannot fight later edits in that root.
+  const openRequestFile = stringValue(cfg, "file");
+  const openRequestRoot = stringValue(cfg, "root");
+  useEffect(() => {
+    if (openRequestFile === undefined || openRequestRoot === undefined) return;
+    const target = manifestRef.current.roots.find(
+      (candidate) => candidate.canonicalRoot === openRequestRoot,
+    );
+    if (target === undefined) return;
+    const existing = sessionsRef.current.get(target.rootRef);
+    if (existing === undefined || legacyLayoutJson === undefined) return;
+    if (existing.layoutJson === legacyLayoutJson) return;
+    const next = new Map(sessionsRef.current);
+    next.set(target.rootRef, {
+      rootRef: target.rootRef,
+      root: target.canonicalRoot,
+      layoutJson: legacyLayoutJson,
+    });
+    sessionsRef.current = next;
+    setSessions(next);
+    updateCfgRef.current({
+      rootSessionsJson: serializeEditorRootSessions(next, manifestRef.current, target.rootRef),
+      file: undefined,
+      openFiles: undefined,
+      layoutJson: undefined,
+    });
+  }, [legacyLayoutJson, openRequestFile, openRequestRoot]);
   useEffect(() => {
     if (sessionsJson !== undefined || parsedSessions.size === 0) return;
     updateCfgRef.current({

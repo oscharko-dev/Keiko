@@ -115,6 +115,20 @@ function Harness({ current }: { readonly current: WorkspaceManifest }): ReactNod
   const view = workspace(current);
   return (
     <I18nProvider>
+      <button
+        type="button"
+        onClick={() =>
+          setCfg((value) => ({
+            ...value,
+            root: "/repo-a",
+            file: "src/opened.ts",
+            openFiles: ["src/opened.ts"],
+            layoutJson: "layout:/repo-a:opened",
+          }))
+        }
+      >
+        Request external open
+      </button>
       <MultiRootEditorHost
         manifest={current}
         workspace={view}
@@ -143,6 +157,22 @@ describe("MultiRootEditorHost", () => {
 
     expect(screen.getByTestId("editor-/repo-a")).toHaveTextContent("Dirty buffer");
     expect(screen.getByTestId("editor-/repo-a")).toHaveTextContent("layout:/repo-a:changed");
+  });
+
+  it("adopts an external open request into the target root's session exactly once", async () => {
+    // Regression: per-root sessions took precedence over cfg, so once a root had a session the
+    // root/file/layoutJson patch openEditorFile writes was ignored and "open in editor" from
+    // search, Problems, local history or an agent proposal silently did nothing.
+    const user = userEvent.setup();
+    render(<Harness current={manifest()} />);
+
+    // A session now exists for /repo-a, and the user has moved it away from the initial layout.
+    await user.click(screen.getByRole("button", { name: "Change layout" }));
+    expect(screen.getByTestId("editor-/repo-a")).toHaveTextContent("layout:/repo-a:changed");
+
+    await user.click(screen.getByRole("button", { name: "Request external open" }));
+
+    expect(screen.getByTestId("editor-/repo-a")).toHaveTextContent("layout:/repo-a:opened");
   });
 
   it("forcibly disposes models only after a root leaves the manifest and remains axe-clean", async () => {
