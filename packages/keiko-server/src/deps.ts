@@ -1688,18 +1688,18 @@ export function reconcileTaskWorkspacesAtStartup(
   service: WorkspaceReconciliationService | undefined,
 ): void {
   if (service === undefined) return;
-  // `service.reconcile()` is typed as always returning a Promise, but the call itself (property
-  // lookup + invocation) can still throw synchronously for a non-conforming implementation (e.g. a
-  // test double). Isolate that from the Promise-rejection path below so each failure mode is
-  // handled exactly once.
-  let pending: ReturnType<WorkspaceReconciliationService["reconcile"]>;
+  // Construction must never fail because of reconciliation, so BOTH failure modes are swallowed
+  // here and each is still handled exactly once: `.catch` absorbs the Promise rejection, and the
+  // surrounding `try` absorbs a synchronous throw from the call itself (property lookup +
+  // invocation), which a non-conforming implementation (e.g. a test double) can still raise even
+  // though `reconcile()` is typed as always returning a Promise. Attaching `.catch` at the call
+  // site rather than after the `try` keeps the promise from ever floating inside it
+  // (typescript:S4822).
   try {
-    pending = service.reconcile();
+    void service.reconcile().catch(() => undefined);
   } catch {
-    // construction must never fail because of reconciliation.
     return;
   }
-  void pending.catch(() => undefined);
 }
 
 function seedInitialProject(
