@@ -2877,7 +2877,7 @@ function activityAwareWorkspaceLifecycle(
   };
 }
 
-// eslint-disable-next-line complexity, max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
+// eslint-disable-next-line max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime: DapRuntimeReference = {
     current: args.options.dapDebug,
@@ -2909,13 +2909,10 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
           workspaceLifecycle: args.bundle.workspaceLifecycle,
           serverPrincipal:
             args.options.codingRuntimeServerPrincipal ??
-            ((): string => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
+            DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID,
           ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
         })
       : undefined;
-  // ADR-0141: the authenticated app-session channel is always composed. Its pairing authority is
-  // injected first (the CI fake), else the launcher-bound production port resolved from the
-  // environment; absent authority fails closed. Production leaves the content source absent until W1.5.
   const codingAppSessionChannel = createCodingAppSessionChannel({
     registry: createSessionRegistry(),
     pairingPort:
@@ -2928,6 +2925,21 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     args.bundle.workspaceLifecycle,
     codingRuntimeControlPlane?.safeActivityProjection,
   );
+  const codingRuntimeControlPlaneDeps = buildCodingRuntimeControlPlaneDeps(
+    codingRuntimeControlPlane,
+    runtimeComposition.unavailableReason,
+  );
+  const runtimeMutationLeaseDep = buildRuntimeMutationLeaseDependency(
+    args.options,
+    runtimeComposition,
+  );
+  const dapDebugDep = dapRuntime.current === undefined ? {} : { dapDebug: dapRuntime.current };
+  const workspaceLifecycleDep =
+    workspaceLifecycle === undefined ? {} : { workspaceLifecycle };
+  const memoryDeniedCategoryMatchersDep =
+    args.options.memoryDeniedCategoryMatchers === undefined
+      ? {}
+      : { memoryDeniedCategoryMatchers: args.options.memoryDeniedCategoryMatchers };
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
     evidenceStore: args.evidenceStore,
@@ -2942,43 +2954,8 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     codingRuntimeEvidenceAggregator,
     codingRuntimeDeploymentCeiling: codingRuntimeCeiling,
-    ...(args.options.codingRuntimeResolver === undefined && runtimeComposition.runtimeMutationLease
-      ? { runtimeMutationLease: runtimeComposition.runtimeMutationLease }
-      : {}),
-    ...(codingRuntimeControlPlane
-      ? {
-          codingRuntimeOrchestrator: codingRuntimeControlPlane.orchestrator,
-          codingRuntimeEventHub: codingRuntimeControlPlane.eventHub,
-          codingRuntimeHostQualified: codingRuntimeControlPlane.runtimeHostQualified,
-          ...(codingRuntimeControlPlane.safeActivityProjection
-            ? { codingSafeActivityProjection: codingRuntimeControlPlane.safeActivityProjection }
-            : {}),
-          ...(codingRuntimeControlPlane.runtimeHostQualified
-            ? {}
-            : {
-                codingRuntimeUnavailableReason:
-                  runtimeComposition.unavailableReason ?? "runtime-unqualified",
-              }),
-          ...(codingRuntimeControlPlane.cancellationRegistry
-            ? {
-                codingSidecarGatewayCancellationRegistry:
-                  codingRuntimeControlPlane.cancellationRegistry,
-              }
-            : {}),
-          ...(codingRuntimeControlPlane.runtimeCapabilityAuthenticator
-            ? {
-                runtimeCapabilityAuthenticator:
-                  codingRuntimeControlPlane.runtimeCapabilityAuthenticator,
-              }
-            : {}),
-          ...(codingRuntimeControlPlane.openCodeGatewayReadinessRegistry
-            ? {
-                openCodeGatewayReadinessRegistry:
-                  codingRuntimeControlPlane.openCodeGatewayReadinessRegistry,
-              }
-            : {}),
-        }
-      : {}),
+    ...runtimeMutationLeaseDep,
+    ...codingRuntimeControlPlaneDeps,
     codingSidecarGatewayEvidenceAggregator: {
       record: ({ runId, outcome }): void => {
         codingRuntimeEvidenceAggregator.observe(runId, {
@@ -2991,9 +2968,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...autonomousDeliveryFields(args.options),
     ...atlassianConnectorCredentialFields(args),
     redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
-    ...(args.options.memoryDeniedCategoryMatchers === undefined
-      ? {}
-      : { memoryDeniedCategoryMatchers: args.options.memoryDeniedCategoryMatchers }),
+    ...memoryDeniedCategoryMatchersDep,
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,
     preferredProjectPath: args.bundle.preferredProjectPath,
@@ -3011,11 +2986,11 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       runtimeStateDir: dirname(args.resolvedUiDbPath),
       env: args.options.env,
     }),
-    ...(dapRuntime.current === undefined ? {} : { dapDebug: dapRuntime.current }),
+    ...dapDebugDep,
     ...peripherals,
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
     ...optionalPersistenceServices(args.bundle),
-    ...(workspaceLifecycle === undefined ? {} : { workspaceLifecycle }),
+    ...workspaceLifecycleDep,
     dispose: async (): Promise<void> => {
       try {
         await codingRuntimeControlPlane?.orchestrator.shutdown();
@@ -3030,6 +3005,58 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       }
     },
   };
+}
+
+type CodingRuntimeControlPlaneDeps =
+  Partial<
+    Pick<
+      UiHandlerDeps,
+      | "codingRuntimeOrchestrator"
+      | "codingRuntimeEventHub"
+      | "codingRuntimeHostQualified"
+      | "codingSafeActivityProjection"
+      | "codingRuntimeUnavailableReason"
+      | "codingSidecarGatewayCancellationRegistry"
+      | "runtimeCapabilityAuthenticator"
+      | "openCodeGatewayReadinessRegistry"
+    >
+  >;
+
+function buildCodingRuntimeControlPlaneDeps(
+  controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+  unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined,
+): CodingRuntimeControlPlaneDeps {
+  if (controlPlane === undefined) return {};
+  const deps: CodingRuntimeControlPlaneDeps = {
+    codingRuntimeOrchestrator: controlPlane.orchestrator,
+    codingRuntimeEventHub: controlPlane.eventHub,
+    codingRuntimeHostQualified: controlPlane.runtimeHostQualified,
+  };
+  if (controlPlane.safeActivityProjection !== undefined) {
+    deps.codingSafeActivityProjection = controlPlane.safeActivityProjection;
+  }
+  if (!controlPlane.runtimeHostQualified) {
+    deps.codingRuntimeUnavailableReason = unavailableReason ?? "runtime-unqualified";
+  }
+  if (controlPlane.cancellationRegistry !== undefined) {
+    deps.codingSidecarGatewayCancellationRegistry = controlPlane.cancellationRegistry;
+  }
+  if (controlPlane.runtimeCapabilityAuthenticator !== undefined) {
+    deps.runtimeCapabilityAuthenticator = controlPlane.runtimeCapabilityAuthenticator;
+  }
+  if (controlPlane.openCodeGatewayReadinessRegistry !== undefined) {
+    deps.openCodeGatewayReadinessRegistry = controlPlane.openCodeGatewayReadinessRegistry;
+  }
+  return deps;
+}
+
+function buildRuntimeMutationLeaseDependency(
+  options: BuildHandlerDepsOptions,
+  runtimeComposition: ReturnType<typeof productionRuntimeResolver>,
+): Pick<UiHandlerDeps, "runtimeMutationLease"> | Record<never, never> {
+  if (options.codingRuntimeResolver !== undefined) return {};
+  if (runtimeComposition.runtimeMutationLease === undefined) return {};
+  return { runtimeMutationLease: runtimeComposition.runtimeMutationLease };
 }
 
 export const KEIKO_CODING_DEPLOYMENT_CEILING_ENV = "KEIKO_CODING_DEPLOYMENT_CEILING";
