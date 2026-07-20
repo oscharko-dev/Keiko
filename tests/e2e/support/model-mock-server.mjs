@@ -126,7 +126,18 @@ function bufferedCompletion(res, rawRequest) {
 // real model gateway, with a byte-reproducible vector instead of a provider call: same input always
 // yields the same vector, so cosine similarity stays meaningful and the run is repeatable on any
 // host without credentials.
-const EMBEDDING_DIMENSIONS = Number(process.env.KEIKO_E2E_EMBEDDING_DIMENSIONS ?? "16");
+// Validated, not just coerced: Number("") is 0, Number("abc") is NaN, and either one turns
+// `new Array(EMBEDDING_DIMENSIONS)` into an empty array or a RangeError far from the typo that
+// caused it. A verification aid that misconfigures itself silently is worse than one that refuses.
+const EMBEDDING_DIMENSIONS = (() => {
+  const raw = process.env.KEIKO_E2E_EMBEDDING_DIMENSIONS;
+  if (raw === undefined || raw === "") return 16;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 4096) {
+    throw new Error(`KEIKO_E2E_EMBEDDING_DIMENSIONS must be an integer in 1..4096, got ${raw}`);
+  }
+  return parsed;
+})();
 
 function deterministicEmbedding(input) {
   const vector = new Array(EMBEDDING_DIMENSIONS).fill(0);
@@ -143,7 +154,10 @@ function deterministicEmbedding(input) {
 function embeddingsResponse(res, raw) {
   let parsed = {};
   try {
-    parsed = JSON.parse(raw || "{}");
+    const value = JSON.parse(raw || "{}");
+    // JSON.parse succeeds on "null", "42" and "[]" too, and reading .input off null throws. Only
+    // a plain object can carry the request fields; anything else falls through to the empty body.
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) parsed = value;
   } catch {
     // Malformed body → treat as one empty input so the response shape stays valid.
   }

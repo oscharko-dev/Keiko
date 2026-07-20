@@ -231,6 +231,12 @@ export function isCodeSymbolDefinitionLine(line: string): boolean {
 // The scan aborts on the deadline/cancellation signal mid-file rather than only between
 // emitted units. `emitCodeSections` still reports the stop as a diagnostic on its first
 // iteration, so the truncated anchor list never reaches a caller as a complete parse.
+//
+// The collected anchor count is what is handed to `shouldStop`, not a literal 0: every anchor
+// becomes at most one unit, so once there are maxUnitsPerDocument of them the rest of the file
+// cannot contribute anything the caller will ever see. Passing 0 made the unit cap unreachable
+// during the pre-scan, leaving a pathological file free to grow the anchor list to one entry per
+// definition line before any limit applied.
 function symbolAnchors(
   text: string,
   options: ParserOptions,
@@ -239,7 +245,12 @@ function symbolAnchors(
   const anchors: SymbolAnchor[] = [];
   const lines = codeLines(text);
   for (let index = 0; index < lines.length; index += 1) {
-    if (index % SYMBOL_SCAN_DEADLINE_STRIDE === 0 && shouldStop(startedAt, options, 0).stop) break;
+    if (
+      index % SYMBOL_SCAN_DEADLINE_STRIDE === 0 &&
+      shouldStop(startedAt, options, anchors.length).stop
+    ) {
+      break;
+    }
     const line = lines[index];
     if (line === undefined) continue;
     const label = codeSymbolLabel(line.text);

@@ -217,9 +217,11 @@ jobs:
         # Not an npm dependency: sqlite-vec publishes an invalid SPDX license string, which both the
         # dependency-review policy and check:workspace-supply-chain reject — the latter by design has
         # no exception mechanism. Fetched here and verified against a pinned SHA-256 instead, the
-        # same way the Sonar Scanner CLI is obtained below. Without it the vector-index suite asserts
-        # its fail-closed fallback rather than skipping, so this step adds real-binary coverage and
-        # never gates the run.
+        # same way the Sonar Scanner CLI is obtained below. Without the binary the vector-index suite
+        # asserts its fail-closed fallback rather than skipping, so this step adds real-binary
+        # coverage. It does gate: a failed download or a checksum mismatch exits nonzero and fails
+        # the job, which is the intended behaviour — a tampered artifact must stop the run, not
+        # silently downgrade it to fallback coverage. Hosts with no published asset return success.
         run: npm run provision:sqlite-vec
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}

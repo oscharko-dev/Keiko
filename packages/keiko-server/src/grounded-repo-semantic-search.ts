@@ -141,6 +141,11 @@ function canonicalRoot(fs: WorkspaceFs, root: string): string {
   }
 }
 
+function compareOpaqueIds(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 function matchingRepositorySources(
   store: KnowledgeStore,
   fs: WorkspaceFs,
@@ -149,6 +154,10 @@ function matchingRepositorySources(
 ): readonly { readonly capsule: KnowledgeCapsule; readonly source: KnowledgeSource }[] {
   const expectedRoot = canonicalRoot(fs, repositoryRoot);
   const matches: { capsule: KnowledgeCapsule; source: KnowledgeSource }[] = [];
+  // Sorted below with a code-unit comparison, not localeCompare: the caller takes the FIRST match
+  // as the pod to search, so this ordering picks which repository pod answers a question. Locale
+  // collation is host- and ICU-dependent, which would let two machines with identical stores
+  // resolve the same repository root to different pods.
   for (const capsule of listCapsules(store)) {
     if (capsule.embeddingModelIdentity.modelId !== modelId) continue;
     for (const source of listCapsuleSources(store, capsule.id)) {
@@ -162,8 +171,8 @@ function matchingRepositorySources(
   }
   return matches.sort(
     (left, right) =>
-      String(left.capsule.id).localeCompare(String(right.capsule.id)) ||
-      String(left.source.id).localeCompare(String(right.source.id)),
+      compareOpaqueIds(String(left.capsule.id), String(right.capsule.id)) ||
+      compareOpaqueIds(String(left.source.id), String(right.source.id)),
   );
 }
 

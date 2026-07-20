@@ -560,6 +560,11 @@ function querySqliteVecIndex(
   };
 }
 
+function compareChunkIds(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 function querySqliteVecIndexForSource(
   request: VectorIndexSearchRequest,
   indexName: string,
@@ -577,6 +582,9 @@ function querySqliteVecIndexForSource(
         "  AND capsule_id = :capsule_id",
         "  AND identity_key = :identity_key",
         sourceClause,
+        // Distance only: sqlite-vec's KNN table cannot satisfy a secondary sort key and rejects the
+        // statement outright, which fails the query closed into the brute-force fallback. The
+        // tie-break is applied below, on the rows it returns.
         "ORDER BY distance ASC",
       ].join(" "),
     )
@@ -587,7 +595,14 @@ function querySqliteVecIndexForSource(
       identity_key: identityKey,
       ...(sourceId !== undefined ? { source_id: String(sourceId) } : {}),
     }) as unknown as readonly SqliteVecCandidateRow[];
-  return rows;
+  // Exact distance ties are left in whatever order the vec index emitted, which is not guaranteed
+  // to be stable across runs or hosts; chunk_id makes the returned ordering reproducible. Which
+  // rows survive the `k` truncation on a tie is decided inside sqlite-vec's KNN search and cannot
+  // be influenced from here, so this pins everything downstream of that point, not the cut itself.
+  return [...rows].sort(
+    (left, right) =>
+      left.distance - right.distance || compareChunkIds(left.chunk_id, right.chunk_id),
+  );
 }
 
 function sqliteVecRowToCandidate(row: SqliteVecCandidateRow): VectorIndexCandidate {

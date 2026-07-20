@@ -99,12 +99,31 @@ function download(url, destination) {
   });
 }
 
+function sha256Of(file) {
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
 function verify(file, expectedSha256) {
-  const actual = createHash("sha256").update(readFileSync(file)).digest("hex");
+  const actual = sha256Of(file);
   if (actual !== expectedSha256) {
     rmSync(file, { force: true });
     fail(`checksum mismatch: expected ${expectedSha256}, got ${actual}`);
   }
+}
+
+const PROVENANCE_PATH = () => join(TARGET_DIR, "PROVENANCE.txt");
+const EXTENSION_DIGEST_PREFIX = "extension-sha256=";
+
+// The pinned digest covers the downloaded tarball, so it says nothing about the file left on disk
+// afterwards. Recording the extracted binary's own digest lets a later run re-verify the cache
+// instead of trusting it because the path exists.
+function recordedExtensionDigest() {
+  const file = PROVENANCE_PATH();
+  if (!existsSync(file)) return undefined;
+  const line = readFileSync(file, "utf8")
+    .split(/\r?\n/u)
+    .find((candidate) => candidate.startsWith(EXTENSION_DIGEST_PREFIX));
+  return line?.slice(EXTENSION_DIGEST_PREFIX.length);
 }
 
 function main() {
@@ -118,8 +137,16 @@ function main() {
   const [assetPlatform, expectedSha256] = asset;
   const extensionPath = extensionPathFor(TARGET_DIR, platform);
   if (existsSync(extensionPath)) {
-    console.log(`provision-sqlite-vec: already provisioned at ${extensionPath}`);
-    return;
+    // Existence is not provenance. Re-verify against the digest recorded when this binary was first
+    // checksummed, so a tampered, truncated or half-extracted cache is replaced rather than loaded
+    // into the process as a native extension.
+    const recorded = recordedExtensionDigest();
+    if (recorded !== undefined && recorded === sha256Of(extensionPath)) {
+      console.log(`provision-sqlite-vec: already provisioned at ${extensionPath}`);
+      return;
+    }
+    console.log("provision-sqlite-vec: cached extension failed re-verification; re-provisioning.");
+    rmSync(extensionPath, { force: true });
   }
   mkdirSync(TARGET_DIR, { recursive: true });
   const tarball = join(TARGET_DIR, `sqlite-vec-${VERSION}-loadable-${assetPlatform}.tar.gz`);
@@ -132,7 +159,11 @@ function main() {
   rmSync(tarball, { force: true });
   if (!existsSync(extensionPath)) fail(`extracted archive did not contain ${extensionPath}`);
   chmodSync(extensionPath, 0o755);
-  writeFileSync(join(TARGET_DIR, "PROVENANCE.txt"), `${url}\nsha256=${expectedSha256}\n`, "utf8");
+  writeFileSync(
+    PROVENANCE_PATH(),
+    `${url}\nsha256=${expectedSha256}\n${EXTENSION_DIGEST_PREFIX}${sha256Of(extensionPath)}\n`,
+    "utf8",
+  );
   console.log(`provision-sqlite-vec: verified and extracted to ${extensionPath}`);
 }
 

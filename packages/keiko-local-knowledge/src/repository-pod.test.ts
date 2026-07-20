@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -253,6 +254,18 @@ describe("repository pod executable journey", () => {
     if (containmentFailure?.kind === "document-failed") {
       expect(containmentFailure.error.code).toBe("DISCOVERY_FAILED:PATH_ESCAPE");
     }
+
+    // The sensitive-path denial is asserted for its own reason, not merely as an absence from the
+    // list above. The fixture writes a real `.env` holding a secret and its `.gitignore` covers
+    // only `node_modules/`, so the workspace deny-list is the sole thing keeping it out — and it
+    // is refused during the walk rather than failed during indexing, which is why it produces no
+    // event at all. Pin both halves: gitignore did not do this, and nothing about it was indexed.
+    expect(existsSync(join(repositoryRoot, ".env"))).toBe(true);
+    expect(readFileSync(join(repositoryRoot, ".gitignore"), "utf8")).not.toContain(".env");
+    expect(documentRows().map((row) => row.document_path)).not.toContain(".env");
+    expect(
+      initialEvents.filter((event) => "relativePath" in event && event.relativePath === ".env"),
+    ).toEqual([]);
 
     const mappings = listRepositoryChunkLineRanges(store, CAPSULE_ID);
     const spans = chunkSpans();

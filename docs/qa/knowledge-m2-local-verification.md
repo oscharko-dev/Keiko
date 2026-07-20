@@ -61,8 +61,12 @@ H=(-H 'content-type: application/json' -H 'x-keiko-csrf: 1')
 CAP=$(curl -s -X POST "$B/api/local-knowledge/capsules" "${H[@]}" \
   -d '{"displayName":"Keiko Parsers"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["capsule"]["id"])')
 
-curl -s -X POST "$B/api/local-knowledge/capsules/$CAP/connection" "${H[@]}" \
-  -d "{\"scope\":{\"kind\":\"repository\",\"repositoryRoot\":\"$PWD/packages/keiko-local-knowledge/src/parsers\"},\"displayName\":\"Keiko parsers\"}"
+# Build the body with a JSON encoder rather than string interpolation: a repository path may
+# legitimately contain a quote or a backslash, which would produce an invalid request body.
+ROOT="$PWD/packages/keiko-local-knowledge/src/parsers"
+BODY=$(python3 -c 'import json,sys; print(json.dumps({"scope": {"kind": "repository", "repositoryRoot": sys.argv[1]}, "displayName": "Keiko parsers"}))' "$ROOT")
+
+curl -s -X POST "$B/api/local-knowledge/capsules/$CAP/connection" "${H[@]}" -d "$BODY"
 
 curl -s -X POST "$B/api/local-knowledge/capsules/$CAP/index" "${H[@]}" -d '{}'
 curl -s -X POST "$B/api/local-knowledge/capsules/$CAP/reindex" "${H[@]}" -d '{"mode":"changed-files"}'

@@ -108,6 +108,51 @@ interface StoredLineRangeRow {
   readonly document_line_count: number;
 }
 
+function stringField(row: Record<string, unknown>, key: string): string | undefined {
+  const value = row[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function integerField(row: Record<string, unknown>, key: string): number | undefined {
+  const value = row[key];
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+}
+
+// The driver hands back `unknown`, and casting straight to the row shape would let an undefined
+// field surface deep inside citation rendering, far from whatever produced it.
+//
+// Honest scope: this cannot fire against the current schema. Both tables in the join are STRICT
+// with NOT NULL on every column read here, so SQLite itself rejects a row that would fail this
+// check. It guards the next migration, not today's data — relax a column or add a LEFT JOIN and
+// the cast would start lying silently, whereas this stops at the row that broke the contract.
+function asLineRangeRow(value: unknown): StoredLineRangeRow {
+  const row = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const chunkId = stringField(row, "chunk_id");
+  const documentId = stringField(row, "document_id");
+  const documentPath = stringField(row, "document_path");
+  const startLine = integerField(row, "start_line");
+  const endLine = integerField(row, "end_line");
+  const lineCount = integerField(row, "document_line_count");
+  if (
+    chunkId === undefined ||
+    documentId === undefined ||
+    documentPath === undefined ||
+    startLine === undefined ||
+    endLine === undefined ||
+    lineCount === undefined
+  ) {
+    throw new Error("REPOSITORY_CHUNK_LINE_RANGE_ROW_INVALID");
+  }
+  return {
+    chunk_id: chunkId,
+    document_id: documentId,
+    document_path: documentPath,
+    start_line: startLine,
+    end_line: endLine,
+    document_line_count: lineCount,
+  };
+}
+
 function toLineRange(row: StoredLineRangeRow): RepositoryChunkLineRange {
   return {
     chunkId: row.chunk_id as ChunkId,
@@ -132,8 +177,8 @@ export function resolveRepositoryChunkLineRange(
        JOIN documents AS d ON d.capsule_id = r.capsule_id AND d.id = r.document_id
        WHERE r.capsule_id = :capsule_id AND r.chunk_id = :chunk_id`,
     )
-    .get({ capsule_id: capsuleId, chunk_id: chunkId }) as StoredLineRangeRow | undefined;
-  return row === undefined ? undefined : toLineRange(row);
+    .get({ capsule_id: capsuleId, chunk_id: chunkId }) as unknown;
+  return row === undefined ? undefined : toLineRange(asLineRangeRow(row));
 }
 
 export function listRepositoryChunkLineRanges(
@@ -155,6 +200,6 @@ export function listRepositoryChunkLineRanges(
       documentId === undefined
         ? { capsule_id: capsuleId }
         : { capsule_id: capsuleId, document_id: documentId },
-    ) as unknown as readonly StoredLineRangeRow[];
-  return rows.map(toLineRange);
+    ) as readonly unknown[];
+  return rows.map((row) => toLineRange(asLineRangeRow(row)));
 }
