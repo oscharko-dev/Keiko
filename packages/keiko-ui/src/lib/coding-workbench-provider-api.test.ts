@@ -105,6 +105,37 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
       status: 502,
     });
   });
+
+  it("rejects an unknown top-level status so the enum guard fails closed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ status: "half-open" })));
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
+
+  it("collects every per-field reason when an available profile is wrong-typed everywhere", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          status: "available",
+          profileId: 42,
+          modelAlias: null,
+          localEndpointPath: true,
+          supportsStreaming: "yes",
+          supportsToolCalling: 1,
+          runMetadata: "not-an-object",
+        }),
+      ),
+    );
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
 });
 
 function codexSubscriptionProfileFixture(): Record<string, unknown> {
