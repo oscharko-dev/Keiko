@@ -698,9 +698,18 @@ export class CodingRuntimeOrchestrator {
         ? await this.deps.manager.stop(runId)
         : await this.deps.manager.takeover(runId);
     } catch {
+      this.recordEndRequestException(runId);
       // Recovery-required remains the only safe projection when stop/takeover cannot be trusted.
       return undefined;
     }
+  }
+
+  private recordEndRequestException(runId: string): void {
+    this.deps.evidence.observe(runId, {
+      kind: "state-transition",
+      state: "recovery-required",
+      failureCode: "recovery-required",
+    });
   }
 
   private hasActiveRunChanged(runId: string): boolean {
