@@ -83,10 +83,20 @@ KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1 npm run check:editor-m11-performance
 
 ## D12 and release-evidence boundary
 
-Issue #2533 does not edit any file in the ADR-0139 D12 measurement toolchain. Therefore the in-flight
-closeout does not regenerate `docs/release/1209-perf-evidence.json`. The immutable comparison,
-editor bundle-size gate, and editor release-evidence gate remain the Linux-authoritative release
-proof. The supplemental harness cannot replace or relax any B1–B11 budget.
+Issue #2533 edits no file in the ADR-0139 D12 measurement toolchain, but **the milestone does**, and
+the gate evaluates the branch rather than the issue. #2523 edited
+`tests/e2e/support/editorWorkspace.ts` — a member of `D12_MEASUREMENT_TOOLCHAIN_PATHS` — to dismiss
+the Workspace Trust prompt, which changed the measurement harness itself. Under the D10 doctrine that
+mandates an in-flight regeneration when the ruler changes, `docs/release/1209-perf-evidence.json` was
+regenerated for this branch on Linux, the authoritative environment (#2614).
+
+An earlier revision of this section stated the opposite at issue scope and was used to justify
+skipping the regeneration, while `check:perf-evidence:editor` was red. The scope that matters is the
+branch, and the corrected statement is the one above.
+
+The immutable comparison, editor bundle-size gate, and editor release-evidence gate remain the
+Linux-authoritative release proof. The supplemental harness cannot replace or relax any B1–B11
+budget.
 
 The CI UI lane runs the composed M11 Playwright journey. It attaches content-free profile-switch
 and restore timings, the #2605 finding reference, and a populated screenshot after real-browser

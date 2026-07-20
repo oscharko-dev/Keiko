@@ -87,9 +87,14 @@ The supplemental `check:editor-m11-performance` harness measures the maximum 32-
 32-root search fan-out, serialized editor root sessions, eight history roots, and a 64-checkpoint
 history chain. The local informational result is detailed in the security/performance review.
 
-This issue does not edit the ADR-0139 measurement toolchain, so it does not regenerate D12 evidence
-in flight. The committed D12 comparison and deterministic bundle gates remain the Linux-authoritative
-release evidence. The M11 harness follows the same discipline: real samples, p50/p95 summaries,
+This issue edits no file in the ADR-0139 measurement toolchain, but the milestone does: #2523 edited
+`tests/e2e/support/editorWorkspace.ts`, which is a member of `D12_MEASUREMENT_TOOLCHAIN_PATHS`.
+`check:perf-evidence:editor` evaluates the branch, not the issue, so the D12 evidence was
+regenerated in flight on Linux (#2614). An earlier revision of this paragraph asserted the opposite
+at issue scope while the gate was red.
+
+The committed D12 comparison and deterministic bundle gates remain the Linux-authoritative release
+evidence. The M11 harness follows the same discipline: real samples, p50/p95 summaries,
 deterministic disk/retention enforcement everywhere, and wall-clock/RSS enforcement only when a
 controlled runner sets `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`.
 
