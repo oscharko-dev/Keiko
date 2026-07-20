@@ -4,8 +4,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildJourneyReport,
   classifyLsofNetworkNames,
+  createJourneyContext,
+  createNetworkObserver,
+  governedExecutable,
   missingRealBinaryEvidence,
+  readGatewayObservation,
   processIdsForExecutable,
   readMaterializedLimits,
   realBinaryEvidenceComplete,
@@ -152,5 +157,90 @@ describe("#2483 real-binary observation helpers", () => {
     });
 
     expect(gaps).toHaveLength(5);
+  });
+
+  it("resolves a governed executable only from a fixed absolute path", () => {
+    // A bare name resolved through PATH could be shadowed on a developer or CI machine, and the
+    // shadowed binary would silently decide what the egress evidence claims.
+    expect(governedExecutable(["/definitely/missing", "/bin/sh"], "sh")).toBe("/bin/sh");
+    expect(() => governedExecutable(["/definitely/missing"], "nope")).toThrow(
+      /nope not found at a governed absolute path/u,
+    );
+  });
+
+  it("reports a content-free egress projection with no endpoint or content fields", () => {
+    const observer = createNetworkObserver("/nonexistent/opencode");
+    const report = observer.report();
+
+    expect(report).toMatchObject({
+      method: "sampled-established-tcp-sockets",
+      sampleCount: 0,
+      observedProcessCount: 0,
+      socketObservationCount: 0,
+      distinctLoopbackConnectionCount: 0,
+      distinctExternalConnectionCount: 0,
+      truncated: false,
+      contentFieldsRecorded: false,
+      endpointFieldsRecorded: false,
+    });
+    // Every reported value is a count, a method name, or a boolean flag — never an endpoint,
+    // a host, or a connection hash.
+    for (const [key, value] of Object.entries(report)) {
+      const shape = key === "method" ? "string" : typeof value === "boolean" ? "boolean" : "number";
+      expect(typeof value).toBe(shape);
+    }
+  });
+
+  it("treats a missing or malformed gateway observation as zero rather than throwing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-2483-"));
+    const absent = join(dir, "absent.json");
+    const partial = join(dir, "partial.json");
+    writeFileSync(
+      partial,
+      JSON.stringify({ requestCount: 3, outputTokenLimits: [4096, "x", 8192] }),
+    );
+
+    expect(readGatewayObservation(absent)).toEqual({ requestCount: 0, outputTokenLimits: [] });
+    // Non-integer entries are dropped rather than admitted into the evidence.
+    expect(readGatewayObservation(partial)).toEqual({
+      requestCount: 3,
+      outputTokenLimits: [4096, 8192],
+    });
+  });
+
+  it("derives a run-scoped journey context without leaking it into the repository", () => {
+    const context = createJourneyContext("macos-arm64");
+
+    expect(context.executable).toContain("macos-arm64");
+    expect(context.executable.endsWith("/payload/bin/opencode")).toBe(true);
+    // State and probe directories live outside the checkout so a run cannot dirty the tree.
+    expect(context.stateDir.startsWith(tmpdir())).toBe(true);
+    expect(context.probeState.startsWith(tmpdir())).toBe(true);
+    expect(context.stateDir).not.toBe(context.probeState);
+  });
+
+  it("assembles an evidence report that carries counts and outcomes only", () => {
+    const report = buildJourneyReport({
+      exitCode: 0,
+      gateway: { requestCount: 7, outputTokenLimits: [4096] },
+      limits: [{ context: 32_768, output: 4_096 }],
+      missingPayload: { passed: true, unavailableReason: "payload-missing" },
+      observer: createNetworkObserver("/nonexistent/opencode"),
+      target: "macos-arm64",
+      wallClockMs: 41_128,
+    });
+
+    expect(report).toMatchObject({
+      schemaVersion: 1,
+      issue: 2483,
+      evidenceClass: "functional-not-platform-qualified",
+      runtime: { name: "opencode-compatible", version: "1.17.17", target: "macos-arm64" },
+      journey: { exitCode: 0, wallClockMs: 41_128 },
+    });
+    expect(missingRealBinaryEvidence(report)).toEqual([]);
+    // The whole report must stay free of paths, endpoints, and page or prompt text.
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain("/Users");
+    expect(serialized).not.toContain("http");
   });
 });

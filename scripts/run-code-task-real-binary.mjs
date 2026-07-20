@@ -32,7 +32,7 @@ const REAL_BINARY_VERSION = "1.17.17";
 const GOVERNED_PS_PATHS = ["/bin/ps", "/usr/bin/ps"];
 const GOVERNED_LSOF_PATHS = ["/usr/sbin/lsof", "/usr/bin/lsof", "/opt/homebrew/bin/lsof"];
 
-function governedExecutable(candidates, label) {
+export function governedExecutable(candidates, label) {
   const found = candidates.find((candidate) => existsSync(candidate));
   if (found === undefined) {
     throw new Error(`${label} not found at a governed absolute path (${candidates.join(", ")})`);
@@ -75,7 +75,7 @@ export function processIdsForExecutable(output, executable) {
   });
 }
 
-function addBounded(set, value, state) {
+export function addBounded(set, value, state) {
   if (set.has(value)) return;
   if (set.size >= MAX_DISTINCT_CONNECTIONS) {
     state.truncated = true;
@@ -84,7 +84,7 @@ function addBounded(set, value, state) {
   set.add(value);
 }
 
-function createNetworkObserver(executable) {
+export function createNetworkObserver(executable) {
   const processIds = new Set();
   const loopback = new Set();
   const external = new Set();
@@ -169,7 +169,7 @@ function runPlaywright(env, observer, limitObserver) {
   });
 }
 
-function readGatewayObservation(path) {
+export function readGatewayObservation(path) {
   if (!existsSync(path)) return { requestCount: 0, outputTokenLimits: [] };
   const parsed = JSON.parse(readFileSync(path, "utf8"));
   return {
@@ -274,7 +274,7 @@ function ensureMacTarget() {
   return target;
 }
 
-function createJourneyContext(target) {
+export function createJourneyContext(target) {
   const runKey = process.env.GITHUB_RUN_ID ?? String(process.pid);
   const stateDir = join(tmpdir(), "keiko-e2e", `code-task-2483-real-binary-${runKey}`);
   return {
@@ -298,7 +298,7 @@ function createJourneyContext(target) {
   };
 }
 
-function buildJourneyReport(input) {
+export function buildJourneyReport(input) {
   return {
     schemaVersion: 1,
     issue: 2483,
