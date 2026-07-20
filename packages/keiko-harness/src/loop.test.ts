@@ -594,6 +594,10 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(outcome).toBe("failed");
     expect(failureCategory(sink.events())).toBe("HARNESS_INTERNAL");
     expect(ctx.counters.commandExecutions).toBe(1);
+    // The contract-violation path must close the tool:call:started event, matching every other
+    // exit from runOneTool (success -> tool:call:completed, exception -> tool:call:failed).
+    const toolEvents = sink.events().filter((e) => e.type.startsWith("tool:call:"));
+    expect(toolEvents.map((e) => e.type)).toEqual(["tool:call:started", "tool:call:failed"]);
   });
 
   it("wall-time exact boundary: elapsed === maxWallTimeMs does not exceed; elapsed > maxWallTimeMs does", async () => {
