@@ -9,8 +9,12 @@ import {
 } from "./productionAuxiliaryPorts.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import type { CodingToolActionOf } from "./codingToolGovernedDelegate.js";
-import type { CodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts";
+import type {
+  AuxiliaryResearchScopeV1,
+  CodingWorkbenchAuthorityEnvelope,
+} from "@oscharko-dev/keiko-contracts";
 import { createServerApprovedSkillCatalog } from "./skillCatalog.js";
+import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
 
 const AUTHORITY_EXPIRES_AT = "2026-07-20T01:00:00.000Z";
@@ -76,6 +80,8 @@ function response(): NormalizedResponse {
 
 interface PortsOptions {
   readonly emit?: ((event: unknown) => void) | undefined;
+  readonly researchGrantRegistry?:
+    ProductionAuxiliaryPortInput["researchGrantRegistry"] | undefined;
   readonly readText?:
     ProductionAuxiliaryPortInput["secureWorkspaceTextRead"]["readText"] | undefined;
 }
@@ -115,6 +121,9 @@ function ports(
           Promise.resolve({ ok: true as const, text: '{"scripts":{"b":"1","a":"2"}}' })),
     },
     emit: options.emit ?? ((): void => undefined),
+    ...(options.researchGrantRegistry === undefined
+      ? {}
+      : { researchGrantRegistry: options.researchGrantRegistry }),
   });
 }
 
@@ -252,6 +261,34 @@ describe("createProductionAuxiliaryPorts", () => {
     expect(result).toMatchObject({ status: "completed" });
     // Child lifecycle is surfaced content-free: the objective text never reaches an event.
     expect(JSON.stringify(events)).not.toContain("Inspect the repository entry point");
+  });
+
+  it("passes the run's live research scope to the child, content-free", async () => {
+    // A child inherits the parent's grant as a SCOPE — grant id, domains, expiry and the bound
+    // request-line digest — never the sanitized query text itself.
+    const registry = createResearchGrantRegistry();
+    registry.register(
+      "run-2387",
+      {
+        grantId: "research-grant-1" as AuxiliaryResearchScopeV1["grantId"],
+        domains: ["docs.example.org"],
+        expiresAt: AUTHORITY_EXPIRES_AT,
+        queryTextDigest: { outcome: "known", value: "c".repeat(64) },
+      },
+      "approved query text",
+      "d".repeat(64),
+      Date.parse("2026-07-20T00:30:00.000Z"),
+    );
+    const events: unknown[] = [];
+    const surface = ports("gpt-coding-safe", [], {
+      emit: (e) => events.push(e),
+      researchGrantRegistry: registry,
+    });
+
+    const result = await surface.childAgentAuthority?.execute(childAction(), undefined, LIVE_GUARD);
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(JSON.stringify(events)).not.toContain("approved query text");
   });
 
   it("stops the child when the parent budget refuses its first delegated call", async () => {
