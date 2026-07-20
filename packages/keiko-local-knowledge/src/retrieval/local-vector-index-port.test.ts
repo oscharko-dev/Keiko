@@ -196,6 +196,34 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
     }
   });
 
+  it("fails closed with invalid-partition-key when the encoded partition cannot be decoded", () => {
+    // `parsePartitionKey` uses `decodeURIComponent` and returns `undefined` on any decode
+    // failure — a malformed key MUST fail closed instead of silently narrowing to a partial
+    // parse, because a mis-parsed key would address the wrong capsule and cross the partition
+    // boundary the port exists to enforce. `%%` is invalid percent-encoding (a lone `%` with no
+    // hex digits behind it), so `decodeURIComponent` throws and the port returns the
+    // `port-invalid-query` status with the specific `invalid-partition-key` reason.
+    const fixture = freshStore();
+    try {
+      createTestCapsule(fixture.store);
+      const port = createLocalKnowledgeStoreVectorIndexPort({
+        namespace: "knowledge",
+        store: fixture.store,
+      });
+      const result = port.search(baseQuery({ partitionKey: "%%" }));
+      expect(result).toStrictEqual({
+        ok: false,
+        diagnostics: {
+          provider: "brute-force",
+          status: "port-invalid-query",
+          reason: "invalid-partition-key",
+        },
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("round-trips a capsule id containing the partition-key separator without collision", () => {
     // Regression: an earlier revision used a raw `::` delimiter without escaping, so a capsule
     // id like `victim|source-x` (or `victim::source-x` under the earlier scheme) would be
@@ -351,6 +379,52 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
       expect(result.sawIdentityIncompatible).toBe(true);
       expect(result.sawDimensionCompatible).toBe(false);
       expect(result.diagnostics.status).toBe("fallback-incompatible-identity");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("short-circuits per-source dispatch after the first fail-closed port call", () => {
+    // Qodo perf fix: the earlier revision re-ran `port.search(...)` per source even when the
+    // first call fell closed with `sqlite-vec-runtime-not-configured`, which meant N
+    // `writeUnavailable(...)` state writes for the same vec-index-state row per source-filtered
+    // request. The shim must stop after the first fail-closed dispatch — the merged result is
+    // byte-identical to what N-1 more redundant calls would have produced (same store, same
+    // identity, same runtime absence), without the wasted round-trips.
+    const fixture = freshStore();
+    try {
+      const capsule = createTestCapsule(fixture.store);
+      const calls: string[] = [];
+      const stubPort: VectorIndexPort = {
+        search: (query) => {
+          calls.push(query.partitionKey);
+          return {
+            ok: false,
+            diagnostics: {
+              provider: "sqlite-vec",
+              status: "fallback-unavailable",
+              reason: "sqlite-vec-runtime-not-configured",
+            },
+          };
+        },
+      };
+      const adapter = vectorIndexPortAsKnowledgeAdapter(stubPort);
+      const result = adapter.searchCapsule({
+        store: fixture.store,
+        capsule,
+        sourceFilter: [
+          "src-a" as KnowledgeSourceId,
+          "src-b" as KnowledgeSourceId,
+          "src-c" as KnowledgeSourceId,
+        ],
+        queryVector: new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
+        candidateLimit: 5,
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toBe(encodePartitionKey(capsule.id, "src-a" as KnowledgeSourceId));
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics.status).toBe("fallback-unavailable");
+      expect(result.diagnostics.reason).toBe("sqlite-vec-runtime-not-configured");
     } finally {
       fixture.cleanup();
     }
