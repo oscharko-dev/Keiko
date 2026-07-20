@@ -16,6 +16,7 @@ export {
 export {
   resolveVectorIndexOptions,
   searchVectorIndex,
+  sqliteVecIndexName,
   type VectorIndexAdapter,
   type VectorIndexCandidate,
   type VectorIndexMode,
