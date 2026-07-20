@@ -84,6 +84,27 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
       code: "CONTRACT_VALIDATION_FAILED",
     });
   });
+
+  it("accepts an allow-listed unavailable reason without demanding availability fields", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ status: "unavailable", reason: "missing-config" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "missing-config",
+    });
+  });
+
+  it("rejects a non-object top-level response so the isObjectRecord guard fails closed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse("not an object")));
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
 });
 
 function codexSubscriptionProfileFixture(): Record<string, unknown> {
@@ -150,6 +171,15 @@ describe("fetchCodingWorkbenchCodexSubscriptionProfile", () => {
       status: 502,
     });
   });
+
+  it("rejects a null top-level response so the contract guard fails closed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(null)));
+
+    await expect(fetchCodingWorkbenchCodexSubscriptionProfile()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
 });
 
 describe("prepareCodingWorkbenchCodexSubscriptionSetup", () => {
@@ -176,6 +206,14 @@ describe("prepareCodingWorkbenchCodexSubscriptionSetup", () => {
 
   it("fails closed when the setup plan envelope is malformed", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ schemaVersion: "1" })));
+
+    await expect(
+      prepareCodingWorkbenchCodexSubscriptionSetup("chatgpt-browser-login"),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
+
+  it("rejects a non-object setup plan response so the contract guard fails closed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([])));
 
     await expect(
       prepareCodingWorkbenchCodexSubscriptionSetup("chatgpt-browser-login"),

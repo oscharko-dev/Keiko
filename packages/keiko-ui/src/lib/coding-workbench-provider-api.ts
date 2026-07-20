@@ -138,7 +138,9 @@ function validateCodexAuthSetupPlanResponse(
   return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
 }
 
-function contractValidator<T>(validator: ProviderResponseValidator) {
+function contractValidator<T>(
+  validator: ProviderResponseValidator,
+): (path: string, value: unknown) => T {
   return (path: string, value: unknown): T => {
     const validation = validator(value);
     if (validation.ok) return value as T;
