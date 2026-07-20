@@ -11,8 +11,9 @@
 //     `<script>`/`<style>`/`<noscript>` bodies, HTML comments, and every tag and attribute. Those
 //     carry text a human previewing the page would never see, so the operator's approval of the
 //     destination cannot possibly have covered them.
-//   * It LABELS. What survives is fenced in an explicit untrusted-data envelope whose delimiter is
-//     derived from the fetched bytes' own digest, so the page cannot close its own quarantine block.
+//   * It LABELS. What survives is fenced in an explicit untrusted-data envelope that the page cannot
+//     close: the fence nonce is a sha256 fixed point (see `envelope`), and every literal marker
+//     token in the extracted text is redacted regardless (`neutralizeMarker`).
 //   * It does NOT filter or classify. Plainly-worded instructions that are VISIBLE on the page
 //     survive verbatim, by design — that text IS the research content. The defence against a model
 //     that follows them anyway remains the authority model (mode gates, approvals, the mutation
@@ -41,10 +42,15 @@ const MARKER_REDACTION = "[marker-redacted]";
 export const RESEARCH_UNTRUSTED_BEGIN_FENCE = `[${MARKER} BEGIN `;
 export const RESEARCH_UNTRUSTED_END_FENCE = `[${MARKER} END `;
 
-// Bounds for the reused parser. The fetched bytes are already capped by the egress port's read
-// budget; these bound the parse itself so a pathological page cannot burn the turn.
-const QUARANTINE_PARSE_TIMEOUT_MS = 5_000;
+// Bounds for the reused parser. The egress read budget alone allows up to 2 MB, and the scanner runs
+// synchronously on the runtime thread, so the parse is additionally bounded here. Measured on the
+// maximum-size payloads: ~61 ms for a 2 MB single text run, ~22 ms for a 1.5 MB tag-dense page; the
+// 1 MiB ceiling halves the worst of that while leaving far more input than the 64 KiB tool-result
+// ceiling can ever surface. `html-parser` also re-checks the deadline every few thousand scan steps
+// (#2646 review), so a many-events/few-blocks page is interrupted rather than run to completion.
+const QUARANTINE_PARSE_TIMEOUT_MS = 2_000;
 const QUARANTINE_PARSE_MAX_UNITS = 20_000;
+const QUARANTINE_MAX_PARSE_BYTES = 1_048_576;
 
 // A page whose extracted text is empty still returns an envelope: the model must see that the read
 // happened and produced nothing, rather than silently receiving no tool result content.
@@ -72,10 +78,17 @@ export async function quarantineResearchContent(
   now: () => number,
 ): Promise<QuarantinedResearchContent> {
   const nonce = createHash("sha256").update(bytes).digest("hex").slice(0, NONCE_CHARS);
+  // Bound the synchronous parse. Slicing rather than rejecting keeps an oversized page usable: the
+  // scanner tolerates a truncated tail (`findTagEnd` re-synchronizes on the next boundary) and the
+  // result is clamped to the tool-result ceiling regardless.
+  const parsed =
+    bytes.byteLength > QUARANTINE_MAX_PARSE_BYTES
+      ? bytes.subarray(0, QUARANTINE_MAX_PARSE_BYTES)
+      : bytes;
   const extraction = await extractBoundedDocumentText(
-    { bytes, extension: "html" },
+    { bytes: parsed, extension: "html" },
     {
-      maxInputBytes: bytes.byteLength,
+      maxInputBytes: parsed.byteLength,
       maxOutputBytes: CODING_TOOL_MAX_READ_BYTES,
       maxUnits: QUARANTINE_PARSE_MAX_UNITS,
       timeoutMs: QUARANTINE_PARSE_TIMEOUT_MS,
@@ -91,7 +104,10 @@ export async function quarantineResearchContent(
   return {
     text: envelope(clamped, nonce, extraction.outcome),
     extractedChars: clamped.length,
-    truncated: extraction.truncated || clamped.length < sanitized.length,
+    truncated:
+      extraction.truncated ||
+      clamped.length < sanitized.length ||
+      parsed.byteLength < bytes.byteLength,
   };
 }
 
@@ -103,12 +119,24 @@ export function isQuarantinedResearchContent(text: string): boolean {
   return text.startsWith(RESEARCH_UNTRUSTED_BEGIN_FENCE) && CLOSING_FENCE.test(text);
 }
 
-const CLOSING_FENCE = new RegExp(`\\n\\[${MARKER} END [0-9a-f]{${String(NONCE_CHARS)}}\\]$`, "u");
+const CLOSING_FENCE = new RegExp(
+  String.raw`\n\[${MARKER} END [0-9a-f]{${String(NONCE_CHARS)}}\]$`,
+  "u",
+);
 
 // The envelope. The preamble states the trust rule in the imperative the model actually reads, and
-// the BEGIN/CONTENT/END fences carry the per-read nonce so the enclosed text cannot terminate them:
-// the nonce is derived from the sha256 of the fetched bytes, which the page would have to predict
-// while itself being the input to that digest.
+// the BEGIN/CONTENT/END fences carry the per-read nonce.
+//
+// Why the page cannot close its own block, stated precisely because it was misread in review: the
+// nonce is sha256 over the bytes AS SERVED. An attacker can of course compute that digest offline —
+// but WRITING it into the page changes the page, and therefore changes the digest. A page that
+// contains its own correct fence is a sha256 fixed point. (`researchContentQuarantine.test.ts`
+// demonstrates the failed forgery rather than asserting the property abstractly.)
+//
+// `neutralizeMarker` is the second, unconditional line: every literal marker token in the extracted
+// text is redacted whether or not its nonce matches. Keep BOTH — the nonce argument is about
+// self-consistency, the redaction is about the transcript never containing a second thing that
+// reads like a fence.
 function envelope(content: string, nonce: string, outcome: string): string {
   return [
     `${RESEARCH_UNTRUSTED_BEGIN_FENCE}${nonce} extraction=${outcome}]`,

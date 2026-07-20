@@ -1562,6 +1562,15 @@ describe("validateCodingWorkbenchRuntimeEvent (#2387 auxiliary kinds)", () => {
   // trust ever being asserted, and it is bound to the accepted outcome because a denial produced
   // no read to classify.
   it("requires the untrusted classification on an accepted research read and rejects it elsewhere", () => {
+    // The happy path: accepted + declared is the ONLY accepted-research shape that validates.
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "accepted",
+        byteCount: 2048,
+        contentTrust: "untrusted",
+      }).ok,
+    ).toBe(true);
     const unclassified = validateCodingWorkbenchRuntimeEvent({
       ...auxEvent("research-performed"),
       auxiliaryOutcome: "accepted",
@@ -1571,14 +1580,17 @@ describe("validateCodingWorkbenchRuntimeEvent (#2387 auxiliary kinds)", () => {
     if (!unclassified.ok) {
       expect(unclassified.errors).toContain("event.contentTrust is required");
     }
-    // There is no "trusted" web page: the vocabulary is closed at one value.
-    expect(
-      validateCodingWorkbenchRuntimeEvent({
-        ...auxEvent("research-performed"),
-        auxiliaryOutcome: "accepted",
-        contentTrust: "trusted",
-      }),
-    ).toMatchObject({ ok: false });
+    // There is no "trusted" web page, and an empty or malformed marker is not a declaration: the
+    // vocabulary is closed at one value and every other input fails closed.
+    for (const contentTrust of ["trusted", "", null, undefined, 0, {}]) {
+      expect(
+        validateCodingWorkbenchRuntimeEvent({
+          ...auxEvent("research-performed"),
+          auxiliaryOutcome: "accepted",
+          contentTrust,
+        }),
+      ).toMatchObject({ ok: false });
+    }
     // A denial produced no read; classifying content that never arrived is a contract error.
     expect(
       validateCodingWorkbenchRuntimeEvent({

@@ -115,17 +115,33 @@ function validateSseOptionalEnums(value: Record<string, unknown>, errors: string
   ) {
     errors.push("auxiliaryOutcome is invalid");
   }
-  if (
-    value.contentTrust !== undefined &&
-    !isOneOf(value.contentTrust, CODING_WORKBENCH_CONTENT_TRUST_VALUES)
-  ) {
-    errors.push("contentTrust is invalid");
-  }
+  validateSseContentTrust(value, errors);
   if (
     value.failureCode !== undefined &&
     !isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES)
   ) {
     errors.push("failureCode is invalid");
+  }
+}
+
+// #2637: the SSE boundary mirrors the runtime-event rule rather than merely type-checking the field.
+// An accepted `research-performed` frame MUST declare the marker, and no other frame may carry it —
+// otherwise the timeline could render a skill invocation or a denied fetch as though it had taken in
+// untrusted page content, or render an accepted research read without saying what it took in. Both
+// directions are a lie about provenance, so both fail closed.
+function validateSseContentTrust(value: Record<string, unknown>, errors: string[]): void {
+  const isAcceptedResearch =
+    value.kind === "runtime-event" &&
+    value.eventKind === "research-performed" &&
+    value.auxiliaryOutcome === "accepted";
+  if (isAcceptedResearch) {
+    if (!isOneOf(value.contentTrust, CODING_WORKBENCH_CONTENT_TRUST_VALUES)) {
+      errors.push("contentTrust is required on an accepted research-performed frame");
+    }
+    return;
+  }
+  if (value.contentTrust !== undefined) {
+    errors.push("contentTrust is only admissible on an accepted research-performed frame");
   }
 }
 

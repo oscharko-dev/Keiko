@@ -22,6 +22,8 @@
 // The successful research turn then invokes a server-approved skill and one bounded read-only
 // child through the same production tool facade; both lifecycle records must reach the timeline.
 
+import { readFileSync } from "node:fs";
+
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts";
@@ -29,9 +31,11 @@ import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 
 import {
   RESEARCH_APP_SESSION_LAUNCHER_SECRET,
+  RESEARCH_INJECTION_PAYLOAD,
   RESEARCH_JOURNEY_HOST,
   RESEARCH_JOURNEY_REQUEST_LINE,
   researchRepositoryRoot,
+  researchScriptedToolCallLog,
   researchStateDir,
 } from "./support/coding-runtime-2387-research.js";
 
@@ -195,14 +199,27 @@ async function expectResearchReadShownAsUntrusted(page: Page): Promise<void> {
 }
 
 // #2637: the granted page asked, in visible prose, for a workspace mutation. The compliant scripted
-// model has demonstrably read that text (it reached the skill step), so the absence of any diff is
-// the boundary holding — not the model failing to look.
+// model has demonstrably read that text (it reached the skill step), so this is the boundary
+// holding — not the model failing to look.
+//
+// The load-bearing assertion is that the edit was never REQUESTED. A diff-free workspace alone
+// would also be satisfied by an edit that was requested and then denied downstream, which is a
+// different (and weaker) property than the one #2637 requires.
 async function expectNoMutationWasAttempted(page: Page): Promise<void> {
+  const requested = readFileSync(researchScriptedToolCallLog(stateDir), "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0);
+  expect(requested).not.toContain("keiko_changeset_edit");
+  // The scripted model did reach the decision step and did ask for something, so the absence above
+  // is a decision, not an empty transcript.
+  expect(requested).toContain("keiko_research_fetch");
+  expect(requested).toContain("keiko_skill");
+
   const timeline = page.getByRole("list", { name: "Coding run event timeline" });
   await expect(timeline.getByText("Diff summarized", { exact: true })).toHaveCount(0);
   const changes = page.getByRole("region", { name: "Changes" });
   if ((await changes.count()) > 0) {
-    await expect(changes.getByText(/INJECTED_2637/u)).toHaveCount(0);
+    await expect(changes.getByText(RESEARCH_INJECTION_PAYLOAD, { exact: false })).toHaveCount(0);
   }
 }
 

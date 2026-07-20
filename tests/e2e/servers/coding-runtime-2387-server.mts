@@ -11,7 +11,14 @@
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import type { Server } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -54,7 +61,6 @@ import {
 import {
   createFunctionalRuntimeResolver,
   functionalGatewayConfig,
-  researchInjectionPage,
   scriptedResponse,
   scriptedTranscript,
   RESEARCH_JOURNEY_URL,
@@ -64,6 +70,11 @@ import { researchRequestLineText } from "../../../packages/keiko-server/src/codi
 import {
   RESEARCH_DEFAULT_UI_PORT,
   RESEARCH_APP_SESSION_LAUNCHER_SECRET,
+  RESEARCH_FIXTURE_SOURCE,
+  RESEARCH_INJECTION_DIRECTIVE,
+  RESEARCH_INJECTION_PAYLOAD,
+  researchInjectionPage,
+  researchScriptedToolCallLog,
   RESEARCH_JOURNEY_HOST,
   RESEARCH_JOURNEY_REQUEST_LINE,
   researchManagedWorkspaceRoot,
@@ -94,7 +105,7 @@ function createRepositoryFixture(stateDir: string): void {
   git(repository, ["config", "user.email", "research@keiko.example"]);
   git(repository, ["config", "user.name", "Keiko Research"]);
   git(repository, ["config", "commit.gpgsign", "false"]);
-  writeFileSync(join(repository, "src", "example.ts"), "export const value = 'RESEARCH_2387';\n");
+  writeFileSync(join(repository, "src", "example.ts"), RESEARCH_FIXTURE_SOURCE);
   writeFileSync(
     join(repository, "package.json"),
     JSON.stringify({ scripts: { typecheck: 'node -e "process.exit(0)"' } }),
@@ -243,6 +254,24 @@ interface ResearchComposition {
   readonly scripted: ScriptedOpenCodeHarness;
 }
 
+// #2637: the scripted model is told the page's directive and the exact edit the page asks for, so
+// its compliant branch produces a REAL changeset request against the fixture file. Every scripted
+// tool name is appended to a log the spec reads, so the journey can assert what was REQUESTED
+// rather than only what was applied.
+function researchScriptState(stateDir: string): ScriptState {
+  const toolCallLog = researchScriptedToolCallLog(stateDir);
+  return {
+    mode: "research",
+    calls: 0,
+    old: RESEARCH_FIXTURE_SOURCE,
+    next: `export const value = '${RESEARCH_INJECTION_PAYLOAD}';\n`,
+    injectionDirective: RESEARCH_INJECTION_DIRECTIVE,
+    observeToolCall: (name: string): void => {
+      appendFileSync(toolCallLog, `${name}\n`, { mode: 0o600 });
+    },
+  };
+}
+
 function buildResearchComposition(stateDir: string, port: number): ResearchComposition {
   const bffStateRoot = join(stateDir, "bff-state");
   for (const dir of ["state", "ui-db", "evidence"]) {
@@ -252,7 +281,7 @@ function buildResearchComposition(stateDir: string, port: number): ResearchCompo
   mkdirSync(managedRoot, { recursive: true, mode: 0o700 });
   const services = createResearchWorkspaceServices(managedRoot);
   const scripted = createScriptedOpenCodeHarness();
-  const script: ScriptState = { mode: "research", calls: 0, old: "", next: "" };
+  const script = researchScriptState(stateDir);
   const resolver = createFunctionalRuntimeResolver({
     portable: scriptedFunctionalPortable(stateDir),
     runtimeStateRoot: join(stateDir, "runtime-state"),

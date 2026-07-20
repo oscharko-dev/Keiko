@@ -76,22 +76,48 @@ The extracted text is wrapped in an explicit untrusted-data envelope that tells 
 imperative it actually reads, that the enclosed text is third-party data carrying no authority.
 
 The fence delimiter carries a nonce derived from the SHA-256 of the fetched bytes. A page cannot
-close its own quarantine block: to predict the nonce it would have to predict a digest of which it
-is itself the input. As belt and braces, any literal occurrence of the marker token inside the page
-is redacted, so the transcript never contains a second thing that reads like a fence.
+close its own quarantine block, and it is worth stating the argument precisely because it was
+misread in review: the digest is taken over the bytes **as served**, so an attacker computing it
+offline and then _writing it into the page_ changes the page and therefore changes the digest. A
+page containing its own correct fence is a SHA-256 fixed point. The test suite demonstrates the
+failed forgery rather than asserting the property abstractly.
 
-### 4. It stays inside the tool-result ceiling
+Independently of that, `neutralizeMarker` redacts **every** literal occurrence of the marker token
+out of the extracted text, whether or not its nonce matches. Keep both: the nonce argument is about
+self-consistency, the redaction is about the transcript never containing a second thing that reads
+like a fence.
+
+### 4. It bounds the work it does
+
+The scanner runs synchronously on the runtime thread, so the parse is bounded twice. The bytes fed
+to it are capped at 1 MiB (the egress read budget alone allows 2 MB, and the tool result is capped
+at 64 KiB regardless, so no realistic page loses content). And the scanner re-checks its deadline
+every few thousand scan steps, not only when it emits a block — an input engineered to produce many
+scan events and almost no blocks would otherwise run past `timeoutMs` before any limit was
+consulted.
+
+Measured on maximum-size payloads: ~61 ms for a 2 MB single text run, ~22 ms for a 1.5 MB tag-dense
+page. The parse is single-pass and O(n) in input size. This is a bounded pause on the runtime
+thread, not an unbounded one — but it is a synchronous pause, and that is the honest description.
+Moving the parse off-thread was considered and judged disproportionate to a measured
+tens-of-milliseconds ceiling on a fetch that already requires a per-URL operator approval and a byte
+budget.
+
+### 5. It stays inside the tool-result ceiling
 
 The envelope is budgeted against `CODING_TOOL_MAX_READ_BYTES` so the downstream truncation in
 `projectEgressRead` (`codingToolFacade.ts`) can never sever the closing fence and leave the model
 holding an unterminated quarantine block.
 
-### 5. It is asserted, not assumed
+### 6. It is asserted, not assumed
 
 An accepted `research-performed` runtime event **must** declare `contentTrust: "untrusted"` — the
 contract rejects an accepted research read that does not, and rejects the field on any denial (which
-produced no read to classify). That marker reaches the SSE frame and the Coding Workbench timeline,
-so an operator sees that the run took in third-party content, not merely that a fetch succeeded.
+produced no read to classify). The **same binding is enforced again at the SSE boundary**, so a frame
+cannot reach the timeline claiming that a skill invocation or a denied fetch took in untrusted page
+content, nor an accepted research read that never said what it took in. That marker reaches the
+Coding Workbench timeline, so an operator sees that the run took in third-party content, not merely
+that a fetch succeeded.
 
 ## What the quarantine step does NOT do
 
@@ -125,17 +151,19 @@ This is the half that matters. Do not size any other control as though these wer
 
 ## Verification
 
-| Claim                                                   | Test                                                                |
-| ------------------------------------------------------- | ------------------------------------------------------------------- |
-| Visible page text is fenced, not handed over verbatim   | `researchEgressPort.test.ts` — "fences visible page text …"         |
-| Script/style/comment/attribute channels are dropped     | `researchEgressPort.test.ts`, `researchContentQuarantine.test.ts`   |
-| Invisible and control characters are removed            | `researchContentQuarantine.test.ts`                                 |
-| A page cannot forge or close the fence                  | `researchContentQuarantine.test.ts` — marker redaction, nonce tests |
-| The envelope survives the tool-result ceiling           | `researchEgressPort.test.ts`, `researchContentQuarantine.test.ts`   |
-| An accepted read must declare untrusted content         | `coding-workbench.test.ts`                                          |
-| The classification reaches the SSE frame                | `codingRuntimeOrchestrator.test.ts`                                 |
-| The timeline shows it                                   | `codingWorkbenchLabels.test.ts`                                     |
-| End to end, an injected page does not obtain a mutation | `tests/e2e/code-task-research-skills-subagents.spec.ts`             |
+| Claim                                                       | Test                                                                                 |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Visible page text is fenced, not handed over verbatim       | `researchEgressPort.test.ts` — "fences visible page text …"                          |
+| Script/style/comment/attribute channels are dropped         | `researchEgressPort.test.ts`, `researchContentQuarantine.test.ts`                    |
+| Invisible and control characters are removed                | `researchContentQuarantine.test.ts`                                                  |
+| A page cannot forge or close the fence                      | `researchContentQuarantine.test.ts` — demonstrated failed forgery + marker redaction |
+| A block-free page cannot outrun the parse deadline          | `bounded-document-extraction.test.ts` — tag-dense deadline test                      |
+| The envelope survives the tool-result ceiling               | `researchEgressPort.test.ts`, `researchContentQuarantine.test.ts`                    |
+| An accepted read must declare untrusted content             | `coding-workbench.test.ts`                                                           |
+| The SSE frame enforces the same binding                     | `coding-workbench-runtime-api.test.ts`                                               |
+| The classification reaches the SSE frame                    | `codingRuntimeOrchestrator.test.ts`                                                  |
+| The timeline shows it                                       | `codingWorkbenchLabels.test.ts`                                                      |
+| End to end, an injected page never even REQUESTS a mutation | `tests/e2e/code-task-research-skills-subagents.spec.ts` (scripted tool-call log)     |
 
 ## If you change this
 

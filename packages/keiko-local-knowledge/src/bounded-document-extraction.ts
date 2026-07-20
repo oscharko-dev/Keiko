@@ -142,7 +142,10 @@ const FORMAT_CANDIDATES: readonly FormatCandidate[] = Object.freeze([
 
 function resolveFormat(extension: string, mediaType: string): FormatBinding | undefined {
   const ext = extension.toLowerCase().replace(/^\./, "");
-  const media = mediaType.toLowerCase();
+  // A real `Content-Type` carries parameters (`text/html; charset=utf-8`); match on the essence
+  // only. This applies to every binding, not just html — the exact-equality compare silently missed
+  // parameterized docx/xlsx/pdf types too.
+  const media = (mediaType.toLowerCase().split(";")[0] ?? "").trim();
   const match = FORMAT_CANDIDATES.find(
     (candidate) => candidate.extensions.includes(ext) || candidate.mediaTypes.includes(media),
   );
