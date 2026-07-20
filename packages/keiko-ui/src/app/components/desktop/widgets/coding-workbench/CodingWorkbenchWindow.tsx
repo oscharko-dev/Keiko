@@ -343,9 +343,8 @@ function ResearchDestination({
   if (state.status === "idle") return null;
   const ask = state.ask;
   return (
-    <div
+    <fieldset
       className={styles.approvalResearch}
-      role="group"
       aria-label={t("codingWorkbench.approval.research.title")}
     >
       <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.research.title")}</p>
@@ -366,7 +365,7 @@ function ResearchDestination({
           />
         </dl>
       )}
-    </div>
+    </fieldset>
   );
 }
 

@@ -119,7 +119,7 @@ export function DiffHunkView({ hunk, lang, labels, viewLabels }: DiffHunkViewPro
       </div>
       {hunk.lines.map((line, idx) => (
         <DiffLineView
-          key={idx}
+          key={`${String(line.oldLine ?? "-")}:${String(line.newLine ?? "-")}:${line.kind}:${String(idx)}`}
           line={line}
           lang={lang}
           kindLabel={labels?.[line.kind]}
@@ -194,8 +194,8 @@ export function DiffFileSection({
             {labels?.binaryFile ?? "Binary file — no text diff to display."}
           </p>
         ) : (
-          file.hunks.map((hunk, hi) => (
-            <DiffHunkView key={hi} hunk={hunk} lang={ext} viewLabels={labels} />
+          file.hunks.map((hunk) => (
+            <DiffHunkView key={hunk.header} hunk={hunk} lang={ext} viewLabels={labels} />
           ))
         )}
         {file.truncated && !file.hunks.some((hunk) => hunk.truncated) ? (

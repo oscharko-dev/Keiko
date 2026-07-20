@@ -27,7 +27,7 @@ export function ResearchGrantChip({
   const t = useCodingWorkbenchTranslate();
   if (grant === undefined) return null;
   return (
-    <div className={styles.researchGrant} role="group" aria-labelledby={RESEARCH_LABEL_ID}>
+    <fieldset className={styles.researchGrant} aria-labelledby={RESEARCH_LABEL_ID}>
       <p id={RESEARCH_LABEL_ID} className={styles.statusBadge}>
         <span aria-hidden="true">●</span>
         {t("codingWorkbench.research.chipLabel")}
@@ -44,7 +44,7 @@ export function ResearchGrantChip({
           {busy ? t("codingWorkbench.research.revoking") : t("codingWorkbench.research.revoke")}
         </button>
       </div>
-    </div>
+    </fieldset>
   );
 }
 

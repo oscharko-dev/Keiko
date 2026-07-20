@@ -45,7 +45,7 @@ export type CodeTaskSkillId = CodeTaskAuxiliaryBranded<"CodeTaskSkillId">;
 /** A one-layer read-only child agent run id, distinct from the parent run id. */
 export type CodeTaskChildRunId = CodeTaskAuxiliaryBranded<"CodeTaskChildRunId">;
 
-const SKILL_ID_PATTERN = /^skl_[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}(?:\.[0-9]{1,4}){0,2}$/u;
+const SKILL_ID_PATTERN = /^skl_[a-z0-9][a-z0-9-]{0,62}@\d{1,4}(?:\.\d{1,4}){0,2}$/u;
 const CHILD_RUN_ID_PATTERN = /^chr_[A-Za-z0-9_-]{1,251}$/u;
 // A validated public domain: lower-case labels, no scheme, port, path, credentials, or IP literal.
 // IP literals and loopback names are rejected here so a grant can only ever name a public host; the
@@ -271,8 +271,7 @@ export function validateAuxiliaryCapabilityRequestV1(
   if (value.schemaVersion !== CODE_TASK_AUXILIARY_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
-  errors.push(...targetErrors(value));
-  errors.push(...requestVariantErrors(value));
+  errors.push(...targetErrors(value), ...requestVariantErrors(value));
   return errors.length === 0
     ? { ok: true, value: value as unknown as AuxiliaryCapabilityRequestV1 }
     : { ok: false, errors };

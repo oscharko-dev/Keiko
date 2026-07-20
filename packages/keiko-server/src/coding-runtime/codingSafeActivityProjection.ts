@@ -827,16 +827,18 @@ function safeId(value: unknown): value is string {
   return typeof value === "string" && SAFE_ID.test(value);
 }
 
+const COMMON_SIGNAL_KEYS = ["kind", "occurredAt", "signalId"] as const;
+
+/** Extra keys admitted per signal kind; anything else makes the signal structurally invalid. */
+const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readonly string[]>> = {
+  message: ["messageId", "role", "parentMessageId"],
+  text: ["messageId", "text"],
+  plan: ["anchorMessageId", "steps"],
+  tool: ["messageId", "callId", "tool", "state"],
+};
+
 function exactSignalKeys(signal: CodingSafeActivitySignal): boolean {
-  const common = ["kind", "occurredAt", "signalId"];
-  const allowed =
-    signal.kind === "message"
-      ? [...common, "messageId", "role", "parentMessageId"]
-      : signal.kind === "text"
-        ? [...common, "messageId", "text"]
-        : signal.kind === "plan"
-          ? [...common, "anchorMessageId", "steps"]
-          : [...common, "messageId", "callId", "tool", "state"];
+  const allowed = [...COMMON_SIGNAL_KEYS, ...SIGNAL_KIND_KEYS[signal.kind]];
   return Object.keys(signal).every((key) => allowed.includes(key));
 }
 

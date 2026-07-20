@@ -241,6 +241,11 @@ function terminalState(runState: CodingWorkbenchRuntimeStateName | undefined): b
   );
 }
 
+/**
+ * The projection is not live. Two call sites need exactly this set: the lifecycle transition must
+ * NOT relabel such a state as "ended" (that would caption a stale feed as final), and the resync
+ * effect uses it to decide when a fresh runtime signal is worth reconnecting for.
+ */
 function failureStatus(status: CodingWorkbenchSafeActivityStatus): boolean {
   return (
     status === "unavailable" ||
@@ -261,17 +266,8 @@ function useActivityResync(input: {
   useEffect(() => {
     const changed = seenRef.current !== runtimeEventSignal;
     seenRef.current = runtimeEventSignal;
-    if (runId === undefined || !changed || !resyncStatus(status)) return undefined;
+    if (runId === undefined || !changed || !failureStatus(status)) return undefined;
     const timer = setTimeout(retry, RESYNC_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [retry, runId, runtimeEventSignal, status]);
-}
-
-function resyncStatus(status: CodingWorkbenchSafeActivityStatus): boolean {
-  return (
-    status === "unavailable" ||
-    status === "disconnected" ||
-    status === "offline" ||
-    status === "error"
-  );
 }

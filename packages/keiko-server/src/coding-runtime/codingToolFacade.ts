@@ -222,7 +222,7 @@ function projectEgressRead(
   let bytes: Buffer = Buffer.from(value.text, "utf8");
   if (bytes.length > CODING_TOOL_MAX_READ_BYTES) {
     bytes = bytes.subarray(0, CODING_TOOL_MAX_READ_BYTES);
-    while (bytes.length > 0 && !isUtf8(bytes)) bytes = bytes.subarray(0, bytes.length - 1);
+    while (bytes.length > 0 && !isUtf8(bytes)) bytes = bytes.subarray(0, -1);
   }
   if (!isUtf8(bytes)) return undefined;
   return {

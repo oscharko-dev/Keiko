@@ -330,7 +330,7 @@ function createRunToolSurface(
   const skillCatalog = createServerApprovedSkillCatalog();
   const explicitSkills = createExplicitSkillInvocationTracker(skillCatalog);
   explicitSkills.observeTurn(request.taskIntent);
-  const toolFacade = createManagedToolFacade(
+  const toolFacade = createManagedToolFacade({
     input,
     context,
     minted,
@@ -341,7 +341,7 @@ function createRunToolSurface(
     skillCatalog,
     explicitSkills,
     onRuntimeEvent,
-  );
+  });
   return { invocationRegistry, leases, explicitSkills, toolFacade };
 }
 
@@ -487,18 +487,32 @@ function createBackendRun(
   });
 }
 
-function createManagedToolFacade(
-  input: ProductionCodingRuntimeResolverInput,
-  context: CodingRuntimeTrustedContext,
-  minted: MintedRuntime,
-  authority: CodingRuntimeAuthorityService,
-  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
-  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
-  research: ResearchComposition,
-  skillCatalog: SkillCatalog,
-  explicitSkills: ExplicitSkillInvocationTracker,
-  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
-): CodingToolFacade {
+/** One parameter object: the facade needs the whole run context, not an argument list to mis-order. */
+interface ManagedToolFacadeInput {
+  readonly input: ProductionCodingRuntimeResolverInput;
+  readonly context: CodingRuntimeTrustedContext;
+  readonly minted: MintedRuntime;
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
+  readonly research: ResearchComposition;
+  readonly skillCatalog: SkillCatalog;
+  readonly explicitSkills: ExplicitSkillInvocationTracker;
+  readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+}
+
+function createManagedToolFacade({
+  input,
+  context,
+  minted,
+  authority,
+  invocationRegistry,
+  leases,
+  research,
+  skillCatalog,
+  explicitSkills,
+  onRuntimeEvent,
+}: ManagedToolFacadeInput): CodingToolFacade {
   return createProductionManagedWorktreeToolFacade({
     authority,
     authorityRef: minted.authorityRef,

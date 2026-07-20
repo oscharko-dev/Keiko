@@ -141,7 +141,10 @@ const SKILL_SCHEMA = {
   properties: {
     skillId: {
       type: "string",
-      pattern: "^skl_[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}(?:\\.[0-9]{1,4}){0,2}$",
+      // Character classes are spelled out, NOT `\d`: this string is part of the digest-pinned
+      // visible schema surface handed to the pinned OpenCode child, so its bytes are a wire
+      // contract. Re-spelling it changes the canonical digest and the runtime is refused 403.
+      pattern: String.raw`^skl_[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}(?:\.[0-9]{1,4}){0,2}$`,
       maxLength: 80,
     },
   },

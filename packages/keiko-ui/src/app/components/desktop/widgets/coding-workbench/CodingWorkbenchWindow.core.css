@@ -162,11 +162,12 @@
 }
 
 .researchGrant {
+  /* <fieldset> for its native "group" role (S6819); the explicit margin resets the UA default. */
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: var(--space-3);
-  margin-top: var(--space-4);
+  margin: var(--space-4) 0 0;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
   padding: var(--space-4);

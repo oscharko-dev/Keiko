@@ -175,7 +175,10 @@
 /* #2387: the destination of a pending research fetch, set apart from the vocabulary facts above
    because it is the one part of the approval carrying model-chosen text the operator must read. */
 .approvalResearch {
-  margin-top: var(--space-4);
+  /* <fieldset> for its native "group" role (S6819); the UA border/margin/padding are reset here so
+     the panel keeps the same box the previous div had. */
+  min-width: 0;
+  margin: var(--space-4) 0 0;
   border: 1px solid var(--border-accent);
   border-radius: var(--radius-control);
   padding: var(--space-3);

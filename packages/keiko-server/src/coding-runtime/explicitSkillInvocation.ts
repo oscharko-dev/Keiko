@@ -9,7 +9,7 @@ export interface ExplicitSkillInvocationTracker {
 }
 
 const EXPLICIT_SKILL =
-  /(?:^|\s)\$(?:skill\s+)?(skl_[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}(?:\.[0-9]{1,4}){0,2})(?=\s|$)/gu;
+  /(?:^|\s)\$(?:skill\s+)?(skl_[a-z0-9][a-z0-9-]{0,62}@\d{1,4}(?:\.\d{1,4}){0,2})(?=\s|$)/gu;
 
 export function createExplicitSkillInvocationTracker(
   catalog: Pick<SkillCatalog, "has">,

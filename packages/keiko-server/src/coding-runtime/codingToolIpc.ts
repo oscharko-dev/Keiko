@@ -121,44 +121,38 @@ function parseJson(body: string): unknown {
   }
 }
 
-type CodingToolRequestParser = (
-  value: Record<string, unknown>,
-) => CodingToolActionRequest | undefined;
-
-// Parser table keyed by the wire `action` discriminator. A Map (not a plain object) is deliberate:
-// the key comes from untrusted runtime JSON, and an object lookup would resolve inherited keys such
-// as "constructor" or "toString" to a Function. An unknown or non-string action finds no parser and
-// the request fails closed.
-const CODING_TOOL_REQUEST_PARSERS: ReadonlyMap<string, CodingToolRequestParser> = new Map([
-  ["read", readRequest],
-  ["edit", editRequest],
-  [
-    "command",
-    (value): CodingToolActionRequest | undefined => namedRequest(value, "commandId", "command"),
-  ],
-  [
-    "verification",
-    (value): CodingToolActionRequest | undefined =>
-      namedRequest(value, "verifierId", "verification"),
-  ],
-  ["git", gitRequest],
-  ["delivery", deliveryRequest],
-  [
-    "connector",
-    (value): CodingToolActionRequest | undefined => namedRequest(value, "scope", "connector"),
-  ],
-  [
-    "egress",
-    (value): CodingToolActionRequest | undefined => namedRequest(value, "target", "egress"),
-  ],
-  ["skill", skillRequest],
-  ["child-agent", childAgentRequest],
-]);
-
+// Static dispatch on purpose. The `action` discriminator arrives in untrusted runtime JSON, so no
+// form of table lookup is used to reach a callable: a plain object would resolve inherited keys
+// such as "constructor" to a Function, and even a prototype-safe Map still calls a function chosen
+// by attacker-controlled input. A switch names every reachable parser at compile time, and the
+// `default` fails closed for anything else.
+// One exhaustive case per wire action: the switch IS the parser table.
+// eslint-disable-next-line complexity -- exhaustive static wire dispatch, see above
 function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequest | undefined {
-  const action = value.action;
-  const parse = typeof action === "string" ? CODING_TOOL_REQUEST_PARSERS.get(action) : undefined;
-  return parse?.(value);
+  switch (value.action) {
+    case "read":
+      return readRequest(value);
+    case "edit":
+      return editRequest(value);
+    case "command":
+      return namedRequest(value, "commandId", "command");
+    case "verification":
+      return namedRequest(value, "verifierId", "verification");
+    case "git":
+      return gitRequest(value);
+    case "delivery":
+      return deliveryRequest(value);
+    case "connector":
+      return namedRequest(value, "scope", "connector");
+    case "egress":
+      return namedRequest(value, "target", "egress");
+    case "skill":
+      return skillRequest(value);
+    case "child-agent":
+      return childAgentRequest(value);
+    default:
+      return undefined;
+  }
 }
 
 function skillRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {

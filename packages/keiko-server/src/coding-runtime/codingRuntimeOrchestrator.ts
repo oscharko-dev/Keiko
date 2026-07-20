@@ -222,7 +222,7 @@ export class CodingRuntimeOrchestrator {
     const registry = this.deps.researchGrants;
     if (registry === undefined) return undefined;
     const grants = registry.activeGrants(runId, this.now().getTime());
-    const newest = grants[grants.length - 1];
+    const newest = grants.at(-1);
     if (newest === undefined) return undefined;
     const domains = [...new Set(grants.flatMap((grant) => grant.domains))].sort((left, right) =>
       left.localeCompare(right),

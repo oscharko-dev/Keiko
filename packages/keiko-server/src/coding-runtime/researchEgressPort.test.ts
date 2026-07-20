@@ -208,33 +208,15 @@ describe("researchEgressPort success path", () => {
 });
 
 describe("researchEgressPort target admission", () => {
-  it("rejects a non-https target", async () => {
+  // Every rejected URL shape must fail closed identically: no fetch is attempted at all.
+  it.each([
+    ["a non-https target", "http://docs.example.com/a"],
+    ["a target carrying embedded credentials", "https://user:pass@docs.example.com/a"],
+    ["a target on a non-default port", "https://docs.example.com:8443/a"],
+    ["a malformed target", "not a url"],
+  ])("rejects %s without attempting a fetch", async (_label, target) => {
     const test = harness({ grants: [makeGrant()] });
-    await expect(
-      test.execute(egressRequest("http://docs.example.com/a"), undefined, LIVE_GUARD),
-    ).resolves.toEqual({ status: "failed" });
-    expect(test.calls).toHaveLength(0);
-  });
-
-  it("rejects a target carrying embedded credentials", async () => {
-    const test = harness({ grants: [makeGrant()] });
-    await expect(
-      test.execute(egressRequest("https://user:pass@docs.example.com/a"), undefined, LIVE_GUARD),
-    ).resolves.toEqual({ status: "failed" });
-    expect(test.calls).toHaveLength(0);
-  });
-
-  it("rejects a target on a non-default port", async () => {
-    const test = harness({ grants: [makeGrant()] });
-    await expect(
-      test.execute(egressRequest("https://docs.example.com:8443/a"), undefined, LIVE_GUARD),
-    ).resolves.toEqual({ status: "failed" });
-    expect(test.calls).toHaveLength(0);
-  });
-
-  it("rejects a malformed target", async () => {
-    const test = harness({ grants: [makeGrant()] });
-    await expect(test.execute(egressRequest("not a url"), undefined, LIVE_GUARD)).resolves.toEqual({
+    await expect(test.execute(egressRequest(target), undefined, LIVE_GUARD)).resolves.toEqual({
       status: "failed",
     });
     expect(test.calls).toHaveLength(0);

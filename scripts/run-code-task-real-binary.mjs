@@ -25,9 +25,24 @@ const repoRoot = resolve(import.meta.dirname, "..");
 const MAX_DISTINCT_CONNECTIONS = 4_096;
 const REAL_BINARY_VERSION = "1.17.17";
 
+// Absolute, fixed system paths — never a bare name resolved through PATH. This runner samples
+// process and socket facts on a developer or CI machine whose PATH may contain writable
+// directories, and a shadowed `ps`/`lsof` would silently decide what the egress evidence claims.
+// Mirrors the governed-executable pattern in scripts/check-dependency-hygiene.mjs.
+const GOVERNED_PS_PATHS = ["/bin/ps", "/usr/bin/ps"];
+const GOVERNED_LSOF_PATHS = ["/usr/sbin/lsof", "/usr/bin/lsof", "/opt/homebrew/bin/lsof"];
+
+function governedExecutable(candidates, label) {
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (found === undefined) {
+    throw new Error(`${label} not found at a governed absolute path (${candidates.join(", ")})`);
+  }
+  return found;
+}
+
 function isLoopbackEndpoint(endpoint) {
   return (
-    /^127(?:\.[0-9]{1,3}){3}:/u.test(endpoint) ||
+    /^127(?:\.\d{1,3}){3}:/u.test(endpoint) ||
     endpoint.startsWith("[::1]:") ||
     endpoint.startsWith("[::ffff:127.") ||
     endpoint.startsWith("localhost:")
@@ -47,7 +62,7 @@ export function classifyLsofNetworkNames(output) {
 
 export function processIdsForExecutable(output, executable) {
   return output.split(/\r?\n/u).flatMap((line) => {
-    const matched = /^\s*(?<pid>[0-9]+)\s+(?<command>.+)$/u.exec(line);
+    const matched = /^[ \t]*(?<pid>\d+)[ \t]+(?<command>.+)$/u.exec(line);
     if (
       matched?.groups === undefined ||
       (matched.groups.command !== executable &&
@@ -94,7 +109,13 @@ function sampleNetwork(executable, processIds, loopback, external, state) {
   state.sampleCount += 1;
   let psOutput;
   try {
-    psOutput = execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
+    psOutput = execFileSync(
+      governedExecutable(GOVERNED_PS_PATHS, "ps"),
+      ["-axo", "pid=,command="],
+      {
+        encoding: "utf8",
+      },
+    );
   } catch {
     return;
   }
@@ -107,9 +128,11 @@ function sampleNetwork(executable, processIds, loopback, external, state) {
 function sampleProcessSockets(pid, loopback, external, state) {
   let output;
   try {
-    output = execFileSync("lsof", ["-nP", "-a", "-p", String(pid), "-iTCP", "-F", "n"], {
-      encoding: "utf8",
-    });
+    output = execFileSync(
+      governedExecutable(GOVERNED_LSOF_PATHS, "lsof"),
+      ["-nP", "-a", "-p", String(pid), "-iTCP", "-F", "n"],
+      { encoding: "utf8" },
+    );
   } catch {
     return;
   }
@@ -338,7 +361,7 @@ export async function runRealBinaryJourney() {
   if (!existsSync(context.executable)) {
     throw new Error("staged approved OpenCode payload is missing");
   }
-  execFileSync("lsof", ["-v"], { stdio: "ignore" });
+  execFileSync(governedExecutable(GOVERNED_LSOF_PATHS, "lsof"), ["-v"], { stdio: "ignore" });
   const observer = createNetworkObserver(context.executable);
   const limitObserver = createMaterializedLimitObserver(context.stateDir);
   const startedAt = Date.now();

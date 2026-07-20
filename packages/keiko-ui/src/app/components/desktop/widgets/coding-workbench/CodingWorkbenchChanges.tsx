@@ -126,9 +126,9 @@ function ReadyChanges({
         </div>
       )}
       {changes.truncated ? (
-        <p className={styles.changesNotice} role="status">
+        <output className={styles.changesNotice}>
           {t("codingWorkbench.changes.filesTruncated")}
-        </p>
+        </output>
       ) : null}
     </>
   );
@@ -259,14 +259,13 @@ function SelectedDiff({
   return (
     <div className={styles.changesDiffPane}>
       <p className={styles.changesPaneTitle}>{t("codingWorkbench.changes.diff.title")}</p>
-      <div
+      <section
         className={`${styles.changesDiff} review`}
-        role="region"
         aria-label={t("codingWorkbench.changes.diff.region")}
         tabIndex={0}
       >
         <DiffContent changes={changes} labels={labels} t={t} />
-      </div>
+      </section>
     </div>
   );
 }
@@ -292,9 +291,7 @@ function DiffContent({
   return (
     <div className="rv-body">
       {changes.diffTruncated ? (
-        <p className="rv-truncated" role="status">
-          {t("codingWorkbench.changes.diff.truncated")}
-        </p>
+        <output className="rv-truncated">{t("codingWorkbench.changes.diff.truncated")}</output>
       ) : null}
       {changes.diff.files.map((file, index) => (
         <DiffFileSection

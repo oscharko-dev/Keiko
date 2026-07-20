@@ -125,7 +125,11 @@ function packageScriptDigest(text: string): CodeTaskSha256Digest {
   let names: readonly string[] = [];
   try {
     const parsed: unknown = JSON.parse(text);
-    if (isRecord(parsed) && isRecord(parsed.scripts)) names = Object.keys(parsed.scripts).sort();
+    // Explicit collator: the digest must be stable across hosts, and the default sort's
+    // implementation-defined ordering would make the same package.json hash differently.
+    if (isRecord(parsed) && isRecord(parsed.scripts)) {
+      names = Object.keys(parsed.scripts).sort((left, right) => left.localeCompare(right));
+    }
   } catch {
     names = [];
   }

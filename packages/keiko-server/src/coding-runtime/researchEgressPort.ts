@@ -296,7 +296,7 @@ function decodePathname(pathname: string): string {
 }
 
 function decodeSearch(search: string): string {
-  const raw = (search.startsWith("?") ? search.slice(1) : search).replace(/\+/gu, " ");
+  const raw = (search.startsWith("?") ? search.slice(1) : search).replaceAll(/\+/gu, " ");
   try {
     return decodeURIComponent(raw);
   } catch {
