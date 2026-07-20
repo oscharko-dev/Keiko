@@ -1212,14 +1212,14 @@ function logLatencyCharacterization(onLog, results) {
 // is written whenever the gate runs with `--write` (alongside the main evidence) and is not
 // compared against a committed baseline. `evaluateAnnProof` enforces the operational claim; this
 // document records the measurement.
-function categorizeLatencyWinner(annMs, exactMs) {
+export function categorizeLatencyWinner(annMs, exactMs) {
   const ratio = exactMs === 0 ? Number.POSITIVE_INFINITY : annMs / exactMs;
   if (ratio > 1.2) return "brute-force";
   if (ratio < 0.8) return "ann";
   return "tied";
 }
 
-function breakEvenNarrative(smallWinner, largeWinner, smallRows, largeRows, exactScanCap) {
+export function breakEvenNarrative(smallWinner, largeWinner, smallRows, largeRows, exactScanCap) {
   const smallStr = String(smallRows);
   const largeStr = String(largeRows);
   const capStr = String(exactScanCap);
@@ -1269,7 +1269,7 @@ function renderLatencyTable(rows) {
   return [line(rows[0]), separator, ...rows.slice(1).map(line)];
 }
 
-function renderLatencyCharacterization(results) {
+export function renderLatencyCharacterization(results) {
   const ann = results.find((result) => result.id === "ann-active")?.metrics;
   if (ann?.latencyLargeAnnMedianMs === undefined) return undefined;
   const smallWinner = categorizeLatencyWinner(
