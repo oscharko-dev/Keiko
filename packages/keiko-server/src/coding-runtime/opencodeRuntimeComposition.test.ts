@@ -1587,9 +1587,9 @@ describe("private OpenCode tool bridge", () => {
         expect.objectContaining({
           correlationId: "tool:call_sync_throw",
           operation: "coding-runtime.tool-bridge",
-          source: "opencode-runtime-composition.start-facade",
+          source: "opencode-runtime-composition.facade-execute",
           errorClass: "Error",
-          message: "tool-facade-sync-throw",
+          message: "tool-facade-failed",
         }),
       ]);
       const serialized = JSON.stringify(records);

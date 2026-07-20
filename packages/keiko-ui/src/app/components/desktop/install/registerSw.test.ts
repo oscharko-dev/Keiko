@@ -46,10 +46,39 @@ function restoreCaches(): void {
   Object.defineProperty(globalThis, "caches", originalCaches);
 }
 
-async function flushMicrotasks(times = 4): Promise<void> {
+// registerSw defers its container calls into the promise chain (so a synchronous throw from a
+// non-conforming runtime becomes a rejection the single `.catch` absorbs), which costs a couple of
+// extra hops on top of each `.then` the helper itself chains.
+async function flushMicrotasks(times = 8): Promise<void> {
   for (let i = 0; i < times; i += 1) {
     await Promise.resolve();
   }
+}
+
+// Node reports an unhandled rejection only once the microtask queue is exhausted and the current
+// turn of the event loop ends, so a microtask-only flush would let a leaked rejection pass
+// unnoticed. `setImmediate` is the event-loop boundary that guarantees we resume after that point —
+// it is a phase hand-off, not a timed sleep, so nothing here depends on wall-clock or CI load.
+async function flushRejectionReporting(): Promise<void> {
+  await flushMicrotasks();
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+// Attaching a process-global listener from a test leaks into every later test in the worker if an
+// assertion throws first, so ownership is scoped to one call and released in a `finally`.
+async function withUnhandledRejectionSpy(
+  body: (unhandled: ReturnType<typeof vi.fn>) => Promise<void> | void,
+): Promise<ReturnType<typeof vi.fn>> {
+  const unhandled = vi.fn();
+  process.on("unhandledRejection", unhandled);
+  try {
+    await body(unhandled);
+  } finally {
+    process.off("unhandledRejection", unhandled);
+  }
+  return unhandled;
 }
 
 describe("registerSw static-shell caching", () => {
@@ -67,11 +96,12 @@ describe("registerSw static-shell caching", () => {
     vi.unstubAllEnvs();
   });
 
-  it("calls navigator.serviceWorker.register with /sw.js and scope '/'", () => {
+  it("calls navigator.serviceWorker.register with /sw.js and scope '/'", async () => {
     const register = vi.fn().mockResolvedValue({});
     installServiceWorker({ register });
 
     registerSw();
+    await flushMicrotasks();
 
     expect(register).toHaveBeenCalledOnce();
     expect(register).toHaveBeenCalledWith("/sw.js", { scope: "/" });
@@ -89,36 +119,37 @@ describe("registerSw static-shell caching", () => {
     const register = vi.fn().mockRejectedValue(error);
     installServiceWorker({ register });
 
-    // Spy on the unhandledrejection path: if the helper leaks a rejection, jsdom will
-    // surface it as an unhandled rejection event on the global.
-    const unhandled = vi.fn();
-    process.on("unhandledRejection", unhandled);
-
-    registerSw();
-
-    // Wait two microtask flushes — once for `register()` to reject and once for `.catch`
-    // to resolve to undefined. After that, no unhandled rejection should be queued.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    process.off("unhandledRejection", unhandled);
+    // Spy on the unhandledrejection path: if the helper leaks a rejection, Node reports it once the
+    // event loop turn ends.
+    const unhandled = await withUnhandledRejectionSpy(async () => {
+      registerSw();
+      await flushRejectionReporting();
+    });
 
     expect(register).toHaveBeenCalledOnce();
     expect(unhandled).not.toHaveBeenCalled();
   });
 
-  it("does not throw if register() itself throws synchronously (silent-failure contract)", () => {
+  it("does not throw if register() itself throws synchronously (silent-failure contract)", async () => {
     // A non-conforming runtime could throw synchronously instead of returning a rejected
     // Promise. The helper MUST still degrade silently — the install banner falls back to
-    // manual instructions in that case (per ADR-0024 D6).
+    // manual instructions in that case (per ADR-0024 D6). The call is invoked inside the promise
+    // chain, so that throw arrives as a rejection: assert it neither escapes the caller NOR leaks
+    // as an unhandled rejection, which is the failure mode that shape could otherwise introduce.
     const register = vi.fn().mockImplementation(() => {
       throw new Error("Synchronous failure");
     });
     installServiceWorker({ register });
 
-    expect(() => {
-      registerSw();
-    }).not.toThrow();
+    const unhandled = await withUnhandledRejectionSpy(async () => {
+      expect(() => {
+        registerSw();
+      }).not.toThrow();
+      await flushRejectionReporting();
+    });
+
+    expect(register).toHaveBeenCalledOnce();
+    expect(unhandled).not.toHaveBeenCalled();
   });
 
   it("asks an already waiting update to activate when the page has an active controller", async () => {
