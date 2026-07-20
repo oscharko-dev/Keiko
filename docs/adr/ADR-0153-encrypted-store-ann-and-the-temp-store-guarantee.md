@@ -61,7 +61,7 @@ guarantee TEMP pages stay in memory".
 `searchSqliteVecIndex` no longer refuses a store for being encrypted. It refuses a store that cannot
 prove decrypted vectors will stay off disk:
 
-```
+```text
 encrypted store  AND  temp_store is not MEMORY   →  refuse
 ```
 

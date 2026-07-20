@@ -809,10 +809,13 @@ describe("searchVectorIndex", () => {
           .maxIndexedVectorBytes,
       ).toBe(DEFAULT_MAX_INDEXED_VECTOR_BYTES);
     }
-    expect(
-      resolveVectorIndexOptions({ mode: "sqlite-vec", maxIndexedVectorBytes: Number.NaN }, {})
-        .maxIndexedVectorBytes,
-    ).toBe(DEFAULT_MAX_INDEXED_VECTOR_BYTES);
+    // Both malformed-input branches of the clamp guard, not just one: NaN is not finite, -1 is.
+    for (const malformed of [Number.NaN, -1]) {
+      expect(
+        resolveVectorIndexOptions({ mode: "sqlite-vec", maxIndexedVectorBytes: malformed }, {})
+          .maxIndexedVectorBytes,
+      ).toBe(DEFAULT_MAX_INDEXED_VECTOR_BYTES);
+    }
   });
 
   // A vector that will not open is a store-integrity failure, not an identity mismatch. Indexing the

@@ -17,7 +17,7 @@ import {
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { getCapsule } from "../capsule-lifecycle.js";
 import {
@@ -479,6 +479,10 @@ async function assertEncryptedUnpinnedFallback(
 ): Promise<void> {
   const fixture = managedStore(undefined, encryptedProtection());
   try {
+    // Opening without the runtime is what leaves the store unpinned; FILE is then set explicitly so
+    // the refused condition is constructed rather than inherited from the SQLite build's default,
+    // which is MEMORY on a build compiled with SQLITE_TEMP_STORE=3.
+    fixture.store._internal.db.exec("PRAGMA temp_store = FILE");
     expect(tempStoreValue(fixture.store)).not.toBe(SQLITE_TEMP_STORE_MEMORY);
     const seeded = await seedCapsuleWithVectors(fixture.store, {
       capsuleId: "cap-ann-encrypted-unpinned",
@@ -510,6 +514,9 @@ function assertUnpinnedControlSpills(tempDir: string, extensionPath: string): vo
   const db = new DatabaseSync(join(dir, "control.db"), { allowExtension: true });
   try {
     db.exec("PRAGMA journal_mode = WAL");
+    // The control must spill, so it pins the OPPOSITE way explicitly instead of relying on the
+    // build default being FILE.
+    db.exec("PRAGMA temp_store = FILE");
     expect(readTempStore(db)).not.toBe(SQLITE_TEMP_STORE_MEMORY);
     db.enableLoadExtension(true);
     db.loadExtension(extensionPath);
@@ -659,7 +666,13 @@ async function assertUnprovisionedRuntimeFallback(
   }
 }
 
-afterAll(() => {
+// Cleanup is deferred to process exit rather than `afterAll`. SQLite memoises the temp-directory
+// choice for the process, and Vitest reuses a worker across test files, so removing the directory —
+// or restoring the environment variable, which can invalidate the very string SQLite memoised —
+// while the worker is still alive would leave a later test file pointed at a directory that no
+// longer exists. At exit no further SQLite call can observe it. The directory is asserted empty by
+// the proof itself, so nothing accumulates in it in the meantime.
+process.once("exit", () => {
   rmSync(SQLITE_TEMP_DIR, { recursive: true, force: true });
 });
 

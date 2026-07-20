@@ -15,15 +15,20 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-interface TempStoreRow {
-  readonly temp_store: number;
-}
-
 // SQLite's `temp_store` enumeration: 0 = compile-time default, 1 = FILE, 2 = MEMORY.
 const TEMP_STORE_MEMORY = 2;
 
 export function pinTempStoreToMemory(db: DatabaseSync): void {
   db.exec("PRAGMA temp_store = MEMORY");
+}
+
+// The pragma row is narrowed rather than asserted. This value decides whether decrypted vectors may
+// be held in a TEMP structure, so an unexpected driver or pragma result shape must resolve to "not
+// proven" — a type assertion would let a malformed row through as if it had been read successfully.
+function tempStoreValue(row: unknown): number | undefined {
+  if (typeof row !== "object" || row === null || !("temp_store" in row)) return undefined;
+  const value: unknown = row.temp_store;
+  return typeof value === "number" ? value : undefined;
 }
 
 // Reads the value actually in force on this connection rather than trusting that the pin was
@@ -32,8 +37,7 @@ export function pinTempStoreToMemory(db: DatabaseSync): void {
 // guarantee unmet, and callers that depend on it must be able to tell.
 export function tempStoreIsMemory(db: DatabaseSync): boolean {
   try {
-    const row = db.prepare("PRAGMA temp_store").get() as unknown as TempStoreRow | undefined;
-    return row?.temp_store === TEMP_STORE_MEMORY;
+    return tempStoreValue(db.prepare("PRAGMA temp_store").get()) === TEMP_STORE_MEMORY;
   } catch {
     // An unreadable pragma is an unproven guarantee, which fails closed exactly like an unpinned one.
     return false;

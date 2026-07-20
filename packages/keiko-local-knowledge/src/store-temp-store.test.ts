@@ -30,6 +30,22 @@ function readTempStore(store: KnowledgeStore): number | undefined {
   return row?.temp_store;
 }
 
+// SQLite's default TEMP placement is a property of the BUILD, not of this repository. Read it from a
+// connection this package never touched so the expectations below compare against what SQLite
+// actually does on this host.
+function platformDefaultTempStore(): number | undefined {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-lk-temp-store-baseline-"));
+  const db = new DatabaseSync(join(dir, "baseline.db"));
+  try {
+    const row = db.prepare("PRAGMA temp_store").get() as unknown as
+      { readonly temp_store: number } | undefined;
+    return row?.temp_store;
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function encryptedProtection(): KnowledgeStoreProtectionOptions {
   return {
     mode: "encrypted-key-provider",
@@ -89,7 +105,13 @@ describe("temp-store placement", () => {
 
   // The pin is scoped to stores that can build an index. Every other store keeps SQLite's default,
   // so this change cannot alter the memory profile of the stores that make up the shipped default.
+  //
+  // The baseline is READ from a bare connection rather than assumed to be non-MEMORY: a SQLite build
+  // compiled with SQLITE_TEMP_STORE=3 defaults to MEMORY, and hard-coding "not memory" would fail
+  // there for a reason that has nothing to do with this change. What must hold on every build is
+  // that an unconfigured store is left exactly where SQLite put it.
   it("leaves TEMP storage at the SQLite default when no vector runtime is configured", () => {
+    const baseline = platformDefaultTempStore();
     for (const vectorIndex of [
       undefined,
       { mode: "disabled" } as VectorIndexOptions,
@@ -98,8 +120,10 @@ describe("temp-store placement", () => {
     ]) {
       const fixture = fixtureFor(vectorIndex);
       try {
-        expect(readTempStore(fixture.store)).not.toBe(SQLITE_TEMP_STORE_MEMORY);
-        expect(tempStoreIsMemory(fixture.store._internal.db)).toBe(false);
+        expect(readTempStore(fixture.store)).toBe(baseline);
+        expect(tempStoreIsMemory(fixture.store._internal.db)).toBe(
+          baseline === SQLITE_TEMP_STORE_MEMORY,
+        );
       } finally {
         fixture.cleanup();
       }
@@ -110,6 +134,9 @@ describe("temp-store placement", () => {
     const dir = mkdtempSync(join(tmpdir(), "keiko-lk-temp-store-bare-"));
     const db = new DatabaseSync(join(dir, "bare.db"));
     try {
+      // FILE is set explicitly rather than assumed, so the transition under test is observed on any
+      // SQLite build regardless of which default it was compiled with.
+      db.exec("PRAGMA temp_store = FILE");
       expect(tempStoreIsMemory(db)).toBe(false);
       pinTempStoreToMemory(db);
       expect(tempStoreIsMemory(db)).toBe(true);
