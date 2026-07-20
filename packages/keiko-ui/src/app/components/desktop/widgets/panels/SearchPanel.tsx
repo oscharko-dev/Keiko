@@ -21,7 +21,10 @@ import {
   fetchWorkspaceSearch,
   fetchWorkspaceSymbols,
 } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
 import { useOptionalChatSessionCatalog } from "../../context/ChatSessionContext";
@@ -81,7 +84,7 @@ function globArray(value: string): readonly string[] {
 function regexSyntaxError(
   query: string,
   mode: WorkspaceSearchMode,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string | null {
   if (mode !== "regex" || query.trim().length === 0) return null;
   try {
@@ -129,7 +132,7 @@ function statusMessage(args: {
   readonly status: SearchStatus;
   readonly response: SearchAggregate | null;
   readonly error: string | null;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): string {
   const { t } = args;
   if (!args.hasRoot) return t("searchPanel.status.selectWorkspace");
@@ -162,7 +165,7 @@ function resultGroups(response: SearchAggregate | null): readonly SearchResultGr
 
 function symbolResponseToSearchResponse(
   response: WorkspaceSymbolSearchResponse,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): WorkspaceSearchResponse {
   return {
     results: response.results.map((result) => ({
@@ -224,7 +227,10 @@ function aggregateSearch(
   };
 }
 
-function searchFailureMessage(aggregate: SearchAggregate, t: I18nTranslate): string | null {
+function searchFailureMessage(
+  aggregate: SearchAggregate,
+  t: OptionalWidgetTranslate,
+): string | null {
   if (aggregate.successfulRootCount > 0) return null;
   if (aggregate.errors.length === 1) {
     return aggregate.errors[0]?.message ?? t("searchPanel.error.searchFailed");
@@ -257,7 +263,7 @@ async function sourcesForPreview(
 
 function replaceSummary(
   response: WorkspaceReplacePreviewResponse | null,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (response === null) return t("searchPanel.replace.noPreviewComputed");
   const omitted =
@@ -279,7 +285,7 @@ function replaceErrorMessage(error: unknown, fallback: string): string {
 
 function conflictSummary(
   conflicts: readonly WorkspaceReplaceApplyConflict[],
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (conflicts.length === 0) return "";
   const listed = conflicts
@@ -334,7 +340,7 @@ function RootErrors({
 }: {
   readonly errors: readonly RootSearchError[];
   readonly operation: "searched" | "previewed";
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   if (errors.length === 0) return null;
   const operationLabel =
@@ -374,7 +380,7 @@ function ReplaceReviews({
   readonly appliedRootIds: ReadonlySet<string>;
   readonly messages: ReadonlyMap<string, string>;
   readonly onApply: (preview: RootReplacePreview) => void;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   return previews.map((preview) => {
     const applied = appliedRootIds.has(preview.target.id);
@@ -415,7 +421,7 @@ function ReplaceReviews({
 }
 
 export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const catalog = useOptionalChatSessionCatalog();
   const openBuffers = useWorkspaceReplaceBuffers();
   const selectedRoot = root ?? catalog?.activeProject?.path;
