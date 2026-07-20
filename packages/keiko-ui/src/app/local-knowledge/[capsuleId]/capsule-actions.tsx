@@ -273,9 +273,23 @@ function parseFilesInput(value: string): readonly string[] {
   );
 }
 
-function buildScope(rootPath: string, filesInput: string): ConnectCapsuleSourceScope | null {
+// A repository source is not merely a folder that happens to contain code: the "repository"
+// scope kind is what packages/keiko-server/src/local-knowledge-handlers.ts uses to decide
+// whether a capsule is routed through the repository pod -- git-blob fingerprints, incremental
+// unchanged-file skipping driven by git status, and code-aware chunking that yields path:line
+// citations, instead of whole-file re-embedding on every refresh. Specific-file selection and
+// repository mode are mutually exclusive (a "some files from this repo" scope would defeat the
+// git-aware incremental logic), so repository mode wins outright and the files input is ignored.
+function buildScope(
+  rootPath: string,
+  filesInput: string,
+  repositoryMode: boolean,
+): ConnectCapsuleSourceScope | null {
   const trimmedRoot = rootPath.trim();
   if (trimmedRoot === "") return null;
+  if (repositoryMode) {
+    return { kind: "repository", repositoryRoot: trimmedRoot };
+  }
   const files = parseFilesInput(filesInput);
   if (files.length === 0) {
     return { kind: "folder", rootPath: trimmedRoot, recursive: true };
@@ -286,10 +300,14 @@ function buildScope(rootPath: string, filesInput: string): ConnectCapsuleSourceS
 function selectedSourceSummary(
   rootPath: string,
   filesInput: string,
+  repositoryMode: boolean,
   t: I18nTranslate,
 ): string | null {
   const trimmedRoot = rootPath.trim();
   if (trimmedRoot === "") return null;
+  if (repositoryMode) {
+    return t("localKnowledge.detail.connect.selectedRepository", { path: trimmedRoot });
+  }
   const fileCount = parseFilesInput(filesInput).length;
   if (fileCount > 0) {
     return t("localKnowledge.detail.connect.selectedDocuments", {
@@ -310,13 +328,25 @@ function ConnectSourceForm({
   const [rootPath, setRootPath] = useState("");
   const [filesInput, setFilesInput] = useState("");
   const [specificFilesExpanded, setSpecificFilesExpanded] = useState(false);
+  const [repositoryMode, setRepositoryMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const nativeNoteId = useId();
   const nativeDialogSupported = useNativeFileDialogCapability();
-  const scope = buildScope(rootPath, filesInput);
-  const selectedSource = selectedSourceSummary(rootPath, filesInput, t);
+  const scope = buildScope(rootPath, filesInput, repositoryMode);
+  const selectedSource = selectedSourceSummary(rootPath, filesInput, repositoryMode, t);
   const documentFilters = nativeDocumentFilters(t);
+
+  // Repository mode and the specific-files disclosure are mutually exclusive (see buildScope).
+  // Turning repository mode on clears any in-progress file selection instead of leaving it
+  // behind, disabled but stale, in the collapsed disclosure.
+  function handleRepositoryModeChange(checked: boolean): void {
+    setRepositoryMode(checked);
+    if (checked) {
+      setFilesInput("");
+      setSpecificFilesExpanded(false);
+    }
+  }
 
   function handleNativeOutcome(
     outcome: Awaited<ReturnType<typeof pickWithNativeDialog>>,
@@ -376,6 +406,7 @@ function ConnectSourceForm({
       setRootPath("");
       setFilesInput("");
       setSpecificFilesExpanded(false);
+      setRepositoryMode(false);
       onConnected();
     } catch (error) {
       setConnectError(formatError(error, t));
@@ -416,9 +447,13 @@ function ConnectSourceForm({
           <button
             type="button"
             className="lk-btn lk-btn-primary"
-            disabled={busy || !nativeDialogSupported}
+            disabled={busy || !nativeDialogSupported || repositoryMode}
             aria-describedby={nativeDialogSupported ? undefined : nativeNoteId}
-            title={t("localKnowledge.detail.help.sourceSetup")}
+            title={
+              repositoryMode
+                ? t("localKnowledge.detail.connect.repositoryFilesDisabledNote")
+                : t("localKnowledge.detail.help.sourceSetup")
+            }
             onClick={openNativeFilesPicker}
           >
             {t("localKnowledge.detail.connect.pickDocumentSource")}
@@ -466,12 +501,43 @@ function ConnectSourceForm({
           </button>
         </div>
       </div>
+      <div className="lkd-connect-row">
+        <label htmlFor="lkd-connect-repository-toggle" className="dlg-label">
+          <input
+            id="lkd-connect-repository-toggle"
+            type="checkbox"
+            checked={repositoryMode}
+            disabled={busy}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              handleRepositoryModeChange(e.target.checked)
+            }
+          />{" "}
+          <Explainable description={t("localKnowledge.detail.help.repositoryMode")}>
+            {t("localKnowledge.detail.connect.repositoryMode")}
+          </Explainable>
+        </label>
+      </div>
       <details
         className={detailStyles.specificFilesDisclosure}
-        open={specificFilesExpanded}
-        onToggle={(event) => setSpecificFilesExpanded(event.currentTarget.open)}
+        data-disabled={repositoryMode ? "true" : undefined}
+        open={specificFilesExpanded && !repositoryMode}
+        onToggle={(event) => {
+          if (repositoryMode) return;
+          setSpecificFilesExpanded(event.currentTarget.open);
+        }}
       >
-        <summary className={detailStyles.specificFilesSummary}>
+        <summary
+          className={detailStyles.specificFilesSummary}
+          aria-disabled={repositoryMode}
+          title={
+            repositoryMode
+              ? t("localKnowledge.detail.connect.repositoryFilesDisabledNote")
+              : undefined
+          }
+          onClick={(event) => {
+            if (repositoryMode) event.preventDefault();
+          }}
+        >
           <span>
             <Explainable description={t("localKnowledge.detail.help.specificFiles")}>
               {t("localKnowledge.detail.connect.specificFiles")}
@@ -486,12 +552,17 @@ function ConnectSourceForm({
           id="lkd-connect-files-input"
           className="dlg-input lkd-connect-input"
           value={filesInput}
-          disabled={busy}
+          disabled={busy || repositoryMode}
           placeholder={"src/app.ts\nREADME.md"}
           rows={4}
           onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFilesInput(e.target.value)}
         />
       </details>
+      {repositoryMode ? (
+        <p className={detailStyles.selectedSourceNote}>
+          {t("localKnowledge.detail.connect.repositoryFilesDisabledNote")}
+        </p>
+      ) : null}
       {connectError !== null ? (
         <div role="alert" aria-live="assertive" className="lk-alert">
           {connectError}

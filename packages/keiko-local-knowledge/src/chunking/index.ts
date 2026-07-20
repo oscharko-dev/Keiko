@@ -40,6 +40,7 @@ export {
   type ChunkDocumentResult,
   type ChunkingOptions,
   type ChunkingResult,
+  type ChunkingUnitContext,
   type LocalKnowledgeTokenizer,
   type LocalKnowledgeTokenizerKind,
   type ResolvedChunkingOptions,

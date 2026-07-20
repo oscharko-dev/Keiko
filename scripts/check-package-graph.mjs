@@ -58,6 +58,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
       "@oscharko-dev/keiko-workspace",
       "@oscharko-dev/keiko-tools",
       "@oscharko-dev/keiko-harness",
+      "@oscharko-dev/keiko-local-knowledge",
       "@oscharko-dev/keiko-workflows",
       "@oscharko-dev/keiko-verification",
       "@oscharko-dev/keiko-evidence",

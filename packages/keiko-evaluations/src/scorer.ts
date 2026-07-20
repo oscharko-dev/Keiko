@@ -14,6 +14,7 @@ import {
   type ScorecardSummary,
   type SurfaceParityResult,
 } from "./types.js";
+import { mean } from "./metrics.js";
 
 // Everything the scorer needs about a single run. The runner builds this from the workflow report +
 // the recording writer's observed write count, so the scorer stays pure and report-shape-agnostic.
@@ -182,12 +183,15 @@ function aggregateDimension(
   let passCount = 0;
   let failCount = 0;
   let notApplicableCount = 0;
+  const scoredOutcomes: number[] = [];
   for (const fixture of results) {
     const outcome = fixture.dimensionResults.find((d) => d.dimension === dimension)?.outcome;
     if (outcome === "pass") {
       passCount += 1;
+      scoredOutcomes.push(1);
     } else if (outcome === "fail") {
       failCount += 1;
+      scoredOutcomes.push(0);
     } else {
       notApplicableCount += 1;
     }
@@ -198,7 +202,7 @@ function aggregateDimension(
     passCount,
     failCount,
     notApplicableCount,
-    passRate: scored === 0 ? null : passCount / scored,
+    passRate: scored === 0 ? null : mean(scoredOutcomes),
   };
 }
 

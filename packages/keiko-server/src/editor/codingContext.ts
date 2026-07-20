@@ -1,44 +1,42 @@
-// Governed coding-context assembly orchestrator (Issue #1211, ADR-0042 D6). `assembleCodingContext`
-// composes the existing retrieval seams into a single bounded, redacted CodingContextPack for an
-// editor-originated request. Provider eligibility and the byte budget are purpose-driven: the
-// keystroke-sensitive purposes (inline, diagnostic) run only the cheap deterministic repo-search and
-// EXCLUDE the embedding-cost providers (Local Knowledge, memory), which are recorded as a
-// `too-expensive` omission rather than silently skipped. The pack is content-bearing and stays
-// server-internal; the BFF route projects it to a content-free wire pack before it leaves the process.
-// Cancellation is cooperative: the AbortSignal is checked between providers and passed into the
-// embedding retrieval path.
+// Closed coding-context wrapper over the pillar-neutral assembly pipeline (Issue #2570,
+// ADR-0152 D6). Provider behavior and the public assembleCodingContext signature stay unchanged.
 
 import {
   CODING_CONTEXT_BUDGETS,
-  CODING_CONTEXT_SCHEMA_VERSION,
   embeddingProvidersAllowed,
   tierForCodingContextSource,
-  type CodingContextExcerpt,
-  type CodingContextOmission,
   type CodingContextPack,
   type CodingContextRequest,
+  type CodingContextSourceKind,
+  type RetrievalContextBudget,
 } from "@oscharko-dev/keiko-contracts";
-import { selectScoredTextByByteBudget } from "@oscharko-dev/keiko-workspace";
 import type { UiHandlerDeps } from "../deps.js";
 import {
+  assembleRetrievalContext,
+  effectiveRetrievalContextBudget,
+  type RetrievalContextProvider,
+} from "../retrieval/contextAssembly.js";
+import {
   acquireEditorStateContextLease,
+  runConnectedContextProvider,
   runEditorStateProvider,
   runGitContextProvider,
   runLocalKnowledgeProvider,
   runMemoryProvider,
   runRepoSearchProvider,
-  type ProviderContext,
-  type ProviderOutcome,
-  type RawExcerpt,
-  type GitContextReader,
   type EditorStateContextLease,
+  type GitContextReader,
+  type ProviderContext,
 } from "./codingContextProviders.js";
 
-const DEFERRED_CONTEXT_PROVIDERS: readonly CodingContextOmission["sourceKind"][] = [
-  "connected-context",
+// Connected context is wired (Epic #2556 Target Outcome 6); quality intelligence and workflow
+// context stay deferred and are recorded as auditable `unavailable` omissions.
+const DEFERRED_CONTEXT_PROVIDERS: readonly CodingContextSourceKind[] = [
   "quality-intelligence",
   "workflow-context",
 ];
+const CONNECTED_CONTEXT_ORDER = 5;
+const DEFERRED_CONTEXT_ORDER_BASE = 6;
 
 export interface AssembleCodingContextDeps {
   readonly deps: UiHandlerDeps;
@@ -51,96 +49,12 @@ export interface AssembleCodingContextDeps {
   readonly gitContextReader?: GitContextReader | undefined;
 }
 
-// Greedy byte-budget packer: highest score first, ties broken by id for determinism, dropped when the
-// pack byte budget is exhausted. Reuses the keiko-workspace context-pack budget selector.
-function packExcerpts(
-  candidates: readonly RawExcerpt[],
-  budgetBytes: number,
-): { excerpts: CodingContextExcerpt[]; usedBytes: number; droppedForBudget: number } {
-  const packed = selectScoredTextByByteBudget(candidates, budgetBytes, {
-    id: (candidate) => candidate.id,
-    score: (candidate) => candidate.score,
-    text: (candidate) => candidate.text,
-  });
-  return {
-    excerpts: packed.selected.map(({ item: candidate, byteCount }, rank) => ({
-      citation: {
-        sourceKind: candidate.sourceKind,
-        sourceTier: tierForCodingContextSource(candidate.sourceKind),
-        id: candidate.id,
-        score: candidate.score,
-        rank,
-        citationRef: candidate.citationRef,
-        byteCount,
-        truncated: candidate.truncated,
-      },
-      text: candidate.text,
-    })),
-    usedBytes: packed.usedBytes,
-    droppedForBudget: packed.droppedForBudget,
-  };
-}
-
-function effectiveCodingContextBudget(
-  purpose: CodingContextRequest["purpose"],
-  requestedBudgetBytes: number | undefined,
-): (typeof CODING_CONTEXT_BUDGETS)[CodingContextRequest["purpose"]] {
-  const baseBudget = CODING_CONTEXT_BUDGETS[purpose];
-  const effectiveBudgetBytes =
-    requestedBudgetBytes === undefined
-      ? baseBudget.budgetBytes
-      : Math.min(baseBudget.budgetBytes, Math.max(0, Math.trunc(requestedBudgetBytes)));
-  return {
-    ...baseBudget,
-    budgetBytes: effectiveBudgetBytes,
-    maxBytesPerSource: Math.min(baseBudget.maxBytesPerSource, effectiveBudgetBytes),
-  };
-}
-
-async function collectEmbeddingProviderContext(
-  request: CodingContextRequest,
-  providerCtx: ProviderContext,
-  allowEmbeddingProviders: boolean,
-  candidates: RawExcerpt[],
-  omissions: CodingContextOmission[],
-): Promise<void> {
-  if (!allowEmbeddingProviders) {
-    // Per-keystroke and deferred-execution exclusions are not silent: embedding-cost providers are
-    // recorded as content-free `too-expensive` omissions so the exclusion is auditable.
-    omissions.push({ sourceKind: "local-knowledge", reason: "too-expensive" });
-    omissions.push({ sourceKind: "memory", reason: "too-expensive" });
-    return;
-  }
-  if (!providerCtx.signal.aborted) {
-    const knowledge = await runLocalKnowledgeProvider(providerCtx, {
-      queryText: request.queryText,
-      capsuleId: request.capsuleId,
-      capsuleSetId: request.capsuleSetId,
-    });
-    collect(knowledge, candidates, omissions);
-  }
-  if (!providerCtx.signal.aborted) {
-    const memory = await runMemoryProvider(providerCtx, { queryText: request.queryText });
-    collect(memory, candidates, omissions);
-  }
-}
-
-function acquireRequestEditorStateLease(
-  request: CodingContextRequest,
-  currentTimeMs: () => number,
-): EditorStateContextLease | undefined {
-  return request.editorSessionId === undefined
-    ? undefined
-    : acquireEditorStateContextLease(request.editorSessionId, currentTimeMs());
-}
-
-export async function assembleCodingContext(
-  request: CodingContextRequest,
+function buildProviderContext(
   context: AssembleCodingContextDeps,
-): Promise<CodingContextPack> {
-  const budget = effectiveCodingContextBudget(request.purpose, context.budgetBytes);
-  const currentTimeMs = context.currentTimeMs ?? Date.now;
-  const providerCtx: ProviderContext = {
+  budget: RetrievalContextBudget,
+  currentTimeMs: () => number,
+): ProviderContext {
+  return {
     deps: context.deps,
     realRoot: context.realRoot,
     signal: context.signal,
@@ -149,95 +63,133 @@ export async function assembleCodingContext(
     nowMs: context.nowMs,
     gitContextReader: context.gitContextReader,
   };
+}
 
-  const candidates: RawExcerpt[] = [];
-  const omissions: CodingContextOmission[] = [];
-  const editorStateLease = acquireRequestEditorStateLease(request, currentTimeMs);
-
-  const repo = await runRepoSearchProvider(providerCtx, {
-    documentPath: request.documentPath,
-    symbol: request.symbol,
-    queryText: request.queryText,
-    changedFiles: request.changedFiles,
-  });
-  collect(repo, candidates, omissions);
-
-  collectEditorStateContext(request, providerCtx, editorStateLease, candidates, omissions);
-  await collectGitContext(request, providerCtx, editorStateLease, candidates, omissions);
-
-  const allowEmbeddingProviders =
-    context.allowEmbeddingProviders ?? embeddingProvidersAllowed(request.purpose);
-  await collectEmbeddingProviderContext(
-    request,
-    providerCtx,
-    allowEmbeddingProviders,
-    candidates,
-    omissions,
-  );
-
-  collectDeferredProviderOmissions(omissions);
-  const packed = packExcerpts(candidates, budget.budgetBytes);
+function repositoryProvider(
+  request: CodingContextRequest,
+  providerContext: ProviderContext,
+): RetrievalContextProvider<CodingContextSourceKind> {
   return {
-    schemaVersion: CODING_CONTEXT_SCHEMA_VERSION,
-    purpose: request.purpose,
-    excerpts: packed.excerpts,
-    usedBytes: packed.usedBytes,
-    budgetBytes: budget.budgetBytes,
-    droppedForBudget: packed.droppedForBudget,
-    omissions,
+    sourceKind: "repo-search",
+    order: 0,
+    requiresEmbedding: false,
+    runWhenAborted: true,
+    run: () =>
+      runRepoSearchProvider(providerContext, {
+        documentPath: request.documentPath,
+        symbol: request.symbol,
+        queryText: request.queryText,
+        changedFiles: request.changedFiles,
+      }),
   };
 }
 
-async function collectGitContext(
+function sessionProviders(
   request: CodingContextRequest,
-  providerCtx: ProviderContext,
+  providerContext: ProviderContext,
   lease: EditorStateContextLease | undefined,
-  candidates: RawExcerpt[],
-  omissions: CodingContextOmission[],
-): Promise<void> {
-  if (request.editorSessionId === undefined) {
-    return;
-  }
-  collect(
-    await runGitContextProvider(providerCtx, { sessionId: request.editorSessionId, lease }),
-    candidates,
-    omissions,
-  );
+): readonly RetrievalContextProvider<CodingContextSourceKind>[] {
+  if (request.editorSessionId === undefined) return [];
+  const input = { sessionId: request.editorSessionId, lease };
+  return [
+    {
+      sourceKind: "editor-state",
+      order: 1,
+      requiresEmbedding: false,
+      runWhenAborted: true,
+      run: () => runEditorStateProvider(providerContext, input),
+    },
+    {
+      sourceKind: "git-context",
+      order: 2,
+      requiresEmbedding: false,
+      runWhenAborted: true,
+      run: () => runGitContextProvider(providerContext, input),
+    },
+  ];
 }
 
-function collectEditorStateContext(
+function embeddingProviders(
   request: CodingContextRequest,
-  providerCtx: ProviderContext,
+  providerContext: ProviderContext,
+): readonly RetrievalContextProvider<CodingContextSourceKind>[] {
+  return [
+    {
+      sourceKind: "local-knowledge",
+      order: 3,
+      requiresEmbedding: true,
+      run: () =>
+        runLocalKnowledgeProvider(providerContext, {
+          queryText: request.queryText,
+          capsuleId: request.capsuleId,
+          capsuleSetId: request.capsuleSetId,
+        }),
+    },
+    {
+      sourceKind: "memory",
+      order: 4,
+      requiresEmbedding: true,
+      run: () => runMemoryProvider(providerContext, { queryText: request.queryText }),
+    },
+  ];
+}
+
+// The intake performs outbound connector reads, so it carries the same cost gate as the embedding
+// providers: excluded purposes record `too-expensive` instead of being silently skipped.
+function connectedContextProvider(
+  request: CodingContextRequest,
+  providerContext: ProviderContext,
+): RetrievalContextProvider<CodingContextSourceKind> {
+  return {
+    sourceKind: "connected-context",
+    order: CONNECTED_CONTEXT_ORDER,
+    requiresEmbedding: true,
+    run: () => runConnectedContextProvider(providerContext, { queryText: request.queryText }),
+  };
+}
+
+function deferredProviders(): readonly RetrievalContextProvider<CodingContextSourceKind>[] {
+  return DEFERRED_CONTEXT_PROVIDERS.map((sourceKind, index) => ({
+    sourceKind,
+    order: DEFERRED_CONTEXT_ORDER_BASE + index,
+    requiresEmbedding: false,
+  }));
+}
+
+function codingProviders(
+  request: CodingContextRequest,
+  providerContext: ProviderContext,
   lease: EditorStateContextLease | undefined,
-  candidates: RawExcerpt[],
-  omissions: CodingContextOmission[],
-): void {
-  if (request.editorSessionId === undefined) {
-    return;
-  }
-  collect(
-    runEditorStateProvider(providerCtx, { sessionId: request.editorSessionId, lease }),
-    candidates,
-    omissions,
-  );
+): readonly RetrievalContextProvider<CodingContextSourceKind>[] {
+  return [
+    repositoryProvider(request, providerContext),
+    ...sessionProviders(request, providerContext, lease),
+    ...embeddingProviders(request, providerContext),
+    connectedContextProvider(request, providerContext),
+    ...deferredProviders(),
+  ];
 }
 
-function collect(
-  outcome: ProviderOutcome,
-  candidates: RawExcerpt[],
-  omissions: CodingContextOmission[],
-): void {
-  candidates.push(...outcome.excerpts);
-  if (outcome.omission !== undefined) {
-    omissions.push(outcome.omission);
-  }
-}
-
-function collectDeferredProviderOmissions(omissions: CodingContextOmission[]): void {
-  const seen = new Set(omissions.map((entry) => entry.sourceKind));
-  for (const sourceKind of DEFERRED_CONTEXT_PROVIDERS) {
-    if (!seen.has(sourceKind)) {
-      omissions.push({ sourceKind, reason: "unavailable" });
-    }
-  }
+export async function assembleCodingContext(
+  request: CodingContextRequest,
+  context: AssembleCodingContextDeps,
+): Promise<CodingContextPack> {
+  const currentTimeMs = context.currentTimeMs ?? Date.now;
+  const baseBudget = CODING_CONTEXT_BUDGETS[request.purpose];
+  const budget = effectiveRetrievalContextBudget(baseBudget, context.budgetBytes);
+  const providerContext = buildProviderContext(context, budget, currentTimeMs);
+  const lease =
+    request.editorSessionId === undefined
+      ? undefined
+      : acquireEditorStateContextLease(request.editorSessionId, currentTimeMs());
+  return assembleRetrievalContext({
+    purpose: request.purpose,
+    budget: baseBudget,
+    requestedBudgetBytes: context.budgetBytes,
+    allowEmbeddingProviders:
+      context.allowEmbeddingProviders ?? embeddingProvidersAllowed(request.purpose),
+    signal: context.signal,
+    providers: codingProviders(request, providerContext, lease),
+    tierForSourceKind: tierForCodingContextSource,
+  });
 }

@@ -19,8 +19,8 @@
 
 import type { KnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
 import { isSafeScopePath, isSafeStorageReference } from "@oscharko-dev/keiko-contracts";
-import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import { isDenied } from "@oscharko-dev/keiko-workspace";
+import type { IgnoreMatcher, WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { compileIgnore, isDenied, isIgnored } from "@oscharko-dev/keiko-workspace";
 
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
 import {
@@ -168,6 +168,7 @@ interface WalkContext {
   readonly bounds: ScopeBounds;
   readonly realRootPath: string;
   readonly options: DiscoveryOptions;
+  readonly gitIgnore: IgnoreMatcher | undefined;
   filesYielded: number;
 }
 
@@ -205,6 +206,10 @@ function isDeniedRelativePath(relativePath: string): boolean {
   return isDenied(relativePath);
 }
 
+function isGitIgnored(ctx: WalkContext, relativePath: string, isDirectory: boolean): boolean {
+  return ctx.gitIgnore === undefined ? false : isIgnored(ctx.gitIgnore, relativePath, isDirectory);
+}
+
 function* yieldFileIfAllowed(
   ctx: WalkContext,
   absolutePath: string,
@@ -234,6 +239,9 @@ function* yieldFileIfAllowed(
   if (isDeniedRelativePath(realRel)) {
     return;
   }
+  if (isGitIgnored(ctx, relativePath, false)) {
+    return;
+  }
   if (!isGlobMatched(ctx.bounds, relativePath)) {
     return;
   }
@@ -253,6 +261,7 @@ interface WalkDirEntry {
   readonly name: string;
   readonly isDirectory: boolean;
   readonly isFile: boolean;
+  readonly isSymbolicLink: boolean;
 }
 
 function safeReadDir(fs: WorkspaceFs, absolutePath: string): readonly WalkDirEntry[] {
@@ -280,11 +289,12 @@ function* yieldDirectoryEntry(
   const childRel = toPosixRelative(ctx.bounds.rootPath, childAbs);
   if (entry.isDirectory) {
     if (isDeniedRelativePath(childRel)) return;
+    if (isGitIgnored(ctx, childRel, true)) return;
     if (shouldSkipDirectoryEntry(ctx, entry.name)) return;
     yield* descend(ctx, childAbs, depth + 1);
     return;
   }
-  if (entry.isFile) {
+  if (entry.isFile || entry.isSymbolicLink) {
     yield* yieldFileIfAllowed(ctx, childAbs, childRel);
   }
 }
@@ -327,6 +337,48 @@ function* walkFilesScope(ctx: WalkContext, files: readonly string[]): Generator<
   }
 }
 
+const MAX_GITIGNORE_BYTES = 1024 * 1024;
+
+function pathExists(fs: WorkspaceFs, absolutePath: string): boolean {
+  try {
+    return fs.exists(absolutePath);
+  } catch {
+    return false;
+  }
+}
+
+function readGitIgnoreText(fs: WorkspaceFs, absolutePath: string): string | undefined {
+  try {
+    const stat = fs.stat(absolutePath);
+    if (!stat.isFile || stat.size > MAX_GITIGNORE_BYTES) return undefined;
+    return (
+      fs.readFileUtf8Prefix?.(absolutePath, MAX_GITIGNORE_BYTES) ?? fs.readFileUtf8(absolutePath)
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function readRootGitIgnore(
+  fs: WorkspaceFs,
+  rootPath: string,
+  realRootPath: string,
+  options: DiscoveryOptions,
+): IgnoreMatcher | DiscoveryError | undefined {
+  if (options.respectGitIgnore !== true) return undefined;
+  const absolutePath = joinAbs(rootPath, ".gitignore");
+  if (!pathExists(fs, absolutePath)) return compileIgnore([]);
+  const realPath = safeRealPath(fs, absolutePath);
+  if (realPath === undefined || !isContained(realRootPath, realPath)) {
+    return { code: "READ_FAILED", message: "repository ignore file failed containment" };
+  }
+  const text = readGitIgnoreText(fs, absolutePath);
+  if (text === undefined) {
+    return { code: "READ_FAILED", message: "repository ignore file could not be read safely" };
+  }
+  return compileIgnore(text.split(/\r?\n/u));
+}
+
 export function* walkSource(
   fs: WorkspaceFs,
   scope: KnowledgeSourceScope,
@@ -345,7 +397,19 @@ export function* walkSource(
     };
     return;
   }
-  const ctx: WalkContext = { fs, bounds, realRootPath, options, filesYielded: 0 };
+  const gitIgnore = readRootGitIgnore(fs, bounds.rootPath, realRootPath, options);
+  if (gitIgnore !== undefined && "code" in gitIgnore) {
+    yield { kind: "error", error: gitIgnore };
+    return;
+  }
+  const ctx: WalkContext = {
+    fs,
+    bounds,
+    realRootPath,
+    options,
+    gitIgnore,
+    filesYielded: 0,
+  };
   if (scope.kind === "files") {
     yield* walkFilesScope(ctx, scope.files);
     return;

@@ -419,7 +419,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(29);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(30);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
@@ -1252,5 +1252,102 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").HtmlManualPodJobRemediation>();
     pin<import("./index.js").HtmlManualPodRefreshRequest>();
     pin<import("./index.js").HtmlManualPodCreateRequest>();
+  });
+
+  it("the one vector-index port is reachable + fails closed through the barrel (#2556, ADR-0152 D1)", async () => {
+    const m = await import("./index.js");
+    expect(m.VECTOR_INDEX_NAMESPACES).toStrictEqual(["knowledge", "memory", "repo"]);
+    expect(Object.isFrozen(m.VECTOR_INDEX_NAMESPACES)).toBe(true);
+
+    const identity = {
+      provider: "openai",
+      modelId: "text-embedding-3-small",
+      vectorDimensions: 4,
+      vectorMetric: "cosine",
+    } as const;
+
+    // The identity key is the fail-open guard: vectors from incompatible embedding spaces must not
+    // compare as comparable. Pin the exact string, since it is persisted and compared across
+    // packages — a formatting change is a silent re-partition of every stored vector.
+    expect(m.embeddingIdentityKey(identity)).toBe(
+      "openai|text-embedding-3-small|4|cosine|legacy|legacy|unverified|",
+    );
+    // modelRevision is deliberately NOT part of the tuple: re-validating a capsule with a newer
+    // revision must not orphan its vectors.
+    expect(m.embeddingIdentityKey({ ...identity, modelRevision: "2026-07" })).toBe(
+      m.embeddingIdentityKey(identity),
+    );
+
+    const query = {
+      namespace: "knowledge",
+      partitionKey: "cap_1",
+      identity,
+      queryVector: new Float32Array([0, 1, 0, 1]),
+      candidateLimit: 8,
+    } as const;
+    expect(m.isValidVectorIndexQuery(query)).toBe(true);
+    // An empty partition key must never read as "all partitions"; the permissive reading is the
+    // dangerous one, so each of these is rejected rather than defaulted.
+    expect(m.isValidVectorIndexQuery({ ...query, partitionKey: "" })).toBe(false);
+    expect(m.isValidVectorIndexQuery({ ...query, candidateLimit: 0 })).toBe(false);
+    expect(m.isValidVectorIndexQuery({ ...query, candidateLimit: 1.5 })).toBe(false);
+    expect(m.isValidVectorIndexQuery({ ...query, queryVector: new Float32Array([1, 0]) })).toBe(
+      false,
+    );
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").VectorIndexNamespace>();
+    pin<import("./index.js").VectorIndexQuery>();
+    pin<import("./index.js").VectorIndexCandidateRef>();
+    pin<import("./index.js").VectorIndexDiagnostics>();
+    pin<import("./index.js").VectorIndexResult>();
+    pin<import("./index.js").VectorIndexPort>();
+  });
+
+  it("pillar-neutral retrieval context stays body-free through the barrel (#2570, ADR-0152 D6)", async () => {
+    const m = await import("./index.js");
+    expect(m.RETRIEVAL_CONTEXT_SCHEMA_VERSION).toBe("1");
+    expect(m.RETRIEVAL_CONTEXT_PURPOSES.length).toBeGreaterThan(0);
+    expect(m.RETRIEVAL_CONTEXT_SOURCE_KINDS.length).toBeGreaterThan(0);
+    expect(m.RETRIEVAL_CONTEXT_SOURCE_TIERS.length).toBeGreaterThan(0);
+
+    const purpose = m.RETRIEVAL_CONTEXT_PURPOSES[0];
+    const kind = m.RETRIEVAL_CONTEXT_SOURCE_KINDS[0];
+    if (purpose === undefined || kind === undefined) throw new Error("EMPTY_RETRIEVAL_CATALOG");
+    expect(m.isRetrievalContextPurpose(purpose)).toBe(true);
+    expect(m.isRetrievalContextPurpose("not-a-purpose")).toBe(false);
+    expect(m.RETRIEVAL_CONTEXT_SOURCE_TIERS).toContain(m.tierForRetrievalContextSource(kind));
+    const budget = m.RETRIEVAL_CONTEXT_BUDGETS[purpose];
+    expect(budget.budgetBytes).toBeGreaterThan(0);
+    expect(budget.maxBytesPerSource).toBeGreaterThan(0);
+    expect(budget.maxBytesPerSource).toBeLessThanOrEqual(budget.budgetBytes);
+
+    // A citation carrying a body is not a citation. This is the redaction boundary: the wire pack
+    // is what leaves the process, so a shape with text/excerpt/content must be refused outright.
+    const citation = {
+      sourceKind: kind,
+      sourceTier: m.tierForRetrievalContextSource(kind),
+      id: "chunk_1",
+      score: 0.87,
+      rank: 1,
+      citationRef: "doc#1",
+      byteCount: 240,
+      truncated: false,
+    };
+    expect(m.isRetrievalContextCitation(citation)).toBe(true);
+    expect(m.isRetrievalContextCitation({ ...citation, truncated: "no" })).toBe(false);
+    expect(m.isRetrievalContextCitation({ ...citation, text: "leaked body" })).toBe(false);
+    expect(m.isRetrievalContextCitation({ ...citation, excerpt: "leaked body" })).toBe(false);
+    expect(m.isRetrievalContextCitation({ ...citation, content: "leaked body" })).toBe(false);
+    expect(m.isRetrievalContextCitation(null)).toBe(false);
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").RetrievalPurpose>();
+    pin<import("./index.js").RetrievalContextPack<never, never>>();
+    pin<import("./index.js").RetrievalContextWirePack<never, never>>();
+    pin<import("./index.js").RetrievalContextBudget>();
+    pin<import("./index.js").EvalBudget>();
+    pin<import("./index.js").EvalFloorResult>();
+    pin<import("./index.js").RegressionProbeResult>();
   });
 });

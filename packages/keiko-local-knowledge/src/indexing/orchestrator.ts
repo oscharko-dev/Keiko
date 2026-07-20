@@ -167,6 +167,7 @@ function resolvedDiscoveryOptions(state: RunState): DiscoveryOptions {
   const base = {
     maxDepth: clampDiscoveryInteger(raw?.maxDepth, DEFAULT_DISCOVERY_OPTIONS.maxDepth),
     maxFiles: clampDiscoveryInteger(raw?.maxFiles, DEFAULT_DISCOVERY_OPTIONS.maxFiles),
+    ...(raw?.respectGitIgnore === true ? { respectGitIgnore: true } : {}),
   };
   const signal = raw?.signal ?? state.options.signal;
   return signal === undefined ? base : { ...base, signal };
@@ -295,7 +296,16 @@ interface DocumentRestoreSnapshot {
   readonly parsedUnits: readonly RawTableRow[];
   readonly chunks: readonly RawTableRow[];
   readonly chunkLexicalRows: readonly RawTableRow[];
+  readonly repositoryChunkLineRows: readonly RawTableRow[];
   readonly vectors: readonly RawTableRow[];
+}
+
+function tableExists(db: DatabaseSync, table: string): boolean {
+  return (
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name").get({
+      name: table,
+    }) !== undefined
+  );
 }
 
 function selectRowsForDocument(
@@ -358,6 +368,9 @@ function captureRestoreSnapshotIfEligible(
       state.capsule.id,
       documentId,
     ),
+    repositoryChunkLineRows: tableExists(db, "repository_chunk_line_ranges")
+      ? selectRowsForDocument(db, "repository_chunk_line_ranges", state.capsule.id, documentId)
+      : [],
     vectors: selectRowsForDocument(db, "vectors", state.capsule.id, documentId),
   });
 }
@@ -430,6 +443,9 @@ function restoreDocumentSnapshot(
   for (const row of snapshot.parsedUnits) insertRawRow(db, "parsed_units", row);
   for (const row of snapshot.chunks) insertRawRow(db, "chunks", row);
   for (const row of snapshot.chunkLexicalRows) insertRawRow(db, "chunk_lexical_index", row);
+  for (const row of snapshot.repositoryChunkLineRows) {
+    insertRawRow(db, "repository_chunk_line_ranges", row);
+  }
   for (const row of snapshot.vectors) insertRawRow(db, "vectors", row);
   restoreDocumentRow(db, documentId, snapshot.document);
   invalidateVectorIndexStateForCapsules(db, [state.capsule.id]);
@@ -450,6 +466,14 @@ function restoreSnapshotOnFailure(
   if (snapshot === undefined) return;
   if (!events.some((event) => event.kind === "document-failed")) return;
   restoreDocumentSnapshot(state, documentId, snapshot);
+}
+
+function restoreSnapshotOnCancellation(state: RunState, documentId: DocumentId): boolean {
+  if (!cancellationRequested(state)) return false;
+  const snapshot = state.restoreSnapshots.get(String(documentId));
+  discardRestoreSnapshot(state, documentId);
+  if (snapshot !== undefined) restoreDocumentSnapshot(state, documentId, snapshot);
+  return true;
 }
 
 // ─── Per-chunk text projection ────────────────────────────────────────────────
@@ -1708,6 +1732,7 @@ async function* handlePersistedDocument(
 
   yield* chunkStep.chunked.events;
   persistJobProgress(state);
+  if (restoreSnapshotOnCancellation(state, documentId)) return;
   yield* embedAndFinalizeChunkedDocument(state, result, documentId);
 }
 

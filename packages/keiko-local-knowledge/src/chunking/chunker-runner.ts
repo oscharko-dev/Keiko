@@ -24,6 +24,7 @@ import {
   deleteChunksForDocument,
   hasStaleChunksForDocument,
   insertChunkRow,
+  selectDocumentParserId,
   selectDocumentSourceId,
   selectParsedUnitsForDocument,
   type ParsedUnitRow,
@@ -37,6 +38,12 @@ import type {
   ChunkingResult,
 } from "./types.js";
 import { ChunkingError } from "./types.js";
+import { CODE_PARSER_ID } from "../parsers/code-parser.js";
+import {
+  buildDocumentLineIndex,
+  persistRepositoryChunkLineRange,
+  type DocumentLineIndex,
+} from "../indexing/repository-chunk-lines.js";
 
 // ─── Row → ParsedUnit reconstitution ──────────────────────────────────────────
 // The parsed_units table is the canonical write surface for #194. We re-hydrate the
@@ -228,6 +235,8 @@ interface PersistContext {
   readonly sourceId: KnowledgeSourceId;
   readonly documentId: DocumentId;
   readonly sourceText: string;
+  readonly parserId: string;
+  readonly lineIndex: DocumentLineIndex | undefined;
 }
 
 function documentMaxChunks(options: ChunkingOptions | undefined): number {
@@ -241,6 +250,42 @@ function optionsWithRemainingChunkBudget(
   return options === undefined ? { maxChunks: remaining } : { ...options, maxChunks: remaining };
 }
 
+function persistChunk(
+  store: KnowledgeStore,
+  ctx: PersistContext,
+  row: ParsedUnitRow,
+  unit: ParsedUnit,
+  chunk: ChunkingResult,
+  strategyKey: string,
+  orderIndex: number,
+): ChunkId {
+  const id = composeChunkId(ctx.documentId, unit, chunk);
+  insertChunkRow(store._internal.db, {
+    id,
+    capsuleId: ctx.capsuleId,
+    sourceId: ctx.sourceId,
+    documentId: ctx.documentId,
+    parsedUnitId: row.id,
+    orderIndex,
+    tokenCount: chunk.tokenCount,
+    safeExcerptHash: chunk.safeExcerptHash,
+    chunkingStrategyVersion: strategyKey,
+    characterStart: chunk.characterStart,
+    characterEnd: chunk.characterEnd,
+  });
+  if (ctx.lineIndex !== undefined) {
+    persistRepositoryChunkLineRange(store._internal.db, {
+      capsuleId: ctx.capsuleId,
+      chunkId: id,
+      documentId: ctx.documentId,
+      characterStart: chunk.characterStart,
+      characterEnd: chunk.characterEnd,
+      lineIndex: ctx.lineIndex,
+    });
+  }
+  return id;
+}
+
 function persistAllChunks(
   store: KnowledgeStore,
   ctx: PersistContext,
@@ -248,7 +293,6 @@ function persistAllChunks(
   options: ChunkingOptions | undefined,
   signal: AbortSignal | undefined,
 ): readonly ChunkId[] {
-  const db = store._internal.db;
   const chunkIds: ChunkId[] = [];
   const maxChunks = documentMaxChunks(options);
   const strategyKey = chunkingStrategyKey(options);
@@ -264,22 +308,10 @@ function persistAllChunks(
       unit,
       ctx.sourceText,
       optionsWithRemainingChunkBudget(options, remaining),
+      { parserId: ctx.parserId },
     );
     for (const chunk of chunks) {
-      const id = composeChunkId(ctx.documentId, unit, chunk);
-      insertChunkRow(db, {
-        id,
-        capsuleId: ctx.capsuleId,
-        sourceId: ctx.sourceId,
-        documentId: ctx.documentId,
-        parsedUnitId: row.id,
-        orderIndex,
-        tokenCount: chunk.tokenCount,
-        safeExcerptHash: chunk.safeExcerptHash,
-        chunkingStrategyVersion: strategyKey,
-        characterStart: chunk.characterStart,
-        characterEnd: chunk.characterEnd,
-      });
+      const id = persistChunk(store, ctx, row, unit, chunk, strategyKey, orderIndex);
       chunkIds.push(id);
       orderIndex += 1;
     }
@@ -361,7 +393,15 @@ export function chunkDocument(
     if (shouldDeleteExistingChunks(preflight, force)) {
       deleteChunksForDocument(db, capsuleId, documentId);
     }
-    const ctx: PersistContext = { capsuleId, sourceId, documentId, sourceText };
+    const parserId = selectDocumentParserId(db, capsuleId, documentId) ?? "unknown";
+    const ctx: PersistContext = {
+      capsuleId,
+      sourceId,
+      documentId,
+      sourceText,
+      parserId,
+      lineIndex: parserId === CODE_PARSER_ID ? buildDocumentLineIndex(sourceText) : undefined,
+    };
     const chunkIds = persistAllChunks(store, ctx, rows, options, signal);
     throwIfAborted(signal);
     db.exec("COMMIT");

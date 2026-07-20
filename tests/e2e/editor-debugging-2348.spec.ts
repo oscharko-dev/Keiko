@@ -764,6 +764,7 @@ async function stopFromDebugPanel(page: Page, panel: Locator): Promise<void> {
 async function expectServerPaused(
   page: Page,
   session: DebugSessionProjection,
+  minGeneration = 0,
 ): Promise<DebugSessionProjection> {
   let paused: DebugSessionProjection | undefined;
   await expect
@@ -781,8 +782,16 @@ async function expectServerPaused(
       }, session.sessionId);
       const record = value as { readonly status?: unknown };
       if (record.status !== "paused") return record.status;
-      paused = debugSession(value);
-      return record.status;
+      const projection = debugSession(value);
+      // A session still sitting on the previous stop is not the pause being waited for. The
+      // registry advances pauseGeneration once per adapter stop event, so requiring a higher
+      // generation distinguishes "stepped and paused again" from "never left the last pause".
+      // Reported rather than swallowed, so a timeout says which generation it was stuck on.
+      if (projection.pauseGeneration < minGeneration) {
+        return `paused-at-generation-${String(projection.pauseGeneration)}`;
+      }
+      paused = projection;
+      return "paused";
     })
     .toBe("paused");
   if (paused === undefined) throw new Error("DEBUG_SESSION_PAUSE_NOT_OBSERVED");
@@ -794,8 +803,9 @@ async function expectPaused(
   panel: Locator,
   session: DebugSessionProjection,
   frameName: string,
+  minGeneration = 0,
 ): Promise<DebugSessionProjection> {
-  const paused = await expectServerPaused(page, session);
+  const paused = await expectServerPaused(page, session, minGeneration);
   await expect(panel.getByText("Session is paused.")).toBeVisible();
   await expect(panel.getByRole("button", { name: new RegExp(frameName) })).toBeVisible();
   return paused;
@@ -853,15 +863,22 @@ async function stepAndStop(
   panel: Locator,
   session: DebugSessionProjection,
 ): Promise<void> {
+  // Wait on the state each step actually produces — a new pause, proven by pauseGeneration
+  // advancing — instead of racing the control-POST response. That race gave the three round trips
+  // no budget of their own: a slow-but-successful step under CI load consumed the whole test's
+  // 120s and failed it, exactly the flake `stopFromDebugPanel` above was already fixed for.
+  // Polling bare "paused" instead would be worse than the race, not better: the session is already
+  // paused when the button is clicked, so it would go green even if the step never landed.
+  let current = session;
   for (const label of ["Step over", "Step into", "Step out"] as const) {
-    const stepped = page.waitForResponse(
-      (response) =>
-        response.url().includes("/api/editor/debug/control") &&
-        response.request().method() === "POST",
-    );
     await panel.getByRole("button", { name: label }).click();
-    expect((await stepped).status()).toBe(200);
-    await expectPaused(page, panel, session, "breakpointFixture");
+    current = await expectPaused(
+      page,
+      panel,
+      current,
+      "breakpointFixture",
+      current.pauseGeneration + 1,
+    );
   }
   await stopFromDebugPanel(page, panel);
 }

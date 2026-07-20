@@ -4,7 +4,7 @@
 // so neither engine structurally dominates. Deterministic. See ADR-0036.
 
 import type { RerankResult } from "@oscharko-dev/keiko-model-gateway";
-import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { applyRerankMapping, fallbackRerankSelection } from "./grounded-rerank-facade.js";
 
 export const RRF_K = 60;
 
@@ -129,65 +129,33 @@ export function rerankAndSelect<P>(
   return selected;
 }
 
-function withFinalMarkers<P>(
+export function withFinalMarkers<P>(
   candidates: readonly SelectedCandidate<P>[],
 ): readonly SelectedCandidate<P>[] {
   return candidates.map((candidate, index) => ({ ...candidate, marker: index + 1 }));
+}
+
+export function withModelRerankScore<P>(
+  candidate: SelectedCandidate<P>,
+  result: RerankResult,
+): SelectedCandidate<P> {
+  return result.relevanceScore === undefined
+    ? candidate
+    : { ...candidate, rerankerScore: result.relevanceScore };
 }
 
 export function selectTopPromptCandidates<P>(
   candidates: readonly SelectedCandidate<P>[],
   topN: number,
 ): readonly SelectedCandidate<P>[] {
-  if (topN <= 0) return [];
-  return withFinalMarkers(candidates.slice(0, topN));
+  return withFinalMarkers(fallbackRerankSelection(candidates, topN, "slice-topN"));
 }
 
-// eslint-disable-next-line complexity
 export function applyModelRerankResults<P>(
   candidates: readonly SelectedCandidate<P>[],
   results: readonly RerankResult[],
   topN: number,
 ): readonly SelectedCandidate<P>[] | undefined {
-  if (candidates.length === 0) return [];
-  if (results.length === 0 || topN <= 0) return undefined;
-  const used = new Set<number>();
-  const reranked: SelectedCandidate<P>[] = [];
-  for (const result of results) {
-    if (!Number.isInteger(result.index) || result.index < 0 || result.index >= candidates.length) {
-      return undefined;
-    }
-    if (used.has(result.index)) return undefined;
-    const candidate = candidates[result.index];
-    if (candidate === undefined) return undefined;
-    used.add(result.index);
-    reranked.push(
-      result.relevanceScore === undefined
-        ? candidate
-        : { ...candidate, rerankerScore: result.relevanceScore },
-    );
-  }
-  return withFinalMarkers(reranked.slice(0, topN));
-}
-
-// Shared diagnostics-shaping helpers for the single-scope (local-knowledge-grounded-qa.ts) and
-// hybrid (grounded-qa-hybrid.ts) reranking paths, so a future diagnostics-shaping change is made
-// in one place instead of drifting between two identical copies.
-export function withKeptCount(
-  diagnostics: GroundedRerankerDiagnostics,
-  keptCount: number,
-): GroundedRerankerDiagnostics {
-  return { ...diagnostics, keptCount };
-}
-
-export function invalidRerankMappingDiagnostics(
-  diagnostics: GroundedRerankerDiagnostics,
-  keptCount: number,
-): GroundedRerankerDiagnostics {
-  return {
-    ...diagnostics,
-    status: "invalid-response",
-    failureKind: "invalid-response",
-    keptCount,
-  };
+  const selected = applyRerankMapping(candidates, results, topN, withModelRerankScore);
+  return selected === undefined ? undefined : withFinalMarkers(selected);
 }

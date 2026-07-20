@@ -1242,9 +1242,9 @@ describe("runIndexingJob — force", () => {
     await drain(runIndexingJob(buildOptions(fixture, { force: true })));
 
     const after = fixture.store._internal.db
-      .prepare("SELECT COUNT(*) AS n FROM vector_index_state WHERE capsule_id = :capsule_id")
-      .get({ capsule_id: String(fixture.capsuleId) }) as { readonly n: number };
-    expect(after.n).toBe(0);
+      .prepare("SELECT status FROM vector_index_state WHERE capsule_id = :capsule_id")
+      .get({ capsule_id: String(fixture.capsuleId) }) as { readonly status: string };
+    expect(after.status).toBe("dirty");
   });
 
   it("preserves other source vectors when force=true is scoped to one source", async () => {

@@ -25,6 +25,7 @@ import {
 } from "./fixtures.js";
 import { runRetrievalEval } from "./runner.js";
 import { PASS_THRESHOLDS, type RetrievalEvalFixture } from "./types.js";
+import type { VectorIndexAdapter } from "@oscharko-dev/keiko-local-knowledge";
 
 describe("runRetrievalEval — single-topic fixture", () => {
   it("hits recall=1.0 and precision=1.0 on the ground-truth query", async () => {
@@ -40,6 +41,33 @@ describe("runRetrievalEval — single-topic fixture", () => {
     const scorecard = await runRetrievalEval(singleTopicFixture);
     expect(scorecard.fixtureId).toBe("single-topic");
     expect(scorecard.runId).toBe("eval-single-topic");
+  });
+});
+
+describe("runRetrievalEval — vector-index threading", () => {
+  it("passes the caller-supplied vector index into the production retrieval runner", async () => {
+    let calls = 0;
+    const adapter: VectorIndexAdapter = {
+      searchCapsule: () => {
+        calls += 1;
+        return {
+          ok: false,
+          candidates: [],
+          sawDimensionCompatible: false,
+          sawIdentityIncompatible: false,
+          diagnostics: {
+            provider: "sqlite-vec",
+            status: "fallback-unavailable",
+            reason: "test-runtime-unavailable",
+          },
+        };
+      },
+    };
+
+    const scorecard = await runRetrievalEval(singleTopicFixture, { vectorIndex: { adapter } });
+
+    expect(calls).toBeGreaterThan(0);
+    expect(scorecard.passed).toBe(true);
   });
 });
 

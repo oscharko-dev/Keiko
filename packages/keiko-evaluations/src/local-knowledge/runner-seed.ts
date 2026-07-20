@@ -15,14 +15,18 @@ import type {
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
-
-import { createCapsule } from "../capsule-lifecycle.js";
-import { createCapsuleSet, getCapsuleSet } from "../capsule-set-lifecycle.js";
-import { insertChunkRow } from "../chunking/chunker-persist.js";
-import { insertDocumentRow, insertParsedUnitRow } from "../discovery/persist.js";
-import { upsertLexicalRows, type LexicalChunkIndexRow } from "../indexing/lexical-index-persist.js";
-import { addSourceToCapsule } from "../source-lifecycle.js";
-import type { KnowledgeStore } from "../store.js";
+import type { KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
+import {
+  addSourceToCapsule,
+  createCapsule,
+  createCapsuleSet,
+  getCapsuleSet,
+  insertChunkRow,
+  insertDocumentRow,
+  insertParsedUnitRow,
+  upsertLexicalRows,
+  type LexicalChunkIndexRow,
+} from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import { citationRequirementForUnit, type CitationRequirementKey } from "./dimensions.js";
 import type {

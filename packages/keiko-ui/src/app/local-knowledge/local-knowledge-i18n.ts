@@ -137,6 +137,10 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.detail.connect.relativeFiles": "Relative document paths",
   "localKnowledge.detail.connect.selectedSource": "Selected source: {path}",
   "localKnowledge.detail.connect.selectedDocuments": "Selected documents: {count} from {root}",
+  "localKnowledge.detail.connect.repositoryMode": "Connect as a code repository",
+  "localKnowledge.detail.connect.selectedRepository": "Selected repository: {path}",
+  "localKnowledge.detail.connect.repositoryFilesDisabledNote":
+    "Specific-file selection is unavailable in repository mode. The whole repository is connected as one code source.",
   "localKnowledge.detail.connect.connect": "Connect",
   "localKnowledge.detail.connect.connecting": "Connecting…",
   "localKnowledge.detail.connect.limitSummary":
@@ -147,6 +151,8 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
     "This path tells Keiko where the selected source is stored on this device. Keiko indexes only the connected source.",
   "localKnowledge.detail.help.specificFiles":
     "Use this when only certain documents inside a folder should belong to the Knowledge Pod. Each line is one document below the source path.",
+  "localKnowledge.detail.help.repositoryMode":
+    "Connects this source as a code repository instead of a document folder. Keiko then uses code-aware chunking, citations with file and line numbers, and a fast incremental refresh based on what changed in git. Not available together with specific-file selection.",
   "localKnowledge.detail.help.indexNow":
     "Starts indexing. Keiko reads the source, extracts text, and prepares it for later answers.",
   "localKnowledge.detail.help.maintenance":
@@ -595,6 +601,10 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.connect.relativeFiles": "Relative Dokumentpfade",
   "localKnowledge.detail.connect.selectedSource": "Ausgewählte Knowledgequelle: {path}",
   "localKnowledge.detail.connect.selectedDocuments": "Ausgewählte Dokumente: {count} aus {root}",
+  "localKnowledge.detail.connect.repositoryMode": "Als Code-Repository verbinden",
+  "localKnowledge.detail.connect.selectedRepository": "Ausgewähltes Repository: {path}",
+  "localKnowledge.detail.connect.repositoryFilesDisabledNote":
+    "Die Auswahl einzelner Dokumente ist im Repository-Modus nicht verfügbar. Das gesamte Repository wird als eine Code-Quelle verbunden.",
   "localKnowledge.detail.connect.connect": "Verbinden",
   "localKnowledge.detail.connect.connecting": "Verbinde…",
   "localKnowledge.detail.connect.limitSummary":
@@ -605,6 +615,8 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Dieser Pfad zeigt Keiko, wo die ausgewählte Quelle auf diesem Gerät liegt. Keiko indexiert nur die verbundene Quelle.",
   "localKnowledge.detail.help.specificFiles":
     "Nutze das, wenn aus einem Ordner nur bestimmte Dokumente in den Knowledge Pod sollen. Jede Zeile steht für ein Dokument unterhalb des Quellpfads.",
+  "localKnowledge.detail.help.repositoryMode":
+    "Verbindet diese Quelle als Code-Repository statt als Dokumentordner. Keiko nutzt dann code-bewusstes Chunking, Zitate mit Datei- und Zeilenangabe sowie eine schnelle inkrementelle Aktualisierung anhand der Git-Änderungen. Nicht gemeinsam mit der Auswahl einzelner Dokumente verfügbar.",
   "localKnowledge.detail.help.indexNow":
     "Startet die Indexierung. Keiko liest die Quelle, extrahiert Text und bereitet ihn für spätere Antworten vor.",
   "localKnowledge.detail.help.maintenance":

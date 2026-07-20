@@ -28,6 +28,12 @@ export {
   unsupportedParser,
 } from "./registry.js";
 export { textParser } from "./text-parser.js";
+export {
+  CODE_PARSER_ID,
+  codeParser,
+  codeSymbolLabel,
+  isCodeSymbolDefinitionLine,
+} from "./code-parser.js";
 export { jsonParser } from "./json-parser.js";
 export { csvParser } from "./csv-parser.js";
 export { htmlParser } from "./html-parser.js";
@@ -39,6 +45,7 @@ export { xlsxParser } from "./xlsx-parser.js";
 // depends on a runtime engine; text registers last because its `matches` predicate is the most
 // permissive (accepts any `text/*`), so it must not shadow structured adapters.
 import { csvParser } from "./csv-parser.js";
+import { codeParser } from "./code-parser.js";
 import { docxParser } from "./docx-parser.js";
 import { htmlParser } from "./html-parser.js";
 import { jsonParser } from "./json-parser.js";
@@ -67,6 +74,8 @@ export function createDefaultParserRegistry(
   if (options.ocrAdapter !== undefined) {
     registry = registerParser(registry, createOcrPipelineParser(options.ocrAdapter));
   }
+  // Code must precede the permissive text adapter so source files receive symbol-anchored units.
+  registry = registerParser(registry, codeParser);
   // Text parser is registered last among the real adapters because its `matches` predicate
   // is the most permissive (it accepts any `text/*` media type), so it must not shadow the
   // structured adapters.

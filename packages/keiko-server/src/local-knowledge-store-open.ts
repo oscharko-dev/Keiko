@@ -1,9 +1,10 @@
 import { dirname } from "node:path";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import type { KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
+import type { KnowledgeStore, VectorIndexOptions } from "@oscharko-dev/keiko-local-knowledge";
 import {
   KnowledgeStoreError,
   openKnowledgeStore,
+  resolveVectorIndexOptions,
   resolveKnowledgeStorePath,
   updateCapsuleState,
 } from "@oscharko-dev/keiko-local-knowledge";
@@ -79,6 +80,7 @@ export function recoverAbandonedIndexingJobs(store: KnowledgeStore): void {
 export interface OpenKnowledgeStoreForDeps {
   readonly store: KnowledgeStore;
   readonly dbPath: string;
+  readonly vectorIndex: VectorIndexOptions;
   close(): void;
 }
 
@@ -111,15 +113,25 @@ export function openKnowledgeStoreForDeps(
   }
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
   const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
-  const store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
+  const vectorIndex = localKnowledgeVectorIndexOptions(deps);
+  const store = openKnowledgeStore(
+    protection === undefined ? { dbPath, vectorIndex } : { dbPath, protection, vectorIndex },
+  );
   if (options.recover === true) {
     recoverAbandonedIndexingJobs(store);
   }
   return {
     store,
     dbPath,
+    vectorIndex,
     close: (): void => {
       store.close();
     },
   };
+}
+
+export function localKnowledgeVectorIndexOptions(
+  deps: Pick<UiHandlerDeps, "env">,
+): VectorIndexOptions {
+  return resolveVectorIndexOptions(undefined, deps.env);
 }
