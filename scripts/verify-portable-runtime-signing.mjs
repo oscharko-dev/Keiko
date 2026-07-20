@@ -25,7 +25,8 @@ function fail(message) {
 // Declared-then-assigned rather than an all-`undefined` object literal: the literal pinned every
 // property's inferred type to `undefined`, which made later value comparisons (e.g.
 // `options.policy === "production"`) read as statically impossible (javascript:S3403).
-function parseArgs(argv) {
+/** @internal Exported only for the deterministic argument-parsing tests. */
+export function parseArgs(argv) {
   let manifest;
   let policy;
   let verificationInput;
