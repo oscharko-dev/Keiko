@@ -57,12 +57,28 @@ async function flushMicrotasks(times = 8): Promise<void> {
 
 // Node reports an unhandled rejection only once the microtask queue is exhausted and the current
 // turn of the event loop ends, so a microtask-only flush would let a leaked rejection pass
-// unnoticed. Yielding to a macrotask is what makes the `unhandledRejection` assertions real.
+// unnoticed. `setImmediate` is the event-loop boundary that guarantees we resume after that point —
+// it is a phase hand-off, not a timed sleep, so nothing here depends on wall-clock or CI load.
 async function flushRejectionReporting(): Promise<void> {
   await flushMicrotasks();
   await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
+    setImmediate(resolve);
   });
+}
+
+// Attaching a process-global listener from a test leaks into every later test in the worker if an
+// assertion throws first, so ownership is scoped to one call and released in a `finally`.
+async function withUnhandledRejectionSpy(
+  body: (unhandled: ReturnType<typeof vi.fn>) => Promise<void> | void,
+): Promise<ReturnType<typeof vi.fn>> {
+  const unhandled = vi.fn();
+  process.on("unhandledRejection", unhandled);
+  try {
+    await body(unhandled);
+  } finally {
+    process.off("unhandledRejection", unhandled);
+  }
+  return unhandled;
 }
 
 describe("registerSw static-shell caching", () => {
@@ -103,19 +119,12 @@ describe("registerSw static-shell caching", () => {
     const register = vi.fn().mockRejectedValue(error);
     installServiceWorker({ register });
 
-    // Spy on the unhandledrejection path: if the helper leaks a rejection, jsdom will
-    // surface it as an unhandled rejection event on the global.
-    const unhandled = vi.fn();
-    process.on("unhandledRejection", unhandled);
-
-    registerSw();
-
-    // Wait two microtask flushes — once for `register()` to reject and once for `.catch`
-    // to resolve to undefined. After that, no unhandled rejection should be queued.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    process.off("unhandledRejection", unhandled);
+    // Spy on the unhandledrejection path: if the helper leaks a rejection, Node reports it once the
+    // event loop turn ends.
+    const unhandled = await withUnhandledRejectionSpy(async () => {
+      registerSw();
+      await flushRejectionReporting();
+    });
 
     expect(register).toHaveBeenCalledOnce();
     expect(unhandled).not.toHaveBeenCalled();
@@ -131,14 +140,13 @@ describe("registerSw static-shell caching", () => {
       throw new Error("Synchronous failure");
     });
     installServiceWorker({ register });
-    const unhandled = vi.fn();
-    process.on("unhandledRejection", unhandled);
 
-    expect(() => {
-      registerSw();
-    }).not.toThrow();
-    await flushRejectionReporting();
-    process.off("unhandledRejection", unhandled);
+    const unhandled = await withUnhandledRejectionSpy(async () => {
+      expect(() => {
+        registerSw();
+      }).not.toThrow();
+      await flushRejectionReporting();
+    });
 
     expect(register).toHaveBeenCalledOnce();
     expect(unhandled).not.toHaveBeenCalled();
