@@ -608,6 +608,9 @@ jobs:
       - name: Governed editor debugging E2E (#2348)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-debugging-2348
+      - name: M11 mixed-trust multi-root closeout E2E (#2533)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:e2e:editor-m11-closeout-2533
       - name: Refresh workspace performance evidence
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: |
