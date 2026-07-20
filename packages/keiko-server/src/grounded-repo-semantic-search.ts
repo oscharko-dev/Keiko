@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
 
 import {
@@ -9,6 +8,7 @@ import {
   type RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  gitBlobFingerprint,
   listCapsuleSources,
   listCapsules,
   listRepositoryChunkLineRanges,
@@ -622,21 +622,16 @@ function containedDocumentPath(repositoryRoot: string, scopePath: string): strin
   return candidate;
 }
 
-function gitBlobFingerprint(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  return createHash("sha1")
-    .update(`blob ${String(bytes.byteLength)}\0`, "utf8")
-    .update(bytes)
-    .digest("hex");
-}
-
 function gitFingerprintIsFresh(
   document: CandidateDocument,
   fingerprint: RepositoryFileFingerprint,
 ): boolean {
+  // Encode once: the byte length and the blob id are both properties of the same encoded bytes,
+  // and `gitBlobFingerprint` is the indexing layer's own writer, so reader and writer cannot drift.
+  const bytes = new TextEncoder().encode(document.sourceText);
   return (
-    new TextEncoder().encode(document.sourceText).byteLength === fingerprint.byteLength &&
-    gitBlobFingerprint(document.sourceText) === fingerprint.contentFingerprint
+    bytes.byteLength === fingerprint.byteLength &&
+    gitBlobFingerprint(bytes) === fingerprint.contentFingerprint
   );
 }
 

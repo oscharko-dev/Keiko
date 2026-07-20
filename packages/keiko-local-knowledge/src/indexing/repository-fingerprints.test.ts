@@ -1,11 +1,10 @@
-import { createHash } from "node:crypto";
-
 import { describe, expect, it } from "vitest";
 
 import { freshStore } from "../_support.js";
 import { memoryFs } from "../discovery/test-support.js";
 import { DEFAULT_DISCOVERY_OPTIONS } from "../discovery/types.js";
 import {
+  gitBlobFingerprint,
   parseGitIndexTrackedPaths,
   scanRepositoryFingerprints,
 } from "./repository-fingerprints.js";
@@ -32,13 +31,15 @@ function gitIndexV2(paths: readonly string[]): Uint8Array {
   return bytes;
 }
 
-function gitBlobHash(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  return createHash("sha1")
-    .update(`blob ${String(bytes.byteLength)}\0`, "utf8")
-    .update(bytes)
-    .digest("hex");
-}
+// Blob ids produced by `git hash-object --stdin` for the exact byte sequences below. Pinning real
+// git output — rather than recomputing the hash the way the implementation does — is what makes
+// these assertions an oracle: a reimplementation would agree with a wrong implementation, whereas
+// these values fail the moment our blob id stops being git's blob id.
+const GIT_BLOB_IDS = {
+  "export function tracked(): void {}\n": "623b56f16ed03ac1520683107c9452c439bb48a8",
+  'const gruesse = "Grüße";\n': "2b0659517a04c2a3ef40f1f361a2ada95926aa0e",
+  "": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+} as const;
 
 describe("repository_file_fingerprints ledger table", () => {
   it("exists immediately after opening a fresh store, before any fingerprint read/write runs (Issue #2569 ledger migration)", () => {
@@ -57,6 +58,16 @@ describe("repository_file_fingerprints ledger table", () => {
 });
 
 describe("repository fingerprints", () => {
+  // The whole incremental-skip guarantee rests on this one equality: our blob id must be the blob
+  // id git itself records, or the freshness comparison degrades to "always changed" while still
+  // reporting success. This is the single owner of that computation — the server's freshness check
+  // imports it rather than carrying a second copy that could drift.
+  it("computes exactly the blob id `git hash-object` reports, including empty and multibyte input", () => {
+    for (const [content, expected] of Object.entries(GIT_BLOB_IDS)) {
+      expect(gitBlobFingerprint(new TextEncoder().encode(content))).toBe(expected);
+    }
+  });
+
   it("parses bounded Git index v2 entries without launching Git", () => {
     const parsed = parseGitIndexTrackedPaths(gitIndexV2(["src/a.ts", "src/b.py"]));
     expect([...(parsed ?? [])]).toEqual(["src/a.ts", "src/b.py"]);
@@ -79,7 +90,7 @@ describe("repository fingerprints", () => {
     expect(result.usedGitIndex).toBe(true);
     expect(byPath.get("src/tracked.ts")).toMatchObject({
       fingerprintKind: "git-blob-sha1",
-      contentFingerprint: gitBlobHash(tracked),
+      contentFingerprint: GIT_BLOB_IDS[tracked],
     });
     expect(byPath.get("src/untracked.py")?.fingerprintKind).toBe("file-state");
   });

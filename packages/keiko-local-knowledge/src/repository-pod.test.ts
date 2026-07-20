@@ -210,6 +210,20 @@ describe("repository_pod_runs ledger table", () => {
   });
 });
 
+describe("repository pod prune", () => {
+  it("deletes documents for a file that was genuinely removed from disk", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    await refreshRepositoryPod(indexingDeps(adapter), { runId: "remove-initial" });
+    expect(documentRows().map((row) => row.document_path)).toContain("src/worker.go");
+
+    unlinkSync(join(repositoryRoot, "src", "worker.go"));
+    await refreshRepositoryPod(indexingDeps(adapter), { runId: "remove-refresh" });
+
+    expect(documentRows().map((row) => row.document_path)).not.toContain("src/worker.go");
+  });
+});
+
 describe("repository pod executable journey", () => {
   it("indexes, resolves path:line, refreshes incrementally, survives cancellation, and removes", async () => {
     createShell();

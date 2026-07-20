@@ -242,14 +242,27 @@ function failedWithheldBaseline(
   return fingerprints.filter((item) => !failedRelativePaths.has(item.relativePath));
 }
 
+// Prunes against what the WALK found, not against the persisted baseline. A file that failed to
+// index is deliberately withheld from the baseline so the next run retries it — but it still exists
+// on disk, and pruning on the withheld baseline would delete its documents. That is reachable in
+// principle: `resolveJobStatus` reports "failed" only when processedDocuments === 0, so a run where
+// one document fails and another succeeds applies with failures present (verified: applied=true,
+// status="succeeded", failedRelativePaths non-empty).
+//
+// No fixture in this suite reproduces the destructive case, because the only non-fatal per-document
+// failure available here is the escaping symlink, which the walk already rejects before it becomes a
+// fingerprint — so `next` and the scan agree and the two keyings coincide. An embedding failure is
+// fatal to the whole job and never applies. The prune is keyed on the scan anyway: removal is a
+// statement about the filesystem, and deriving it from a baseline that deliberately withholds
+// entries conflates "failed this run" with "gone".
 function pruneRemovedDocuments(
   deps: RepositoryPodDeps,
   prior: ReadonlyMap<string, RepositoryFileFingerprint>,
-  next: readonly RepositoryFileFingerprint[],
+  scanned: readonly RepositoryFileFingerprint[],
 ): void {
-  const nextPaths = new Set(next.map((item) => item.relativePath));
+  const scannedPaths = new Set(scanned.map((item) => item.relativePath));
   for (const relativePath of prior.keys()) {
-    if (nextPaths.has(relativePath)) continue;
+    if (scannedPaths.has(relativePath)) continue;
     const documentId = documentIdFor({
       capsuleId: deps.capsuleId,
       sourceId: deps.sourceId,
@@ -363,7 +376,7 @@ export async function refreshRepositoryPod(
       next,
       runId,
       () => {
-        pruneRemovedDocuments(deps, prior, next);
+        pruneRemovedDocuments(deps, prior, scan.fingerprints);
       },
     );
   }

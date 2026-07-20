@@ -164,7 +164,20 @@ async function trackedPathsFromGitIndex(
   }
 }
 
-function gitBlobFingerprint(bytes: Uint8Array): string {
+/**
+ * Git's blob object id for `bytes`: `sha1("blob <byteLength>\0" + content)`.
+ *
+ * SHA-1 is not a security choice here, it is git's object format. The value is useful only insofar
+ * as it equals what `git hash-object` reports for the same bytes, which is what lets the pod ask
+ * git's own index whether a tracked file changed. A stronger digest would produce a value that
+ * matches nothing git records and would defeat the comparison outright.
+ *
+ * This is the single owner of the computation. The writer below and the server's freshness check
+ * must agree exactly: if they ever drifted, every tracked file would look changed on every pass and
+ * the incremental skip that the repository pod exists to provide would silently degrade to a full
+ * re-embed while still reporting success.
+ */
+export function gitBlobFingerprint(bytes: Uint8Array): string {
   return createHash("sha1")
     .update(`blob ${String(bytes.byteLength)}\0`, "utf8")
     .update(bytes)

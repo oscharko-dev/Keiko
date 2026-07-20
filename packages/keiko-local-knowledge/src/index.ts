@@ -351,6 +351,7 @@ export {
   type RepositoryChunkLineRange,
 } from "./indexing/repository-chunk-lines.js";
 export {
+  gitBlobFingerprint,
   readRepositoryFileFingerprints,
   type RepositoryFileFingerprint,
   type RepositoryFingerprintKind,
