@@ -2543,6 +2543,53 @@ export {
   validateContextToolObservation,
 } from "./context-observations-validation.js";
 
+// ─── Pillar-neutral retrieval context (Issue #2570, ADR-0152 D6) ───────────────
+export type {
+  RetrievalPurpose,
+  RetrievalContextSourceKind,
+  RetrievalContextSourceTier,
+  RetrievalContextOmissionReason,
+  RetrievalContextOmission,
+  RetrievalContextCitation,
+  RetrievalContextExcerpt,
+  RetrievalContextPack,
+  RetrievalContextWirePack,
+  RetrievalContextBudget,
+  RetrievalContextScopeKind,
+  RetrievalContextRequest,
+} from "./retrieval-context.js";
+export {
+  RETRIEVAL_CONTEXT_SCHEMA_VERSION,
+  RETRIEVAL_CONTEXT_PURPOSES,
+  RETRIEVAL_CONTEXT_SOURCE_KINDS,
+  RETRIEVAL_CONTEXT_SOURCE_TIERS,
+  RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND,
+  RETRIEVAL_CONTEXT_OMISSION_REASONS,
+  RETRIEVAL_CONTEXT_BUDGETS,
+  isRetrievalContextPurpose,
+  tierForRetrievalContextSource,
+  isRetrievalContextCitation,
+  toRetrievalContextWirePack,
+} from "./retrieval-context.js";
+
+// ─── The one vector-index port (Issue #2556, ADR-0152 D1) ────────────────────
+export type {
+  VectorIndexNamespace,
+  VectorIndexQuery,
+  VectorIndexCandidateRef,
+  VectorIndexDiagnostics,
+  VectorIndexResult,
+  VectorIndexPort,
+} from "./vector-index-port.js";
+export {
+  VECTOR_INDEX_NAMESPACES,
+  embeddingIdentityKey,
+  isValidVectorIndexQuery,
+} from "./vector-index-port.js";
+
+// ─── Shared evaluation-gate shapes (Issue #2570, ADR-0152 D5) ────────────────
+export type { EvalBudget, EvalFloorResult, RegressionProbeResult } from "./evaluation-gates.js";
+
 // ─── Governed coding-context retrieval (Issue #1211 / Epic #1189, ADR-0042 D6) ──
 export type {
   CodingContextPurpose,

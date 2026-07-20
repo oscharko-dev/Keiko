@@ -85,6 +85,62 @@ describe("walkSource — folder scope", () => {
   });
 });
 
+describe("walkSource — repository gitignore option", () => {
+  const repositoryScope: KnowledgeSourceScope = {
+    kind: "repository",
+    repositoryRoot: ROOT,
+  };
+
+  it("reuses ordered workspace ignore semantics without weakening the deny list", () => {
+    const fs = memoryFs(ROOT, [
+      {
+        relativePath: ".gitignore",
+        content: ["ignored/*.ts", "!ignored/keep.ts", "!.env", "vendor/"].join("\n"),
+      },
+      { relativePath: "ignored/drop.ts", content: "drop" },
+      { relativePath: "ignored/keep.ts", content: "keep" },
+      { relativePath: "vendor/bundle.js", content: "vendor" },
+      { relativePath: ".env", content: "SECRET=1" },
+      { relativePath: "src/index.ts", content: "export {};" },
+    ]);
+    const files: string[] = [];
+    for (const result of walkSource(fs, repositoryScope, {
+      ...DEFAULT_DISCOVERY_OPTIONS,
+      respectGitIgnore: true,
+    })) {
+      if (result.kind === "file") files.push(result.file.relativePath);
+    }
+    expect(files).toContain("ignored/keep.ts");
+    expect(files).toContain("src/index.ts");
+    expect(files).not.toContain("ignored/drop.ts");
+    expect(files).not.toContain("vendor/bundle.js");
+    expect(files).not.toContain(".env");
+  });
+
+  it("fails closed when the selected gitignore escapes the repository root", () => {
+    const fs = memoryFs(ROOT, [
+      {
+        relativePath: ".gitignore",
+        content: "ignored/",
+        realPathOverride: "/outside/.gitignore",
+      },
+      { relativePath: "src/index.ts", content: "export {};" },
+    ]);
+    const out = [
+      ...walkSource(fs, repositoryScope, {
+        ...DEFAULT_DISCOVERY_OPTIONS,
+        respectGitIgnore: true,
+      }),
+    ];
+    expect(out).toEqual([
+      {
+        kind: "error",
+        error: { code: "READ_FAILED", message: "repository ignore file failed containment" },
+      },
+    ]);
+  });
+});
+
 describe("walkSource — Windows separator normalisation", () => {
   it("passes containment when WorkspaceFs.realPath returns Windows-style backslash paths", () => {
     // Simulate a Windows WorkspaceFs: root and realPath returns use backslash separators.

@@ -123,4 +123,18 @@ describe("configuredContextPackRerankerFor", () => {
     expect(out?.[0]?.signals[0]).toEqual({ name: "model-rerank", value: 0.98 });
     deps.store.close();
   });
+
+  it("preserves every candidate when the provider returns an empty result list", async () => {
+    const deps = depsWith(config(true), (request) =>
+      Promise.resolve({ ok: true, value: { modelId: request.modelId, results: [] } }),
+    );
+    const reranker = configuredContextPackRerankerFor(deps, QUERY, undefined);
+    const candidates = [candidate("src/a.ts", 0.4), candidate("src/b.ts", 0.6)];
+
+    const out = await reranker?.rerank(candidates, new Map(), candidates.length);
+
+    expect(out).toBe(candidates);
+    expect(out).toHaveLength(2);
+    deps.store.close();
+  });
 });

@@ -68,6 +68,10 @@ import { mockRequest, mockResponse } from "./_support.js";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const NOW = 1_700_000_000_000;
+
+// `expect.any` is typed `any`; pinning it to the field type keeps the full-object diagnostics
+// literals below type-safe while tolerating real elapsed time on provider-backed paths.
+const ANY_LATENCY_MS = expect.any(Number) as unknown as number;
 const CHAT_MODEL = "example-chat-model";
 const HYBRID_ANSWER_SENTINEL = "Hybrid answer from injected seam.";
 
@@ -609,13 +613,16 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.contextPack.knowledge.referencesUsed).toBeLessThanOrEqual(
       answer.contextPack.knowledge.referenceBudget,
     );
-    expect(answer.contextPack.reranker).toMatchObject({
+    // Byte-diff pin (issue #2567 D5): toEqual, NOT toMatchObject — an ADDED diagnostics field is a
+    // wire change on the grounded-answer contract and must fail here rather than pass silently.
+    expect(answer.contextPack.reranker).toEqual({
       status: "disabled",
       mode: "none",
       candidateCount: 2,
       documentCount: 0,
       keptCount: 2,
       failureKind: "not-configured",
+      latencyMs: 0,
     });
     expect(answer.contextPack.knowledge.reranker?.status).toBe("disabled");
     // Regression for Epic #1820 / #1922: a not-configured reranker is the default, fully-supported
@@ -1806,11 +1813,13 @@ describe("hybrid model reranker", () => {
     expect((seenUsers[0] ?? "").indexOf("[1] ### Folder source")).toBeLessThan(
       (seenUsers[0] ?? "").indexOf("[2] ### Connector source"),
     );
-    expect(answer.contextPack.reranker).toMatchObject({
+    expect(answer.contextPack.reranker).toEqual({
       status: "applied",
+      mode: "provider-backed",
       candidateCount: 2,
       documentCount: 2,
       keptCount: 2,
+      latencyMs: ANY_LATENCY_MS,
     });
     expect(answer.retrievalActivity?.pods[0]?.modes).toContain("reranked");
   });
@@ -1858,12 +1867,14 @@ describe("hybrid model reranker", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
     expect(rerankCalls).toBe(0);
-    expect(answer.contextPack.reranker).toMatchObject({
+    expect(answer.contextPack.reranker).toEqual({
       status: "denied",
       mode: "local-only",
-      failureKind: "policy-denied",
       candidateCount: 2,
+      documentCount: 0,
       keptCount: 2,
+      failureKind: "policy-denied",
+      latencyMs: 0,
     });
     expect(answer.retrievalActivity?.pods[0]?.reasonCodes).toContain("policy-denied");
   });
@@ -1907,13 +1918,14 @@ describe("hybrid model reranker", () => {
       expect(result.status, JSON.stringify(result.body)).toBe(200);
       const answer = asHybrid(result.body as GroundedAnswer);
       expect(answer.knowledgeCitations[0]?.marker).toBe("[1]");
-      expect(answer.contextPack.reranker).toMatchObject({
+      expect(answer.contextPack.reranker).toEqual({
         status: "unavailable",
         mode: "provider-backed",
-        failureKind: kind,
         candidateCount: 2,
         documentCount: 2,
         keptCount: 2,
+        failureKind: kind,
+        latencyMs: ANY_LATENCY_MS,
       });
       expect(answer.retrievalActivity?.pods[0]).toMatchObject({
         state: "degraded",
@@ -1958,11 +1970,106 @@ describe("hybrid model reranker", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.contextPack.reranker).toMatchObject({
+    expect(answer.contextPack.reranker).toEqual({
       status: "invalid-response",
       mode: "provider-backed",
-      failureKind: "invalid-response",
+      candidateCount: 2,
+      documentCount: 2,
       keptCount: 2,
+      failureKind: "invalid-response",
+      latencyMs: ANY_LATENCY_MS,
+    });
+  });
+
+  // The transport-level invalid-response journey above short-circuits BEFORE applyRerankMapping, so
+  // it never proves the mapping rejection reaches the wire. This drives a transport-SUCCESSFUL
+  // response whose indices are unusable (duplicate index 0), which is the only way the caller-level
+  // "invalid-response" status can originate from the mapping guard itself.
+  it("falls back with invalid-response diagnostics for a duplicate-index provider response", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Duplicate Rerank Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/rerank-duplicate.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("rerank-duplicate-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const packMap = new Map([
+      ["src/rerank-duplicate.ts", folderPack("src/rerank-duplicate.ts", 0.5, "rerank-dup-atom")],
+    ]);
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Duplicate index fallback?" })),
+      hybridDeps({
+        config: rerankerGatewayConfig(),
+        configPresent: true,
+        rerankRequest: () => Promise.resolve(successfulRerank([0, 0])),
+      }),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer("Duplicate index fallback answer [1] [2]."),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    // Fallback selection is the preliminary order, so the connector keeps its pre-rerank marker.
+    expect(answer.knowledgeCitations[0]?.marker).toBe("[1]");
+    expect(answer.contextPack.reranker).toEqual({
+      status: "invalid-response",
+      mode: "provider-backed",
+      candidateCount: 2,
+      documentCount: 2,
+      keptCount: 2,
+      failureKind: "invalid-response",
+      latencyMs: ANY_LATENCY_MS,
+    });
+  });
+
+  // The empty-pool-and-unconfigured intersection — the ONE state where the two pre-facade
+  // implementations disagreed (issue #2567 D5). The shared facade resolves it to the single-scope
+  // answer: the configuration check wins, so "not-configured" is reported even with nothing to
+  // rerank. This is a deliberate, declared behavior change against the legacy hybrid path, which
+  // emitted a bare "disabled" here. See the rationale comment on `rerankSelection`.
+  it("reports not-configured with an empty candidate pool on the no-evidence route", async () => {
+    const { capsuleId: capA } = await seedReadyCapsule("Empty Pool Rerank A");
+    const { capsuleId: capB } = await seedReadyCapsule("Empty Pool Rerank B");
+    const chatId = makeHybridChat(
+      [],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    );
+    const connectorRetrieve: ConnectorRetrieve = () =>
+      Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" });
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Anything at all?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      { connectorRetrieve, answer: throwingHybridAnswerer() },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.contextPack.reranker).toEqual({
+      status: "disabled",
+      mode: "none",
+      candidateCount: 0,
+      documentCount: 0,
+      keptCount: 0,
+      failureKind: "not-configured",
+      latencyMs: 0,
     });
   });
 });

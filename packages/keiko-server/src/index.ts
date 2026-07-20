@@ -311,6 +311,17 @@ export {
   type GroundedRetrievalBudget,
 } from "./grounded-retrieval-eval.js";
 
+// Knowledge M2.3 (#2567) — the single governed model-rerank facade shared by every grounded
+// orchestrator. Documents remain caller-shaped, while policy/config gating, provider mapping,
+// diagnostics, and deterministic fallback behavior stay centralized.
+export {
+  rerankSelection,
+  type RerankFallbackMode,
+  type RerankSelection,
+  type RerankSelectionInput,
+  type RerankSelectionPolicy,
+} from "./grounded-rerank-facade.js";
+
 // RB-4 / GEN-AI-EVAL-003 — grounded-answer faithfulness + citation-support eval. Exposed so
 // scripts/check-grounded-faithfulness.mjs can gate that fabricated citations are flagged and empty
 // evidence abstains.

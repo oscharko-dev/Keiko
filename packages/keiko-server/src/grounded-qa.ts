@@ -78,7 +78,7 @@ import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
-import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
+import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { pathIsDenied } from "./files-deny.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
@@ -874,7 +874,11 @@ function defaultRunner(
         ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
         : input;
     const contextPackReranker = configuredContextPackRerankerFor(deps, budgetedInput.query, signal);
-    const repoSemanticSearchProvider = configuredRepoSemanticSearchProviderFor(deps, signal);
+    const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
+      deps,
+      signal,
+      budgetedInput.workspaceRoot,
+    );
     return runGroundedExploration(budgetedInput, {
       answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal, modelInputTokensMax),
       nowMs,
@@ -882,12 +886,16 @@ function defaultRunner(
       microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
       workspaceIndexForRoot: deps.workspaceIndexForRoot,
       ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
-      ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
+      ...(semanticLease.provider === undefined
+        ? {}
+        : { repoSemanticSearchProvider: semanticLease.provider }),
       ...(entailmentStage === undefined ? {} : { entailmentStage }),
       // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
       // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
       // the legacy no-profile path stays byte-identical (observer guard never sees a key).
       ...(contextProfile === undefined ? {} : { contextProfile }),
+    }).finally(() => {
+      semanticLease.close();
     });
   };
 }

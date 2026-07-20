@@ -117,6 +117,7 @@
     "check:retrieval-quality": "node --disable-warning=ExperimentalWarning scripts/check-retrieval-quality.mjs",
     "check:grounded-retrieval-quality": "node scripts/check-grounded-retrieval-quality.mjs",
     "check:grounded-faithfulness": "node scripts/check-grounded-faithfulness.mjs",
+    "check:knowledge-m2-closeout": "node --disable-warning=ExperimentalWarning scripts/check-knowledge-m2-closeout.mjs",
     "check:grounded-entailment": "node scripts/check-grounded-entailment.mjs",
     "check:context-quality": "node scripts/check-context-quality.mjs",
     "check:error-observability": "node scripts/check-error-observability.mjs",
@@ -180,7 +181,8 @@
     "check:mutation:scoped": "node scripts/check-mutation-quality.mjs --scoped",
     "test:mutation:security": "npm run test:mutation:security:run && npm run test:mutation:debug-launch-security && npm run check:mutation:baseline",
     "check:publish-manifests": "node scripts/check-publish-manifests.mjs",
-    "smoke:registry-install": "node scripts/registry-install-smoke.mjs"
+    "smoke:registry-install": "node scripts/registry-install-smoke.mjs",
+    "provision:sqlite-vec": "node scripts/provision-sqlite-vec.mjs"
   },
   "overrides": {
     "undici": "7.28.0",

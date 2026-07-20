@@ -104,7 +104,22 @@ const CLAIM_STOPWORDS = new Set([
 ]);
 
 const SIGNIFICANT_TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}_./:-]{2,}/gu;
-const SENTENCE_BOUNDARY_PATTERN = /[.!?\n]/u;
+// A period only ends a sentence when it is NOT inside a token. Repository-pod answers routinely
+// name files and members ("implemented in code-parser.ts", "calls parser.parse"), and treating the
+// dot in those as a sentence break shatters the claim: the sentence around a trailing [n] marker
+// became "…in `code-parser" plus a stray "ts`", so the cited token no longer matched the evidence
+// and every such citation was silently dropped. `!`/`?`/newline always break; `.` breaks only at
+// end-of-text or before whitespace.
+const SENTENCE_BOUNDARY_PATTERN = /[!?\n]/u;
+
+function isSentenceBoundary(answer: string, offset: number): boolean {
+  const char = answer[offset];
+  if (char === undefined) return false;
+  if (SENTENCE_BOUNDARY_PATTERN.test(char)) return true;
+  if (char !== ".") return false;
+  const next = answer[offset + 1];
+  return next === undefined || /\s/u.test(next);
+}
 
 function citationPassesFaithfulness(
   answer: string,
@@ -127,16 +142,31 @@ function citationPassesFaithfulness(
   return overlap >= Math.min(required, claimTokens.length);
 }
 
+// The claim a marker supports is the sentence it sits in — but standard citation style puts the
+// marker AFTER the closing period ("... returns undefined.[9]"). Walking back from the marker then
+// hits that period immediately and yields an empty claim, so the faithfulness check saw zero tokens
+// and dropped a perfectly good citation. When the text between the previous boundary and the marker
+// holds nothing but markers and whitespace, the marker belongs to the sentence BEFORE it.
 function citationSentence(answer: string, markerOffset: number): string {
-  let start = markerOffset;
-  while (start > 0 && !SENTENCE_BOUNDARY_PATTERN.test(answer[start - 1] ?? "")) {
-    start -= 1;
+  const sentenceAround = (offset: number): { start: number; end: number } => {
+    let start = offset;
+    while (start > 0 && !isSentenceBoundary(answer, start - 1)) start -= 1;
+    let end = offset;
+    while (end < answer.length && !isSentenceBoundary(answer, end)) end += 1;
+    return { start, end };
+  };
+  const own = sentenceAround(markerOffset);
+  if (stripMarkers(answer.slice(own.start, own.end)).trim().length > 0) {
+    return answer.slice(own.start, own.end);
   }
-  let end = markerOffset;
-  while (end < answer.length && !SENTENCE_BOUNDARY_PATTERN.test(answer[end] ?? "")) {
-    end += 1;
+  // Skip back over the boundary characters themselves, then take the sentence that ends there.
+  let previousEnd = own.start;
+  while (previousEnd > 0 && isSentenceBoundary(answer, previousEnd - 1)) {
+    previousEnd -= 1;
   }
-  return answer.slice(start, end);
+  if (previousEnd === 0) return answer.slice(own.start, own.end);
+  const previous = sentenceAround(previousEnd - 1);
+  return answer.slice(previous.start, previous.end);
 }
 
 function stripMarkers(value: string): string {

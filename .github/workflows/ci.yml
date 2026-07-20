@@ -150,6 +150,19 @@ jobs:
         # claim is falsely flagged, an unavailable judge stops degrading to WARN, or a pass-through
         # judge still "detects" (the checker must be load-bearing — non-tautology proven in CI).
         run: npm run check:grounded-entailment
+      - name: Provision the sqlite-vec loadable extension (Issue #2566)
+        # The ANN proof in the closeout gate below drives the real extension. It is not an npm
+        # dependency — sqlite-vec publishes an invalid SPDX license string that both the
+        # dependency-review policy and check:workspace-supply-chain reject — so it is fetched here
+        # and verified against a pinned SHA-256, the same way the Sonar Scanner CLI is obtained.
+        run: npm run provision:sqlite-vec
+      - name: Knowledge M2 closeout gate (Knowledge M2.8, Epic #2556)
+        # The wave's anti-false-green artifact. Re-runs the six substrate proofs (ANN activation,
+        # one reranker transport importer, the evaluation fold, the retrieval-context wire snapshot,
+        # the repository pod, and the wave bookkeeping state read out of docs/qa/knowledge-m2-wave.md)
+        # and compares the committed docs/qa/knowledge-m2-substrate-evidence.md against a freshly
+        # rendered one, failing closed on drift. Uses the compiled dist built by `npm run typecheck`.
+        run: npm run check:knowledge-m2-closeout
       - name: Server error observability gate (RB-6, GEN-OBS-DIAGNOSTICS-901)
         # Drives the REAL built BFF: forces a handler throw and asserts the top-level catch returns an
         # opaque 500 that carries a correlation id (body + X-Keiko-Correlation-Id header), routes the
@@ -202,6 +215,16 @@ jobs:
           # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
           # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Provision the sqlite-vec loadable extension (Issue #2566)
+        # Not an npm dependency: sqlite-vec publishes an invalid SPDX license string, which both the
+        # dependency-review policy and check:workspace-supply-chain reject — the latter by design has
+        # no exception mechanism. Fetched here and verified against a pinned SHA-256 instead, the
+        # same way the Sonar Scanner CLI is obtained below. Without the binary the vector-index suite
+        # asserts its fail-closed fallback rather than skipping, so this step adds real-binary
+        # coverage. It does gate: a failed download or a checksum mismatch exits nonzero and fails
+        # the job, which is the intended behaviour — a tampered artifact must stop the run, not
+        # silently downgrade it to fallback coverage. Hosts with no published asset return success.
+        run: npm run provision:sqlite-vec
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:coverage:quality

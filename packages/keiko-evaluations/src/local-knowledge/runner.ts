@@ -25,11 +25,21 @@ import type {
   DocumentId,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
+  RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  embedChunkBatch,
+  openKnowledgeStore,
+  resolveVectorIndexOptions,
+  runLocalKnowledgeRetrieval,
+  type KnowledgeStore,
+  type RetrievalDiagnostics,
+  type RetrievalNoEvidenceReason,
+  type VectorIndexOptions,
+} from "@oscharko-dev/keiko-local-knowledge";
 
-import { embedChunkBatch } from "../indexing/embedding-batcher.js";
-import { runLocalKnowledgeRetrieval } from "../retrieval/index.js";
-import { openKnowledgeStore, type KnowledgeStore } from "../store.js";
+import { mean } from "../metrics.js";
+import { evaluateFloors } from "../quality-helpers.js";
 
 import {
   scoreCitationQuality,
@@ -53,11 +63,6 @@ import type {
   RetrievalEvalScorecard,
 } from "./types.js";
 import { PASS_THRESHOLDS } from "./types.js";
-import type {
-  RetrievalDiagnostics,
-  RetrievalNoEvidenceReason,
-  RetrievalReference,
-} from "../retrieval/types.js";
 
 // ─── Public dependency surface ───────────────────────────────────────────────
 
@@ -71,6 +76,7 @@ export interface RunRetrievalEvalDeps {
   // Optional hook for non-CI model-judged evaluation. The offline deterministic harness
   // does not enable this by default; callers must opt in explicitly.
   readonly modelJudge?: ModelJudgedRetrievalEvalJudge;
+  readonly vectorIndex?: VectorIndexOptions;
 }
 
 // ─── Vector embedding (post-seed) ────────────────────────────────────────────
@@ -209,6 +215,7 @@ async function runOneQuery(
   query: RetrievalEvalQuery,
   seeded: SeededFixture,
   now: () => number,
+  vectorIndex: VectorIndexOptions,
 ): Promise<QueryEvaluation> {
   // Route the query embedding toward the declared topic WITHOUT putting the marker into the
   // searchable query text: production queries never contain harness markers, so the lexical
@@ -224,7 +231,7 @@ async function runOneQuery(
   const retrievalQuery = buildRetrievalQuery(query, query.text);
   const start = now();
   const result = await runLocalKnowledgeRetrieval(
-    { store, embeddingAdapter: adapter },
+    { store, embeddingAdapter: adapter, vectorIndex },
     retrievalQuery,
   );
   const end = now();
@@ -281,16 +288,9 @@ async function runModelJudge(
     );
   }
   return {
-    groundedness: meanOf(judged.map((item) => item.groundedness)),
-    faithfulness: meanOf(judged.map((item) => item.faithfulness)),
+    groundedness: mean(judged.map((item) => item.groundedness)),
+    faithfulness: mean(judged.map((item) => item.faithfulness)),
   };
-}
-
-function meanOf(values: readonly number[]): number {
-  if (values.length === 0) return 0;
-  let sum = 0;
-  for (const v of values) sum += v;
-  return sum / values.length;
 }
 
 function recordNoEvidenceReason(
@@ -339,25 +339,17 @@ function buildScorecard(
   modelJudged: ModelJudgedRetrievalEvalScores | undefined,
 ): RetrievalEvalScorecard {
   const dimensions = {
-    recall: meanOf(perQuery.map((q) => q.scores.recall)),
-    precision: meanOf(perQuery.map((q) => q.scores.precision)),
-    meanReciprocalRank: meanOf(perQuery.map((q) => q.scores.meanReciprocalRank)),
-    ndcg: meanOf(perQuery.map((q) => q.scores.ndcg)),
-    sourceIsolation: meanOf(perQuery.map((q) => q.scores.sourceIsolation)),
-    citationQuality: meanOf(perQuery.map((q) => q.scores.citationQuality)),
-    noEvidenceAccuracy: meanOf(perQuery.map((q) => q.scores.noEvidenceAccuracy)),
-    contextBudgetFit: meanOf(perQuery.map((q) => q.scores.contextBudgetFit)),
+    recall: mean(perQuery.map((q) => q.scores.recall)),
+    precision: mean(perQuery.map((q) => q.scores.precision)),
+    meanReciprocalRank: mean(perQuery.map((q) => q.scores.meanReciprocalRank)),
+    ndcg: mean(perQuery.map((q) => q.scores.ndcg)),
+    sourceIsolation: mean(perQuery.map((q) => q.scores.sourceIsolation)),
+    citationQuality: mean(perQuery.map((q) => q.scores.citationQuality)),
+    noEvidenceAccuracy: mean(perQuery.map((q) => q.scores.noEvidenceAccuracy)),
+    contextBudgetFit: mean(perQuery.map((q) => q.scores.contextBudgetFit)),
     latencyMs: perQuery.reduce((acc, q) => acc + q.scores.latencyTicks, 0),
   };
-  const passed =
-    dimensions.recall >= PASS_THRESHOLDS.recall &&
-    dimensions.precision >= PASS_THRESHOLDS.precision &&
-    dimensions.meanReciprocalRank >= PASS_THRESHOLDS.meanReciprocalRank &&
-    dimensions.ndcg >= PASS_THRESHOLDS.ndcg &&
-    dimensions.sourceIsolation >= PASS_THRESHOLDS.sourceIsolation &&
-    dimensions.citationQuality >= PASS_THRESHOLDS.citationQuality &&
-    dimensions.noEvidenceAccuracy >= PASS_THRESHOLDS.noEvidenceAccuracy &&
-    dimensions.contextBudgetFit >= PASS_THRESHOLDS.contextBudgetFit;
+  const passed = evaluateFloors(dimensions, PASS_THRESHOLDS).ok;
   const outcomes = buildOutcomeSummary(perQuery);
   return modelJudged === undefined
     ? { fixtureId: fixture.id, runId, dimensions, outcomes, passed }
@@ -388,13 +380,14 @@ async function runFixture(
   const now = deps.now ?? defaultClock();
   const runId = deps.runId ?? `eval-${fixture.id}`;
   const dir = mkdtempSync(join(tmpdir(), "keiko-eval-"));
-  const store = openKnowledgeStore({ dbPath: join(dir, "eval.db") });
+  const vectorIndex = resolveVectorIndexOptions(deps.vectorIndex);
+  const store = openKnowledgeStore({ dbPath: join(dir, "eval.db"), vectorIndex });
   try {
     const seeded = seedFixture(store, fixture);
     await embedAllChunks(store, fixture, seeded, now);
     const perQuery: QueryEvaluation[] = [];
     for (const query of fixture.queries) {
-      perQuery.push(await runOneQuery(store, query, seeded, now));
+      perQuery.push(await runOneQuery(store, query, seeded, now, vectorIndex));
     }
     const modelJudged = await runModelJudge(deps.modelJudge, fixture, perQuery);
     return { scorecard: buildScorecard(fixture, runId, perQuery, modelJudged), perQuery };

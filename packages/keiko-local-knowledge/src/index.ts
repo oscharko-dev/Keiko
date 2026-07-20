@@ -72,6 +72,9 @@ export {
   buildParserOptions,
   createDefaultParserRegistry,
   createParserRegistry,
+  CODE_PARSER_ID,
+  codeParser,
+  codeSymbolLabel,
   csvParser,
   docxParser,
   htmlParser,
@@ -80,6 +83,7 @@ export {
   registerParser,
   resolveParser,
   textParser,
+  isCodeSymbolDefinitionLine,
   unsupportedParser,
   xlsxParser,
   type AsyncParserAdapter,
@@ -156,7 +160,6 @@ export {
 } from "./discovery/index.js";
 export * from "./indexing/index.js";
 export * from "./retrieval/index.js";
-export * from "./evaluations/index.js";
 export * from "./conversation/index.js";
 export { readCitationExcerpt } from "./conversation/citation-excerpts.js";
 export {
@@ -325,3 +328,31 @@ export {
   type CreateConnectorPodShellInput,
   type UnappliedConnectorSyncRunInput,
 } from "./connector-pod.js";
+
+// ─── Real-working-tree repository Knowledge Pods (Issue #2569, ADR-0152 D8) ─────────────
+// Existing repository scope + walker/parser/chunker/indexing lanes, with package-owned
+// fingerprint baselines and code-chunk line locations. No consumer is swapped here (#2571).
+export {
+  createRepositoryPodShell,
+  deleteRepositoryPod,
+  listRepositoryPodRuns,
+  refreshRepositoryPod,
+  type CreateRepositoryPodShellInput,
+  type RefreshRepositoryPodInput,
+  type RepositoryPodChangeCounts,
+  type RepositoryPodDeps,
+  type RepositoryPodIndexingDeps,
+  type RepositoryPodRefreshResult,
+  type RepositoryPodRunRecord,
+} from "./repository-pod.js";
+export {
+  listRepositoryChunkLineRanges,
+  resolveRepositoryChunkLineRange,
+  type RepositoryChunkLineRange,
+} from "./indexing/repository-chunk-lines.js";
+export {
+  gitBlobFingerprint,
+  readRepositoryFileFingerprints,
+  type RepositoryFileFingerprint,
+  type RepositoryFingerprintKind,
+} from "./indexing/repository-fingerprints.js";

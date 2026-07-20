@@ -43,6 +43,12 @@ export interface ChunkingOptions {
   readonly indexingTextStrategyKey?: string;
 }
 
+// Internal parser provenance threaded by chunkDocument. It keeps the symbol probe code-only
+// without adding a new ParsedUnit contract kind or marker to citation section paths.
+export interface ChunkingUnitContext {
+  readonly parserId?: string;
+}
+
 // Defaults documented inline so a caller passing `{}` gets predictable behaviour.
 export const DEFAULT_MAX_TOKENS = 512;
 export const DEFAULT_MIN_TOKENS = 64;

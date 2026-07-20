@@ -23,6 +23,8 @@
 import type { RetrievalEvalScorecard } from "./types.js";
 import { PASS_THRESHOLDS } from "./types.js";
 
+import { mean } from "../metrics.js";
+
 const HYBRID_MODE = "hybrid";
 
 export type RetrievalComparisonMode = "lexical" | "vector" | "fused";
@@ -64,13 +66,6 @@ export interface RetrievalComparisonRow {
 
 export interface RetrievalModeComparison {
   readonly rows: readonly RetrievalComparisonRow[];
-}
-
-function mean(values: readonly number[]): number {
-  if (values.length === 0) return 0;
-  let sum = 0;
-  for (const value of values) sum += value;
-  return sum / values.length;
 }
 
 function hybridQueryCountOf(cards: readonly RetrievalEvalScorecard[]): number {

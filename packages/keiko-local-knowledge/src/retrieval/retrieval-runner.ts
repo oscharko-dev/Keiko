@@ -38,6 +38,7 @@ import {
 import type { KnowledgeStore } from "../store.js";
 
 import { validateAnswerGrounding } from "./answer-grounding.js";
+import type { VectorIndexOptions } from "./vector-index.js";
 import {
   searchVectorsForScope,
   type RetrievalScopeInput,
@@ -56,6 +57,7 @@ export interface RetrievalDependencies {
   readonly store: KnowledgeStore;
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
   readonly queryTransformer?: QueryTransformer;
+  readonly vectorIndex?: VectorIndexOptions;
   // Optional cancellation. Honoured by the embedding adapter; the store reads are
   // synchronous so they cannot be interrupted, only the model call.
   readonly signal?: AbortSignal;
@@ -79,6 +81,7 @@ export async function runLocalKnowledgeRetrieval(
     ...(query.minScore !== undefined ? { minScore: query.minScore } : {}),
     ...(query.strategy !== undefined ? { strategy: query.strategy } : {}),
     ...(deps.queryTransformer !== undefined ? { queryTransformer: deps.queryTransformer } : {}),
+    ...(deps.vectorIndex !== undefined ? { vectorIndex: deps.vectorIndex } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
   });
 

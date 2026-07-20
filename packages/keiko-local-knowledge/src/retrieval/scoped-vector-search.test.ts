@@ -2304,6 +2304,55 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(outcome.references.some((ref) => seededChunkIds.has(String(ref.chunkId)))).toBe(true);
   });
 
+  it("keeps weak OR fallback overlap from overriding dense rank order", async () => {
+    const { store } = getFixture();
+    const target = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-or-fallback-rank",
+      sourceId: "src-or-fallback-rank",
+      documentId: "doc-semantic-target",
+      text: "semantic evidence about an unrelated vocabulary",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const competitor = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-or-fallback-rank",
+      sourceId: "src-or-fallback-rank",
+      documentId: "doc-weak-lexical",
+      text: "alpha filler without the other query term",
+      skipCapsule: true,
+      skipSource: true,
+      unitId: "unit-weak-lexical",
+      contentHash: "4".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const targetChunk = target.chunkIds[0];
+    const competitorChunk = competitor.chunkIds[0];
+    if (targetChunk === undefined || competitorChunk === undefined) {
+      throw new Error("expected seeded chunks");
+    }
+    setChunkVector(store, target.capsuleId, targetChunk, vectorBlob(1, 0));
+    setChunkVector(
+      store,
+      competitor.capsuleId,
+      competitorChunk,
+      vectorBlob(0.999, Math.sqrt(1 - 0.999 * 0.999)),
+    );
+    const adapter = scriptedAdapter({
+      responder: (request): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(request, new Float32Array(vectorBlob(1, 0).buffer)),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [target.capsuleId] },
+      "alpha zulu",
+      { topK: 1 },
+    );
+
+    expect(outcome.diagnostics.lexicalOrFallbackUsed).toBe(true);
+    expect(outcome.references[0]?.citation.documentId).toBe("doc-semantic-target");
+  });
+
   it("does not discount a strict lexical match when a different chained-question leg needed the OR fallback", async () => {
     const { store } = getFixture();
     // Leg 1 ("ADR-0036 reciprocal rank fusion") strict-AND matches this document cleanly — no

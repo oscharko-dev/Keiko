@@ -31,6 +31,9 @@ export interface DiscoveryOptions {
   // Cap on the total number of files yielded — keeps the walker bounded even when a
   // scope is mis-configured to point at a huge directory.
   readonly maxFiles: number;
+  // Repository pods opt in explicitly. The root .gitignore is evaluated by the shared workspace
+  // ignore engine after the always-on deny list, so ignore negation can never re-admit a secret.
+  readonly respectGitIgnore?: boolean;
   // Optional cancellation. The walker checks at each directory boundary so an abort lands
   // within one directory of work.
   readonly signal?: AbortSignal;

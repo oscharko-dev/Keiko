@@ -19,6 +19,11 @@ describe("grounded retrieval eval (RB-5, GEN-AI-RELEASE-GATE-001)", () => {
     expect(scorecard.recallAtK).toBeGreaterThanOrEqual(
       DEFAULT_GROUNDED_RETRIEVAL_BUDGET.minRecallAtK,
     );
+    expect(scorecard.semanticProviderName).toBe("configured-repo-semantic-search");
+    expect(scorecard.fingerprintCount).toBe(10);
+    expect(scorecard.indexedPathCount).toBe(10);
+    expect(scorecard.alignedVectorCount).toBe(10);
+    expect(scorecard.askTimeDocumentEmbeddingCount).toBe(0);
   });
 
   it("proves the semantic path is exercised: a paraphrased query with no lexical overlap still ranks the right file", async () => {

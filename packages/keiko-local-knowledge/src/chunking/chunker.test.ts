@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { DocumentId, ParsedUnit } from "@oscharko-dev/keiko-contracts";
 
 import { chunkParsedUnit, chunkingStrategyKey } from "./chunker.js";
+import { CODE_PARSER_ID } from "../parsers/code-parser.js";
 import {
   CONSERVATIVE_TOKENIZER_ID,
   QWEN3_SENTENCEPIECE_TOKENIZER_ID,
@@ -35,6 +36,53 @@ function sha256Hex(text: string): string {
 }
 
 describe("chunkParsedUnit — pure", () => {
+  it("prefers symbol boundaries only for units produced by the code parser", () => {
+    const text = [
+      "function alpha() { return 1; }",
+      "// padding between symbols",
+      "function beta() { return 2; }",
+      "// later non-symbol line",
+      "// latest non-symbol line",
+    ].join("\n");
+    const options = {
+      maxTokens: 115,
+      minTokens: 0,
+      overlapTokens: 0,
+      tokenEstimator: (value: string): number => value.length,
+    };
+    const unit = pageUnit(0, text.length);
+    const codeChunks = chunkParsedUnit(unit, text, options, { parserId: CODE_PARSER_ID });
+    const proseChunks = chunkParsedUnit(unit, text, options, { parserId: "text" });
+    expect(codeChunks[0]?.characterEnd).toBe(text.indexOf("function beta"));
+    expect(proseChunks[0]?.characterEnd).toBeGreaterThan(codeChunks[0]?.characterEnd ?? 0);
+  });
+
+  // `chooseChunkEnd` runs the symbol probe over every line of a code unit, inside the caller's
+  // open BEGIN/COMMIT transaction. A quadratic symbol pattern therefore did not just slow the
+  // parser down, it held a write transaction open for the same tens of seconds. The probe is now
+  // bounded per line, so a hostile long-space code unit chunks in ordinary time.
+  it("chunks a hostile long-space code unit in bounded time", () => {
+    const hostile = `a${" ".repeat(60_000)}b`;
+    const text = [hostile, "function alpha() { return 1; }", hostile, hostile].join("\n");
+    const startedAt = Date.now();
+    const chunks = chunkParsedUnit(
+      pageUnit(0, text.length),
+      text,
+      { maxTokens: 4_000, minTokens: 0, overlapTokens: 0, tokenEstimator: (v) => v.length },
+      { parserId: CODE_PARSER_ID },
+    );
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(chunks.length).toBeGreaterThan(1);
+  });
+
+  it("keeps prose chunk boundaries byte-identical without code-parser provenance", () => {
+    const text = "First sentence. Second sentence.\nThird line.\nFourth line.";
+    const options = { maxTokens: 8, minTokens: 0, overlapTokens: 0 };
+    expect(chunkParsedUnit(pageUnit(0, text.length), text, options)).toEqual(
+      chunkParsedUnit(pageUnit(0, text.length), text, options, { parserId: "text" }),
+    );
+  });
+
   it("includes the active tokenizer identity in the strategy key", () => {
     const qwenTokenizer: LocalKnowledgeTokenizer = {
       identity: QWEN3_SENTENCEPIECE_TOKENIZER_ID,

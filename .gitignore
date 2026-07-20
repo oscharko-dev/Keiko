@@ -198,3 +198,6 @@ tests/memory-eval/scorecard.json
 # Mutation-testing workspaces and reports are generated locally and in CI.
 /.stryker-tmp/
 /reports/mutation/
+
+# Checksum-verified sqlite-vec loadable extension for local/CI verification (scripts/provision-sqlite-vec.mjs).
+.sqlite-vec/

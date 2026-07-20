@@ -43,11 +43,13 @@ import {
   type StoreContentCipher,
 } from "./store-content-cipher.js";
 import { applyStoreContentEncryption } from "./store-content-encryption.js";
+import type { VectorIndexOptions } from "./retrieval/vector-index.js";
 
 export interface OpenKnowledgeStoreOptions {
   readonly dbPath: string;
   readonly clock?: () => number;
   readonly protection?: KnowledgeStoreProtectionOptions;
+  readonly vectorIndex?: VectorIndexOptions;
 }
 
 export interface KnowledgeStoreKeyProviderContext {
@@ -267,10 +269,19 @@ function quarantineFile(target: string, cause?: unknown): void {
   );
 }
 
-function tryOpenAndMigrate(dbPath: string): OpenAttempt {
+function vectorIndexRuntimeConfigured(options: VectorIndexOptions | undefined): boolean {
+  return (
+    (options?.mode === "auto" || options?.mode === "sqlite-vec") &&
+    (options.sqliteVec !== undefined || options.sqliteVecExtensionPath !== undefined)
+  );
+}
+
+function tryOpenAndMigrate(dbPath: string, allowExtension: boolean): OpenAttempt {
   let db: DatabaseSync;
   try {
-    db = new DatabaseSync(dbPath);
+    db = allowExtension
+      ? new DatabaseSync(dbPath, { allowExtension: true })
+      : new DatabaseSync(dbPath);
   } catch (cause) {
     return isSqliteCorruptionError(cause)
       ? { status: "corrupt", cause }
@@ -321,10 +332,11 @@ function restrictStoreFilePermissions(dbPath: string): void {
 
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
   ensureDirHardened(dirname(opts.dbPath));
-  let attempt = tryOpenAndMigrate(opts.dbPath);
+  const allowExtension = vectorIndexRuntimeConfigured(opts.vectorIndex);
+  let attempt = tryOpenAndMigrate(opts.dbPath, allowExtension);
   if (attempt.status === "corrupt") {
     quarantineFile(opts.dbPath, attempt.cause);
-    attempt = tryOpenAndMigrate(opts.dbPath);
+    attempt = tryOpenAndMigrate(opts.dbPath, allowExtension);
   }
   if (attempt.status !== "ok") {
     throw new KnowledgeStoreError(`Failed to open knowledge-capsule store at ${opts.dbPath}.`, {

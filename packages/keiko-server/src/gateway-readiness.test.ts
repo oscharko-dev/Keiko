@@ -321,6 +321,54 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  it("probes the reranker of the config generation the run started with", async () => {
+    // The gateway-setup save route can replace the runtime config while a readiness run is in
+    // flight, and feature probes execute concurrently after the awaited chat probe. Every probe in
+    // one report must describe the generation `chooseProvider` selected, so a save that lands
+    // mid-run must not redirect the reranker probe at a different endpoint.
+    const rerankerFor = (host: string): NonNullable<GatewayConfig["reranker"]> => ({
+      modelId: "qwen3-reranker",
+      baseUrl: `https://${host}/v1`,
+      apiKey: "reranker-secret",
+      timeoutMs: 10_000,
+    });
+    const pinned: GatewayConfig = { ...gatewayConfig(), reranker: rerankerFor("pinned.internal") };
+    const saved: GatewayConfig = { ...gatewayConfig(), reranker: rerankerFor("saved.internal") };
+
+    let current: GatewayConfig = pinned;
+    const rerankUrls: string[] = [];
+    const fetchImpl = vi.fn((input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("rerank")) {
+        rerankUrls.push(url);
+        return Promise.resolve(jsonResponse({ results: [{ index: 0, relevance_score: 0.99 }] }));
+      }
+      // Simulate a concurrent gateway-setup save landing while the chat probe is awaited.
+      current = saved;
+      return Promise.resolve(jsonResponse(chatPayload("OK")));
+    }) as unknown as typeof fetch;
+
+    const deps: UiHandlerDeps = {
+      ...depsWith(pinned, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => current,
+        present: () => true,
+        set: (next) => {
+          current = next ?? pinned;
+        },
+      },
+    };
+
+    const report = await runGatewayReadiness({ options: { probes: ["reranker"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    expect(rerankUrls).toHaveLength(1);
+    expect(rerankUrls[0]).toContain("pinned.internal");
+    expect(rerankUrls[0]).not.toContain("saved.internal");
+    deps.store.close();
+  });
+
   it("skips requested feature probes when basic chat is not verified", async () => {
     const fetchImpl = vi
       .fn()

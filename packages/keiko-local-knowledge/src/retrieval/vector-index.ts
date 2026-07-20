@@ -1,3 +1,4 @@
+import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts";
 import type {
   EmbeddingModelIdentity,
   EmbeddingVectorMetric,
@@ -58,6 +59,11 @@ export interface VectorIndexOptions {
   readonly sqliteVec?: SqliteVecModule;
   readonly sqliteVecExtensionPath?: string;
   readonly now?: () => number;
+}
+
+export interface VectorIndexEnvironment {
+  readonly KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX?: string;
+  readonly KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH?: string;
 }
 
 interface ResolvedVectorIndexOptions {
@@ -127,11 +133,27 @@ const SELECT_SQLITE_VEC_INDEX_ROWS_SQL = [
   "ORDER BY chunk_id ASC",
 ].join(" ");
 
+// There is deliberately no bundled sqlite-vec module. The npm package publishes the license string
+// "MIT OR Apache", which is not valid SPDX, so the dependency-review policy and
+// `check:workspace-supply-chain` both reject it — and the latter has no exception mechanism by
+// design. The extension is therefore operator-provisioned through
+// KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH (ADR-0152 D2), or injected directly for tests.
+// With neither supplied the resolver yields no module and retrieval keeps using brute force, which
+// is the same fail-closed outcome an unavailable runtime already produced.
+export function resolveVectorIndexOptions(
+  options: VectorIndexOptions | undefined,
+  environment: VectorIndexEnvironment = process.env,
+): ResolvedVectorIndexOptions {
+  return resolvedVectorIndexOptions(options, environment);
+}
+
 function resolvedVectorIndexOptions(
   options: VectorIndexOptions | undefined,
+  environment: VectorIndexEnvironment,
 ): ResolvedVectorIndexOptions {
+  const supplied = options ?? {};
   const mode = parseVectorIndexMode(
-    options?.mode ?? process.env.KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX,
+    supplied.mode ?? environment.KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX,
   );
   const resolved: {
     mode: VectorIndexMode;
@@ -139,12 +161,21 @@ function resolvedVectorIndexOptions(
     sqliteVec?: SqliteVecModule;
     sqliteVecExtensionPath?: string;
     now: () => number;
-  } = { mode, now: options?.now ?? Date.now };
-  if (options?.adapter !== undefined) resolved.adapter = options.adapter;
-  if (options?.sqliteVec !== undefined) resolved.sqliteVec = options.sqliteVec;
-  const extensionPath = vectorIndexExtensionPath(options);
+  } = { mode, now: supplied.now ?? Date.now };
+  if (supplied.adapter !== undefined) resolved.adapter = supplied.adapter;
+  const extensionPath = vectorIndexExtensionPath(supplied, environment);
   if (extensionPath !== undefined) resolved.sqliteVecExtensionPath = extensionPath;
+  const sqliteVec = selectedSqliteVec(supplied, mode);
+  if (sqliteVec !== undefined) resolved.sqliteVec = sqliteVec;
   return resolved;
+}
+
+function selectedSqliteVec(
+  options: VectorIndexOptions,
+  mode: VectorIndexMode,
+): SqliteVecModule | undefined {
+  if (mode === "disabled") return undefined;
+  return options.sqliteVec;
 }
 
 function parseVectorIndexMode(value: string | undefined): VectorIndexMode {
@@ -152,9 +183,12 @@ function parseVectorIndexMode(value: string | undefined): VectorIndexMode {
   return "disabled";
 }
 
-function vectorIndexExtensionPath(options: VectorIndexOptions | undefined): string | undefined {
+function vectorIndexExtensionPath(
+  options: VectorIndexOptions,
+  environment: VectorIndexEnvironment,
+): string | undefined {
   const value =
-    options?.sqliteVecExtensionPath ?? process.env.KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH;
+    options.sqliteVecExtensionPath ?? environment.KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH;
   return value === undefined || value.length === 0 ? undefined : value;
 }
 
@@ -195,7 +229,7 @@ export function searchVectorIndex(
   request: VectorIndexSearchRequest,
   options: VectorIndexOptions | undefined,
 ): VectorIndexSearchResult {
-  const resolved = resolvedVectorIndexOptions(options);
+  const resolved = resolvedVectorIndexOptions(options, process.env);
   if (resolved.adapter !== undefined) return resolved.adapter.searchCapsule(request);
   if (resolved.mode === "disabled") return disabledResult();
   return searchSqliteVecIndex(request, resolved);
@@ -289,12 +323,7 @@ function loadSqliteVecUncached(
   options: ResolvedVectorIndexOptions,
 ): SqliteVecLoadResult {
   if (options.sqliteVec !== undefined) {
-    try {
-      options.sqliteVec.load(db);
-      return { ok: true };
-    } catch {
-      return { ok: false, reason: "sqlite-vec-module-load-failed" };
-    }
+    return loadSqliteVecModule(db, options.sqliteVec);
   }
   if (options.sqliteVecExtensionPath === undefined) {
     return { ok: false, reason: "sqlite-vec-runtime-not-configured" };
@@ -302,18 +331,46 @@ function loadSqliteVecUncached(
   if (typeof db.enableLoadExtension !== "function" || typeof db.loadExtension !== "function") {
     return { ok: false, reason: "sqlite-load-extension-unavailable" };
   }
+  let result: SqliteVecLoadResult = {
+    ok: false,
+    reason: "sqlite-vec-extension-load-failed",
+  };
   try {
     db.enableLoadExtension(true);
     db.loadExtension(options.sqliteVecExtensionPath);
-    return { ok: true };
+    result = { ok: true };
   } catch {
-    return { ok: false, reason: "sqlite-vec-extension-load-failed" };
+    // The fail-closed result is initialized above so the existing diagnostic stays pinned.
   } finally {
-    try {
-      db.enableLoadExtension(false);
-    } catch {
-      // Best-effort hardening; a failing disable should not mask the real load result.
+    if (!disableSqliteExtensionLoading(db)) {
+      result = { ok: false, reason: "sqlite-vec-extension-load-failed" };
     }
+  }
+  return result;
+}
+
+function loadSqliteVecModule(db: DatabaseSync, sqliteVec: SqliteVecModule): SqliteVecLoadResult {
+  let result: SqliteVecLoadResult = { ok: false, reason: "sqlite-vec-module-load-failed" };
+  try {
+    sqliteVec.load(db);
+    result = { ok: true };
+  } catch {
+    // The fail-closed result is initialized above so the existing diagnostic stays pinned.
+  } finally {
+    if (!disableSqliteExtensionLoading(db)) {
+      result = { ok: false, reason: "sqlite-vec-module-load-failed" };
+    }
+  }
+  return result;
+}
+
+function disableSqliteExtensionLoading(db: DatabaseSync): boolean {
+  if (typeof db.enableLoadExtension !== "function") return true;
+  try {
+    db.enableLoadExtension(false);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -503,6 +560,11 @@ function querySqliteVecIndex(
   };
 }
 
+function compareChunkIds(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 function querySqliteVecIndexForSource(
   request: VectorIndexSearchRequest,
   indexName: string,
@@ -520,7 +582,10 @@ function querySqliteVecIndexForSource(
         "  AND capsule_id = :capsule_id",
         "  AND identity_key = :identity_key",
         sourceClause,
-        "ORDER BY distance ASC, chunk_id ASC",
+        // Distance only: sqlite-vec's KNN table cannot satisfy a secondary sort key and rejects the
+        // statement outright, which fails the query closed into the brute-force fallback. The
+        // tie-break is applied below, on the rows it returns.
+        "ORDER BY distance ASC",
       ].join(" "),
     )
     .all({
@@ -530,7 +595,14 @@ function querySqliteVecIndexForSource(
       identity_key: identityKey,
       ...(sourceId !== undefined ? { source_id: String(sourceId) } : {}),
     }) as unknown as readonly SqliteVecCandidateRow[];
-  return rows;
+  // Exact distance ties are left in whatever order the vec index emitted, which is not guaranteed
+  // to be stable across runs or hosts; chunk_id makes the returned ordering reproducible. Which
+  // rows survive the `k` truncation on a tie is decided inside sqlite-vec's KNN search and cannot
+  // be influenced from here, so this pins everything downstream of that point, not the cut itself.
+  return [...rows].sort(
+    (left, right) =>
+      left.distance - right.distance || compareChunkIds(left.chunk_id, right.chunk_id),
+  );
 }
 
 function sqliteVecRowToCandidate(row: SqliteVecCandidateRow): VectorIndexCandidate {
@@ -614,15 +686,7 @@ function identityFromSqliteVecRow(row: SqliteVecIndexRow): EmbeddingModelIdentit
   };
 }
 
-export function embeddingIdentityKey(identity: EmbeddingModelIdentity): string {
-  return [
-    identity.provider,
-    identity.modelId,
-    String(identity.vectorDimensions),
-    identity.vectorMetric,
-    identity.normalization ?? "legacy",
-    identity.instructionVersion ?? "legacy",
-    identity.embeddingSpaceFingerprint ?? "unverified",
-    String(identity.dimensionsParam ?? ""),
-  ].join("|");
-}
+// The identity key now lives in keiko-contracts (ADR-0152 D1). It was one of two byte-equivalent
+// copies in this package; a drifting copy is a silent fail-open, because vectors from incompatible
+// embedding spaces would compare as if they were comparable.
+export { embeddingIdentityKey };

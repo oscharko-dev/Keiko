@@ -117,10 +117,10 @@ describe("composeVectorRecord", () => {
 });
 
 // GEN-PERF-PERSISTENCE-013: per-row insert must not invalidate the capsule's vector-index state once
-// per row (a DELETE that is a no-op after the first row of a document). Batch callers invalidate ONCE
-// at the transaction boundary. We count db.prepare calls compiling the index-state DELETE as the proxy.
+// per row. Batch callers invalidate ONCE at the transaction boundary. We count db.prepare calls
+// compiling the index-state UPDATE as the proxy.
 describe("insertVectorRow index-state invalidation (GEN-PERF-PERSISTENCE-013)", () => {
-  const INVALIDATE_MARKER = "DELETE FROM vector_index_state";
+  const INVALIDATE_MARKER = "UPDATE vector_index_state";
 
   function countInvalidations(run: () => void): number {
     const db = fixture.store._internal.db as unknown as {

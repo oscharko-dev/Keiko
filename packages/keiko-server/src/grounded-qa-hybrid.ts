@@ -18,6 +18,7 @@ import {
   runLocalKnowledgeRetrieval,
   type KnowledgeStore,
   type RetrievalResult,
+  type VectorIndexOptions,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   KnowledgeCapsule,
@@ -26,11 +27,9 @@ import type {
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  applyModelRerankResults,
-  invalidRerankMappingDiagnostics,
   rerankAndSelect,
-  selectTopPromptCandidates,
-  withKeptCount,
+  withFinalMarkers,
+  withModelRerankScore,
   type RerankInput,
   type SelectedCandidate,
 } from "./grounded-rerank.js";
@@ -104,7 +103,7 @@ import {
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
-import { requestConfiguredRerank } from "./grounded-model-reranker.js";
+import { rerankSelection } from "./grounded-rerank-facade.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import {
@@ -407,56 +406,27 @@ interface HybridRerankedSelection {
   readonly diagnostics: GroundedRerankerDiagnostics;
 }
 
-function policyDeniedRerankDiagnostics(
-  candidateCount: number,
-  keptCount: number,
-): GroundedRerankerDiagnostics {
-  return {
-    status: "denied",
-    mode: "local-only",
-    candidateCount,
-    documentCount: 0,
-    keptCount,
-    failureKind: "policy-denied",
-    latencyMs: 0,
-  };
-}
-
 async function rerankHybridSelection(
   ctx: HybridGroundedAskCtx,
   preliminary: readonly SelectedCandidate<HybridPayload>[],
   limits: ReturnType<typeof currentGroundingLimits>,
   externalRerankingDenied: boolean,
 ): Promise<HybridRerankedSelection> {
-  const fallback = selectTopPromptCandidates(preliminary, limits.maxPromptReferences);
-  if (externalRerankingDenied) {
-    return {
-      selected: fallback,
-      diagnostics: policyDeniedRerankDiagnostics(preliminary.length, fallback.length),
-    };
-  }
-  const attempt = await requestConfiguredRerank({
+  const result = await rerankSelection({
     deps: ctx.deps,
     query: ctx.content,
-    documents: preliminary.map((candidate) => candidate.redactedText),
+    candidates: preliminary,
+    documentFor: (candidate) => candidate.redactedText,
     topN: limits.maxPromptReferences,
     signal: ctx.signal,
+    policy: {
+      externalReranking: externalRerankingDenied ? "deny" : "allow",
+      localReranking: "allow",
+    },
+    applyScore: withModelRerankScore,
+    fallbackMode: "slice-topN",
   });
-  if (attempt.outcome === undefined) {
-    return { selected: fallback, diagnostics: withKeptCount(attempt.diagnostics, fallback.length) };
-  }
-  const reranked = applyModelRerankResults(
-    preliminary,
-    attempt.outcome.value.results,
-    limits.maxPromptReferences,
-  );
-  if (reranked === undefined) {
-    return {
-      selected: fallback,
-      diagnostics: invalidRerankMappingDiagnostics(attempt.diagnostics, fallback.length),
-    };
-  }
-  return { selected: reranked, diagnostics: withKeptCount(attempt.diagnostics, reranked.length) };
+  return { selected: withFinalMarkers(result.selected), diagnostics: result.diagnostics };
 }
 
 function connectorsDenyExternalReranking(connectors: readonly RetrievedConnector[]): boolean {
@@ -619,6 +589,7 @@ type RetrievalQueryShape = Parameters<typeof runLocalKnowledgeRetrieval>[1];
 function defaultConnectorRetrieve(
   ctx: HybridGroundedAskCtx,
   connectorScopeCount: number,
+  vectorIndex: VectorIndexOptions,
 ): ConnectorRetrieve {
   return async (store, scope, _selected): Promise<RetrievalResult> => {
     const embeddingAdapter = createEmbeddingAdapter(ctx.deps);
@@ -626,7 +597,7 @@ function defaultConnectorRetrieve(
       throw new EmbeddingAdapterError(embeddingAdapter);
     }
     return runLocalKnowledgeRetrieval(
-      { store, embeddingAdapter, signal: ctx.signal },
+      { store, embeddingAdapter, signal: ctx.signal, vectorIndex },
       connectorQuery(scope, ctx.content, connectorScopeCount),
     );
   };
@@ -697,10 +668,12 @@ async function retrieveConnectorIntoSlot(
 async function retrieveConnectors(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
+  vectorIndex: VectorIndexOptions,
   connectorScopes: readonly ChatLocalKnowledgeScope[],
   resolved: readonly SelectedLocalKnowledgeScope[],
 ): Promise<ConnectorRetrieval | RouteResult> {
-  const retrieve = ctx.connectorRetrieve ?? defaultConnectorRetrieve(ctx, connectorScopes.length);
+  const retrieve =
+    ctx.connectorRetrieve ?? defaultConnectorRetrieve(ctx, connectorScopes.length, vectorIndex);
   const labels = connectorLabels(resolved.map((s) => s.scopeLabel));
   // Index-addressed slots keep the emitted order identical to the scope order regardless of
   // which worker finishes first — evidence and labels stay deterministic.
@@ -1502,7 +1475,7 @@ function assembleHybridNoEvidenceRoute(
 export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<RouteResult> {
   const env = openStoreForDeps(ctx.deps);
   try {
-    return await runHybridWithStore(ctx, env.store);
+    return await runHybridWithStore(ctx, env.store, env.vectorIndex);
   } catch (error) {
     return mapHybridError(error, ctx.deps);
   } finally {
@@ -1658,6 +1631,7 @@ function capSourcesToLimits(
 async function runHybridWithStore(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
+  vectorIndex: VectorIndexOptions,
 ): Promise<RouteResult> {
   const limits = currentGroundingLimits(ctx.deps);
   const capped = capSourcesToLimits(ctx, limits);
@@ -1671,7 +1645,7 @@ async function runHybridWithStore(
       query,
       ctx.folderRetriever ?? defaultRetriever(ctx.signal, ctx.deps),
     ),
-    retrieveConnectors(ctx, store, capped.connectorScopes, resolved),
+    retrieveConnectors(ctx, store, vectorIndex, capped.connectorScopes, resolved),
   ]);
   // Merge upfront-skipped folders (inaccessible/denied at canonicalization), over-cap folder skips,
   // and retrieval-time folder skips so all omissions appear in the assembled uncertainty entries.
