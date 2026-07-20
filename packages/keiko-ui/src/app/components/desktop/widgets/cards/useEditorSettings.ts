@@ -119,6 +119,12 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
   const readAbort = useRef<AbortController | undefined>(undefined);
   const mutationAbort = useRef<AbortController | undefined>(undefined);
   const [snapshot, setSnapshot] = useState<EditorM11SettingsSnapshot | undefined>();
+  // Bumped by every mutation result so an older in-flight read cannot overwrite a newer write.
+  const writeGeneration = useRef(0);
+  const applySnapshot = useCallback((next: EditorM11SettingsSnapshot): void => {
+    writeGeneration.current += 1;
+    setSnapshot(next);
+  }, []);
   const [loading, setLoading] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [issue, setIssue] = useState<EditorSettingsIssue | undefined>();
@@ -129,11 +135,16 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
     readAbort.current?.abort();
     const controller = new AbortController();
     readAbort.current = controller;
+    // A mutation that completes while this read is in flight produces the newer snapshot. Without
+    // this generation guard the late read result overwrote it, so a profile switch silently
+    // reverted to the pre-switch settings whenever the initial load was still resolving.
+    const generation = writeGeneration.current;
     setLoading(true);
     setIssue(undefined);
     try {
       const data = await fetchEditorSettings(root, controller.signal);
       if (rootRef.current !== root || controller.signal.aborted) return;
+      if (writeGeneration.current !== generation) return;
       setSnapshot(data);
       setIssue(undefined);
     } catch (error: unknown) {
@@ -188,12 +199,12 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
         setAnnouncement,
         setIssue,
         setMutating,
-        setSnapshot,
+        setSnapshot: applySnapshot,
         signalRef: mutationAbort,
         snapshot,
       });
     },
-    [root, snapshot],
+    [applySnapshot, root, snapshot],
   );
 
   const setValue = useCallback(
@@ -210,13 +221,13 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
         setAnnouncement,
         setIssue,
         setMutating,
-        setSnapshot,
+        setSnapshot: applySnapshot,
         signalRef: mutationAbort,
         snapshot,
         value,
       });
     },
-    [root, snapshot],
+    [applySnapshot, root, snapshot],
   );
 
   const applied = useMemo(() => appliedEditorSettings(snapshot), [snapshot]);
@@ -236,13 +247,13 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
         setAnnouncement,
         setIssue,
         setMutating,
-        setSnapshot,
+        setSnapshot: applySnapshot,
         signalRef: mutationAbort,
         snapshot,
         settingIds,
       });
     },
-    [root, snapshot],
+    [applySnapshot, root, snapshot],
   );
 
   return {
