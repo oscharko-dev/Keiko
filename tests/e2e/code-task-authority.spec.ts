@@ -332,14 +332,45 @@ async function proveRunChangesView(
   target: string,
 ): Promise<void> {
   const changes = page.getByRole("region", { name: "Run changes" });
-  await expect(
-    changes.getByRole("button", { name: new RegExp(AUTHORITY_TARGET_RELATIVE_PATH, "u") }),
-  ).toBeVisible({ timeout: 30_000 });
-  await expect(changes.getByRole("region", { name: "Run-scoped file diff" })).toContainText(
-    AUTHORITY_EDITED_CONTENT.trim(),
-  );
+  const fileButton = changes.getByRole("button", {
+    name: new RegExp(AUTHORITY_TARGET_RELATIVE_PATH, "u"),
+  });
+  await expect(fileButton).toBeVisible({ timeout: 30_000 });
+  const diffPane = changes.getByRole("region", { name: "Run-scoped file diff" });
+  await expect(diffPane).toContainText(AUTHORITY_EDITED_CONTENT.trim());
   await expect(changes.getByText(/^As of [0-9a-f]{7,40}$/u)).toBeVisible();
   await proveUnpairedClientReadsNoManagedDiff(stranger, new URL(page.url()).origin, target);
+  await proveChangesRefreshPreservesFocusAndContent(page, fileButton, diffPane);
+}
+
+// #2641 focus-survival extension: with a file row focused, any later change signal must NOT
+// unmount the file list or the diff pane. Pinning this in the browser catches a regression to
+// the pre-fix "reset to loading on refresh" behaviour that would blank the pane and drop focus.
+// The hook-level regression test in `useCodingWorkbenchChanges.test.tsx` covers the exact
+// stale-while-revalidate contract; this end-to-end assertion is a lightweight guard that the
+// contract survives all the way through the real render tree in a real browser session.
+async function proveChangesRefreshPreservesFocusAndContent(
+  page: Page,
+  fileButton: Locator,
+  diffPane: Locator,
+): Promise<void> {
+  await fileButton.focus();
+  await expect(fileButton).toBeFocused();
+  // Poll continuously for a bounded window so any late-arriving change signal from the
+  // stopping/stopped transitions is observed. Both assertions must remain true for the whole
+  // window — a regression to the pre-fix "reset to loading on refresh" would flip focus off
+  // the button and blank the diff pane the moment the refresh landed.
+  await expect
+    .poll(
+      async () =>
+        (await fileButton.evaluate((element) => element === document.activeElement)) &&
+        (await diffPane.evaluate(
+          (element, needle) => element.textContent.includes(needle),
+          AUTHORITY_EDITED_CONTENT.trim(),
+        )),
+      { intervals: [50, 100, 100, 100, 200], timeout: 800 },
+    )
+    .toBe(true);
 }
 
 // #2478: revoking the app session (sign-out through the paired cookie jar) must surface as the

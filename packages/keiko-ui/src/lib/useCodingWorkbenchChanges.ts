@@ -92,22 +92,36 @@ function nextSelectedPath(
   return files[0]?.path ?? null;
 }
 
+// Stale-while-revalidate merge: keep the previously rendered diff visible when the same file is
+// still selected after a refresh. Blanking it would unmount the diff pane on every change signal,
+// destroying keyboard focus and re-announcing the polite live region during a run.
 function readyState(
   current: CodingWorkbenchChangesState,
   status: GitRepositoryStatusResponse,
   history: GitHistoryResponse,
 ): CodingWorkbenchChangesState {
   const selectedPath = nextSelectedPath(current, status.changes);
+  const sameSelection = selectedPath !== null && selectedPath === current.selectedPath;
   return {
     status: "ready",
     files: status.changes,
     selectedPath,
     head: headLabel(status, history),
     truncated: status.truncated,
-    diffStatus: selectedPath === null ? "idle" : "loading",
-    diff: null,
-    diffTruncated: false,
+    diffStatus: diffStatusForMerge(current, selectedPath, sameSelection),
+    diff: sameSelection ? current.diff : null,
+    diffTruncated: sameSelection ? current.diffTruncated : false,
   };
+}
+
+function diffStatusForMerge(
+  current: CodingWorkbenchChangesState,
+  selectedPath: string | null,
+  sameSelection: boolean,
+): CodingWorkbenchDiffStatus {
+  if (selectedPath === null) return "idle";
+  if (sameSelection) return current.diffStatus === "idle" ? "loading" : current.diffStatus;
+  return "loading";
 }
 
 async function loadChanges(
@@ -127,13 +141,21 @@ function useChangesSnapshot(input: {
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchChangesState>>;
 }): void {
   const { bindingPending, client, epoch, root, runId, setState } = input;
+  const seenRunIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
+    // A runId change is a hard boundary: the stale-while-revalidate preservation only applies
+    // within a single run, otherwise switching runs while the same file path is selected would
+    // caption the previous run's diff, files and head as the new run's.
+    const runIdChanged = seenRunIdRef.current !== runId;
+    seenRunIdRef.current = runId;
     if (runId === undefined) {
       setState(EMPTY_STATE);
       return undefined;
     }
     if (bindingPending) {
-      setState(unavailable("loading"));
+      setState((current) =>
+        !runIdChanged && current.status === "ready" ? current : unavailable("loading"),
+      );
       return undefined;
     }
     if (root === null) {
@@ -141,7 +163,11 @@ function useChangesSnapshot(input: {
       return undefined;
     }
     let cancelled = false;
-    setState((current) => ({ ...unavailable("loading"), selectedPath: current.selectedPath }));
+    setState((current) =>
+      !runIdChanged && current.status === "ready"
+        ? current
+        : { ...unavailable("loading"), selectedPath: runIdChanged ? null : current.selectedPath },
+    );
     void loadChanges(client, root).then(
       ([status, history]) => {
         if (cancelled) return;
@@ -173,15 +199,24 @@ function diffState(
 function useSelectedDiff(input: {
   readonly client: CodingWorkbenchChangesClient;
   readonly root: string | null;
+  readonly epoch: number;
   readonly state: CodingWorkbenchChangesState;
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchChangesState>>;
 }): void {
-  const { client, root, setState, state } = input;
+  const { client, epoch, root, setState, state } = input;
   const path = state.selectedPath;
   useEffect(() => {
     if (state.status !== "ready" || root === null || path === null) return undefined;
     let cancelled = false;
-    setState((current) => ({ ...current, diffStatus: "loading", diff: null }));
+    // Stale-while-revalidate: leave the previously rendered diff visible while a background
+    // refresh fetches the new one. Only surface the loading placeholder when there is nothing
+    // to fall back to (initial load or a fresh file selection); otherwise the diff pane would
+    // unmount on every change signal, taking any focused control with it.
+    setState((current) =>
+      current.diff === null && current.diffStatus !== "loading"
+        ? { ...current, diffStatus: "loading" }
+        : current,
+    );
     void client.getDiff(root, path).then(
       (response) => {
         if (cancelled) return;
@@ -197,7 +232,7 @@ function useSelectedDiff(input: {
     return () => {
       cancelled = true;
     };
-  }, [client, path, root, setState, state.status]);
+  }, [client, epoch, path, root, setState, state.status]);
 }
 
 function useRunBoundRoot(input: UseCodingWorkbenchChangesInput): string | null {
@@ -250,7 +285,7 @@ export function useCodingWorkbenchChanges(
     });
   }, []);
   useChangesSnapshot({ ...input, client, root, epoch, setState });
-  useSelectedDiff({ client, root, state, setState });
+  useSelectedDiff({ client, root, epoch, state, setState });
   useChangeSignalRefresh({ ...input, refresh: retry });
   return { ...state, retry, selectPath };
 }
