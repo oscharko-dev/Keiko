@@ -231,3 +231,200 @@ describe("validateAuxiliaryCapabilityOutcomeV1", () => {
     expect(AUXILIARY_CAPABILITIES).toEqual(["research", "skill", "child-agent"]);
   });
 });
+
+// The validator's rejection half is the half that matters: it is the boundary an auxiliary request
+// crosses before any authority is derived from it. Every guard below is asserted from its FAILING
+// side, and each names the field it rejected so a denial is diagnosable without echoing content.
+describe("auxiliary request rejection paths", () => {
+  function errorsFor(request: unknown): readonly string[] {
+    const result = validateAuxiliaryCapabilityRequestV1(request);
+    return result.ok ? [] : result.errors;
+  }
+
+  it("rejects every malformed target identifier and names each one", () => {
+    const errors = errorsFor({
+      ...researchRequest(),
+      taskId: "",
+      runId: 7,
+      workspaceId: null,
+      stateRevision: -1,
+      idempotencyKey: undefined,
+    });
+
+    expect(errors).toEqual(
+      expect.arrayContaining([
+        "taskId is invalid",
+        "runId is invalid",
+        "workspaceId is invalid",
+        "stateRevision must be a non-negative integer",
+        "idempotencyKey is invalid",
+      ]),
+    );
+  });
+
+  it("rejects a non-integer or fractional state revision", () => {
+    expect(errorsFor({ ...researchRequest(), stateRevision: 1.5 })).toContain(
+      "stateRevision must be a non-negative integer",
+    );
+  });
+
+  it("rejects a research scope that is not an object", () => {
+    expect(errorsFor({ ...researchRequest(), research: "developer.mozilla.org" })).toEqual([
+      "research scope must be an object",
+    ]);
+  });
+
+  it("rejects an invalid grant id and a non-UTC expiry", () => {
+    const errors = errorsFor({
+      ...researchRequest(),
+      research: { ...researchRequest().research, grantId: 42, expiresAt: "2026-07-17T00:00:00" },
+    });
+
+    expect(errors).toEqual(
+      expect.arrayContaining([
+        "researchScope.grantId is invalid",
+        "researchScope.expiresAt must be an ISO-8601 UTC instant",
+      ]),
+    );
+  });
+
+  it("rejects an unparseable expiry that still ends in Z", () => {
+    expect(
+      errorsFor({
+        ...researchRequest(),
+        research: { ...researchRequest().research, expiresAt: "not-a-date-at-allZ" },
+      }),
+    ).toContain("researchScope.expiresAt must be an ISO-8601 UTC instant");
+  });
+
+  it("fails an empty domain list closed rather than reading it as unrestricted", () => {
+    expect(
+      errorsFor({ ...researchRequest(), research: { ...researchRequest().research, domains: [] } }),
+    ).toContain("researchScope.domains must be a non-empty list of public domains");
+    expect(
+      errorsFor({
+        ...researchRequest(),
+        research: { ...researchRequest().research, domains: "developer.mozilla.org" },
+      }),
+    ).toContain("researchScope.domains must be a non-empty list of public domains");
+  });
+
+  it("rejects a domain list where any single entry is non-public", () => {
+    expect(
+      errorsFor({
+        ...researchRequest(),
+        research: {
+          ...researchRequest().research,
+          domains: ["developer.mozilla.org", "127.0.0.1"],
+        },
+      }),
+    ).toContain("researchScope.domains must be a non-empty list of public domains");
+  });
+
+  it("rejects a query digest that is not a tagged fact", () => {
+    expect(
+      errorsFor({
+        ...researchRequest(),
+        research: { ...researchRequest().research, queryTextDigest: DIGEST },
+      }),
+    ).toContain("researchScope.queryTextDigest must be a tagged fact object");
+  });
+
+  it("rejects a known digest fact whose value is not a sha256", () => {
+    expect(
+      errorsFor({
+        ...researchRequest(),
+        research: {
+          ...researchRequest().research,
+          queryTextDigest: { outcome: "known", value: "short" },
+        },
+      }),
+    ).toContain("researchScope.queryTextDigest.value is invalid");
+  });
+
+  it("rejects an absent-or-unknown digest fact that smuggles a value", () => {
+    for (const outcome of ["unknown", "unavailable", "absent"]) {
+      expect(
+        errorsFor({
+          ...researchRequest(),
+          research: {
+            ...researchRequest().research,
+            queryTextDigest: { outcome, value: DIGEST },
+          },
+        }),
+      ).toContain(`researchScope.queryTextDigest must not carry a value for outcome ${outcome}`);
+    }
+  });
+
+  it("accepts every value-free outcome on the digest fact", () => {
+    for (const outcome of ["unknown", "unavailable", "absent"]) {
+      expect(
+        validateAuxiliaryCapabilityRequestV1({
+          ...researchRequest(),
+          research: { ...researchRequest().research, queryTextDigest: { outcome } },
+        }),
+      ).toMatchObject({ ok: true });
+    }
+  });
+
+  it("rejects an outcome tag outside the closed vocabulary", () => {
+    expect(
+      errorsFor({
+        ...researchRequest(),
+        research: {
+          ...researchRequest().research,
+          queryTextDigest: { outcome: "redacted", value: DIGEST },
+        },
+      }),
+    ).toContain(
+      "researchScope.queryTextDigest.outcome must be known, unknown, unavailable, or absent",
+    );
+  });
+
+  it("rejects a skill request with a malformed id or an unknown invocation", () => {
+    const errors = errorsFor({
+      ...target(),
+      schemaVersion: CODE_TASK_AUXILIARY_SCHEMA_VERSION,
+      capability: "skill",
+      skillId: "docs-search@1",
+      invocation: "inferred",
+    });
+
+    expect(errors).toEqual(expect.arrayContaining(["skillId is invalid", "invocation is invalid"]));
+  });
+
+  it("rejects a child request with a malformed run id or a non-positive budget", () => {
+    const errors = errorsFor({
+      ...target(),
+      schemaVersion: CODE_TASK_AUXILIARY_SCHEMA_VERSION,
+      capability: "child-agent",
+      childRunId: "run-1",
+      maxToolCalls: 0,
+    });
+
+    expect(errors).toEqual(
+      expect.arrayContaining(["childRunId is invalid", "maxToolCalls must be a positive integer"]),
+    );
+  });
+
+  it("rejects an unrecognized capability before inspecting any other field", () => {
+    // The discriminant is resolved first, so a bogus capability yields exactly one error and the
+    // rest of the payload is never interpreted.
+    expect(errorsFor({ ...target(), schemaVersion: 1, capability: "shell" })).toEqual([
+      "capability must be research, skill, or child-agent",
+    ]);
+  });
+
+  it("rejects a non-object request and a wrong schema version", () => {
+    expect(errorsFor("research")).toEqual(["auxiliary request must be an object"]);
+    expect(errorsFor({ ...researchRequest(), schemaVersion: 2 })).toContain(
+      "schemaVersion must be the literal 1",
+    );
+  });
+
+  it("rejects an unknown key rather than ignoring it", () => {
+    expect(errorsFor({ ...researchRequest(), envelope: { widened: true } })).toEqual(
+      expect.arrayContaining([expect.stringContaining("auxiliaryRequest")]),
+    );
+  });
+});
