@@ -25,6 +25,8 @@ import {
   handleCodingRuntimeQuestionList,
   handleCodingRuntimeQuestionReject,
   handleCodingRuntimeRecoveryAcknowledgement,
+  handleCodingRuntimeResearchAsk,
+  handleCodingRuntimeResearchRevoke,
   handleCodingRuntimeResume,
   handleCodingRuntimeRetry,
   handleCodingRuntimeStatus,
@@ -112,6 +114,7 @@ function runtime(overrides: Partial<Record<string, unknown>> = {}): UiHandlerDep
     acknowledgeRecovery: () => Promise.resolve({ ok: true as const, snapshot }),
     pause: () => Promise.resolve({ ok: true as const, snapshot }),
     resume: () => Promise.resolve({ ok: true as const, snapshot }),
+    revokeResearch: () => Promise.resolve({ ok: true as const, snapshot }),
     submitFollowUp: (_runId: string, body: unknown) => {
       calls.push(body);
       return Promise.resolve({ ok: true as const, snapshot });
@@ -129,6 +132,15 @@ function runtime(overrides: Partial<Record<string, unknown>> = {}): UiHandlerDep
       }),
     status: () => snapshot,
     getSnapshot: (runId: string) => (runId === "run-1" ? snapshot : undefined),
+    pendingResearchAsk: (runId: string) =>
+      runId === "run-1"
+        ? {
+            requestId: "research-approval-1",
+            host: "nodejs.org",
+            requestLine: "/docs/latest/api/stream.html backpressure",
+            expiresAt: "2026-07-13T00:02:00.000Z",
+          }
+        : undefined,
   };
   const eventHub = {
     subscribe: (
@@ -168,6 +180,8 @@ describe("coding runtime routes", () => {
     expect(patterns.some((pattern) => pattern.endsWith("/follow-up"))).toBe(true);
     expect(patterns.some((pattern) => pattern.endsWith("/pause"))).toBe(true);
     expect(patterns.some((pattern) => pattern.endsWith("/resume"))).toBe(true);
+    // #2387: the research revoke mutation shares the same guarded runtime group.
+    expect(patterns.some((pattern) => pattern.endsWith("/research/revoke"))).toBe(true);
   });
 
   it("declares the productive singleton lifecycle routes and leaves deprecated authority routes unmounted", () => {
@@ -177,6 +191,7 @@ describe("coding runtime routes", () => {
         "GET /api/coding-workbench/runtime/readiness",
         "GET /api/coding-workbench/runtime/status",
         "GET /api/coding-workbench/runtime/runs/:runId/events",
+        "GET /api/coding-workbench/runtime/runs/:runId/research",
         "POST /api/coding-workbench/runtime/runs/:runId/approvals",
         "POST /api/coding-workbench/runtime/runs/:runId/stop",
         "POST /api/coding-workbench/runtime/runs/:runId/takeover",
@@ -185,6 +200,7 @@ describe("coding runtime routes", () => {
         "POST /api/coding-workbench/runtime/runs/:runId/pause",
         "POST /api/coding-workbench/runtime/runs/:runId/resume",
         "POST /api/coding-workbench/runtime/runs/:runId/follow-up",
+        "POST /api/coding-workbench/runtime/runs/:runId/research/revoke",
         "POST /api/coding-workbench/runtime/runs/:runId/questions",
         "POST /api/coding-workbench/runtime/runs/:runId/questions/answer",
         "POST /api/coding-workbench/runtime/runs/:runId/questions/reject",
@@ -204,6 +220,7 @@ describe("coding runtime routes", () => {
     const handlers = [
       handleCodingRuntimePause,
       handleCodingRuntimeResume,
+      handleCodingRuntimeResearchRevoke,
       handleCodingRuntimeFollowUp,
       handleCodingRuntimeQuestionAnswer,
       handleCodingRuntimeQuestionReject,
@@ -287,6 +304,68 @@ describe("coding runtime routes", () => {
         unpairedProjection,
       );
     }
+  });
+
+  it("#2387: the paired research route shows the operator the exact host and request line", () => {
+    const session = pairedAppSession();
+    const reviewed = handleCodingRuntimeResearchAsk(
+      context("", { runId: "run-1" }, "/api/coding-workbench/runtime/runs", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+
+    expect(reviewed).toEqual({
+      status: 200,
+      body: {
+        session: "active",
+        pending: {
+          requestId: "research-approval-1",
+          host: "nodejs.org",
+          requestLine: "/docs/latest/api/stream.html backpressure",
+          expiresAt: "2026-07-13T00:02:00.000Z",
+        },
+      },
+    });
+  });
+
+  it("#2387: an unpaired research read yields the constant content-free projection, never the host", () => {
+    const session = pairedAppSession();
+    const unpairedProjection = { status: 200, body: { session: "unpaired" } };
+    // Same constant shape for a live run, an unknown run, a missing runId, and a server composed
+    // without the runtime, so the response is not an existence oracle (ADR-0141 D6).
+    const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
+      [{ runId: "run-1" }, runtime({ codingAppSessionChannel: session.channel })],
+      [{ runId: "run-9" }, runtime({ codingAppSessionChannel: session.channel })],
+      [{}, runtime({ codingAppSessionChannel: session.channel })],
+      [
+        { runId: "run-1" },
+        runtime({ codingAppSessionChannel: session.channel, codingRuntimeOrchestrator: undefined }),
+      ],
+      [{ runId: "run-1" }, runtime()],
+    ];
+    for (const [params, deps] of cases) {
+      const result = handleCodingRuntimeResearchAsk(context("", params), deps);
+      expect(result).toEqual(unpairedProjection);
+      expect(JSON.stringify(result.body)).not.toContain("nodejs.org");
+    }
+  });
+
+  it("#2387: a paired read of an unknown run conceals existence instead of reporting no ask", () => {
+    const session = pairedAppSession();
+
+    const result = handleCodingRuntimeResearchAsk(
+      context("", { runId: "run-9" }, "/api/coding-workbench/runtime/runs", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+
+    expect(result.status).toBe(404);
+    expect(JSON.stringify(result.body)).not.toContain("nodejs.org");
+  });
+
+  it("#2387: the content-free status projection never carries the pending research destination", () => {
+    const status = handleCodingRuntimeStatus(context(""), runtime());
+
+    expect(JSON.stringify(status.body)).not.toContain("nodejs.org");
+    expect(JSON.stringify(status.body)).not.toContain("backpressure");
   });
 
   it("#2478: unpaired question mutations receive the existence-concealing not-found result", async () => {

@@ -23,7 +23,10 @@ import type {
 } from "../productionOpenCodeBackend.js";
 import { parseOpenCodeHistory } from "../opencodeProtocol.js";
 import { OPENCODE_MODEL_VISIBLE_TOOLS, OPENCODE_PINNED_VERSION } from "../opencodeToolSchemas.js";
-import { projectOpenCodeProtocolSurface } from "../opencodeProtocolSurface.js";
+import {
+  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  projectOpenCodeProtocolSurface,
+} from "../opencodeProtocolSurface.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessBackend,
@@ -38,7 +41,7 @@ const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const RECEIPT = `sha256:${"0".repeat(64)}`;
 const PROTOCOL_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 const MAX_FAKE_BODY_BYTES = 1024 * 1024;
-const MAX_FAKE_AGENT_STEPS = 8;
+const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";
 
 /** OpenAPI projection served by the scripted child; it projects to the pinned handshake digest. */
@@ -255,7 +258,12 @@ export function stagedFunctionalPortable(testRoot: string): FunctionalPortableOp
   if (digest(resolve(stagedBinary)) !== digest(binary)) {
     throw new Error("functional-opencode-binary-copy-mismatch");
   }
-  const sidecar = verification(installRoot, target);
+  // The staged artifact IS the pinned binary: its live /doc re-projects onto the product
+  // surface pin, not onto the scripted harness surface digest.
+  const sidecar = {
+    ...verification(installRoot, target),
+    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  };
   return {
     evidenceClass: "functional-not-platform-qualified",
     installRoot,
@@ -519,11 +527,14 @@ interface PendingFakeQuestion {
 }
 
 const FAKE_TOOL_ACTIONS: Readonly<
-  Record<string, { readonly action: string; readonly argument: string }>
+  Record<string, { readonly action: string; readonly arguments: readonly string[] }>
 > = {
-  keiko_workspace_read: { action: "read", argument: "relativePath" },
-  keiko_changeset_edit: { action: "edit", argument: "changeset" },
-  keiko_verification: { action: "verification", argument: "verifierId" },
+  keiko_workspace_read: { action: "read", arguments: ["relativePath"] },
+  keiko_changeset_edit: { action: "edit", arguments: ["changeset"] },
+  keiko_verification: { action: "verification", arguments: ["verifierId"] },
+  keiko_research_fetch: { action: "egress", arguments: ["target"] },
+  keiko_skill: { action: "skill", arguments: ["skillId"] },
+  keiko_child_agent: { action: "child-agent", arguments: ["objective", "maxToolCalls"] },
 };
 
 /**
@@ -915,24 +926,26 @@ class FakeOpenCodeChild {
 
   private executeToolCall(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     if (call.name === "question") return this.askQuestion(call, signal);
+    if (call.name === "todowrite") return Promise.resolve(executeBuiltInTodoWrite(call));
     return this.callToolFacade(call, signal);
   }
 
-  /** A rejected (or aborted) question fails the tool and ends the turn, like the real binary. */
+  /**
+   * A rejected (or aborted) question fails the tool and ends the turn, like the real binary.
+   * The real v1.17.17 publishes its question lifecycle live-only over /global/event — question
+   * rows never reach the durable history — so the fake mirrors exactly that.
+   */
   private askQuestion(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     this.questionSequence += 1;
     const id = `que_functional${String(this.questionSequence)}`;
     const row = { id, sessionID: FAKE_SESSION_ID, questions: call.args.questions };
-    this.appendHistory("question.asked", { id, sessionID: FAKE_SESSION_ID, questions: [] });
     return new Promise<string>((resolveQuestion, rejectQuestion) => {
       const settled = (outcome: FakeQuestionOutcome): void => {
         signal.removeEventListener("abort", onAbort);
-        this.appendHistory(
-          outcome.kind === "answered" ? "question.replied" : "question.rejected",
-          outcome.kind === "answered"
-            ? { sessionID: FAKE_SESSION_ID, requestID: id, answers: [] }
-            : { sessionID: FAKE_SESSION_ID, requestID: id },
-        );
+        this.broadcast(outcome.kind === "answered" ? "question.replied" : "question.rejected", {
+          sessionID: FAKE_SESSION_ID,
+          requestID: id,
+        });
         if (outcome.kind === "answered") resolveQuestion(JSON.stringify(outcome));
         else rejectQuestion(new Error("functional-question-rejected"));
       };
@@ -942,7 +955,7 @@ class FakeOpenCodeChild {
       };
       this.questions.set(id, { row, settle: settled });
       signal.addEventListener("abort", onAbort, { once: true });
-      this.broadcast("question.nudge", {});
+      this.broadcast("question.asked", { id, sessionID: FAKE_SESSION_ID });
     });
   }
 
@@ -969,12 +982,17 @@ class FakeOpenCodeChild {
         action: definition.action,
         actionId: identity,
         idempotencyKey: identity,
-        [definition.argument]: call.args[definition.argument],
+        ...Object.fromEntries(definition.arguments.map((name) => [name, call.args[name]])),
       }),
     });
     if (!response.ok) return '{"status":"failed"}';
     return await response.text();
   }
+}
+
+/** Mirrors the v1.17.17 built-in: full-replace todo state, no facade round-trip, no tool event. */
+function executeBuiltInTodoWrite(call: FakeToolCall): string {
+  return JSON.stringify(call.args.todos ?? [], null, 2);
 }
 
 function splitFunctionalText(value: string): readonly string[] {

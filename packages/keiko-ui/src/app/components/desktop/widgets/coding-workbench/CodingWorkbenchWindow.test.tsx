@@ -1,12 +1,15 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  AvailableCodingSafeActivityFeed,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
+import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
+import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import {
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
@@ -14,12 +17,43 @@ import {
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 
 const runtimeHookMock = vi.hoisted(() => vi.fn());
+const questionsHookMock = vi.hoisted(() => vi.fn());
+const activityHookMock = vi.hoisted(() => vi.fn());
+const researchAskHookMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
 }));
 
+vi.mock("@/lib/useCodingWorkbenchQuestions", () => ({
+  useCodingWorkbenchQuestions: questionsHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchSafeActivity", () => ({
+  useCodingWorkbenchSafeActivity: activityHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchResearchAsk", () => ({
+  useCodingWorkbenchResearchAsk: researchAskHookMock,
+}));
+
 const AT = "2026-07-13T12:00:00.000Z";
+
+const EMPTY_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
+  status: "empty",
+  questions: [],
+  errorCode: null,
+  answer: vi.fn(() => Promise.resolve(true)),
+  reject: vi.fn(() => Promise.resolve(true)),
+  retry: vi.fn(),
+};
+
+const IDLE_ACTIVITY: UseCodingWorkbenchSafeActivityResult = {
+  status: "idle",
+  feed: null,
+  errorCode: null,
+  retry: vi.fn(),
+};
 
 function actions(): CodingWorkbenchRuntimeActions {
   return {
@@ -38,6 +72,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     pause: vi.fn(() => Promise.resolve()),
     resume: vi.fn(() => Promise.resolve()),
     submitFollowUp: vi.fn(() => Promise.resolve()),
+    revokeResearchGrant: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -120,6 +155,36 @@ function renderWorkbench(
 }
 
 describe("CodingWorkbenchWindow", () => {
+  beforeEach(() => {
+    questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
+    activityHookMock.mockReturnValue(IDLE_ACTIVITY);
+    researchAskHookMock.mockReturnValue({ status: "idle", ask: null });
+  });
+
+  function egressApprovalState(
+    kind: "network-egress" | "delivery-substrate" = "network-egress",
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId: "research-approval-1",
+            kind,
+            actionClass: "network-egress",
+            reasonCode: "research-approval-required",
+            actionKind: "research",
+            risk: "medium",
+            expiresAt: "2026-07-13T12:02:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
   it("renders only live server-confirmed readiness and starts with transient task intent", async () => {
     const user = userEvent.setup();
     const liveActions = renderWorkbench();
@@ -173,6 +238,41 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(2, "denied");
   });
 
+  it("#2387: shows the research destination the operator is about to approve", async () => {
+    researchAskHookMock.mockReturnValue({
+      status: "ready",
+      ask: {
+        requestId: "research-approval-1",
+        host: "nodejs.org",
+        requestLine: "/docs/latest/api/stream.html backpressure",
+        expiresAt: "2026-07-13T12:02:00.000Z",
+      },
+    });
+    renderWorkbench(egressApprovalState());
+
+    const destination = screen.getByRole("group", { name: "Research destination" });
+    expect(destination).toHaveTextContent("nodejs.org");
+    expect(destination).toHaveTextContent("/docs/latest/api/stream.html backpressure");
+    // The destination is reviewable text, never a live link that reviewing could follow.
+    expect(destination.querySelector("a")).toBeNull();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("#2387: says the destination is unavailable rather than implying there is none", () => {
+    researchAskHookMock.mockReturnValue({ status: "unavailable", ask: null });
+    renderWorkbench(egressApprovalState());
+
+    expect(screen.getByText(/Destination unavailable\. Re-pair this window/u)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeInTheDocument();
+  });
+
+  it("#2387: shows no destination block for an approval that is not network egress", () => {
+    researchAskHookMock.mockReturnValue({ status: "idle", ask: null });
+    renderWorkbench(egressApprovalState("delivery-substrate"));
+
+    expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
+  });
+
   it("renders recovery acknowledgement before allowing a fresh retry", async () => {
     const user = userEvent.setup();
     const liveActions = renderWorkbench(
@@ -210,7 +310,9 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("Authentication setup plan unavailable.");
+    expect(
+      screen.getByText("Authentication setup plan unavailable.", { exact: false }),
+    ).toBeInTheDocument();
   });
 
   it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", () => {
@@ -225,6 +327,60 @@ describe("CodingWorkbenchWindow", () => {
     ).toHaveLength(96);
   });
 
+  it("renders authenticated conversation, terminal tools, plan, truncation, and an inline question", async () => {
+    const user = userEvent.setup();
+    const answer = vi.fn(() => Promise.resolve(true));
+    activityHookMock.mockReturnValue({
+      status: "live",
+      feed: activityFeed(),
+      errorCode: null,
+      retry: vi.fn(),
+    } satisfies UseCodingWorkbenchSafeActivityResult);
+    questionsHookMock.mockReturnValue({
+      status: "ready",
+      questions: [
+        {
+          id: "question-1",
+          questions: [
+            {
+              header: "Continue",
+              question: "Use <img src=x onerror=alert(1)>?",
+              options: [{ label: "Proceed", description: "Continue the bounded run" }],
+            },
+          ],
+        },
+      ],
+      errorCode: null,
+      answer,
+      reject: vi.fn(() => Promise.resolve(true)),
+      retry: vi.fn(),
+    } satisfies UseCodingWorkbenchQuestionsResult);
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+      }),
+    );
+
+    const timeline = screen.getByRole("list", { name: "Coding run event timeline" });
+    expect(timeline).toHaveTextContent("Review the repository");
+    expect(timeline).toHaveTextContent("Tool activity: workspace.read");
+    expect(timeline).toHaveTextContent("Succeeded");
+    expect(timeline).toHaveTextContent("Current plan");
+    expect(timeline).toHaveTextContent("Output truncated");
+    expect(document.querySelector("img")).toBeNull();
+    const questions = screen.getByRole("region", { name: "Runtime questions" });
+    expect(questions.closest('ol[aria-label="Coding run event timeline"]')).toBe(timeline);
+
+    await user.click(screen.getByRole("radio", { name: /Proceed/u }));
+    await user.click(screen.getByRole("button", { name: "Send answer" }));
+    expect(answer).toHaveBeenCalledWith("question-1", [["Proceed"]]);
+    expect(screen.getByRole("heading", { name: "Live activity timeline" })).toHaveFocus();
+  });
+
   it("has no serious or critical axe violations in the live ready state", async () => {
     runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
     const { container } = render(<CodingWorkbenchWindow />);
@@ -236,4 +392,76 @@ describe("CodingWorkbenchWindow", () => {
       ),
     ).toEqual([]);
   });
+
+  it("surfaces the internet research grant and revokes it during a live run", async () => {
+    const user = userEvent.setup();
+    const liveActions = renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "running",
+            runId: "run-1",
+            researchGrant: {
+              grantId: "grant-1",
+              domains: ["developer.mozilla.org", "nodejs.org"],
+              expiresAt: "2026-07-13T12:30:00.000Z",
+            },
+          }),
+        },
+      }),
+    );
+
+    const group = screen.getByRole("group", { name: "Internet · Research only" });
+    expect(group).toHaveTextContent("developer.mozilla.org, nodejs.org");
+    expect(group).toHaveTextContent("2026-07-13T12:30:00.000Z");
+    const revoke = screen.getByRole("button", {
+      name: "Revoke the internet research grant for this run and its child agents",
+    });
+    expect(revoke).toBeEnabled();
+    await user.click(revoke);
+    expect(liveActions.revokeResearchGrant).toHaveBeenCalledOnce();
+  });
 });
+
+function activityFeed(): AvailableCodingSafeActivityFeed {
+  return {
+    schemaVersion: "1",
+    availability: "available",
+    runId: "run-1",
+    updatedAt: AT,
+    turns: [
+      {
+        turnId: "turn-1",
+        messages: [
+          {
+            messageId: "message-1",
+            role: "assistant",
+            occurredAt: AT,
+            segments: [{ kind: "text", text: "Review the repository", truncated: true }],
+            truncated: true,
+          },
+        ],
+        tools: [
+          {
+            callId: "call-1",
+            tool: "workspace.read",
+            state: "succeeded",
+            occurredAt: AT,
+          },
+        ],
+        truncated: true,
+      },
+    ],
+    plan: {
+      revision: 1,
+      anchorMessageId: "message-1",
+      updatedAt: AT,
+      steps: [{ text: "Inspect the target", state: "active", truncated: false }],
+      truncated: false,
+    },
+    truncated: false,
+    droppedEventCount: 0,
+  };
+}

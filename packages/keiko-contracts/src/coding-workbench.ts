@@ -142,6 +142,7 @@ export const CODING_WORKBENCH_PERMISSION_REQUEST_KINDS: readonly CodingWorkbench
 export type CodingWorkbenchSupervisedActionKind =
   | "file-edit"
   | "verification-command"
+  | "research"
   | "commit"
   | "push"
   | "pull-request"
@@ -154,6 +155,7 @@ export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchS
   Object.freeze([
     "file-edit",
     "verification-command",
+    "research",
     "commit",
     "push",
     "pull-request",
@@ -231,6 +233,10 @@ export type CodingWorkbenchRuntimeEventKind =
   | "diff-summarized"
   | "verification-summarized"
   | "artifact-produced"
+  | "research-performed"
+  | "skill-invoked"
+  | "child-run-started"
+  | "child-run-completed"
   | "failure-redacted";
 
 export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRuntimeEventKind[] =
@@ -244,8 +250,27 @@ export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRunti
     "diff-summarized",
     "verification-summarized",
     "artifact-produced",
+    "research-performed",
+    "skill-invoked",
+    "child-run-started",
+    "child-run-completed",
     "failure-redacted",
   ] as const satisfies readonly CodingWorkbenchRuntimeEventKind[]);
+
+// The normalized outcome vocabulary shared by the #2387 auxiliary-capability events. `accepted` is
+// the positive path; `denied`, `unavailable`, `limit-reached`, and `stopped` are governance
+// outcomes distinct from a redacted hard failure (which still uses failureCode/failureSummary).
+export type CodingWorkbenchAuxiliaryStatus =
+  "accepted" | "denied" | "unavailable" | "limit-reached" | "stopped";
+
+export const CODING_WORKBENCH_AUXILIARY_STATUSES: readonly CodingWorkbenchAuxiliaryStatus[] =
+  Object.freeze([
+    "accepted",
+    "denied",
+    "unavailable",
+    "limit-reached",
+    "stopped",
+  ] as const satisfies readonly CodingWorkbenchAuxiliaryStatus[]);
 
 export interface CodingWorkbenchModePolicy {
   // Capability admission is not pre-approval. Resource scope, risk, authority, and hard-deny gates
@@ -574,6 +599,14 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly artifactLabel?: string | undefined;
   readonly artifactDigest?: string | undefined;
   readonly artifactBytes?: number | undefined;
+  // #2387 auxiliary-capability events (research-performed / skill-invoked / child-run-*). Content
+  // free: the normalized outcome, the approved skill id and how it was invoked, and the one-layer
+  // child run id plus its explicit result count — never queries, pages, skill bodies, or scratch.
+  readonly auxiliaryOutcome?: CodingWorkbenchAuxiliaryStatus | undefined;
+  readonly skillId?: string | undefined;
+  readonly skillInvocation?: "explicit" | "implicit" | undefined;
+  readonly childRunId?: string | undefined;
+  readonly childResultCount?: number | undefined;
   readonly failureCode?: string | undefined;
   readonly failureSummary?: string | undefined;
   readonly retryable?: boolean | undefined;
@@ -688,6 +721,7 @@ export function permissionKindForSupervisedCodingAction(
 ): CodingWorkbenchPermissionRequestKind {
   if (actionKind === "file-edit") return "workspace-write";
   if (actionKind === "verification-command") return "command-execution";
+  if (actionKind === "research") return "network-egress";
   if (actionKind === "connector-write" || actionKind === "external-write") {
     return "connector-access";
   }

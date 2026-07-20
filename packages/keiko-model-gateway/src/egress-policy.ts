@@ -228,7 +228,8 @@ function isTargetClassBlocked(
   targetClass: OutboundTargetClass,
   egress: OutboundHttpEgressConfig | undefined,
 ): boolean {
-  if (targetClass === "public" || targetClass === "loopback") return false;
+  if (targetClass === "public") return false;
+  if (targetClass === "loopback") return egress?.denyLoopback === true;
   if (ALWAYS_BLOCKED_TARGET_CLASSES.has(targetClass)) return true;
   if (PRIVATE_NETWORK_OVERRIDABLE_TARGET_CLASSES.has(targetClass)) {
     return egress?.allowLinkLocalAndMetadata !== true;

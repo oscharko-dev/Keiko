@@ -15,6 +15,9 @@ import {
   createCodingRuntimeOrchestrator,
   type CodingRuntimeOrchestratorResult,
 } from "./codingRuntimeOrchestrator.js";
+import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
+import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
+import type { AuxiliaryResearchScopeV1 } from "@oscharko-dev/keiko-contracts";
 
 function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
   if (!result.ok) throw new Error(`expected success, received ${result.failureCode}`);
@@ -144,6 +147,8 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     reject: vi.fn(() => Promise.resolve(true)),
   } satisfies CodingRuntimeQuestionPort;
   const safeActivityProjection = activityProjection ?? fakeSafeActivityProjection();
+  const researchGrants = createResearchGrantRegistry();
+  const pendingResearchApprovals = createPendingResearchApprovals();
   const orchestrator = createCodingRuntimeOrchestrator({
     manager: manager,
     approvalAuthority,
@@ -161,6 +166,8 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     questionPort,
     safeActivityProjection,
     serverPrincipal: () => "server",
+    researchGrants,
+    pendingResearchApprovals,
     now: () => new Date("2026-01-01T00:00:00.000Z"),
     newRunId: () => `run-${String(rows.size + 1)}`,
   });
@@ -175,6 +182,8 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     taskDispatcher,
     questionPort,
     safeActivityProjection,
+    researchGrants,
+    pendingResearchApprovals,
     listPrunableSettled,
     deletePruned,
   };
@@ -191,6 +200,21 @@ function fakeSafeActivityProjection(): CodingSafeActivityProjection {
     markUnavailable: vi.fn(),
     currentContent: vi.fn(() => null),
     subscribeContent: vi.fn(() => ({ admitted: true, detach: vi.fn() })),
+  };
+}
+
+const FIXTURE_NOW_MS = Date.parse("2026-01-01T00:00:00.000Z");
+
+function researchScope(
+  grantId: string,
+  domains: readonly string[],
+  expiresAt = "2026-01-01T00:05:00.000Z",
+): AuxiliaryResearchScopeV1 {
+  return {
+    grantId: grantId as AuxiliaryResearchScopeV1["grantId"],
+    domains,
+    expiresAt,
+    queryTextDigest: { outcome: "known", value: "a".repeat(64) },
   };
 }
 
@@ -753,5 +777,160 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     const stopped = await f.orchestrator.stop("run-1", { requestId: "run-1" });
     expect(stopped.ok).toBe(true);
     expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+  });
+});
+
+describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
+  async function grantedFixture() {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.researchGrants.register(
+      "run-1",
+      researchScope("research-grant-1", ["docs.example.org"]),
+      "approved query",
+      "c".repeat(64),
+      FIXTURE_NOW_MS,
+    );
+    return f;
+  }
+
+  it("projects the live research grant onto the snapshot, content-free", async () => {
+    const f = await grantedFixture();
+
+    const snapshot = f.orchestrator.snapshot();
+
+    expect(snapshot.researchGrant).toEqual({
+      grantId: "research-grant-1",
+      domains: ["docs.example.org"],
+      expiresAt: "2026-01-01T00:05:00.000Z",
+    });
+    // The projection never leaks the bound digest or the sanitized query.
+    expect(JSON.stringify(snapshot)).not.toContain("approved query");
+    expect(JSON.stringify(snapshot)).not.toContain("a".repeat(64));
+  });
+
+  it("#2387: projects the pending ask's host and request line for operator review", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.pendingResearchApprovals.request({
+      runId: "run-1",
+      url: new URL("https://docs.example.org/guide/streams?topic=backpressure"),
+      taskId: "task-1",
+      workspaceId: "workspace-1",
+      nowMs: FIXTURE_NOW_MS,
+    });
+
+    expect(f.orchestrator.pendingResearchAsk("run-1")).toEqual({
+      requestId: "research-approval-1",
+      host: "docs.example.org",
+      requestLine: "/guide/streams topic=backpressure",
+      expiresAt: "2026-01-01T00:02:00.000Z",
+    });
+    // The reviewable detail is for the AUTHENTICATED channel only; the public snapshot stays free
+    // of the host, the path, and the query.
+    expect(JSON.stringify(f.orchestrator.snapshot())).not.toContain("docs.example.org");
+    expect(JSON.stringify(f.orchestrator.snapshot())).not.toContain("backpressure");
+  });
+
+  it("#2387: has no reviewable ask for another run, or with nothing pending", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.pendingResearchApprovals.request({
+      runId: "run-1",
+      url: new URL("https://docs.example.org/guide"),
+      taskId: "task-1",
+      workspaceId: "workspace-1",
+      nowMs: FIXTURE_NOW_MS,
+    });
+
+    expect(f.orchestrator.pendingResearchAsk("run-other")).toBeUndefined();
+    expect(fixture().orchestrator.pendingResearchAsk("run-1")).toBeUndefined();
+  });
+
+  it("aggregates several live grants into one sorted, deduplicated projection", async () => {
+    const f = await grantedFixture();
+    f.researchGrants.register(
+      "run-1",
+      researchScope("research-grant-2", ["api.example.net"], "2026-01-01T00:04:00.000Z"),
+      undefined,
+      "d".repeat(64),
+      FIXTURE_NOW_MS,
+    );
+
+    const snapshot = f.orchestrator.snapshot();
+
+    expect(snapshot.researchGrant).toEqual({
+      grantId: "research-grant-2",
+      domains: ["api.example.net", "docs.example.org"],
+      expiresAt: "2026-01-01T00:05:00.000Z",
+    });
+  });
+
+  it("revokes the grant with a revision bump and a grant-absent snapshot", async () => {
+    const f = await grantedFixture();
+    const before = f.orchestrator.snapshot();
+
+    const revoked = await f.orchestrator.revokeResearch("run-1", {
+      requestId: "revoke-1",
+      expectedRevision: before.revision,
+      grantId: "research-grant-1",
+    });
+
+    const snapshot = successfulSnapshot(revoked);
+    expect(snapshot.revision).toBe(before.revision + 1);
+    expect(snapshot.researchGrant).toBeUndefined();
+    expect(f.researchGrants.activeGrants("run-1", FIXTURE_NOW_MS)).toEqual([]);
+  });
+
+  it("fails a stale-revision revoke closed and keeps the grant live", async () => {
+    const f = await grantedFixture();
+    const before = f.orchestrator.snapshot();
+
+    const stale = await f.orchestrator.revokeResearch("run-1", {
+      requestId: "revoke-stale",
+      expectedRevision: before.revision - 1,
+      grantId: "research-grant-1",
+    });
+
+    expect(stale).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(f.orchestrator.snapshot().researchGrant).toBeDefined();
+  });
+
+  it("fails a revoke naming an unknown grant id closed", async () => {
+    const f = await grantedFixture();
+    const before = f.orchestrator.snapshot();
+
+    const forged = await f.orchestrator.revokeResearch("run-1", {
+      requestId: "revoke-forged",
+      expectedRevision: before.revision,
+      grantId: "not-a-live-grant",
+    });
+
+    expect(forged).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(f.orchestrator.snapshot().researchGrant).toBeDefined();
+  });
+
+  it("fails a revoke against a non-current run closed", async () => {
+    const f = await grantedFixture();
+
+    const wrongRun = await f.orchestrator.revokeResearch("run-9", {
+      requestId: "revoke-wrong-run",
+      expectedRevision: 0,
+      grantId: "research-grant-1",
+    });
+
+    expect(wrongRun).toEqual({ ok: false, failureCode: "invalid-intent" });
+  });
+
+  it("never projects a grant on a terminal snapshot", async () => {
+    const f = await grantedFixture();
+
+    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+
+    // The registry entry may briefly outlive the transition; the projection boundary
+    // still refuses to show internet reach on a settled run.
+    const settled = f.orchestrator.getSnapshot("run-1");
+    expect(settled?.state).toBe("cancelled");
+    expect(settled?.researchGrant).toBeUndefined();
   });
 });

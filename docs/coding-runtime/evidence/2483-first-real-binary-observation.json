@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "issue": 2483,
+  "evidenceClass": "functional-not-platform-qualified",
+  "runtime": {
+    "name": "opencode-compatible",
+    "version": "1.17.17",
+    "target": "macos-arm64"
+  },
+  "journey": {
+    "exitCode": 0,
+    "wallClockMs": 41128
+  },
+  "limits": {
+    "materializedChildLimits": [
+      {
+        "context": 32768,
+        "output": 4096
+      }
+    ],
+    "gatewayRequestCount": 7,
+    "observedGatewayOutputTokenLimits": [4096]
+  },
+  "egress": {
+    "method": "sampled-established-tcp-sockets",
+    "sampleCount": 32,
+    "observedProcessCount": 28,
+    "socketObservationCount": 225,
+    "distinctLoopbackConnectionCount": 8,
+    "distinctExternalConnectionCount": 31,
+    "truncated": false,
+    "contentFieldsRecorded": false,
+    "endpointFieldsRecorded": false
+  },
+  "missingPayload": {
+    "passed": true,
+    "unavailableReason": "payload-missing"
+  }
+}

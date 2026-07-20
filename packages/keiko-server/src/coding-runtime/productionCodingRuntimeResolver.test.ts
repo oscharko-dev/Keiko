@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createProductionCodingRuntimeHost } from "./productionCodingRuntimeHost.js";
+import type { CodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type {
   CodingRuntimeStartConfirmationClaim,
   CodingRuntimeStartConfirmationConsumer,
@@ -32,6 +33,35 @@ describe("production coding runtime resolver", () => {
 
     expect(createProductionCodingRuntimeHost(resolver)).toBeUndefined();
     expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it("attaches the run lease to production composition and detaches it on stop", async () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const detach = vi.fn();
+    const attach = vi.fn(() => detach);
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer, { attach }),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const manager = host.createManager(vi.fn());
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+
+    const launch = host.launchResolver.resolve(request);
+    expect(attach).toHaveBeenCalledOnce();
+    await manager.start({
+      ...launch,
+      runId: request.runId,
+      workspaceRoot: fixture.workspace,
+      requestedMode: request.requestedMode,
+    });
+    await manager.stop(request.runId);
+
+    expect(detach).toHaveBeenCalledOnce();
   });
 
   it("binds a qualified backend to server authority and supports two run-bound turns", async () => {
@@ -217,6 +247,7 @@ function resolverFor(
   fixture: ReturnType<typeof workspaceFixture>,
   createRun: ProductionRuntimeBackendResolver["createRun"],
   confirmationConsumer?: CodingRuntimeStartConfirmationConsumer,
+  runtimeMutationLeaseBroker?: Pick<CodingRuntimeEditorMutationLeaseBroker, "attach">,
 ) {
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: fixture.authority,
@@ -232,6 +263,7 @@ function resolverFor(
     },
     verificationRunner: { runToReport: vi.fn() },
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
+    ...(runtimeMutationLeaseBroker ? { runtimeMutationLeaseBroker } : {}),
   });
 }
 

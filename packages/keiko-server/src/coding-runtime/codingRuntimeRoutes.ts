@@ -7,9 +7,11 @@ import {
   parseCodingWorkbenchRuntimeReadinessRequest,
   resolveEffectiveCodingWorkbenchMode,
   unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
+  unpairedCodingWorkbenchRuntimeResearchChannelPayload,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeQuestionsChannelPayload,
+  type CodingWorkbenchRuntimeResearchChannelPayload,
   type CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
@@ -297,6 +299,19 @@ export function handleCodingRuntimeResume(
     : mutation(ctx, deps, runId, (runtime, body) => runtime.resume(runId, body));
 }
 
+// Revoking the #2387 internet research grant drops it for the parent run and every child in one
+// revision bump; the response is the revision-bumped, grant-absent snapshot. A stale revision or a
+// grant id the server does not hold fails closed as invalid intent.
+export function handleCodingRuntimeResearchRevoke(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.revokeResearch(runId, body));
+}
+
 // Inline follow-up: a drafted message is admitted while the run is running or paused; the
 // orchestrator's operation coordinator enforces the revision and one-use request-id serial
 // admission, so exactly one turn is admitted per revision and no hidden prompt queue is possible.
@@ -374,6 +389,33 @@ export function handleCodingRuntimeQuestionList(
   });
 }
 
+/**
+ * The #2387 operator-review projection of a pending research ask: the public host and the sanitized
+ * request line the grant would bind. Content-bearing, so it enforces the same app-session read
+ * authority as the question routes (ADR-0141 D2, #2478) and answers an unpaired caller with the one
+ * constant content-free payload — never a distinct auth error and never a different answer for an
+ * unknown run, so it is not an existence oracle (ADR-0141 D6).
+ */
+export function handleCodingRuntimeResearchAsk(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpairedCodingWorkbenchRuntimeResearchChannelPayload() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound();
+  const required = requireRuntime(deps);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound();
+  const pending = required.orchestrator.pendingResearchAsk(runId);
+  const payload: CodingWorkbenchRuntimeResearchChannelPayload = {
+    session: "active",
+    ...(pending === undefined ? {} : { pending }),
+  };
+  return { status: 200, body: payload };
+}
+
 function frame(event: CodingWorkbenchRuntimeSseEvent): string {
   return `id: ${event.cursor}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`;
 }
@@ -449,6 +491,11 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     handler: handleCodingRuntimeEvents,
   },
   {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/research",
+    handler: handleCodingRuntimeResearchAsk,
+  },
+  {
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs/:runId/approvals",
     handler: handleCodingRuntimeApproval,
@@ -487,6 +534,11 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs/:runId/follow-up",
     handler: handleCodingRuntimeFollowUp,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/research/revoke",
+    handler: handleCodingRuntimeResearchRevoke,
   },
   {
     method: "POST",

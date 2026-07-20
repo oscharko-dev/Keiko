@@ -70,9 +70,9 @@ function defaultParseFailureMessage(status: number): string {
 // RB-6 (GEN-OBS-CORRELATION-601): a per-request correlation id sent on X-Keiko-Correlation-Id so a
 // failure is traceable UI -> server with a single id (the server honours a well-formed client id and
 // echoes it back). Header-safe alphabet + length, matching the server's SAFE_CORRELATION_ID predicate.
-const CORRELATION_HEADER = "X-Keiko-Correlation-Id";
+export const CORRELATION_HEADER = "X-Keiko-Correlation-Id";
 
-function newClientCorrelationId(): string {
+export function newClientCorrelationId(): string {
   return secureRandomId("ui");
 }
 

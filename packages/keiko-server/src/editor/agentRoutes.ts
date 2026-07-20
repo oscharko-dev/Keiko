@@ -1405,6 +1405,7 @@ function decideActionPolicy(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
   deps?: EditorAgentRouteDeps,
+  runtimeMutation?: RuntimeMutationClassification,
 ): EditorAgentActionPolicyDecision {
   const { targetPath, targetSensitive } = governedActionTarget(action, snapshot);
   const baseline = classifyEditorAgentAction(action.type, {
@@ -1416,6 +1417,7 @@ function decideActionPolicy(
   if (action.approvalRef !== undefined) {
     return denyByAuthority(baseline, "approval-reference-invalid");
   }
+  if (runtimeMutation?.kind === "runtime") return baseline;
   if (EDITOR_AGENT_WORKBENCH_ACTION_CLASS[baseline.effectClass] === null) return baseline;
   if (action.authorityRef === undefined) {
     return denyByAuthority(baseline, "authority-missing");
@@ -1689,8 +1691,12 @@ function classifyRuntimeMutation(
     return runtimeMutationRequest(action, snapshot);
   }
   if (deps?.runtimeMutationLease === undefined) return { kind: "local" };
+  const request = runtimeMutationRequest(action, snapshot);
+  if (request.kind !== "runtime") return request;
+  const matched = matchesRuntimeMutationLease(deps.runtimeMutationLease, request);
+  if (matched.kind !== "local") return matched;
   const authorityRef = action.authorityRef;
-  if (authorityRef === undefined || snapshot === undefined) return { kind: "local" };
+  if (authorityRef === undefined || snapshot === undefined) return { kind: "denied" };
   const resolution = editorAgentAuthorityRegistry.resolve(
     authorityRef,
     snapshot.workspaceRoot,
@@ -1698,9 +1704,7 @@ function classifyRuntimeMutation(
     new Date().toISOString(),
   );
   if (!resolution.ok) return { kind: "denied" };
-  const request = runtimeMutationRequest(action, snapshot);
-  if (request.kind !== "runtime") return request;
-  return matchesRuntimeMutationLease(deps.runtimeMutationLease, request);
+  return { kind: "local" };
 }
 
 function matchesRuntimeMutationLease(
@@ -1790,7 +1794,7 @@ function handleApprovedChangesetResult(
   deps: EditorAgentRouteDeps | undefined,
   runtimeMutation: RuntimeMutationClassification,
 ): RouteResult {
-  const decision = decideActionPolicy(action, snapshot, deps);
+  const decision = decideActionPolicy(action, snapshot, deps, runtimeMutation);
   const policyConflict = policyAdmissionConflict(action, decision);
   if (policyConflict !== null) {
     return finishRuntimeChangeset(
@@ -1837,7 +1841,7 @@ function finishRuntimeChangeset(
   result: EditorAgentActionResult,
   deps: EditorAgentRouteDeps | undefined,
   runtimeMutation: RuntimeMutationClassification,
-  decision = decideActionPolicy(action, snapshot, deps),
+  decision = decideActionPolicy(action, snapshot, deps, runtimeMutation),
 ): RouteResult {
   return finishChangesetResult(
     action,
@@ -3077,7 +3081,8 @@ async function admitEditorAction(
   signal: AbortSignal,
 ): Promise<RouteResult> {
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
-  const decision = decideActionPolicy(action, snapshot, deps);
+  const runtimeMutation = classifyRuntimeMutation(action, snapshot, deps);
+  const decision = decideActionPolicy(action, snapshot, deps, runtimeMutation);
   if (isServerResolvedAction(action)) {
     if (deps === undefined) {
       return serverResolvedFailure(
@@ -3099,12 +3104,22 @@ async function admitEditorAction(
   if (policyConflict !== null) {
     return rejectActionRequest(action, snapshot, decision, policyConflict, requestHash, 403);
   }
-  const reservationDenial = reserveActionAuthority(action, snapshot, decision, deps);
+  const reservationDenial =
+    runtimeMutation.kind === "runtime"
+      ? null
+      : reserveActionAuthority(action, snapshot, decision, deps);
   if (reservationDenial !== null) {
     const result = conflict(action, "POLICY_DENIED", "The action authority budget is exhausted.");
     return rejectActionRequest(action, snapshot, reservationDenial, result, requestHash, 403);
   }
-  return queueAndEmitAction(action, requestHash, snapshot, decision, admission.inspection, deps);
+  return queueAndEmitAction(
+    action,
+    requestHash,
+    snapshot,
+    decision,
+    admission.inspection,
+    runtimeMutation,
+  );
 }
 
 export async function handleEditorAgentActions(
@@ -3179,11 +3194,13 @@ function queueAndEmitAction(
   snapshot: EditorAgentSessionSnapshot | undefined,
   decision: EditorAgentActionPolicyDecision,
   inspection: AdmissionInspection,
-  deps: EditorAgentActionRouteDeps | undefined,
+  runtimeMutation: RuntimeMutationClassification,
 ): RouteResult {
   const boundAction = snapshot === undefined ? action : bindActiveBufferTarget(action, snapshot);
   const requiresReview =
-    decision.disposition === "review-required" || boundAction.requiresReview === true;
+    runtimeMutation.kind === "runtime" ||
+    decision.disposition === "review-required" ||
+    boundAction.requiresReview === true;
   const emitAction =
     snapshot === undefined
       ? null
@@ -3194,7 +3211,6 @@ function queueAndEmitAction(
     auditAction(action, snapshot, decision, result);
     return { status: 409, body: { result } };
   }
-  const runtimeMutation = classifyRuntimeMutation(boundAction, snapshot, deps);
   const runtimeOwned = runtimeMutation.kind === "runtime";
   const outcome = editorAgentRegistry.queueAction(boundAction, emitAction, { runtimeOwned });
   rememberIdempotency(action.idempotencyKey, requestHash, outcome.result);

@@ -3,14 +3,18 @@ import { describe, expect, it } from "vitest";
 import {
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_TURNS,
+  CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   CODING_SAFE_ACTIVITY_TOOL_STATES,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
   type CodingSafeActivityFeed,
+  type CodingSafeActivityPlan,
 } from "./coding-safe-activity.js";
 
 function availableFeed(): CodingSafeActivityFeed {
@@ -294,4 +298,67 @@ describe("coding safe-activity contract", () => {
     }));
     expect(validateCodingSafeActivityFeed({ ...feed, turns: oversizedTurns }).ok).toBe(false);
   });
+
+  it("accepts a plan snapshot across the complete closed step-state vocabulary", () => {
+    for (const state of CODING_SAFE_ACTIVITY_PLAN_STEP_STATES) {
+      const feed = { ...availableFeed(), plan: { ...plan(), steps: [planStep({ state })] } };
+      expect(validateCodingSafeActivityFeed(feed)).toEqual({ ok: true, value: feed });
+    }
+    const marked = {
+      ...availableFeed(),
+      plan: { ...plan(), steps: [planStep({ truncated: true })], truncated: true },
+    };
+    expect(validateCodingSafeActivityFeed(marked).ok).toBe(true);
+  });
+
+  it("rejects malformed, oversized, and inconsistently truncated plan snapshots", () => {
+    const feed = availableFeed();
+    const oversizedSteps = Array.from({ length: 40 }, (_, index) =>
+      planStep({ text: `${String(index)}_${"x".repeat(250)}` }),
+    );
+    const invalidPlans: unknown[] = [
+      undefined,
+      { ...plan(), unexpected: true },
+      { ...plan(), revision: 0 },
+      { ...plan(), revision: 1.5 },
+      { ...plan(), anchorMessageId: "not safe!" },
+      { ...plan(), updatedAt: "2026-07-18T17:00:00Z" },
+      { ...plan(), steps: {} },
+      { ...plan(), steps: Array.from({ length: CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS + 1 }, plan) },
+      { ...plan(), steps: [planStep({ text: "" })] },
+      {
+        ...plan(),
+        steps: [planStep({ text: "x".repeat(CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS + 1) })],
+      },
+      { ...plan(), steps: [planStep({ text: "hidden\u200btext" })] },
+      { ...plan(), steps: [planStep({ state: "in_progress" })] },
+      { ...plan(), steps: [{ ...planStep({}), unexpected: true }] },
+      { ...plan(), steps: [planStep({ truncated: true })], truncated: false },
+      { ...plan(), steps: oversizedSteps },
+    ];
+    for (const value of invalidPlans) {
+      expect(validateCodingSafeActivityFeed({ ...feed, plan: value }).ok).toBe(false);
+    }
+  });
 });
+
+function plan(): CodingSafeActivityPlan {
+  return {
+    revision: 1,
+    anchorMessageId: "msg_assistant_1",
+    updatedAt: "2026-07-18T17:00:00.003Z",
+    steps: [planStep({})],
+    truncated: false,
+  };
+}
+
+function planStep(
+  overrides: Partial<Record<"text" | "state" | "truncated", unknown>>,
+): CodingSafeActivityPlan["steps"][number] {
+  return {
+    text: "Read the workspace entry point",
+    state: "active",
+    truncated: false,
+    ...overrides,
+  } as CodingSafeActivityPlan["steps"][number];
+}

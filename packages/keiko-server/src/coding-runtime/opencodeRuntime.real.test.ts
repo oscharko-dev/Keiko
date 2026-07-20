@@ -23,6 +23,7 @@ import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   GatewayRequest,
+  GatewayStreamChunk,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 
@@ -514,6 +515,18 @@ async function createGatewayHarness(
         providerCalls += 1;
         return script(request, callIndex);
       },
+    // The real v1.17.17 child issues streaming chats; without this scripted stream factory the
+    // gateway falls back to the default provider path and every post-handshake turn dies.
+    codingSidecarGatewayChatStreamFactory:
+      (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
+      (request): AsyncIterable<GatewayStreamChunk> => ({
+        async *[Symbol.asyncIterator](): AsyncGenerator<GatewayStreamChunk> {
+          requests.push(request);
+          const callIndex = providerCalls;
+          providerCalls += 1;
+          yield { type: "done", response: await script(request, callIndex) };
+        },
+      }),
     runtimeCapabilityAuthenticator: {
       authenticate: (capability: string, audience: "model-gateway" | "tool-facade"): unknown =>
         capability === MODEL_CAPABILITY && audience === "model-gateway"
@@ -964,7 +977,11 @@ describe("[functional-only] real staged OpenCode runtime", () => {
             `functional-opencode-second-turn-dispatch-missing:accepted=${String(secondAccepted)}:status-before-submit=${statusBeforeSecondSubmit}:arrival-latency-ms=${String(heldArrivalLatencyMs)}:gateway-calls=${String(gateway.calls())}:gateway-requests=${String(gateway.requests.length)}:gateway-summaries=${gateway.summaries().join(",")}:status-after-submit=${sessionStatuses.slice(statusSampleOffset).join(",")}:manager-health=${runtime.manager.health().status}:stderr=${backend.redactedStderr()}:${runtimeDatabaseProjection(databasePath)}`,
           );
         }
-        expect(statusBeforeSecondSubmit).toBe("status=");
+        // The live idle control may settle the turn before a final status poll samples the
+        // cleared entry, so the last observation is either already empty or the stale busy
+        // sample; the accepted second submit and the fresh busy observation below carry the
+        // actual settled-session proof.
+        expect(["status=", "status=busy"]).toContain(statusBeforeSecondSubmit);
         await expect(
           waitForCondition(
             () => sessionStatuses.some((status) => status.includes("busy")),

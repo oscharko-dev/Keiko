@@ -205,7 +205,10 @@ import {
   type WorkspaceIndexProvider,
 } from "./workspace-index-provider.js";
 import type { AutonomousDeliveryConnectorExecutor } from "./coding-runtime/autonomousDeliveryPolicy.js";
-import type { CodingRuntimeEditorMutationLeasePort } from "./coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
+import {
+  createCodingRuntimeEditorMutationLeaseBroker,
+  type CodingRuntimeEditorMutationLeasePort,
+} from "./coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshotStore,
@@ -710,6 +713,13 @@ export interface BuildHandlerDepsOptions {
   // KEIKO_CODING_DEPLOYMENT_CEILING environment value, then the governed-assist default. An
   // unrecognized environment value is ignored fail-closed (the narrowest posture wins).
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
+  /**
+   * Read-only public research egress (#2387). Enabled by default: this only opens the
+   * network-egress ACTION CLASS in the run envelope — every individual fetch still requires an
+   * operator-approved, host- and request-line-bound grant, so no approval means no outbound
+   * request. Set false to deny the class entirely for deployments that forbid research.
+   */
+  readonly codingRuntimeResearchEgressEnabled?: boolean | undefined;
   readonly codingRuntimeServerPrincipal?: (() => string | undefined) | undefined;
   // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
@@ -976,6 +986,19 @@ function defaultContextProfile(
   }
   const modelId = selectConfiguredModel(config, { kind: "chat" });
   return modelId === undefined ? DEFAULT_CONTEXT_PROFILE : resolveProfile(modelId);
+}
+
+/**
+ * The provider model id a #2387 read-only child agent runs on: the coding-safe sidecar profile's
+ * resolved alias, i.e. exactly what the sidecar gateway maps the runtime's "coding" alias onto.
+ * Undefined when no coding-safe model is available, which keeps the child-agent port unmounted
+ * rather than launching a child against an id the gateway cannot resolve.
+ */
+function codingSafeChildModelId(runtimeConfig: RuntimeGatewayConfig): string | undefined {
+  const config = runtimeConfig.current();
+  if (config === undefined) return undefined;
+  const resolved = resolveCodingSafeSidecarGatewayProfile(config);
+  return resolved.status === "available" ? resolved.modelAlias : undefined;
 }
 
 function codingSafeSidecarProvider(config: GatewayConfig): ModelProviderConfig | undefined {
@@ -2919,6 +2942,9 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     codingRuntimeEvidenceAggregator,
     codingRuntimeDeploymentCeiling: codingRuntimeCeiling,
+    ...(args.options.codingRuntimeResolver === undefined && runtimeComposition.runtimeMutationLease
+      ? { runtimeMutationLease: runtimeComposition.runtimeMutationLease }
+      : {}),
     ...(codingRuntimeControlPlane
       ? {
           codingRuntimeOrchestrator: codingRuntimeControlPlane.orchestrator,
@@ -2994,6 +3020,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       try {
         await codingRuntimeControlPlane?.orchestrator.shutdown();
       } finally {
+        runtimeComposition.dispose?.();
         codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
         await shutdownHostLspPool();
         await dapProduction?.dispose();
@@ -3025,6 +3052,8 @@ function resolveCodingRuntimeDeploymentCeiling(
 interface ProductionRuntimeComposition {
   readonly resolver: ProductionCodingRuntimeResolver | undefined;
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
+  readonly dispose?: (() => void) | undefined;
 }
 
 interface ProductionRuntimePortResolution {
@@ -3079,6 +3108,21 @@ function materializedManagedRoot(managedTaskWorkspaceRoot: string): boolean {
   }
 }
 
+function runtimeWorkspaceAuthority(
+  args: UiHandlerDepsAssemblyArgs,
+  workspaceLifecycle: NonNullable<UiHandlerDepsAssemblyArgs["bundle"]["workspaceLifecycle"]>,
+  managedTaskWorkspaceRoot: string,
+  deploymentCeiling: CodingWorkbenchMode,
+): Parameters<typeof createProductionCodingRuntimeResolver>[0]["workspaceAuthority"] {
+  return {
+    workspaceLifecycle,
+    managedTaskWorkspaceRoot,
+    deploymentCeiling,
+    readWorkspaceHead: readProductionWorkspaceHead,
+    researchEgressEnabled: args.options.codingRuntimeResearchEgressEnabled ?? true,
+  };
+}
+
 function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
   verificationRunner: PeripheralManagers["verificationRunner"],
@@ -3106,17 +3150,34 @@ function productionRuntimeResolver(
   const confirmationConsumer =
     args.options.codingRuntimeStartConfirmationConsumer ??
     (resolution.activated ? createAuthenticatedSessionStartConfirmationPlane() : undefined);
+  const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
   const resolver = createProductionCodingRuntimeResolver({
-    workspaceAuthority: {
+    workspaceAuthority: runtimeWorkspaceAuthority(
+      args,
       workspaceLifecycle,
       managedTaskWorkspaceRoot,
       deploymentCeiling,
-      readWorkspaceHead: readProductionWorkspaceHead,
-    },
+    ),
     ...resolution.ports,
     verificationRunner,
+    runtimeMutationLeaseBroker,
+    gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
+    childModelPortFactory:
+      args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
+    // #2387: a read-only child agent calls the gateway directly, so it needs the same resolved
+    // coding-safe PROVIDER model id the sidecar gateway maps the runtime's "coding" alias onto.
+    // Resolved per call because the gateway config can change while the server is up.
+    childModelId: (): string | undefined => codingSafeChildModelId(args.runtimeConfig),
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
+  return qualifiedProductionRuntimeComposition(resolver, readiness, runtimeMutationLeaseBroker);
+}
+
+function qualifiedProductionRuntimeComposition(
+  resolver: ProductionCodingRuntimeResolver,
+  readiness: OpenCodeGatewayReadinessRegistry,
+  runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+): ProductionRuntimeComposition {
   return {
     resolver: {
       resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {
@@ -3127,6 +3188,10 @@ function productionRuntimeResolver(
       },
     },
     unavailableReason: undefined,
+    runtimeMutationLease: runtimeMutationLeaseBroker,
+    dispose: (): void => {
+      runtimeMutationLeaseBroker.dispose();
+    },
   };
 }
 

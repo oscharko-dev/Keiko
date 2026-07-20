@@ -1,0 +1,195 @@
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  buildRedactor,
+  createInMemoryUiStore,
+  createRunRegistry,
+  type UiHandlerDeps,
+} from "./index.js";
+import { mockRequest, mockResponse } from "./_support.js";
+import type { RouteContext } from "./routes.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "./coding-app-session/_support.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import {
+  handleGitDiff,
+  handleGitStatus,
+  type GitProcessResult,
+  type GitProcessRunner,
+} from "./gitRoutes.js";
+import { handleGitHistory } from "./gitRepositoryReads.js";
+
+let root: string;
+let managedRoot: string;
+let managedWorktree: string;
+
+function ok(stdout: string): GitProcessResult {
+  return { exitCode: 0, signal: null, stdout, stderr: "", truncated: false };
+}
+
+function route(path: string, cookie?: string): RouteContext {
+  return {
+    req: mockRequest({ headers: cookie === undefined ? {} : { cookie } }),
+    res: mockResponse().res,
+    params: {},
+    url: new URL(`http://localhost${path}`),
+  };
+}
+
+function deps(runner: GitProcessRunner): UiHandlerDeps {
+  return {
+    config: undefined,
+    configPresent: false,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: buildRedactor({}),
+    registry: createRunRegistry(),
+    modelPortFactory: () => undefined,
+    store: createInMemoryUiStore(),
+    managedTaskWorkspaceRoot: managedRoot,
+    codingAppSessionChannel: createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    }),
+    gitRouteOptions: { runner, maxDiffBytes: 4_096, maxStatusBytes: 4_096, maxChanges: 20 },
+  };
+}
+
+function pair(dependencies: UiHandlerDeps): string {
+  const paired = dependencies.codingAppSessionChannel?.pair(fakePairingRequestBody());
+  if (paired?.paired !== true) throw new Error("pairing failed");
+  return `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
+}
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), "keiko-managed-git-auth-"));
+  const managedStorage = join(root, "managed-storage");
+  managedRoot = join(root, "managed");
+  managedWorktree = join(managedRoot, "repository", "workspace");
+  await mkdir(join(managedStorage, "repository", "workspace"), { recursive: true });
+  await symlink(managedStorage, managedRoot, "dir");
+});
+
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+describe("managed task-worktree Git read authorization (#2482)", () => {
+  it("returns a content-free status before executing Git for an unpaired managed root", async () => {
+    const runner = vi.fn<GitProcessRunner>();
+    const dependencies = deps(runner);
+    const request = route(`/api/git/status?root=${encodeURIComponent(managedWorktree)}`);
+
+    const result = await handleGitStatus(request, dependencies);
+    const history = await handleGitHistory(
+      route(`/api/git/history?root=${encodeURIComponent(managedWorktree)}&limit=1`),
+      dependencies,
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { available: false, changes: [], stagedCount: 0, unstagedCount: 0 },
+    });
+    expect(history).toMatchObject({ status: 200, body: { available: false, entries: [] } });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("answers a NON-EXISTENT managed path exactly like an existing one, so it is no existence oracle", async () => {
+    // The gate used to run after path resolution: a missing directory threw a 400 while an existing
+    // one returned the content-free projection, letting an unpaired caller probe which managed
+    // worktree paths exist. Both must now be indistinguishable.
+    const runner = vi.fn<GitProcessRunner>();
+    const dependencies = deps(runner);
+    const missing = `${managedWorktree}/does-not-exist-${String(Date.now())}`;
+
+    const existing = await handleGitStatus(
+      route(`/api/git/status?root=${encodeURIComponent(managedWorktree)}`),
+      dependencies,
+    );
+    const absent = await handleGitStatus(
+      route(`/api/git/status?root=${encodeURIComponent(missing)}`),
+      dependencies,
+    );
+
+    expect(absent.status).toBe(existing.status);
+    expect((absent.body as { available?: boolean }).available).toBe(false);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("returns no diff to forged or revoked sessions and never executes Git", async () => {
+    const runner = vi.fn<GitProcessRunner>();
+    const dependencies = deps(runner);
+    const validCookie = pair(dependencies);
+    dependencies.codingAppSessionChannel?.signOut(validCookie.slice(validCookie.indexOf("=") + 1));
+    const forgedCookie = `${APP_SESSION_COOKIE_NAME}=sess_000000000000000000000000.forged`;
+
+    for (const cookie of [validCookie, forgedCookie]) {
+      const result = await handleGitDiff(
+        route(
+          `/api/git/diff?root=${encodeURIComponent(managedWorktree)}&path=src%2Fsecret.ts&scope=all`,
+          cookie,
+        ),
+        dependencies,
+      );
+      expect(result).toMatchObject({ status: 200, body: { available: false, diff: "" } });
+    }
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("authorizes a paired managed-root read through the existing bounded Git route", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${managedWorktree}\n`))
+      .mockResolvedValueOnce(ok(""))
+      .mockResolvedValueOnce(ok("diff --git a/src/value.ts b/src/value.ts\n-old\n+new\n"));
+    const dependencies = deps(runner);
+    const result = await handleGitDiff(
+      route(
+        `/api/git/diff?root=${encodeURIComponent(managedWorktree)}&path=src%2Fvalue.ts&scope=all`,
+        pair(dependencies),
+      ),
+      dependencies,
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { available: true },
+    });
+    expect(JSON.stringify(result.body)).toContain("+new");
+  });
+
+  it("classifies an outside symlink alias by resolved root so it cannot bypass the gate", async () => {
+    const alias = join(root, "managed-alias");
+    await symlink(managedWorktree, alias, "dir");
+    const runner = vi.fn<GitProcessRunner>();
+    const result = await handleGitDiff(
+      route(`/api/git/diff?root=${encodeURIComponent(alias)}&scope=all`),
+      deps(runner),
+    );
+
+    expect(result).toMatchObject({ status: 200, body: { available: false, diff: "" } });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("leaves ordinary roots on the existing unauthenticated generic Git posture", async () => {
+    const ordinaryRoot = join(root, "ordinary");
+    await mkdir(ordinaryRoot);
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${ordinaryRoot}\n`))
+      .mockResolvedValueOnce(ok("## main\0 M src/value.ts\0"));
+    const result = await handleGitStatus(
+      route(`/api/git/status?root=${encodeURIComponent(ordinaryRoot)}`),
+      deps(runner),
+    );
+
+    expect(result).toMatchObject({ status: 200, body: { available: true, unstagedCount: 1 } });
+  });
+});
