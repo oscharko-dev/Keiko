@@ -35,6 +35,7 @@ import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { FilesError, runFilesHandler } from "./files.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 
 type UnavailableReason = GitUnavailableReason | "unsafe-repository" | "git-error";
 
@@ -64,12 +65,24 @@ function gitRunnerCacheId(runner: NormalizedGitRouteOptions["runner"]): number {
   return id;
 }
 
-function gitSummaryCacheKey(ctx: RouteContext, options: NormalizedGitRouteOptions): string {
+function gitSummaryCacheKey(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  options: NormalizedGitRouteOptions,
+): string {
+  // Issue #2640: partition the cache by app-session read authority. Without the sessionId leg an
+  // unpaired caller within the TTL could read a summary populated by a paired one — the paired
+  // projection is content-bearing, the unpaired one is content-free, so they must never share a
+  // cache entry. Empty string is the deliberate namespace for "no session" and cannot collide
+  // with a real session id (SESSION_ID_PATTERN in sessionRegistry.ts pins them to `sess_` + 24
+  // hex).
+  const session = resolveAppSessionReadAuthority(deps, ctx.req);
   return JSON.stringify({
     root: ctx.url.searchParams.get("root") ?? "",
     runner: gitRunnerCacheId(options.runner),
     maxStatusBytes: options.maxStatusBytes,
     timeoutMs: options.timeoutMs,
+    sessionId: session?.sessionId ?? "",
   });
 }
 
@@ -280,7 +293,7 @@ export async function handleGitSummary(
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
     const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
-    const cacheKey = gitSummaryCacheKey(ctx, options);
+    const cacheKey = gitSummaryCacheKey(ctx, deps, options);
     const cached = cachedGitSummary(deps, cacheKey);
     if (cached !== undefined) return cached.value;
     const value = computeGitSummary(ctx, deps, options).catch((error: unknown) => {

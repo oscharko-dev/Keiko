@@ -24,7 +24,7 @@ import {
   type GitProcessResult,
   type GitProcessRunner,
 } from "./gitRoutes.js";
-import { handleGitHistory } from "./gitRepositoryReads.js";
+import { handleGitHistory, handleGitSummary } from "./gitRepositoryReads.js";
 
 let root: string;
 let managedRoot: string;
@@ -176,6 +176,32 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
 
     expect(result).toMatchObject({ status: 200, body: { available: false, diff: "" } });
     expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("never serves a paired caller's cached /api/git/summary to an unpaired caller (#2640)", async () => {
+    // Regression: the summary response cache used to key only on the raw `root` query value and the
+    // runner options, not on the app-session read authority. A paired caller populated the entry
+    // and, within the 2s TTL, an unpaired caller received the paired projection instead of the
+    // content-free unavailable one. The cache MUST partition by session so cross-session leakage
+    // is impossible without weakening the unpaired-caller answer.
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${managedWorktree}\n`))
+      .mockResolvedValueOnce(ok("# branch.head main\0# branch.ab +0 -0\0"))
+      .mockResolvedValueOnce(ok(""))
+      .mockResolvedValueOnce(ok(""));
+    const dependencies = deps(runner);
+    const path = `/api/git/summary?root=${encodeURIComponent(managedWorktree)}`;
+
+    const paired = await handleGitSummary(route(path, pair(dependencies)), dependencies);
+    const unpaired = await handleGitSummary(route(path), dependencies);
+
+    expect(paired).toMatchObject({ status: 200, body: { available: true, branch: "main" } });
+    expect(unpaired).toMatchObject({
+      status: 200,
+      body: { available: false, remotes: [], stagedCount: 0, unstagedCount: 0 },
+    });
+    expect((unpaired.body as { branch?: unknown }).branch).toBeUndefined();
   });
 
   it("leaves ordinary roots on the existing unauthenticated generic Git posture", async () => {
