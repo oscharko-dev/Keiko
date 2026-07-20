@@ -29,6 +29,8 @@ const MANIFEST = JSON.stringify({
 interface MutatedBinding {
   rootIdentityDigest: string;
   manifestDigest: string;
+  manifestRef: string;
+  manifestRevision: number;
 }
 
 let root: string;
@@ -366,10 +368,21 @@ describe("WorkspaceScriptTrust invalidation reasons", () => {
     expect(reason).toBe("identity-changed");
   });
 
-  it("records manifest-changed when only the stored manifest digest no longer matches", () => {
+  it("records manifest-changed when the stored manifest reference no longer matches", () => {
     const reason = grantAndInjectMutatedRecord((binding) => {
-      binding.manifestDigest = "c".repeat(64);
+      binding.manifestRef = "mf-".padEnd(43, "d");
     });
     expect(reason).toBe("manifest-changed");
+  });
+
+  it("keeps the grant when only the workspace-level manifest digest moved", () => {
+    // ADR-0148: focus and reorder bump the manifest revision and digest without changing this
+    // root or its approved basis, so they must not invalidate. Before ADR-0148 this recorded
+    // manifest-changed and every Explorer click revoked trust across the workspace.
+    const reason = grantAndInjectMutatedRecord((binding) => {
+      binding.manifestDigest = "c".repeat(64);
+      binding.manifestRevision += 5;
+    });
+    expect(reason).toBe("human-grant");
   });
 });

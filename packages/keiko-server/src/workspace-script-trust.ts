@@ -320,13 +320,10 @@ function invalidationReason(
   expected: WorkspaceTrustBinding,
 ): WorkspaceTrustReason {
   if (stored.rootIdentityDigest !== expected.rootIdentityDigest) return "identity-changed";
-  if (
-    stored.manifestRef !== expected.manifestRef ||
-    stored.manifestRevision !== expected.manifestRevision ||
-    stored.manifestDigest !== expected.manifestDigest
-  ) {
-    return "manifest-changed";
-  }
+  // ADR-0148: only the manifest reference participates in validity. The workspace-level revision
+  // and digest are recorded as provenance and change on focus and reorder, so reporting them as a
+  // reason would attribute an invalidation to a mutation that never caused one.
+  if (stored.manifestRef !== expected.manifestRef) return "manifest-changed";
   return "trust-basis-changed";
 }
 

@@ -139,17 +139,34 @@ describe("canonical workspace trust", () => {
       }),
     ).toBe("approval-required");
 
+    // ADR-0148: every dimension that describes the trusted root still invalidates the grant.
     const staleBindings: readonly WorkspaceTrustBinding[] = [
       { ...binding(), manifestRef: OTHER_MANIFEST },
-      { ...binding(), manifestRevision: binding().manifestRevision + 1 },
-      { ...binding(), manifestDigest: OTHER_MANIFEST_DIGEST },
       { ...binding(), rootRef: OTHER_ROOT },
       { ...binding(), rootIdentityDigest: OTHER_ROOT_DIGEST },
       { ...binding(), trustBasisDigest: { outcome: "known", value: OTHER_TRUST_BASIS } },
       { ...binding(), trustBasisDigest: { outcome: "unknown" } },
+      { ...binding(), trustBasisDigest: { outcome: "unavailable" } },
+      { ...binding(), trustBasisDigest: { outcome: "absent" } },
     ];
     for (const stale of staleBindings) {
       expect(projectCommandTaskTrustState(trustedAssessment(), stale)).toBe("approval-required");
+    }
+
+    // ADR-0148: the workspace-level manifest revision and digest are recorded as provenance but no
+    // longer decide validity — they change on focus and reorder, which carry no authority, and
+    // including them revoked every grant on an ordinary Explorer click.
+    const viewOnlyBindings: readonly WorkspaceTrustBinding[] = [
+      { ...binding(), manifestRevision: binding().manifestRevision + 1 },
+      { ...binding(), manifestDigest: OTHER_MANIFEST_DIGEST },
+      {
+        ...binding(),
+        manifestRevision: binding().manifestRevision + 9,
+        manifestDigest: OTHER_MANIFEST_DIGEST,
+      },
+    ];
+    for (const viewOnly of viewOnlyBindings) {
+      expect(projectCommandTaskTrustState(trustedAssessment(), viewOnly)).toBe("trusted");
     }
   });
 

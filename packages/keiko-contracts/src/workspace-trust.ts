@@ -236,11 +236,20 @@ function factsMatch(
   return left.outcome !== "known" || (right.outcome === "known" && left.value === right.value);
 }
 
+/**
+ * ADR-0148 narrows this comparison to the dimensions that describe the trusted root itself. The
+ * manifest revision and digest are workspace-level and change on focus and reorder, which carry no
+ * authority, so including them revoked every grant on an ordinary Explorer click. They are still
+ * recorded on the binding as provenance.
+ *
+ * Everything the removed dimensions protected is still covered: a replaced directory changes
+ * `rootIdentityDigest`, changed approved bytes change `trustBasisDigest`, a removed root has its
+ * record deleted with the manifest revision, and a root moved to another workspace changes
+ * `manifestRef`.
+ */
 function trustBindingsMatch(left: WorkspaceTrustBinding, right: WorkspaceTrustBinding): boolean {
   return (
     left.manifestRef === right.manifestRef &&
-    left.manifestRevision === right.manifestRevision &&
-    left.manifestDigest === right.manifestDigest &&
     left.rootRef === right.rootRef &&
     left.rootIdentityDigest === right.rootIdentityDigest &&
     factsMatch(left.trustBasisDigest, right.trustBasisDigest)

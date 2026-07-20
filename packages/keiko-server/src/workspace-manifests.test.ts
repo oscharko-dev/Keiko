@@ -138,15 +138,14 @@ describe("WorkspaceManifestService", () => {
     ).toBe("WORKSPACE_ROOT_NOT_MEMBER");
   });
 
-  it("keeps persisted trust records across focus and reorder, and drops them only on membership change", () => {
+  it("keeps workspace trust across focus and reorder, and drops it only on membership change", () => {
     // Regression: replaceWorkspaceManifest deleted the trust rows for the UNION of previous and
     // next root refs, and affectedRootPaths reported that same union, so a mutation that changes
     // no membership at all destroyed every stored grant and recomputed every root. Focus and
     // reorder change no membership and therefore no authority.
-    //
-    // NOTE: this asserts the STORE record survives. Whether the grant still projects as trusted
-    // after a revision bump is a separate, ADR-0147-level question (the trust binding deliberately
-    // includes the workspace manifest revision and digest) and is reported, not changed here.
+    // ADR-0148 completes the repair at the contract layer: the binding comparison no longer
+    // includes the workspace-level manifest revision and digest, so the grant survives the
+    // revision bump that focus and reorder produce.
     const alpha = service.list().find((manifest) => manifest.roots[0]?.canonicalRoot === rootA);
     if (alpha === undefined) throw new Error("missing alpha workspace");
     const twoRoots = service.addRoot(dispatch(alpha, 0), rootB).manifest;
@@ -163,6 +162,9 @@ describe("WorkspaceManifestService", () => {
     expect(focused.affectedRoots).toEqual([]);
     expect(store.readWorkspaceTrustRecord(first.rootRef)).toBeDefined();
     expect(store.readWorkspaceTrustRecord(beta.rootRef)).toBeDefined();
+    // ADR-0148: the grant still projects as trusted, because focus changes no authority.
+    expect(trust.trustLevelForRoot(rootA)).toBe("trusted");
+    expect(trust.trustLevelForRoot(rootB)).toBe("trusted");
 
     const reordered = service.reorderRoots(dispatch(focused.manifest, 0), [
       beta.rootRef,
@@ -172,6 +174,8 @@ describe("WorkspaceManifestService", () => {
     expect(reordered.affectedRoots).toEqual([]);
     expect(store.readWorkspaceTrustRecord(first.rootRef)).toBeDefined();
     expect(store.readWorkspaceTrustRecord(beta.rootRef)).toBeDefined();
+    expect(trust.trustLevelForRoot(rootA)).toBe("trusted");
+    expect(trust.trustLevelForRoot(rootB)).toBe("trusted");
 
     // Membership change must still invalidate, which is the behaviour the union was protecting.
     const removed = service.removeRoot(dispatch(reordered.manifest, 0), first.rootRef);
