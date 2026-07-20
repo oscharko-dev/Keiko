@@ -81,13 +81,13 @@ export interface EditorLocalHistoryCaptureInput {
   readonly nowMs?: number | undefined;
 }
 
-export interface EditorLocalHistoryCaptureResult {
+interface EditorLocalHistoryCaptureResult {
   readonly entry: EditorLocalHistoryEntry;
   readonly coalesced: boolean;
   readonly prunedEntryCount: number;
 }
 
-export interface EditorLocalHistoryReadResult {
+interface EditorLocalHistoryReadResult {
   readonly entry: EditorLocalHistoryEntry;
   readonly content: string;
 }
@@ -124,7 +124,7 @@ export interface EditorLocalHistoryStore {
   readonly delete: (scope: EditorLocalHistoryRootScope, entryRef: string) => void;
 }
 
-export interface EditorLocalHistoryLimits {
+interface EditorLocalHistoryLimits {
   readonly maxEntries: number;
   readonly maxEntryBytes: number;
   readonly maxTotalBytes: number;

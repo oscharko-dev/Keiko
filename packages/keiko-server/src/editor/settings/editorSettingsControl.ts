@@ -123,7 +123,7 @@ export interface EditorProfileImportControlMutation {
   readonly realRoot?: string | undefined;
 }
 
-export type EditorProfileExportControlResult =
+type EditorProfileExportControlResult =
   | WorkspaceProfileExportResult
   | { readonly kind: "invalid"; readonly code: "PROFILE_NOT_FOUND" }
   | { readonly kind: "unavailable"; readonly code: "STATE_UNAVAILABLE" };

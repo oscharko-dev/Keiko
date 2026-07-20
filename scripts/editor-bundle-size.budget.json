@@ -4,11 +4,14 @@
   "editorOwnCodeGzipBytesObserved": 100629,
   "initialPageChunkGzipBytesCeiling": 331776,
   "monacoEditorPinnedVersion": "0.55.1",
+  "$comment_firstLoadRuntimeValueImporters": "checkFirstLoadIsolation is a flat value-import scan over packages/keiko-ui/src; it cannot follow a next/dynamic(ssr:false) boundary, so a module that is only ever reached through one still reports as a first-load importer. Each entry below is allow-listed because its sole importer resolves it dynamically with ssr:false, which is what actually keeps the editor runtime out of the first-load chunk. Epic #2285 (M11) added the last two: MultiRootEditorHost.tsx is imported only by SelectionAwareWorkspaceHosts.tsx, which widgets/index.tsx loads through dynamic(..., { ssr: false }) for the Chat/Files/Editor window hosts; EditorFileHistoryPanel.tsx is loaded only by EditorRuntimeWidget.tsx via dynamic(() => import('./EditorFileHistoryPanel'), { ssr: false }). The authoritative first-load proof is not this scan but initialPageChunkGzipBytesCeiling, measured against a real static export on CI/Linux with --require-static-export; if either module ever leaks into the initial chunk, that ceiling fails regardless of this allow-list.",
   "firstLoadRuntimeValueImporters": [
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx",
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorSurface.tsx",
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorDiffSurface.tsx",
-    "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorMonacoRuntime.ts"
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorMonacoRuntime.ts",
+    "packages/keiko-ui/src/app/components/desktop/widgets/MultiRootEditorHost.tsx",
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorFileHistoryPanel.tsx"
   ],
   "lazyEditorPlusMonacoRuntimeGzipBytesBudget": 2621440,
   "perWorkerChunkGzipBytesBudget": 768000
