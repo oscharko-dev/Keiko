@@ -100,9 +100,11 @@ function snapshot(root: string): EditorAgentSessionSnapshot {
     windowId: "window-2489",
     workspaceRoot: root,
     activePaneId: "pane-2489",
-    panes: [{ paneId: "pane-2489", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+    panes: [
+      { paneId: "pane-2489", activeFile: "src/main.ts", openFiles: ["src/main.ts", "src/a.ts"] },
+    ],
     dirtyFiles: [],
-    activeFile: "src/a.ts",
+    activeFile: "src/main.ts",
     cursor: null,
     selection: null,
     diagnosticsSummary: null,

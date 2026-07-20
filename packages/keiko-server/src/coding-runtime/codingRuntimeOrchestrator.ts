@@ -627,48 +627,107 @@ export class CodingRuntimeOrchestrator {
       : this.transition(next, "recovery-required", "recovery-required");
   }
 
-  // eslint-disable-next-line complexity -- Closed stop/takeover state transition.
   private async end(
     kind: "stop" | "takeover",
     runId: string,
     input: unknown,
   ): Promise<CodingRuntimeOrchestratorResult> {
-    const parsed =
-      kind === "stop"
-        ? parseCodingWorkbenchRuntimeStopRequest(input)
-        : parseCodingWorkbenchRuntimeTakeoverRequest(input);
+    const parsed = this.parseEndRequest(kind, input);
     const current = this.current();
-    if (!parsed.ok || parsed.value.requestId !== runId) return this.fail("invalid-intent");
+    if (!this.isEndRequestConsistent(parsed, runId, current)) return this.fail("invalid-intent");
     if (!current) return { ok: true, snapshot: this.projection.idle() };
-    if (current.runId !== runId) return this.fail("invalid-intent");
     if (current.state === "recovery-required") return this.fail("recovery-required");
     this.deps.safeActivityProjection?.purge(runId, kind === "stop" ? "stop" : "takeover");
-    const stopping =
-      kind === "stop"
-        ? this.transition(current, "stopping")
-        : { ok: true as const, snapshot: this.projection.publicSnapshot(current) };
+    const stopping = this.createEndStoppingTransition(kind, current);
     if (!stopping.ok) return stopping;
-    let result: Awaited<ReturnType<CodingRuntimeManager["stop"]>> | undefined;
-    try {
-      result =
-        kind === "stop"
-          ? await this.deps.manager.stop(current.runId)
-          : await this.deps.manager.takeover(current.runId);
-    } catch {
-      result = undefined;
-    }
+    const result = await this.executeEndRequest(kind, current.runId);
+    return this.completeEndRequest(kind, runId, result);
+  }
+
+  private completeEndRequest(
+    kind: "stop" | "takeover",
+    runId: string,
+    result: Awaited<ReturnType<CodingRuntimeManager["stop"]>> | undefined,
+  ): CodingRuntimeOrchestratorResult {
+    if (this.hasActiveRunChanged(runId)) return this.fail("runtime-failed");
     if (result?.ok) {
-      // The manager emits `runtime-stopped` while its stop settles; when that ingest already
-      // completed the terminal transition, report the settled snapshot instead of failing a stop
-      // that provably succeeded. Any non-terminal outcome still falls through fail-closed.
-      const settled = this.deps.snapshots.get(runId);
-      if (this.activeRunId === undefined && settled !== undefined && terminal.has(settled.state)) {
-        return { ok: true, snapshot: this.projection.publicSnapshot(settled) };
-      }
-      return this.transitionActive(kind === "stop" ? "cancelled" : "taken-over");
+      const settled = this.endSettledResult(runId);
+      if (settled !== undefined) return settled;
+      return this.transitionActive(this.endSuccessState(kind));
     }
     return this.transitionActive("recovery-required", "recovery-required");
   }
+
+  private parseEndRequest(
+    kind: "stop" | "takeover",
+    input: unknown,
+  ):
+    | ReturnType<typeof parseCodingWorkbenchRuntimeStopRequest>
+    | ReturnType<typeof parseCodingWorkbenchRuntimeTakeoverRequest> {
+    return kind === "stop"
+      ? parseCodingWorkbenchRuntimeStopRequest(input)
+      : parseCodingWorkbenchRuntimeTakeoverRequest(input);
+  }
+
+  private isEndRequestConsistent(
+    parsed:
+      | ReturnType<typeof parseCodingWorkbenchRuntimeStopRequest>
+      | ReturnType<typeof parseCodingWorkbenchRuntimeTakeoverRequest>,
+    runId: string,
+    current: CodingRuntimeSnapshot | undefined,
+  ): boolean {
+    if (!parsed.ok || parsed.value.requestId !== runId) return false;
+    return current === undefined || current.runId === runId;
+  }
+
+  private createEndStoppingTransition(
+    kind: "stop" | "takeover",
+    current: CodingRuntimeSnapshot,
+  ): CodingRuntimeOrchestratorResult {
+    return kind === "stop"
+      ? this.transition(current, "stopping")
+      : { ok: true as const, snapshot: this.projection.publicSnapshot(current) };
+  }
+
+  private async executeEndRequest(
+    kind: "stop" | "takeover",
+    runId: string,
+  ): Promise<Awaited<ReturnType<CodingRuntimeManager["stop"]>> | undefined> {
+    try {
+      return kind === "stop"
+        ? await this.deps.manager.stop(runId)
+        : await this.deps.manager.takeover(runId);
+    } catch {
+      this.recordEndRequestException(runId);
+      // Recovery-required remains the only safe projection when stop/takeover cannot be trusted.
+      return undefined;
+    }
+  }
+
+  private recordEndRequestException(runId: string): void {
+    this.deps.evidence.observe(runId, {
+      kind: "state-transition",
+      state: "recovery-required",
+      failureCode: "recovery-required",
+    });
+  }
+
+  private hasActiveRunChanged(runId: string): boolean {
+    return this.activeRunId !== undefined && this.activeRunId !== runId;
+  }
+
+  private endSettledResult(runId: string): CodingRuntimeOrchestratorResult | undefined {
+    const settled = this.deps.snapshots.get(runId);
+    if (this.activeRunId === undefined && settled !== undefined && terminal.has(settled.state)) {
+      return { ok: true, snapshot: this.projection.publicSnapshot(settled) };
+    }
+    return undefined;
+  }
+
+  private endSuccessState(kind: "stop" | "takeover"): CodingWorkbenchRuntimeStateName {
+    return kind === "stop" ? "cancelled" : "taken-over";
+  }
+
   private transitionActive(
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
@@ -676,56 +735,100 @@ export class CodingRuntimeOrchestrator {
     const current = this.current();
     return current ? this.transition(current, state, failureCode) : this.fail("runtime-failed");
   }
-  // eslint-disable-next-line complexity -- Closed runtime state transition.
   private transition(
     current: CodingRuntimeSnapshot,
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
   ): CodingRuntimeOrchestratorResult {
-    if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state))
+    if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
-    const next = this.deps.snapshots.transition(current.runId, {
+    }
+    const next = this.createTransitionSnapshot(current, state, failureCode);
+    const published = this.publishTransition(next);
+    this.recordTransitionEvidence(next, state, failureCode);
+    if (this.shouldTransitionToRecoveryRequired(published, state)) {
+      return this.transition(next, "recovery-required", "recovery-required");
+    }
+    this.finalizeTransitionIfTerminal(next, state, failureCode);
+    return { ok: true, snapshot: this.projection.publicSnapshot(next) };
+  }
+
+  private createTransitionSnapshot(
+    current: CodingRuntimeSnapshot,
+    state: CodingWorkbenchRuntimeStateName,
+    failureCode?: CodingWorkbenchRuntimeFailureCode,
+  ): CodingRuntimeSnapshot {
+    return this.deps.snapshots.transition(current.runId, {
       state,
       revision: current.revision + 1,
       updatedAt: this.now().toISOString(),
       ...(failureCode ? { failureCode } : {}),
     });
-    const published = this.projection.publish(next);
+  }
+
+  private publishTransition(next: CodingRuntimeSnapshot): boolean {
+    return this.projection.publish(next);
+  }
+
+  private recordTransitionEvidence(
+    next: CodingRuntimeSnapshot,
+    state: CodingWorkbenchRuntimeStateName,
+    failureCode?: CodingWorkbenchRuntimeFailureCode,
+  ): void {
     this.deps.evidence.observe(next.runId, {
       kind: "state-transition",
       state,
       ...(failureCode ? { failureCode } : {}),
     });
-    if (!published && !terminal.has(state) && state !== "recovery-required") {
-      return this.transition(next, "recovery-required", "recovery-required");
+  }
+
+  private shouldTransitionToRecoveryRequired(
+    published: boolean,
+    state: CodingWorkbenchRuntimeStateName,
+  ): boolean {
+    return !published && !terminal.has(state) && state !== "recovery-required";
+  }
+
+  private finalizeTransitionIfTerminal(
+    next: CodingRuntimeSnapshot,
+    state: CodingWorkbenchRuntimeStateName,
+    failureCode?: CodingWorkbenchRuntimeFailureCode,
+  ): void {
+    if (state === "recovery-required") {
+      this.deps.safeActivityProjection?.markUnavailable(next.runId);
+    } else if (!terminal.has(state)) {
+      return;
+    } else {
+      this.deps.safeActivityProjection?.purge(
+        next.runId,
+        state === "taken-over" ? "takeover" : "stop",
+      );
     }
-    if (terminal.has(state) || state === "recovery-required") {
-      if (state === "recovery-required")
-        this.deps.safeActivityProjection?.markUnavailable(next.runId);
-      else
-        this.deps.safeActivityProjection?.purge(
-          next.runId,
-          state === "taken-over" ? "takeover" : "stop",
-        );
-      this.deps.evidence.settle({
-        runId: next.runId,
-        state,
-        revision: next.revision,
-        settledAt: next.updatedAt,
-        ...(failureCode ? { failureCode } : {}),
-        taskDigest: next.taskDigest,
-        workspaceDigest: next.workspaceDigest,
-        operatorDigest: next.operatorDigest,
-        authorityDigest: next.authorityDigest,
-        bindingDigest: next.bindingDigest,
-        provenanceDigest: next.provenanceDigest,
-      });
-      if (terminal.has(state)) this.activeRunId = undefined;
-      this.approvals.delete(next.runId);
-      this.operations.clear(next.runId);
-      this.pruneSettled();
-    }
-    return { ok: true, snapshot: this.projection.publicSnapshot(next) };
+    this.publishSettlement(next, state, failureCode);
+  }
+
+  private publishSettlement(
+    next: CodingRuntimeSnapshot,
+    state: CodingWorkbenchRuntimeStateName,
+    failureCode?: CodingWorkbenchRuntimeFailureCode,
+  ): void {
+    this.deps.evidence.settle({
+      runId: next.runId,
+      state,
+      revision: next.revision,
+      settledAt: next.updatedAt,
+      ...(failureCode ? { failureCode } : {}),
+      taskDigest: next.taskDigest,
+      workspaceDigest: next.workspaceDigest,
+      operatorDigest: next.operatorDigest,
+      authorityDigest: next.authorityDigest,
+      bindingDigest: next.bindingDigest,
+      provenanceDigest: next.provenanceDigest,
+    });
+    if (terminal.has(state)) this.activeRunId = undefined;
+    this.approvals.delete(next.runId);
+    this.operations.clear(next.runId);
+    this.pruneSettled();
   }
   private pruneSettled(): void {
     const pruned = this.deps.snapshots.listPrunableSettled();
