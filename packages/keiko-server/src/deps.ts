@@ -2877,6 +2877,7 @@ function activityAwareWorkspaceLifecycle(
   };
 }
 
+// eslint-disable-next-line complexity -- process-lifetime dependency manifest has high fixed branching but bounded surface area.
 // eslint-disable-next-line max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime: DapRuntimeReference = {
@@ -2909,7 +2910,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
           workspaceLifecycle: args.bundle.workspaceLifecycle,
           serverPrincipal:
             args.options.codingRuntimeServerPrincipal ??
-            (() => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
+            ((): string | undefined => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
           ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
         })
       : undefined;
@@ -3007,17 +3008,16 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   };
 }
 
-type CodingRuntimeControlPlaneDeps =
-  {
-    codingRuntimeOrchestrator?: UiHandlerDeps["codingRuntimeOrchestrator"];
-    codingRuntimeEventHub?: UiHandlerDeps["codingRuntimeEventHub"];
-    codingRuntimeHostQualified?: UiHandlerDeps["codingRuntimeHostQualified"];
-    codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
-    codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
-    codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
-    runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
-    openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
-  };
+interface CodingRuntimeControlPlaneDeps {
+  codingRuntimeOrchestrator?: UiHandlerDeps["codingRuntimeOrchestrator"];
+  codingRuntimeEventHub?: UiHandlerDeps["codingRuntimeEventHub"];
+  codingRuntimeHostQualified?: UiHandlerDeps["codingRuntimeHostQualified"];
+  codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
+  codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
+  codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
+  runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
+  openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
+}
 
 function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
