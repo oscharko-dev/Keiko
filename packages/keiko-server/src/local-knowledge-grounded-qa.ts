@@ -2185,13 +2185,20 @@ async function runScopedGroundedAnswer(
       answerGenerator: generator,
       referenceReranker: referenceRerankerForScope(deps, env.store, selected, limits),
       citationFaithfulness: {
+        // The faithfulness basis must be everything the model was SHOWN for that reference, which
+        // is the rendered label followed by the excerpt (see renderCitations: `[n] label` then the
+        // fenced excerpt). Judging against the excerpt alone rejects citations that are perfectly
+        // faithful to the label — and for a repository pod that is the normal case, because the
+        // label carries the file path while the excerpt is raw source. An answer saying "implemented
+        // in code-parser.ts" then shares no tokens with the code body and its citation is silently
+        // dropped, leaving a bare [n] marker in the prose with nothing behind it.
         excerptForReference: (reference): string =>
-          readCitationExcerpt(
+          `${renderCitationLabel(reference.citation)}\n${readCitationExcerpt(
             env.store,
             reference.capsuleId,
             reference.citation,
             limits.maxExcerptChars,
-          ),
+          )}`,
       },
       signal,
     },

@@ -140,4 +140,57 @@ describe("attachCitationsToAnswer", () => {
     expect(result.text).toBe("The SOC2 control requires quarterly access reviews [1].");
     expect(result.citations).toEqual([]);
   });
+
+  // Repository-pod regressions. Answers grounded on a code repository name files and members
+  // constantly ("implemented in code-parser.ts", "calls parser.parse"), and a period is only a
+  // sentence break when it is not inside a token. Treating every dot as a boundary shattered the
+  // claim — the sentence around the marker collapsed to the fragment after the last dot, which no
+  // longer overlapped the evidence — so every such citation was silently dropped while retrieval
+  // itself was healthy. Observed live against a real indexed repository before the fix.
+  it("keeps a citation whose claim names a file, since the dot in a filename is not a sentence end", () => {
+    const refs = [reference("ch-a")];
+    const result = attachCitationsToAnswer(
+      "The definition check lives in `code-parser.ts`[1].",
+      refs,
+      {
+        excerptForReference: () =>
+          "code-parser.ts · function isCodeSymbolDefinitionLine\n" +
+          "// decides whether a line is a code symbol definition",
+      },
+    );
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]?.reference.chunkId).toBe("ch-a");
+  });
+
+  it("keeps a citation whose claim names a dotted member expression", () => {
+    const refs = [reference("ch-a")];
+    const result = attachCitationsToAnswer("The loop calls parser.parse on each unit[1].", refs, {
+      excerptForReference: () => "for (const unit of units) { parser.parse(unit); }",
+    });
+    expect(result.citations).toHaveLength(1);
+  });
+
+  it("attributes a marker placed after the closing period to the sentence it follows", () => {
+    const refs = [reference("ch-a")];
+    const result = attachCitationsToAnswer(
+      "The function is `isCodeSymbolDefinitionLine`.[1]",
+      refs,
+      {
+        excerptForReference: () =>
+          "export function isCodeSymbolDefinitionLine(line: string): boolean {",
+      },
+    );
+    expect(result.citations).toHaveLength(1);
+  });
+
+  // The guard must still bite: the fixes above widen which text counts as the claim, they do not
+  // weaken the faithfulness comparison. A file-naming claim cited against unrelated evidence is
+  // exactly the unfaithful case the check exists to catch.
+  it("still drops a file-naming claim when the excerpt is unrelated", () => {
+    const refs = [reference("ch-a")];
+    const result = attachCitationsToAnswer("It is implemented in `code-parser.ts`[1].", refs, {
+      excerptForReference: () => "The release checklist covers signing, notarization, and upload.",
+    });
+    expect(result.citations).toEqual([]);
+  });
 });
