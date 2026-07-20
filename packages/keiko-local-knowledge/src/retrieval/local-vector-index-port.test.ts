@@ -23,17 +23,17 @@ import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.j
 import { createCapsule } from "../capsule-lifecycle.js";
 import type { KnowledgeStore } from "../store.js";
 
-// The port implementation is exported from the LK barrel; tests exercise the public export
-// surface so a broken re-export from the barrel would fail this suite (Qodo testability rule).
-// A deep import through `./local-vector-index-port.js` would let a barrel-removal regression
-// silently pass — the retrieval-scoped re-export in `./index.ts` is the contract callers use.
+// Deep-import the port implementation so vitest's v8 coverage attributes execution to the
+// SOURCE file rather than the compiled dist re-exported by the LK barrel. A separate suite in
+// this file (below) additionally reaches the public entrypoint to guard against a broken
+// re-export from `retrieval/index.ts`, so the barrel contract is still covered.
 import {
   createLocalKnowledgeStoreVectorIndexPort,
   encodePartitionKey,
-  searchVectorIndex,
   vectorIndexPortAsKnowledgeAdapter,
   vectorIndexPortAsRepoAdapter,
-} from "@oscharko-dev/keiko-local-knowledge";
+} from "./local-vector-index-port.js";
+import { searchVectorIndex } from "./vector-index.js";
 
 function createTestCapsule(
   store: KnowledgeStore,
@@ -459,5 +459,21 @@ describe("vectorIndexPortAsRepoAdapter", () => {
     } finally {
       fixture.cleanup();
     }
+  });
+});
+
+describe("VectorIndexPort exports are reachable via the LK public entrypoint", () => {
+  it("re-exports the port factory, adapter shims, and encoder from the package barrel", async () => {
+    // Public-entrypoint smoke: if `retrieval/index.ts` stops re-exporting any of these four
+    // symbols, importing them via `@oscharko-dev/keiko-local-knowledge` would resolve to
+    // `undefined` and this suite would fail closed. The deep-imported suite above owns the
+    // behaviour; this suite owns the barrel contract (Qodo testability rule for changed
+    // public exports).
+    const publicSurface = await import("@oscharko-dev/keiko-local-knowledge");
+    expect(typeof publicSurface.createLocalKnowledgeStoreVectorIndexPort).toBe("function");
+    expect(typeof publicSurface.encodePartitionKey).toBe("function");
+    expect(typeof publicSurface.vectorIndexPortAsKnowledgeAdapter).toBe("function");
+    expect(typeof publicSurface.vectorIndexPortAsRepoAdapter).toBe("function");
+    expect(typeof publicSurface.sqliteVecIndexName).toBe("function");
   });
 });

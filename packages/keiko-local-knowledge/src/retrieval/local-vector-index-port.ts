@@ -15,13 +15,14 @@
 import {
   embeddingIdentityKey,
   isValidVectorIndexQuery,
+  type KnowledgeCapsuleId,
+  type KnowledgeSourceId,
   type VectorIndexCandidateRef,
   type VectorIndexDiagnostics,
   type VectorIndexPort,
   type VectorIndexQuery,
   type VectorIndexResult,
 } from "@oscharko-dev/keiko-contracts";
-import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 
 import { getCapsule } from "../capsule-lifecycle.js";
 import type { KnowledgeStore } from "../store.js";
@@ -211,8 +212,8 @@ export function createLocalKnowledgeStoreVectorIndexPort(
       // Any inbound adapter is cleared: the LK adapter shim wraps this port, so leaving one in
       // place would loop back through the shim indefinitely. `exactOptionalPropertyTypes` makes
       // an explicit `adapter: undefined` illegal, so destructure the field out entirely.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- rest-sibling omit of adapter
       const { adapter: _adapter, ...flattened } = options.vectorIndexOptions ?? {};
-      void _adapter;
       return toPortResult(searchVectorIndex(request, flattened));
     },
   };
