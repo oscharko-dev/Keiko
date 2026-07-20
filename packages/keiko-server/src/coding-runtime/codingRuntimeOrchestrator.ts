@@ -26,7 +26,11 @@ import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import { reviewableResearchAsk } from "./researchApprovalIssuance.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
-import { CodingRuntimeOrchestratorState } from "./codingRuntimeOrchestratorState.js";
+import {
+  auxiliaryEventFacts,
+  CodingRuntimeOrchestratorState,
+  type AuxiliaryEventFacts,
+} from "./codingRuntimeOrchestratorState.js";
 import type {
   CodingRuntimeLaunchResolver,
   CodingRuntimeOrchestratorDeps,
@@ -390,7 +394,7 @@ export class CodingRuntimeOrchestrator {
       if (event.kind === "runtime-stopped") return this.transition(current, "cancelled");
       if (event.kind === "failure-redacted")
         return this.transition(current, "failed", "runtime-failed");
-      return this.publishOrRecover(current, event.kind);
+      return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
     });
   }
 
@@ -421,8 +425,9 @@ export class CodingRuntimeOrchestrator {
   private publishOrRecover(
     current: CodingRuntimeSnapshot,
     eventKind: CodingWorkbenchRuntimeEvent["kind"],
+    auxiliary?: AuxiliaryEventFacts,
   ): CodingRuntimeOrchestratorResult {
-    return this.projection.publish(current, eventKind)
+    return this.projection.publish(current, eventKind, auxiliary)
       ? { ok: true, snapshot: this.projection.publicSnapshot(current) }
       : this.transition(current, "recovery-required", "recovery-required");
   }

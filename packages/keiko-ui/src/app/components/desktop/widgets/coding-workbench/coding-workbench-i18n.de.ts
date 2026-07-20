@@ -338,6 +338,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.detailFailure":
     "Sequenz {sequence}. Revision {revision}. Fehler: {failure}.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
+  "codingWorkbench.event.detailUntrustedContent":
+    "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",
   "codingWorkbench.outcomeLabel.accepted": "Angenommen",
   "codingWorkbench.outcomeLabel.denied": "Abgelehnt",
   "codingWorkbench.outcomeLabel.unavailable": "Nicht verfügbar",

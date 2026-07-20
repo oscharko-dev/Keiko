@@ -1488,6 +1488,7 @@ describe("validateCodingWorkbenchRuntimeEvent (#2387 auxiliary kinds)", () => {
         ...auxEvent("research-performed"),
         auxiliaryOutcome: "accepted",
         byteCount: 2048,
+        contentTrust: "untrusted",
       }).ok,
     ).toBe(true);
     expect(
@@ -1550,7 +1551,68 @@ describe("validateCodingWorkbenchRuntimeEvent (#2387 auxiliary kinds)", () => {
       validateCodingWorkbenchRuntimeEvent({
         ...auxEvent("research-performed"),
         auxiliaryOutcome: "accepted",
+        contentTrust: "untrusted",
         skillId: "skl_x@1",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  // #2637: an accepted research read handed page text to the model, so the event has to say what
+  // that text is. The rule is what stops a research read from reaching the timeline without its
+  // trust ever being asserted, and it is bound to the accepted outcome because a denial produced
+  // no read to classify.
+  it("requires the untrusted classification on an accepted research read and rejects it elsewhere", () => {
+    // The happy path: accepted + declared is the ONLY accepted-research shape that validates.
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "accepted",
+        byteCount: 2048,
+        contentTrust: "untrusted",
+      }).ok,
+    ).toBe(true);
+    const unclassified = validateCodingWorkbenchRuntimeEvent({
+      ...auxEvent("research-performed"),
+      auxiliaryOutcome: "accepted",
+      byteCount: 2048,
+    });
+    expect(unclassified.ok).toBe(false);
+    if (!unclassified.ok) {
+      expect(unclassified.errors).toContain("event.contentTrust is required");
+    }
+    // There is no "trusted" web page, and an empty or malformed marker is not a declaration: the
+    // vocabulary is closed at one value and every other input fails closed.
+    for (const contentTrust of ["trusted", "", null, undefined, 0, {}]) {
+      expect(
+        validateCodingWorkbenchRuntimeEvent({
+          ...auxEvent("research-performed"),
+          auxiliaryOutcome: "accepted",
+          contentTrust,
+        }),
+      ).toMatchObject({ ok: false });
+    }
+    // A denial produced no read; classifying content that never arrived is a contract error.
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "denied",
+        contentTrust: "untrusted",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "denied",
+      }).ok,
+    ).toBe(true);
+    // The classification is exclusive to research reads.
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("skill-invoked"),
+        skillId: "skl_docs-search@1",
+        skillInvocation: "explicit",
+        auxiliaryOutcome: "accepted",
+        contentTrust: "untrusted",
       }),
     ).toMatchObject({ ok: false });
   });
