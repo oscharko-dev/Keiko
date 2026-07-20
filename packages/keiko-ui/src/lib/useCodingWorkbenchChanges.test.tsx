@@ -344,4 +344,53 @@ describe("useCodingWorkbenchChanges", () => {
     await flush();
     expect(view.result.current.diff?.files[0]?.path).toBe("src/file-001.ts");
   });
+
+  // Cross-run isolation: the stale-while-revalidate merge preserves the diff only WITHIN a run.
+  // If runId changes while the same path is selected, the previous run's diff must not carry
+  // over even for a single render — captioning run B's changes panel with run A's diff would
+  // be a factual mislabel of what the run produced.
+  it("does not carry the previous run's diff over when runId changes", async () => {
+    const stub = client();
+    const view = renderHook(
+      (input: UseCodingWorkbenchChangesInput) => useCodingWorkbenchChanges(input),
+      { initialProps: { ...baseInput(), client: stub } },
+    );
+    await flush();
+    expect(view.result.current.status).toBe("ready");
+    expect(view.result.current.diff).not.toBeNull();
+
+    view.rerender({ ...baseInput({ runId: "run-2641-other" }), client: stub });
+    expect(view.result.current.diff).toBeNull();
+    expect(view.result.current.files).toHaveLength(0);
+    expect(view.result.current.selectedPath).toBeNull();
+    expect(view.result.current.status).toBe("loading");
+    await flush();
+    expect(view.result.current.status).toBe("ready");
+  });
+
+  // A same-file refresh AFTER a failed diff must keep diffStatus non-idle across the merge so
+  // the retry surfaces the error state cleanly; useSelectedDiff's own loading guard then
+  // self-corrects on the next successful fetch.
+  it("preserves the failed diff status across a same-selection refresh, then recovers", async () => {
+    vi.useFakeTimers();
+    const stub = client();
+    stub.getDiff.mockRejectedValueOnce(new Error("bounded diff transport failure"));
+    const view = renderHook(
+      (input: UseCodingWorkbenchChangesInput) => useCodingWorkbenchChanges(input),
+      { initialProps: { ...baseInput(), client: stub } },
+    );
+    await flush();
+    expect(view.result.current.diffStatus).toBe("error");
+    expect(view.result.current.diff).toBeNull();
+
+    // Refresh without changing selection — diff error state persists through the merge (still
+    // "error" or, after useSelectedDiff kicks in, "loading" while it re-fetches).
+    view.rerender({ ...baseInput({ changeSignal: "cursor-1" }), client: stub });
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    await flush();
+
+    // The next successful diff fetch recovers.
+    expect(view.result.current.diffStatus).toBe("ready");
+    expect(view.result.current.diff?.files[0]?.path).toBe("src/file-000.ts");
+  });
 });

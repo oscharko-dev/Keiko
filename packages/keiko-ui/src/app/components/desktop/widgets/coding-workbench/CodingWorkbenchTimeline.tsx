@@ -179,12 +179,16 @@ interface TimelineWindow {
   readonly end: number;
   readonly onScroll: (event: UIEvent<HTMLOListElement>) => void;
   readonly measureRow: (id: string, height: number) => void;
+  readonly hasMeasured: (id: string) => boolean;
   readonly spacerBefore: number;
   readonly spacerAfter: number;
 }
 
 // Cumulative prefix sums so index → offset is O(1) after an O(n) build. Recomputed only when the
-// items array or a measured height actually changes (memoised on the height version).
+// items array or a measured height actually changes (memoised on the height version). Prunes
+// cached heights for ids that dropped out of the current items so the cache does not grow
+// unbounded over a long-lived session — turn eviction from `droppedEventCount` and cross-run
+// switches both replace whole swathes of ids that would otherwise linger forever.
 function useCumulativeOffsets(
   items: readonly TimelineItem[],
   heightsRef: RefObject<ReadonlyMap<string, number>>,
@@ -194,11 +198,18 @@ function useCumulativeOffsets(
     const offsets = new Array<number>(items.length + 1);
     offsets[0] = 0;
     const measured = heightsRef.current ?? new Map<string, number>();
+    const liveIds = new Set<string>();
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
       if (item === undefined) continue;
+      liveIds.add(item.id);
       const known = measured.get(item.id);
       offsets[index + 1] = (offsets[index] ?? 0) + (known ?? ROW_HEIGHT_BY_KIND[item.kind]);
+    }
+    if (measured.size > liveIds.size) {
+      const pruned = new Map<string, number>();
+      for (const [id, height] of measured) if (liveIds.has(id)) pruned.set(id, height);
+      heightsRef.current = pruned;
     }
     return offsets;
     // heightsVersion is the reactive signal that a cached height changed; heightsRef itself is
@@ -235,6 +246,7 @@ function useTimelineWindow(items: readonly TimelineItem[]): TimelineWindow {
     heightsRef.current = next;
     setHeightsVersion((value) => value + 1);
   }, []);
+  const hasMeasured = useCallback((id: string): boolean => heightsRef.current.has(id), []);
   const onScroll = useCallback(
     (event: UIEvent<HTMLOListElement>): void => setScrollTop(event.currentTarget.scrollTop),
     [],
@@ -247,6 +259,7 @@ function useTimelineWindow(items: readonly TimelineItem[]): TimelineWindow {
       end: items.length,
       onScroll,
       measureRow,
+      hasMeasured,
       spacerBefore: 0,
       spacerAfter: 0,
     };
@@ -263,6 +276,7 @@ function useTimelineWindow(items: readonly TimelineItem[]): TimelineWindow {
     end,
     onScroll,
     measureRow,
+    hasMeasured,
     spacerBefore: cumulative[start] ?? 0,
     spacerAfter: Math.max(0, totalHeight - (cumulative[end] ?? totalHeight)),
   };
@@ -355,7 +369,17 @@ function TimelineContent({
 
 function TimelineList({
   items,
-  timeline: { virtual, start, visible, end, onScroll, measureRow, spacerBefore, spacerAfter },
+  timeline: {
+    virtual,
+    start,
+    visible,
+    end,
+    onScroll,
+    measureRow,
+    hasMeasured,
+    spacerBefore,
+    spacerAfter,
+  },
   questions,
   restoreFocusRef,
   t,
@@ -385,6 +409,7 @@ function TimelineList({
           total={total}
           t={t}
           measureRow={measureRow}
+          hasMeasured={hasMeasured}
         />
       ))}
       {virtual && end < items.length && spacerAfter > 0 ? (
@@ -406,15 +431,25 @@ function TimelineSpacer({ size }: { readonly size: number }): ReactNode {
   return <li className={styles.timelineSpacer} style={{ blockSize: size }} aria-hidden="true" />;
 }
 
-// Measure the rendered <li> after every commit and report its height so the virtualizer's
-// cumulative offsets track the real layout instead of a fixed 64 px estimate. A zero measurement
-// (jsdom without layout) is treated as "not measured yet" — the per-kind default height wins.
+// Measure the rendered <li> after mount / when the id changes and report its height so the
+// virtualizer's cumulative offsets track the real layout instead of a fixed 64 px estimate. A
+// zero measurement (jsdom without layout) is treated as "not measured yet" — the per-kind
+// default height wins. Skip already-measured rows entirely: a scroll-induced commit would
+// otherwise force a synchronous offsetHeight layout read on every visible row on every scroll,
+// which is exactly the layout thrash the virtualizer is supposed to avoid.
 function useRowMeasurement(
   id: string,
   measureRow: (id: string, height: number) => void,
+  hasMeasured: (id: string) => boolean,
 ): RefObject<HTMLLIElement | null> {
   const ref = useRef<HTMLLIElement>(null);
+  // Deliberately no dependency array: the effect must fire whenever the row commits so an
+  // unmeasured row picks up its height as soon as the browser has laid it out. The hasMeasured
+  // guard is what keeps the effect cheap — once a row's height is cached, subsequent commits
+  // (including scroll-induced ones) short-circuit before touching `offsetHeight`, which is what
+  // the pre-fix version would otherwise thrash on every visible row on every scroll.
   useLayoutEffect(() => {
+    if (hasMeasured(id)) return;
     const node = ref.current;
     if (node === null) return;
     const height = node.offsetHeight;
@@ -429,22 +464,20 @@ function TimelineRow({
   total,
   t,
   measureRow,
+  hasMeasured,
 }: {
   readonly item: TimelineItem;
   readonly position: number;
   readonly total: number;
   readonly t: CodingWorkbenchTranslate;
   readonly measureRow: (id: string, height: number) => void;
+  readonly hasMeasured: (id: string) => boolean;
 }): ReactNode {
-  if (item.kind === "message")
-    return (
-      <MessageRow item={item} position={position} total={total} t={t} measureRow={measureRow} />
-    );
-  if (item.kind === "tool")
-    return <ToolRow item={item} position={position} total={total} t={t} measureRow={measureRow} />;
-  if (item.kind === "plan")
-    return <PlanRow item={item} position={position} total={total} t={t} measureRow={measureRow} />;
-  return <EventRow item={item} position={position} total={total} t={t} measureRow={measureRow} />;
+  const rowProps = { item, position, total, t, measureRow, hasMeasured };
+  if (item.kind === "message") return <MessageRow {...rowProps} item={item} />;
+  if (item.kind === "tool") return <ToolRow {...rowProps} item={item} />;
+  if (item.kind === "plan") return <PlanRow {...rowProps} item={item} />;
+  return <EventRow {...rowProps} item={item} />;
 }
 
 interface RowProps<T extends TimelineItem> {
@@ -453,6 +486,7 @@ interface RowProps<T extends TimelineItem> {
   readonly total: number;
   readonly t: CodingWorkbenchTranslate;
   readonly measureRow: (id: string, height: number) => void;
+  readonly hasMeasured: (id: string) => boolean;
 }
 
 function MessageRow({
@@ -461,8 +495,9 @@ function MessageRow({
   total,
   t,
   measureRow,
+  hasMeasured,
 }: RowProps<Extract<TimelineItem, { kind: "message" }>>): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow);
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
   return (
     <li
       ref={rowRef}
@@ -498,8 +533,9 @@ function ToolRow({
   total,
   t,
   measureRow,
+  hasMeasured,
 }: RowProps<Extract<TimelineItem, { kind: "tool" }>>): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow);
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
   return (
     <li
       ref={rowRef}
@@ -527,8 +563,9 @@ function PlanRow({
   total,
   t,
   measureRow,
+  hasMeasured,
 }: RowProps<Extract<TimelineItem, { kind: "plan" }>>): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow);
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
   return (
     <li
       ref={rowRef}
@@ -563,8 +600,9 @@ function EventRow({
   total,
   t,
   measureRow,
+  hasMeasured,
 }: RowProps<Extract<TimelineItem, { kind: "event" }>>): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow);
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
   return (
     <li
       ref={rowRef}

@@ -123,7 +123,7 @@ describe("coding app-session channel API", () => {
   it("fails closed with 502 when the stream response has no readable body", async () => {
     // A 200 response with a null body is a corrupted upstream — surfacing anything less than
     // 502 would let the caller assume the projection is present when it is not.
-    const response = { ok: true, status: 200, body: null } as unknown as Response;
+    const response = new Response(null, { status: 200 });
     await expect(
       streamCodingAppSessionChannelSnapshots({
         signal: new AbortController().signal,

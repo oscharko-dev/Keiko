@@ -133,6 +133,13 @@ describe("CodingWorkbenchTimeline", () => {
   });
 
   it("uses measured row heights when translating scroll offsets to a start index", () => {
+    // Two paint-and-rerender passes are required for the measurement cache to converge here:
+    // the first pass measures the initially rendered rows (0..95); the second pass — after
+    // scrolling shifts the visible window — measures the newly rendered rows. Rows that are
+    // never in either window (skipped middle rows) stay at the per-kind default height, which
+    // is correct behaviour and does not affect this assertion because the head spacer only
+    // sums cumulative heights up to the start index, and after a deep scroll the start index
+    // lands inside the measured tail window.
     // With 500 events measured at 240 px each, scrolling to y = 50000 must land the start
     // index deep in the measured range: 50000/240 = 208, minus overscan → ~200. The head
     // spacer is then cumulative[200] = 200 * 240 = 48 000. The pre-fix uniform 64 px caps

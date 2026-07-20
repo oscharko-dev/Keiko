@@ -346,6 +346,9 @@ async function proveRunChangesView(
 // #2641 focus-survival extension: with a file row focused, any later change signal must NOT
 // unmount the file list or the diff pane. Pinning this in the browser catches a regression to
 // the pre-fix "reset to loading on refresh" behaviour that would blank the pane and drop focus.
+// The hook-level regression test in `useCodingWorkbenchChanges.test.tsx` covers the exact
+// stale-while-revalidate contract; this end-to-end assertion is a lightweight guard that the
+// contract survives all the way through the real render tree in a real browser session.
 async function proveChangesRefreshPreservesFocusAndContent(
   page: Page,
   fileButton: Locator,
@@ -353,12 +356,21 @@ async function proveChangesRefreshPreservesFocusAndContent(
 ): Promise<void> {
   await fileButton.focus();
   await expect(fileButton).toBeFocused();
-  // Give any late-arriving change signal from the stopping/stopped transitions a chance to
-  // refresh the panel. Focus must survive and the previously rendered diff content must remain
-  // visible throughout the settle window.
-  await page.waitForTimeout(1_500);
-  await expect(fileButton).toBeFocused();
-  await expect(diffPane).toContainText(AUTHORITY_EDITED_CONTENT.trim());
+  // Poll continuously for a bounded window so any late-arriving change signal from the
+  // stopping/stopped transitions is observed. Both assertions must remain true for the whole
+  // window — a regression to the pre-fix "reset to loading on refresh" would flip focus off
+  // the button and blank the diff pane the moment the refresh landed.
+  await expect
+    .poll(
+      async () =>
+        (await fileButton.evaluate((element) => element === document.activeElement)) &&
+        (await diffPane.evaluate(
+          (element, needle) => element.textContent.includes(needle),
+          AUTHORITY_EDITED_CONTENT.trim(),
+        )),
+      { intervals: [50, 100, 100, 100, 200], timeout: 800 },
+    )
+    .toBe(true);
 }
 
 // #2478: revoking the app session (sign-out through the paired cookie jar) must surface as the

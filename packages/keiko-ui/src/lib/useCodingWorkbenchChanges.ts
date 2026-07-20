@@ -141,13 +141,21 @@ function useChangesSnapshot(input: {
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchChangesState>>;
 }): void {
   const { bindingPending, client, epoch, root, runId, setState } = input;
+  const seenRunIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
+    // A runId change is a hard boundary: the stale-while-revalidate preservation only applies
+    // within a single run, otherwise switching runs while the same file path is selected would
+    // caption the previous run's diff, files and head as the new run's.
+    const runIdChanged = seenRunIdRef.current !== runId;
+    seenRunIdRef.current = runId;
     if (runId === undefined) {
       setState(EMPTY_STATE);
       return undefined;
     }
     if (bindingPending) {
-      setState((current) => (current.status === "ready" ? current : unavailable("loading")));
+      setState((current) =>
+        !runIdChanged && current.status === "ready" ? current : unavailable("loading"),
+      );
       return undefined;
     }
     if (root === null) {
@@ -156,9 +164,9 @@ function useChangesSnapshot(input: {
     }
     let cancelled = false;
     setState((current) =>
-      current.status === "ready"
+      !runIdChanged && current.status === "ready"
         ? current
-        : { ...unavailable("loading"), selectedPath: current.selectedPath },
+        : { ...unavailable("loading"), selectedPath: runIdChanged ? null : current.selectedPath },
     );
     void loadChanges(client, root).then(
       ([status, history]) => {
