@@ -113,29 +113,25 @@ function deleteKeikoShellCaches(): void {
 
 function cleanupDevServiceWorkers(sw: ServiceWorkerContainer): void {
   // Silent failure by design: development cleanup must never break the app, so both failure modes
-  // are swallowed and each is still handled exactly once. `.catch` absorbs the Promise rejection,
-  // and the surrounding `try` absorbs a synchronous throw from the call itself, which a
-  // non-conforming runtime (or a test stub) could still raise even though the spec says
-  // `getRegistrations()` returns a Promise. Building the chain inside the `try` keeps the promise
-  // from ever floating in it (typescript:S4822).
-  try {
-    void sw
-      .getRegistrations()
-      .then((registrations) =>
-        Promise.all(registrations.map((registration) => registration.unregister())),
-      )
-      .then(() => {
-        deleteKeikoShellCaches();
-        if (sw.controller === null) return;
-        const reloadKey = "keiko.dev.service-worker-cleanup-reloaded";
-        if (window.sessionStorage.getItem(reloadKey) === "true") return;
-        window.sessionStorage.setItem(reloadKey, "true");
-        window.location.reload();
-      })
-      .catch((_error: unknown) => undefined);
-  } catch {
-    return;
-  }
+  // are swallowed. Invoking inside `.then` rather than a `try` is what makes that possible with a
+  // single handler: a synchronous throw from the call itself, which a non-conforming runtime (or a
+  // test stub) could still raise even though the spec says `getRegistrations()` returns a Promise,
+  // is converted into a rejection and lands in the same `.catch`. A `try` around a promise-returning
+  // call is rejected by typescript:S4822 in either direction.
+  void Promise.resolve()
+    .then(() => sw.getRegistrations())
+    .then((registrations) =>
+      Promise.all(registrations.map((registration) => registration.unregister())),
+    )
+    .then(() => {
+      deleteKeikoShellCaches();
+      if (sw.controller === null) return;
+      const reloadKey = "keiko.dev.service-worker-cleanup-reloaded";
+      if (window.sessionStorage.getItem(reloadKey) === "true") return;
+      window.sessionStorage.setItem(reloadKey, "true");
+      window.location.reload();
+    })
+    .catch((_error: unknown) => undefined);
 }
 
 export function registerSw(): void {
@@ -151,21 +147,17 @@ export function registerSw(): void {
   }
 
   // Fire-and-forget, silent failure by design: static shell caching must never break app startup,
-  // so both failure modes are swallowed and each is still handled exactly once. `.catch` absorbs
-  // the Promise rejection, and the surrounding `try` absorbs a synchronous throw from the call
-  // itself, which a non-conforming runtime (or a test stub) could still raise even though the spec
-  // says `register()` returns a Promise. Building the chain inside the `try` keeps the promise from
-  // ever floating in it (typescript:S4822). Using `unknown` for the rejection value — `register()`
-  // rejects with `DOMException` in spec but other runtimes may differ, and we never inspect the
-  // error in production code.
-  try {
-    void sw
-      .register("/sw.js", { scope: "/" })
-      .then((registration) => {
-        handleRegisteredServiceWorker(sw, registration);
-      })
-      .catch((_error: unknown) => undefined);
-  } catch {
-    return;
-  }
+  // so both failure modes are swallowed. Invoking inside `.then` rather than a `try` is what makes
+  // that possible with a single handler: a synchronous throw from the call itself, which a
+  // non-conforming runtime (or a test stub) could still raise even though the spec says `register()`
+  // returns a Promise, is converted into a rejection and lands in the same `.catch`. A `try` around
+  // a promise-returning call is rejected by typescript:S4822 in either direction. Using `unknown`
+  // for the rejection value — `register()` rejects with `DOMException` in spec but other runtimes
+  // may differ, and we never inspect the error in production code.
+  void Promise.resolve()
+    .then(() => sw.register("/sw.js", { scope: "/" }))
+    .then((registration) => {
+      handleRegisteredServiceWorker(sw, registration);
+    })
+    .catch((_error: unknown) => undefined);
 }
