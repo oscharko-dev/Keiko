@@ -10,7 +10,9 @@ reports them on stdout and deliberately keeps them out of this document.
 | ANN            | vector rows                            |                                                            20001 |
 | ANN            | exact scan cap                         |                                                            20000 |
 | ANN            | minimum recall@10                      |                                                            1.000 |
-| ANN            | encrypted diagnostic                   |                                         fallback-encrypted-store |
+| ANN            | encrypted ANN diagnostic               |                                                        available |
+| ANN            | encrypted temp_store                   |                                                           memory |
+| ANN            | encrypted unpinned diagnostic          |                                         fallback-encrypted-store |
 | ANN            | load diagnostic                        |                                 sqlite-vec-extension-load-failed |
 | ANN            | partition violations                   |                                                                0 |
 | Reranker       | facade importer count                  |                                                                1 |

@@ -14,9 +14,11 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
 import { createCapsule } from "../capsule-lifecycle.js";
 import { openKnowledgeStore, type KnowledgeStore } from "../store.js";
-import { PLAINTEXT_CONTENT_CIPHER } from "../store-content-cipher.js";
+import { PLAINTEXT_CONTENT_CIPHER, type StoreContentCipher } from "../store-content-cipher.js";
 
 import {
+  DEFAULT_MAX_INDEXED_VECTOR_BYTES,
+  resolveVectorIndexOptions,
   searchVectorIndex,
   type SqliteVecModule,
   type VectorIndexAdapter,
@@ -129,12 +131,21 @@ function createTestCapsule(
   );
 }
 
-function fakeVectorIndexStore(state: FakeVectorIndexState): KnowledgeStore {
+function fakeVectorIndexStore(
+  state: FakeVectorIndexState,
+  contentCipher: StoreContentCipher = PLAINTEXT_CONTENT_CIPHER,
+): KnowledgeStore {
   const db = {
     exec: (sql: string): void => {
       void sql;
     },
     prepare: (sql: string): FakePreparedStatement => {
+      // The fake stands in for a store opened WITH the vector runtime, so it reports the ADR-0153 D2
+      // pin as in force. Encrypted-store cases that want the unpinned refusal use a real store
+      // (`encryptedFixture`) rather than teaching this fake to lie in the other direction.
+      if (sql.includes("PRAGMA temp_store")) {
+        return { get: (): { readonly temp_store: number } => ({ temp_store: 2 }) };
+      }
       if (sql.includes("MAX(created_at)")) {
         return {
           get: (): { readonly n: number; readonly max_created_at: number | null } => ({
@@ -223,7 +234,7 @@ function fakeVectorIndexStore(state: FakeVectorIndexState): KnowledgeStore {
     _internal: {
       db: db as unknown as DatabaseSync,
       now: () => 1,
-      contentCipher: PLAINTEXT_CONTENT_CIPHER,
+      contentCipher,
     },
   };
 }
@@ -415,7 +426,10 @@ describe("searchVectorIndex", () => {
     }
   });
 
-  it("fails closed on encrypted stores before loading sqlite-vec", () => {
+  // The refusal is no longer "this store is encrypted" but "this encrypted store cannot prove its
+  // TEMP pages stay in memory" (ADR-0153 D1). `encryptedFixture` opens without a vector runtime, so
+  // `openKnowledgeStore` does not pin `temp_store` and the condition is genuinely unmet.
+  it("fails closed on encrypted stores without the temp-store pin, before loading sqlite-vec", () => {
     const fixture = encryptedFixture();
     try {
       const capsule = createTestCapsule(fixture.store);
@@ -438,14 +452,14 @@ describe("searchVectorIndex", () => {
         diagnostics: {
           provider: "sqlite-vec",
           status: "fallback-encrypted-store",
-          reason: "encrypted-store",
+          reason: "encrypted-store-temp-store-unpinned",
           indexName: "keiko_lk_vec_1536_cosine",
         },
       });
       expect(readVectorIndexStateRows(fixture.store)).toEqual([
         {
           status: "unavailable",
-          reason: "encrypted-store",
+          reason: "encrypted-store-temp-store-unpinned",
           index_name: "keiko_lk_vec_1536_cosine",
           updated_at: 1_700_000_000_456,
         },
@@ -735,6 +749,110 @@ describe("searchVectorIndex", () => {
         provider: "sqlite-vec",
         status: "fallback-incompatible-identity",
         reason: "stored-vector-identity-mismatch",
+        indexName: "keiko_lk_vec_1536_cosine",
+      },
+    });
+  });
+  // ADR-0153 D3. The index lives in memory, so its size is bounded; a capsule over the bound falls
+  // back to brute force instead of allocating without limit, and never touches the runtime to do it.
+  it("falls back to brute force when the capsule exceeds the index size bound", () => {
+    const capsule = detachedCapsule();
+    const state: FakeVectorIndexState = {
+      vectorRows: [fakeVectorRow()],
+      queryRows: [],
+      insertedTempRows: [],
+      wroteReadyState: false,
+      deletedTempRows: false,
+    };
+    const store = fakeVectorIndexStore(state);
+    let loads = 0;
+
+    const result = searchVectorIndex(requestFor(store, capsule), {
+      mode: "sqlite-vec",
+      // One 1536-dimension vector is 6144 bytes, comfortably over this bound.
+      maxIndexedVectorBytes: 1_024,
+      sqliteVec: {
+        load: () => {
+          loads += 1;
+        },
+      },
+    });
+
+    expect(loads).toBe(0);
+    expect(state.insertedTempRows).toEqual([]);
+    expect(result).toMatchObject({
+      ok: false,
+      candidates: [],
+      diagnostics: {
+        provider: "sqlite-vec",
+        status: "fallback-index-too-large",
+        reason: "index-bytes-over-bound",
+        indexName: "keiko_lk_vec_1536_cosine",
+        vectorCount: 1,
+      },
+    });
+  });
+
+  // The bound is a floor-lowering knob, never a widening one: an operator or a caller cannot raise
+  // the amount of decrypted vector payload the process will hold.
+  it("clamps the index size bound so it can only be tightened", () => {
+    expect(resolveVectorIndexOptions({ mode: "sqlite-vec" }, {}).maxIndexedVectorBytes).toBe(
+      DEFAULT_MAX_INDEXED_VECTOR_BYTES,
+    );
+    expect(
+      resolveVectorIndexOptions({ mode: "sqlite-vec", maxIndexedVectorBytes: 4_096 }, {})
+        .maxIndexedVectorBytes,
+    ).toBe(4_096);
+    for (const widening of [DEFAULT_MAX_INDEXED_VECTOR_BYTES * 4, Number.POSITIVE_INFINITY]) {
+      expect(
+        resolveVectorIndexOptions({ mode: "sqlite-vec", maxIndexedVectorBytes: widening }, {})
+          .maxIndexedVectorBytes,
+      ).toBe(DEFAULT_MAX_INDEXED_VECTOR_BYTES);
+    }
+    expect(
+      resolveVectorIndexOptions({ mode: "sqlite-vec", maxIndexedVectorBytes: Number.NaN }, {})
+        .maxIndexedVectorBytes,
+    ).toBe(DEFAULT_MAX_INDEXED_VECTOR_BYTES);
+  });
+
+  // A vector that will not open is a store-integrity failure, not an identity mismatch. Indexing the
+  // sealed bytes instead would build an index over ciphertext and answer from it.
+  it("fails closed when a stored vector cannot be decrypted", () => {
+    const capsule = detachedCapsule();
+    const state: FakeVectorIndexState = {
+      vectorRows: [fakeVectorRow()],
+      queryRows: [],
+      insertedTempRows: [],
+      wroteReadyState: false,
+      deletedTempRows: false,
+    };
+    const refusingCipher: StoreContentCipher = {
+      ...PLAINTEXT_CONTENT_CIPHER,
+      isEncrypted: true,
+      openVector: (): Uint8Array => {
+        throw new Error("authentication failed");
+      },
+    };
+    const store = fakeVectorIndexStore(state, refusingCipher);
+
+    const result = searchVectorIndex(requestFor(store, capsule), {
+      mode: "sqlite-vec",
+      sqliteVec: {
+        load: (dbHandle) => {
+          void dbHandle;
+        },
+      },
+    });
+
+    expect(state.insertedTempRows).toEqual([]);
+    expect(state.wroteReadyState).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      candidates: [],
+      diagnostics: {
+        provider: "sqlite-vec",
+        status: "fallback-query-error",
+        reason: "stored-vector-decrypt-failed",
         indexName: "keiko_lk_vec_1536_cosine",
       },
     });

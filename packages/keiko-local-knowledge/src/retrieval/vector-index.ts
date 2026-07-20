@@ -15,7 +15,9 @@ import {
   writeVectorIndexState,
   type VectorIndexProvider,
 } from "../indexing/vector-index-state.js";
+import type { StoreContentCipher } from "../store-content-cipher.js";
 import type { KnowledgeStore } from "../store.js";
+import { tempStoreIsMemory } from "../store-temp-store.js";
 
 import type { RetrievalVectorIndexDiagnostics } from "./types.js";
 
@@ -58,6 +60,10 @@ export interface VectorIndexOptions {
   readonly adapter?: VectorIndexAdapter;
   readonly sqliteVec?: SqliteVecModule;
   readonly sqliteVecExtensionPath?: string;
+  // Tightens the ADR-0153 D3 bound on how much vector payload may be held in the in-memory index.
+  // It can only be lowered: a supplied value above the default is clamped back to it, so the bound
+  // is never a widening knob.
+  readonly maxIndexedVectorBytes?: number;
   readonly now?: () => number;
 }
 
@@ -71,6 +77,7 @@ interface ResolvedVectorIndexOptions {
   readonly adapter?: VectorIndexAdapter;
   readonly sqliteVec?: SqliteVecModule;
   readonly sqliteVecExtensionPath?: string;
+  readonly maxIndexedVectorBytes: number;
   readonly now: () => number;
 }
 
@@ -96,6 +103,16 @@ interface SqliteVecIndexRow {
   readonly created_at: number;
 }
 
+// One row on its way into the vec0 index: identity columns plus the DECRYPTED embedding. Kept
+// distinct from `SqliteVecIndexRow` (which carries the stored, possibly sealed bytes) so the two
+// cannot be confused at a call site.
+interface SqliteVecIndexEntry {
+  readonly chunk_id: string;
+  readonly capsule_id: string;
+  readonly source_id: string;
+  readonly embedding: Uint8Array;
+}
+
 interface SqliteVecCandidateRow {
   readonly chunk_id: string;
   readonly capsule_id: string;
@@ -108,6 +125,30 @@ interface SqliteTempTableRow {
 }
 
 type SqliteVecLoadResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
+// ADR-0153 D3. Pinning `temp_store` to memory buys the no-spill guarantee by making the vec0 index
+// RAM-resident, which turns an unbounded index into an unbounded allocation. The bound is expressed
+// in decrypted vector bytes because that is what actually occupies memory: 256 MiB is roughly 43k
+// vectors at 1536 dimensions, comfortably above any local capsule and far below a heap that would
+// destabilise the host process. A capsule over the bound is not refused retrieval — it falls back to
+// brute force, which streams vectors instead of holding them.
+export const DEFAULT_MAX_INDEXED_VECTOR_BYTES = 256 * 1024 * 1024;
+
+const BYTES_PER_FLOAT32 = 4;
+
+// A store is only permitted to build the ANN index over decrypted vectors while SQLite is pinned to
+// keep TEMP pages in memory (ADR-0153 D1). Plaintext stores carry no such condition: their vectors
+// are already on disk in the clear, so a TEMP spill exposes nothing the database does not.
+const ENCRYPTED_STORE_UNPINNED_REASON = "encrypted-store-temp-store-unpinned";
+const INDEX_OVER_BOUND_REASON = "index-bytes-over-bound";
+const VECTOR_DECRYPT_FAILED_REASON = "stored-vector-decrypt-failed";
+
+function clampIndexedVectorBytes(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return DEFAULT_MAX_INDEXED_VECTOR_BYTES;
+  }
+  return Math.min(value, DEFAULT_MAX_INDEXED_VECTOR_BYTES);
+}
 
 const SQLITE_VEC_PROVIDER: VectorIndexProvider = "sqlite-vec";
 const SQLITE_VEC_TABLE_PREFIX = "keiko_lk_vec";
@@ -160,8 +201,13 @@ function resolvedVectorIndexOptions(
     adapter?: VectorIndexAdapter;
     sqliteVec?: SqliteVecModule;
     sqliteVecExtensionPath?: string;
+    maxIndexedVectorBytes: number;
     now: () => number;
-  } = { mode, now: supplied.now ?? Date.now };
+  } = {
+    mode,
+    maxIndexedVectorBytes: clampIndexedVectorBytes(supplied.maxIndexedVectorBytes),
+    now: supplied.now ?? Date.now,
+  };
   if (supplied.adapter !== undefined) resolved.adapter = supplied.adapter;
   const extensionPath = vectorIndexExtensionPath(supplied, environment);
   if (extensionPath !== undefined) resolved.sqliteVecExtensionPath = extensionPath;
@@ -235,34 +281,100 @@ export function searchVectorIndex(
   return searchSqliteVecIndex(request, resolved);
 }
 
+type SqliteVecPrecheck =
+  | { readonly ok: true; readonly stamp: VectorIndexStampRow }
+  | { readonly ok: false; readonly result: VectorIndexSearchResult };
+
+// Encryption alone no longer refuses the index (ADR-0153 D1, superseding the ADR-0152 D2
+// carve-out). Brute force already decrypts every vector into process memory to compare it, and the
+// vec0 index is a TEMP table that never persists — the one unreconciled risk was SQLite spilling
+// that TEMP database to a file. What is checked here is therefore the guarantee itself, read from
+// the live connection, not the intent to have set it: a store that cannot prove TEMP pages stay in
+// memory keeps the pre-existing fail-closed outcome.
+function encryptedStoreIndexPermitted(store: KnowledgeStore): boolean {
+  if (!store._internal.contentCipher.isEncrypted) return true;
+  return tempStoreIsMemory(store._internal.db);
+}
+
+function indexedVectorBytes(stamp: VectorIndexStampRow, identity: EmbeddingModelIdentity): number {
+  return stamp.n * identity.vectorDimensions * BYTES_PER_FLOAT32;
+}
+
+function precheckSqliteVecIndex(
+  request: VectorIndexSearchRequest,
+  options: ResolvedVectorIndexOptions,
+  indexName: string,
+): SqliteVecPrecheck {
+  const identity = request.capsule.embeddingModelIdentity;
+  if (!encryptedStoreIndexPermitted(request.store)) {
+    writeUnavailable(request, options, indexName, ENCRYPTED_STORE_UNPINNED_REASON);
+    return {
+      ok: false,
+      result: unavailableResult(
+        "fallback-encrypted-store",
+        ENCRYPTED_STORE_UNPINNED_REASON,
+        indexName,
+      ),
+    };
+  }
+  if (identity.vectorMetric !== "cosine") {
+    writeUnavailable(request, options, indexName, "unsupported-metric");
+    return {
+      ok: false,
+      result: unavailableResult("fallback-unsupported-metric", "unsupported-metric", indexName),
+    };
+  }
+  if (request.queryVector.length !== identity.vectorDimensions) {
+    return { ok: false, result: identityMismatchResult("query-dimension-mismatch", indexName) };
+  }
+  const stamp = vectorIndexStamp(request.store, request.capsule);
+  if (indexedVectorBytes(stamp, identity) > options.maxIndexedVectorBytes) {
+    writeUnavailable(request, options, indexName, INDEX_OVER_BOUND_REASON);
+    return { ok: false, result: overBoundResult(indexName, stamp.n) };
+  }
+  return { ok: true, stamp };
+}
+
+function identityMismatchResult(reason: string, indexName: string): VectorIndexSearchResult {
+  return {
+    ok: false,
+    candidates: [],
+    sawDimensionCompatible: false,
+    sawIdentityIncompatible: true,
+    diagnostics: {
+      provider: SQLITE_VEC_PROVIDER,
+      status: "fallback-incompatible-identity",
+      reason,
+      indexName,
+    },
+  };
+}
+
+// Counts only. The bound diagnostic never carries the byte budget's provenance, a path, or anything
+// derived from the vectors themselves.
+function overBoundResult(indexName: string, vectorCount: number): VectorIndexSearchResult {
+  return {
+    ok: false,
+    candidates: [],
+    sawDimensionCompatible: false,
+    sawIdentityIncompatible: false,
+    diagnostics: {
+      provider: SQLITE_VEC_PROVIDER,
+      status: "fallback-index-too-large",
+      reason: INDEX_OVER_BOUND_REASON,
+      indexName,
+      vectorCount,
+    },
+  };
+}
+
 function searchSqliteVecIndex(
   request: VectorIndexSearchRequest,
   options: ResolvedVectorIndexOptions,
 ): VectorIndexSearchResult {
-  const identity = request.capsule.embeddingModelIdentity;
-  const indexName = sqliteVecIndexName(identity);
-  if (request.store._internal.contentCipher.isEncrypted) {
-    writeUnavailable(request, options, indexName, "encrypted-store");
-    return unavailableResult("fallback-encrypted-store", "encrypted-store", indexName);
-  }
-  if (identity.vectorMetric !== "cosine") {
-    writeUnavailable(request, options, indexName, "unsupported-metric");
-    return unavailableResult("fallback-unsupported-metric", "unsupported-metric", indexName);
-  }
-  if (request.queryVector.length !== identity.vectorDimensions) {
-    return {
-      ok: false,
-      candidates: [],
-      sawDimensionCompatible: false,
-      sawIdentityIncompatible: true,
-      diagnostics: {
-        provider: SQLITE_VEC_PROVIDER,
-        status: "fallback-incompatible-identity",
-        reason: "query-dimension-mismatch",
-        indexName,
-      },
-    };
-  }
+  const indexName = sqliteVecIndexName(request.capsule.embeddingModelIdentity);
+  const precheck = precheckSqliteVecIndex(request, options, indexName);
+  if (!precheck.ok) return precheck.result;
 
   const load = loadSqliteVec(request.store, options);
   if (!load.ok) {
@@ -271,7 +383,7 @@ function searchSqliteVecIndex(
   }
 
   try {
-    const build = ensureSqliteVecIndex(request, options, indexName);
+    const build = ensureSqliteVecIndex(request, options, indexName, precheck.stamp);
     if (!build.ok) return build.result;
     return querySqliteVecIndex(request, indexName);
   } catch {
@@ -378,9 +490,9 @@ function ensureSqliteVecIndex(
   request: VectorIndexSearchRequest,
   options: ResolvedVectorIndexOptions,
   indexName: string,
+  stamp: VectorIndexStampRow,
 ): { readonly ok: true } | { readonly ok: false; readonly result: VectorIndexSearchResult } {
   createSqliteVecTempTable(request.store._internal.db, indexName, request.capsule);
-  const stamp = vectorIndexStamp(request.store, request.capsule);
   const state = readVectorIndexState(request.store._internal.db, {
     capsuleId: request.capsule.id,
     provider: SQLITE_VEC_PROVIDER,
@@ -442,18 +554,10 @@ function rebuildSqliteVecIndex(
   if (!compatible.ok) {
     return {
       ok: false,
-      result: {
-        ok: false,
-        candidates: [],
-        sawDimensionCompatible: false,
-        sawIdentityIncompatible: true,
-        diagnostics: {
-          provider: SQLITE_VEC_PROVIDER,
-          status: "fallback-incompatible-identity",
-          reason: "stored-vector-identity-mismatch",
-          indexName,
-        },
-      },
+      result:
+        compatible.kind === "identity"
+          ? identityMismatchResult("stored-vector-identity-mismatch", indexName)
+          : unavailableResult("fallback-query-error", VECTOR_DECRYPT_FAILED_REASON, indexName),
     };
   }
   replaceSqliteVecRows(request, indexName, compatible.rows);
@@ -461,28 +565,57 @@ function rebuildSqliteVecIndex(
   return { ok: true };
 }
 
+// Opens one stored vector into the plaintext float32 bytes vec0 indexes. On a plaintext store the
+// cipher is the identity function, so this is the same read as before; on an encrypted store it is
+// the same decryption the brute-force path already performs (`scoped-vector-search.ts`), and the
+// result is copied out of the decrypted envelope rather than aliasing it. A wrong length or a failed
+// authentication yields nothing, which the caller turns into a fail-closed fallback — a partially
+// decrypted index would silently answer from garbage.
+function plaintextEmbedding(
+  cipher: StoreContentCipher,
+  row: SqliteVecIndexRow,
+): Uint8Array | undefined {
+  const expectedBytes = row.vector_dimensions * BYTES_PER_FLOAT32;
+  try {
+    const opened = cipher.openVector(row.embedding, expectedBytes);
+    return opened.byteLength === expectedBytes ? new Uint8Array(opened) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function compatibleSqliteVecRows(
   request: VectorIndexSearchRequest,
-): { readonly ok: true; readonly rows: readonly SqliteVecIndexRow[] } | { readonly ok: false } {
+):
+  | { readonly ok: true; readonly rows: readonly SqliteVecIndexEntry[] }
+  | { readonly ok: false; readonly kind: "identity" | "decrypt" } {
   const rows = readSqliteVecIndexRows(request.store, request.capsule);
-  const compatibleRows: SqliteVecIndexRow[] = [];
+  const cipher = request.store._internal.contentCipher;
+  const entries: SqliteVecIndexEntry[] = [];
   for (const row of rows) {
     const rowIdentity = identityFromSqliteVecRow(row);
     if (
       rowIdentity === undefined ||
       !assertCompatibleEmbeddingIdentity(request.capsule.embeddingModelIdentity, rowIdentity).ok
     ) {
-      return { ok: false };
+      return { ok: false, kind: "identity" };
     }
-    compatibleRows.push(row);
+    const embedding = plaintextEmbedding(cipher, row);
+    if (embedding === undefined) return { ok: false, kind: "decrypt" };
+    entries.push({
+      chunk_id: row.chunk_id,
+      capsule_id: row.capsule_id,
+      source_id: row.source_id,
+      embedding,
+    });
   }
-  return { ok: true, rows: compatibleRows };
+  return { ok: true, rows: entries };
 }
 
 function replaceSqliteVecRows(
   request: VectorIndexSearchRequest,
   indexName: string,
-  rows: readonly SqliteVecIndexRow[],
+  rows: readonly SqliteVecIndexEntry[],
 ): void {
   const db = request.store._internal.db;
   const identityKey = embeddingIdentityKey(request.capsule.embeddingModelIdentity);

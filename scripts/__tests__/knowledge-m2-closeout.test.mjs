@@ -36,7 +36,9 @@ function annInput(overrides = {}) {
     annP95Latency: "<=250ms",
     exactMedianLatency: "<=25ms",
     exactP95Latency: "<=50ms",
-    encryptedStatus: "fallback-encrypted-store",
+    encryptedAnnStatus: "available",
+    encryptedTempStore: "memory",
+    encryptedUnpinnedStatus: "fallback-encrypted-store",
     loadFailureReason: "sqlite-vec-extension-load-failed",
     disabledStatus: "disabled",
     partitionViolations: 0,
@@ -150,7 +152,12 @@ describe("Knowledge M2 closeout proof evaluators", () => {
       { vectorRows: 20_000 },
       { activeStatus: "disabled" },
       { recalls: [1, 0.9] },
-      { encryptedStatus: "available" },
+      // ADR-0153 D1 negative controls, one per direction of the boundary: ANN refused on a pinned
+      // encrypted store (Outcome 3 silently unmet), the pin not actually in force, and ANN reaching
+      // an encrypted store that never got the pin.
+      { encryptedAnnStatus: "fallback-encrypted-store" },
+      { encryptedTempStore: "file" },
+      { encryptedUnpinnedStatus: "available" },
       { loadFailureReason: "unexpected" },
       { disabledStatus: "available" },
       { partitionViolations: 1 },

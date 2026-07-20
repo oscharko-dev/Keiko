@@ -141,6 +141,9 @@ export interface RetrievalVectorIndexDiagnostics {
     | "fallback-encrypted-store"
     | "fallback-unsupported-metric"
     | "fallback-incompatible-identity"
+    // The capsule's vectors exceed the bound on what may be held in the in-memory ANN index
+    // (ADR-0153 D3). Brute force answers instead; the diagnostic carries counts, never content.
+    | "fallback-index-too-large"
     | "fallback-query-error";
   readonly reason?: string;
   readonly indexName?: string;
