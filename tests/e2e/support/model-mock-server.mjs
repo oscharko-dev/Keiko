@@ -119,6 +119,50 @@ function bufferedCompletion(res, rawRequest) {
   res.end(JSON.stringify(body));
 }
 
+// Deterministic OpenAI-compatible embeddings (Issue #2556). Local Knowledge cannot create a capsule
+// at all without an embedding-capable model, so without this the repository-pod flow could only be
+// proven a layer at a time and never as the product a user actually drives. Pointing the gateway at
+// this loopback server exercises the whole path — capsule, connect, index, retrieve — through the
+// real model gateway, with a byte-reproducible vector instead of a provider call: same input always
+// yields the same vector, so cosine similarity stays meaningful and the run is repeatable on any
+// host without credentials.
+const EMBEDDING_DIMENSIONS = Number(process.env.KEIKO_E2E_EMBEDDING_DIMENSIONS ?? "16");
+
+function deterministicEmbedding(input) {
+  const vector = new Array(EMBEDDING_DIMENSIONS).fill(0);
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    const slot = (code + index) % EMBEDDING_DIMENSIONS;
+    vector[slot] = (vector[slot] ?? 0) + ((code % 31) + 1) / 32;
+  }
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+  if (norm === 0) return vector.map(() => 1 / Math.sqrt(EMBEDDING_DIMENSIONS));
+  return vector.map((value) => value / norm);
+}
+
+function embeddingsResponse(res, raw) {
+  let parsed = {};
+  try {
+    parsed = JSON.parse(raw || "{}");
+  } catch {
+    // Malformed body → treat as one empty input so the response shape stays valid.
+  }
+  const inputs = Array.isArray(parsed.input) ? parsed.input : [String(parsed.input ?? "")];
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(
+    JSON.stringify({
+      object: "list",
+      model: String(parsed.model ?? "keiko-e2e-embedding"),
+      data: inputs.map((value, index) => ({
+        object: "embedding",
+        index,
+        embedding: deterministicEmbedding(String(value)),
+      })),
+      usage: { prompt_tokens: inputs.length, total_tokens: inputs.length },
+    }),
+  );
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? "/", `http://${HOST}:${String(PORT)}`);
   if (req.method === "GET" && url.pathname === "/healthz") {
@@ -140,6 +184,10 @@ const server = createServer((req, res) => {
         bufferedCompletion(res, raw);
       }
     });
+    return;
+  }
+  if (req.method === "POST" && url.pathname.endsWith("/embeddings")) {
+    void readBody(req).then((raw) => embeddingsResponse(res, raw));
     return;
   }
   res.writeHead(404, { "content-type": "application/json" });
