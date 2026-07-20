@@ -46,43 +46,19 @@ describe("verify-portable-runtime-signing parseArgs", () => {
     });
   });
 
-  it("fails closed on a missing manifest", () => {
+  it.each([
+    ["a missing manifest", ["--policy", "production"]],
+    ["a missing policy", ["--manifest", "/tmp/m.json"]],
+    ["a policy outside the supported set", ["--manifest", "/tmp/m.json", "--policy", "prod-ish"]],
+    [
+      "an unsupported argument",
+      ["--manifest", "/tmp/m.json", "--policy", "production", "--sign-anyway"],
+    ],
+    ["a flag present without its value", ["--manifest"]],
+    ["a flag value that is an empty string", ["--policy", ""]],
+  ])("fails closed on %s", (_case, argv) => {
     const exit = trapExit();
-    expect(() => parseArgs(["--policy", "production"])).toThrow("process.exit(1)");
-    expect(exit).toHaveBeenCalledWith(1);
-  });
-
-  it("fails closed on a missing policy", () => {
-    const exit = trapExit();
-    expect(() => parseArgs(["--manifest", "/tmp/m.json"])).toThrow("process.exit(1)");
-    expect(exit).toHaveBeenCalledWith(1);
-  });
-
-  it("fails closed on a policy outside the supported set", () => {
-    const exit = trapExit();
-    expect(() => parseArgs(["--manifest", "/tmp/m.json", "--policy", "prod-ish"])).toThrow(
-      "process.exit(1)",
-    );
-    expect(exit).toHaveBeenCalledWith(1);
-  });
-
-  it("fails closed on an unsupported argument", () => {
-    const exit = trapExit();
-    expect(() =>
-      parseArgs(["--manifest", "/tmp/m.json", "--policy", "production", "--sign-anyway"]),
-    ).toThrow("process.exit(1)");
-    expect(exit).toHaveBeenCalledWith(1);
-  });
-
-  it("fails closed when a flag is present without its value", () => {
-    const exit = trapExit();
-    expect(() => parseArgs(["--manifest"])).toThrow("process.exit(1)");
-    expect(exit).toHaveBeenCalledWith(1);
-  });
-
-  it("fails closed when a flag value is an empty string", () => {
-    const exit = trapExit();
-    expect(() => parseArgs(["--policy", ""])).toThrow("process.exit(1)");
+    expect(() => parseArgs(argv)).toThrow("process.exit(1)");
     expect(exit).toHaveBeenCalledWith(1);
   });
 });
