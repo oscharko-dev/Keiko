@@ -57,8 +57,7 @@ const SESSION_ID = "session-2489";
 const HASH = "a".repeat(64);
 const CEILING = "autonomous-delivery" as const;
 const DECL_TEXT = "export const sharedValue = 1;\n";
-const MAIN_TEXT =
-  "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n";
+const MAIN_TEXT = "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n";
 
 function runGit(root: string, args: readonly string[]): void {
   execFileSync("git", args, { cwd: root, stdio: "ignore" });
