@@ -1269,7 +1269,7 @@ function renderLatencyTable(rows) {
   return [line(rows[0]), separator, ...rows.slice(1).map(line)];
 }
 
-export function renderLatencyCharacterization(results) {
+function renderLatencyCharacterization(results) {
   const ann = results.find((result) => result.id === "ann-active")?.metrics;
   if (ann?.latencyLargeAnnMedianMs === undefined) return undefined;
   const smallWinner = categorizeLatencyWinner(
