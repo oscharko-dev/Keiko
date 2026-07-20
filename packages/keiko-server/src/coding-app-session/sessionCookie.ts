@@ -37,6 +37,18 @@ export function serializeSessionCookie(cookieToken: string, options: SessionCook
   return `${APP_SESSION_COOKIE_NAME}=${cookieToken}; ${baseAttributes(options.secure, APP_SESSION_COOKIE_PATH)}; Max-Age=${String(maxAge)}`;
 }
 
+/**
+ * The broad `Path=/api` cookie this release replaced. A browser that paired before the narrowing
+ * still holds it under the SAME name, so it keeps riding along on unrelated `/api` requests until
+ * it expires on its own, and a sign-out that only clears the narrow paths would not remove it.
+ * Every issuance and every clear therefore also emits an expired projection for it.
+ */
+const APP_SESSION_LEGACY_COOKIE_PATH = "/api";
+
+function expiredLegacyCookie(secure: boolean): string {
+  return `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure, APP_SESSION_LEGACY_COOKIE_PATH)}; Max-Age=0`;
+}
+
 /** Serialize both least-privilege cookie projections consumed by authenticated Code reads. */
 export function serializeSessionCookies(
   cookieToken: string,
@@ -45,7 +57,7 @@ export function serializeSessionCookies(
   const codingCookie = serializeSessionCookie(cookieToken, options);
   const maxAge = Math.max(0, Math.floor(options.maxAgeSeconds));
   const gitCookie = `${APP_SESSION_COOKIE_NAME}=${cookieToken}; ${baseAttributes(options.secure, APP_SESSION_GIT_COOKIE_PATH)}; Max-Age=${String(maxAge)}`;
-  return [codingCookie, gitCookie];
+  return [codingCookie, gitCookie, expiredLegacyCookie(options.secure)];
 }
 
 /** Serialize the `Set-Cookie` value that clears a session on sign-out. */
@@ -58,6 +70,7 @@ export function clearSessionCookies(secure: boolean): readonly string[] {
   return [
     clearSessionCookie(secure),
     `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure, APP_SESSION_GIT_COOKIE_PATH)}; Max-Age=0`,
+    expiredLegacyCookie(secure),
   ];
 }
 

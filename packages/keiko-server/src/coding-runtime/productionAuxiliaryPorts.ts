@@ -125,10 +125,12 @@ function packageScriptDigest(text: string): CodeTaskSha256Digest {
   let names: readonly string[] = [];
   try {
     const parsed: unknown = JSON.parse(text);
-    // Explicit collator: the digest must be stable across hosts, and the default sort's
-    // implementation-defined ordering would make the same package.json hash differently.
+    // Codepoint order, explicitly. The digest must be identical on every host, so the comparator
+    // must not depend on the environment: `localeCompare()` without a fixed locale sorts by the
+    // HOST locale and would hash the same package.json differently on a differently-configured
+    // machine — the very nondeterminism this digest exists to rule out.
     if (isRecord(parsed) && isRecord(parsed.scripts)) {
-      names = Object.keys(parsed.scripts).sort((left, right) => left.localeCompare(right));
+      names = Object.keys(parsed.scripts).sort(byCodepoint);
     }
   } catch {
     names = [];
@@ -136,6 +138,11 @@ function packageScriptDigest(text: string): CodeTaskSha256Digest {
   return createHash("sha256")
     .update(JSON.stringify(names), "utf8")
     .digest("hex") as CodeTaskSha256Digest;
+}
+
+function byCodepoint(left: string, right: string): number {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

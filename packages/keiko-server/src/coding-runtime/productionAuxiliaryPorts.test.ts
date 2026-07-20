@@ -179,6 +179,29 @@ describe("createProductionAuxiliaryPorts", () => {
     expect(JSON.stringify(events)).not.toContain("scripts");
   });
 
+  it("digests package scripts in codepoint order, independent of key order and host locale", async () => {
+    // The digest must be identical on every host. `localeCompare()` without a fixed locale sorts by
+    // the HOST locale — de-DE and sv-SE order "Ärger" differently — so the same package.json would
+    // hash differently on differently-configured machines. Two runs whose script sets are equal but
+    // written in a different order, including a non-ASCII key, must agree.
+    const scripts = '{"scripts":{"Zebra":"1","apple":"2","Ärger":"3","_x":"4"}}';
+    const reordered = '{"scripts":{"_x":"4","Ärger":"3","apple":"2","Zebra":"1"}}';
+
+    const digestFor = async (text: string): Promise<string> => {
+      const surface = ports("gpt-coding-safe", [], {
+        readText: () => Promise.resolve({ ok: true as const, text }),
+      });
+      const result = await surface.skillAuthority.execute(
+        skillAction("skl_repo-structure-summary@1"),
+        undefined,
+        LIVE_GUARD,
+      );
+      return JSON.stringify(result);
+    };
+
+    expect(await digestFor(scripts)).toBe(await digestFor(reordered));
+  });
+
   it("denies a skill the catalog does not approve, and still audits the probe", async () => {
     const events: unknown[] = [];
     const surface = ports("gpt-coding-safe", [], { emit: (e) => events.push(e) });
