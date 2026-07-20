@@ -33,6 +33,25 @@ export function deriveWorkspaceRootRef(canonicalRoot: string): WorkspaceRootRef 
   return rootReference(canonicalRoot);
 }
 
+/**
+ * The filesystem identity digest for a path that is already canonical. Callers that resolved and
+ * alias-checked the root earlier use this to re-derive the same digest without repeating the
+ * alias rejection — re-imposing it would reject a legitimately canonical root reached through a
+ * symlinked parent, which is exactly how the debug capsule receives its execution root.
+ */
+export function workspaceRootIdentityDigestFor(
+  canonicalRoot: string,
+  stat: { readonly dev: number; readonly ino: number; readonly mode: number; readonly uid: number },
+): WorkspaceRootIdentityDigest {
+  return framedDigest("keiko.m11.root-identity.fs.v1", [
+    canonicalRoot,
+    String(stat.dev),
+    String(stat.ino),
+    String(stat.mode),
+    String(stat.uid),
+  ]) as WorkspaceRootIdentityDigest;
+}
+
 export function inspectWorkspaceRootIdentity(path: string): WorkspaceRootIdentity {
   const supplied = lstatSync(path);
   if (supplied.isSymbolicLink()) throw new Error("WORKSPACE_ROOT_ALIAS_DENIED");
