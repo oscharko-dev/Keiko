@@ -223,7 +223,21 @@ function rootProjects(
   });
 }
 
+function membershipChanged(before: WorkspaceManifest, after: WorkspaceManifest): boolean {
+  const beforeByRef = new Map(before.roots.map((root) => [root.rootRef, root.identityDigest]));
+  if (beforeByRef.size !== after.roots.length) return true;
+  return after.roots.some((root) => beforeByRef.get(root.rootRef) !== root.identityDigest);
+}
+
+/**
+ * Changing which roots a workspace contains changes the composed authority of every member, so a
+ * membership or identity change recomputes all of them (ADR-0125/0138: composition may only
+ * narrow). Reordering roots or moving focus changes no membership and therefore no authority, so
+ * it affects nothing — reporting the union unconditionally made a plain focus click recompute and
+ * revoke trust across the whole workspace.
+ */
 function affectedRootPaths(before: WorkspaceManifest, after: WorkspaceManifest): readonly string[] {
+  if (!membershipChanged(before, after)) return [];
   return [...new Set([...before.roots, ...after.roots].map((root) => root.canonicalRoot))];
 }
 

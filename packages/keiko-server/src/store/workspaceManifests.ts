@@ -39,6 +39,10 @@ const SQL_FIND_BY_ROOT = `${SQL_SELECT.trim()} WHERE workspace_id = (
 const SQL_FIND_BY_PROJECT = `${SQL_SELECT.trim()} WHERE workspace_id = (
   SELECT workspace_id FROM workspace_manifest_roots WHERE project_path = ?
 )`;
+const SQL_ROOT_IDENTITIES = `
+SELECT root_ref, identity_digest FROM workspace_manifest_roots
+WHERE workspace_id = ?
+`;
 const SQL_ROOT_PROJECTS = `
 SELECT root_ref, project_path FROM workspace_manifest_roots
 WHERE workspace_id = ? ORDER BY position
@@ -64,6 +68,39 @@ function rootProjects(
     readonly project_path: string;
   }[];
   return rows.map((row) => ({ rootRef: row.root_ref, projectPath: row.project_path }));
+}
+
+function rootIdentities(db: DatabaseSync, workspaceId: string): ReadonlyMap<string, string> {
+  const rows = db.prepare(SQL_ROOT_IDENTITIES).all(workspaceId) as unknown as readonly {
+    readonly root_ref: string;
+    readonly identity_digest: string;
+  }[];
+  return new Map(rows.map((row) => [row.root_ref, row.identity_digest]));
+}
+
+/**
+ * Trust is invalidated only where the workspace actually changed shape: a root that left, a root
+ * that joined, or a root whose filesystem identity was replaced under the same reference. A
+ * mutation that merely reorders roots or moves focus changes no authority and must preserve every
+ * grant — invalidating the union of previous and next members revoked trust on every root for a
+ * plain focus click, which made persisted trust (#2521) unobservable in practice.
+ */
+function invalidatedRootRefs(
+  previous: ReadonlyMap<string, string>,
+  next: readonly { readonly rootRef: string; readonly identityDigest: string }[],
+): ReadonlySet<string> {
+  const invalidated = new Set<string>();
+  const nextRefs = new Set(next.map((root) => root.rootRef));
+  for (const rootRef of previous.keys()) {
+    if (!nextRefs.has(rootRef)) invalidated.add(rootRef);
+  }
+  for (const root of next) {
+    const previousIdentity = previous.get(root.rootRef);
+    if (previousIdentity === undefined || previousIdentity !== root.identityDigest) {
+      invalidated.add(root.rootRef);
+    }
+  }
+  return invalidated;
 }
 
 function rowToRecord(db: DatabaseSync, row: ManifestRow): WorkspaceManifestRecordRow {
@@ -245,17 +282,18 @@ export function replaceWorkspaceManifest(
   }
   db.exec("BEGIN IMMEDIATE");
   try {
-    const previous = rootProjects(db, input.manifest.workspaceId);
+    // Read before the absorbed manifests are dropped and before the target is rewritten, so this
+    // is the pre-mutation membership. Roots arriving from an absorbed workspace are absent here
+    // and therefore invalidate, which is the fail-closed outcome for a root joining a workspace.
+    const previousIdentities = rootIdentities(db, input.manifest.workspaceId);
     for (const workspaceId of input.absorbedWorkspaceIds) {
       db.prepare("DELETE FROM workspace_manifests WHERE workspace_id = ?").run(workspaceId);
     }
     updateTargetManifest(db, input, now);
-    const invalidated = new Set([
-      ...previous.map((root) => root.rootRef),
-      ...input.manifest.roots.map((root) => root.rootRef),
-    ]);
     const removeTrust = db.prepare("DELETE FROM workspace_trust_records WHERE root_ref = ?");
-    for (const rootRef of invalidated) removeTrust.run(rootRef);
+    for (const rootRef of invalidatedRootRefs(previousIdentities, input.manifest.roots)) {
+      removeTrust.run(rootRef);
+    }
     db.exec("COMMIT");
     return true;
   } catch (error) {
