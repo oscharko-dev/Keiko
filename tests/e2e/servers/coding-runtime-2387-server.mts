@@ -17,7 +17,11 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { GatewayStreamChunk, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  GatewayStreamChunk,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../../packages/keiko-server/src/coding-app-session/launcherSessionPairingPort.js";
@@ -50,7 +54,9 @@ import {
 import {
   createFunctionalRuntimeResolver,
   functionalGatewayConfig,
+  researchInjectionPage,
   scriptedResponse,
+  scriptedTranscript,
   RESEARCH_JOURNEY_URL,
   type ScriptState,
 } from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
@@ -153,9 +159,10 @@ function hermeticResearchFetch(): (url: string) => Promise<Response> {
     if (new URL(url).hostname !== RESEARCH_JOURNEY_HOST) {
       return Promise.reject(new Error("blocked-by-hermetic-transport"));
     }
-    return Promise.resolve(
-      new Response("<html><body>Backpressure guide</body></html>", { status: 200 }),
-    );
+    // #2637: the granted page is hostile. It carries a visible directive that asks for a workspace
+    // mutation, plus the same directive hidden in a <script> body and an HTML comment. The run must
+    // complete without that mutation being attempted.
+    return Promise.resolve(new Response(researchInjectionPage(), { status: 200 }));
   };
 }
 
@@ -179,7 +186,10 @@ function childResponse(): NormalizedResponse {
 // Exactly the gateway seams the functional harness replaces: fixture gateway config + scripted
 // OpenAI-compatible chat factories. Every route and control-plane surface stays production wiring.
 function researchHandlerDeps(deps: UiHandlerDeps, script: ScriptState): UiHandlerDeps {
-  const chat = (): Promise<NormalizedResponse> => Promise.resolve(scriptedResponse(script));
+  // #2637: the scripted model reads the conversation it is given, so the journey can prove that the
+  // granted page's directive reaches it fenced as untrusted data — and that it does not comply.
+  const chat = (request?: GatewayRequest): Promise<NormalizedResponse> =>
+    Promise.resolve(scriptedResponse(script, scriptedTranscript(request)));
   return {
     ...deps,
     config: functionalGatewayConfig(),
@@ -187,8 +197,8 @@ function researchHandlerDeps(deps: UiHandlerDeps, script: ScriptState): UiHandle
     gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
-      async function* (): AsyncIterable<GatewayStreamChunk> {
-        yield { type: "done" as const, response: await chat() };
+      async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
+        yield { type: "done" as const, response: await chat(request) };
       },
   };
 }

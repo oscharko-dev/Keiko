@@ -201,6 +201,64 @@ describe("extractBoundedDocumentText", () => {
     expect(result.extractedBytes).toBeGreaterThan(0);
   });
 
+  // Issue #2637: the `html` binding exists so governed research egress projects a fetched public
+  // page through this same hardened scanner instead of growing a second tag stripper.
+  it("extracts visible HTML text and drops script, style, and comment bodies", async () => {
+    const page = encode(
+      [
+        "<html><head><style>a{content:'STYLE_X'}</style><title>Guide</title></head><body>",
+        "<!-- COMMENT_X -->",
+        "<script>var s='SCRIPT_X';</script>",
+        "<p>visible prose</p>",
+        "</body></html>",
+      ].join(""),
+    );
+
+    const result = await extractBoundedDocumentText({ bytes: page, extension: "html" }, options());
+
+    expect(result.outcome).toBe("extracted");
+    expect(result.format).toBe("html");
+    expect(result.text).toContain("visible prose");
+    for (const hidden of ["STYLE_X", "COMMENT_X", "SCRIPT_X", "<p>"]) {
+      expect(result.text).not.toContain(hidden);
+    }
+  });
+
+  it("resolves HTML by extension alias and by media type", async () => {
+    const page = encode("<html><body><p>alias prose</p></body></html>");
+
+    for (const input of [
+      { bytes: page, extension: "htm" },
+      { bytes: page, extension: "", mediaType: "text/html" },
+      { bytes: page, extension: "", mediaType: "application/xhtml+xml" },
+    ]) {
+      const result = await extractBoundedDocumentText(input, options());
+      expect(result.format).toBe("html");
+      expect(result.text).toContain("alias prose");
+    }
+  });
+
+  it("reports an HTML page with no visible text as empty rather than leaking its markup", async () => {
+    const result = await extractBoundedDocumentText(
+      { bytes: encode("<html><body><script>hidden()</script></body></html>"), extension: "html" },
+      options(),
+    );
+
+    expect(result.outcome).toBe("empty");
+    expect(result.text).toBe("");
+  });
+
+  it("clamps oversized HTML to the output cap", async () => {
+    const result = await extractBoundedDocumentText(
+      { bytes: encode(`<p>${"prose ".repeat(2_000)}</p>`), extension: "html" },
+      options({ maxOutputBytes: 64 }),
+    );
+
+    expect(result.outcome).toBe("extracted");
+    expect(result.truncated).toBe(true);
+    expect(result.extractedBytes).toBeLessThanOrEqual(64);
+  });
+
   it("keeps diagnostics free of absolute filesystem paths", async () => {
     const result = await extractBoundedDocumentText(
       { bytes: encode("corrupt"), extension: "docx" },

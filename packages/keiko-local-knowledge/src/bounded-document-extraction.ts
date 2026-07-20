@@ -1,9 +1,12 @@
 // Bounded, request-local small-document text extraction for Repository Search (Issue #1285).
 //
 // This module is the documented reuse/generalization point: instead of duplicating DOCX/XLSX/
-// PDF parsing, it composes the already-shipped Local Knowledge parser adapters (docx-parser,
-// xlsx-parser, pdf-parser — Epic #189) into a single bounded, pure text projection that callers
-// outside the indexing pipeline can use. keiko-workspace cannot host this (it is a leaf package
+// PDF/HTML parsing, it composes the already-shipped Local Knowledge parser adapters (docx-parser,
+// xlsx-parser, pdf-parser, html-parser — Epic #189) into a single bounded, pure text projection
+// that callers outside the indexing pipeline can use. The `html` binding (Issue #2637) exists so
+// governed research egress projects a fetched public page through the SAME hardened, script/style/
+// comment-dropping scanner the indexing pipeline uses, instead of growing a second tag stripper.
+// keiko-workspace cannot host this (it is a leaf package
 // that may not depend on keiko-local-knowledge, ADR-0019 direction 3b); keiko-local-knowledge is
 // the only package that may compose the parsers, so the bounded extractor lives here and the
 // grounded Repository Search path (keiko-server) calls it.
@@ -22,18 +25,21 @@
 import type { DocumentId, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 
 import { docxParser } from "./parsers/docx-parser.js";
+import { htmlParser } from "./parsers/html-parser.js";
 import { pdfParser } from "./parsers/pdf-parser.js";
 import { buildParserOptions } from "./parsers/registry.js";
 import type {
   AsyncParserAdapter,
   InternalParserResult,
+  ParserAdapter,
+  ParserOptions,
   ParserSelectionInput,
 } from "./parsers/types.js";
 import { xlsxParser } from "./parsers/xlsx-parser.js";
 
 // ─── Public contract ───────────────────────────────────────────────────────────
 
-export type BoundedDocumentFormat = "docx" | "xlsx" | "pdf";
+export type BoundedDocumentFormat = "docx" | "xlsx" | "pdf" | "html";
 
 export type BoundedDocumentExtractionOutcome =
   // Text was extracted (possibly truncated to the output cap).
@@ -102,25 +108,45 @@ const DEFAULT_DOCUMENT_ID = "bounded-document" as DocumentId;
 const DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const PDF_MEDIA = "application/pdf";
+const HTML_MEDIA = "text/html";
+const XHTML_MEDIA = "application/xhtml+xml";
 
 interface FormatBinding {
   readonly format: BoundedDocumentFormat;
-  readonly parser: AsyncParserAdapter;
+  // `html` binds the synchronous `htmlParser`; the office/pdf adapters are asynchronous. `runParser`
+  // accepts either so a hardened, already-shipped adapter never has to be duplicated just because
+  // its parse step happens to be synchronous.
+  readonly parser: ParserAdapter | AsyncParserAdapter;
 }
+
+interface FormatCandidate extends FormatBinding {
+  readonly extensions: readonly string[];
+  readonly mediaTypes: readonly string[];
+}
+
+// Scanned in order; the first binding whose extension OR media type matches wins. A table rather
+// than a chain of predicates so adding a format cannot push the resolver past the complexity bound.
+// Neither list ever contains the empty string, so an unknown extension and an unknown media type
+// both fall through to `unsupported-format` instead of matching by accident.
+const FORMAT_CANDIDATES: readonly FormatCandidate[] = Object.freeze([
+  { format: "docx", parser: docxParser, extensions: ["docx"], mediaTypes: [DOCX_MEDIA] },
+  { format: "xlsx", parser: xlsxParser, extensions: ["xlsx"], mediaTypes: [XLSX_MEDIA] },
+  { format: "pdf", parser: pdfParser, extensions: ["pdf"], mediaTypes: [PDF_MEDIA] },
+  {
+    format: "html",
+    parser: htmlParser,
+    extensions: ["html", "htm"],
+    mediaTypes: [HTML_MEDIA, XHTML_MEDIA],
+  },
+] as const);
 
 function resolveFormat(extension: string, mediaType: string): FormatBinding | undefined {
   const ext = extension.toLowerCase().replace(/^\./, "");
   const media = mediaType.toLowerCase();
-  if (ext === "docx" || media === DOCX_MEDIA) {
-    return { format: "docx", parser: docxParser };
-  }
-  if (ext === "xlsx" || media === XLSX_MEDIA) {
-    return { format: "xlsx", parser: xlsxParser };
-  }
-  if (ext === "pdf" || media === PDF_MEDIA) {
-    return { format: "pdf", parser: pdfParser };
-  }
-  return undefined;
+  const match = FORMAT_CANDIDATES.find(
+    (candidate) => candidate.extensions.includes(ext) || candidate.mediaTypes.includes(media),
+  );
+  return match === undefined ? undefined : { format: match.format, parser: match.parser };
 }
 
 // Office files protected with a password are not OOXML ZIP packages; they are wrapped in a
@@ -284,6 +310,20 @@ function preflightFailure(
   return undefined;
 }
 
+// A synchronous adapter cannot be interrupted mid-parse, so the deadline it honours is the one it
+// checks itself at unit-emission boundaries (`ParserOptions.timeoutMs` + `signal`); the outer race
+// still bounds the awaited result. Async adapters keep the full pre-emptive race.
+function parseWithAdapter(
+  binding: FormatBinding,
+  selection: ParserSelectionInput,
+  options: ParserOptions,
+): Promise<InternalParserResult> {
+  if ("parseAsync" in binding.parser) {
+    return binding.parser.parseAsync(selection, options);
+  }
+  return Promise.resolve(binding.parser.parse(selection, options));
+}
+
 // Runs the reused parser under a per-document deadline. The adapter contract conveys failure through
 // diagnostics rather than throwing; the try/catch is a boundary safety net so a parser-internal
 // defect degrades to a stable `malformed` outcome instead of crashing the grounded request.
@@ -308,7 +348,7 @@ async function runParser(
   });
   try {
     return await Promise.race([
-      binding.parser.parseAsync(selection, parserOptions),
+      parseWithAdapter(binding, selection, parserOptions),
       timeout.expired,
     ]);
   } catch {

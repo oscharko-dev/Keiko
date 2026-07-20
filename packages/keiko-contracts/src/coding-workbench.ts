@@ -272,6 +272,15 @@ export const CODING_WORKBENCH_AUXILIARY_STATUSES: readonly CodingWorkbenchAuxili
     "stopped",
   ] as const satisfies readonly CodingWorkbenchAuxiliaryStatus[]);
 
+// #2637: the trust classification of tool-result content handed to a Code task's model. Web page
+// text fetched by governed research egress is `untrusted` — third-party data that carries no
+// authority. The union is deliberately single-valued: there is no "trusted" web page, so there is
+// no value a research read could be relabelled with. Widening it is an ADR-level decision.
+export type CodingWorkbenchContentTrust = "untrusted";
+
+export const CODING_WORKBENCH_CONTENT_TRUST_VALUES: readonly CodingWorkbenchContentTrust[] =
+  Object.freeze(["untrusted"] as const satisfies readonly CodingWorkbenchContentTrust[]);
+
 export interface CodingWorkbenchModePolicy {
   // Capability admission is not pre-approval. Resource scope, risk, authority, and hard-deny gates
   // still determine the tri-state effect for each concrete action.
@@ -603,6 +612,11 @@ export interface CodingWorkbenchRuntimeEvent {
   // free: the normalized outcome, the approved skill id and how it was invoked, and the one-layer
   // child run id plus its explicit result count — never queries, pages, skill bodies, or scratch.
   readonly auxiliaryOutcome?: CodingWorkbenchAuxiliaryStatus | undefined;
+  // #2637: the trust classification of the page text a completed research fetch handed to the
+  // model. `untrusted` is the ONLY admissible value and an accepted `research-performed` event MUST
+  // declare it, so a research read can never reach the timeline claiming to be anything else. It is
+  // a constant marker, not content: it names the channel, never a byte of the page.
+  readonly contentTrust?: CodingWorkbenchContentTrust | undefined;
   readonly skillId?: string | undefined;
   readonly skillInvocation?: "explicit" | "implicit" | undefined;
   readonly childRunId?: string | undefined;

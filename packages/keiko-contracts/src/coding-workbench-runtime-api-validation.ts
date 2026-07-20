@@ -1,5 +1,6 @@
 import {
   CODING_WORKBENCH_AUXILIARY_STATUSES,
+  CODING_WORKBENCH_CONTENT_TRUST_VALUES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
   type CodingWorkbenchValidationResult,
 } from "./coding-workbench.js";
@@ -75,7 +76,9 @@ export function sseEventKeys(kind: unknown): readonly string[] {
     "revision",
     "failureCode",
   ];
-  return kind === "runtime-event" ? [...common, "eventKind", "auxiliaryOutcome"] : common;
+  return kind === "runtime-event"
+    ? [...common, "eventKind", "auxiliaryOutcome", "contentTrust"]
+    : common;
 }
 
 export function validateSseEventFields(
@@ -100,11 +103,23 @@ export function validateSseEventFields(
   ) {
     errors.push("eventKind is invalid");
   }
+  validateSseOptionalEnums(value, errors);
+}
+
+// The optional closed-vocabulary fields an SSE frame may carry. Split out of `validateSseEventFields`
+// so that function stays inside the repository complexity bound as the vocabulary grows.
+function validateSseOptionalEnums(value: Record<string, unknown>, errors: string[]): void {
   if (
     value.auxiliaryOutcome !== undefined &&
     !isOneOf(value.auxiliaryOutcome, CODING_WORKBENCH_AUXILIARY_STATUSES)
   ) {
     errors.push("auxiliaryOutcome is invalid");
+  }
+  if (
+    value.contentTrust !== undefined &&
+    !isOneOf(value.contentTrust, CODING_WORKBENCH_CONTENT_TRUST_VALUES)
+  ) {
+    errors.push("contentTrust is invalid");
   }
   if (
     value.failureCode !== undefined &&

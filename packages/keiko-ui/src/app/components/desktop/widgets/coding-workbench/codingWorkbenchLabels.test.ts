@@ -152,6 +152,32 @@ describe("eventDetail auxiliary outcome", () => {
   });
 });
 
+// #2637: the operator approved a destination, never what the page would say. An accepted research
+// read has to be visible in the timeline AS untrusted content, not just as a successful fetch.
+describe("eventDetail untrusted research content", () => {
+  it("names the quarantined content on an accepted research read", () => {
+    expect(
+      eventDetail(
+        runtimeEvent({
+          eventKind: "research-performed",
+          auxiliaryOutcome: "accepted",
+          contentTrust: "untrusted",
+        }),
+        t,
+      ),
+    ).toBe(
+      "codingWorkbench.event.detail codingWorkbench.event.detailOutcome " +
+        "codingWorkbench.event.detailUntrustedContent",
+    );
+  });
+
+  it("says nothing about content for a research denial, which took nothing in", () => {
+    expect(
+      eventDetail(runtimeEvent({ eventKind: "research-performed", auxiliaryOutcome: "denied" }), t),
+    ).toBe("codingWorkbench.event.detail codingWorkbench.event.detailOutcome");
+  });
+});
+
 describe("lifecycleAnnouncement research grant", () => {
   function withGrant(
     researchGrant: CodingWorkbenchRuntimeResearchGrant | null,
