@@ -77,7 +77,7 @@ function hasWorkspaceRevisionPrecondition(
   realRoot: string,
 ): boolean {
   const parsed = parseEditorSettingsEtag(singleHeader(ctx, "if-match"));
-  if (parsed === undefined || parsed.workspaceRevision !== expectedRevision) return false;
+  if (parsed?.workspaceRevision !== expectedRevision) return false;
   return parsed.rootToken === editorSettingsRootToken(realRoot);
 }
 
