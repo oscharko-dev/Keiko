@@ -297,6 +297,28 @@ describe("extractBoundedDocumentText", () => {
     expect(result.outcome).toBe("timed-out");
   });
 
+  // A stopped scan records WHY it stopped exactly once. The trailing text keeps a pending block
+  // OPEN when the deadline trips, so the final unconditional `flushBlock` would re-evaluate the same
+  // limit and emit a duplicate — the invariant the cooperative scan-loop check broke (#2646 review).
+  it("records the timeout once when the deadline trips with a block still open", async () => {
+    let calls = 0;
+    const now = (): number => (calls++ === 0 ? 0 : 10_000);
+
+    const result = await extractBoundedDocumentText(
+      {
+        bytes: encode(
+          `<p>visible prose</p>${'<div class="x" data-y="z">'.repeat(60_000)}trailing text`,
+        ),
+        extension: "html",
+      },
+      options({ timeoutMs: 1_000, now }),
+    );
+
+    const codes = result.diagnostics.map((d) => d.code);
+    expect(codes.filter((code) => code === "PARSER_TIMEOUT")).toHaveLength(1);
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+
   it("keeps diagnostics free of absolute filesystem paths", async () => {
     const result = await extractBoundedDocumentText(
       { bytes: encode("corrupt"), extension: "docx" },

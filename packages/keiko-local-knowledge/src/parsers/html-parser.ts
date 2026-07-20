@@ -385,16 +385,27 @@ function resetBlock(state: ScanState): void {
   state.blockText = "";
 }
 
+// Records WHY the scan stopped, exactly once, and reports whether it has stopped. Every caller that
+// can halt the scan routes through here so a stopped scan never accumulates a second, identical
+// diagnostic: `stopped` used to be set only inside `flushBlock` (which resets the pending block,
+// making the final unconditional flush a no-op), and the cooperative scan-loop check added for
+// #2637 broke that invariant.
+function recordScanLimit(state: ScanState): boolean {
+  if (state.stopped) return true;
+  const limit = shouldStop(state.startedAt, state.options, state.units.length);
+  if (!limit.stop || limit.code === undefined || limit.message === undefined) return false;
+  state.diagnostics.push(diagnostic(limit.code, limit.message, state.input.documentId, "info"));
+  state.stopped = true;
+  return true;
+}
+
 function flushBlock(state: ScanState, end: number): void {
   if (state.pendingBlockStart === null) return;
   if (end <= state.pendingBlockStart || !state.pendingBlockHasText) {
     resetBlock(state);
     return;
   }
-  const limit = shouldStop(state.startedAt, state.options, state.units.length);
-  if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-    state.diagnostics.push(diagnostic(limit.code, limit.message, state.input.documentId, "info"));
-    state.stopped = true;
+  if (recordScanLimit(state)) {
     resetBlock(state);
     return;
   }
@@ -429,12 +440,7 @@ function flushBlock(state: ScanState, end: number): void {
 // (`pushVerbatimBlock`) paths so offset math and anchor stamping stay identical.
 function pushRenderedBlock(state: ScanState, rendered: string): void {
   if (rendered.length === 0) return;
-  const limit = shouldStop(state.startedAt, state.options, state.units.length);
-  if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-    state.diagnostics.push(diagnostic(limit.code, limit.message, state.input.documentId, "info"));
-    state.stopped = true;
-    return;
-  }
+  if (recordScanLimit(state)) return;
   if (state.cleanedParts.length > 0) {
     state.cleanedParts.push("\n");
     state.cleanedOffset += 1;
@@ -1036,17 +1042,10 @@ function step(state: ScanState, cursor: number): number {
 // `shouldStop` only when a block is EMITTED, so an input engineered to produce very few blocks while
 // requiring a lot of scanning (one enormous text run, a huge unterminated element, thousands of
 // attribute-only tags) could scan far past `timeoutMs` before any limit was consulted. The scan loop
-// therefore re-checks every SCAN_DEADLINE_CHECK_STEPS steps. The interval is large enough that the
-// added `options.now()` calls are immaterial next to the per-step scanning work, and small enough
-// that the deadline is honoured promptly on a block-free document.
+// therefore re-checks every SCAN_DEADLINE_CHECK_STEPS steps via the shared `recordScanLimit`. The
+// interval is large enough that the added `options.now()` calls are immaterial next to the per-step
+// scanning work, and small enough that the deadline is honoured promptly on a block-free document.
 const SCAN_DEADLINE_CHECK_STEPS = 4096;
-
-function applyScanDeadline(state: ScanState): void {
-  const limit = shouldStop(state.startedAt, state.options, state.units.length);
-  if (!limit.stop || limit.code === undefined || limit.message === undefined) return;
-  state.diagnostics.push(diagnostic(limit.code, limit.message, state.input.documentId, "info"));
-  state.stopped = true;
-}
 
 function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserOptions): Emission {
   // Read the title from the FULL document (before <main> narrowing drops the head) so a manual's
@@ -1078,7 +1077,7 @@ function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserO
   while (cursor < text.length && !state.stopped) {
     cursor = step(state, cursor);
     steps += 1;
-    if (steps % SCAN_DEADLINE_CHECK_STEPS === 0) applyScanDeadline(state);
+    if (steps % SCAN_DEADLINE_CHECK_STEPS === 0) recordScanLimit(state);
   }
   flushBlock(state, text.length);
   return {
