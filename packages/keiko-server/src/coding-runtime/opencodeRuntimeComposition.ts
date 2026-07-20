@@ -1056,24 +1056,21 @@ async function executeToolRequest(
     return { status: 400, body: "" };
   }
   const actionId = parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES)?.actionId;
-  const started = startFacadeExecution(facade, capability, headers, body, admission);
-  if (!started.ok) {
-    emitFacadeStartDiagnostic(diagnostics, actionId, started.error);
-    admission.release();
-    settleSafeTool(settleTool, actionId, "failed");
-    return { status: 502, body: "" };
-  }
-  releaseAdmissionWhenSettled(started.work, admission);
+  const work = startFacadeExecution(facade, capability, headers, body, admission);
+  releaseAdmissionWhenSettled(work, admission);
   try {
-    const result = await raceAbort(started.work, admission.controller.signal);
+    const result = await raceAbort(work, admission.controller.signal);
     const reason = abortReason(admission.controller.signal);
     if (reason !== undefined) {
       settleSafeTool(settleTool, actionId, "cancelled");
       return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
     }
     return responseForToolResult(result, settleTool, actionId);
-  } catch {
+  } catch (error) {
     const reason = abortReason(admission.controller.signal);
+    // A cancellation is an expected outcome, not a facade fault, so only a genuine failure is
+    // surfaced to the operator.
+    if (reason === undefined) emitFacadeFailureDiagnostic(diagnostics, actionId, error);
     settleSafeTool(settleTool, actionId, reason === undefined ? "failed" : "cancelled");
     return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
   }
@@ -1095,32 +1092,22 @@ function responseForToolResult(
     : { status: 502, body: "" };
 }
 
-// Start the facade call, containing only its SYNCHRONOUS throw (a facade that dies before
-// returning a promise). The thrown value is carried back to the caller, which surfaces it as an
-// operator diagnostic before failing the request; the returned promise's rejection stays owned by
-// the awaiting request path, which maps it to a 502/408 and settles the tool.
-type FacadeStart =
-  | { readonly ok: true; readonly work: Promise<CodingToolResult> }
-  | { readonly ok: false; readonly error: unknown };
-
+// Invoking inside `.then` defers the call, so a facade that dies SYNCHRONOUSLY (before returning a
+// promise) surfaces as a rejection on the very same path as one whose promise rejects. That gives
+// the awaiting request path a single failure mode to own — it emits the operator diagnostic,
+// settles the tool, and maps the request to 502/408 — and it keeps the call out of a `try`, which
+// typescript:S4822 rejects around a promise-returning call in either direction (with a `.catch` it
+// asks for the `try` to go, without one it asks for the `.catch`).
 function startFacadeExecution(
   facade: CodingToolFacade,
   capability: string,
   headers: Headers,
   body: string,
   admission: AdmittedToolRequest,
-): FacadeStart {
-  try {
-    const work = facade.execute({ body, capability, headers, signal: admission.controller.signal });
-    // A no-op tap, NOT the error handler: attaching it does not consume the rejection for the
-    // awaiting request path, which still observes it through `raceAbort`. It keeps the promise from
-    // floating inside this `try` (typescript:S4822) and suppresses an unhandled-rejection warning on
-    // the abort path, where the caller can stop awaiting before the facade settles.
-    void work.catch(() => undefined);
-    return { ok: true, work };
-  } catch (error) {
-    return { ok: false, error };
-  }
+): Promise<CodingToolResult> {
+  return Promise.resolve().then(() =>
+    facade.execute({ body, capability, headers, signal: admission.controller.signal }),
+  );
 }
 
 // Content-free by design (the tool bridge never logs request or error bodies): the record carries
@@ -1132,7 +1119,7 @@ function startFacadeExecution(
 // the `tool:<callId>` production shape passes, prose/whitespace/overlength degrade to a marker.
 const SAFE_ACTION_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/;
 
-function emitFacadeStartDiagnostic(
+function emitFacadeFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
   error: unknown,
@@ -1144,9 +1131,9 @@ function emitFacadeStartDiagnostic(
         : "tool-bridge-unparsed-action",
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.tool-bridge",
-    source: "opencode-runtime-composition.start-facade",
+    source: "opencode-runtime-composition.facade-execute",
     errorClass: contentFreeErrorClass(error),
-    message: "tool-facade-sync-throw",
+    message: "tool-facade-failed",
   });
 }
 
