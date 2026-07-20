@@ -17,7 +17,6 @@ import {
   createCapsule,
   listCapsules,
   searchVectorIndex,
-  sqliteVecIndexName,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -30,8 +29,8 @@ import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/db.js";
 
 // The default embedding identity used to seed a capsule inside the store. Matches the shipped
-// production identity that `text-embedding-3-small` reports so `sqliteVecIndexName` produces a
-// stable, predictable table name assertion.
+// production identity that `text-embedding-3-small` reports so the derived sqlite-vec table
+// name (`sqliteVecIndexName`) is stable and predictable across runs.
 const DEFAULT_IDENTITY = {
   provider: "openai",
   modelId: "text-embedding-3-small",
@@ -103,18 +102,18 @@ function seedCapsule(opened: OpenKnowledgeStoreForDeps, capsuleId: string): void
   });
 }
 
-describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", () => {
+describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): void => {
   let fixture: DepsFixture;
 
-  beforeEach(() => {
+  beforeEach((): void => {
     fixture = buildDepsFixture();
   });
 
-  afterEach(() => {
+  afterEach((): void => {
     fixture.cleanup();
   });
 
-  it("returns a vectorIndex whose adapter is bound (composition did not silently drop)", () => {
+  it("returns a vectorIndex whose adapter is bound (composition did not silently drop)", (): void => {
     // Without the shim wired, `.adapter` would be undefined and every retrieval call would take
     // the LK-native default path. The activation record in ADR-0152 D3 depends on this being
     // present at the composition root — a missing adapter is a silent regression to pre-D3.
@@ -126,19 +125,23 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", () =>
     }
   });
 
-  it("dispatches retrieval through the shim, not the LK-native default", () => {
+  it("dispatches retrieval through the shim, not the LK-native default", (): void => {
     // Positive shim-in-chain proof: the shim converts each LK request into a port query whose
     // `partitionKey` is the capsule id. The port then performs an INDEPENDENT capsule lookup
     // by that id in the store — a step the LK-native default path does not run because the LK
     // request already carries the capsule object. So a request with a capsule object whose id
-    // is NOT present in the store returns `status: "port-capsule-absent"` through the shim,
-    // and `sqlite-vec-runtime-not-configured` (or a similar sqlite-vec fallback) through the
-    // LK-native path. The status alone therefore identifies which path answered.
+    // is NOT present in the store makes the port emit `status: "port-capsule-absent"` with
+    // `reason: "capsule-not-found"`. That status is outside the LK-native
+    // `RetrievalVectorIndexDiagnostics.status` enum, so the shim's `toLkStatus` projection
+    // rewrites it to the enum's default (`fallback-query-error`) while `reason` survives
+    // verbatim. The LK-native default path (no shim) would instead reach the sqlite-vec
+    // runtime probe on this same request, so the exact `fallback-query-error / capsule-not-found`
+    // pairing is only reachable when the shim is in the call chain.
     const opened = openKnowledgeStoreForDeps(fixture.deps);
     try {
       // Seed a capsule so the store is real, then craft a request against a DIFFERENT capsule
-      // id — the shim's lookup by id will not find it and must fail closed with the port-only
-      // status. The seeded capsule's identity is reused so the query is otherwise well-formed.
+      // id — the shim's lookup by id will not find it and must fail closed. The seeded
+      // capsule's identity is reused so the query is otherwise well-formed.
       const seedId = "cap-store-open-real";
       seedCapsule(opened, seedId);
       const [seeded] = listCapsules(opened.store);
@@ -163,12 +166,15 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", () =>
     }
   });
 
-  it("preserves the shim's sqlite-vec indexName + vectorCount signals when a real capsule is queried", () => {
-    // A second proof: for a real capsule (no vectors indexed), the shim rebuilds
-    // `indexName` and `vectorCount: 0` in the merged diagnostic. The LK-native default path
-    // never emits `indexName` at the runtime-not-configured step. Both facts together make the
-    // shim's contribution to the diagnostic observable independently of the shim's own port
-    // refusal status vocabulary asserted above.
+  it("keeps the LK-native fallback diagnostics for a real capsule without a configured runtime", (): void => {
+    // The shim must not silently MASK the underlying LK behaviour when it CAN reach the LK
+    // path. On a real capsule with no vectors indexed and no sqlite-vec runtime configured,
+    // the shim's port call reaches `searchSqliteVecIndex`, which falls closed with
+    // `sqlite-vec-runtime-not-configured` — the exact same status/reason the pre-composition
+    // path emitted. The `indexName` / `vectorCount` fields the shim rebuilds on a SUCCESSFUL
+    // KNN are not exercised here (fail-closed short-circuits before rebuild); those live in
+    // the LK-scoped `searchSqliteVecIndex` regression tests where a real vec runtime is
+    // available.
     const opened = openKnowledgeStoreForDeps(fixture.deps);
     try {
       const capsuleId = "cap-store-open-signal";
@@ -185,24 +191,15 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", () =>
         },
         opened.vectorIndex,
       );
-      // A store with no vectors and no sqlite-vec runtime configured falls closed with
-      // `sqlite-vec-runtime-not-configured`. This assertion holds whether the shim OR the
-      // LK-native default runs — its purpose here is to confirm the shim did not silently
-      // MASK the underlying LK behaviour, which the earlier test proved is now shim-driven.
       expect(result.ok).toBe(false);
       expect(result.diagnostics.status).toBe("fallback-unavailable");
       expect(result.diagnostics.reason).toBe("sqlite-vec-runtime-not-configured");
-      // The shim's `sqliteVecIndexName` derivation is the same one `vector-index.ts` uses on a
-      // successful KNN, so the string is predictable and pinned here.
-      expect(sqliteVecIndexName(seeded.embeddingModelIdentity)).toBe(
-        `keiko_lk_vec_${String(seeded.embeddingModelIdentity.vectorDimensions)}_${seeded.embeddingModelIdentity.vectorMetric}`,
-      );
     } finally {
       opened.close();
     }
   });
 
-  it("preserves the base options — mode, now, and any resolved extension path — alongside the adapter", () => {
+  it("preserves the base options — mode, now, and any resolved extension path — alongside the adapter", (): void => {
     // If the shim replaced the whole options bag instead of extending it, the `mode` decision,
     // the `now` clock, and any resolved extension path would silently revert to defaults on
     // retrieval. All three must survive because the shim rebinds ONLY the adapter slot.
@@ -232,7 +229,7 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", () =>
     ["empty string", ""],
   ])(
     "throws a `KnowledgeStoreError` when `uiDbPath` is %s, before touching the store",
-    (_label, uiDbPath) => {
+    (_label, uiDbPath): void => {
       const broken = buildDepsFixture({ uiDbPath });
       try {
         expect(() => openKnowledgeStoreForDeps(broken.deps)).toThrow(

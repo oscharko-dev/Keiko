@@ -311,39 +311,39 @@ interface PortDispatch {
 // The two adapter shims (knowledge/repo) share this function; the only difference is the
 // namespace label the port sees on its query. Parameterising here removes a duplicate branch
 // that would otherwise be maintained in lockstep across both shims.
+//
+// Short-circuit on the first fail-closed dispatch: every port.search call re-enters the LK
+// pipeline (precheck, runtime probe, `writeUnavailable(...)` on the fallback path). When the
+// first source returns `ok: false`, the remaining calls would repeat the same precondition
+// failure — same store, same identity, same runtime absence — and re-write the same
+// `vector_index_state` row. Stop after the first failure so the merged result stays
+// fail-closed exactly as it would after N calls, without N-1 wasted round-trips.
 function dispatchPortCalls(
   port: VectorIndexPort,
   namespace: LocalKnowledgeStoreNamespace,
   request: VectorIndexSearchRequest,
 ): readonly PortDispatch[] {
   const capsulePartition = encodePartitionKey(request.capsule.id);
-  if (request.sourceFilter === undefined || request.sourceFilter.length === 0) {
-    return [
-      {
-        partitionKey: capsulePartition,
-        result: port.search({
-          namespace,
-          partitionKey: capsulePartition,
-          identity: request.capsule.embeddingModelIdentity,
-          queryVector: request.queryVector,
-          candidateLimit: request.candidateLimit,
-        }),
-      },
-    ];
-  }
-  return request.sourceFilter.map((sourceId): PortDispatch => {
-    const partitionKey = encodePartitionKey(request.capsule.id, sourceId);
-    return {
+  const dispatchOne = (partitionKey: string): PortDispatch => ({
+    partitionKey,
+    result: port.search({
+      namespace,
       partitionKey,
-      result: port.search({
-        namespace,
-        partitionKey,
-        identity: request.capsule.embeddingModelIdentity,
-        queryVector: request.queryVector,
-        candidateLimit: request.candidateLimit,
-      }),
-    };
+      identity: request.capsule.embeddingModelIdentity,
+      queryVector: request.queryVector,
+      candidateLimit: request.candidateLimit,
+    }),
   });
+  if (request.sourceFilter === undefined || request.sourceFilter.length === 0) {
+    return [dispatchOne(capsulePartition)];
+  }
+  const dispatches: PortDispatch[] = [];
+  for (const sourceId of request.sourceFilter) {
+    const dispatch = dispatchOne(encodePartitionKey(request.capsule.id, sourceId));
+    dispatches.push(dispatch);
+    if (!dispatch.result.ok) break;
+  }
+  return dispatches;
 }
 
 // Adapt a `VectorIndexPort` to the `VectorIndexAdapter` shape the LK retrieval path consumes

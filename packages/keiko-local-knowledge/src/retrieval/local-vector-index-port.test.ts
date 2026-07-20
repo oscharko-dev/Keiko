@@ -23,13 +23,17 @@ import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.j
 import { createCapsule } from "../capsule-lifecycle.js";
 import type { KnowledgeStore } from "../store.js";
 
+// The port implementation is exported from the LK barrel; tests exercise the public export
+// surface so a broken re-export from the barrel would fail this suite (Qodo testability rule).
+// A deep import through `./local-vector-index-port.js` would let a barrel-removal regression
+// silently pass — the retrieval-scoped re-export in `./index.ts` is the contract callers use.
 import {
   createLocalKnowledgeStoreVectorIndexPort,
   encodePartitionKey,
+  searchVectorIndex,
   vectorIndexPortAsKnowledgeAdapter,
   vectorIndexPortAsRepoAdapter,
-} from "./local-vector-index-port.js";
-import { searchVectorIndex } from "./vector-index.js";
+} from "@oscharko-dev/keiko-local-knowledge";
 
 function createTestCapsule(
   store: KnowledgeStore,
