@@ -8,12 +8,14 @@ import {
   type RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  createLocalKnowledgeStoreVectorIndexPort,
   gitBlobFingerprint,
   listCapsuleSources,
   listCapsules,
   listRepositoryChunkLineRanges,
   readRepositoryFileFingerprints,
   searchVectorsForScope,
+  vectorIndexPortAsRepoAdapter,
   type KnowledgeStore,
   type RepositoryChunkLineRange,
   type RepositoryFileFingerprint,
@@ -1021,11 +1023,26 @@ export function configuredRepoSemanticSearchProviderLeaseFor(
   if (fallback === undefined) return { provider: undefined, close: () => undefined };
   try {
     const opened = openKnowledgeStoreForDeps(deps);
+    // ADR-0152 D3: repository-pod retrieval is served through the pillar-neutral
+    // `VectorIndexPort` under the `repo` namespace. `opened.vectorIndex` already carries the
+    // knowledge-namespace shim from the composition root, so we rebind its adapter to a repo
+    // shim before it reaches the pod path. The store, extension gate, and other options are
+    // preserved verbatim — this changes only the namespace label the port observes.
+    const podVectorIndex: VectorIndexOptions = {
+      ...opened.vectorIndex,
+      adapter: vectorIndexPortAsRepoAdapter(
+        createLocalKnowledgeStoreVectorIndexPort({
+          namespace: "repo",
+          store: opened.store,
+          vectorIndexOptions: opened.vectorIndex,
+        }),
+      ),
+    };
     const provider = configuredRepoSemanticSearchProviderFor(deps, signal, {
       repositoryPod: {
         store: opened.store,
         repositoryRoot,
-        vectorIndex: opened.vectorIndex,
+        vectorIndex: podVectorIndex,
       },
     });
     return {

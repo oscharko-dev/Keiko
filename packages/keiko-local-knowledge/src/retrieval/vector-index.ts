@@ -776,7 +776,10 @@ function vectorIndexStamp(store: KnowledgeStore, capsule: KnowledgeCapsule): Vec
   }) as unknown as VectorIndexStampRow;
 }
 
-function sqliteVecIndexName(identity: EmbeddingModelIdentity): string {
+// Exported so the port adapter shim in `local-vector-index-port.ts` can rebuild the
+// `indexName` diagnostic the port's shape does not carry, without a second copy of this
+// formatter drifting away from the one that decides the actual sqlite-vec table name.
+export function sqliteVecIndexName(identity: EmbeddingModelIdentity): string {
   return `${SQLITE_VEC_TABLE_PREFIX}_${String(identity.vectorDimensions)}_${identity.vectorMetric}`;
 }
 
