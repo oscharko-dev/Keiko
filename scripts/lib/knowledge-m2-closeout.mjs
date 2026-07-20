@@ -90,7 +90,15 @@ export function evaluateAnnProof(input) {
   if (input.vectorRows <= input.exactScanCap) failures.push("corpus-not-above-exact-cap");
   if (input.activeStatus !== "available") failures.push(`ann-status:${input.activeStatus}`);
   if (input.recalls.some((recall) => recall < 0.95)) failures.push("ann-recall-below-0.95");
-  if (input.encryptedStatus !== "fallback-encrypted-store") failures.push("encrypted-fallback");
+  // ADR-0153 D1 replaced the blanket encrypted-store refusal with a boundary, so the gate certifies
+  // the boundary rather than one side of it: ANN must be REACHABLE on an encrypted store that pins
+  // TEMP storage to memory (Outcome 3 is false otherwise), the pin must actually be in force, and an
+  // encrypted store without it must still fail closed. Three assertions where ADR-0152 D2 had one.
+  if (input.encryptedAnnStatus !== "available")
+    failures.push(`encrypted-ann:${input.encryptedAnnStatus}`);
+  if (input.encryptedTempStore !== "memory") failures.push("encrypted-temp-store-unpinned");
+  if (input.encryptedUnpinnedStatus !== "fallback-encrypted-store")
+    failures.push(`encrypted-unpinned:${input.encryptedUnpinnedStatus}`);
   if (input.loadFailureReason !== "sqlite-vec-extension-load-failed")
     failures.push("load-fallback");
   if (input.disabledStatus !== "disabled") failures.push("disabled-negative-control");
@@ -347,26 +355,41 @@ function recallAtK(actual, expected) {
   return actual.filter((candidate) => expectedIds.has(candidate.chunkId)).length / TOP_K;
 }
 
-async function encryptedFallback(identity, vectorIndex) {
+// One encrypted-store probe. `storeVectorIndex` decides whether the store is opened with the vector
+// runtime configured, which is what makes `openKnowledgeStore` pin TEMP storage (ADR-0153 D2);
+// omitting it produces the unpinned store the guard must still refuse.
+async function encryptedProbe(identity, storeVectorIndex, searchOptions, capsuleId) {
   const store = openKnowledgeStore({
     dbPath: ":memory:",
-    vectorIndex,
+    ...(storeVectorIndex === undefined ? {} : { vectorIndex: storeVectorIndex }),
     protection: {
       mode: "encrypted-key-provider",
       keyProvider: { providerId: "m2-closeout", resolveKey: () => new Uint8Array(32).fill(17) },
     },
   });
   try {
-    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "m2-encrypted", identity });
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId, identity });
     const capsule = getCapsule(store, seeded.capsuleId);
     if (capsule === undefined) throw new Error("missing encrypted capsule");
-    return searchVectorIndex(
+    const status = searchVectorIndex(
       { store, capsule, queryVector: QUERY_VECTORS[0], candidateLimit: TOP_K },
-      vectorIndex,
+      searchOptions,
     ).diagnostics.status;
+    const tempStore = store._internal.db.prepare("PRAGMA temp_store").get()?.temp_store;
+    return { status, tempStore: tempStore === 2 ? "memory" : "file" };
   } finally {
     store.close();
   }
+}
+
+async function encryptedAnnBoundary(identity, vectorIndex) {
+  const pinned = await encryptedProbe(identity, vectorIndex, vectorIndex, "m2-encrypted-pinned");
+  const unpinned = await encryptedProbe(identity, undefined, vectorIndex, "m2-encrypted-unpinned");
+  return {
+    encryptedAnnStatus: pinned.status,
+    encryptedTempStore: pinned.tempStore,
+    encryptedUnpinnedStatus: unpinned.status,
+  };
 }
 
 async function annMeasurements(store, capsule, rows, vectorIndex) {
@@ -464,7 +487,7 @@ async function runAnnProof() {
       annP95Latency: latencyBucket(percentile(measured.annLatency, 0.95)),
       exactMedianLatency: latencyBucket(percentile(measured.exactLatency, 0.5)),
       exactP95Latency: latencyBucket(percentile(measured.exactLatency, 0.95)),
-      encryptedStatus: await encryptedFallback(identity, vectorIndex),
+      ...(await encryptedAnnBoundary(identity, vectorIndex)),
       loadFailureReason: missing.diagnostics.reason,
       disabledStatus: disabled.diagnostics.status,
       partitionViolations: measured.partitionViolations,
@@ -694,7 +717,9 @@ function evidenceRows(results) {
     ["ANN", "vector rows", String(ann.vectorRows)],
     ["ANN", "exact scan cap", String(ann.exactScanCap)],
     ["ANN", `minimum recall@${String(TOP_K)}`, Math.min(...ann.recalls).toFixed(3)],
-    ["ANN", "encrypted diagnostic", ann.encryptedStatus],
+    ["ANN", "encrypted ANN diagnostic", ann.encryptedAnnStatus],
+    ["ANN", "encrypted temp_store", ann.encryptedTempStore],
+    ["ANN", "encrypted unpinned diagnostic", ann.encryptedUnpinnedStatus],
     ["ANN", "load diagnostic", ann.loadFailureReason],
     ["ANN", "partition violations", String(ann.partitionViolations)],
     ["Reranker", "facade importer count", String(facade.importers.length)],

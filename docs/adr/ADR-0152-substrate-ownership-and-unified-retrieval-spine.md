@@ -152,6 +152,16 @@ receive only `semanticById`; the shared port never becomes a dependency of that 
 > provider, production capsule stores ARE encrypted, so ANN is inert in the shipped default
 > configuration. Encrypted-store ANN is outside M2 and needs its own ADR; it may not be inferred
 > from this one.
+>
+> **Superseded (2026-07-20, Issue #2630) by
+> [ADR-0153](ADR-0153-encrypted-store-ann-and-the-temp-store-guarantee.md).** That separate ADR is
+> the one this paragraph called for. It found that the encryption flag was the wrong boundary —
+> brute force already decrypts every vector into process memory, and the vec0 index already never
+> persists — while the real unreconciled risk, SQLite spilling its TEMP database to an
+> immediately-unlinked file, went undetected on every store. The guard now tests `PRAGMA temp_store`
+> read from the live connection instead of `isEncrypted`, stores that enable the index pin TEMP
+> storage to memory, and the RAM-resident index is size-bounded. Locks 1 and 2 below are untouched:
+> the mode still defaults to `disabled` and the runtime stays operator-provisioned.
 
 The current sqlite-vec path is shipped but dormant behind three independent locks:
 
@@ -180,6 +190,12 @@ Encrypted stores continue to return `fallback-encrypted-store`
 and use brute force by design. Sealed vectors may be decrypted only within their owning package and
 only into TEMP or in-memory structures. Encrypted-store ANN is outside M2 and requires a separate
 ADR; it may not be inferred from this port.
+
+> **Superseded by [ADR-0153](ADR-0153-encrypted-store-ann-and-the-temp-store-guarantee.md).** The
+> refusal is now conditional on the TEMP-storage guarantee rather than on encryption, and the
+> "only into TEMP or in-memory structures" rule is enforced instead of assumed: a store that enables
+> the index pins `temp_store` to MEMORY, so its TEMP structures cannot become a file. The
+> no-persisted-index rule is unchanged.
 
 ### D3 — The server is the only composition root for namespace wiring
 
