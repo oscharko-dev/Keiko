@@ -18,6 +18,10 @@ const GENERATE: TaskInput = {
   input: { filePath: "src/foo.ts" },
 };
 const INVESTIGATE: TaskInput = { taskType: "investigate-bug", input: { description: "bug" } };
+const EDITOR_AGENT: TaskInput = {
+  taskType: "editor-agent-turn",
+  input: { goal: "search the workspace", sessionId: "session-1" },
+};
 
 function states(events: readonly HarnessEvent[]): string[] {
   return events.filter((e) => e.type === "state:transition").map((e) => e.to);
@@ -424,6 +428,133 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
     // The entry guard fires BEFORE the second model call is dispatched; only one call was made.
     expect(calls()).toBe(1);
+  });
+
+  // Issue #2638: the command budget must be enforced where a command actually executes,
+  // not at tool-call entry — otherwise a zero budget refuses every tool call including the
+  // read-only ones a callsite meant to permit. Both task types that reach the tool-call
+  // state (investigate-bug, editor-agent-turn) get the same two-way coverage: a read-only
+  // tool still runs and only a command-executing tool is refused.
+  it("investigate-bug: maxCommandExecutions=0 still admits a read-only tool call", async () => {
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "read_file")] }),
+      response({ content: "--- a/x\n+++ b/x\n+fix" }),
+    ]);
+    let executed = 0;
+    const readTool: import("./ports.js").ToolPort = {
+      execute: (req) => {
+        executed += 1;
+        return Promise.resolve({
+          toolCallId: req.toolCallId,
+          output: "content",
+          durationMs: 0,
+          commandExecuted: false,
+        });
+      },
+      listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
+    };
+    const { ctx, sink } = buildContext({
+      task: INVESTIGATE,
+      model: port,
+      tools: readTool,
+      limits: { maxCommandExecutions: 0 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(executed).toBe(1);
+    expect(ctx.counters.commandExecutions).toBe(0);
+    expect(failureCategory(sink.events())).toBeUndefined();
+  });
+
+  it("investigate-bug: maxCommandExecutions=0 refuses a command-executing tool", async () => {
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "run_command")] }),
+    ]);
+    let executed = 0;
+    const commandTool: import("./ports.js").ToolPort = {
+      execute: (req) => {
+        executed += 1;
+        return Promise.resolve({
+          toolCallId: req.toolCallId,
+          output: "ran",
+          durationMs: 0,
+          commandExecuted: true,
+        });
+      },
+      listTools: () => [{ name: "run_command", description: "run", parameters: {} }],
+    };
+    const { ctx, sink } = buildContext({
+      task: INVESTIGATE,
+      model: port,
+      tools: commandTool,
+      limits: { maxCommandExecutions: 0 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_COMMAND_EXECUTIONS");
+    expect(executed).toBe(0);
+    expect(ctx.counters.commandExecutions).toBe(0);
+  });
+
+  it("editor-agent-turn: maxCommandExecutions=0 still admits a read-only tool call", async () => {
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "read_file")] }),
+      response({ content: "done" }),
+    ]);
+    let executed = 0;
+    const readTool: import("./ports.js").ToolPort = {
+      execute: (req) => {
+        executed += 1;
+        return Promise.resolve({
+          toolCallId: req.toolCallId,
+          output: "content",
+          durationMs: 0,
+          commandExecuted: false,
+        });
+      },
+      listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
+    };
+    const { ctx, sink } = buildContext({
+      task: EDITOR_AGENT,
+      model: port,
+      tools: readTool,
+      limits: { maxCommandExecutions: 0 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(executed).toBe(1);
+    expect(ctx.counters.commandExecutions).toBe(0);
+    expect(failureCategory(sink.events())).toBeUndefined();
+  });
+
+  it("editor-agent-turn: maxCommandExecutions=0 refuses a command-executing tool", async () => {
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "run_command")] }),
+    ]);
+    let executed = 0;
+    const commandTool: import("./ports.js").ToolPort = {
+      execute: (req) => {
+        executed += 1;
+        return Promise.resolve({
+          toolCallId: req.toolCallId,
+          output: "ran",
+          durationMs: 0,
+          commandExecuted: true,
+        });
+      },
+      listTools: () => [{ name: "run_command", description: "run", parameters: {} }],
+    };
+    const { ctx, sink } = buildContext({
+      task: EDITOR_AGENT,
+      model: port,
+      tools: commandTool,
+      limits: { maxCommandExecutions: 0 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_COMMAND_EXECUTIONS");
+    expect(executed).toBe(0);
+    expect(ctx.counters.commandExecutions).toBe(0);
   });
 
   it("wall-time exact boundary: elapsed === maxWallTimeMs does not exceed; elapsed > maxWallTimeMs does", async () => {

@@ -52,24 +52,24 @@ export function createProductionReadOnlyChildRunner(
 type ReturnTypeForRunner = Awaited<ReturnType<ReadOnlyChildRunner["run"]>>;
 
 /**
- * The child's harness budget. Two numbers here are load-bearing and easy to get wrong:
+ * The child's harness budget.
  *
  * `maxIterations`/`maxModelCalls` must clear the cost of a real tool-calling turn (ask → run tool →
  * report), or the child ends `limit-exceeded` having read nothing while still reporting a completed
  * outcome.
  *
- * `maxCommandExecutions` is deliberately NOT zero. The harness enters the tool-call state only
- * while `commandExecutions < maxCommandExecutions`, so a zero budget rejects EVERY tool call —
- * including this child's only tool, `read_file`. Command containment comes from the tool surface
- * instead: `readOnlyTools` offers exactly one read tool, so no result can ever set
- * `commandExecuted` and this counter is never consumed.
+ * `maxCommandExecutions: 0` states the child's containment directly: this envelope must never run
+ * a subprocess. The harness enforces the budget where a command actually executes (issue #2638), so
+ * a zero command budget no longer refuses read-only tool calls. The tool surface offers exactly one
+ * read tool that reports `commandExecuted: false`, so the counter is never consumed — the zero here
+ * is now a stated invariant, not a workaround.
  */
 function childLimits(maxToolCalls: number): Parameters<typeof createSession>[1]["limits"] {
   return {
     maxIterations: Math.max(4, maxToolCalls * 2 + 2),
     maxModelCalls: Math.max(3, maxToolCalls + 2),
     maxToolCalls,
-    maxCommandExecutions: maxToolCalls + 1,
+    maxCommandExecutions: 0,
     maxContextBytes: 128_000,
     maxPatchBytes: 0,
     maxWallTimeMs: 120_000,
