@@ -122,7 +122,7 @@ const METHOD_DECLARATION_PATTERN = new RegExp(
     // and NOTHING whitespace-matching follows it — a class that can match spaces sitting in front
     // of `\s+`/`\s*` is precisely the ambiguity that made the previous table backtrack
     // quadratically, so the terminator is a disjoint single-character class instead.
-    String.raw`[^;{()]{0,200}`,
+    "[^;{()]{0,200}",
     String.raw`[{;]\s*$`,
   ].join(""),
   "u",
@@ -142,8 +142,9 @@ const METHOD_DECLARATION_PATTERN = new RegExp(
 // out near `pub async unsafe extern "C" fn`), so bounding them costs no recall and removes the
 // unbounded `*` that made a long modifier-looking run super-linear.
 const RUST_FN_MODIFIER = String.raw`(?:pub(?:\([^()]{0,80}\))?|async|unsafe|extern|"[^"]{1,64}")`;
-const KOTLIN_FUN_MODIFIER = String.raw`(?:public|private|protected|internal|open|override|suspend|inline|operator|tailrec)`;
-const JVM_TYPE_MODIFIER = String.raw`(?:public|private|protected|abstract|final|sealed|data|open|internal)`;
+const KOTLIN_FUN_MODIFIER =
+  "(?:public|private|protected|internal|open|override|suspend|inline|operator|tailrec)";
+const JVM_TYPE_MODIFIER = "(?:public|private|protected|abstract|final|sealed|data|open|internal)";
 
 const SYMBOL_PATTERNS: readonly SymbolPattern[] = Object.freeze([
   {
