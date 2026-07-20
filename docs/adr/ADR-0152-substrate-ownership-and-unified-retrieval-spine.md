@@ -119,6 +119,10 @@ receive only `semanticById`; the shared port never becomes a dependency of that 
 > with no ANN backend behind them would be ceremony, not capability. The binding half of D1 — one
 > interface so no pillar can add a second, one identity key so none can drift — is in force now; the
 > wiring follows when a namespace has something to wire to.
+>
+> **Superseded (2026-07-20, Issue #2632).** D3 composition is now built for `knowledge` and
+> `repo`; `memory` is still deferred with a recorded shape-mismatch reason. See the activation
+> record on D3 for the wiring points and the deferral rationale.
 
 ### D2 — sqlite-vec remains dormant until its runtime is explicitly and safely configured
 
@@ -224,6 +228,49 @@ through the owning package's existing bounded seam.
 For all namespaces, port unavailability, stale state, identity mismatch, invalid scores, or a
 partition mismatch selects the current exact/brute-force behavior. No adapter may convert those
 conditions into an empty successful result that suppresses candidates.
+
+> **Activation record (2026-07-20, Issue #2632).** D3 composition is now built and in force for
+> two of the three namespaces. The port implementation for the LK-backed namespaces is
+> `createLocalKnowledgeStoreVectorIndexPort` in
+> `packages/keiko-local-knowledge/src/retrieval/local-vector-index-port.ts`; it applies
+> `isValidVectorIndexQuery` as its single precondition, refuses cross-namespace calls, resolves
+> the `partitionKey` to a capsule (with an optional `capsuleId::sourceId` suffix used by the
+> shim to preserve the current per-source KNN cadence), and delegates candidate generation to
+> `searchVectorIndex` with any inbound `adapter` slot cleared so a dispatch cannot re-enter the
+> shim through itself.
+>
+> `knowledge` is wired at the composition root
+> ([`local-knowledge-store-open.ts`](../../packages/keiko-server/src/local-knowledge-store-open.ts)):
+> `openKnowledgeStoreForDeps` opens the store with the raw `VectorIndexOptions` (so the
+> extension gate at `openKnowledgeStore` decides on the same signal it always did), then rebinds
+> the returned `vectorIndex.adapter` to `vectorIndexPortAsKnowledgeAdapter(port)`. The
+> retrieval hot path in `tryVectorIndexForCapsule` still calls `searchVectorIndex(request,
+> options)` unchanged; the shim projects the LK-native request into one port query when there
+> is no source filter and one per source when there is, merging on score with the
+> `candidateLimit` slice and reconstructing `sawDimensionCompatible` /
+> `sawIdentityIncompatible` off the port status vocabulary so lane state stays byte-identical.
+>
+> `repo` is wired at
+> `configuredRepoSemanticSearchProviderLeaseFor`
+> ([`grounded-repo-semantic-search.ts`](../../packages/keiko-server/src/grounded-repo-semantic-search.ts)):
+> the pod path rebinds `vectorIndex.adapter` to `vectorIndexPortAsRepoAdapter(port)` before it
+> reaches the pod query, so the port sees `namespace: "repo"` for those calls. The store,
+> extension gate, and every other option are preserved verbatim — only the namespace label the
+> port observes changes.
+>
+> `memory` is deliberately NOT composed by this issue. The recorded reason is a shape
+> mismatch, not a lack of will: the current `semanticScoresFrom` in
+> `packages/keiko-server/src/memory-retrieval-signals.ts` is a **score-map producer** — given a
+> candidate list (already selected by strength/recency/pin signals) and a query, it emits a
+> `Map<MemoryId, number>` of cosine scores over the pre-selected set — whereas
+> `VectorIndexPort` is a **candidate generator** — given a partition and a query, it emits the
+> top-K ids by score. Making memory conform to the port would require either extending the
+> port to accept a candidate set (violating its closed shape and the "no widening" rule) or
+> restructuring memory retrieval to be candidate-generation-first (violating D3's "leaves
+> `keiko-memory-retrieval`, its weights, and all non-semantic signals untouched"). Neither is
+> within #2632. Memory composition follows when the port has a shape that admits a
+> caller-supplied candidate set, or when memory retrieval gains its own ANN backend and can
+> generate candidates from the vault partition directly.
 
 ### D4 — One server reranker facade absorbs orchestration without moving consumer ports
 
