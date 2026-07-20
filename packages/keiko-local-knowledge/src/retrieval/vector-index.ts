@@ -181,6 +181,14 @@ const SELECT_SQLITE_VEC_INDEX_ROWS_SQL = [
 // KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH (ADR-0152 D2), or injected directly for tests.
 // With neither supplied the resolver yields no module and retrieval keeps using brute force, which
 // is the same fail-closed outcome an unavailable runtime already produced.
+//
+// Issue #2631 flipped the mode default from `disabled` to `auto`, so activation is decided by
+// runtime CAPABILITY rather than by discovering an environment variable. The downstream gate at
+// `openKnowledgeStore.vectorIndexRuntimeConfigured` still requires a module or an extension path
+// before it grants `allowExtension: true` (ADR-0152 D2 obligations preserved), and
+// `searchSqliteVecIndex` still fails closed with `sqlite-vec-runtime-not-configured` when there is
+// nothing to load — so an unqualified or missing binary still falls closed. `"disabled"` remains
+// the explicit opt-out for operators who want the vector index off regardless of capability.
 export function resolveVectorIndexOptions(
   options: VectorIndexOptions | undefined,
   environment: VectorIndexEnvironment = process.env,
@@ -226,7 +234,9 @@ function selectedSqliteVec(
 
 function parseVectorIndexMode(value: string | undefined): VectorIndexMode {
   if (value === "auto" || value === "sqlite-vec" || value === "disabled") return value;
-  return "disabled";
+  // Issue #2631: default-on by capability. Unset and unrecognised values resolve to `auto`; the only
+  // way to switch the vector index off is the explicit `disabled` value above.
+  return "auto";
 }
 
 function vectorIndexExtensionPath(

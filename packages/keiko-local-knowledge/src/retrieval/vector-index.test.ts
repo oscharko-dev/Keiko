@@ -793,6 +793,22 @@ describe("searchVectorIndex", () => {
     });
   });
 
+  // Issue #2631 unit-level regression. The unit-level assertion of "the shipped default resolves
+  // to auto" — the end-to-end fallback and ANN cases live next to the store-open path in
+  // `vector-index-runtime.test.ts`. Both the empty option object and undefined must resolve the same
+  // way, so the funnel used by every server handler cannot silently opt out.
+  it("defaults the shipped resolution to auto without any input", () => {
+    for (const supplied of [undefined, {}] as const) {
+      const resolved = resolveVectorIndexOptions(supplied, {});
+      expect(resolved.mode).toBe("auto");
+      expect(resolved.sqliteVec).toBeUndefined();
+      expect(resolved.sqliteVecExtensionPath).toBeUndefined();
+    }
+    expect(
+      resolveVectorIndexOptions(undefined, { KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "disabled" }).mode,
+    ).toBe("disabled");
+  });
+
   // The bound is a floor-lowering knob, never a widening one: an operator or a caller cannot raise
   // the amount of decrypted vector payload the process will hold.
   it("clamps the index size bound so it can only be tightened", () => {

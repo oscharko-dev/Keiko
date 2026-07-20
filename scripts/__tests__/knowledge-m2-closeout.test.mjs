@@ -4,6 +4,8 @@ import {
   HS6_SINGLE_WRITER_FILE_COUNT,
   PROOF_IDS,
   REQUIRED_RERANKER_DIAGNOSTIC_FIELDS,
+  breakEvenNarrative,
+  categorizeLatencyWinner,
   evaluateAnnProof,
   evaluateBookkeepingProof,
   evaluateEvalProof,
@@ -17,6 +19,7 @@ import {
   parseWaveBookkeepingItems,
   readWaveBookkeepingItems,
   renderKnowledgeM2Evidence,
+  renderLatencyCharacterization,
   rerankerImportProofFromEntries,
   runBookkeepingProof,
   runKnowledgeM2CloseoutGate,
@@ -42,6 +45,21 @@ function annInput(overrides = {}) {
     loadFailureReason: "sqlite-vec-extension-load-failed",
     disabledStatus: "disabled",
     partitionViolations: 0,
+    // Issue #2631 additions. These must be present for `evaluateAnnProof` to accept the input:
+    // latency row-count anchors, ANN latency-fixture recall floor, and the injected-degenerate
+    // regression proof (recalls low across every query, decoy count carried alongside for the
+    // evidence table). Millisecond values are informational — used by the characterization document.
+    latencyVectorDimensions: 384,
+    latencyLargeRows: 50_000,
+    latencyLargeAnnMedianMs: 180,
+    latencyLargeExactMedianMs: 65,
+    latencyLargeMinRecall: 1,
+    latencySmallRows: 500,
+    latencySmallAnnMedianMs: 2.5,
+    latencySmallExactMedianMs: 0.4,
+    productionExactScanCap: 20_000,
+    degenerateInjectionRecalls: [0, 0, 0],
+    degenerateInjectionDecoyCount: 10,
     ...overrides,
   };
 }
@@ -161,6 +179,18 @@ describe("Knowledge M2 closeout proof evaluators", () => {
       { loadFailureReason: "unexpected" },
       { disabledStatus: "available" },
       { partitionViolations: 1 },
+      // Issue #2631 negative controls, one per direction of each new assertion. The latency-fixture
+      // row counts anchor the "recorded latency comparison" so a future change cannot silently
+      // shrink the comparison to a vacuous one; the latency-fixture recall floor prevents a stealth
+      // quality regression in the realistic-dim fixture; and the injected-degenerate assertion
+      // fires when the degenerate injection is silently reverted to the healthy path (any recall
+      // reaching the floor) or dropped entirely.
+      { latencyLargeRows: 25_000 },
+      { latencySmallRows: 250 },
+      { latencyLargeMinRecall: 0.94 },
+      { degenerateInjectionRecalls: [0, 1, 0] },
+      { degenerateInjectionRecalls: [] },
+      { degenerateInjectionRecalls: undefined },
     ];
     expect(failures.every((override) => !evaluateAnnProof(annInput(override)).ok)).toBe(true);
   });
@@ -376,6 +406,51 @@ describe("Knowledge M2 evidence", () => {
 
   it("sorts object keys for deterministic scorecard hashing", () => {
     expect(stableStringify({ b: 2, a: [{ d: 4, c: 3 }] })).toBe('{"a":[{"c":3,"d":4}],"b":2}');
+  });
+});
+
+// Issue #2631: pure helpers for the latency characterization document. Kept together so every
+// branch of `categorizeLatencyWinner` and `breakEvenNarrative` is exercised in one place.
+describe("Knowledge M2 latency characterization helpers", () => {
+  it("categorises ANN vs brute-force by a ratio band", () => {
+    // Ratio above 1.2 → brute force wins (ANN slower); below 0.8 → ANN wins (brute force slower);
+    // in between → tied. The exactMs === 0 branch defaults to POSITIVE_INFINITY, which is > 1.2.
+    expect(categorizeLatencyWinner(200, 50)).toBe("brute-force");
+    expect(categorizeLatencyWinner(50, 200)).toBe("ann");
+    expect(categorizeLatencyWinner(100, 100)).toBe("tied");
+    expect(categorizeLatencyWinner(10, 0)).toBe("brute-force");
+  });
+
+  it("narrates the operational break-even at the exact-scan cap", () => {
+    const narrative = breakEvenNarrative("brute-force", "brute-force", 500, 50_000, 20_000);
+    expect(narrative).toContain("500");
+    expect(narrative).toContain("50000");
+    expect(narrative).toContain("DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS = 20000");
+    expect(narrative).toContain("scoped-vector-search.ts");
+    expect(narrative).toContain("operational");
+  });
+
+  it("renders the characterization document with row counts, ms, recall, and winners", () => {
+    const results = passingResults();
+    const rendered = renderLatencyCharacterization(results);
+    expect(rendered).toContain("# Knowledge M2 ANN latency characterization");
+    // Row counts land in the table verbatim; milliseconds are rounded to three decimals.
+    expect(rendered).toContain("| 500");
+    expect(rendered).toContain("| 50000");
+    expect(rendered).toContain("180.000"); // large ANN median (from annInput default)
+    expect(rendered).toContain("65.000"); // large exact median
+    expect(rendered).toContain("2.500"); // small ANN median
+    expect(rendered).toContain("0.400"); // small exact median
+    expect(rendered).toMatch(/384-dim/u);
+    // The break-even narrative is spliced in.
+    expect(rendered).toContain("DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS = 20000");
+  });
+
+  it("returns undefined when the ANN proof did not measure latency", () => {
+    const results = passingResults().map((result) =>
+      result.id === "ann-active" ? { ...result, metrics: {} } : result,
+    );
+    expect(renderLatencyCharacterization(results)).toBeUndefined();
   });
 });
 
