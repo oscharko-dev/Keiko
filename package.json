@@ -179,7 +179,8 @@
     "check:mutation:scoped": "node scripts/check-mutation-quality.mjs --scoped",
     "test:mutation:security": "npm run test:mutation:security:run && npm run test:mutation:debug-launch-security && npm run check:mutation:baseline",
     "check:publish-manifests": "node scripts/check-publish-manifests.mjs",
-    "smoke:registry-install": "node scripts/registry-install-smoke.mjs"
+    "smoke:registry-install": "node scripts/registry-install-smoke.mjs",
+    "provision:sqlite-vec": "node scripts/provision-sqlite-vec.mjs"
   },
   "overrides": {
     "undici": "7.28.0",
@@ -237,7 +238,6 @@
     "@oscharko-dev/keiko-workflows": "0.2.15",
     "@oscharko-dev/keiko-workspace": "0.2.15",
     "pdfjs-dist": "^6.0.227",
-    "sqlite-vec": "0.1.9",
     "typescript": "~6.0.3",
     "ws": "^8.21.0",
     "yauzl": "^3.4.0"

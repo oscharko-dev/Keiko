@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname, join, resolve } from "node:path";
 
 import type {
   ChunkId,
@@ -37,15 +38,31 @@ import {
   type VectorIndexOptions,
 } from "./vector-index.js";
 
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+
 const DIMENSIONS = 4;
 const CORPUS_ROWS = 20_001;
 const TOP_K = 10;
 const QUERY_VECTOR = new Float32Array([1, 0, 0, 0]);
 const MODEL_ID = "sqlite-vec-real-binary-test";
-const SUPPORTED_RUNTIME =
-  (process.platform === "darwin" && (process.arch === "arm64" || process.arch === "x64")) ||
-  (process.platform === "linux" && (process.arch === "arm64" || process.arch === "x64")) ||
-  (process.platform === "win32" && process.arch === "x64");
+// The extension is not an npm dependency (its upstream SPDX string is invalid and the repository's
+// supply-chain policy rejects it), so the real binary is provisioned out-of-band and verified
+// against a pinned SHA-256 by `npm run provision:sqlite-vec`. Reading it from disk here keeps this
+// test hermetic — no network, no install-time side effect. When it has not been provisioned the
+// journey below asserts the fail-closed fallback instead of skipping, so the suite still proves
+// something on every host.
+const PROVISIONED_EXTENSION_PATH = provisionedSqliteVecPath();
+const SUPPORTED_RUNTIME = PROVISIONED_EXTENSION_PATH !== undefined;
+
+function provisionedSqliteVecPath(): string | undefined {
+  const configured = process.env.KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH;
+  if (configured !== undefined && configured.length > 0 && existsSync(configured))
+    return configured;
+  const suffix =
+    process.platform === "darwin" ? "dylib" : process.platform === "win32" ? "dll" : "so";
+  const candidate = join(REPO_ROOT, ".sqlite-vec", "0.1.9", `vec0.${suffix}`);
+  return existsSync(candidate) ? candidate : undefined;
+}
 
 interface ManagedStore {
   readonly store: KnowledgeStore;
@@ -454,7 +471,12 @@ async function assertCorruptPathAndDisabledPin(identity: EmbeddingModelIdentity)
   }
 }
 
-async function assertUnsupportedPlatformFallback(
+// Reached when no extension has been provisioned for this host — either the platform has no
+// published asset, or `npm run provision:sqlite-vec` has not been run. Either way the point is that
+// retrieval still ANSWERS: the vector index reports a redacted fail-closed diagnostic and the
+// brute-force path returns references, so the suite proves something on every host rather than
+// skipping itself into vacuous green.
+async function assertUnprovisionedRuntimeFallback(
   adapter: OpenAIEmbeddingAdapter,
   identity: EmbeddingModelIdentity,
   vectorIndex: VectorIndexOptions,
@@ -465,7 +487,7 @@ async function assertUnsupportedPlatformFallback(
     const result = await runPipeline(fixture.store, adapter, seeded.capsuleId, vectorIndex);
     expect(result.diagnostics?.vectorIndex).toMatchObject({
       status: "fallback-unavailable",
-      reason: "sqlite-vec-module-load-failed",
+      reason: "sqlite-vec-runtime-not-configured",
     });
     expect(result.references.length).toBeGreaterThan(0);
   } finally {
@@ -474,7 +496,11 @@ async function assertUnsupportedPlatformFallback(
 }
 
 describe("sqlite-vec runtime resolution", () => {
-  it("keeps the default disabled and selects the bundled runtime only for an active mode", () => {
+  // There is no bundled runtime to select: the npm package is rejected by the repository's
+  // supply-chain policy for an invalid upstream SPDX string, so an active mode on its own resolves
+  // to no module and retrieval keeps using brute force. Activation requires an operator-provisioned
+  // extension path (ADR-0152 D2) or a directly injected module.
+  it("resolves no runtime from the mode alone, so activation stays explicit", () => {
     const disabled = resolveVectorIndexOptions(undefined, {});
     const active = resolveVectorIndexOptions(undefined, {
       KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto",
@@ -482,10 +508,11 @@ describe("sqlite-vec runtime resolution", () => {
     expect(disabled).toMatchObject({ mode: "disabled" });
     expect(disabled.sqliteVec).toBeUndefined();
     expect(active).toMatchObject({ mode: "auto" });
-    expect(active.sqliteVec?.load).toBeTypeOf("function");
+    expect(active.sqliteVec).toBeUndefined();
+    expect(active.sqliteVecExtensionPath).toBeUndefined();
   });
 
-  it("gives an explicit extension path priority over the bundled module", () => {
+  it("carries an operator-provisioned extension path through as the activation route", () => {
     const resolved = resolveVectorIndexOptions(undefined, {
       KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "sqlite-vec",
       KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH: "/configured/vec0",
@@ -515,9 +542,12 @@ describe("sqlite-vec real binary retrieval journey", () => {
     const identity = await verifiedIdentity(adapter);
     const vectorIndex = resolveVectorIndexOptions(undefined, {
       KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto",
+      ...(PROVISIONED_EXTENSION_PATH === undefined
+        ? {}
+        : { KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH: PROVISIONED_EXTENSION_PATH }),
     });
     if (!SUPPORTED_RUNTIME) {
-      await assertUnsupportedPlatformFallback(adapter, identity, vectorIndex);
+      await assertUnprovisionedRuntimeFallback(adapter, identity, vectorIndex);
       return;
     }
     const fixture = managedStore(vectorIndex);

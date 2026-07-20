@@ -6,23 +6,32 @@ This note records the content-free qualification evidence for the Local Knowledg
 activation in Issue #2566. The corpus is synthetic and seeded; no source text, embedding body,
 capsule identifier, endpoint, or user data is retained here.
 
-The runtime is the exact `sqlite-vec@0.1.9` npm package recorded in `package-lock.json`. Keiko keeps
-`KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX` disabled by default. `auto` or `sqlite-vec` selects the packaged
-loader unless `KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH` explicitly selects an extension
-path. A store opened without one of those active, resolved configurations still denies SQLite
-extension loading.
+The runtime is **not** an npm dependency. sqlite-vec publishes the license string `MIT OR Apache`,
+which is not valid SPDX, so the dependency-review policy rejects it and the CycloneDX SBOM carries no
+license entry at all — which `check:workspace-supply-chain` rejects as `<missing>`, and that gate has
+no exception mechanism by design. The actual license is dual MIT / Apache-2.0, verified at the source:
+github.com/asg017/sqlite-vec carries both `LICENSE-MIT` and `LICENSE-APACHE` at its root. Following
+the repository's existing precedent for a license-blocked artifact (the Sonar Scanner CLI in
+`ci.yml`), the extension is obtained directly and verified against a pinned SHA-256 by
+`npm run provision:sqlite-vec`, which records the source URL and digest in a `PROVENANCE.txt`
+alongside the extracted binary.
+
+At runtime the extension is operator-provisioned through
+`KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH`. Keiko keeps
+`KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX` disabled by default, and with no extension path configured the
+resolver yields no module at all: retrieval keeps using brute force and a store opened without an
+active, resolved configuration still denies SQLite extension loading.
 
 ## Platform matrix
 
-| Platform    | Distribution selected by npm    | Qualification                                       |
-| ----------- | ------------------------------- | --------------------------------------------------- |
-| macOS arm64 | `sqlite-vec-darwin-arm64@0.1.9` | Local real-binary journey passed                    |
-| macOS x64   | `sqlite-vec-darwin-x64@0.1.9`   | Install-time package mapping; CI smoke target       |
-| Linux x64   | `sqlite-vec-linux-x64@0.1.9`    | Authoritative CI real-binary journey; never skipped |
+| Platform    | Upstream release asset     | Qualification                                       |
+| ----------- | -------------------------- | --------------------------------------------------- |
+| macOS arm64 | `…-loadable-macos-aarch64` | Local real-binary journey passed                    |
+| macOS x64   | `…-loadable-macos-x86_64`  | Install-time package mapping; CI smoke target       |
+| Linux x64   | `…-loadable-linux-x86_64`  | Authoritative CI real-binary journey; never skipped |
 
-The upstream loader also declares Linux arm64 and Windows x64 packages. Any unrecognized
-platform/architecture causes the module load to fail closed with the existing
-`sqlite-vec-module-load-failed` diagnostic, after which the established exact/guided/LSH ladder
+Linux arm64 and Windows x64 assets are pinned as well. A host with no provisioned extension
+fails closed with the `sqlite-vec-runtime-not-configured` diagnostic, after which the established exact/guided/LSH ladder
 runs. The test makes this an asserted fallback on unsupported hosts; it does not use a capability
 skip. A configured but corrupt extension path likewise produces the existing
 `sqlite-vec-extension-load-failed` diagnostic and falls back.

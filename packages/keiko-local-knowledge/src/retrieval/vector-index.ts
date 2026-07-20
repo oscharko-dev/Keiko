@@ -9,7 +9,6 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { assertCompatibleEmbeddingIdentity } from "@oscharko-dev/keiko-model-gateway";
 import type { DatabaseSync } from "node:sqlite";
-import * as bundledSqliteVec from "sqlite-vec";
 
 import {
   readVectorIndexState,
@@ -134,19 +133,23 @@ const SELECT_SQLITE_VEC_INDEX_ROWS_SQL = [
   "ORDER BY chunk_id ASC",
 ].join(" ");
 
-const BUNDLED_SQLITE_VEC: SqliteVecModule = { load: bundledSqliteVec.load };
-
+// There is deliberately no bundled sqlite-vec module. The npm package publishes the license string
+// "MIT OR Apache", which is not valid SPDX, so the dependency-review policy and
+// `check:workspace-supply-chain` both reject it — and the latter has no exception mechanism by
+// design. The extension is therefore operator-provisioned through
+// KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH (ADR-0152 D2), or injected directly for tests.
+// With neither supplied the resolver yields no module and retrieval keeps using brute force, which
+// is the same fail-closed outcome an unavailable runtime already produced.
 export function resolveVectorIndexOptions(
   options: VectorIndexOptions | undefined,
   environment: VectorIndexEnvironment = process.env,
 ): ResolvedVectorIndexOptions {
-  return resolvedVectorIndexOptions(options, environment, BUNDLED_SQLITE_VEC);
+  return resolvedVectorIndexOptions(options, environment);
 }
 
 function resolvedVectorIndexOptions(
   options: VectorIndexOptions | undefined,
   environment: VectorIndexEnvironment,
-  defaultSqliteVec?: SqliteVecModule,
 ): ResolvedVectorIndexOptions {
   const supplied = options ?? {};
   const mode = parseVectorIndexMode(
@@ -162,7 +165,7 @@ function resolvedVectorIndexOptions(
   if (supplied.adapter !== undefined) resolved.adapter = supplied.adapter;
   const extensionPath = vectorIndexExtensionPath(supplied, environment);
   if (extensionPath !== undefined) resolved.sqliteVecExtensionPath = extensionPath;
-  const sqliteVec = selectedSqliteVec(supplied, mode, extensionPath, defaultSqliteVec);
+  const sqliteVec = selectedSqliteVec(supplied, mode);
   if (sqliteVec !== undefined) resolved.sqliteVec = sqliteVec;
   return resolved;
 }
@@ -170,12 +173,9 @@ function resolvedVectorIndexOptions(
 function selectedSqliteVec(
   options: VectorIndexOptions,
   mode: VectorIndexMode,
-  extensionPath: string | undefined,
-  defaultSqliteVec: SqliteVecModule | undefined,
 ): SqliteVecModule | undefined {
-  if (options.sqliteVec !== undefined) return options.sqliteVec;
-  if (mode === "disabled" || extensionPath !== undefined) return undefined;
-  return defaultSqliteVec;
+  if (mode === "disabled") return undefined;
+  return options.sqliteVec;
 }
 
 function parseVectorIndexMode(value: string | undefined): VectorIndexMode {

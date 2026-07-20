@@ -1773,6 +1773,61 @@ describe("local-knowledge handlers", () => {
     ]);
   });
 
+  // The full chain a user actually triggers: the UI posts a repository scope to the connection
+  // route, then the refresh route indexes it. Everything in between — wire validation, scope
+  // canonicalization, pod dispatch — is the shipped code path, not a handler called in isolation.
+  // Without this, "the UI can create a repository pod" was only ever proven one layer at a time.
+  it("connects a repository scope over the route and indexes it through the pod", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const repoRoot = join(tmp, "repo");
+    mkdirSync(join(repoRoot, "src"), { recursive: true });
+    writeFileSync(
+      join(repoRoot, "src", "app.ts"),
+      ["export function execute(): string {", '  return "ok";', "}", ""].join("\n"),
+      "utf8",
+    );
+
+    const deps = depsFor(tmp);
+    const connected = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "repository", repositoryRoot: repoRoot },
+          displayName: "Repository",
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      deps,
+    );
+    expect(connected.status, JSON.stringify(connected.body)).toBe(201);
+
+    const indexed = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "changed-files" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    expect(indexed.status, JSON.stringify(indexed.body)).toBe(200);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const runs = inspect._internal.db
+      .prepare("SELECT applied, added_files FROM repository_pod_runs WHERE capsule_id = :c")
+      .all({ c: "cap-1" }) as unknown as readonly {
+      readonly applied: number;
+      readonly added_files: number;
+    }[];
+    const scopeKind = inspect._internal.db
+      .prepare("SELECT scope_kind FROM knowledge_sources LIMIT 1")
+      .get() as unknown as { readonly scope_kind: string } | undefined;
+    inspect.close();
+
+    expect(scopeKind?.scope_kind).toBe("repository");
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.applied).toBe(1);
+    expect(runs[0]?.added_files).toBeGreaterThan(0);
+  });
+
   // Epic #2556 Target Outcomes 1 and 2. Before this wiring `refreshRepositoryPod` had no production
   // caller at all — only the evaluation harness — so the whole M2 repository-pod substrate was
   // unreachable from the product. Routing the one indexing dispatch point through the pod for a

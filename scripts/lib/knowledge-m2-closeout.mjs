@@ -407,10 +407,29 @@ async function seedAnnProofStore(store, identity) {
   return seeded;
 }
 
+// The extension is operator-provisioned rather than an npm dependency (see
+// scripts/provision-sqlite-vec.mjs for why), so the ANN proof drives the provisioned binary. This
+// stays a real proof: with nothing provisioned the gate FAILS rather than quietly certifying a
+// fallback as if ANN had been exercised.
+function provisionedSqliteVecPath() {
+  const configured = process.env.KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH;
+  if (typeof configured === "string" && configured.length > 0 && existsSync(configured)) {
+    return configured;
+  }
+  const suffix =
+    process.platform === "darwin" ? "dylib" : process.platform === "win32" ? "dll" : "so";
+  const candidate = join(ROOT, ".sqlite-vec", "0.1.9", `vec0.${suffix}`);
+  return existsSync(candidate) ? candidate : undefined;
+}
+
 async function runAnnProof() {
   const identity = await verifiedVectorIdentity();
+  const extensionPath = provisionedSqliteVecPath();
   const vectorIndex = resolveVectorIndexOptions(undefined, {
     KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto",
+    ...(extensionPath === undefined
+      ? {}
+      : { KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH: extensionPath }),
   });
   const store = openKnowledgeStore({ dbPath: ":memory:", vectorIndex });
   try {

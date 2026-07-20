@@ -124,12 +124,28 @@ receive only `semanticById`; the shared port never becomes a dependency of that 
 
 > **Activation record (2026-07-20).** Locks 2 and 3 below describe the PRE-activation state and are
 > no longer true at the head of this wave. M2.2 discharged the activation obligation this decision
-> pre-authorized: `sqlite-vec@0.1.9` is now a root runtime dependency and a peer dependency of
-> `keiko-local-knowledge`, and `openKnowledgeStore` passes `allowExtension: true` when — and only
-> when — a vector-index runtime is configured. Binary provenance and platform qualification are
-> recorded in [`docs/qa/sqlite-vec-ann-evidence.md`](../qa/sqlite-vec-ann-evidence.md). Lock 1 still
-> holds exactly as written: the mode defaults to `disabled` and no production composition sets
-> either environment variable, so the path stays opt-in.
+> pre-authorized: `openKnowledgeStore` passes `allowExtension: true` when — and only when — a
+> vector-index runtime is configured. Lock 1 still holds exactly as written: the mode defaults to
+> `disabled` and no production composition sets either environment variable, so the path stays
+> opt-in.
+>
+> Lock 2 survives in an amended form, and deliberately so. sqlite-vec was briefly taken as an npm
+> dependency and then removed: the package publishes the license string `"MIT OR Apache"`, which is
+> not valid SPDX, so the dependency-review policy rejects it and the CycloneDX SBOM carries no
+> license entry at all, which `check:workspace-supply-chain` rejects as `<missing>`. That second
+> gate has no exception mechanism by design — "we cannot prove they are acceptable without a
+> declaration" — and the repository's precedent for a license-blocked artifact is to obtain it
+> directly rather than except it (the Sonar Scanner CLI in `ci.yml`). The real license is dual
+> MIT / Apache-2.0, verified at the source rather than inferred: github.com/asg017/sqlite-vec
+> carries both `LICENSE-MIT` and `LICENSE-APACHE`.
+>
+> So no binary is bundled and no package dependency is declared. The runtime is
+> **operator-provisioned** through `KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH`, and
+> `scripts/provision-sqlite-vec.mjs` fetches the upstream release asset against a pinned SHA-256 for
+> local and CI verification only — the product never calls it. With nothing provisioned the resolver
+> yields no module and retrieval keeps using brute force, which is the same fail-closed outcome an
+> unavailable runtime already produced. Binary provenance and platform qualification are recorded in
+> [`docs/qa/sqlite-vec-ann-evidence.md`](../qa/sqlite-vec-ann-evidence.md).
 >
 > The constraint that survives activation is unchanged and remains binding: encrypted stores return
 > `fallback-encrypted-store` and use brute force by design. Because keiko-server injects a key

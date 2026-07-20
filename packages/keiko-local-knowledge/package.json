@@ -36,9 +36,6 @@
     "pdfjs-dist": "^6.0.227",
     "yauzl": "^3.3.2"
   },
-  "peerDependencies": {
-    "sqlite-vec": "0.1.9"
-  },
   "optionalDependencies": {
     "@napi-rs/canvas": "^1.0.2"
   },
