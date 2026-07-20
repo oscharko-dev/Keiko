@@ -89,6 +89,9 @@ describe("useCodingWorkbenchResearchAsk", () => {
     await waitFor(() => {
       expect(result.current.status).toBe("unavailable");
     });
+    // The whole state must clear: a retained ask would leave a stale destination on screen while
+    // the panel claims the read failed.
+    expect(result.current).toEqual({ status: "unavailable", ask: null });
   });
 
   it("re-reads when a NEW ask replaces the current one", async () => {
@@ -117,10 +120,12 @@ describe("useCodingWorkbenchResearchAsk", () => {
 
   it("aborts the in-flight read when the approval disappears", async () => {
     let observed: AbortSignal | undefined;
-    getResearchAskMock.mockImplementation((_runId: string, signal?: AbortSignal) => {
-      observed = signal;
-      return new Promise(() => undefined);
-    });
+    getResearchAskMock.mockImplementation(
+      (_runId: string, signal?: AbortSignal): Promise<never> => {
+        observed = signal;
+        return new Promise<never>(() => undefined);
+      },
+    );
 
     const { rerender } = renderHook(
       (props: UseCodingWorkbenchResearchAskInput) => useCodingWorkbenchResearchAsk(props),

@@ -187,8 +187,12 @@ function emitSkillEvent(
 }
 
 /**
- * Create the skill-invocation port. A single request yields a single normalized outcome; only an
- * accepted invocation surfaces a `skill-invoked` event on the parent transcript.
+ * Create the skill-invocation port. A single request yields a single normalized outcome, and EVERY
+ * request that names a trustworthy skill id surfaces a `skill-invoked` event on the parent
+ * transcript — accepted, denied by the catalog, and denied or unavailable at re-evaluation alike.
+ * Denied probes are deliberately visible: a model repeatedly asking for an unapproved skill is
+ * exactly what an operator needs to see. The one event-free path is a structurally malformed
+ * request, which carries no skill id worth auditing; the request validator is its audit surface.
  */
 export function createSkillInvocationPort(deps: SkillInvocationPortDeps): SkillInvocationPort {
   let sequence = 0;

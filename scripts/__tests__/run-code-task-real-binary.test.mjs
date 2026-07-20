@@ -129,6 +129,15 @@ describe("#2483 real-binary observation helpers", () => {
         missingPayload: { passed: false, unavailableReason: "probe-failed" },
       }),
     ).toEqual(["payload-missing probe did not pass (reason probe-failed)"]);
+    // A probe that "passed" while reporting a different reason is the subtler failure: readiness
+    // failed closed for something other than the missing payload, so the negative proof is not the
+    // one the evidence claims.
+    expect(
+      missingRealBinaryEvidence({
+        ...complete,
+        missingPayload: { passed: true, unavailableReason: "runtime-unqualified" },
+      }),
+    ).toEqual(["payload-missing probe reported runtime-unqualified"]);
   });
 
   it("reports every gap at once rather than only the first", () => {

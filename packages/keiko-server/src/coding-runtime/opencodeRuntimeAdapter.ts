@@ -808,6 +808,9 @@ function toolDescription(action: GeneratedToolAction): string {
   }
   if (action === "skill") return "Invoke one exact server-approved read-only skill.";
   if (action === "child-agent") return "Run one bounded, one-layer read-only child agent.";
+  if (action === "verification") {
+    return "Run one vetted repository verification through Keiko governance.";
+  }
   return "Submit a bounded changeset through Keiko governance.";
 }
 

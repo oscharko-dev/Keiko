@@ -125,18 +125,35 @@ describe("createProductionReadOnlyChildRunner", () => {
     expect(outcome.resultCount).toBe(0);
   });
 
-  it("denies a read the parent authority gate rejects", async () => {
+  it("stops the child session when the parent authority gate denies, not just the one call", async () => {
+    // The runner contract requires stopping on a non-ok gate decision. Answering only that one tool
+    // call "denied" would let the child keep spending model calls against the parent's budget after
+    // its authority was already revoked.
     let reads = 0;
+    let modelCalls = 0;
 
     const outcome = await runChild({
-      call: toolThenFinish("read_file", { relativePath: "src/index.ts" }),
+      call: (): Promise<NormalizedResponse> => {
+        modelCalls += 1;
+        return Promise.resolve(
+          modelCalls === 1
+            ? response({
+                content: "",
+                finishReason: "tool_calls",
+                toolCalls: [
+                  { id: "call-1", name: "read_file", arguments: { relativePath: "src/index.ts" } },
+                ],
+              })
+            : response(),
+        );
+      },
       gate: (): ReadOnlyChildGateDecision => ({
         ok: false,
         terminal: "denied",
         reasonCode: "authority-revoked",
       }),
       read: {
-        readText: () => {
+        readText: (): ReturnType<SecureWorkspaceTextReadPort["readText"]> => {
           reads += 1;
           return Promise.resolve({ ok: true as const, text: "unreachable" });
         },
@@ -145,6 +162,22 @@ describe("createProductionReadOnlyChildRunner", () => {
 
     expect(reads).toBe(0);
     expect(outcome.resultCount).toBe(0);
+    // The denial ended the session: no further model turn was taken.
+    expect(modelCalls).toBe(1);
+  });
+
+  it("routes an offered read through the gate before touching the workspace", async () => {
+    const attempts: string[] = [];
+
+    await runChild({
+      call: toolThenFinish("read_file", { relativePath: "src/index.ts" }),
+      gate: (): ReadOnlyChildGateDecision => {
+        attempts.push("gated");
+        return { ok: true };
+      },
+    });
+
+    expect(attempts).toEqual(["gated"]);
   });
 
   it("rejects a non-string relativePath instead of forwarding it to the read port", async () => {
