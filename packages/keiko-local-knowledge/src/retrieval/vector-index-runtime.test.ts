@@ -1,5 +1,6 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
@@ -51,6 +52,14 @@ const MODEL_ID = "sqlite-vec-real-binary-test";
 // test hermetic — no network, no install-time side effect. When it has not been provisioned the
 // journey below asserts the fail-closed fallback instead of skipping, so the suite still proves
 // something on every host.
+// SQLite memoises its temp-directory choice on the FIRST temp file it creates in a process
+// (`unixTempFileDir` caches the getenv results in a static), so SQLITE_TMPDIR has to be in place
+// before anything in this worker touches TEMP storage. Setting it at module scope also keeps the
+// spill proof free of mid-test environment mutation: the directory is fixed for the whole file, and
+// the proof snapshots it immediately before the run it is measuring.
+const SQLITE_TEMP_DIR = mkdtempSync(join(tmpdir(), "keiko-sqlite-tmpdir-"));
+process.env.SQLITE_TMPDIR = SQLITE_TEMP_DIR;
+
 const PROVISIONED_EXTENSION_PATH = provisionedSqliteVecPath();
 const SUPPORTED_RUNTIME = PROVISIONED_EXTENSION_PATH !== undefined;
 
@@ -217,6 +226,27 @@ function seedLargeCorpus(
   return chunkIds;
 }
 
+// SQLite's `temp_store` enumeration; 2 is MEMORY. Read from the live connection so the assertions
+// below test the pragma actually in force, not that the code intended to set it.
+const SQLITE_TEMP_STORE_MEMORY = 2;
+
+function readTempStore(db: DatabaseSync): number | undefined {
+  const row = db.prepare("PRAGMA temp_store").get() as unknown as
+    { readonly temp_store: number } | undefined;
+  return row?.temp_store;
+}
+
+function tempStoreValue(store: KnowledgeStore): number | undefined {
+  return readTempStore(store._internal.db);
+}
+
+function storeDbPath(store: KnowledgeStore): string {
+  const row = store._internal.db.prepare("PRAGMA database_list").get() as unknown as
+    { readonly file: string } | undefined;
+  if (row === undefined || row.file.length === 0) throw new Error("expected a file-backed store");
+  return row.file;
+}
+
 function vectorIndexState(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -281,20 +311,38 @@ async function assertCandidateScoreContract(
   }
 }
 
+interface AnnCorpus {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly chunkIds: readonly ChunkId[];
+}
+
+async function seedAnnCorpus(
+  fixture: ManagedStore,
+  identity: EmbeddingModelIdentity,
+  capsuleId = "cap-ann-real",
+): Promise<AnnCorpus> {
+  const seeded = await seedCapsuleWithVectors(fixture.store, {
+    capsuleId,
+    sourceId: `src-${capsuleId}`,
+    documentId: `doc-${capsuleId}`,
+    identity,
+    text: "alpha",
+  });
+  return {
+    capsuleId: seeded.capsuleId,
+    chunkIds: seedLargeCorpus(fixture.store, seeded, identity),
+  };
+}
+
 async function assertAnnJourney(
   fixture: ManagedStore,
   adapter: OpenAIEmbeddingAdapter,
   identity: EmbeddingModelIdentity,
   vectorIndex: VectorIndexOptions,
+  corpus: AnnCorpus,
 ): Promise<{ readonly capsuleId: KnowledgeCapsuleId; readonly chunkIds: readonly ChunkId[] }> {
-  const seeded = await seedCapsuleWithVectors(fixture.store, {
-    capsuleId: "cap-ann-real",
-    sourceId: "src-ann-real",
-    documentId: "doc-ann-real",
-    identity,
-    text: "alpha",
-  });
-  const chunkIds = seedLargeCorpus(fixture.store, seeded, identity);
+  const seeded = { capsuleId: corpus.capsuleId };
+  const chunkIds = corpus.chunkIds;
   const exact = await runPipeline(fixture.store, adapter, seeded.capsuleId, { mode: "disabled" });
   const result = await runPipeline(fixture.store, adapter, seeded.capsuleId, vectorIndex);
   expect(result.diagnostics?.vectorIndex).toMatchObject({
@@ -420,24 +468,147 @@ async function assertStoredIdentityFallback(
   expect(result.references.length).toBeGreaterThan(0);
 }
 
-async function assertEncryptedFallback(
+// An encrypted store whose connection cannot prove TEMP pages stay in memory keeps the pre-existing
+// fail-closed outcome. Opening WITHOUT the vector runtime is exactly that store: `openKnowledgeStore`
+// only pins `temp_store` for a store that enables the index, so supplying a runtime at search time
+// alone leaves the ADR-0153 D1 condition unmet.
+async function assertEncryptedUnpinnedFallback(
   adapter: OpenAIEmbeddingAdapter,
   identity: EmbeddingModelIdentity,
   vectorIndex: VectorIndexOptions,
 ): Promise<void> {
-  const fixture = managedStore(vectorIndex, encryptedProtection());
+  const fixture = managedStore(undefined, encryptedProtection());
   try {
+    // Opening without the runtime is what leaves the store unpinned; FILE is then set explicitly so
+    // the refused condition is constructed rather than inherited from the SQLite build's default,
+    // which is MEMORY on a build compiled with SQLITE_TEMP_STORE=3.
+    fixture.store._internal.db.exec("PRAGMA temp_store = FILE");
+    expect(tempStoreValue(fixture.store)).not.toBe(SQLITE_TEMP_STORE_MEMORY);
     const seeded = await seedCapsuleWithVectors(fixture.store, {
-      capsuleId: "cap-ann-encrypted",
+      capsuleId: "cap-ann-encrypted-unpinned",
       identity,
       text: "alpha beta gamma delta",
     });
     const result = await runPipeline(fixture.store, adapter, seeded.capsuleId, vectorIndex);
     expect(result.diagnostics?.vectorIndex).toMatchObject({
       status: "fallback-encrypted-store",
-      reason: "encrypted-store",
+      reason: "encrypted-store-temp-store-unpinned",
     });
     expect(result.references.length).toBeGreaterThan(0);
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+// The negative control for the spill proof below, and the reason that proof is not vacuous. It
+// drives the SAME vec0 column layout and the SAME corpus size through a connection that has not
+// pinned `temp_store`, and asserts SQLite did materialise its TEMP database into a file.
+//
+// The observable is the temp DIRECTORY's mtime, not a directory listing: on POSIX hosts SQLite
+// unlinks a temp file immediately after opening it, so the file is never visible to a reader and
+// only the two directory mutations it causes survive. If a future change shrinks the corpus below
+// the TEMP page-cache threshold this control fails, which is the point — it pins the proof to a
+// corpus that would actually spill.
+function assertUnpinnedControlSpills(tempDir: string, extensionPath: string): void {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-spill-control-"));
+  const db = new DatabaseSync(join(dir, "control.db"), { allowExtension: true });
+  try {
+    db.exec("PRAGMA journal_mode = WAL");
+    // The control must spill, so it pins the OPPOSITE way explicitly instead of relying on the
+    // build default being FILE.
+    db.exec("PRAGMA temp_store = FILE");
+    expect(readTempStore(db)).not.toBe(SQLITE_TEMP_STORE_MEMORY);
+    db.enableLoadExtension(true);
+    db.loadExtension(extensionPath);
+    db.enableLoadExtension(false);
+    db.exec(
+      [
+        "CREATE VIRTUAL TABLE IF NOT EXISTS temp.keiko_lk_vec_control USING vec0(",
+        "  capsule_id TEXT partition key, source_id TEXT, identity_key TEXT, chunk_id TEXT,",
+        `  embedding float[${String(DIMENSIONS)}] distance_metric=cosine);`,
+      ].join("\n"),
+    );
+    const before = statSync(tempDir).mtimeMs;
+    const insert = db.prepare(
+      [
+        "INSERT INTO temp.keiko_lk_vec_control",
+        "  (capsule_id, source_id, identity_key, chunk_id, embedding)",
+        "VALUES (:capsule_id, :source_id, :identity_key, :chunk_id, :embedding)",
+      ].join(" "),
+    );
+    db.exec("BEGIN IMMEDIATE");
+    for (let ordinal = 0; ordinal < CORPUS_ROWS; ordinal += 1) {
+      insert.run({
+        capsule_id: "cap-ann-control",
+        source_id: "src-ann-control",
+        identity_key: "control-identity-key",
+        chunk_id: `ann-chunk-${String(ordinal).padStart(5, "0")}`,
+        embedding: float32Bytes(corpusVector(ordinal, CORPUS_ROWS + 1)),
+      });
+    }
+    db.exec("COMMIT");
+    expect(statSync(tempDir).mtimeMs).not.toBe(before);
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ADR-0153 D4. Builds a real ANN index over an ENCRYPTED store and proves two things at once: the
+// retrieval-quality floors hold exactly as they do on the plaintext store (`assertAnnJourney`), and
+// no plaintext vector reached disk while they did — neither into SQLite's temp directory nor into
+// the store directory. Written to fail if the `temp_store` pin is reverted: the control above proves
+// this corpus spills without it.
+async function assertEncryptedAnnJourneyWithoutSpill(
+  adapter: OpenAIEmbeddingAdapter,
+  identity: EmbeddingModelIdentity,
+  vectorIndex: VectorIndexOptions,
+  extensionPath: string,
+): Promise<void> {
+  assertUnpinnedControlSpills(SQLITE_TEMP_DIR, extensionPath);
+  const fixture = managedStore(vectorIndex, encryptedProtection());
+  try {
+    expect(fixture.store._internal.contentCipher.isEncrypted).toBe(true);
+    expect(tempStoreValue(fixture.store)).toBe(SQLITE_TEMP_STORE_MEMORY);
+    const corpus = await seedAnnCorpus(fixture, identity, "cap-ann-encrypted");
+    const storeDir = dirname(storeDbPath(fixture.store));
+    const filesBefore = readdirSync(storeDir).sort();
+    const tempMtimeBefore = statSync(SQLITE_TEMP_DIR).mtimeMs;
+
+    await assertAnnJourney(fixture, adapter, identity, vectorIndex, corpus);
+
+    expect(statSync(SQLITE_TEMP_DIR).mtimeMs).toBe(tempMtimeBefore);
+    expect(readdirSync(SQLITE_TEMP_DIR)).toEqual([]);
+    expect(readdirSync(storeDir).sort()).toEqual(filesBefore);
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+// ADR-0153 D3. The index is RAM-resident, so it is bounded; a capsule over the bound falls back to
+// brute force rather than growing without limit, and says so in counts only.
+async function assertOverBoundFallsBackToBruteForce(
+  adapter: OpenAIEmbeddingAdapter,
+  identity: EmbeddingModelIdentity,
+  vectorIndex: VectorIndexOptions,
+): Promise<void> {
+  const bounded: VectorIndexOptions = { ...vectorIndex, maxIndexedVectorBytes: 1_024 };
+  const fixture = managedStore(bounded, encryptedProtection());
+  try {
+    const corpus = await seedAnnCorpus(fixture, identity, "cap-ann-bounded");
+    const result = await runPipeline(fixture.store, adapter, corpus.capsuleId, bounded);
+    expect(result.diagnostics?.vectorIndex).toEqual({
+      provider: "sqlite-vec",
+      status: "fallback-index-too-large",
+      reason: "index-bytes-over-bound",
+      indexName: "keiko_lk_vec_4_cosine",
+      vectorCount: CORPUS_ROWS,
+    });
+    expect(result.references.length).toBeGreaterThan(0);
+    expect(vectorIndexState(fixture.store, corpus.capsuleId)).toEqual({
+      status: "unavailable",
+      vector_count: CORPUS_ROWS,
+    });
   } finally {
     fixture.cleanup();
   }
@@ -494,6 +665,16 @@ async function assertUnprovisionedRuntimeFallback(
     fixture.cleanup();
   }
 }
+
+// Cleanup is deferred to process exit rather than `afterAll`. SQLite memoises the temp-directory
+// choice for the process, and Vitest reuses a worker across test files, so removing the directory —
+// or restoring the environment variable, which can invalidate the very string SQLite memoised —
+// while the worker is still alive would leave a later test file pointed at a directory that no
+// longer exists. At exit no further SQLite call can observe it. The directory is asserted empty by
+// the proof itself, so nothing accumulates in it in the meantime.
+process.once("exit", () => {
+  rmSync(SQLITE_TEMP_DIR, { recursive: true, force: true });
+});
 
 describe("sqlite-vec runtime resolution", () => {
   // There is no bundled runtime to select: the npm package is rejected by the repository's
@@ -552,7 +733,8 @@ describe("sqlite-vec real binary retrieval journey", () => {
     }
     const fixture = managedStore(vectorIndex);
     try {
-      const seeded = await assertAnnJourney(fixture, adapter, identity, vectorIndex);
+      const corpus = await seedAnnCorpus(fixture, identity);
+      const seeded = await assertAnnJourney(fixture, adapter, identity, vectorIndex, corpus);
       const firstChunk = seeded.chunkIds[0];
       if (firstChunk === undefined) throw new Error("expected ANN chunk");
       await assertStalenessRebuild(
@@ -574,7 +756,28 @@ describe("sqlite-vec real binary retrieval journey", () => {
     } finally {
       fixture.cleanup();
     }
-    await assertEncryptedFallback(realBinaryAdapter(), identity, vectorIndex);
+    await assertEncryptedUnpinnedFallback(realBinaryAdapter(), identity, vectorIndex);
     await assertCorruptPathAndDisabledPin(identity);
   }, 60_000);
+
+  // ADR-0153: encrypted-store ANN, the temp-store guarantee, and the spill proof. This is the
+  // decision's executable half — quality parity with the plaintext baseline, no plaintext vector on
+  // disk while achieving it, and a bound that falls closed instead of growing without limit.
+  it("runs ANN on an encrypted store without spilling plaintext vectors to disk", async () => {
+    const adapter = realBinaryAdapter();
+    const identity = await verifiedIdentity(adapter);
+    const extensionPath = PROVISIONED_EXTENSION_PATH;
+    const vectorIndex = resolveVectorIndexOptions(undefined, {
+      KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto",
+      ...(extensionPath === undefined
+        ? {}
+        : { KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH: extensionPath }),
+    });
+    if (extensionPath === undefined) {
+      await assertUnprovisionedRuntimeFallback(adapter, identity, vectorIndex);
+      return;
+    }
+    await assertEncryptedAnnJourneyWithoutSpill(adapter, identity, vectorIndex, extensionPath);
+    await assertOverBoundFallsBackToBruteForce(realBinaryAdapter(), identity, vectorIndex);
+  }, 120_000);
 });

@@ -43,6 +43,7 @@ import {
   type StoreContentCipher,
 } from "./store-content-cipher.js";
 import { applyStoreContentEncryption } from "./store-content-encryption.js";
+import { pinTempStoreToMemory } from "./store-temp-store.js";
 import type { VectorIndexOptions } from "./retrieval/vector-index.js";
 
 export interface OpenKnowledgeStoreOptions {
@@ -101,7 +102,11 @@ function defaultClock(): number {
 // the conservative default for the local single-writer desktop pattern.
 export const LK_STORE_BUSY_TIMEOUT_MS = 5_000;
 
-function applyDurabilityPragmas(db: DatabaseSync): void {
+function applyDurabilityPragmas(db: DatabaseSync, pinTempStore: boolean): void {
+  // ADR-0153 D2: a store that enables the vector index keeps SQLite's TEMP database in memory, so
+  // the vec0 ANN index can never spill decrypted vectors into a temp file. Applied here, before any
+  // TEMP table exists, because changing `temp_store` later drops them.
+  if (pinTempStore) pinTempStoreToMemory(db);
   // WAL: crash-safe single-writer; readers do not block the writer. Right tradeoff for
   // the indexing+retrieval mix the local-knowledge layer will see.
   db.exec("PRAGMA journal_mode = WAL");
@@ -276,10 +281,14 @@ function vectorIndexRuntimeConfigured(options: VectorIndexOptions | undefined): 
   );
 }
 
-function tryOpenAndMigrate(dbPath: string, allowExtension: boolean): OpenAttempt {
+// `vectorIndexEnabled` gates two coupled capabilities of the same decision: extension loading, so
+// sqlite-vec can be loaded at all, and the ADR-0153 D2 TEMP-storage pin, so the index it builds
+// cannot spill to disk. They are deliberately the same condition — an index that can be built must
+// also be unable to spill.
+function tryOpenAndMigrate(dbPath: string, vectorIndexEnabled: boolean): OpenAttempt {
   let db: DatabaseSync;
   try {
-    db = allowExtension
+    db = vectorIndexEnabled
       ? new DatabaseSync(dbPath, { allowExtension: true })
       : new DatabaseSync(dbPath);
   } catch (cause) {
@@ -288,7 +297,7 @@ function tryOpenAndMigrate(dbPath: string, allowExtension: boolean): OpenAttempt
       : { status: "error", cause };
   }
   try {
-    applyDurabilityPragmas(db);
+    applyDurabilityPragmas(db, vectorIndexEnabled);
     assertQuickCheckOk(db);
     if (hasAnyUserContent(db) && !expectedV1TablesPresent(db)) {
       // Pre-existing foreign schema or a partial install missing even the v1 tables is not
@@ -332,11 +341,11 @@ function restrictStoreFilePermissions(dbPath: string): void {
 
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
   ensureDirHardened(dirname(opts.dbPath));
-  const allowExtension = vectorIndexRuntimeConfigured(opts.vectorIndex);
-  let attempt = tryOpenAndMigrate(opts.dbPath, allowExtension);
+  const vectorIndexEnabled = vectorIndexRuntimeConfigured(opts.vectorIndex);
+  let attempt = tryOpenAndMigrate(opts.dbPath, vectorIndexEnabled);
   if (attempt.status === "corrupt") {
     quarantineFile(opts.dbPath, attempt.cause);
-    attempt = tryOpenAndMigrate(opts.dbPath, allowExtension);
+    attempt = tryOpenAndMigrate(opts.dbPath, vectorIndexEnabled);
   }
   if (attempt.status !== "ok") {
     throw new KnowledgeStoreError(`Failed to open knowledge-capsule store at ${opts.dbPath}.`, {
