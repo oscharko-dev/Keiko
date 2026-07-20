@@ -2909,7 +2909,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
           workspaceLifecycle: args.bundle.workspaceLifecycle,
           serverPrincipal:
             args.options.codingRuntimeServerPrincipal ??
-            DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID,
+            (() => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
           ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
         })
       : undefined;
@@ -3008,19 +3008,16 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
 }
 
 type CodingRuntimeControlPlaneDeps =
-  Partial<
-    Pick<
-      UiHandlerDeps,
-      | "codingRuntimeOrchestrator"
-      | "codingRuntimeEventHub"
-      | "codingRuntimeHostQualified"
-      | "codingSafeActivityProjection"
-      | "codingRuntimeUnavailableReason"
-      | "codingSidecarGatewayCancellationRegistry"
-      | "runtimeCapabilityAuthenticator"
-      | "openCodeGatewayReadinessRegistry"
-    >
-  >;
+  {
+    codingRuntimeOrchestrator?: UiHandlerDeps["codingRuntimeOrchestrator"];
+    codingRuntimeEventHub?: UiHandlerDeps["codingRuntimeEventHub"];
+    codingRuntimeHostQualified?: UiHandlerDeps["codingRuntimeHostQualified"];
+    codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
+    codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
+    codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
+    runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
+    openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
+  };
 
 function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
