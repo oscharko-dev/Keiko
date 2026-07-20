@@ -62,7 +62,7 @@ export function classifyLsofNetworkNames(output) {
 
 export function processIdsForExecutable(output, executable) {
   return output.split(/\r?\n/u).flatMap((line) => {
-    const matched = /^[ \t]*(?<pid>\d+)[ \t]+(?<command>.+)$/u.exec(line);
+    const matched = /^[ \t]*(?<pid>\d+)[ \t]+(?<command>[^ \t].*)$/u.exec(line);
     if (
       matched?.groups === undefined ||
       (matched.groups.command !== executable &&

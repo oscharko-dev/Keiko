@@ -3,11 +3,59 @@ import { describe, expect, it } from "vitest";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
-import { createProductionAuxiliaryPorts } from "./productionAuxiliaryPorts.js";
+import {
+  createProductionAuxiliaryPorts,
+  type ProductionAuxiliaryPortInput,
+} from "./productionAuxiliaryPorts.js";
+import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type { CodingToolActionOf } from "./codingToolGovernedDelegate.js";
+import type { CodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts";
 import { createServerApprovedSkillCatalog } from "./skillCatalog.js";
 import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
 
 const AUTHORITY_EXPIRES_AT = "2026-07-20T01:00:00.000Z";
+
+const PARENT_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
+  schemaVersion: "1",
+  runId: "run-2387",
+  localUser: "local-operator",
+  taskRefs: ["issue-2387"],
+  workspace: {
+    workspaceId: "workspace-2387",
+    rootLabel: "keiko-workspace",
+    rootDigest: "a".repeat(64),
+  },
+  branch: {
+    baseRef: "dev",
+    headRef: "issue/2387",
+    allowDetachedHead: false,
+    allowedPrefixes: ["issue/"],
+  },
+  requestedMode: "supervised-coding",
+  deploymentCeiling: "supervised-coding",
+  effectiveMode: "supervised-coding",
+  runtimeSource: "keiko-sidecar",
+  actionClasses: ["workspace-read"],
+  connectorScopes: [],
+  modelProfile: {
+    profileId: "coding-safe-openai-compatible",
+    source: "keiko-model-gateway",
+    supportsStreaming: false,
+    supportsToolCalling: true,
+  },
+  commandPolicy: {
+    mode: "deny",
+    allow: [],
+    deny: [],
+    maxCommandTimeoutMs: 1,
+    requirePerCommandApproval: true,
+  },
+  networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+  gates: ["human-approval"],
+  budget: { maxRuntimeMs: 120_000, maxToolCalls: 12, maxPromptTokens: 24_000, maxPatchBytes: 0 },
+  expiresAt: AUTHORITY_EXPIRES_AT,
+  approvalProofDigest: "b".repeat(64),
+};
 
 function response(): NormalizedResponse {
   return {
@@ -26,9 +74,16 @@ function response(): NormalizedResponse {
   };
 }
 
+interface PortsOptions {
+  readonly emit?: ((event: unknown) => void) | undefined;
+  readonly readText?:
+    ProductionAuxiliaryPortInput["secureWorkspaceTextRead"]["readText"] | undefined;
+}
+
 function ports(
   modelId: string,
   observed: string[] = [],
+  options: PortsOptions = {},
 ): ReturnType<typeof createProductionAuxiliaryPorts> {
   const catalog = createServerApprovedSkillCatalog();
   return createProductionAuxiliaryPorts({
@@ -54,10 +109,38 @@ function ports(
       return { call: (): Promise<NormalizedResponse> => Promise.resolve(response()) };
     },
     secureWorkspaceTextRead: {
-      readText: () => Promise.resolve({ ok: true as const, text: "file text" }),
+      readText:
+        options.readText ??
+        ((): ReturnType<ProductionAuxiliaryPortInput["secureWorkspaceTextRead"]["readText"]> =>
+          Promise.resolve({ ok: true as const, text: '{"scripts":{"b":"1","a":"2"}}' })),
     },
-    emit: () => undefined,
+    emit: options.emit ?? ((): void => undefined),
   });
+}
+
+const LIVE_GUARD: CodingToolMutationGuard = {
+  check: () => true,
+  resolveParentAuthority: () => PARENT_AUTHORITY,
+  chargeDelegatedRead: () => true,
+};
+
+function skillAction(skillId: string): CodingToolActionOf<"skill"> {
+  return {
+    action: "skill",
+    actionId: "act-skill-1",
+    idempotencyKey: "idem-skill-1",
+    skillId,
+  };
+}
+
+function childAction(): CodingToolActionOf<"child-agent"> {
+  return {
+    action: "child-agent",
+    actionId: "act-child-1",
+    idempotencyKey: "idem-child-1",
+    objective: "Inspect the repository entry point",
+    maxToolCalls: 2,
+  };
 }
 
 describe("createProductionAuxiliaryPorts", () => {
@@ -78,5 +161,86 @@ describe("createProductionAuxiliaryPorts", () => {
 
   it("always mounts the skill port, which needs no provider model", () => {
     expect(ports("").skillAuthority).toBeDefined();
+  });
+
+  it("runs an approved repository-analysis skill and audits the invocation", async () => {
+    const events: unknown[] = [];
+    const surface = ports("gpt-coding-safe", [], { emit: (e) => events.push(e) });
+
+    const result = await surface.skillAuthority.execute(
+      skillAction("skl_repo-structure-summary@1"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(events).not.toHaveLength(0);
+    // The audited event is content-free: it never carries the file text the skill read.
+    expect(JSON.stringify(events)).not.toContain("scripts");
+  });
+
+  it("denies a skill the catalog does not approve, and still audits the probe", async () => {
+    const events: unknown[] = [];
+    const surface = ports("gpt-coding-safe", [], { emit: (e) => events.push(e) });
+
+    const result = await surface.skillAuthority.execute(
+      skillAction("skl_not-approved@1"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(events).not.toHaveLength(0);
+  });
+
+  it("reports the skill unavailable when the workspace read fails closed", async () => {
+    const surface = ports("gpt-coding-safe", [], {
+      readText: () => Promise.resolve({ ok: false as const, reason: "denied" as const }),
+    });
+
+    const result = await surface.skillAuthority.execute(
+      skillAction("skl_repo-structure-summary@1"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+  });
+
+  it("stops a child agent when the parent authority is no longer resolvable", async () => {
+    const surface = ports("gpt-coding-safe");
+    const revoked: CodingToolMutationGuard = {
+      check: () => true,
+      resolveParentAuthority: () => undefined,
+    };
+
+    const result = await surface.childAgentAuthority?.execute(childAction(), undefined, revoked);
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(JSON.stringify(result)).toContain("authority-revoked");
+  });
+
+  it("runs a child agent through the orchestrator under a live parent authority", async () => {
+    const events: unknown[] = [];
+    const surface = ports("gpt-coding-safe", [], { emit: (e) => events.push(e) });
+
+    const result = await surface.childAgentAuthority?.execute(childAction(), undefined, LIVE_GUARD);
+
+    expect(result).toMatchObject({ status: "completed" });
+    // Child lifecycle is surfaced content-free: the objective text never reaches an event.
+    expect(JSON.stringify(events)).not.toContain("Inspect the repository entry point");
+  });
+
+  it("stops the child when the parent budget refuses its first delegated call", async () => {
+    const surface = ports("gpt-coding-safe");
+    const exhausted: CodingToolMutationGuard = {
+      check: () => true,
+      resolveParentAuthority: () => PARENT_AUTHORITY,
+      chargeDelegatedRead: () => false,
+    };
+
+    const result = await surface.childAgentAuthority?.execute(childAction(), undefined, exhausted);
+
+    expect(result).toMatchObject({ status: "completed" });
   });
 });

@@ -838,8 +838,8 @@ const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readon
 };
 
 function exactSignalKeys(signal: CodingSafeActivitySignal): boolean {
-  const allowed = [...COMMON_SIGNAL_KEYS, ...SIGNAL_KIND_KEYS[signal.kind]];
-  return Object.keys(signal).every((key) => allowed.includes(key));
+  const allowed = new Set<string>([...COMMON_SIGNAL_KEYS, ...SIGNAL_KIND_KEYS[signal.kind]]);
+  return Object.keys(signal).every((key) => allowed.has(key));
 }
 
 function replaceMap<K, V>(target: Map<K, V>, source: ReadonlyMap<K, V>): void {
