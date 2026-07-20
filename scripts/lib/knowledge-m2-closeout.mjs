@@ -407,7 +407,7 @@ async function seedAnnProofStore(store, identity) {
   return seeded;
 }
 
-export async function runAnnProof() {
+async function runAnnProof() {
   const identity = await verifiedVectorIdentity();
   const vectorIndex = resolveVectorIndexOptions(undefined, {
     KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto",
@@ -506,7 +506,7 @@ export function missingRerankerDiagnosticFields(source) {
   );
 }
 
-export function runFacadeProof() {
+function runFacadeProof() {
   const serverRoot = join(ROOT, "packages/keiko-server/src");
   const entries = sourceFilesUnder(serverRoot).map((path) => ({
     path: relative(ROOT, path),
