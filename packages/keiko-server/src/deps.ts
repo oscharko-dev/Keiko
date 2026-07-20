@@ -2935,8 +2935,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     runtimeComposition,
   );
   const dapDebugDep = dapRuntime.current === undefined ? {} : { dapDebug: dapRuntime.current };
-  const workspaceLifecycleDep =
-    workspaceLifecycle === undefined ? {} : { workspaceLifecycle };
+  const workspaceLifecycleDep = workspaceLifecycle === undefined ? {} : { workspaceLifecycle };
   const memoryDeniedCategoryMatchersDep =
     args.options.memoryDeniedCategoryMatchers === undefined
       ? {}

@@ -695,11 +695,7 @@ export class CodingRuntimeOrchestrator {
 
   private endSettledResult(runId: string): CodingRuntimeOrchestratorResult | undefined {
     const settled = this.deps.snapshots.get(runId);
-    if (
-      this.activeRunId === undefined &&
-      settled !== undefined &&
-      terminal.has(settled.state)
-    ) {
+    if (this.activeRunId === undefined && settled !== undefined && terminal.has(settled.state)) {
       return { ok: true, snapshot: this.projection.publicSnapshot(settled) };
     }
     return undefined;
