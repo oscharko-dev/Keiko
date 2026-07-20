@@ -112,30 +112,30 @@ function deleteKeikoShellCaches(): void {
 }
 
 function cleanupDevServiceWorkers(sw: ServiceWorkerContainer): void {
-  // Wrap the synchronous call too: although the spec says `getRegistrations()` returns a
-  // Promise, a non-conforming runtime (or a test stub) could throw synchronously, and this
-  // helper's whole contract is that it never breaks the app. Isolate that guard from the
-  // already-`.catch`-handled Promise chain below so each failure mode is handled exactly once.
-  let pending: ReturnType<ServiceWorkerContainer["getRegistrations"]>;
+  // Silent failure by design: development cleanup must never break the app, so both failure modes
+  // are swallowed and each is still handled exactly once. `.catch` absorbs the Promise rejection,
+  // and the surrounding `try` absorbs a synchronous throw from the call itself, which a
+  // non-conforming runtime (or a test stub) could still raise even though the spec says
+  // `getRegistrations()` returns a Promise. Building the chain inside the `try` keeps the promise
+  // from ever floating in it (typescript:S4822).
   try {
-    pending = sw.getRegistrations();
+    void sw
+      .getRegistrations()
+      .then((registrations) =>
+        Promise.all(registrations.map((registration) => registration.unregister())),
+      )
+      .then(() => {
+        deleteKeikoShellCaches();
+        if (sw.controller === null) return;
+        const reloadKey = "keiko.dev.service-worker-cleanup-reloaded";
+        if (window.sessionStorage.getItem(reloadKey) === "true") return;
+        window.sessionStorage.setItem(reloadKey, "true");
+        window.location.reload();
+      })
+      .catch((_error: unknown) => undefined);
   } catch {
-    // Silent failure by design. Development cleanup must never break the app.
     return;
   }
-  void pending
-    .then((registrations) =>
-      Promise.all(registrations.map((registration) => registration.unregister())),
-    )
-    .then(() => {
-      deleteKeikoShellCaches();
-      if (sw.controller === null) return;
-      const reloadKey = "keiko.dev.service-worker-cleanup-reloaded";
-      if (window.sessionStorage.getItem(reloadKey) === "true") return;
-      window.sessionStorage.setItem(reloadKey, "true");
-      window.location.reload();
-    })
-    .catch((_error: unknown) => undefined);
 }
 
 export function registerSw(): void {
@@ -150,26 +150,22 @@ export function registerSw(): void {
     return;
   }
 
-  // Fire-and-forget. Wrap the synchronous call too: although the spec says `register()`
-  // returns a Promise, a non-conforming runtime (or a test stub) could throw synchronously,
-  // and the helper's whole contract is that it never breaks the page. Isolate that guard from
-  // the already-`.catch`-handled Promise chain below so each failure mode is handled exactly
-  // once. `.catch` swallows the Promise rejection. Using `unknown` for the rejection value —
-  // `register()` rejects with `DOMException` in spec but other runtimes may differ, and we
-  // never inspect the error in production code.
-  let pending: ReturnType<ServiceWorkerContainer["register"]>;
+  // Fire-and-forget, silent failure by design: static shell caching must never break app startup,
+  // so both failure modes are swallowed and each is still handled exactly once. `.catch` absorbs
+  // the Promise rejection, and the surrounding `try` absorbs a synchronous throw from the call
+  // itself, which a non-conforming runtime (or a test stub) could still raise even though the spec
+  // says `register()` returns a Promise. Building the chain inside the `try` keeps the promise from
+  // ever floating in it (typescript:S4822). Using `unknown` for the rejection value — `register()`
+  // rejects with `DOMException` in spec but other runtimes may differ, and we never inspect the
+  // error in production code.
   try {
-    pending = sw.register("/sw.js", { scope: "/" });
+    void sw
+      .register("/sw.js", { scope: "/" })
+      .then((registration) => {
+        handleRegisteredServiceWorker(sw, registration);
+      })
+      .catch((_error: unknown) => undefined);
   } catch {
-    // Silent failure by design. Static shell caching must never break app startup.
     return;
   }
-  void pending
-    .then((registration) => {
-      handleRegisteredServiceWorker(sw, registration);
-    })
-    .catch((_error: unknown) => {
-      // Silent failure by design. Static shell caching must never break app startup.
-      return undefined;
-    });
 }

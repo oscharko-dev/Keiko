@@ -1096,9 +1096,9 @@ function responseForToolResult(
 }
 
 // Start the facade call, containing only its SYNCHRONOUS throw (a facade that dies before
-// returning a promise). The thrown value is carried back to the caller — which surfaces it as an
-// operator diagnostic before failing the request — while the returned promise's rejection is
-// handled by the awaiting request path, so no promise ever lives inside a try (typescript:S4822).
+// returning a promise). The thrown value is carried back to the caller, which surfaces it as an
+// operator diagnostic before failing the request; the returned promise's rejection stays owned by
+// the awaiting request path, which maps it to a 502/408 and settles the tool.
 type FacadeStart =
   | { readonly ok: true; readonly work: Promise<CodingToolResult> }
   | { readonly ok: false; readonly error: unknown };
@@ -1111,10 +1111,13 @@ function startFacadeExecution(
   admission: AdmittedToolRequest,
 ): FacadeStart {
   try {
-    return {
-      ok: true,
-      work: facade.execute({ body, capability, headers, signal: admission.controller.signal }),
-    };
+    const work = facade.execute({ body, capability, headers, signal: admission.controller.signal });
+    // A no-op tap, NOT the error handler: attaching it does not consume the rejection for the
+    // awaiting request path, which still observes it through `raceAbort`. It keeps the promise from
+    // floating inside this `try` (typescript:S4822) and suppresses an unhandled-rejection warning on
+    // the abort path, where the caller can stop awaiting before the facade settles.
+    void work.catch(() => undefined);
+    return { ok: true, work };
   } catch (error) {
     return { ok: false, error };
   }
