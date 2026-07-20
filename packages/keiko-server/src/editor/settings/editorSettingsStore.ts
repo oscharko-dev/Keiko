@@ -100,6 +100,63 @@ export function editorSettingsWorkspaceFingerprint(realRoot: string): string {
   return sha256(realRoot);
 }
 
+/**
+ * The single source of truth for the `edm7` settings ETag grammar. The token is produced here and
+ * parsed here so that a new precedence layer can never be added to the producer while a consumer
+ * keeps an older shape — the exact drift that made debug activation unreachable once an editor
+ * profile was active.
+ */
+const EDITOR_SETTINGS_ETAG_PATTERN =
+  /^"edm7-(\d+)-(\d+)-(\d+)(?:-p(\d+))?-([A-Za-z0-9_-]{4,64})"$/u;
+
+const EDITOR_SETTINGS_ROOT_TOKEN_CHARS = 24;
+
+export interface EditorSettingsEtagParts {
+  readonly userRevision: number;
+  readonly workspaceRevision: number;
+  readonly rootRevision: number;
+  readonly profileRevision: number;
+  readonly rootToken: string;
+}
+
+export function editorSettingsRootToken(realRoot: string | undefined): string {
+  return realRoot === undefined
+    ? "user"
+    : editorSettingsWorkspaceFingerprint(realRoot).slice(0, EDITOR_SETTINGS_ROOT_TOKEN_CHARS);
+}
+
+export function formatEditorSettingsEtag(
+  realRoot: string | undefined,
+  parts: Omit<EditorSettingsEtagParts, "rootToken">,
+): string {
+  const profileToken = parts.profileRevision === 0 ? "" : `-p${String(parts.profileRevision)}`;
+  return `"edm7-${String(parts.userRevision)}-${String(parts.workspaceRevision)}-${String(
+    parts.rootRevision,
+  )}${profileToken}-${editorSettingsRootToken(realRoot)}"`;
+}
+
+export function parseEditorSettingsEtag(
+  value: string | undefined,
+): EditorSettingsEtagParts | undefined {
+  const match = value === undefined ? null : EDITOR_SETTINGS_ETAG_PATTERN.exec(value);
+  if (match === null) return undefined;
+  const userRevision = Number(match[1]);
+  const workspaceRevision = Number(match[2]);
+  const rootRevision = Number(match[3]);
+  const profileRevision = match[4] === undefined ? 0 : Number(match[4]);
+  const revisions = [userRevision, workspaceRevision, rootRevision, profileRevision];
+  if (revisions.some((revision) => !Number.isSafeInteger(revision) || revision < 0)) {
+    return undefined;
+  }
+  return {
+    userRevision,
+    workspaceRevision,
+    rootRevision,
+    profileRevision,
+    rootToken: match[5] ?? "",
+  };
+}
+
 export function editorSettingsUserRecordPath(stateDir: string): string {
   return join(stateDir, "editor-settings-user.json");
 }

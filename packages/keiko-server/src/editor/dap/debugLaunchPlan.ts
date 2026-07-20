@@ -30,6 +30,7 @@ import {
   type DebugLaunchTarget,
 } from "./debugLaunchCatalog.js";
 import { isSafeDapSocketBasename, isSha256Digest } from "./debugLaunchSecurityPredicates.js";
+import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 
 const CAPSULE_ROOT = "/keiko-execution-root" as const;
 const CAPSULE_RUNTIME_ROOT = "/run/keiko-debug" as const;
@@ -255,29 +256,31 @@ function validateEndpoint(context: DebugLaunchRuntimeContext): void {
 }
 
 function validateWorkspaceIdentity(context: DebugLaunchRuntimeContext): void {
-  const workspaceStat = lstatSync(context.canonicalWorkspaceRoot);
+  // The recorded identity must still describe the live directory. Re-deriving through the single
+  // shared M11 root-identity function keeps producer and validator on one formula; deriving the
+  // digest locally here is what let the two drift apart once the producer was migrated.
+  let live: ReturnType<typeof inspectWorkspaceRootIdentity>;
+  try {
+    live = inspectWorkspaceRootIdentity(context.canonicalWorkspaceRoot);
+  } catch {
+    throw new DebugCapsulePlanError();
+  }
   const workspaceIdentity = context.workspaceIdentity;
-  const observed = [workspaceStat.dev, workspaceStat.ino, workspaceStat.mode, workspaceStat.uid];
+  const observed = [live.device, live.inode, live.mode, live.ownerUid];
   const expected = [
     workspaceIdentity.device,
     workspaceIdentity.inode,
     workspaceIdentity.mode,
     workspaceIdentity.ownerUid,
   ];
-  const valid =
+  const invalid =
     !context.workspaceTrusted ||
     context.fs.realPath(context.workspaceRoot) !== context.canonicalWorkspaceRoot ||
     workspaceIdentity.realPath !== context.canonicalWorkspaceRoot ||
+    live.canonicalRoot !== context.canonicalWorkspaceRoot ||
     observed.some((value, index) => value !== expected[index]) ||
-    workspaceIdentity.identityDigest !==
-      hash([
-        workspaceIdentity.realPath,
-        workspaceStat.dev,
-        workspaceStat.ino,
-        workspaceStat.mode,
-        workspaceStat.uid,
-      ]);
-  if (valid) throw new DebugCapsulePlanError();
+    workspaceIdentity.identityDigest !== live.identityDigest;
+  if (invalid) throw new DebugCapsulePlanError();
 }
 
 function validateArtifacts(context: DebugLaunchRuntimeContext): void {

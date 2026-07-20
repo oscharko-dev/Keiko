@@ -197,7 +197,7 @@ function routeDeps(): NonNullable<Parameters<typeof handleEditorAgentActions>[1]
     redactor: (value: unknown): unknown => value,
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
     workspaceScriptTrust: {
-      trustLevelForRoot: (root): "trusted" | "restricted" =>
+      trustLevelForRoot: (root: string): "trusted" | "restricted" =>
         root === rootA ? "trusted" : "restricted",
     },
   } as unknown as NonNullable<Parameters<typeof handleEditorAgentActions>[1]>;

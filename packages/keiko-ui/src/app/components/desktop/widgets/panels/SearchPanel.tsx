@@ -21,6 +21,7 @@ import {
   fetchWorkspaceSearch,
   fetchWorkspaceSymbols,
 } from "@/lib/api";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
 import { useOptionalChatSessionCatalog } from "../../context/ChatSessionContext";
@@ -77,13 +78,17 @@ function globArray(value: string): readonly string[] {
   return trimmed.length === 0 ? [] : [trimmed];
 }
 
-function regexSyntaxError(query: string, mode: WorkspaceSearchMode): string | null {
+function regexSyntaxError(
+  query: string,
+  mode: WorkspaceSearchMode,
+  t: I18nTranslate,
+): string | null {
   if (mode !== "regex" || query.trim().length === 0) return null;
   try {
     new RegExp(query);
     return null;
   } catch {
-    return "The regular expression is not valid.";
+    return t("searchPanel.error.invalidRegex");
   }
 }
 
@@ -124,17 +129,31 @@ function statusMessage(args: {
   readonly status: SearchStatus;
   readonly response: SearchAggregate | null;
   readonly error: string | null;
+  readonly t: I18nTranslate;
 }): string {
-  if (!args.hasRoot) return "Select a workspace before searching.";
-  if (args.query.trim().length === 0) return "Enter a query to search the active workspace.";
+  const { t } = args;
+  if (!args.hasRoot) return t("searchPanel.status.selectWorkspace");
+  if (args.query.trim().length === 0) return t("searchPanel.status.enterQuery");
   if (args.error !== null) return args.error;
-  if (args.status === "loading")
-    return args.multiRoot ? "Searching workspace roots..." : "Searching workspace...";
-  if (args.response === null) return "Ready to search.";
-  if (args.response.results.length === 0) return "No matching files found.";
-  const suffix = args.response.truncated ? " Results were capped; refine the query." : "";
-  const roots = args.multiRoot ? ` across ${String(args.response.successfulRootCount)} roots` : "";
-  return `${String(args.response.results.length)} matches${roots} in ${String(args.response.filesScanned)} files scanned.${suffix}`;
+  if (args.status === "loading") {
+    return args.multiRoot
+      ? t("searchPanel.status.searchingRoots")
+      : t("searchPanel.status.searching");
+  }
+  if (args.response === null) return t("searchPanel.status.readyToSearch");
+  if (args.response.results.length === 0) return t("searchPanel.status.noMatches");
+  const suffix = args.response.truncated ? t("searchPanel.status.resultsCappedSuffix") : "";
+  const roots = args.multiRoot
+    ? t("searchPanel.status.acrossRootsSuffix", {
+        count: args.response.successfulRootCount,
+      })
+    : "";
+  return t("searchPanel.status.results", {
+    count: args.response.results.length,
+    roots,
+    filesScanned: args.response.filesScanned,
+    suffix,
+  });
 }
 
 function resultGroups(response: SearchAggregate | null): readonly SearchResultGroup[] {
@@ -143,13 +162,18 @@ function resultGroups(response: SearchAggregate | null): readonly SearchResultGr
 
 function symbolResponseToSearchResponse(
   response: WorkspaceSymbolSearchResponse,
+  t: I18nTranslate,
 ): WorkspaceSearchResponse {
   return {
     results: response.results.map((result) => ({
       path: result.path,
       lineRange: { startLine: result.line, endLine: result.line },
       snippet: `${result.kind} ${result.symbol}${
-        result.enclosingSymbol === undefined ? "" : ` in ${result.enclosingSymbol}`
+        result.enclosingSymbol === undefined
+          ? ""
+          : t("searchPanel.symbol.enclosingSuffix", {
+              enclosing: result.enclosingSymbol,
+            })
       }`,
       score: result.score,
     })),
@@ -170,7 +194,11 @@ function aggregateSearch(
   let successfulRootCount = 0;
   for (const outcome of outcomes) {
     if (outcome.status === "error") {
-      errors.push({ id: outcome.target.id, label: outcome.target.label, message: outcome.message });
+      errors.push({
+        id: outcome.target.id,
+        label: outcome.target.label,
+        message: outcome.message,
+      });
       continue;
     }
     successfulRootCount += 1;
@@ -196,11 +224,12 @@ function aggregateSearch(
   };
 }
 
-function searchFailureMessage(aggregate: SearchAggregate): string | null {
+function searchFailureMessage(aggregate: SearchAggregate, t: I18nTranslate): string | null {
   if (aggregate.successfulRootCount > 0) return null;
-  if (aggregate.errors.length === 1)
-    return aggregate.errors[0]?.message ?? "Workspace search failed.";
-  return "Workspace search failed for every root.";
+  if (aggregate.errors.length === 1) {
+    return aggregate.errors[0]?.message ?? t("searchPanel.error.searchFailed");
+  }
+  return t("searchPanel.error.allRootsFailed");
 }
 
 async function sourcesForPreview(
@@ -226,25 +255,44 @@ async function sourcesForPreview(
   return Object.fromEntries(entries);
 }
 
-function replaceSummary(response: WorkspaceReplacePreviewResponse | null): string {
-  if (response === null) return "No replace preview has been computed.";
+function replaceSummary(
+  response: WorkspaceReplacePreviewResponse | null,
+  t: I18nTranslate,
+): string {
+  if (response === null) return t("searchPanel.replace.noPreviewComputed");
   const omitted =
-    response.omittedFileCount > 0 ? ` ${String(response.omittedFileCount)} files omitted.` : "";
-  return `${String(response.editCount)} replacements across ${String(response.fileCount)} files.${omitted}`;
+    response.omittedFileCount > 0
+      ? t("searchPanel.replace.omittedSuffix", {
+          count: response.omittedFileCount,
+        })
+      : "";
+  return t("searchPanel.replace.summary", {
+    editCount: response.editCount,
+    fileCount: response.fileCount,
+    omitted,
+  });
 }
 
 function replaceErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function conflictSummary(conflicts: readonly WorkspaceReplaceApplyConflict[]): string {
+function conflictSummary(
+  conflicts: readonly WorkspaceReplaceApplyConflict[],
+  t: I18nTranslate,
+): string {
   if (conflicts.length === 0) return "";
   const listed = conflicts
     .slice(0, 3)
     .map((conflict) => `${conflict.path} (${conflict.reason})`)
     .join(", ");
-  const remaining = conflicts.length > 3 ? `, ${String(conflicts.length - 3)} more` : "";
-  return ` Conflicts: ${listed}${remaining}.`;
+  const remaining =
+    conflicts.length > 3
+      ? t("searchPanel.replace.conflictsMoreSuffix", {
+          count: conflicts.length - 3,
+        })
+      : "";
+  return t("searchPanel.replace.conflictsSummary", { listed, remaining });
 }
 
 async function applyReviewedReplace(args: {
@@ -282,17 +330,23 @@ async function applyReviewedReplace(args: {
 function RootErrors({
   errors,
   operation,
+  t,
 }: {
   readonly errors: readonly RootSearchError[];
   readonly operation: "searched" | "previewed";
+  readonly t: I18nTranslate;
 }): ReactNode {
   if (errors.length === 0) return null;
+  const operationLabel =
+    operation === "searched"
+      ? t("searchPanel.rootErrors.operationSearched")
+      : t("searchPanel.rootErrors.operationPreviewed");
   return (
     <div className={`${styles.status} ${styles.error}`} role="alert">
       <span>
         {errors.length === 1
-          ? `One root could not be ${operation}.`
-          : `Some roots could not be ${operation}.`}
+          ? t("searchPanel.rootErrors.one", { operation: operationLabel })
+          : t("searchPanel.rootErrors.some", { operation: operationLabel })}
       </span>
       <ul className={styles.errorList}>
         {errors.map((error) => (
@@ -312,6 +366,7 @@ function ReplaceReviews({
   appliedRootIds,
   messages,
   onApply,
+  t,
 }: {
   readonly previews: readonly RootReplacePreview[];
   readonly multiRoot: boolean;
@@ -319,19 +374,26 @@ function ReplaceReviews({
   readonly appliedRootIds: ReadonlySet<string>;
   readonly messages: ReadonlyMap<string, string>;
   readonly onApply: (preview: RootReplacePreview) => void;
+  readonly t: I18nTranslate;
 }): ReactNode {
   return previews.map((preview) => {
     const applied = appliedRootIds.has(preview.target.id);
     const buttonLabel = multiRoot
-      ? `Apply reviewed replace in ${preview.target.label}`
-      : "Apply reviewed replace";
+      ? t("searchPanel.action.applyReviewedReplaceInRoot", {
+          rootLabel: preview.target.label,
+        })
+      : t("searchPanel.action.applyReviewedReplace");
     return (
       <section className={styles.replaceReview} key={preview.target.id}>
         {multiRoot ? <h3 className={styles.rootHeading}>{preview.target.label}</h3> : null}
         <EditorDiffSurface
           model={preview.model}
           loadState={{ status: "ready" }}
-          actions={{ canApply: !applied, canReject: false, canRunVerification: false }}
+          actions={{
+            canApply: !applied,
+            canReject: false,
+            canRunVerification: false,
+          }}
           onApply={() => onApply(preview)}
         />
         {multiRoot && messages.has(preview.target.id) ? (
@@ -353,10 +415,11 @@ function ReplaceReviews({
 }
 
 export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): ReactNode {
+  const t = useTranslate();
   const catalog = useOptionalChatSessionCatalog();
   const openBuffers = useWorkspaceReplaceBuffers();
   const selectedRoot = root ?? catalog?.activeProject?.path;
-  const projectName = catalog?.activeProject?.name ?? "No project selected";
+  const projectName = catalog?.activeProject?.name ?? t("searchPanel.noProjectSelected");
   const targets = useMemo(
     () => panelTargets(selectedRoot, projectName, roots),
     [projectName, roots, selectedRoot],
@@ -374,7 +437,10 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
   const [response, setResponse] = useState<SearchAggregate | null>(null);
   const [replacePreviews, setReplacePreviews] = useState<readonly RootReplacePreview[]>([]);
   const [status, setStatus] = useState<SearchStatus>("idle");
-  const [replaceStatus, setReplaceStatus] = useState("Preview replace before applying changes.");
+  // `replaceStatus` is `null` until the first replace-related action runs, so visibility never
+  // depends on comparing translated display text against a hardcoded sentinel (that comparison
+  // silently breaks once the sentinel and the status text are translated independently).
+  const [replaceStatus, setReplaceStatus] = useState<string | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [rootErrors, setRootErrors] = useState<readonly RootSearchError[]>([]);
   const [replaceErrors, setReplaceErrors] = useState<readonly RootSearchError[]>([]);
@@ -383,7 +449,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
   const [replaceMessages, setReplaceMessages] = useState<ReadonlyMap<string, string>>(new Map());
   const [activeIndex, setActiveIndex] = useState(0);
   const controlsId = useId();
-  const inlineError = searchDomain === "text" ? regexSyntaxError(query, mode) : null;
+  const inlineError = searchDomain === "text" ? regexSyntaxError(query, mode, t) : null;
   const groups = useMemo(() => resultGroups(response), [response]);
   const message = statusMessage({
     hasRoot: targets.length > 0,
@@ -392,8 +458,9 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
     status,
     response,
     error: inlineError ?? routeError,
+    t,
   });
-  const showReplaceStatus = replaceStatus !== "Preview replace before applying changes.";
+  const showReplaceStatus = replaceStatus !== null;
 
   useEffect(() => {
     const focusSearch = (): void => queryInputRef.current?.focus();
@@ -411,9 +478,13 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
       const outcomes = await requestWorkspaceRoots(targets, (target) =>
         searchDomain === "symbols"
           ? fetchWorkspaceSymbols(
-              { root: target.root, query: query.trim(), maxResults: WORKSPACE_SEARCH_MAX_RESULTS },
+              {
+                root: target.root,
+                query: query.trim(),
+                maxResults: WORKSPACE_SEARCH_MAX_RESULTS,
+              },
               options,
-            ).then(symbolResponseToSearchResponse)
+            ).then((result) => symbolResponseToSearchResponse(result, t))
           : fetchWorkspaceSearch(
               requestFromState({
                 root: target.root,
@@ -429,7 +500,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
       );
       if (signal?.aborted === true) return;
       const next = aggregateSearch(outcomes);
-      const failure = searchFailureMessage(next);
+      const failure = searchFailureMessage(next, t);
       setResponse(failure === null ? next : null);
       setRootErrors(multiRoot ? next.errors : []);
       setRouteError(failure);
@@ -445,6 +516,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
       multiRoot,
       query,
       searchDomain,
+      t,
       targets,
       wholeWord,
     ],
@@ -481,7 +553,9 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
   const previewReplace = useCallback(async (): Promise<void> => {
     if (targets.length === 0 || query.trim().length === 0 || inlineError !== null) return;
     setReplaceStatus(
-      multiRoot ? "Computing per-root replace previews..." : "Computing replace preview...",
+      multiRoot
+        ? t("searchPanel.replace.computingMulti")
+        : t("searchPanel.replace.computingSingle"),
     );
     setReplaceErrors([]);
     setAppliedRootIds(new Set());
@@ -510,7 +584,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
         errors.push({
           id: target.id,
           label: target.label,
-          message: replaceErrorMessage(error, "Replace preview failed."),
+          message: replaceErrorMessage(error, t("searchPanel.error.previewFailed")),
         });
       }
     }
@@ -519,15 +593,21 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
     if (!multiRoot) {
       setReplaceStatus(
         next[0] === undefined
-          ? (errors[0]?.message ?? "Replace preview failed.")
-          : replaceSummary(next[0].response),
+          ? (errors[0]?.message ?? t("searchPanel.error.previewFailed"))
+          : replaceSummary(next[0].response, t),
       );
       return;
     }
     setReplaceStatus(
-      `${String(next.length)} root previews ready. Review and apply each root separately.${
-        errors.length === 0 ? "" : ` ${String(errors.length)} roots unavailable.`
-      }`,
+      t("searchPanel.replace.multiReady", {
+        count: next.length,
+        errors:
+          errors.length === 0
+            ? ""
+            : t("searchPanel.replace.multiErrorsSuffix", {
+                count: errors.length,
+              }),
+      }),
     );
   }, [
     caseSensitive,
@@ -538,6 +618,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
     multiRoot,
     query,
     replacement,
+    t,
     targets,
   ]);
 
@@ -552,21 +633,41 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
         });
         const suffix =
           result.conflictCount > 0
-            ? ` ${String(result.conflictCount)} files reported conflicts.${conflictSummary(result.conflicts)}`
+            ? t("searchPanel.replace.conflictsSuffix", {
+                count: result.conflictCount,
+                conflicts: conflictSummary(result.conflicts, t),
+              })
             : "";
-        const nextMessage = `${String(result.appliedCount)} files applied.${suffix}`;
+        const nextMessage = t("searchPanel.replace.appliedSummary", {
+          count: result.appliedCount,
+          suffix,
+        });
         setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
-        setReplaceStatus(multiRoot ? `${preview.target.label}: ${nextMessage}` : nextMessage);
+        setReplaceStatus(
+          multiRoot
+            ? t("searchPanel.replace.rootPrefixedStatus", {
+                rootLabel: preview.target.label,
+                message: nextMessage,
+              })
+            : nextMessage,
+        );
         setAppliedRootIds((current) => new Set(current).add(preview.target.id));
       } catch (error) {
-        const nextMessage = replaceErrorMessage(error, "Workspace replace apply failed.");
+        const nextMessage = replaceErrorMessage(error, t("searchPanel.error.applyFailed"));
         setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
-        setReplaceStatus(multiRoot ? `${preview.target.label}: ${nextMessage}` : nextMessage);
+        setReplaceStatus(
+          multiRoot
+            ? t("searchPanel.replace.rootPrefixedStatus", {
+                rootLabel: preview.target.label,
+                message: nextMessage,
+              })
+            : nextMessage,
+        );
       } finally {
         setApplyingRootId(null);
       }
     },
-    [multiRoot, openBuffers],
+    [multiRoot, openBuffers, t],
   );
 
   return (
@@ -583,26 +684,27 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
           <input
             ref={queryInputRef}
             type="search"
-            aria-label="Search files and symbols"
+            aria-label={t("searchPanel.input.ariaLabel")}
             aria-describedby={controlsId}
-            placeholder="Search workspace files"
+            placeholder={t("searchPanel.input.placeholder")}
             value={query}
             disabled={targets.length === 0}
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
         <div className="tw-label srch-label">
-          {projectName} <span className="srch-meta mono">workspace search</span>
+          {projectName}{" "}
+          <span className="srch-meta mono">{t("searchPanel.label.workspaceSearch")}</span>
         </div>
         <div className={styles.controlRow}>
-          <div className={styles.modeGroup} aria-label="Search domain">
+          <div className={styles.modeGroup} aria-label={t("searchPanel.group.searchDomain")}>
             <button
               className={styles.modeButton}
               type="button"
               aria-pressed={searchDomain === "text"}
               onClick={() => setSearchDomain("text")}
             >
-              Text
+              {t("searchPanel.domain.text")}
             </button>
             <button
               className={styles.modeButton}
@@ -610,17 +712,17 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
               aria-pressed={searchDomain === "symbols"}
               onClick={() => setSearchDomain("symbols")}
             >
-              Symbols
+              {t("searchPanel.domain.symbols")}
             </button>
           </div>
-          <div className={styles.modeGroup} aria-label="Search mode">
+          <div className={styles.modeGroup} aria-label={t("searchPanel.group.searchMode")}>
             <button
               className={styles.modeButton}
               type="button"
               aria-pressed={mode === "literal"}
               onClick={() => setMode("literal")}
             >
-              Literal
+              {t("searchPanel.mode.literal")}
             </button>
             <button
               className={styles.modeButton}
@@ -628,7 +730,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
               aria-pressed={mode === "regex"}
               onClick={() => setMode("regex")}
             >
-              Regex
+              {t("searchPanel.mode.regex")}
             </button>
           </div>
           <label className={styles.checkLabel}>
@@ -637,7 +739,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
               checked={caseSensitive}
               onChange={(event) => setCaseSensitive(event.target.checked)}
             />{" "}
-            Case sensitive
+            {t("searchPanel.option.caseSensitive")}
           </label>
           <label className={styles.checkLabel}>
             <input
@@ -645,35 +747,35 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
               checked={wholeWord}
               onChange={(event) => setWholeWord(event.target.checked)}
             />{" "}
-            Match whole word
+            {t("searchPanel.option.matchWholeWord")}
           </label>
         </div>
         <div className={styles.globGrid}>
           <label className={styles.fieldLabel}>
-            Include glob
+            {t("searchPanel.field.includeGlob")}
             <input
               className={`${styles.globInput} mono`}
               value={includeText}
-              placeholder="src/**/*.ts"
+              placeholder={t("searchPanel.field.includeGlobPlaceholder")}
               onChange={(event) => setIncludeText(event.target.value)}
             />
           </label>
           <label className={styles.fieldLabel}>
-            Exclude glob
+            {t("searchPanel.field.excludeGlob")}
             <input
               className={`${styles.globInput} mono`}
               value={excludeText}
-              placeholder="dist/**"
+              placeholder={t("searchPanel.field.excludeGlobPlaceholder")}
               onChange={(event) => setExcludeText(event.target.value)}
             />
           </label>
         </div>
         <label className={styles.fieldLabel}>
-          Replacement
+          {t("searchPanel.field.replacement")}
           <input
             className={`${styles.globInput} mono`}
             value={replacement}
-            placeholder="Replacement text"
+            placeholder={t("searchPanel.field.replacementPlaceholder")}
             onChange={(event) => setReplacement(event.target.value)}
           />
         </label>
@@ -683,7 +785,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
           disabled={targets.length === 0 || query.trim().length === 0 || inlineError !== null}
           onClick={() => void previewReplace()}
         >
-          Preview replace
+          {t("searchPanel.action.previewReplace")}
         </button>
       </form>
       <div
@@ -693,13 +795,13 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
       >
         {message}
       </div>
-      <RootErrors errors={rootErrors} operation="searched" />
+      <RootErrors errors={rootErrors} operation="searched" t={t} />
       {showReplaceStatus ? (
         <div className={styles.status} role="status">
           {replaceStatus}
         </div>
       ) : null}
-      <RootErrors errors={replaceErrors} operation="previewed" />
+      <RootErrors errors={replaceErrors} operation="previewed" t={t} />
       {groups.length > 0 ? (
         <SearchResultList
           groups={groups}
@@ -716,6 +818,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
         appliedRootIds={appliedRootIds}
         messages={replaceMessages}
         onApply={(preview) => void applyReplacePreview(preview)}
+        t={t}
       />
     </div>
   );

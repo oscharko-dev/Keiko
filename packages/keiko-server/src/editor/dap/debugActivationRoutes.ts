@@ -1,7 +1,10 @@
 import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../../routes.js";
-import { editorSettingsWorkspaceFingerprint } from "../settings/editorSettingsStore.js";
+import {
+  editorSettingsRootToken,
+  parseEditorSettingsEtag,
+} from "../settings/editorSettingsStore.js";
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 const MAX_ROOT_CHARS = 4_096;
@@ -73,11 +76,9 @@ function hasWorkspaceRevisionPrecondition(
   expectedRevision: number,
   realRoot: string,
 ): boolean {
-  const value = singleHeader(ctx, "if-match");
-  const match =
-    value === undefined ? null : /^"edm7-(\d+)-(\d+)-(\d+)-([A-Za-z0-9_-]{4,64})"$/u.exec(value);
-  if (match === null || Number(match[2]) !== expectedRevision) return false;
-  return match[4] === editorSettingsWorkspaceFingerprint(realRoot).slice(0, 24);
+  const parsed = parseEditorSettingsEtag(singleHeader(ctx, "if-match"));
+  if (parsed === undefined || parsed.workspaceRevision !== expectedRevision) return false;
+  return parsed.rootToken === editorSettingsRootToken(realRoot);
 }
 
 function unavailable(): RouteResult {

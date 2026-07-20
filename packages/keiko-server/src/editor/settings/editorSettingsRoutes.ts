@@ -20,7 +20,7 @@ import {
 } from "../../routes.js";
 import { SSE_HEADERS, startSseHeartbeat } from "../../sse.js";
 import type { EditorSettingsControlMutation } from "./editorSettingsControl.js";
-import { editorSettingsWorkspaceFingerprint } from "./editorSettingsStore.js";
+import { editorSettingsRootToken, parseEditorSettingsEtag } from "./editorSettingsStore.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_ROOT_CHARS = 4_096;
@@ -162,29 +162,25 @@ function idempotencyKey(ctx: RouteContext): string | undefined {
 }
 
 function parseRevisionPrecondition(ctx: RouteContext): ParsedRevisionPrecondition | undefined {
-  const value = singleHeader(ctx, "if-match");
-  const match =
-    value === undefined
-      ? null
-      : /^"edm7-(\d+)-(\d+)-(\d+)(?:-p\d+)?-([A-Za-z0-9_-]{4,64})"$/u.exec(value);
-  if (match === null) return undefined;
-  const userRevision = Number(match[1]);
-  const workspaceRevision = Number(match[2]);
-  const rootRevision = Number(match[3]);
+  const parsed = parseEditorSettingsEtag(singleHeader(ctx, "if-match"));
+  if (parsed === undefined) return undefined;
   if (
-    !validRevision(userRevision) ||
-    !validRevision(workspaceRevision) ||
-    !validRevision(rootRevision)
+    !validRevision(parsed.userRevision) ||
+    !validRevision(parsed.workspaceRevision) ||
+    !validRevision(parsed.rootRevision)
   ) {
     return undefined;
   }
-  return { rootToken: match[4] ?? "", userRevision, workspaceRevision, rootRevision };
+  return {
+    rootToken: parsed.rootToken,
+    userRevision: parsed.userRevision,
+    workspaceRevision: parsed.workspaceRevision,
+    rootRevision: parsed.rootRevision,
+  };
 }
 
 function expectedRootToken(realRoot: string | undefined): string {
-  return realRoot === undefined
-    ? "user"
-    : editorSettingsWorkspaceFingerprint(realRoot).slice(0, 24);
+  return editorSettingsRootToken(realRoot);
 }
 
 function hasRevisionPrecondition(

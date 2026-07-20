@@ -45,6 +45,7 @@ import { debugActivationWorkspaceFingerprint } from "../dap/debugActivationEvide
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 import {
   editorSettingsWorkspaceFingerprint,
+  formatEditorSettingsEtag,
   type EditorSettingsChangeEvent,
   type EditorSettingsIdempotencyRecord,
   type EditorSettingsStore,
@@ -186,9 +187,12 @@ function etag(
   rootRevision: number,
   profileRevision: number,
 ): string {
-  const rootToken = realRoot === undefined ? "user" : editorSettingsWorkspaceFingerprint(realRoot);
-  const profileToken = profileRevision === 0 ? "" : `-p${String(profileRevision)}`;
-  return `"edm7-${String(userRevision)}-${String(workspaceRevision)}-${String(rootRevision)}${profileToken}-${rootToken.slice(0, 24)}"`;
+  return formatEditorSettingsEtag(realRoot, {
+    userRevision,
+    workspaceRevision,
+    rootRevision,
+    profileRevision,
+  });
 }
 
 function combinedState(
