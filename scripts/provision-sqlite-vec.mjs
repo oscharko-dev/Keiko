@@ -27,28 +27,54 @@ const VERSION = "0.1.9";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TARGET_DIR = join(REPO_ROOT, ".sqlite-vec", VERSION);
 
-// SHA-256 of each upstream release tarball, computed from the published assets at
-// github.com/asg017/sqlite-vec/releases/tag/v0.1.9. A mismatch aborts before extraction.
+// Two SHA-256 digests per platform, both pinned HERE rather than beside the artifact: the upstream
+// release tarball, and the loadable library that tarball is expected to contain. The second is what
+// makes a cached provisioning safe to reuse. Recording it next to the binary — in a PROVENANCE file
+// the same attacker could rewrite — would only prove the directory is self-consistent, not that it
+// holds what upstream published. The digests below live in version control and pass through review;
+// the directory does not. Every value was computed by fetching the published asset from
+// github.com/asg017/sqlite-vec/releases/tag/v0.1.9, verifying the tarball, and hashing what it
+// extracted. A mismatch on either aborts before anything is loaded.
 const ASSETS = new Map([
   [
     "linux-x64",
-    ["linux-x86_64", "b959baa1d8dc88861b1edb337b8587178cdcb12d60b4998f9d10b6a82052d5d7"],
+    [
+      "linux-x86_64",
+      "b959baa1d8dc88861b1edb337b8587178cdcb12d60b4998f9d10b6a82052d5d7",
+      "5923730861b86c707cca5602b5f91092f9e52a46706dbc6e269fd4bb9c4498e8",
+    ],
   ],
   [
     "linux-arm64",
-    ["linux-aarch64", "ea03d39541e478fab5974253c461e1cb5d77742f69e40cf96e3fad5bc309a37c"],
+    [
+      "linux-aarch64",
+      "ea03d39541e478fab5974253c461e1cb5d77742f69e40cf96e3fad5bc309a37c",
+      "0b84cbd06418ca3040827deddd650539be05be0f657952426b926c8606217437",
+    ],
   ],
   [
     "darwin-arm64",
-    ["macos-aarch64", "8282126333399ddfe98bbbcc7a1936e7252625aac49df056a98be602e46bfd29"],
+    [
+      "macos-aarch64",
+      "8282126333399ddfe98bbbcc7a1936e7252625aac49df056a98be602e46bfd29",
+      "193e480c50b59a55977d166f4aaf0e1bc8832d6963516e5950f39e4d2ce0b793",
+    ],
   ],
   [
     "darwin-x64",
-    ["macos-x86_64", "53ad76e400786515e2edcaed2f01271dda846316390b761fadbd2dcf56aa4713"],
+    [
+      "macos-x86_64",
+      "53ad76e400786515e2edcaed2f01271dda846316390b761fadbd2dcf56aa4713",
+      "d39d33d16d302d57440d9a9cdbe3cc095e8324aa96b979b5171f545a6346996d",
+    ],
   ],
   [
     "win32-x64",
-    ["windows-x86_64", "51581189d52066b4dfc6631f6d7a3eab7dedc2260656ab09ca97ab3fb8165983"],
+    [
+      "windows-x86_64",
+      "51581189d52066b4dfc6631f6d7a3eab7dedc2260656ab09ca97ab3fb8165983",
+      "fcf98662a7ad9dce394b96a88f91032047823831b951c76636787c312a6476e6",
+    ],
   ],
 ]);
 
@@ -112,19 +138,6 @@ function verify(file, expectedSha256) {
 }
 
 const PROVENANCE_PATH = () => join(TARGET_DIR, "PROVENANCE.txt");
-const EXTENSION_DIGEST_PREFIX = "extension-sha256=";
-
-// The pinned digest covers the downloaded tarball, so it says nothing about the file left on disk
-// afterwards. Recording the extracted binary's own digest lets a later run re-verify the cache
-// instead of trusting it because the path exists.
-function recordedExtensionDigest() {
-  const file = PROVENANCE_PATH();
-  if (!existsSync(file)) return undefined;
-  const line = readFileSync(file, "utf8")
-    .split(/\r?\n/u)
-    .find((candidate) => candidate.startsWith(EXTENSION_DIGEST_PREFIX));
-  return line?.slice(EXTENSION_DIGEST_PREFIX.length);
-}
 
 function main() {
   const asset = assetFor(platform, arch);
@@ -134,14 +147,15 @@ function main() {
     console.log(`provision-sqlite-vec: no published asset for ${platform}-${arch}; skipping.`);
     return;
   }
-  const [assetPlatform, expectedSha256] = asset;
+  const [assetPlatform, expectedSha256, expectedExtensionSha256] = asset;
   const extensionPath = extensionPathFor(TARGET_DIR, platform);
   if (existsSync(extensionPath)) {
-    // Existence is not provenance. Re-verify against the digest recorded when this binary was first
-    // checksummed, so a tampered, truncated or half-extracted cache is replaced rather than loaded
-    // into the process as a native extension.
-    const recorded = recordedExtensionDigest();
-    if (recorded !== undefined && recorded === sha256Of(extensionPath)) {
+    // Existence is not provenance, and neither is a digest file sitting beside the binary — whoever
+    // can swap the library can rewrite that file to match. The cache is re-checked against the
+    // digest pinned in this script, which an attacker with write access to `.sqlite-vec` cannot
+    // reach, so a tampered, truncated or half-extracted cache is replaced rather than loaded into
+    // the process as native code.
+    if (sha256Of(extensionPath) === expectedExtensionSha256) {
       console.log(`provision-sqlite-vec: already provisioned at ${extensionPath}`);
       return;
     }
@@ -158,12 +172,14 @@ function main() {
   });
   rmSync(tarball, { force: true });
   if (!existsSync(extensionPath)) fail(`extracted archive did not contain ${extensionPath}`);
+  // A verified tarball is not yet a verified library: check what actually landed on disk against the
+  // pinned digest before anything is made executable, so a tar that unpacked something other than
+  // the published binary is caught here rather than at load time.
+  verify(extensionPath, expectedExtensionSha256);
   chmodSync(extensionPath, 0o755);
-  writeFileSync(
-    PROVENANCE_PATH(),
-    `${url}\nsha256=${expectedSha256}\n${EXTENSION_DIGEST_PREFIX}${sha256Of(extensionPath)}\n`,
-    "utf8",
-  );
+  // Informational only — a human-readable record of where this came from. Nothing trusts it; the
+  // digests that gate provisioning live in this script.
+  writeFileSync(PROVENANCE_PATH(), `${url}\nsha256=${expectedSha256}\n`, "utf8");
   console.log(`provision-sqlite-vec: verified and extracted to ${extensionPath}`);
 }
 
