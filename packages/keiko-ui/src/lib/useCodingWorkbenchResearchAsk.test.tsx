@@ -2,7 +2,10 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts";
 
-import { useCodingWorkbenchResearchAsk } from "./useCodingWorkbenchResearchAsk";
+import {
+  useCodingWorkbenchResearchAsk,
+  type UseCodingWorkbenchResearchAskInput,
+} from "./useCodingWorkbenchResearchAsk";
 
 const getResearchAskMock = vi.hoisted(() => vi.fn());
 
@@ -21,7 +24,7 @@ function active(): CodingWorkbenchRuntimeResearchChannelPayload {
   return { session: "active", pending: PENDING };
 }
 
-const EGRESS = {
+const EGRESS: UseCodingWorkbenchResearchAskInput = {
   runId: "run-1",
   permissionRequestId: "research-approval-1",
   isNetworkEgress: true,
@@ -92,7 +95,7 @@ describe("useCodingWorkbenchResearchAsk", () => {
     getResearchAskMock.mockResolvedValue(active());
 
     const { result, rerender } = renderHook(
-      (props: typeof EGRESS) => useCodingWorkbenchResearchAsk(props),
+      (props: UseCodingWorkbenchResearchAskInput) => useCodingWorkbenchResearchAsk(props),
       { initialProps: EGRESS },
     );
 
@@ -120,7 +123,7 @@ describe("useCodingWorkbenchResearchAsk", () => {
     });
 
     const { rerender } = renderHook(
-      (props: typeof EGRESS) => useCodingWorkbenchResearchAsk(props),
+      (props: UseCodingWorkbenchResearchAskInput) => useCodingWorkbenchResearchAsk(props),
       {
         initialProps: EGRESS,
       },
