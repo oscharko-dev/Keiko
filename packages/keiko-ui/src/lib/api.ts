@@ -111,10 +111,6 @@ import type {
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
   GitCommitMessageViolationCode,
-  CodingWorkbenchCodexAuthMethod,
-  CodingWorkbenchCodexAuthSetupPlan,
-  CodingWorkbenchCodexSubscriptionProfile,
-  CodingWorkbenchSidecarGatewayResult,
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
   GitDeliveryApprovalClaim,
@@ -160,8 +156,6 @@ import {
   validateGitRepositorySummary,
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
-  validateCodingWorkbenchCodexAuthSetupPlan,
-  validateCodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -217,86 +211,6 @@ function validateBffResponse<T>(path: string, value: unknown, validator: Respons
     `BFF response for ${path} failed contract validation: ${reason}`,
     502,
   );
-}
-
-function validateCodexSubscriptionProfileResponse(value: unknown): GitRepositoryValidation {
-  const result = validateCodingWorkbenchCodexSubscriptionProfile(value);
-  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
-}
-
-function validateCodexAuthSetupPlanResponse(value: unknown): GitRepositoryValidation {
-  const result = validateCodingWorkbenchCodexAuthSetupPlan(value);
-  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
-}
-
-const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
-  "missing-config",
-  "missing-provider",
-  "missing-credentials",
-  "non-chat",
-  "no-tool-calling",
-  "non-workflow-eligible",
-  "non-coding-capable",
-  "deployment-policy-disabled",
-  "subscription-source",
-]);
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isPositiveSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-}
-
-function validateSidecarRunMetadata(value: unknown, reasons: string[]): boolean {
-  if (!isObjectRecord(value)) {
-    reasons.push("runMetadata must be an object");
-    return false;
-  }
-  for (const key of [
-    "maxPromptTokens",
-    "maxOutputTokens",
-    "maxInputMessages",
-    "maxRequestBytes",
-  ] as const) {
-    if (!isPositiveSafeInteger(value[key])) reasons.push(`runMetadata.${key} must be positive`);
-  }
-  return reasons.length === 0;
-}
-
-function validateSidecarGatewayProfileResponse(value: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
-  if (!isObjectRecord(value)) return { ok: false, reasons: ["response must be an object"] };
-  if (value.status === "unavailable") {
-    if (
-      typeof value.reason !== "string" ||
-      !CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS.has(value.reason)
-    ) {
-      reasons.push("reason is invalid");
-    }
-    return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
-  }
-  if (value.status !== "available") {
-    return { ok: false, reasons: ["status is invalid"] };
-  }
-  if (typeof value.profileId !== "string" || value.profileId.length === 0) {
-    reasons.push("profileId must be a non-empty string");
-  }
-  if (typeof value.modelAlias !== "string" || value.modelAlias.length === 0) {
-    reasons.push("modelAlias must be a non-empty string");
-  }
-  if (typeof value.localEndpointPath !== "string" || value.localEndpointPath.length === 0) {
-    reasons.push("localEndpointPath must be a non-empty string");
-  }
-  if (typeof value.supportsStreaming !== "boolean") {
-    reasons.push("supportsStreaming must be boolean");
-  }
-  if (typeof value.supportsToolCalling !== "boolean") {
-    reasons.push("supportsToolCalling must be boolean");
-  }
-  validateSidecarRunMetadata(value.runMetadata, reasons);
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
 // GEN-RES-FETCH-001 — reads against the loopback BFF must not hang the UI when the BFF
@@ -394,39 +308,10 @@ export async function fetchHealth(): Promise<{ status: "ok"; version: string }> 
   return fetchJson("/api/health");
 }
 
-// ---------------------------------------------------------------------------
-// Coding Workbench
-// ---------------------------------------------------------------------------
-
-export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
-  return fetchJson(
-    "/api/coding-sidecar/gateway/profile",
-    { cache: "no-store" },
-    validateSidecarGatewayProfileResponse,
-  );
-}
-
-export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<CodingWorkbenchCodexSubscriptionProfile> {
-  return fetchJson(
-    "/api/coding-workbench/codex-subscription/profile",
-    { cache: "no-store" },
-    validateCodexSubscriptionProfileResponse,
-  );
-}
-
-export async function prepareCodingWorkbenchCodexSubscriptionSetup(
-  method: CodingWorkbenchCodexAuthMethod,
-): Promise<CodingWorkbenchCodexAuthSetupPlan> {
-  return fetchJson(
-    "/api/coding-workbench/codex-subscription/setup",
-    {
-      method: "POST",
-      cache: "no-store",
-      body: JSON.stringify({ method }),
-    },
-    validateCodexAuthSetupPlanResponse,
-  );
-}
+// The Coding Workbench provider profile fetchers (sidecar gateway + Codex subscription) used
+// to live here. They moved to `./coding-workbench-provider-api` because their contract validators
+// transitively value-import from `coding-workbench` / `coding-workbench-evidence`, and this
+// module is first-load-reachable from the desktop shell — see issue #2639.
 
 // ---------------------------------------------------------------------------
 // Update preflight
