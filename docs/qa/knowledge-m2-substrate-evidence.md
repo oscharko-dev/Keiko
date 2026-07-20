@@ -15,6 +15,13 @@ reports them on stdout and deliberately keeps them out of this document.
 | ANN            | encrypted unpinned diagnostic          |                                         fallback-encrypted-store |
 | ANN            | load diagnostic                        |                                 sqlite-vec-extension-load-failed |
 | ANN            | partition violations                   |                                                                0 |
+| ANN            | latency vector dimensions              |                                                              384 |
+| ANN            | latency large rows                     |                                                            50000 |
+| ANN            | latency small rows                     |                                                              500 |
+| ANN            | latency large minimum recall@10        |                                                            1.000 |
+| ANN            | degenerate injection max recall        |                                                            0.000 |
+| ANN            | degenerate decoy chunk count           |                                                               10 |
+| ANN            | latency characterization document      |             docs/qa/knowledge-m2-ann-latency-characterization.md |
 | Reranker       | facade importer count                  |                                                                1 |
 | Reranker       | importer-set hash                      | dd9bce4fc3ee0c1fb880f10a1e1837e9df317b3df318c8b324ed2f9ba2e1e8fd |
 | Evaluation     | fixture count                          |                                                               29 |

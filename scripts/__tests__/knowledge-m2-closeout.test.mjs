@@ -42,6 +42,21 @@ function annInput(overrides = {}) {
     loadFailureReason: "sqlite-vec-extension-load-failed",
     disabledStatus: "disabled",
     partitionViolations: 0,
+    // Issue #2631 additions. These must be present for `evaluateAnnProof` to accept the input:
+    // latency row-count anchors, ANN latency-fixture recall floor, and the injected-degenerate
+    // regression proof (recalls low across every query, decoy count carried alongside for the
+    // evidence table). Millisecond values are informational — used by the characterization document.
+    latencyVectorDimensions: 384,
+    latencyLargeRows: 50_000,
+    latencyLargeAnnMedianMs: 180,
+    latencyLargeExactMedianMs: 65,
+    latencyLargeMinRecall: 1,
+    latencySmallRows: 500,
+    latencySmallAnnMedianMs: 2.5,
+    latencySmallExactMedianMs: 0.4,
+    productionExactScanCap: 20_000,
+    degenerateInjectionRecalls: [0, 0, 0],
+    degenerateInjectionDecoyCount: 10,
     ...overrides,
   };
 }
@@ -161,6 +176,18 @@ describe("Knowledge M2 closeout proof evaluators", () => {
       { loadFailureReason: "unexpected" },
       { disabledStatus: "available" },
       { partitionViolations: 1 },
+      // Issue #2631 negative controls, one per direction of each new assertion. The latency-fixture
+      // row counts anchor the "recorded latency comparison" so a future change cannot silently
+      // shrink the comparison to a vacuous one; the latency-fixture recall floor prevents a stealth
+      // quality regression in the realistic-dim fixture; and the injected-degenerate assertion
+      // fires when the degenerate injection is silently reverted to the healthy path (any recall
+      // reaching the floor) or dropped entirely.
+      { latencyLargeRows: 25_000 },
+      { latencySmallRows: 250 },
+      { latencyLargeMinRecall: 0.94 },
+      { degenerateInjectionRecalls: [0, 1, 0] },
+      { degenerateInjectionRecalls: [] },
+      { degenerateInjectionRecalls: undefined },
     ];
     expect(failures.every((override) => !evaluateAnnProof(annInput(override)).ok)).toBe(true);
   });

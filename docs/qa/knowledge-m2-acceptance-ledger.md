@@ -73,6 +73,24 @@ ADR-0152 anticipates this and scopes it out explicitly: encrypted-store ANN is o
 requires its own ADR. This milestone honours that boundary rather than inferring permission from the
 port it introduced.
 
+**Resolved (2026-07-20).** Both gates were addressed in follow-on Wave-2 work:
+
+- Gate 2 (encrypted-store refusal) — resolved by [#2630](https://github.com/oscharko-dev/Keiko/issues/2630),
+  which introduced [ADR-0153](../adr/ADR-0153-encrypted-store-ann-and-the-temp-store-guarantee.md).
+  The guard now tests `PRAGMA temp_store` on the live connection instead of the encryption flag;
+  stores that enable the vector index pin TEMP storage to memory, and the RAM-resident index is
+  size-bounded (tighten-only). Encrypted-store ANN is reachable.
+- Gate 1 (feature defaults to off) — resolved by [#2631](https://github.com/oscharko-dev/Keiko/issues/2631),
+  which flipped `parseVectorIndexMode(undefined)` from `"disabled"` to `"auto"`. Activation is now
+  decided by CAPABILITY: with a validated sqlite-vec runtime the mode resolves to ANN; without it
+  the store keeps extension loading disabled and answers through brute force. The `ann-active`
+  closeout proof grew an injected-degenerate assertion (a swapped-out ANN index must drop recall
+  below the floor) and a recorded latency comparison at 384-dim; the break-even is the production
+  exact-scan cap, above which brute force is refused and ANN is the only path.
+
+The `NOT MET` verdict above records the state of `dev` on 2026-07-20 and is preserved as historical
+audit output. Verify the current state with `npm run check:knowledge-m2-closeout`.
+
 ## Known gaps carried forward
 
 - **`grounded-retrieval-eval.ts` keeps local `average()` / `ndcgAtK()`** rather than consuming the

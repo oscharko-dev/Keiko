@@ -162,6 +162,16 @@ receive only `semanticById`; the shared port never becomes a dependency of that 
 > read from the live connection instead of `isEncrypted`, stores that enable the index pin TEMP
 > storage to memory, and the RAM-resident index is size-bounded. Locks 1 and 2 below are untouched:
 > the mode still defaults to `disabled` and the runtime stays operator-provisioned.
+>
+> **Activation record (2026-07-20, Issue #2631).** Lock 1 is now superseded: `parseVectorIndexMode`
+> resolves `undefined` and unrecognised values to `"auto"` (was `"disabled"`), so the shipped
+> default no longer requires an operator to discover `KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX`. The mode
+> is decided by CAPABILITY at runtime: a store opened with a validated sqlite-vec runtime pins TEMP
+> storage to memory and uses ANN (ADR-0153 D2); a store opened without one keeps extension loading
+> disabled and continues to answer through brute force. Lock 2 is untouched — the runtime remains
+> operator-provisioned via `KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH`, and an unqualified or
+> missing binary still falls closed with `sqlite-vec-runtime-not-configured`. `"disabled"` remains
+> the explicit opt-out for operators who want the vector index off regardless of capability.
 
 The current sqlite-vec path is shipped but dormant behind three independent locks:
 

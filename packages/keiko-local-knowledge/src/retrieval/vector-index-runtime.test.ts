@@ -632,11 +632,26 @@ async function assertCorruptPathAndDisabledPin(identity: EmbeddingModelIdentity)
       reason: "sqlite-vec-extension-load-failed",
     });
     expect(failed.references.length).toBeGreaterThan(0);
+    // Issue #2631: `unset` now resolves to the default `mode: "auto"` and, absent a runtime, falls
+    // through to the brute-force fallback with a `sqlite-vec-runtime-not-configured` diagnostic.
+    // `disabled` still skips the vector-index probe entirely with `vector-index-disabled`. The
+    // operational outcome — the references returned to the user — must remain the same across both
+    // (the retrieval user sees identical answers); only the vector-index diagnostic differs.
     const unset = await runPipeline(fixture.store, realBinaryAdapter(), seeded.capsuleId);
     const disabled = await runPipeline(fixture.store, realBinaryAdapter(), seeded.capsuleId, {
       mode: "disabled",
     });
-    expect(JSON.stringify(unset)).toBe(JSON.stringify(disabled));
+    expect(JSON.stringify(unset.references)).toBe(JSON.stringify(disabled.references));
+    expect(unset.diagnostics?.vectorIndex).toMatchObject({
+      provider: "sqlite-vec",
+      status: "fallback-unavailable",
+      reason: "sqlite-vec-runtime-not-configured",
+    });
+    expect(disabled.diagnostics?.vectorIndex).toMatchObject({
+      provider: "brute-force",
+      status: "disabled",
+      reason: "vector-index-disabled",
+    });
   } finally {
     fixture.cleanup();
   }
@@ -677,20 +692,31 @@ process.once("exit", () => {
 });
 
 describe("sqlite-vec runtime resolution", () => {
-  // There is no bundled runtime to select: the npm package is rejected by the repository's
-  // supply-chain policy for an invalid upstream SPDX string, so an active mode on its own resolves
-  // to no module and retrieval keeps using brute force. Activation requires an operator-provisioned
-  // extension path (ADR-0152 D2) or a directly injected module.
-  it("resolves no runtime from the mode alone, so activation stays explicit", () => {
-    const disabled = resolveVectorIndexOptions(undefined, {});
+  // Issue #2631: the shipped default resolves to auto — the vector-index knob is not a discovery
+  // burden a user has to find. The runtime bytes still gate ACTIVATION (ADR-0152 D2): the mode alone
+  // resolves to no module, so a store opened with only the default keeps extension loading disabled
+  // and retrieval keeps using brute force until an operator-provisioned extension path or an injected
+  // module arrives. "disabled" is preserved as the explicit opt-out for the same knob.
+  it("defaults to auto without any config, leaving activation gated on runtime bytes", () => {
+    const shipped = resolveVectorIndexOptions(undefined, {});
     const active = resolveVectorIndexOptions(undefined, {
       KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto",
     });
-    expect(disabled).toMatchObject({ mode: "disabled" });
-    expect(disabled.sqliteVec).toBeUndefined();
+    expect(shipped).toMatchObject({ mode: "auto" });
+    expect(shipped.sqliteVec).toBeUndefined();
+    expect(shipped.sqliteVecExtensionPath).toBeUndefined();
     expect(active).toMatchObject({ mode: "auto" });
     expect(active.sqliteVec).toBeUndefined();
     expect(active.sqliteVecExtensionPath).toBeUndefined();
+  });
+
+  it("honours an explicit disabled opt-out that overrides the default", () => {
+    const disabled = resolveVectorIndexOptions(undefined, {
+      KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "disabled",
+    });
+    expect(disabled).toMatchObject({ mode: "disabled" });
+    expect(disabled.sqliteVec).toBeUndefined();
+    expect(disabled.sqliteVecExtensionPath).toBeUndefined();
   });
 
   it("carries an operator-provisioned extension path through as the activation route", () => {
@@ -715,6 +741,81 @@ describe("sqlite-vec runtime resolution", () => {
       fixture.cleanup();
     }
   });
+
+  // Issue #2631 acceptance: the shipped default resolves by CAPABILITY end-to-end. With the same
+  // resolved options ({ mode: "auto" }) but no runtime bytes, the store opens without extension
+  // support and search reports the fail-closed diagnostic (brute-force fallback engages). Provisioning
+  // a runtime — module or extension path — flips the same default to ANN without any env var change.
+  it("resolves to brute force by capability when no runtime is provisioned", async () => {
+    const identity = await verifiedIdentity(realBinaryAdapter());
+    const shipped = resolveVectorIndexOptions(undefined, {});
+    expect(shipped.mode).toBe("auto");
+    const fixture = managedStore(shipped);
+    try {
+      const seeded = await seedCapsuleWithVectors(fixture.store, {
+        capsuleId: "cap-default-no-runtime",
+        sourceId: "src-default-no-runtime",
+        documentId: "doc-default-no-runtime",
+        identity,
+        text: "alpha",
+      });
+      const capsule = getCapsule(fixture.store, seeded.capsuleId);
+      if (capsule === undefined) throw new Error("expected default-no-runtime capsule");
+      const result = searchVectorIndex(
+        { store: fixture.store, capsule, queryVector: QUERY_VECTOR, candidateLimit: TOP_K },
+        shipped,
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        diagnostics: {
+          provider: "sqlite-vec",
+          status: "fallback-unavailable",
+          reason: "sqlite-vec-runtime-not-configured",
+        },
+      });
+      // The gate that permits extension loading (store.ts:277) must still refuse an unconfigured
+      // store — the default-on switch cannot widen the ADR-0152 D2 activation obligation.
+      expect(() => {
+        fixture.store._internal.db.enableLoadExtension(true);
+      }).toThrow();
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("resolves to ANN by capability when a runtime is provisioned", async () => {
+    if (!SUPPORTED_RUNTIME) return;
+    const adapter = realBinaryAdapter();
+    const identity = await verifiedIdentity(adapter);
+    // The env carries only the extension path — no `KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX` set. The
+    // default (auto) plus the provisioned runtime is the entire activation route; a user who never
+    // discovers the mode env var still gets ANN when the operator has provisioned the binary.
+    const shipped = resolveVectorIndexOptions(undefined, {
+      KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH: PROVISIONED_EXTENSION_PATH,
+    });
+    expect(shipped).toMatchObject({
+      mode: "auto",
+      sqliteVecExtensionPath: PROVISIONED_EXTENSION_PATH,
+    });
+    const fixture = managedStore(shipped);
+    try {
+      const corpus = await seedAnnCorpus(fixture, identity, "cap-default-with-runtime");
+      const capsule = getCapsule(fixture.store, corpus.capsuleId);
+      if (capsule === undefined) throw new Error("expected default-with-runtime capsule");
+      const result = searchVectorIndex(
+        { store: fixture.store, capsule, queryVector: QUERY_VECTOR, candidateLimit: TOP_K },
+        shipped,
+      );
+      expect(result.ok).toBe(true);
+      expect(result.diagnostics).toMatchObject({
+        provider: "sqlite-vec",
+        status: "available",
+        indexName: "keiko_lk_vec_4_cosine",
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  }, 60_000);
 });
 
 describe("sqlite-vec real binary retrieval journey", () => {

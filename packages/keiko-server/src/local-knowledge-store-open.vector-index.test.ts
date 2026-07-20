@@ -3,23 +3,43 @@ import { describe, expect, it } from "vitest";
 import { localKnowledgeVectorIndexOptions } from "./local-knowledge-store-open.js";
 
 describe("localKnowledgeVectorIndexOptions", () => {
-  it("keeps unset and invalid modes disabled", () => {
-    const unset = localKnowledgeVectorIndexOptions({ env: {} });
+  // Issue #2631: production deps.env carries no `KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX` in the shipped
+  // configuration, so the default the funnel returns for every server handler is what the product
+  // actually runs on. It must resolve to auto (default-on by capability); the runtime bytes then gate
+  // ACTIVATION downstream at `openKnowledgeStore` (ADR-0152 D2).
+  it("resolves the shipped funnel to auto without any env config", () => {
+    const shipped = localKnowledgeVectorIndexOptions({ env: {} });
+
+    expect(shipped.mode).toBe("auto");
+    expect(shipped.sqliteVec).toBeUndefined();
+    expect(shipped.sqliteVecExtensionPath).toBeUndefined();
+  });
+
+  // An unrecognised value is treated as unset — the same default-on outcome — rather than a silent
+  // opt-out. The operator override is a single explicit value: "disabled".
+  it("falls through unrecognised values to the auto default", () => {
     const invalid = localKnowledgeVectorIndexOptions({
       env: { KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "enabled" },
     });
 
-    expect(unset.mode).toBe("disabled");
-    expect(unset.sqliteVec).toBeUndefined();
-    expect(invalid.mode).toBe("disabled");
+    expect(invalid.mode).toBe("auto");
     expect(invalid.sqliteVec).toBeUndefined();
+    expect(invalid.sqliteVecExtensionPath).toBeUndefined();
   });
 
-  // There is no bundled runtime to map to: sqlite-vec is not an npm dependency, because its
-  // published SPDX string is invalid and the repository's supply-chain policy rejects it. An active
-  // mode alone therefore resolves to no module, and the store keeps extension loading disabled —
-  // activation needs an operator-provisioned extension path (ADR-0152 D2).
-  it("maps auto mode without selecting any runtime, so activation stays explicit", () => {
+  it("honours an explicit disabled override", () => {
+    const disabled = localKnowledgeVectorIndexOptions({
+      env: { KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "disabled" },
+    });
+
+    expect(disabled.mode).toBe("disabled");
+    expect(disabled.sqliteVec).toBeUndefined();
+    expect(disabled.sqliteVecExtensionPath).toBeUndefined();
+  });
+
+  // Explicit sqlite-vec still passes through as before; the default-on switch does not preclude
+  // pinning the mode to sqlite-vec by operator choice.
+  it("maps explicit auto without selecting any runtime, so activation stays explicit", () => {
     const resolved = localKnowledgeVectorIndexOptions({
       env: { KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto" },
     });
