@@ -2877,7 +2877,7 @@ function activityAwareWorkspaceLifecycle(
   };
 }
 
-// eslint-disable-next-line complexity -- process-lifetime dependency manifest has high fixed branching but bounded surface area.
+/* eslint-disable complexity */
 // eslint-disable-next-line max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime: DapRuntimeReference = {
@@ -3008,6 +3008,8 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   };
 }
 
+/* eslint-enable complexity */
+
 interface CodingRuntimeControlPlaneDeps {
   codingRuntimeOrchestrator?: UiHandlerDeps["codingRuntimeOrchestrator"];
   codingRuntimeEventHub?: UiHandlerDeps["codingRuntimeEventHub"];
@@ -3024,27 +3026,30 @@ function buildCodingRuntimeControlPlaneDeps(
   unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined,
 ): CodingRuntimeControlPlaneDeps {
   if (controlPlane === undefined) return {};
-  const deps: CodingRuntimeControlPlaneDeps = {
+  return {
     codingRuntimeOrchestrator: controlPlane.orchestrator,
     codingRuntimeEventHub: controlPlane.eventHub,
     codingRuntimeHostQualified: controlPlane.runtimeHostQualified,
+    ...(controlPlane.safeActivityProjection !== undefined
+      ? { codingSafeActivityProjection: controlPlane.safeActivityProjection }
+      : {}),
+    ...(!controlPlane.runtimeHostQualified
+      ? { codingRuntimeUnavailableReason: unavailableReason ?? "runtime-unqualified" }
+      : {}),
+    ...(controlPlane.cancellationRegistry !== undefined
+      ? {
+          codingSidecarGatewayCancellationRegistry: controlPlane.cancellationRegistry,
+        }
+      : {}),
+    ...(controlPlane.runtimeCapabilityAuthenticator !== undefined
+      ? { runtimeCapabilityAuthenticator: controlPlane.runtimeCapabilityAuthenticator }
+      : {}),
+    ...(controlPlane.openCodeGatewayReadinessRegistry !== undefined
+      ? {
+          openCodeGatewayReadinessRegistry: controlPlane.openCodeGatewayReadinessRegistry,
+        }
+      : {}),
   };
-  if (controlPlane.safeActivityProjection !== undefined) {
-    deps.codingSafeActivityProjection = controlPlane.safeActivityProjection;
-  }
-  if (!controlPlane.runtimeHostQualified) {
-    deps.codingRuntimeUnavailableReason = unavailableReason ?? "runtime-unqualified";
-  }
-  if (controlPlane.cancellationRegistry !== undefined) {
-    deps.codingSidecarGatewayCancellationRegistry = controlPlane.cancellationRegistry;
-  }
-  if (controlPlane.runtimeCapabilityAuthenticator !== undefined) {
-    deps.runtimeCapabilityAuthenticator = controlPlane.runtimeCapabilityAuthenticator;
-  }
-  if (controlPlane.openCodeGatewayReadinessRegistry !== undefined) {
-    deps.openCodeGatewayReadinessRegistry = controlPlane.openCodeGatewayReadinessRegistry;
-  }
-  return deps;
 }
 
 function buildRuntimeMutationLeaseDependency(
