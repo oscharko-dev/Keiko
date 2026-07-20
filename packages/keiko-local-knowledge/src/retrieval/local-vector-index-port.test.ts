@@ -155,6 +155,77 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
     }
   });
 
+  it("refuses on embedding-identity mismatch even when dimensions and metric agree", () => {
+    // Same vectorDimensions + vectorMetric as the capsule's identity, so `isValidVectorIndexQuery`
+    // accepts the query and the LK dimension check inside `searchSqliteVecIndex` would not fire.
+    // What must fail closed is the CANONICAL identity tuple: `embeddingIdentityKey` folds in
+    // `embeddingSpaceFingerprint` and `instructionVersion`, so two vectors from different
+    // embedding spaces are refused before the port dispatches. This is the "identity mismatch
+    // -> ok:false" branch the port contract classes as normal fail-closed behavior; without it,
+    // an incompatible-identity query would silently receive scores from the capsule's index.
+    const fixture = freshStore();
+    try {
+      createTestCapsule(fixture.store, "cap-port-a");
+      const port = createLocalKnowledgeStoreVectorIndexPort({
+        namespace: "knowledge",
+        store: fixture.store,
+      });
+
+      const roguesIdentity: EmbeddingModelIdentity = {
+        ...DEFAULT_EMBEDDING,
+        // The fingerprint uniquely identifies an embedding space; changing it must invalidate
+        // the identity match even though every other field agrees with the capsule's identity.
+        embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v2:rogue",
+      };
+
+      const result = port.search(baseQuery({ identity: roguesIdentity }));
+      expect(result).toStrictEqual({
+        ok: false,
+        diagnostics: {
+          provider: "sqlite-vec",
+          status: "fallback-incompatible-identity",
+          reason: "identity-mismatch",
+        },
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("round-trips a capsule id containing the partition-key separator without collision", () => {
+    // Regression: an earlier revision used a raw `::` delimiter without escaping, so a capsule
+    // id like `victim|source-x` (or `victim::source-x` under the earlier scheme) would be
+    // parsed as capsule `victim` with source `source-x` and cross the partition boundary the
+    // port exists to enforce. `encodePartitionKey` / `parsePartitionKey` must be injective for
+    // every branded string a `KnowledgeCapsuleId` can carry — including opaque ids that happen
+    // to contain the current separator character or any other URI-reserved character.
+    const fixture = freshStore();
+    try {
+      const rogueId = "cap|rogue::x/y%z";
+      createTestCapsule(fixture.store, rogueId);
+      const port = createLocalKnowledgeStoreVectorIndexPort({
+        namespace: "knowledge",
+        store: fixture.store,
+      });
+
+      const encoded = encodePartitionKey(rogueId as KnowledgeCapsuleId);
+      // The encoded key does not contain a bare separator that would let a rogue split occur.
+      // Both `|` and `%` are percent-encoded by `encodeURIComponent`, so the exact string a
+      // splitter would look for cannot appear inside the encoded capsule id component.
+      expect(encoded.includes("cap|rogue")).toBe(false);
+      expect(encoded).toBe(encodeURIComponent(rogueId));
+
+      // Round-trips to the capsule and REACHES the identity guard (not the capsule-absent one),
+      // proving the encoded key resolved back to the capsule the caller named.
+      const result = port.search(baseQuery({ partitionKey: encoded }));
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics.status).not.toBe("port-capsule-absent");
+      expect(result.diagnostics.status).not.toBe("port-invalid-query");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("holds the partitionKey invariant: a query for capsule A never reads capsule B", () => {
     const fixture = freshStore();
     try {
@@ -249,23 +320,12 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
   });
 
   it("surfaces the LK identity-mismatch flag when the port refuses via that status", () => {
+    // A stub port is used here rather than the real one so the assertion isolates the adapter's
+    // flag reconstruction (status label → LK-native `sawIdentityIncompatible: true`) from the
+    // separate concern of "when does the real port emit that status".
     const fixture = freshStore();
     try {
       const capsule = createTestCapsule(fixture.store);
-      const port = createLocalKnowledgeStoreVectorIndexPort({
-        namespace: "knowledge",
-        store: fixture.store,
-        vectorIndexOptions: { mode: "auto" },
-      });
-      const adapter = vectorIndexPortAsKnowledgeAdapter(port);
-
-      // A query vector whose length matches the CAPSULE's dimensions but which the LK path
-      // reports as fallback-incompatible-identity through the sqlite-vec runtime absence — the
-      // reconstruction happens off the status label, so it must not confuse the two cases. To
-      // isolate the identity-flag reconstruction, we use a stub port that directly returns the
-      // status the adapter is supposed to relabel.
-      void capsule;
-      void port;
       const stubPort: VectorIndexPort = {
         search: (_query) => ({
           ok: false,
@@ -276,8 +336,8 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
           },
         }),
       };
-      const stubAdapter = vectorIndexPortAsKnowledgeAdapter(stubPort);
-      const result = stubAdapter.searchCapsule({
+      const adapter = vectorIndexPortAsKnowledgeAdapter(stubPort);
+      const result = adapter.searchCapsule({
         store: fixture.store,
         capsule,
         queryVector: new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
@@ -287,7 +347,6 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
       expect(result.sawIdentityIncompatible).toBe(true);
       expect(result.sawDimensionCompatible).toBe(false);
       expect(result.diagnostics.status).toBe("fallback-incompatible-identity");
-      expect(adapter).toBeDefined();
     } finally {
       fixture.cleanup();
     }

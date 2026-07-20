@@ -13,6 +13,7 @@
 // content-free `ok: false` — never an exception, never a body, never a path.
 
 import {
+  embeddingIdentityKey,
   isValidVectorIndexQuery,
   type VectorIndexCandidateRef,
   type VectorIndexDiagnostics,
@@ -42,22 +43,32 @@ import {
 export type LocalKnowledgeStoreNamespace = "knowledge" | "repo";
 
 // Partition-key layout accepted by the port:
-//   * `capsuleId`               – the whole capsule (no source restriction).
-//   * `capsuleId::sourceId`     – that capsule narrowed to the named source.
+//   * `capsuleId`                                  – the whole capsule (no source restriction).
+//   * `capsuleId + "|" + encoded(sourceId)`        – that capsule narrowed to the named source.
 //
 // The composite form is what the LK adapter shim uses to preserve the current per-source KNN
 // semantic in `querySqliteVecIndex`: one port call per source, with the port narrowing the
 // underlying sqlite-vec query with `sourceFilter` accordingly. The port itself never widens
 // beyond what its partition key names — the partition invariant lives in the SQL.
-const PARTITION_KEY_SEPARATOR = "::";
+//
+// Both components are percent-encoded with `encodeURIComponent` and the SEPARATOR itself is a
+// character that percent-encoding always escapes when present in an input (`|`). That makes the
+// encoding injective across every branded string a `KnowledgeCapsuleId` or `KnowledgeSourceId`
+// can carry — including opaque ids that happen to contain the separator, colons, or any other
+// URI-reserved character — so a rogue id can never mis-parse into someone else's partition.
+const PARTITION_KEY_SEPARATOR = "|";
+
+function encodeIdComponent(id: string): string {
+  return encodeURIComponent(id);
+}
 
 export function encodePartitionKey(
   capsuleId: KnowledgeCapsuleId,
   sourceId?: KnowledgeSourceId,
 ): string {
-  const cid = String(capsuleId);
-  if (sourceId === undefined) return cid;
-  return `${cid}${PARTITION_KEY_SEPARATOR}${String(sourceId)}`;
+  const encodedCapsule = encodeIdComponent(String(capsuleId));
+  if (sourceId === undefined) return encodedCapsule;
+  return `${encodedCapsule}${PARTITION_KEY_SEPARATOR}${encodeIdComponent(String(sourceId))}`;
 }
 
 interface ParsedPartitionKey {
@@ -65,13 +76,22 @@ interface ParsedPartitionKey {
   readonly sourceId?: string;
 }
 
-function parsePartitionKey(partitionKey: string): ParsedPartitionKey {
+// `parsePartitionKey` returns `undefined` when the key cannot be decoded — a malformed key MUST
+// fail closed instead of silently narrowing to a partial parse, because a mis-parsed key would
+// address the wrong capsule and cross the partition boundary the port exists to enforce.
+function parsePartitionKey(partitionKey: string): ParsedPartitionKey | undefined {
   const separatorAt = partitionKey.indexOf(PARTITION_KEY_SEPARATOR);
-  if (separatorAt < 0) return { capsuleId: partitionKey };
-  return {
-    capsuleId: partitionKey.slice(0, separatorAt),
-    sourceId: partitionKey.slice(separatorAt + PARTITION_KEY_SEPARATOR.length),
-  };
+  try {
+    if (separatorAt < 0) return { capsuleId: decodeURIComponent(partitionKey) };
+    return {
+      capsuleId: decodeURIComponent(partitionKey.slice(0, separatorAt)),
+      sourceId: decodeURIComponent(
+        partitionKey.slice(separatorAt + PARTITION_KEY_SEPARATOR.length),
+      ),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function diagnostic(provider: string, status: string, reason?: string): VectorIndexDiagnostics {
@@ -96,6 +116,24 @@ function portCapsuleAbsent(): VectorIndexResult {
   return {
     ok: false,
     diagnostics: diagnostic("brute-force", "port-capsule-absent", "capsule-not-found"),
+  };
+}
+
+function portInvalidPartitionKey(): VectorIndexResult {
+  return {
+    ok: false,
+    diagnostics: diagnostic("brute-force", "port-invalid-query", "invalid-partition-key"),
+  };
+}
+
+// Emitted when the caller-declared `query.identity` and the target capsule's stored identity are
+// not byte-compatible (canonical `embeddingIdentityKey` comparison). Uses the LK-native status
+// `fallback-incompatible-identity` so the adapter shim reconstructs `sawIdentityIncompatible:
+// true` and lane state stays consistent with what the LK-native path would have done.
+function portIdentityMismatch(): VectorIndexResult {
+  return {
+    ok: false,
+    diagnostics: diagnostic("sqlite-vec", "fallback-incompatible-identity", "identity-mismatch"),
   };
 }
 
@@ -133,11 +171,16 @@ export interface CreateLocalKnowledgeStoreVectorIndexPortOptions {
 //      No implementation re-invents this guard.
 //   2. `query.namespace === namespace` — the port refuses cross-namespace answers even for an
 //      opaque caller that hands the wrong label in.
-//   3. The capsule addressed by `partitionKey` exists in the store.
+//   3. `parsePartitionKey(query.partitionKey)` yields a decodable key.
+//   4. The capsule addressed by that key exists in the store.
+//   5. `embeddingIdentityKey(query.identity) === embeddingIdentityKey(capsule.identity)`. The
+//      port contract classes identity mismatch as a normal fail-closed condition; without this
+//      check, a caller declaring an incompatible identity (same dimensions) would still receive
+//      candidates scored against the capsule's index, which is a silent fail-OPEN.
 //
-// Every refusal is `ok: false` with content-free diagnostics; identity/dimension checks and
-// runtime availability fall through to `searchVectorIndex`, whose fallback vocabulary is the
-// observable surface AC1 pins.
+// Every refusal is `ok: false` with content-free diagnostics. Runtime availability, metric
+// support, dimension checks against the STORE, and the encrypted-store TEMP-store gate all fall
+// through to `searchVectorIndex`, whose fallback vocabulary is the observable surface AC1 pins.
 export function createLocalKnowledgeStoreVectorIndexPort(
   options: CreateLocalKnowledgeStoreVectorIndexPortOptions,
 ): VectorIndexPort {
@@ -147,8 +190,15 @@ export function createLocalKnowledgeStoreVectorIndexPort(
       if (!isValidVectorIndexQuery(query)) return portInvalidQuery();
       if (query.namespace !== namespace) return portNamespaceMismatch(namespace);
       const parsed = parsePartitionKey(query.partitionKey);
+      if (parsed === undefined) return portInvalidPartitionKey();
       const capsule = getCapsule(store, parsed.capsuleId as KnowledgeCapsuleId);
       if (capsule === undefined) return portCapsuleAbsent();
+      if (
+        embeddingIdentityKey(query.identity) !==
+        embeddingIdentityKey(capsule.embeddingModelIdentity)
+      ) {
+        return portIdentityMismatch();
+      }
       const request: VectorIndexSearchRequest = {
         store,
         capsule,
@@ -254,20 +304,25 @@ interface PortDispatch {
 }
 
 // Preserve the current per-source KNN cadence: without a source filter we make ONE port call
-// against `capsuleId`; with a source filter we make ONE call per source against
-// `capsuleId::sourceId`. Merging + slicing to `candidateLimit` happens on the union, matching
-// the current `sourceFilter.flatMap` + sort + slice pattern in `querySqliteVecIndex`.
+// against `capsuleId`; with a source filter we make ONE call per source against the encoded
+// composite key. Merging + slicing to `candidateLimit` happens on the union, matching the
+// current `sourceFilter.flatMap` + sort + slice pattern in `querySqliteVecIndex`.
+//
+// The two adapter shims (knowledge/repo) share this function; the only difference is the
+// namespace label the port sees on its query. Parameterising here removes a duplicate branch
+// that would otherwise be maintained in lockstep across both shims.
 function dispatchPortCalls(
   port: VectorIndexPort,
+  namespace: LocalKnowledgeStoreNamespace,
   request: VectorIndexSearchRequest,
 ): readonly PortDispatch[] {
-  const capsulePartition = String(request.capsule.id);
+  const capsulePartition = encodePartitionKey(request.capsule.id);
   if (request.sourceFilter === undefined || request.sourceFilter.length === 0) {
     return [
       {
         partitionKey: capsulePartition,
         result: port.search({
-          namespace: "knowledge",
+          namespace,
           partitionKey: capsulePartition,
           identity: request.capsule.embeddingModelIdentity,
           queryVector: request.queryVector,
@@ -276,12 +331,12 @@ function dispatchPortCalls(
       },
     ];
   }
-  return request.sourceFilter.map((sourceId) => {
+  return request.sourceFilter.map((sourceId): PortDispatch => {
     const partitionKey = encodePartitionKey(request.capsule.id, sourceId);
     return {
       partitionKey,
       result: port.search({
-        namespace: "knowledge",
+        namespace,
         partitionKey,
         identity: request.capsule.embeddingModelIdentity,
         queryVector: request.queryVector,
@@ -295,53 +350,21 @@ function dispatchPortCalls(
 // via `VectorIndexOptions.adapter` (ADR-0152 D3). The shim converts each LK request into one
 // or more port queries, merges the candidate sets, applies `minScore`, sorts, and slices to
 // `candidateLimit` — the same steps `querySqliteVecIndex` performs internally today.
-//
-// The shim always calls the port with `namespace: "knowledge"` because the LK request comes
-// from LK retrieval, which is the knowledge-namespace consumer. A repo-namespace shim would
-// call the port with `namespace: "repo"` (see `createRepoVectorIndexAdapter` below).
 export function vectorIndexPortAsKnowledgeAdapter(port: VectorIndexPort): VectorIndexAdapter {
   return {
     searchCapsule(request: VectorIndexSearchRequest): VectorIndexSearchResult {
-      return mergePortDispatches(dispatchPortCalls(port, request), request);
+      return mergePortDispatches(dispatchPortCalls(port, "knowledge", request), request);
     },
   };
 }
 
-// `dispatchPortCalls` labels every partition key as `knowledge`; for repo the shim relabels the
-// call by making its own dispatch. The two shims share `mergePortDispatches` so behaviour stays
-// symmetric between namespaces.
+// The repo shim reuses `dispatchPortCalls` with a `namespace: "repo"` label so the port sees
+// the correct partition-name origin. Behaviour is otherwise identical — merging, minScore,
+// sort, slice, and diagnostic reconstruction stay symmetric between the two shims.
 export function vectorIndexPortAsRepoAdapter(port: VectorIndexPort): VectorIndexAdapter {
   return {
     searchCapsule(request: VectorIndexSearchRequest): VectorIndexSearchResult {
-      const capsulePartition = String(request.capsule.id);
-      const dispatches: PortDispatch[] =
-        request.sourceFilter === undefined || request.sourceFilter.length === 0
-          ? [
-              {
-                partitionKey: capsulePartition,
-                result: port.search({
-                  namespace: "repo",
-                  partitionKey: capsulePartition,
-                  identity: request.capsule.embeddingModelIdentity,
-                  queryVector: request.queryVector,
-                  candidateLimit: request.candidateLimit,
-                }),
-              },
-            ]
-          : request.sourceFilter.map((sourceId) => {
-              const partitionKey = encodePartitionKey(request.capsule.id, sourceId);
-              return {
-                partitionKey,
-                result: port.search({
-                  namespace: "repo",
-                  partitionKey,
-                  identity: request.capsule.embeddingModelIdentity,
-                  queryVector: request.queryVector,
-                  candidateLimit: request.candidateLimit,
-                }),
-              };
-            });
-      return mergePortDispatches(dispatches, request);
+      return mergePortDispatches(dispatchPortCalls(port, "repo", request), request);
     },
   };
 }
