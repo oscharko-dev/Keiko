@@ -18,10 +18,10 @@
 
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { arch, platform } from "node:process";
+import { arch, env, platform } from "node:process";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const VERSION = "0.1.9";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -54,9 +54,33 @@ const ASSETS = new Map([
 
 const EXTENSION_SUFFIX = { darwin: "dylib", win32: "dll" };
 
+// Resolve the two helper binaries from fixed system locations rather than letting the OS search
+// PATH for them. This runs before the checksum below has proven anything, so a writable PATH entry
+// shadowing `curl` or `tar` would execute attacker-chosen code with the developer's privileges at
+// the one moment nothing has been verified yet. Both binaries ship with every platform this script
+// provisions for — Windows has carried curl.exe and bsdtar since 10 1803 — so pinning the path
+// costs no portability. Node's own fetch() is deliberately not used: it does not pick up
+// system/proxy trust stores the way curl does, and fails with UNABLE_TO_GET_ISSUER_CERT_LOCALLY
+// behind a TLS-inspecting corporate proxy.
+const SYSTEM_BINARIES =
+  platform === "win32"
+    ? {
+        curl: join(env.SystemRoot ?? "C:\\Windows", "System32", "curl.exe"),
+        tar: join(env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"),
+      }
+    : { curl: "/usr/bin/curl", tar: "/usr/bin/tar" };
+
 function fail(message) {
   console.error(`provision-sqlite-vec: ${message}`);
   process.exit(1);
+}
+
+function systemBinary(name) {
+  const binaryPath = SYSTEM_BINARIES[name];
+  // Fail closed rather than falling back to a PATH lookup: an absent system binary is a broken
+  // host, and silently searching PATH would reintroduce exactly the shadowing this guards against.
+  if (!existsSync(binaryPath)) fail(`required system binary not found at ${binaryPath}`);
+  return binaryPath;
 }
 
 export function assetFor(hostPlatform, hostArch) {
@@ -70,7 +94,7 @@ export function extensionPathFor(targetDir, hostPlatform) {
 
 function download(url, destination) {
   // curl over an explicitly pinned https scheme, matching the Sonar Scanner step in ci.yml.
-  execFileSync("curl", ["--proto", "=https", "-sSfL", "-o", destination, url], {
+  execFileSync(systemBinary("curl"), ["--proto", "=https", "-sSfL", "-o", destination, url], {
     stdio: ["ignore", "ignore", "inherit"],
   });
 }
@@ -102,7 +126,7 @@ function main() {
   const url = `https://github.com/asg017/sqlite-vec/releases/download/v${VERSION}/sqlite-vec-${VERSION}-loadable-${assetPlatform}.tar.gz`;
   download(url, tarball);
   verify(tarball, expectedSha256);
-  execFileSync("tar", ["-xzf", tarball, "-C", TARGET_DIR], {
+  execFileSync(systemBinary("tar"), ["-xzf", tarball, "-C", TARGET_DIR], {
     stdio: ["ignore", "ignore", "inherit"],
   });
   rmSync(tarball, { force: true });
@@ -112,6 +136,10 @@ function main() {
   console.log(`provision-sqlite-vec: verified and extracted to ${extensionPath}`);
 }
 
-if (process.argv[1] !== undefined && import.meta.url === `file://${resolve(process.argv[1])}`) {
+// pathToFileURL, not a `file://` template: on Windows a resolved path is `C:\...`, which yields
+// `file://C:\...` instead of the `file:///C:/...` form import.meta.url actually carries, so the
+// comparison was always false there and the script silently did nothing when run directly.
+const entryPoint = process.argv[1];
+if (entryPoint !== undefined && import.meta.url === pathToFileURL(resolve(entryPoint)).href) {
   main();
 }
