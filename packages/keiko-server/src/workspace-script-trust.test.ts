@@ -183,6 +183,44 @@ describe("WorkspaceScriptTrustService", () => {
     expect(spawn).toHaveBeenCalledOnce();
   });
 
+  it("grants a root that has no package manifest and re-restricts it once one appears", () => {
+    // ADR-0147 D9 keeps `absent` and `unavailable` distinct. Conflating them made a root without an
+    // npm manifest ungrantable, so a Go, Java, Python, Rust or shell workspace could never leave
+    // Restricted Mode and its managed language server could never start (#2613).
+    const bare = mkdtempSync(join(tmpdir(), "keiko-script-trust-bare-"));
+    try {
+      store.createProject(bare, "bare");
+      const trust = createWorkspaceScriptTrustService({ store });
+
+      expect(trust.trustLevelForRoot(bare)).toBe("restricted");
+      expect(trust.grant(bare)).toEqual({ trusted: true });
+      expect(trust.trustLevelForRoot(bare)).toBe("trusted");
+      expect(trust.status(bare)).toMatchObject({ trust: "trusted", reason: "human-grant" });
+
+      // A manifest appearing later changes the basis, so the grant must not survive it.
+      writeFileSync(join(bare, "package.json"), MANIFEST, "utf8");
+      expect(trust.trustLevelForRoot(bare)).toBe("restricted");
+      expect(trust.status(bare)).toMatchObject({ reason: "trust-basis-changed" });
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("still refuses to grant when a package manifest exists but cannot be read", () => {
+    // Unreadable is not missing: this path must stay fail-closed exactly as before.
+    const opaque = mkdtempSync(join(tmpdir(), "keiko-script-trust-opaque-"));
+    try {
+      mkdirSync(join(opaque, "package.json"));
+      store.createProject(opaque, "opaque");
+      const trust = createWorkspaceScriptTrustService({ store });
+
+      expect(() => trust.grant(opaque)).toThrow(WorkspaceScriptTrustError);
+      expect(trust.trustLevelForRoot(opaque)).toBe("restricted");
+    } finally {
+      rmSync(opaque, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a grant for an unregistered project", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     expect(() => trust.grant(join(root, "unregistered"))).toThrow(WorkspaceScriptTrustError);

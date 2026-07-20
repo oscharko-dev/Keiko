@@ -223,13 +223,27 @@ function resolveCanonicalRoot(
 // The capability-specific trust basis (ADR-0147 D3): the exact package.json digest. This is the old
 // manifest-digest computation, now a non-throwing tagged fact so `isTrusted` fails closed to
 // restricted rather than throwing on an absent or unreadable manifest.
+/**
+ * ADR-0147 D9 keeps `absent` and `unavailable` distinct and forbids conflating them. A root with no
+ * `package.json` has no package scripts at all, so its package-script trust basis is legitimately
+ * absent and the root stays grantable — that is what lets a non-npm workspace leave Restricted Mode
+ * and start its managed language server. A manifest that exists but cannot be read or parsed is
+ * `unavailable` and still fails closed, because there the basis is unknown rather than empty.
+ */
 function resolveTrustBasisFact(
   fs: WorkspaceFs,
   canonicalRoot: string,
 ): WorkspaceFact<WorkspaceTrustBasisDigest> {
   const manifestPath = join(canonicalRoot, "package.json");
+  let stat: ReturnType<WorkspaceFs["stat"]>;
   try {
-    const stat = fs.stat(manifestPath);
+    stat = fs.stat(manifestPath);
+  } catch {
+    // stat failing is only `absent` when the entry genuinely is not there; anything else that
+    // cannot be stat-ed is an unknown basis and must fail closed.
+    return fs.exists(manifestPath) ? { outcome: "unavailable" } : { outcome: "absent" };
+  }
+  try {
     if (!stat.isFile || stat.isSymbolicLink || stat.size > PACKAGE_MANIFEST_MAX_BYTES) {
       return { outcome: "unavailable" };
     }
@@ -355,7 +369,10 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   public readonly grant = (projectId: string): WorkspaceScriptTrustSnapshot => {
     const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
-    if (basis.outcome !== "known") {
+    // `absent` is a complete, knowable basis: the root has no package scripts, so there is nothing
+    // for the package-script consumer to execute and nothing about it left uncertain. `unavailable`
+    // means the basis could not be determined, which stays fail-closed (ADR-0147 D9).
+    if (basis.outcome !== "known" && basis.outcome !== "absent") {
       throw new WorkspaceScriptTrustError(
         "PACKAGE_MANIFEST_UNAVAILABLE",
         "The project package manifest is unavailable for script trust.",

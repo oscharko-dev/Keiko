@@ -82,3 +82,31 @@ Nothing here widens a deployment ceiling, an Authority Envelope, or a mode.
   but changes what a manifest digest means for every other consumer — dispatch currency, absorbed
   workspace validation, and the ETag preconditions — to fix a problem that belongs to the trust
   axis. Narrowing the trust comparison keeps the change where the defect is.
+
+## Addendum — a determined basis, not necessarily a present one (#2613)
+
+ADR-0147 D9 already requires that missing state is tagged `absent` and unreadable state
+`unavailable`, and that the two are not silently conflated. The trust implementation conflated them:
+`resolveTrustBasisFact` returned `unavailable` both when `package.json` was missing and when it could
+not be read, and the record contract required a trusted record's basis to be exactly `known`.
+
+The effect was that a root without an npm manifest could never be granted trust, so a Go, Java,
+Python, Rust or shell workspace could never leave Restricted Mode and its managed language server
+could never start — a capability M11 advertises but could not deliver.
+
+A trusted record now requires a **determined** basis rather than a present one:
+
+| Basis outcome | Meaning | May carry trust |
+| --- | --- | --- |
+| `known` | The basis was read. | yes |
+| `absent` | It was looked for and definitively is not there. | yes |
+| `unavailable` | It exists but could not be read or parsed. | no |
+| `unknown` | It could not be determined. | no |
+
+For the package-script capability, `absent` means the root has no scripts to execute at all, so the
+grant authorizes nothing that could run. The fail-closed direction is unchanged: a basis that cannot
+be determined never carries trust.
+
+Outcome changes invalidate exactly like content changes. A `package.json` appearing in a root that
+was granted while it had none moves the live basis from `absent` to `known`, the recorded fact no
+longer matches, and the grant is invalidated at a newer revision — the human must grant again.

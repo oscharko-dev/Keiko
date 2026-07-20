@@ -162,8 +162,23 @@ function isWorkspaceTrustReason(value: unknown): value is WorkspaceTrustReason {
   return WORKSPACE_TRUST_REASONS.includes(value as WorkspaceTrustReason);
 }
 
-function trustedBasisIsKnown(level: WorkspaceTrustLevel, binding: WorkspaceTrustBinding): boolean {
-  return level !== "trusted" || binding.trustBasisDigest.outcome === "known";
+/**
+ * A trusted record requires a *determined* basis. `known` is a basis that was read, and `absent` is
+ * a basis that was looked for and definitively is not there — for the package-script capability that
+ * means the root has no scripts to execute at all. Both are determinate, and ADR-0147 D9 forbids
+ * conflating `absent` with `unavailable`.
+ *
+ * `unknown` and `unavailable` mean the basis could not be determined and must never carry trust. A
+ * basis that later changes outcome — a `package.json` appearing where there was none — no longer
+ * matches the recorded fact, so the grant invalidates exactly as a content change does.
+ */
+function trustedBasisIsDetermined(
+  level: WorkspaceTrustLevel,
+  binding: WorkspaceTrustBinding,
+): boolean {
+  if (level !== "trusted") return true;
+  const outcome = binding.trustBasisDigest.outcome;
+  return outcome === "known" || outcome === "absent";
 }
 
 function isWorkspaceTrustRecord(value: unknown): value is WorkspaceTrustRecord {
@@ -182,7 +197,7 @@ function isWorkspaceTrustRecord(value: unknown): value is WorkspaceTrustRecord {
   return (
     fieldsValid &&
     trustReasonMatchesLevel(value.trust, value.reason) &&
-    trustedBasisIsKnown(value.trust, value.binding)
+    trustedBasisIsDetermined(value.trust, value.binding)
   );
 }
 

@@ -100,12 +100,25 @@ describe("canonical workspace trust", () => {
         binding: { ...binding(), manifestDigest: "stale" },
       }).ok,
     ).toBe(false);
+    // A trusted record needs a DETERMINED basis. `unknown` and `unavailable` mean the basis could
+    // not be read and must never carry trust; `absent` means it was looked for and definitively is
+    // not there, which for the package-script capability is a root with no scripts to execute
+    // (ADR-0147 D9, #2613). Conflating absent with unavailable made every non-npm root permanently
+    // unable to leave Restricted Mode.
+    for (const outcome of ["unknown", "unavailable"] as const) {
+      expect(
+        validateWorkspaceTrustRecord({
+          ...trustedRecord(),
+          binding: { ...binding(), trustBasisDigest: { outcome } },
+        }).ok,
+      ).toBe(false);
+    }
     expect(
       validateWorkspaceTrustRecord({
         ...trustedRecord(),
-        binding: { ...binding(), trustBasisDigest: { outcome: "unknown" } },
+        binding: { ...binding(), trustBasisDigest: { outcome: "absent" } },
       }).ok,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       validateWorkspaceTrustRecord({ ...trustedRecord(), trust: "trusted", reason: "policy" }).ok,
     ).toBe(false);
