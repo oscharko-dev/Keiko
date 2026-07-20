@@ -34,7 +34,7 @@ jobs:
           # branch that legitimately must re-measure (a toolchain change, ADR-0139 D10) can produce
           # its evidence on the controlled hosted runner instead of a developer machine.
           ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || 'dev' }}
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
       - name: Install Bubblewrap for the DAP cap runs

@@ -777,7 +777,7 @@ describe("macOS portable production signing workflow", () => {
     expect(smokeJob).toContain("platform_target: macos-x64");
     expect(smokeJob).toContain("runner: macos-15-intel");
     expect(smokeJob).toContain("persist-credentials: false");
-    expect(smokeJob).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
+    expect(smokeJob).toContain("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020");
     expect(smokeJob).toContain("environment: portable-release-signing");
     expect(smokeJob).not.toMatch(/secrets\.|id-token: write|upload-artifact/u);
     expect(smokeJob).toContain("Download immutable verified macOS artifact");

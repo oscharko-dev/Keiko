@@ -56,6 +56,8 @@ import { _resetEditorAgentAuditForTests, listEditorAgentActionAudit } from "./ag
 const SESSION_ID = "session-2489";
 const HASH = "a".repeat(64);
 const CEILING = "autonomous-delivery" as const;
+const DECL_TEXT = "export const sharedValue = 1;\n";
+const MAIN_TEXT = "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n";
 
 function runGit(root: string, args: readonly string[]): void {
   execFileSync("git", args, { cwd: root, stdio: "ignore" });
@@ -64,13 +66,28 @@ function runGit(root: string, args: readonly string[]): void {
 function buildWorkspace(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-agent-producer-"));
   mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(
+    join(root, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        target: "ES2022",
+      },
+      include: ["src/**/*.ts"],
+    }),
+    "utf8",
+  );
   writeFileSync(join(root, "src", "a.ts"), "export const target = 1;\ntarget;\n", "utf8");
+  writeFileSync(join(root, "src", "decl.ts"), DECL_TEXT, "utf8");
+  writeFileSync(join(root, "src", "main.ts"), MAIN_TEXT, "utf8");
   writeFileSync(join(root, "NEEDLE.md"), "producer-reachability-needle\n", "utf8");
   runGit(root, ["init", "-q", "-b", "main"]);
   runGit(root, ["config", "user.name", "Keiko Fixture"]);
   runGit(root, ["config", "user.email", "fixture@invalid.example"]);
   runGit(root, ["config", "commit.gpgsign", "false"]);
-  runGit(root, ["add", "src/a.ts", "NEEDLE.md"]);
+  runGit(root, ["add", "tsconfig.json", "src/a.ts", "src/decl.ts", "src/main.ts", "NEEDLE.md"]);
   runGit(root, ["commit", "-q", "-m", "fixture baseline"]);
   writeFileSync(join(root, "src", "a.ts"), "export const target = 2;\ntarget;\n", "utf8");
   return root;
@@ -394,11 +411,11 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
       toolCallThenStop("editor_navigate_symbol", {
         sessionId: SESSION_ID,
         idempotencyKey: "idem-navigate-1",
-        file: "src/a.ts",
+        file: "src/main.ts",
         operation: "definition",
-        position: { line: 1, character: 0 },
+        position: { line: 1, character: 19 },
         languageId: "typescript",
-        text: "export const target = 2;\ntarget;\n",
+        text: MAIN_TEXT,
       }),
     );
     const response = await postProducerTurn(current.port);
