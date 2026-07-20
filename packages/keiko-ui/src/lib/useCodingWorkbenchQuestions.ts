@@ -320,7 +320,9 @@ async function runQuestionListing(input: ActiveListingInput): Promise<boolean> {
     // #2478: order every list behind boot pairing so a newly opened window cannot race its own
     // redemption into a stale unpaired state.
     await codingAppSessionPairingSettled();
-    for (let attempt = 0; attempt <= QUESTION_VISIBILITY_RETRY_DELAYS_MS.length; attempt += 1) {
+    // One listing per retry delay, plus a final listing that is not followed by a wait.
+    const attempts = QUESTION_VISIBILITY_RETRY_DELAYS_MS.length + 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (controller.signal.aborted) return false;
       const response = await listQuestionAttempt(input);
       if (controller.signal.aborted) return false;

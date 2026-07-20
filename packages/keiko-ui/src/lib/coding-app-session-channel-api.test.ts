@@ -78,8 +78,14 @@ describe("coding app-session channel API", () => {
     expect(received).toEqual([snapshot()]);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/coding-workbench/app-session/channel/stream",
-      expect.objectContaining({ headers: { Accept: "text/event-stream" } }),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "text/event-stream" }),
+      }),
     );
+    // The stream must carry a correlation id like every other BFF request, or a stream failure
+    // cannot be traced UI -> server.
+    const sent = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
+    expect(sent.headers["X-Keiko-Correlation-Id"]).toMatch(/^[A-Za-z0-9_-]{8,}$/u);
   });
 
   it("fails closed when streamed content does not satisfy the channel contract", async () => {

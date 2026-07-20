@@ -180,7 +180,9 @@ async function bindLiveEditorSession(
   signal: AbortSignal,
 ): Promise<EditorAgentAction | undefined> {
   if (client.listSessions === undefined || workspaceRoot === undefined) return action;
-  for (let attempt = 0; attempt <= EDITOR_SESSION_RETRY_DELAYS_MS.length; attempt += 1) {
+  // One listing per retry delay, plus a final listing that is not followed by a wait.
+  const attempts = EDITOR_SESSION_RETRY_DELAYS_MS.length + 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (signal.aborted) return undefined;
     const listed = await client.listSessions(signal);
     if (!listed.ok) return undefined;

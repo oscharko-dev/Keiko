@@ -146,6 +146,23 @@ export function optionsWithDefaults(
   };
 }
 
+/**
+ * Purely lexical pre-check: does the RAW `root` query value name a path inside Keiko's managed
+ * task-worktree root? No filesystem call, so it cannot itself leak existence. Returns false when no
+ * managed root is composed or no root was requested — those fall through to the normal path.
+ */
+function unauthorizedManagedRootRequest(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  requestedRoot: string | null,
+): boolean {
+  const managedRoot = deps.managedTaskWorkspaceRoot;
+  if (managedRoot === undefined || requestedRoot === null || requestedRoot.length === 0) {
+    return false;
+  }
+  return containsPath(resolve(managedRoot), resolve(requestedRoot));
+}
+
 async function isResolvedManagedRoot(
   managedRoot: string | undefined,
   resolvedTarget: string,
@@ -160,11 +177,19 @@ export async function resolveRepository(
   deps: UiHandlerDeps,
   options: NormalizedGitRouteOptions,
 ): Promise<RepositoryContext | GitRepositoryStatusResponse> {
-  const selectedRoot = await resolveRoot(
-    deps.store,
-    ctx.url.searchParams.get("root"),
-    deps.redactor,
-  );
+  const requestedRoot = ctx.url.searchParams.get("root");
+  // Classify the RAW input before touching the filesystem. `resolveRoot` throws for a missing or
+  // invalid directory, so resolving first let an unpaired caller tell "exists under the managed
+  // root" (content-free unavailable) from "does not exist" (a 400) — an existence oracle for
+  // managed worktree paths, which is exactly what this gate exists to prevent. The post-realpath
+  // check below stays as defence in depth for symlink and alias forms the raw prefix cannot see.
+  if (
+    unauthorizedManagedRootRequest(deps, ctx, requestedRoot) &&
+    resolveAppSessionReadAuthority(deps, ctx.req) === undefined
+  ) {
+    return genericUnavailable(requestedRoot ?? "", "unknown");
+  }
+  const selectedRoot = await resolveRoot(deps.store, requestedRoot, deps.redactor);
   // Issue #2482 / ADR-0141 W1.9: any generic Git read whose RESOLVED root is inside Keiko's
   // managed task-worktree root requires the launcher-attested app session. Classifying after
   // resolveRoot closes trailing-separator, `.`-segment, and outside-symlink aliases of a managed

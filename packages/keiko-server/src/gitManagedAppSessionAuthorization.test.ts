@@ -101,6 +101,28 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it("answers a NON-EXISTENT managed path exactly like an existing one, so it is no existence oracle", async () => {
+    // The gate used to run after path resolution: a missing directory threw a 400 while an existing
+    // one returned the content-free projection, letting an unpaired caller probe which managed
+    // worktree paths exist. Both must now be indistinguishable.
+    const runner = vi.fn<GitProcessRunner>();
+    const dependencies = deps(runner);
+    const missing = `${managedWorktree}/does-not-exist-${String(Date.now())}`;
+
+    const existing = await handleGitStatus(
+      route(`/api/git/status?root=${encodeURIComponent(managedWorktree)}`),
+      dependencies,
+    );
+    const absent = await handleGitStatus(
+      route(`/api/git/status?root=${encodeURIComponent(missing)}`),
+      dependencies,
+    );
+
+    expect(absent.status).toBe(existing.status);
+    expect((absent.body as { available?: boolean }).available).toBe(false);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it("returns no diff to forged or revoked sessions and never executes Git", async () => {
     const runner = vi.fn<GitProcessRunner>();
     const dependencies = deps(runner);

@@ -8,7 +8,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { ApiError } from "./api";
-import { bffFetchJson } from "./http";
+import { bffFetchJson, newClientCorrelationId, CORRELATION_HEADER } from "./http";
 
 const CHANNEL_PATH = "/api/coding-workbench/app-session/channel";
 const CHANNEL_STREAM_PATH = `${CHANNEL_PATH}/stream`;
@@ -50,9 +50,11 @@ export interface CodingAppSessionStreamInput {
 export async function streamCodingAppSessionChannelSnapshots(
   input: CodingAppSessionStreamInput,
 ): Promise<void> {
+  // The stream bypasses bffFetchJson, so it has to carry the same correlation id itself; without
+  // it a stream failure cannot be traced UI -> server the way every other request can.
   const response = await (input.fetchImpl ?? globalThis.fetch)(CHANNEL_STREAM_PATH, {
     cache: "no-store",
-    headers: { Accept: "text/event-stream" },
+    headers: { Accept: "text/event-stream", [CORRELATION_HEADER]: newClientCorrelationId() },
     signal: input.signal,
   });
   if (!response.ok) throw streamError(response.status);
