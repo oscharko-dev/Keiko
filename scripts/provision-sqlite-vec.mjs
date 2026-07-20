@@ -65,8 +65,8 @@ const EXTENSION_SUFFIX = { darwin: "dylib", win32: "dll" };
 const SYSTEM_BINARIES =
   platform === "win32"
     ? {
-        curl: join(env.SystemRoot ?? "C:\\Windows", "System32", "curl.exe"),
-        tar: join(env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"),
+        curl: join(env.SystemRoot ?? String.raw`C:\Windows`, "System32", "curl.exe"),
+        tar: join(env.SystemRoot ?? String.raw`C:\Windows`, "System32", "tar.exe"),
       }
     : { curl: "/usr/bin/curl", tar: "/usr/bin/tar" };
 

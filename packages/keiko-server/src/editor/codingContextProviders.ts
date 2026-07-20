@@ -25,6 +25,8 @@ import {
   type GitEditorBlameResponse,
   type GitEditorDiffResponse,
   type GitRepositoryStatusResponse,
+  type CodingWorkbenchConnectorScope,
+  type CodingWorkbenchMode,
   type LanguageRange,
   type RetrievalQuery,
   type RetrievalReference,
@@ -40,10 +42,6 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readCitationExcerpt } from "@oscharko-dev/keiko-local-knowledge";
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
-import type {
-  CodingWorkbenchConnectorScope,
-  CodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   buildCodeContextPack,
@@ -952,8 +950,8 @@ const CONNECTED_CONTEXT_RUN_ID = "editor-coding-context";
 const CONNECTED_CONTEXT_SCORE = 0.75;
 // `owner/repo#123`; GitHub serves pull requests from the issues endpoint, so "issue" reads both.
 const GITHUB_REF_PATTERN =
-  /([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100})#([1-9][0-9]{0,9})/gu;
-const JIRA_REF_PATTERN = /\b([A-Z][A-Z0-9_]{1,20})-([1-9][0-9]{0,9})\b/gu;
+  /([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100})#([1-9]\d{0,9})/gu;
+const JIRA_REF_PATTERN = /\b([A-Z][A-Z0-9_]{1,20})-([1-9]\d{0,9})\b/gu;
 
 interface ConnectedContextIntake {
   readonly connectors: Readonly<Record<CodeContextSource, CodeContextConnector>>;

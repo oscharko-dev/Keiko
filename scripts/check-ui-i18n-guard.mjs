@@ -98,14 +98,14 @@ const FEATURE_CATALOG_DE_PATTERN = /-i18n\.de\.ts$/u;
 // never reads. The requirement is unchanged — English and German must land together — so a
 // single-file catalog satisfies it only when both maps are present AND expose identical keys, which
 // `singleFileCatalogParityProblems` enforces exactly as the split-file parity check does.
-const FEATURE_CATALOG_SINGLE_PATTERN = /-i18n\.ts$/u;
+const FEATURE_CATALOG_SINGLE_SUFFIX = "-i18n.ts";
 const CATALOG_LANGUAGE_MAP_PATTERN = /_(EN|DE)_MESSAGES\b/gu;
 
 export function changedSingleFileFeatureCatalogs(changedFileSet) {
   return [...changedFileSet]
     .filter(
       (file) =>
-        file.startsWith("packages/keiko-ui/src/") && FEATURE_CATALOG_SINGLE_PATTERN.test(file),
+        file.startsWith("packages/keiko-ui/src/") && file.endsWith(FEATURE_CATALOG_SINGLE_SUFFIX),
     )
     .sort((left, right) => left.localeCompare(right));
 }
@@ -614,8 +614,8 @@ export function checkUiI18nGuard({
     );
   }
 
-  problems.push(...featureCatalogParityProblems(repoRoot, catalogRequirement.featureCatalogPairs));
   problems.push(
+    ...featureCatalogParityProblems(repoRoot, catalogRequirement.featureCatalogPairs),
     ...singleFileCatalogParityProblems(repoRoot, catalogRequirement.singleFileCatalogs ?? []),
   );
 

@@ -106,15 +106,15 @@ const RESERVED_WORD_SET: ReadonlySet<string> = new Set<string>(RESERVED_WORDS);
 //   * The line must terminate a declaration with `{` or `;`. Call sites, SQL fragments inside
 //     template literals, and constructor invocations do not, which is what kept this pattern
 //     from being the "conservative" table this module promises.
-const NOT_RESERVED = `(?!(?:${RESERVED_WORDS.join("|")})\\b)`;
+const NOT_RESERVED = String.raw`(?!(?:${RESERVED_WORDS.join("|")})\b)`;
 const METHOD_DECLARATION_PATTERN = new RegExp(
   [
-    "^\\s*",
-    "(?:(?:public|private|protected|static|final|abstract|synchronized|native)\\s+)*",
-    "(?:<[^<>]{1,200}>\\s+)?",
-    `${NOT_RESERVED}[A-Za-z_$][\\w$.]{0,200}(?:<[^<>]{0,200}>)?\\??(?:\\[\\]){0,8}\\s+`,
-    "([A-Za-z_$][\\w$]*)\\s*",
-    "\\([^()]{0,400}\\)",
+    String.raw`^\s*`,
+    String.raw`(?:(?:public|private|protected|static|final|abstract|synchronized|native)\s+)*`,
+    String.raw`(?:<[^<>]{1,200}>\s+)?`,
+    String.raw`${NOT_RESERVED}[A-Za-z_$][\w$.]{0,200}(?:<[^<>]{0,200}>)?\??(?:\[\]){0,8}\s+`,
+    String.raw`([A-Za-z_$][\w$]*)\s*`,
+    String.raw`\([^()]{0,400}\)`,
     // Everything between the parameter list and the declaration terminator: the space before `{`,
     // a TypeScript return-type annotation (`): Promise<string> {` — the dominant method form, and
     // a recall hole if excluded), and a Java `throws` clause. One bounded class covers all three.
@@ -122,8 +122,8 @@ const METHOD_DECLARATION_PATTERN = new RegExp(
     // and NOTHING whitespace-matching follows it — a class that can match spaces sitting in front
     // of `\s+`/`\s*` is precisely the ambiguity that made the previous table backtrack
     // quadratically, so the terminator is a disjoint single-character class instead.
-    "[^;{()]{0,200}",
-    "[{;]\\s*$",
+    String.raw`[^;{()]{0,200}`,
+    String.raw`[{;]\s*$`,
   ].join(""),
   "u",
 );
@@ -134,25 +134,40 @@ const METHOD_DECLARATION_PATTERN = new RegExp(
 // a real declaration shape, and no entry may contain a whitespace-ambiguous character class —
 // because here the table also decides chunk boundaries and citation section paths, so a false
 // anchor is a retrieval-precision defect rather than a spare search hit.
+// Modifier runs are expressed as a bounded repetition over alternatives that contain NO internal
+// whitespace, for the same reason the method pattern above avoids space-matching classes in front
+// of `\s+`: an alternative that can itself consume the separator makes the split ambiguous, and the
+// engine explores every split before failing. `extern "C"` is therefore two tokens rather than one
+// alternative carrying its own `\s+`. The counts are the realistic maxima with headroom (Rust tops
+// out near `pub async unsafe extern "C" fn`), so bounding them costs no recall and removes the
+// unbounded `*` that made a long modifier-looking run super-linear.
+const RUST_FN_MODIFIER = String.raw`(?:pub(?:\([^()]{0,80}\))?|async|unsafe|extern|"[^"]{1,64}")`;
+const KOTLIN_FUN_MODIFIER = String.raw`(?:public|private|protected|internal|open|override|suspend|inline|operator|tailrec)`;
+const JVM_TYPE_MODIFIER = String.raw`(?:public|private|protected|abstract|final|sealed|data|open|internal)`;
+
 const SYMBOL_PATTERNS: readonly SymbolPattern[] = Object.freeze([
   {
     kind: "function",
     pattern: /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\b/u,
   },
-  { kind: "function", pattern: /^\s*(?:async\s+)?def\s+([A-Za-z_][\w]*)\s*\(/u },
+  { kind: "function", pattern: /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/u },
   {
     kind: "function",
-    pattern: /^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)\s*\(/u,
+    pattern: /^\s*func\s+(?:\([^()]{0,200}\)\s*)?([A-Za-z_]\w*)\s*\(/u,
   },
   {
     kind: "function",
-    pattern:
-      /^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|extern(?:\s+"[^"]+")?)\s+)*fn\s+([A-Za-z_][\w]*)\s*(?:<[^>]+>)?\s*\(/u,
+    pattern: new RegExp(
+      String.raw`^\s*(?:${RUST_FN_MODIFIER}\s+){0,6}fn\s+([A-Za-z_]\w*)\s*(?:<[^<>]{0,200}>)?\s*\(`,
+      "u",
+    ),
   },
   {
     kind: "function",
-    pattern:
-      /^\s*(?:(?:public|private|protected|internal|open|override|suspend|inline|operator|tailrec)\s+)*fun\s+(?:<[^>]+>\s*)?([A-Za-z_][\w]*)\s*\(/u,
+    pattern: new RegExp(
+      String.raw`^\s*(?:${KOTLIN_FUN_MODIFIER}\s+){0,8}fun\s+(?:<[^<>]{0,200}>\s*)?([A-Za-z_]\w*)\s*\(`,
+      "u",
+    ),
   },
   {
     kind: "type",
@@ -167,19 +182,21 @@ const SYMBOL_PATTERNS: readonly SymbolPattern[] = Object.freeze([
   {
     kind: "type",
     pattern:
-      /^\s*(?:export\s+)?(?:declare\s+)?(?:pub\s+)?type\s+([A-Za-z_$][\w$]*)\s*(?:<[^<>]{0,200}>\s*)?=/u,
+      /^\s*(?:(?:export|declare|pub)\s+){0,3}type\s+([A-Za-z_$][\w$]*)\s*(?:<[^<>]{0,200}>\s*)?=/u,
   },
   {
     kind: "type",
-    pattern:
-      /^\s*(?:(?:public|private|protected|abstract|final|sealed|data|open|internal)\s+)*(?:class|interface|record|enum)\s+([A-Za-z_$][\w$]*)\b/u,
+    pattern: new RegExp(
+      String.raw`^\s*(?:${JVM_TYPE_MODIFIER}\s+){0,8}(?:class|interface|record|enum)\s+([A-Za-z_$][\w$]*)\b`,
+      "u",
+    ),
   },
-  { kind: "type", pattern: /^\s*(?:pub\s+)?(?:struct|trait|enum)\s+([A-Za-z_][\w]*)\b/u },
+  { kind: "type", pattern: /^\s*(?:pub\s+)?(?:struct|trait|enum)\s+([A-Za-z_]\w*)\b/u },
   {
     kind: "type",
-    pattern: /^\s*type\s+([A-Za-z_][\w]*)\s+(?:struct|interface)\b/u,
+    pattern: /^\s*type\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b/u,
   },
-  { kind: "type", pattern: /^\s*class\s+([A-Za-z_][\w]*)\b/u },
+  { kind: "type", pattern: /^\s*class\s+([A-Za-z_]\w*)\b/u },
   {
     kind: "constant",
     pattern: /^\s*(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/u,

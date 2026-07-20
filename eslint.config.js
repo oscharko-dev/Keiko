@@ -160,7 +160,11 @@ export default defineConfig(
   { files: ["scripts/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
   {
     files: ["scripts/**/*.mjs"],
-    languageOptions: { globals: { console: "readonly", process: "readonly" } },
+    languageOptions: {
+      // structuredClone is a Node built-in since 17 and the repository floor is 24; declare it the
+      // same way this config declares every other runtime global it relies on.
+      globals: { console: "readonly", process: "readonly", structuredClone: "readonly" },
+    },
     rules: {
       "no-console": "off",
       "@typescript-eslint/explicit-function-return-type": "off",

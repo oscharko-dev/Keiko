@@ -4,14 +4,10 @@
 
 import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 import {
-  CODING_CONTEXT_BUDGETS,
   CODING_CONTEXT_PURPOSES,
   CODING_CONTEXT_SOURCE_KINDS,
   CODING_CONTEXT_SOURCE_TIER_BY_KIND,
-  RETRIEVAL_CONTEXT_OMISSION_REASONS,
   RETRIEVAL_CONTEXT_SCHEMA_VERSION,
-  RETRIEVAL_CONTEXT_SOURCE_TIERS,
-  embeddingProvidersAllowed,
   isRetrievalContextCitation,
   toRetrievalContextWirePack,
   type CodingContextPurpose,
@@ -28,16 +24,17 @@ import {
   type RetrievalContextWirePack,
 } from "./retrieval-context.js";
 
+// The schema version is re-declared rather than re-exported because this module also compares
+// against it (validateCodingContextRequest below); the rest are pure pass-throughs, and the
+// coding-profile names for the neutral tier and omission catalogs are aliases, not new values.
 export const CODING_CONTEXT_SCHEMA_VERSION = RETRIEVAL_CONTEXT_SCHEMA_VERSION;
+export { CODING_CONTEXT_PURPOSES, CODING_CONTEXT_SOURCE_KINDS, CODING_CONTEXT_SOURCE_TIER_BY_KIND };
 export {
   CODING_CONTEXT_BUDGETS,
-  CODING_CONTEXT_PURPOSES,
-  CODING_CONTEXT_SOURCE_KINDS,
-  CODING_CONTEXT_SOURCE_TIER_BY_KIND,
   embeddingProvidersAllowed,
-};
-export const CODING_CONTEXT_SOURCE_TIERS = RETRIEVAL_CONTEXT_SOURCE_TIERS;
-export const CODING_CONTEXT_OMISSION_REASONS = RETRIEVAL_CONTEXT_OMISSION_REASONS;
+  RETRIEVAL_CONTEXT_OMISSION_REASONS as CODING_CONTEXT_OMISSION_REASONS,
+  RETRIEVAL_CONTEXT_SOURCE_TIERS as CODING_CONTEXT_SOURCE_TIERS,
+} from "./retrieval-context.js";
 
 export type { CodingContextPurpose, CodingContextSourceKind };
 export type CodingContextSourceTier = RetrievalContextSourceTier;

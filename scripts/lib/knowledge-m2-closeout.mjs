@@ -41,6 +41,7 @@ import {
 } from "../check-retrieval-quality.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const EXTENSION_SUFFIX_BY_PLATFORM = { darwin: "dylib", win32: "dll" };
 const EVIDENCE_PATH = join(ROOT, "docs/qa/knowledge-m2-substrate-evidence.md");
 const WAVE_RECORD_PATH = join(ROOT, "docs/qa/knowledge-m2-wave.md");
 const FACADE_PATH = "packages/keiko-server/src/grounded-rerank-facade.ts";
@@ -70,7 +71,8 @@ export function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   if (value !== null && typeof value === "object") {
     const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`).join(",")}}`;
+    const pairs = entries.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`);
+    return `{${pairs.join(",")}}`;
   }
   return JSON.stringify(value);
 }
@@ -416,8 +418,7 @@ function provisionedSqliteVecPath() {
   if (typeof configured === "string" && configured.length > 0 && existsSync(configured)) {
     return configured;
   }
-  const suffix =
-    process.platform === "darwin" ? "dylib" : process.platform === "win32" ? "dll" : "so";
+  const suffix = EXTENSION_SUFFIX_BY_PLATFORM[process.platform] ?? "so";
   const candidate = join(ROOT, ".sqlite-vec", "0.1.9", `vec0.${suffix}`);
   return existsSync(candidate) ? candidate : undefined;
 }
@@ -521,7 +522,7 @@ export function missingRerankerDiagnosticFields(source) {
   const body = namedInterfaceBody(source, "GroundedRerankerDiagnostics");
   if (body === undefined) return [...REQUIRED_RERANKER_DIAGNOSTIC_FIELDS];
   return REQUIRED_RERANKER_DIAGNOSTIC_FIELDS.filter(
-    (field) => !new RegExp(`readonly\\s+${field}[?:]`, "u").test(body),
+    (field) => !new RegExp(String.raw`readonly\s+${field}[?:]`, "u").test(body),
   );
 }
 
@@ -557,7 +558,7 @@ async function proveTautologyDetection() {
     fixtures: [fixture],
     probeFixtureIds: [fixture.id],
     fixtureId: (item) => item.id,
-    regressFixture: (item) => JSON.parse(JSON.stringify(item)),
+    regressFixture: (item) => structuredClone(item),
     runFixture: LocalKnowledgeEval.runRetrievalEval,
     droppedBelowFloors: (card) =>
       !evaluateFloors(card.dimensions, LocalKnowledgeEval.PASS_THRESHOLDS).ok,
