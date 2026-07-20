@@ -11,8 +11,8 @@ import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
   prepareCodingWorkbenchCodexSubscriptionSetup,
-  ApiError,
-} from "./api";
+} from "./coding-workbench-provider-api";
+import { ApiError } from "./api";
 import {
   getCodingWorkbenchRuntimeReadiness,
   getCodingWorkbenchRuntimeStatus,
@@ -31,8 +31,8 @@ import {
   useCodingWorkbenchRuntimeResources,
 } from "./coding-workbench-runtime-hooks";
 
-vi.mock("./api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api")>();
+vi.mock("./coding-workbench-provider-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./coding-workbench-provider-api")>();
   return {
     ...actual,
     fetchCodingWorkbenchCodexSubscriptionProfile: vi.fn(),
