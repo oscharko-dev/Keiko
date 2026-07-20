@@ -477,12 +477,11 @@ export function FilesWindowSessionHost({
       />
     );
   }
+  // The Explorer root bar is navigation: "go up" and the path input both route here. Turning it
+  // into workspace.addRoot made ordinary upward navigation fail, because a parent directory
+  // overlaps the current root and manifest validation rejects overlapping roots. Adding a root
+  // stays an explicit, separate action through AddRootToolbar in the multi-root Explorer.
   const onRootChange = (nextRoot: string): void => {
-    const actor = workspace.manifest?.roots.find((candidate) => candidate.canonicalRoot === root);
-    if (actor !== undefined) {
-      void workspace.addRoot(actor.rootRef, nextRoot);
-      return;
-    }
     ctx.updateCfg({
       root: nextRoot,
       activeFilePath: undefined,
