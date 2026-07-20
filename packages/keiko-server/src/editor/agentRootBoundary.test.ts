@@ -357,6 +357,46 @@ describe("editor agent root boundary", () => {
     }
   });
 
+  it("denies a snapshot read for a bindingless session once the workspace has more than one root", async () => {
+    // Fail-open regression: authorizeSnapshotRead returned early for any snapshot without a
+    // rootBinding, skipping both the root boundary and the authority reservation. A session
+    // registered while the workspace still had a single root keeps rootBinding === undefined, so a
+    // caller holding only root B's authority could read root A's snapshot — absolute workspaceRoot,
+    // open files, cursor and, at textMode "activeFile", file content.
+    const singleStore = createInMemoryUiStore();
+    try {
+      singleStore.createProject(rootA, "Alpha");
+      const legacy = snapshot(rootA, undefined, "session-legacy-read");
+      const registration = await handleEditorAgentSnapshot(
+        requestContext(
+          { schemaVersion: EDITOR_AGENT_SCHEMA_VERSION, kind: "snapshot", snapshot: legacy },
+          "/api/editor/agent/snapshot",
+        ),
+        { ...routeDeps(), store: singleStore },
+      );
+      expect(registration.status).toBe(200);
+      disconnects.push(editorAgentRegistry.connect(legacy.sessionId, () => undefined));
+
+      // The workspace grows a second root; the already-registered session keeps no binding.
+      const multiRoot = await handleEditorAgentSnapshot(
+        requestContext(
+          {
+            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+            sessionId: legacy.sessionId,
+            textMode: "activeFile",
+          },
+          "/api/editor/agent/snapshot",
+        ),
+        routeDeps(),
+      );
+
+      expect(multiRoot.status).toBe(403);
+      expect(JSON.stringify(multiRoot.body)).not.toContain(rootA);
+    } finally {
+      singleStore.close();
+    }
+  });
+
   it("rejects an A-to-B target without leaking either root path", async () => {
     const sessionA = snapshot(rootA, binding(0), "session-a");
     await registerLive(sessionA);

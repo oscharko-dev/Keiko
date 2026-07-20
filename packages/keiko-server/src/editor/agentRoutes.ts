@@ -1240,7 +1240,13 @@ function authorizeSnapshotRead(
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentRouteDeps | undefined,
 ): RouteResult | null {
-  if (snapshot.rootBinding === undefined) return null;
+  // Whether an explicit binding is required is a property of the live manifest, never of the
+  // snapshot. Deciding it from the snapshot let a session that was registered while the workspace
+  // still had one root keep reading after a second root arrived, skipping both the root boundary
+  // and the authority reservation.
+  const session = resolveEditorAgentSessionRoot(snapshot, deps?.store);
+  if (!session.ok) return rootBoundaryError(session.reason);
+  if (!session.root.explicitBindingRequired && snapshot.rootBinding === undefined) return null;
   const rooted = resolveEditorAgentActionRoot(snapshot, request.rootBinding, deps?.store);
   if (!rooted.ok) return rootBoundaryError(rooted.reason);
   const action = { ...snapshotReadAction(request), sessionId: snapshot.sessionId };
