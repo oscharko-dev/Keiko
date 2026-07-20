@@ -34,6 +34,11 @@ Editor personalization and resilience issues are covered in the dedicated
 that page for M7 settings availability, watcher rescan/degraded states, safe snippet/keyboard
 rollback, and governed AI-assist activation status.
 
+MemoriaViva mode-aware capture issues are covered in the dedicated
+[MemoriaViva Mode-Aware Capture Troubleshooting](memoriaviva-m1-capture.md) entry. Use that page
+for "capture did not run in mode X", Journal-visibility questions, and the autonomy control not
+persisting across a reload.
+
 ## Severity scale
 
 The severity field on each entry uses the following scale. It is a

@@ -9,15 +9,30 @@
 // vault hiccup, or any other failure can NEVER throw into the chat path — it logs and returns [].
 
 import { randomUUID } from "node:crypto";
+import type {
+  CodingWorkbenchMode,
+  MemoryAuditInitiatorSurface,
+} from "@oscharko-dev/keiko-contracts";
 import type { ConversationMemoryActionWire } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { MemoryId, MemoryProposalId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  MemoryId,
+  MemoryProposalId,
+  MemoryRecord,
+  MemoryScope,
+  MemorySourceKind,
+} from "@oscharko-dev/keiko-contracts/memory";
 import { redact } from "@oscharko-dev/keiko-security";
+import {
+  type MemoryAccessStatLike,
+  planMemoryMaintenance,
+} from "@oscharko-dev/keiko-memory-governance";
 import { findConfiguredCapability, type ResponseFormat } from "@oscharko-dev/keiko-model-gateway";
 import {
   extractSalientMemories,
   memoryTextSecretEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
+  type RejectionReason,
   type SalienceDiagnostic,
   type SalienceDeps,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -30,10 +45,19 @@ import {
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
+import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { emitServerDiagnostic } from "./diagnostics-log.js";
+import {
+  buildMemoryCaptureDecisionAuditEvent,
+  type MemoryCaptureDecisionOutcome,
+  type MemoryCaptureDecisionReason,
+} from "./memory-capture-projection.js";
 import {
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
   isPersistableMemoryCandidate,
+  memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
+  resolveMemoryCaptureAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
   SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
@@ -58,8 +82,10 @@ function scopeLabel(scope: MemoryScope): string {
 
 // Bounds the dedup corpus so the Jaccard loop stays cheap even for a large vault.
 const MAX_EXISTING_BODIES = 200;
+const MAX_PENDING_SALIENCE_CAPTURES = 32;
 const SALIENCE_MODEL_ENV = "KEIKO_MEMORY_SALIENCE_MODEL_ID";
 const SALIENCE_DEFAULT_SEED = 204;
+let pendingSalienceCaptures = 0;
 
 const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
   type: "json_schema",
@@ -168,24 +194,43 @@ function salienceSeedFor(deps: UiHandlerDeps, modelId: string): number | undefin
   return capability?.supportsSeeding === true ? SALIENCE_DEFAULT_SEED : undefined;
 }
 
+// Content-free operator diagnostic for the salience pipeline: routes through the single
+// redaction-safe server diagnostic sink (diagnostics-log.ts) instead of console.* directly, mirroring
+// the emitAdvisoryPhaseSummary pattern in memory-conflict-advisory.ts. errorClass doubles as a
+// machine-readable event-kind tag for non-error informational records (e.g. a capture summary).
+function emitSalienceDiagnostic(
+  deps: UiHandlerDeps,
+  source: string,
+  errorClass: string,
+  message: string,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "memory.salience",
+    source,
+    errorClass,
+    message,
+  });
+}
+
 function logSalienceDiagnostic(
   diagnostic: SalienceDiagnostic,
   deps: UiHandlerDeps,
   modelId: string,
 ): void {
   const responseFormatEnabled = salienceResponseFormatFor(deps, modelId) !== undefined;
-  const diagnosticDetails =
+  const detail =
     diagnostic.kind === "dropped-model-items"
-      ? { reason: diagnostic.reason, count: diagnostic.count }
-      : { rawItemCount: diagnostic.rawItemCount };
+      ? `reason=${diagnostic.reason} count=${String(diagnostic.count)}`
+      : `rawItemCount=${String(diagnostic.rawItemCount)}`;
   // Safe diagnostic: model id, response-format bit, and counts only; never user text or model text.
-  // eslint-disable-next-line no-console
-  console.warn("salience capture diagnostic", {
-    modelId,
-    responseFormat: responseFormatEnabled,
-    kind: diagnostic.kind,
-    ...diagnosticDetails,
-  });
+  emitSalienceDiagnostic(
+    deps,
+    "memory-salience.logSalienceDiagnostic",
+    "SalienceExtractionDiagnostic",
+    `model=${modelId} responseFormat=${String(responseFormatEnabled)} kind=${diagnostic.kind} ${detail}`,
+  );
 }
 
 function redactedErrorMessage(error: unknown, deps: UiHandlerDeps): string {
@@ -193,36 +238,109 @@ function redactedErrorMessage(error: unknown, deps: UiHandlerDeps): string {
   return redact(message, currentRedactionSecrets(deps));
 }
 
-// Persists one salience candidate and returns its wire action, or null when the outcome is not a
-// candidate, no record could be built, or the candidate was merged into an existing semantic
-// near-duplicate (#204, O-F1) instead of stored. Embed-on-capture happens INSIDE the novelty gate:
-// the body is embedded once, used to detect a near-duplicate, and stored only when the record is
-// actually inserted. Graceful when no embedding model is configured (plain insert, no dedup).
-async function persistCandidate(
+// Salience capture never tracks per-record access stats at capture time, so the governance planner
+// sees a fresh record with no recall/utility history: its strength collapses to provenance
+// confidence, exactly what shouldPromote's confidence >= promoteStrength gate expects.
+const EMPTY_SALIENCE_ACCESS_STATS: ReadonlyMap<MemoryId, MemoryAccessStatLike> = new Map();
+
+// How a candidate settled, for the content-free capture summary. "none" outcomes (non-candidate or
+// unbuildable records) are not tallied.
+type CaptureDisposition = "accepted" | "proposed" | "rejected" | "merged" | "none";
+
+interface PersistedCandidate {
+  readonly action: ConversationMemoryActionWire | null;
+  readonly disposition: CaptureDisposition;
+}
+
+interface CaptureDecisionEvidence {
+  readonly outcome: MemoryCaptureDecisionOutcome;
+  readonly scope: MemoryScope;
+  readonly sourceKind: MemorySourceKind;
+  readonly reason: MemoryCaptureDecisionReason;
+  readonly occurredAt: number;
+  readonly memoryId?: MemoryId;
+}
+
+function recordCaptureDecision(
   deps: UiHandlerDeps,
-  outcome: CaptureOutcome,
-  vault: MemoryVaultStore,
-): Promise<ConversationMemoryActionWire | null> {
-  if (outcome.kind !== "candidate") {
-    return null;
-  }
-  if (!isPersistableMemoryCandidate(outcome)) {
-    return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
-  }
-  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-  const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (record === null) {
-    return null;
-  }
-  if (isSuppressedByForgetTombstone(vault, record)) {
-    return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
-  }
-  const { inserted } = await insertSalienceMemoryWithNoveltyGate(deps, vault, record);
-  if (inserted === null) {
-    // Near-duplicate of an existing in-scope memory: the canonical was reinforced, nothing new to
-    // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
-    return null;
-  }
+  mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
+  decision: CaptureDecisionEvidence,
+): void {
+  const event = buildMemoryCaptureDecisionAuditEvent({
+    eventId: randomUUID(),
+    mode,
+    initiatorSurface: captureAuditInitiatorSurface(surface),
+    ...decision,
+  });
+  recordMemoryAudit(
+    {
+      evidenceStore: deps.evidenceStore,
+      redactString: (input) => redact(input, currentRedactionSecrets(deps)),
+    },
+    event,
+  );
+}
+
+function proposedDecisionReason(
+  mode: CodingWorkbenchMode,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+): MemoryCaptureDecisionReason {
+  if (outcome.requiresApproval) return "sensitivity-requires-approval";
+  return mode === "governed-assist" ? "mode-requires-approval" : "governance-promotion-deferred";
+}
+
+function recordPersistedCandidateDecision(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  inserted: MemoryRecord,
+): void {
+  const accepted = inserted.status === "accepted";
+  recordCaptureDecision(deps, mode, surface, {
+    outcome: accepted ? "auto-accepted" : "proposed",
+    scope: inserted.scope,
+    sourceKind: inserted.provenance.sourceKind,
+    reason: accepted ? "governance-auto-accepted" : proposedDecisionReason(mode, outcome),
+    occurredAt: inserted.createdAt,
+    memoryId: inserted.id,
+  });
+}
+
+function recordRejectedCandidateDecision(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  reason: RejectionReason,
+): void {
+  recordCaptureDecision(deps, mode, surface, {
+    outcome: "rejected",
+    scope: outcome.proposal.scope,
+    sourceKind: outcome.proposal.provenance.sourceKind,
+    reason,
+    occurredAt: outcome.proposal.provenance.capturedAt,
+  });
+}
+
+// Auto-accept a freshly captured public record by routing it THROUGH the existing governance
+// promotion lever — no second promotion path. planMemoryMaintenance/shouldPromote keeps its own
+// gates (status proposed + sensitivity public + strength >= promoteStrength). The record's own
+// createdAt is the clock so a just-captured record decays by zero and its strength equals its
+// provenance confidence deterministically. Promoted -> insert as "accepted" (one atomic insert, no
+// proposed->accepted window); otherwise the record is inserted unchanged.
+function promoteEligibleRecord(record: MemoryRecord): MemoryRecord {
+  const plan = planMemoryMaintenance([record], EMPTY_SALIENCE_ACCESS_STATS, {
+    nowMs: record.createdAt,
+  });
+  return plan.promote.includes(record.id) ? { ...record, status: "accepted" } : record;
+}
+
+function candidateWireAction(
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  inserted: MemoryRecord,
+): ConversationMemoryActionWire {
   return {
     kind: "candidate",
     proposalId: String(inserted.id),
@@ -235,30 +353,156 @@ async function persistCandidate(
   };
 }
 
+// Records a candidate rejection and returns the standard rejected PersistedCandidate shape shared
+// by both rejection branches of persistCandidate.
+function rejectedCandidate(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  reason: RejectionReason,
+): PersistedCandidate {
+  recordRejectedCandidateDecision(deps, mode, surface, outcome, reason);
+  return { action: { kind: "rejected", reason }, disposition: "rejected" };
+}
+
+// Persists one salience candidate and returns its wire action plus how it settled. Returns a null
+// action when the outcome is not a candidate, no record could be built, or the candidate was merged
+// into an existing semantic near-duplicate (#204, O-F1) instead of stored. Embed-on-capture happens
+// INSIDE the novelty gate: the body is embedded once, used to detect a near-duplicate, and stored
+// only when the record is actually inserted. Graceful when no embedding model is configured (plain
+// insert, no dedup). When the resolved mode makes the candidate auto-accept-eligible the record is
+// routed through governance promotion before insert; every existing gate stays untouched.
+async function persistCandidate(
+  deps: UiHandlerDeps,
+  outcome: CaptureOutcome,
+  vault: MemoryVaultStore,
+  mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
+): Promise<PersistedCandidate> {
+  if (outcome.kind !== "candidate") {
+    return { action: null, disposition: "none" };
+  }
+  if (!isPersistableMemoryCandidate(outcome)) {
+    return rejectedCandidate(deps, mode, surface, outcome, SENSITIVE_MEMORY_REJECTION_REASON);
+  }
+  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const record = buildMemoryRecordFromProposal(proposalId, outcome);
+  if (record === null) {
+    return { action: null, disposition: "none" };
+  }
+  if (isSuppressedByForgetTombstone(vault, record)) {
+    return rejectedCandidate(deps, mode, surface, outcome, FORGOTTEN_MEMORY_SUPPRESSION_REASON);
+  }
+  const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
+    ? promoteEligibleRecord(record)
+    : record;
+  const { inserted } = await insertSalienceMemoryWithNoveltyGate(deps, vault, candidate);
+  if (inserted === null) {
+    // Near-duplicate of an existing in-scope memory: the canonical was reinforced, nothing new to
+    // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
+    return { action: null, disposition: "merged" };
+  }
+  recordPersistedCandidateDecision(deps, mode, surface, outcome, inserted);
+  return {
+    action: candidateWireAction(outcome, inserted),
+    disposition: inserted.status === "accepted" ? "accepted" : "proposed",
+  };
+}
+
 interface SalienceTurnRequest {
   readonly content: string;
-  readonly memory: { readonly enabled: boolean } | undefined;
+  readonly memory:
+    { readonly enabled: boolean; readonly mode?: CodingWorkbenchMode | undefined } | undefined;
 }
+
+type SalienceCaptureSurface = "desktop" | "voice";
+
+// Maps the scheduler's capture surface to the audit envelope's initiatorSurface vocabulary so the
+// Memory Journal projection (#2547) can distinguish a voice-originated capture from desktop chat.
+function captureAuditInitiatorSurface(
+  surface: SalienceCaptureSurface,
+): MemoryAuditInitiatorSurface {
+  return surface === "voice" ? "voice" : "conversation-center";
+}
+
+function logSalienceCaptureFailure(
+  surface: SalienceCaptureSurface,
+  error: unknown,
+  deps: UiHandlerDeps,
+): void {
+  emitSalienceDiagnostic(
+    deps,
+    "memory-salience.scheduleMemorySalienceCapture",
+    "SalienceCaptureFailure",
+    `${surface} salience capture failed: ${redactedErrorMessage(error, deps)}`,
+  );
+}
+
+function logSalienceCaptureDropped(surface: SalienceCaptureSurface, deps: UiHandlerDeps): void {
+  emitSalienceDiagnostic(
+    deps,
+    "memory-salience.scheduleMemorySalienceCapture",
+    "SalienceCaptureDropped",
+    `${surface} salience capture skipped: background queue full (${String(
+      pendingSalienceCaptures,
+    )}/${String(MAX_PENDING_SALIENCE_CAPTURES)})`,
+  );
+}
+
+export function scheduleMemorySalienceCapture(
+  deps: UiHandlerDeps,
+  request: SalienceTurnRequest,
+  context: ConversationMemoryRuntimeContext | undefined,
+  modelId: string,
+  assistantText: string,
+  surface: SalienceCaptureSurface,
+): void {
+  if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
+    return;
+  }
+  if (pendingSalienceCaptures >= MAX_PENDING_SALIENCE_CAPTURES) {
+    logSalienceCaptureDropped(surface, deps);
+    return;
+  }
+  pendingSalienceCaptures += 1;
+  setImmediate(() => {
+    void captureSalientFromTurn(deps, request, context, modelId, assistantText, surface)
+      .catch((error: unknown) => {
+        logSalienceCaptureFailure(surface, error, deps);
+      })
+      .finally(() => {
+        pendingSalienceCaptures -= 1;
+      });
+  });
+}
+
+type TurnSalienceExtraction =
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "refused"; readonly reason: RejectionReason }
+  | { readonly kind: "outcomes"; readonly outcomes: readonly CaptureOutcome[] };
 
 async function extractTurnSalienceOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
+  captureContext: CaptureContext,
   modelId: string,
   assistantText: string,
-): Promise<readonly CaptureOutcome[] | null> {
+): Promise<TurnSalienceExtraction> {
   const salienceModelId = configuredSalienceModelId(deps, modelId);
   const callModelMessages = buildCallModel(deps, salienceModelId);
-  if (callModelMessages === null) return null;
+  if (callModelMessages === null) return { kind: "unavailable" };
   const policy = memoryCapturePolicyForDeps(deps);
-  if (memoryTextSecretEgressRejectionReason(request.content, policy) !== null) return null;
-  return extractSalientMemories(
+  const refusalReason = memoryTextSecretEgressRejectionReason(request.content, policy);
+  if (refusalReason !== null) return { kind: "refused", reason: refusalReason };
+  const outcomes = await extractSalientMemories(
     {
       userText: request.content,
       assistantText,
       existingBodies: gatherExistingBodies(vault, context),
-      context: buildSalienceContext(context),
+      context: captureContext,
       policy,
     },
     {
@@ -268,56 +512,154 @@ async function extractTurnSalienceOutcomes(
           { role: "user", content: user },
         ]),
       callModelMessages,
-      now: () => Date.now(),
-      newMemoryId: () => randomUUID() as MemoryId,
-      newProposalId: () => randomUUID() as MemoryProposalId,
+      now: () => captureContext.nowMs,
+      newMemoryId: captureContext.newMemoryId,
+      newProposalId: captureContext.newProposalId,
       onDiagnostic: (diagnostic) => {
         logSalienceDiagnostic(diagnostic, deps, salienceModelId);
       },
     },
   );
+  return { kind: "outcomes", outcomes };
+}
+
+interface SalienceCaptureSummary {
+  proposed: number;
+  accepted: number;
+  rejected: number;
+  merged: number;
+}
+
+function emptySalienceCaptureSummary(): SalienceCaptureSummary {
+  return { proposed: 0, accepted: 0, rejected: 0, merged: 0 };
+}
+
+function tallyDisposition(summary: SalienceCaptureSummary, disposition: CaptureDisposition): void {
+  switch (disposition) {
+    case "accepted":
+      summary.accepted += 1;
+      return;
+    case "proposed":
+      summary.proposed += 1;
+      return;
+    case "rejected":
+      summary.rejected += 1;
+      return;
+    case "merged":
+      summary.merged += 1;
+      return;
+    case "none":
+      return;
+  }
+}
+
+// Content-free capture summary: the effective mode and per-disposition counts only, never bodies or
+// user text. Mirrors the logSalienceDiagnostic diagnostic-sink convention.
+function logSalienceCaptureSummary(
+  mode: CodingWorkbenchMode,
+  summary: SalienceCaptureSummary,
+  deps: UiHandlerDeps,
+): void {
+  emitSalienceDiagnostic(
+    deps,
+    "memory-salience.captureSalientFromTurn",
+    "SalienceCaptureSummary",
+    `mode=${mode} proposed=${String(summary.proposed)} accepted=${String(summary.accepted)} ` +
+      `rejected=${String(summary.rejected)} merged=${String(summary.merged)}`,
+  );
+}
+
+interface SalienceCaptureResult {
+  readonly actions: readonly ConversationMemoryActionWire[];
+  readonly summary: SalienceCaptureSummary;
 }
 
 async function persistSalienceActions(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
-): Promise<readonly ConversationMemoryActionWire[]> {
+  mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
+): Promise<SalienceCaptureResult> {
   const actions: ConversationMemoryActionWire[] = [];
+  const summary = emptySalienceCaptureSummary();
   for (const outcome of outcomes) {
-    const action = await persistCandidate(deps, outcome, vault);
+    const { action, disposition } = await persistCandidate(deps, outcome, vault, mode, surface);
     if (action !== null) actions.push(action);
+    tallyDisposition(summary, disposition);
   }
-  return actions;
+  return { actions, summary };
+}
+
+function recordTurnCaptureRefusal(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
+  context: ConversationMemoryRuntimeContext,
+  occurredAt: number,
+  reason: RejectionReason,
+): void {
+  recordCaptureDecision(deps, mode, surface, {
+    outcome: "rejected",
+    scope: { kind: "project", projectId: context.projectId },
+    sourceKind: "system-default",
+    reason,
+    occurredAt,
+  });
 }
 
 // Captures salient memories from a completed chat turn. Never throws — any failure (model error,
-// vault error, malformed output) yields [] so the chat response is unaffected.
+// vault error, malformed output) yields [] so the chat response is unaffected. `surface` defaults
+// to "desktop" so every pre-existing caller (direct test invocations included) is byte-identical;
+// the scheduler is the only caller that passes an explicit "voice" surface.
 export async function captureSalientFromTurn(
   deps: UiHandlerDeps,
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
   modelId: string,
   assistantText: string,
+  surface: SalienceCaptureSurface = "desktop",
 ): Promise<readonly ConversationMemoryActionWire[]> {
   const vault = deps.memoryVault;
   if (request.memory === undefined || !request.memory.enabled || vault === undefined) {
     return [];
   }
   try {
-    const outcomes = await extractTurnSalienceOutcomes(
+    const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
+    const captureContext = buildSalienceContext(context);
+    const extraction = await extractTurnSalienceOutcomes(
       deps,
       vault,
       request,
       context,
+      captureContext,
       modelId,
       assistantText,
     );
-    return outcomes === null ? [] : await persistSalienceActions(deps, vault, outcomes);
+    if (extraction.kind === "unavailable") return [];
+    if (extraction.kind === "refused") {
+      recordTurnCaptureRefusal(
+        deps,
+        mode,
+        surface,
+        context,
+        captureContext.nowMs,
+        extraction.reason,
+      );
+      return [];
+    }
+    const { outcomes } = extraction;
+    const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode, surface);
+    if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps);
+    return actions;
   } catch (error) {
     // Boundary: salience must never break the chat path. Log and continue.
-    // eslint-disable-next-line no-console
-    console.error("salience capture failed", redactedErrorMessage(error, deps));
+    emitSalienceDiagnostic(
+      deps,
+      "memory-salience.captureSalientFromTurn",
+      "SalienceCaptureFailure",
+      `salience capture failed: ${redactedErrorMessage(error, deps)}`,
+    );
     return [];
   }
 }

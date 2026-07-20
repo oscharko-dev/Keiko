@@ -116,6 +116,13 @@ describe("extractCandidatesFromUserText", () => {
     expect(result[0]).toEqual({ kind: "rejected", reason: "provider-base-url" });
   });
 
+  it("rejects a configured category before creating an explicit candidate", () => {
+    const result = extractCandidatesFromUserText("remember that my medical record changed", ctx(), {
+      deniedCategoryMatchers: [{ category: "health-data", matchers: [/\bmedical record\b/iu] }],
+    });
+    expect(result[0]).toEqual({ kind: "rejected", reason: "denied-category" });
+  });
+
   it("priority: forget wins over remember when both could match", () => {
     // Construct a string that would match both — 'remember about forget' vs 'forget about remember'.
     // The grammar is constructed so the forget regex fires first per the EXTRACTORS order.

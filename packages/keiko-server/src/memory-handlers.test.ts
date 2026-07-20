@@ -37,6 +37,8 @@ import {
 } from "./memory-handlers.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
+import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { buildMemoryCaptureDecisionAuditEvent } from "./memory-capture-projection.js";
 
 function makeReq(payload: unknown): IncomingMessage {
   return Readable.from([Buffer.from(JSON.stringify(payload))]) as unknown as IncomingMessage;
@@ -242,6 +244,97 @@ describe("memory handlers", () => {
       "atlas-body",
       "tag-hit",
     ]);
+  });
+
+  it("keeps the legacy list response byte-identical when no recent params are present", () => {
+    const vault = makeVault();
+    const legacy = makeMemory("legacy-pin", "legacy body", {
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        capturedAt: 123,
+        confidence: 0.9,
+        sensitivity: "public",
+      },
+      validity: { validFrom: 123 },
+      createdAt: 123,
+      updatedAt: 123,
+    });
+    vault.insertMemory(legacy);
+
+    const result = handleListMemories(
+      makeCtx("/api/memory?scope=global&type=preference&status=accepted&limit=50", {}),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(JSON.stringify(result.body)).toBe(
+      '{"memories":[{"id":"legacy-pin","schemaVersion":"1","scope":{"kind":"global"},"type":"preference","body":"legacy body","provenance":{"sourceKind":"explicit-user-instruction","capturedAt":123,"confidence":0.9,"sensitivity":"public"},"validity":{"validFrom":123},"status":"accepted","pinned":false,"tags":[],"createdAt":123,"updatedAt":123}],"total":1,"limit":50,"offset":0}',
+    );
+  });
+
+  it("lists recent captures only from server-authorized scope coordinates", () => {
+    const vault = makeVault();
+    const evidenceStore = createInMemoryEvidenceStore();
+    const ownScope = { kind: "user" as const, userId: userId("operator-a") };
+    const foreignScope = { kind: "user" as const, userId: userId("operator-b") };
+    const own = makeMemory("own-capture", "owned governed excerpt", { scope: ownScope });
+    const foreign = makeMemory("foreign-capture", "foreign body must stay hidden", {
+      scope: foreignScope,
+    });
+    vault.insertMemory(own);
+    vault.insertMemory(foreign);
+    for (const [record, occurredAt] of [
+      [own, 200],
+      [foreign, 300],
+    ] as const) {
+      recordMemoryAudit(
+        { evidenceStore },
+        buildMemoryCaptureDecisionAuditEvent({
+          eventId: `capture-${String(record.id)}`,
+          occurredAt,
+          outcome: "auto-accepted",
+          scope: record.scope,
+          mode: "supervised-coding",
+          initiatorSurface: "conversation-center",
+          sourceKind: record.provenance.sourceKind,
+          reason: "governance-auto-accepted",
+          memoryId: record.id,
+        }),
+      );
+    }
+
+    const result = handleListMemories(
+      makeCtx("/api/memory?since=0&order=desc", {}),
+      makeDeps({
+        memoryVault: vault,
+        evidenceStore,
+        memoryAuthorization: {
+          reviewerId: reviewerId("operator-a"),
+          authorizedScopes: () => [ownScope],
+        },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    const serialized = JSON.stringify(result.body);
+    expect(serialized).toContain("own-capture");
+    expect(serialized).toContain("owned governed excerpt");
+    expect(serialized).not.toContain("foreign-capture");
+    expect(serialized).not.toContain("foreign body must stay hidden");
+  });
+
+  it("rejects malformed, duplicated, and oversized recent cursors", () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const paths = [
+      "/api/memory?since=not-a-timestamp",
+      "/api/memory?since=12345678901234",
+      "/api/memory?since=1&since=2",
+      "/api/memory?order=desc",
+    ];
+
+    for (const path of paths) {
+      expect(handleListMemories(makeCtx(path, {}), deps).status).toBe(400);
+    }
   });
 
   it("includes non-global conflicts in the review queue", () => {
