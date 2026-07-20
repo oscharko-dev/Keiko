@@ -6,6 +6,7 @@ import {
   CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_COMMAND_POLICY_MODES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
+  CODING_WORKBENCH_CONTENT_TRUST_VALUES,
   CODING_WORKBENCH_GATES,
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
@@ -670,6 +671,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
   "research-performed": runtimeEventAllowedKeys(
     "auxiliaryOutcome",
     "byteCount",
+    "contentTrust",
     "failureCode",
     "failureSummary",
     "retryable",
@@ -794,6 +796,12 @@ function validateRuntimeEventAuxiliaryFields(
     !isOneOf(value.skillInvocation, ["explicit", "implicit"] as const)
   ) {
     errors.push("event.skillInvocation is invalid");
+  }
+  if (
+    value.contentTrust !== undefined &&
+    !isOneOf(value.contentTrust, CODING_WORKBENCH_CONTENT_TRUST_VALUES)
+  ) {
+    errors.push("event.contentTrust is invalid");
   }
 }
 
@@ -1129,11 +1137,29 @@ function requireChildRunId(value: Record<string, unknown>, errors: string[]): vo
   }
 }
 
+// #2637: an ACCEPTED research fetch handed page text to the model, so the event MUST declare that
+// content untrusted. The requirement is conditional on the accepted outcome because a denial never
+// produced a read at all — there is nothing to classify. Emitting an accepted research event
+// without the marker is a contract violation, not a defaulted field: the timeline would otherwise
+// show a research read whose trust the runtime never asserted.
 function validateResearchPerformedEventFields(
   value: Record<string, unknown>,
   errors: string[],
 ): void {
   requireAuxiliaryOutcome(value, errors);
+  if (value.auxiliaryOutcome === "accepted") {
+    validateRequiredEnumField(
+      value,
+      "contentTrust",
+      CODING_WORKBENCH_CONTENT_TRUST_VALUES,
+      "event",
+      errors,
+    );
+    return;
+  }
+  if (value.contentTrust !== undefined) {
+    errors.push("event.contentTrust is only admissible on an accepted research read");
+  }
 }
 
 function validateSkillInvokedEventFields(value: Record<string, unknown>, errors: string[]): void {
