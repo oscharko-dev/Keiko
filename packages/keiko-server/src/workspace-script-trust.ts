@@ -56,6 +56,7 @@ const MAX_TRUST_RECORDS = 4_096;
 export const WORKSPACE_SCRIPT_TRUST_ERROR_CODES = {
   PROJECT_NOT_FOUND: "PROJECT_NOT_FOUND",
   PACKAGE_MANIFEST_UNAVAILABLE: "PACKAGE_MANIFEST_UNAVAILABLE",
+  WORKSPACE_STATE_UNAVAILABLE: "WORKSPACE_STATE_UNAVAILABLE",
 } as const;
 
 export type WorkspaceScriptTrustErrorCode =
@@ -64,6 +65,8 @@ export type WorkspaceScriptTrustErrorCode =
 const STATUS_MAP: Readonly<Record<WorkspaceScriptTrustErrorCode, number>> = {
   PROJECT_NOT_FOUND: 404,
   PACKAGE_MANIFEST_UNAVAILABLE: 422,
+  // The project is registered but its workspace state cannot be read (ADR-0147 D9 fail-closed).
+  WORKSPACE_STATE_UNAVAILABLE: 503,
 };
 
 export class WorkspaceScriptTrustError extends CodedHttpError {
@@ -135,24 +138,41 @@ function workspaceInfoForRoot(root: string): WorkspaceInfo {
   };
 }
 
+/**
+ * ADR-0147 D9 migrates a one-root manifest for the current active project only, and removing a root
+ * drops that root's manifest row while its project stays registered. Both leave a registered
+ * project with no workspace manifest, which D9 requires to read as unavailable/restricted. Raising
+ * a coded error keeps that state governed: the routes map it to a typed response instead of letting
+ * a bare Error reach the top-level catch as an opaque 500.
+ */
 function manifestForCanonicalRoot(store: UiStore, canonicalRoot: string): WorkspaceManifest {
   const rootRef = deriveWorkspaceRootRef(canonicalRoot);
   const row = store.findWorkspaceManifestRecordByRoot(rootRef);
-  if (row === undefined) throw new Error("WORKSPACE_ROOT_NOT_MEMBER");
+  if (row === undefined) {
+    throw new WorkspaceScriptTrustError(
+      "WORKSPACE_STATE_UNAVAILABLE",
+      "The workspace state for this project is unavailable.",
+    );
+  }
   let parsed: unknown;
+  const unavailable = (): WorkspaceScriptTrustError =>
+    new WorkspaceScriptTrustError(
+      "WORKSPACE_STATE_UNAVAILABLE",
+      "The workspace state for this project is unavailable.",
+    );
   try {
     parsed = JSON.parse(row.recordJson);
   } catch {
-    throw new Error("WORKSPACE_MANIFEST_UNAVAILABLE");
+    throw unavailable();
   }
-  if (!validateWorkspaceManifest(parsed).ok) throw new Error("WORKSPACE_MANIFEST_UNAVAILABLE");
+  if (!validateWorkspaceManifest(parsed).ok) throw unavailable();
   const manifest = parsed as WorkspaceManifest;
   if (
     manifest.workspaceId !== row.workspaceId ||
     manifest.revision !== row.revision ||
     manifest.manifestDigest !== row.manifestDigest
   ) {
-    throw new Error("WORKSPACE_MANIFEST_UNAVAILABLE");
+    throw unavailable();
   }
   return manifest;
 }
@@ -374,11 +394,19 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
     const workspace = workspaceInfoForRoot(canonicalRoot);
     const trusted = this.isTrusted(projectId, workspace);
-    const binding = currentTrustBinding(
-      this.store,
-      canonicalRoot,
-      resolveTrustBasisFact(this.fs, canonicalRoot),
-    );
+    let binding: WorkspaceTrustBinding;
+    try {
+      binding = currentTrustBinding(
+        this.store,
+        canonicalRoot,
+        resolveTrustBasisFact(this.fs, canonicalRoot),
+      );
+    } catch {
+      // Status is a read of governed state, so unreadable workspace state projects as
+      // restricted/state-unavailable (ADR-0147 D9) rather than failing the request. Grant and
+      // revoke keep raising the coded error, because a mutation must not silently do nothing.
+      return unavailableStatus(projectId);
+    }
     const assessment = readAssessment(this.store, binding.rootRef);
     if (assessment.outcome === "known" && assessment.value.trust === "restricted") {
       return statusProjection(projectId, assessment.value);

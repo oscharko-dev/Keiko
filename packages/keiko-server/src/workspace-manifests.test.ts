@@ -12,6 +12,7 @@ import { createInMemoryUiStore } from "./store/index.js";
 import type { UiStore } from "./store/index.js";
 import {
   createWorkspaceScriptTrustService,
+  WorkspaceScriptTrustError,
   type WorkspaceScriptTrustService,
 } from "./workspace-script-trust.js";
 import { WorkspaceManifestError, WorkspaceManifestService } from "./workspace-manifests.js";
@@ -177,6 +178,34 @@ describe("WorkspaceManifestService", () => {
     recompute(removed.affectedRoots);
     expect(store.readWorkspaceTrustRecord(first.rootRef)).toBeUndefined();
     expect(trust.trustLevelForRoot(rootA)).toBe("restricted");
+  });
+
+  it("projects a still-registered project that lost its manifest as unavailable instead of throwing", () => {
+    // ADR-0147 D9 migrates a one-root manifest for the current active project only, and removeRoot
+    // deletes the removed root's manifest row while its projects row stays registered. Both leave a
+    // registered project with no workspace manifest, and D9 requires that state to fail closed to
+    // unavailable/restricted. It used to escape manifestForCanonicalRoot as an uncoded Error, which
+    // the server turns into an opaque 500 on the trust status, grant, revoke and catalog routes.
+    const alpha = service.list().find((manifest) => manifest.roots[0]?.canonicalRoot === rootA);
+    if (alpha === undefined) throw new Error("missing alpha workspace");
+    const twoRoots = service.addRoot(dispatch(alpha, 0), rootB).manifest;
+    const beta = twoRoots.roots[1];
+    if (beta === undefined) throw new Error("missing beta root");
+    service.removeRoot(dispatch(twoRoots, 0), beta.rootRef);
+
+    expect(store.findWorkspaceManifestRecordByRoot(beta.rootRef)).toBeUndefined();
+    expect(store.listProjects().some((project) => project.path === rootB)).toBe(true);
+
+    expect(trust.status(rootB)).toMatchObject({
+      projectId: rootB,
+      trust: "restricted",
+      decidedBy: "server",
+      reason: "state-unavailable",
+    });
+    expect(trust.trustLevelForRoot(rootB)).toBe("restricted");
+    for (const worker of [(): unknown => trust.grant(rootB), (): unknown => trust.revoke(rootB)]) {
+      expect(worker).toThrow(WorkspaceScriptTrustError);
+    }
   });
 
   it("rejects stale, incomplete, and non-member mutation authority content-free", () => {
