@@ -74,15 +74,18 @@ function checkEntryGuards(ctx: RunContext, state: HarnessStateName): StateStep |
   return null;
 }
 
+// Issue #2638: the command budget is intentionally NOT checked here. Refusing tool-call
+// entry on `commandExecutions >= maxCommandExecutions` is over-broad — it would also block
+// read-only tools once the budget is spent, and refuse EVERY tool call (including read-only)
+// when a caller wires `maxCommandExecutions: 0` to forbid commands outright. The budget is
+// enforced by handleToolCall (pre-execution, name-scoped to `run_command`) and runOneTool
+// (post-execution, contract-violation guard when any other tool claims `commandExecuted:true`);
+// a read-only tool never trips it.
 function checkToolLimits(ctx: RunContext): StateStep | null {
   const pending = ctx.lastResponse?.toolCalls.length ?? 0;
   if (ctx.counters.toolCalls + pending > ctx.limits.maxToolCalls) {
     ctx.failure = toFailure(HARNESS_CODES.LIMIT_TOOL_CALLS, "tool-call budget exhausted");
     return { to: "limit-exceeded", reason: "maxToolCalls exceeded" };
-  }
-  if (ctx.counters.commandExecutions >= ctx.limits.maxCommandExecutions) {
-    ctx.failure = toFailure(HARNESS_CODES.LIMIT_COMMAND_EXEC, "command-execution budget exhausted");
-    return { to: "limit-exceeded", reason: "maxCommandExecutions exceeded" };
   }
   return null;
 }
