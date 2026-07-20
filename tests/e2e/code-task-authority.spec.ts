@@ -25,11 +25,16 @@
 // confirmed" and disable Start.
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
+import {
+  FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
+  FUNCTIONAL_PLAN_STEP_READ,
+  FUNCTIONAL_PLAN_STEP_VERIFY,
+} from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
 
 import {
   AUTHORITY_APP_SESSION_LAUNCHER_SECRET,
@@ -39,10 +44,13 @@ import {
   authorityRepositoryRoot,
   authorityStateDir,
 } from "./support/coding-runtime-2386-authority.js";
+import { openEditorWorkspace, openTreeFile } from "./support/editorWorkspace.js";
 
 const stateDir = authorityStateDir();
 const repositoryRoot = authorityRepositoryRoot(stateDir);
 const managedRoot = authorityManagedWorkspaceRoot(stateDir);
+const realBinaryJourney = process.env.KEIKO_E2E_REAL_BINARY === "1";
+const commandModifier = process.platform === "darwin" ? "Meta" : "Control";
 
 function workbench(page: Page): Locator {
   return page.locator('section[aria-label="Coding Workbench"][data-state]');
@@ -132,6 +140,9 @@ async function answerVisibleQuestion(page: Page): Promise<void> {
   const questions = runtimeQuestions(page);
   await questions.getByRole("radio", { name: /Approve/u }).check();
   await questions.getByRole("button", { name: "Send answer" }).click();
+  await expect(questions.getByRole("heading", { name: "Runtime needs your input" })).toBeHidden({
+    timeout: 30_000,
+  });
 }
 
 // #2478 negative step, executed WHILE the real question is pending so the refusal is meaningful:
@@ -146,6 +157,9 @@ async function proveUnpairedClientReadsNoQuestionText(
   runId: string,
 ): Promise<void> {
   const headers = { origin, "x-keiko-csrf": "1" };
+  const activity = await stranger.get("/api/coding-workbench/app-session/channel");
+  expect(activity.status()).toBe(200);
+  expect(await activity.json()).toEqual({ schemaVersion: "1", content: null });
   const listed = await stranger.post(`/api/coding-workbench/runtime/runs/${runId}/questions`, {
     headers,
     data: { requestId: "req_stranger-list", expectedRevision: 0 },
@@ -168,6 +182,166 @@ async function proveUnpairedClientReadsNoQuestionText(
   expect(answered.status()).toBe(404);
 }
 
+function worktreeRootForTarget(target: string): string {
+  return AUTHORITY_TARGET_RELATIVE_PATH.split("/").reduce((root) => dirname(root), target);
+}
+
+async function hasEditorSession(page: Page, root: string): Promise<boolean> {
+  const response = await page.request.get("/api/editor/agent/sessions");
+  if (!response.ok()) return false;
+  const body = (await response.json()) as {
+    readonly sessions?: readonly {
+      readonly activeFile?: string;
+      readonly workspaceRoot?: string;
+    }[];
+  };
+  return (
+    body.sessions?.some(
+      (session) =>
+        session.workspaceRoot === root && session.activeFile === AUTHORITY_TARGET_RELATIVE_PATH,
+    ) ?? false
+  );
+}
+
+interface ChangesetAuditProjection {
+  readonly actionType?: string;
+  readonly conflictCode?: string;
+  readonly failureCode?: string;
+  readonly outcome?: string;
+  readonly sessionId?: string;
+}
+
+async function latestChangesetAudit(page: Page): Promise<ChangesetAuditProjection | null> {
+  const response = await page.request.get("/api/editor/agent/audit");
+  if (!response.ok()) return null;
+  const body = (await response.json()) as {
+    readonly records?: readonly ChangesetAuditProjection[];
+  };
+  return (
+    [...(body.records ?? [])].reverse().find((record) => record.actionType === "applyChangeset") ??
+    null
+  );
+}
+
+async function openRealBinaryEditorBridge(page: Page): Promise<void> {
+  if (!realBinaryJourney) return;
+  const targets = findManagedTargetFiles(managedRoot, 4);
+  expect(targets).toHaveLength(1);
+  const root = realpathSync(worktreeRootForTarget(targets[0] ?? ""));
+  await page.getByRole("button", { name: "Editor" }).click();
+  const workspace = await openEditorWorkspace(page);
+  const editorWindow = page.locator('section[data-window-id="editor"]');
+  await editorWindow.focus();
+  await expect(editorWindow).toHaveAttribute("data-top", "true");
+  await workspace.getByRole("button", { name: "Expand folder: src" }).click();
+  await openTreeFile(workspace, AUTHORITY_TARGET_RELATIVE_PATH);
+  await expect.poll(() => hasEditorSession(page, root)).toBe(true);
+  const codingWindow = page.locator('section[data-window-id="coding"]');
+  await codingWindow
+    .getByRole("group", { name: "Coding Workbench window controls" })
+    .getByRole("button", { name: "Close Coding Workbench window" })
+    .click();
+  await expect(codingWindow).toHaveCount(0);
+  await trustRealBinaryWorkspaceScripts(page);
+}
+
+async function trustRealBinaryWorkspaceScripts(page: Page): Promise<void> {
+  const trustResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/editor/verification/trust"),
+  );
+  const catalogRefresh = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      response.url().includes("/api/editor/verification/catalog?projectId="),
+  );
+  await page.keyboard.press(`${commandModifier}+Shift+KeyP`);
+  const query = page.getByRole("combobox", { name: "Command query" });
+  await expect(query).toBeVisible();
+  await query.fill(">Trust Workspace Scripts");
+  const command = page.getByRole("option").filter({ hasText: "Trust Workspace Scripts" }).first();
+  await expect(command).toBeVisible();
+  await command.click();
+  expect((await trustResponse).status()).toBe(200);
+  expect((await catalogRefresh).status()).toBe(200);
+}
+
+async function reopenRealBinaryCodingWorkbench(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
+  const codingWindow = page.locator('section[data-window-id="coding"]');
+  await expect(codingWindow).toHaveAttribute("data-top", "true");
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+}
+
+async function approveRealBinaryChangeset(page: Page): Promise<void> {
+  if (!realBinaryJourney) return;
+  const editorWindow = page.locator('section[data-window-id="editor"]');
+  const review = editorWindow.getByRole("group", { name: "Agent changeset review" });
+  await expect
+    .poll(() => latestChangesetAudit(page))
+    .toMatchObject({
+      actionType: "applyChangeset",
+      outcome: "queued",
+    });
+  await expect(review).toBeVisible({ timeout: 30_000 });
+  await expect(editorWindow).toHaveAttribute("data-top", "true");
+  const apply = review.getByTestId("keiko-diff-apply");
+  await expect(apply).toBeVisible();
+  await apply.click();
+  await expect(review).toBeHidden();
+  await reopenRealBinaryCodingWorkbench(page);
+}
+
+async function proveVerificationActivity(timeline: Locator): Promise<void> {
+  if (realBinaryJourney) {
+    await expect(
+      timeline.getByText("Tool activity: keiko_verification", { exact: true }),
+    ).toBeVisible({ timeout: 90_000 });
+    return;
+  }
+  await expect(timeline.getByText("Verification summarized", { exact: true })).toBeVisible({
+    timeout: 90_000,
+  });
+}
+
+// #2482 negative step: the generic Git routes resolve the managed worktree and require the same
+// launcher-attested app session before they execute Git. The fresh cookie-less client knows the
+// exact root and path but still receives only schema-valid empty projections.
+async function proveUnpairedClientReadsNoManagedDiff(
+  stranger: APIRequestContext,
+  origin: string,
+  target: string,
+): Promise<void> {
+  const root = worktreeRootForTarget(target);
+  const query = new URLSearchParams({ root, path: AUTHORITY_TARGET_RELATIVE_PATH, scope: "all" });
+  const diff = await stranger.get(`/api/git/diff?${query.toString()}`, { headers: { origin } });
+  expect(diff.status()).toBe(200);
+  expect(await diff.json()).toMatchObject({ available: false, diff: "" });
+
+  const status = await stranger.get(`/api/git/status?${new URLSearchParams({ root }).toString()}`, {
+    headers: { origin },
+  });
+  expect(status.status()).toBe(200);
+  expect(await status.json()).toMatchObject({ available: false, changes: [] });
+}
+
+async function proveRunChangesView(
+  page: Page,
+  stranger: APIRequestContext,
+  target: string,
+): Promise<void> {
+  const changes = page.getByRole("region", { name: "Run changes" });
+  await expect(
+    changes.getByRole("button", { name: new RegExp(AUTHORITY_TARGET_RELATIVE_PATH, "u") }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(changes.getByRole("region", { name: "Run-scoped file diff" })).toContainText(
+    AUTHORITY_EDITED_CONTENT.trim(),
+  );
+  await expect(changes.getByText(/^As of [0-9a-f]{7,40}$/u)).toBeVisible();
+  await proveUnpairedClientReadsNoManagedDiff(stranger, new URL(page.url()).origin, target);
+}
+
 // #2478: revoking the app session (sign-out through the paired cookie jar) must surface as the
 // honest re-pair state on the questions surface at the next resync (the pause transition), never
 // a silent empty list — while the content-free run controls keep working without a session.
@@ -185,8 +359,63 @@ async function proveRevocationSurfacesRepairState(page: Page): Promise<void> {
   await expect(
     runtimeQuestions(page).getByText("not paired for question content", { exact: false }),
   ).toBeVisible();
+  const changes = page.getByRole("region", { name: "Run changes" });
+  await expect(changes.getByRole("alert")).toContainText("app session may need to be paired", {
+    timeout: 15_000,
+  });
+  await expect(changes.getByRole("region", { name: "Run-scoped file diff" })).toHaveCount(0);
+  await expect(changes).not.toContainText(AUTHORITY_EDITED_CONTENT.trim());
   await page.getByRole("button", { name: "Resume run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
+}
+
+async function proveLiveActivityTimeline(
+  page: Page,
+  request: APIRequestContext,
+  timeline: Locator,
+  runId: string,
+): Promise<void> {
+  await awaitRequiredQuestion(page);
+  await expect(timeline.getByRole("region", { name: "Runtime questions" })).toBeVisible();
+  await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_READ, { exact: true })).toBeVisible();
+  await expect(timeline.locator('[data-tool-state="succeeded"]')).toContainText("workspace");
+  await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
+  await answerVisibleQuestion(page);
+  await openRealBinaryEditorBridge(page);
+  await approveRealBinaryChangeset(page);
+  await proveVerificationActivity(timeline);
+  await expect(
+    timeline.getByText(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX, { exact: false }),
+  ).toBeVisible();
+  const browserRetention = await page.evaluate(() => ({
+    url: window.location.href,
+    local: Object.keys(window.localStorage).map((key) => window.localStorage.getItem(key)),
+    session: Object.keys(window.sessionStorage).map((key) => window.sessionStorage.getItem(key)),
+  }));
+  expect(JSON.stringify(browserRetention)).not.toContain(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX);
+  await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_VERIFY, { exact: true })).toBeVisible();
+  await expect(timeline.getByText("Output truncated", { exact: false })).toBeVisible();
+  const edited = findManagedTargetFiles(managedRoot, 4);
+  expect(edited).toHaveLength(1);
+  expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
+  if (!realBinaryJourney) await proveRunChangesView(page, request, edited[0] ?? "");
+}
+
+async function settleRealBinaryRun(page: Page, runId: string): Promise<void> {
+  const codingWindow = page.locator('section[data-window-id="coding"]');
+  await codingWindow
+    .getByRole("group", { name: "Coding Workbench window controls" })
+    .getByRole("button", { name: "Close Coding Workbench window" })
+    .click();
+  await expect(codingWindow).toHaveCount(0);
+  const stopped = await page.request.post(`/api/coding-workbench/runtime/runs/${runId}/stop`, {
+    headers: { "x-keiko-csrf": "1" },
+    data: { requestId: runId },
+  });
+  expect(stopped.ok()).toBe(true);
+  expect((await stopped.json()) as { readonly state?: string }).toMatchObject({
+    state: "cancelled",
+  });
 }
 
 // Runs FIRST: this readiness probe asserts the #2476 AC4 setup surface, which only renders while
@@ -236,20 +465,18 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   await start.click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
   const runId = await currentRunId(page);
+  const timeline = page.getByRole("list", { name: "Coding run event timeline" });
 
   // The required question must surface in the paired browser (#2478: the round-trip now runs over
   // the authenticated app-session channel); while it is pending, an unpaired local client with
   // every routing fact must receive no question text and no blind-answer authority.
-  await awaitRequiredQuestion(page);
-  await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
-  await answerVisibleQuestion(page);
-  const timeline = page.getByRole("list", { name: "Coding run event timeline" });
-  await expect(timeline.getByText("Verification summarized", { exact: true })).toBeVisible({
-    timeout: 90_000,
-  });
-  const edited = findManagedTargetFiles(managedRoot, 4);
-  expect(edited).toHaveLength(1);
-  expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
+  // #2481: the question is part of the authenticated activity transcript itself, after the
+  // completed read tool and the plan snapshot that causally preceded it — not a detached widget.
+  await proveLiveActivityTimeline(page, request, timeline, runId);
+  if (realBinaryJourney) {
+    await settleRealBinaryRun(page, runId);
+    return;
+  }
 
   // Pause is sticky: the run must stay paused across runtime activity until an explicit Resume.
   await page.getByRole("button", { name: "Pause run" }).click();

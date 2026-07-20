@@ -802,6 +802,7 @@ export type {
   CodingWorkbenchActionClass,
   CodingWorkbenchApprovalRisk,
   CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchBudget,
   CodingWorkbenchBranchConstraints,
   CodingWorkbenchCommandPolicy,
@@ -842,6 +843,7 @@ export type {
 export {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
+  CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_COMMAND_POLICY_MODES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_GATES,
@@ -992,6 +994,32 @@ export {
   validateRuntimeGovernanceOutcomeV1,
   validateRuntimeGovernanceRequestV1,
 } from "./code-task-run-control.js";
+
+// ─── Auxiliary-capability contract (Issue #2387, produced for #2388) ───────────────
+// Governed read-only research / approved skills / one-layer read-only child agents: the strictly
+// narrower companion to GovernedActionV1 — bounded scope, derived authority, content-free outcome.
+export type {
+  AuxiliaryCapability,
+  AuxiliaryCapabilityOutcomeV1,
+  AuxiliaryCapabilityPortV1,
+  AuxiliaryCapabilityRequestV1,
+  AuxiliaryCapabilityTarget,
+  AuxiliaryOutcomeStatus,
+  AuxiliaryResearchScopeV1,
+  CodeTaskChildRunId,
+  CodeTaskSkillId,
+} from "./code-task-auxiliary.js";
+export {
+  AUXILIARY_CAPABILITIES,
+  AUXILIARY_INVOCATIONS,
+  AUXILIARY_OUTCOME_STATUSES,
+  CODE_TASK_AUXILIARY_SCHEMA_VERSION,
+  isCodeTaskChildRunId,
+  isCodeTaskPublicDomain,
+  isCodeTaskSkillId,
+  validateAuxiliaryCapabilityOutcomeV1,
+  validateAuxiliaryCapabilityRequestV1,
+} from "./code-task-auxiliary.js";
 
 // ─── Atlassian connector contracts (Issue #2240, Epic #2238, ADR-0128) ─────────────
 // Governed Confluence/Jira connector lane: descriptors (opaque authRef, never a secret), bounded
@@ -1158,6 +1186,8 @@ export type {
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  CodingWorkbenchRuntimeResearchGrant,
+  CodingWorkbenchRuntimeResearchRevokeRequest,
   CodingWorkbenchRuntimeRetryRequest,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
@@ -1178,6 +1208,7 @@ export {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  parseCodingWorkbenchRuntimeResearchRevokeRequest,
   parseCodingWorkbenchRuntimeRetryRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
@@ -1213,10 +1244,25 @@ export {
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
 export type {
+  CodingWorkbenchRuntimePendingResearch,
+  CodingWorkbenchRuntimeResearchChannelPayload,
+  CodingWorkbenchRuntimeResearchSession,
+} from "./coding-workbench-runtime-research.js";
+export {
+  CODING_WORKBENCH_RESEARCH_HOST_MAX_CHARS,
+  CODING_WORKBENCH_RESEARCH_REQUEST_LINE_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_RESEARCH_SESSION_STATES,
+  unpairedCodingWorkbenchRuntimeResearchChannelPayload,
+  validateCodingWorkbenchRuntimeResearchChannelPayload,
+} from "./coding-workbench-runtime-research.js";
+export type {
   AvailableCodingSafeActivityFeed,
   CodingSafeActivityFeed,
   CodingSafeActivityMessage,
   CodingSafeActivityMessageRole,
+  CodingSafeActivityPlan,
+  CodingSafeActivityPlanStep,
+  CodingSafeActivityPlanStepState,
   CodingSafeActivityTextSegment,
   CodingSafeActivityTool,
   CodingSafeActivityToolState,
@@ -1228,6 +1274,9 @@ export {
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
@@ -1235,6 +1284,7 @@ export {
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MESSAGE_ROLES,
+  CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   CODING_SAFE_ACTIVITY_TOOL_LABEL_MAX_CHARS,
   CODING_SAFE_ACTIVITY_TOOL_STATES,
   unavailableCodingSafeActivityFeed,

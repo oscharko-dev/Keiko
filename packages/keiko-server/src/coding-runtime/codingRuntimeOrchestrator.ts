@@ -4,6 +4,7 @@ import {
   isLegalCodingWorkbenchRuntimeTransition,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
+  parseCodingWorkbenchRuntimeResearchRevokeRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
@@ -11,6 +12,8 @@ import {
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeFailureCode,
+  type CodingWorkbenchRuntimePendingResearch,
+  type CodingWorkbenchRuntimeResearchGrant,
   type CodingWorkbenchRuntimeStartRequest,
   type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
   type CodingWorkbenchRuntimeStateName,
@@ -20,6 +23,7 @@ import type {
   CodingRuntimeManager,
 } from "./codingRuntimeManager.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
+import { reviewableResearchAsk } from "./researchApprovalIssuance.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import { CodingRuntimeOrchestratorState } from "./codingRuntimeOrchestratorState.js";
@@ -82,6 +86,8 @@ export class CodingRuntimeOrchestrator {
       now: this.now,
       pendingPermission: (runId: string): CodingWorkbenchRuntimePendingPermission | undefined =>
         this.approvals.get(runId)?.permission,
+      researchGrant: (runId: string): CodingWorkbenchRuntimeResearchGrant | undefined =>
+        this.projectedResearchGrant(runId),
     });
     this.operations = new CodingRuntimeOperationCoordinator({
       current: (): CodingRuntimeSnapshot | undefined => this.current(),
@@ -166,6 +172,63 @@ export class CodingRuntimeOrchestrator {
       if (result.ok) this.deps.manager.resume(runId);
       return result;
     });
+  }
+
+  /**
+   * Drops every live #2387 research grant for the run (parent and children share the run-bound
+   * registry entry) in one revision bump. Bound to the observed revision and a live grant id, so a
+   * stale or forged revoke fails closed; the returned snapshot no longer carries `researchGrant`.
+   */
+  revokeResearch(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+    return this.serialValue(() => {
+      const registry = this.deps.researchGrants;
+      const parsed = parseCodingWorkbenchRuntimeResearchRevokeRequest(input);
+      const current = this.current();
+      if (registry === undefined || !parsed.ok || current?.runId !== runId)
+        return this.fail("invalid-intent");
+      if (parsed.value.expectedRevision !== current.revision) return this.fail("invalid-intent");
+      const live = registry.activeGrants(runId, this.now().getTime());
+      if (!live.some((grant) => grant.grantId === parsed.value.grantId))
+        return this.fail("invalid-intent");
+      registry.invalidateRun(runId);
+      return this.advanceRevision(current);
+    });
+  }
+
+  /**
+   * The reviewable facts of the run's live research ask, for the AUTHENTICATED research channel
+   * only (#2387 "visible sanitized queries"). Never reaches the unauthenticated status or SSE
+   * projection: the host and request line are model-chosen text and those surfaces stay
+   * content-free. Returns undefined when nothing is pending, the ask expired, or the run is not
+   * the current one — a stale panel can never review an ask that is no longer approvable.
+   */
+  pendingResearchAsk(runId: string): CodingWorkbenchRuntimePendingResearch | undefined {
+    const store = this.deps.pendingResearchApprovals;
+    if (store === undefined || this.current()?.runId !== runId) return undefined;
+    const pending = store.peek(runId, this.now().getTime());
+    if (pending === undefined) return undefined;
+    const reviewable = reviewableResearchAsk(pending);
+    if (reviewable === undefined) return undefined;
+    return {
+      requestId: pending.requestId,
+      host: reviewable.host,
+      requestLine: reviewable.requestLine,
+      expiresAt: new Date(pending.expiresAtMs).toISOString(),
+    };
+  }
+
+  /** Aggregates the run's live grants into the single content-free snapshot projection. */
+  private projectedResearchGrant(runId: string): CodingWorkbenchRuntimeResearchGrant | undefined {
+    const registry = this.deps.researchGrants;
+    if (registry === undefined) return undefined;
+    const grants = registry.activeGrants(runId, this.now().getTime());
+    const newest = grants.at(-1);
+    if (newest === undefined) return undefined;
+    const domains = [...new Set(grants.flatMap((grant) => grant.domains))].sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const expiresAtMs = Math.max(...grants.map((grant) => grant.expiresAtMs));
+    return { grantId: newest.grantId, domains, expiresAt: new Date(expiresAtMs).toISOString() };
   }
 
   private transitionLifecycle(
@@ -261,6 +324,7 @@ export class CodingRuntimeOrchestrator {
           : {}),
         approvedByUserId: principal,
         ttlMs: Math.max(1, challenge.expiresAt - this.now().getTime()),
+        boundRevision: challenge.revision,
       });
     } catch {
       this.approvals.delete(current.runId);

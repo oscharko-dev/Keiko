@@ -96,6 +96,23 @@ describe("classifyOutboundHost IPv6 edge ranges (AUDIT-SEC-003)", () => {
   });
 });
 
+describe("denyLoopback tightens the loopback class for #2387 research egress", () => {
+  it("permits loopback by default (gatewayFetch sidecar traffic) but blocks it under denyLoopback", () => {
+    const url = new URL("https://127.0.0.1/latest");
+    expect(outboundTargetBlockedReason(url, {})).toBeUndefined();
+    expect(outboundTargetBlockedReason(url, { denyLoopback: true })).toBe("loopback address");
+    expect(outboundAddressBlockedReason("127.0.0.1", { denyLoopback: true })).toBe(
+      "loopback address",
+    );
+    // Public targets stay allowed; denyLoopback only tightens the loopback class.
+    expect(
+      outboundTargetBlockedReason(new URL("https://developer.mozilla.org/"), {
+        denyLoopback: true,
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("outbound blocked-reason helpers keep metadata/link-local/multicast blocked even when allowPrivateNetwork is on (AUDIT-SEC-002)", () => {
   it("still blocks the literal cloud-metadata address as a target URL", () => {
     const reason = outboundTargetBlockedReason(

@@ -19,3 +19,35 @@ describe("coding tool IPC exact changesets", () => {
     expect(parseCodingToolRequest(body, 262_144)).toBeUndefined();
   });
 });
+
+describe("coding tool IPC auxiliary requests", () => {
+  it("admits only model-safe skill fields", () => {
+    const body = {
+      action: "skill",
+      actionId: "skill-1",
+      idempotencyKey: "skill-key",
+      skillId: "skl_repo-structure-summary@1",
+    };
+    expect(parseCodingToolRequest(JSON.stringify(body), 262_144)).toEqual(body);
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...body, invocation: "explicit" }), 262_144),
+    ).toBeUndefined();
+  });
+
+  it("clamps child input and rejects model-supplied authority", () => {
+    const body = {
+      action: "child-agent",
+      actionId: "child-1",
+      idempotencyKey: "child-key",
+      objective: "Inspect repository structure",
+      maxToolCalls: 4,
+    };
+    expect(parseCodingToolRequest(JSON.stringify(body), 262_144)).toEqual(body);
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...body, childRunId: "chr_model" }), 262_144),
+    ).toBeUndefined();
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...body, maxToolCalls: 33 }), 262_144),
+    ).toBeUndefined();
+  });
+});

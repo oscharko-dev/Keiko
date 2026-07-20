@@ -10,8 +10,11 @@ const KEIKO_PRODUCER_TOOLS = [
   "keiko_workspace_read",
   "keiko_changeset_edit",
   "keiko_verification",
+  "keiko_research_fetch",
+  "keiko_skill",
+  "keiko_child_agent",
 ] as const;
-const MODEL_VISIBLE_TOOLS = ["question", ...KEIKO_PRODUCER_TOOLS] as const;
+const MODEL_VISIBLE_TOOLS = ["question", "todowrite", ...KEIKO_PRODUCER_TOOLS] as const;
 const READY_LINE = "opencode server listening on http://127.0.0.1:43123\n";
 
 type ReadinessPhase =
@@ -291,6 +294,7 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(headers.Authorization).toBe("Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}");
     expect(bundle.config.tools).toMatchObject({
       question: true,
+      todowrite: true,
       keiko_workspace_read: true,
       keiko_changeset_edit: true,
       bash: false,
@@ -306,6 +310,7 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(bundle.config.permission).toMatchObject({
       "*": "deny",
       question: "allow",
+      todowrite: "allow",
       keiko_workspace_read: "allow",
       keiko_changeset_edit: "allow",
     });

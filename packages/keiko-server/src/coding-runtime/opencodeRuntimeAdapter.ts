@@ -791,42 +791,59 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   return {
     config: createFixedOpenCodeConfig(),
     toolSources: Object.fromEntries(
-      OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, argument, inputSchema }) => [
+      OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
         name,
-        toolSource(action, argument, inputSchema),
+        toolSource(action, schemas),
       ]),
     ),
   };
 }
 
+type GeneratedToolAction = "read" | "edit" | "verification" | "egress" | "skill" | "child-agent";
+
+function toolDescription(action: GeneratedToolAction): string {
+  if (action === "read") return "Read a bounded repository text file through Keiko governance.";
+  if (action === "egress") {
+    return "Fetch one approved public https URL through governed read-only research (#2387).";
+  }
+  if (action === "skill") return "Invoke one exact server-approved read-only skill.";
+  if (action === "child-agent") return "Run one bounded, one-layer read-only child agent.";
+  if (action === "verification") {
+    return "Run one vetted repository verification through Keiko governance.";
+  }
+  return "Submit a bounded changeset through Keiko governance.";
+}
+
 // eslint-disable-next-line max-lines-per-function -- emitted dependency-free tool source keeps all transport gates visible.
 function toolSource(
-  action: "read" | "edit" | "verification",
-  argument: "relativePath" | "changeset" | "verifierId",
-  inputSchema: Readonly<Record<string, unknown>>,
+  action: GeneratedToolAction,
+  schemas: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
 ): string {
+  const argumentNames = Object.keys(schemas);
   return [
     "const MAX_RESPONSE_BYTES = 262144;",
     "const TIMEOUT_MS = 10000;",
     `const action = ${JSON.stringify(action)};`,
-    `const argument = ${JSON.stringify(argument)};`,
-    `const inputSchema = ${JSON.stringify(inputSchema)};`,
+    `const argumentNames = ${JSON.stringify(argumentNames)};`,
+    `const inputSchemas = ${JSON.stringify(schemas)};`,
     "function validResult(value) {",
     '  if (!value || typeof value !== "object" || Array.isArray(value)) return false;',
     '  if (!["completed", "failed", "denied", "invalid", "cancelled", "busy", "observed"].includes(value.status)) return false;',
-    '  if (action !== "read" || value.status !== "completed") return true;',
+    '  if ((action !== "read" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
     '  return !!read && typeof read === "object" && !Array.isArray(read) && typeof read.text === "string" && Number.isSafeInteger(read.byteCount) && /^[a-f0-9]{64}$/.test(read.digest);',
     "}",
     "export default {",
-    `  description: ${JSON.stringify(action === "read" ? "Read a bounded repository text file through Keiko governance." : "Submit a bounded changeset through Keiko governance.")},`,
-    `  args: { ${argument}: inputSchema },`,
+    `  description: ${JSON.stringify(toolDescription(action))},`,
+    "  args: inputSchemas,",
     "  async execute(args, context) {",
     "    const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "    const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     '    if (!endpoint || !capability) throw new Error("keiko-tool-unavailable");',
     "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
-    `    const body = JSON.stringify({ action, actionId: identity, idempotencyKey: identity, ${argument}: args.${argument} });`,
+    "    const request = { action, actionId: identity, idempotencyKey: identity };",
+    "    for (const name of argumentNames) request[name] = args[name];",
+    "    const body = JSON.stringify(request);",
     "    const controller = new AbortController();",
     "    const abort = () => controller.abort();",
     '    context.abort.addEventListener("abort", abort, { once: true });',

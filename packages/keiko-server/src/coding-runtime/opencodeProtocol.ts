@@ -71,6 +71,9 @@ const APPROVED_PRODUCTIVE_TOOLS = new Set<string>(
 );
 const APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS = new Set<string>([
   "question",
+  // #2480: plan carrier only — its admitted parts feed the governed plan projection and it
+  // never reaches the productive tool facade.
+  "todowrite",
   ...APPROVED_PRODUCTIVE_TOOLS,
 ]);
 
@@ -247,15 +250,24 @@ function normalizedSyncPayload(payload: Record<string, unknown>): NormalizedSseD
     typeof payload.id !== "string" ||
     !/^evt_[A-Za-z0-9_-]+$/u.test(payload.id) ||
     !exactRecord(payload.syncEvent, ["type", "id", "seq", "aggregateID", "data"]) ||
-    payload.syncEvent.type !== "session.created.1" ||
     payload.syncEvent.id !== payload.id ||
     !nonNegativeSafeInteger(payload.syncEvent.seq) ||
-    payload.syncEvent.seq !== 0 ||
     !id(payload.syncEvent.aggregateID, "ses_") ||
-    !isRecord(payload.syncEvent.data) ||
-    !sessionCreated(payload.syncEvent.data, payload.syncEvent.aggregateID)
+    !isRecord(payload.syncEvent.data)
   )
     return undefined;
+  // The fixed-session echo keeps its deep shape gate. Every other durable sync envelope is a
+  // content-free pull trigger only: its data is never read here — row admission stays with the
+  // pinned history parser behind POST /sync/history.
+  if (payload.syncEvent.type === "session.created.1") {
+    if (
+      payload.syncEvent.seq !== 0 ||
+      !sessionCreated(payload.syncEvent.data, payload.syncEvent.aggregateID)
+    )
+      return undefined;
+    return { id: payload.id, type: "sync", properties: {} };
+  }
+  if (!nonEmpty(payload.syncEvent.type)) return undefined;
   return { id: payload.id, type: "sync", properties: {} };
 }
 
@@ -556,7 +568,7 @@ function messagePartUpdated(data: Record<string, unknown>, aggregateId: string):
     data.part.sessionID !== aggregateId ||
     !PART_ID.test(String(data.part.id)) ||
     !MESSAGE_ID.test(String(data.part.messageID)) ||
-    !boundedLifecycle(data.part)
+    !boundedPartLifecycle(data.part)
   )
     return false;
   const part = data.part;
@@ -668,6 +680,26 @@ function boundedJson(value: unknown, depth: number): boolean {
 
 function boundedLifecycle(value: unknown): boolean {
   return boundedJson(value, 0) && bytes(JSON.stringify(value)) <= MAX_HISTORY_INFO_BYTES;
+}
+
+/**
+ * A message text part may legitimately carry a full assistant response, which routinely exceeds the
+ * uniform 4096-character per-string bound. The text stays capped by the 64 KiB part byte budget
+ * (the DoS guard), every other field keeps the tight per-string bound, and the safe-activity
+ * projection clips the displayed text to its own segment limit — the reconciliation path never
+ * reads part text content. Non-text parts are bounded exactly as before.
+ *
+ * A part this size only ever arrives through the `POST /sync/history` HTTP body (which shares this
+ * 64 KiB row budget), never as a single live SSE frame: the live path yields content-free pull
+ * triggers only, so the independent `MAX_FRAME_BYTES` SSE limit is not a cross-budget constraint.
+ */
+function boundedPartLifecycle(part: Record<string, unknown>): boolean {
+  if (part.type !== "text") return boundedLifecycle(part);
+  return (
+    typeof part.text === "string" &&
+    boundedLifecycle({ ...part, text: "" }) &&
+    bytes(JSON.stringify(part)) <= MAX_HISTORY_INFO_BYTES
+  );
 }
 
 function finite(value: unknown): value is number {

@@ -10,7 +10,7 @@
     "@oscharko-dev/keiko-sandbox",
     "ws"
   ],
-  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "python3"],
+  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "python3", "ps", "lsof"],
   "workspaces": {
     ".": {
       "playwright": false,

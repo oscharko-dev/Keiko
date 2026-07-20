@@ -19,6 +19,12 @@ export const CODING_SAFE_ACTIVITY_TOOL_STATES = [
   "denied",
   "cancelled",
 ] as const;
+export const CODING_SAFE_ACTIVITY_PLAN_STEP_STATES = [
+  "pending",
+  "active",
+  "completed",
+  "cancelled",
+] as const;
 export const CODING_SAFE_ACTIVITY_MAX_TURNS = 32;
 export const CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN = 16;
 export const CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE = 32;
@@ -30,9 +36,15 @@ export const CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES = 32 * 1_024;
 export const CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES = 60 * 1_024;
 export const CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT = 65_535;
 export const CODING_SAFE_ACTIVITY_TOOL_LABEL_MAX_CHARS = 128;
+export const CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS = 64;
+export const CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS = 256;
+// Fits inside the aggregate feed budget beside a fully populated turn history.
+export const CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES = 8 * 1_024;
 
 export type CodingSafeActivityMessageRole = (typeof CODING_SAFE_ACTIVITY_MESSAGE_ROLES)[number];
 export type CodingSafeActivityToolState = (typeof CODING_SAFE_ACTIVITY_TOOL_STATES)[number];
+export type CodingSafeActivityPlanStepState =
+  (typeof CODING_SAFE_ACTIVITY_PLAN_STEP_STATES)[number];
 
 /** Untrusted runtime text. Consumers must render this as text, never markup or executable content. */
 export interface CodingSafeActivityTextSegment {
@@ -66,12 +78,33 @@ export interface CodingSafeActivityTurn {
   readonly truncated: boolean;
 }
 
+/** Untrusted plan step text. Consumers must render this as text, never markup or executable content. */
+export interface CodingSafeActivityPlanStep {
+  readonly text: string;
+  readonly state: CodingSafeActivityPlanStepState;
+  /** True when the step text was shortened to remain inside a declared projection bound. */
+  readonly truncated: boolean;
+}
+
+export interface CodingSafeActivityPlan {
+  /** Monotonic projection-assigned revision anchoring live plan updates for consumers. */
+  readonly revision: number;
+  /** Assistant message that carried the latest accepted plan update. */
+  readonly anchorMessageId: string;
+  readonly updatedAt: string;
+  readonly steps: readonly CodingSafeActivityPlanStep[];
+  /** True when steps were dropped or clipped to stay inside the declared plan bounds. */
+  readonly truncated: boolean;
+}
+
 export interface AvailableCodingSafeActivityFeed {
   readonly schemaVersion: typeof CODING_SAFE_ACTIVITY_CONTRACT_VERSION;
   readonly availability: "available";
   readonly runId: string;
   readonly updatedAt: string;
   readonly turns: readonly CodingSafeActivityTurn[];
+  /** Latest agent-maintained plan snapshot; absent until the first accepted plan update. */
+  readonly plan?: CodingSafeActivityPlan;
   /** True when whole turns were evicted from the bounded feed. */
   readonly truncated: boolean;
   readonly droppedEventCount: number;
@@ -124,7 +157,7 @@ function validateFeed(value: unknown): CodingWorkbenchValidationResult<CodingSaf
 
 function feedKeys(availability: unknown): readonly string[] {
   const base = ["schemaVersion", "availability", "runId", "updatedAt", "droppedEventCount"];
-  return availability === "available" ? [...base, "turns", "truncated"] : base;
+  return availability === "available" ? [...base, "turns", "truncated", "plan"] : base;
 }
 
 function validateFeedBase(value: Record<string, unknown>, errors: string[]): void {
@@ -157,6 +190,71 @@ function validateAvailableFeed(value: Record<string, unknown>, errors: string[])
   if (typeof value.truncated !== "boolean") {
     errors.push("safeActivityFeed.truncated must be a boolean");
   }
+  if ("plan" in value) validatePlan(value.plan, errors);
+}
+
+function validatePlan(value: unknown, errors: string[]): void {
+  const path = "safeActivityFeed.plan";
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return;
+  }
+  errors.push(
+    ...exactKeys(value, ["revision", "anchorMessageId", "updatedAt", "steps", "truncated"], path),
+  );
+  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 1) {
+    errors.push(`${path}.revision must be a positive safe integer`);
+  }
+  validateSafeId(value.anchorMessageId, `${path}.anchorMessageId`, errors, 128);
+  validateUtcMilliseconds(value.updatedAt, `${path}.updatedAt`, errors);
+  validatePlanSteps(value.steps, path, errors);
+  if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated must be a boolean`);
+  if (planHasTruncatedStep(value) && value.truncated !== true) {
+    errors.push(`${path}.truncated must reflect truncated steps`);
+  }
+  if (serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES) {
+    errors.push(`${path} exceeds the plan UTF-8 byte budget`);
+  }
+}
+
+function validatePlanSteps(value: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS) {
+    errors.push(`${path}.steps must be a bounded array`);
+    return;
+  }
+  value.forEach((step, index) => {
+    validatePlanStep(step, `${path}.steps[${String(index)}]`, errors);
+  });
+}
+
+function validatePlanStep(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return;
+  }
+  errors.push(...exactKeys(value, ["text", "state", "truncated"], path));
+  if (
+    typeof value.text !== "string" ||
+    value.text.length < 1 ||
+    value.text.length > CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS
+  ) {
+    errors.push(`${path}.text must be a bounded non-empty string`);
+  } else if (stripUnsafeFormatChars(value.text) !== value.text) {
+    errors.push(`${path}.text contains unsafe format characters`);
+  }
+  if (!isOneOf(value.state, CODING_SAFE_ACTIVITY_PLAN_STEP_STATES)) {
+    errors.push(`${path}.state is invalid`);
+  }
+  if (typeof value.truncated !== "boolean") {
+    errors.push(`${path}.truncated must be a boolean`);
+  }
+}
+
+function planHasTruncatedStep(value: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(value.steps) &&
+    value.steps.some((step) => isRecord(step) && step.truncated === true)
+  );
 }
 
 interface FeedIdentities {

@@ -692,6 +692,47 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
     }
   });
 
+  it("refuses research egress through a proxy, because no address can be pinned there", async () => {
+    // A pre-proxy DNS lookup is NOT rebinding protection: the proxy resolves the hostname again at
+    // connect time, so the validated address set is never bound to use — a name can resolve
+    // publicly for the policy check and rebind to loopback for the proxy's connect. The
+    // denyLoopback posture therefore refuses the combination outright rather than claiming a
+    // guarantee it cannot keep. The lookup is stubbed to a PUBLIC address so the refusal cannot be
+    // mistaken for the address-class check doing the work.
+    vi.resetModules();
+    const lookup = vi.fn(() => Promise.resolve([{ address: "203.0.113.10", family: 4 }]));
+    vi.doMock("node:dns/promises", () => ({ lookup }));
+    try {
+      const { gatewayFetch: proxyGatewayFetch } = await import("./http.js");
+      await expect(
+        proxyGatewayFetch("https://public-looking.invalid/docs", {
+          egress: {
+            denyLoopback: true,
+            httpsProxy: "http://127.0.0.1:65535",
+          },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+      // Refused before any resolution: the decision does not depend on what DNS answers.
+      expect(lookup).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("still allows ordinary proxied egress that does not carry the research posture", async () => {
+    // Only denyLoopback (research egress) is refused through a proxy; the gateway's own proxied
+    // sidecar/model traffic must keep working, so the refusal must not be a blanket proxy ban.
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response("ok", { status: 200 })));
+
+    const response = await gatewayFetch("https://models.invalid/v1/chat", {
+      fetchImpl,
+      egress: { httpsProxy: "http://127.0.0.1:65535" },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
   it("re-validates and refuses a redirect hop whose DNS resolves to a blocked address", async () => {
     // The origin is a legitimate, allowed target; its redirect Location points at a second
     // hostname that only resolves to a blocked (metadata-class) address on the redirect-hop

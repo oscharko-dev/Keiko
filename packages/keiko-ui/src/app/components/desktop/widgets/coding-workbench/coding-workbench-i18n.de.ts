@@ -91,12 +91,100 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.readiness.eventStream.resumable": "Fortsetzbare Live-Ereignisse",
   "codingWorkbench.readiness.eventStream.waiting": "Wartet auf einen Lauf",
   "codingWorkbench.readiness.eventStream.resnapshot": "Snapshot erneuern",
-  "codingWorkbench.timeline.eyebrow": "Ereignisstrom",
-  "codingWorkbench.timeline.title": "Inhaltsfreie Zeitleiste",
-  "codingWorkbench.timeline.empty": "Noch keine Runtime-Ereignisse.",
+  "codingWorkbench.timeline.eyebrow": "Authentifizierte Aktivität",
+  "codingWorkbench.timeline.title": "Live-Aktivitätszeitleiste",
+  "codingWorkbench.timeline.empty": "Noch keine bestätigte Aktivität.",
   "codingWorkbench.timeline.instructions":
     "Zeitleiste fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.timeline.listLabel": "Coding-Lauf-Ereigniszeitleiste",
+  "codingWorkbench.changes.eyebrow": "Authentifizierte Änderungen",
+  "codingWorkbench.changes.title": "Änderungen des Laufs",
+  "codingWorkbench.changes.help":
+    "Schreibgeschützte Diffs stammen aus dem gebundenen Aufgaben-Workspace dieses Laufs und werden niemals als dauerhafte Evidenz gespeichert.",
+  "codingWorkbench.changes.idle": "Starte einen Lauf, um seine Workspace-Änderungen zu prüfen.",
+  "codingWorkbench.changes.loading": "Neueste begrenzte Änderungen werden geladen…",
+  "codingWorkbench.changes.bindingLost":
+    "Die Aufgaben-Workspace-Bindung des Laufs ist nicht mehr verfügbar. Es wird kein Diff angezeigt.",
+  "codingWorkbench.changes.unavailable":
+    "Änderungen sind nicht verfügbar. Die App-Sitzung muss möglicherweise erneut gekoppelt werden; es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.error":
+    "Änderungen konnten nicht aktualisiert werden. Es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.retry": "Änderungen aktualisieren",
+  "codingWorkbench.changes.asOf": "Stand {head}",
+  "codingWorkbench.changes.empty":
+    "Dieser Lauf enthält in dieser Revision keine Workspace-Änderungen.",
+  "codingWorkbench.changes.changedFiles": "Geänderte Dateien ({count})",
+  "codingWorkbench.changes.virtualInstructions":
+    "Liste der geänderten Dateien fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
+  "codingWorkbench.changes.filesTruncated":
+    "Die Liste der geänderten Dateien hat das Serverlimit erreicht. Nur das begrenzte Präfix wird angezeigt.",
+  "codingWorkbench.changes.fileState.conflicted": "Mit Konflikt",
+  "codingWorkbench.changes.fileState.untracked": "Nicht versioniert",
+  "codingWorkbench.changes.fileState.stagedAndUnstaged": "Vorgemerkt und nicht vorgemerkt",
+  "codingWorkbench.changes.fileState.staged": "Vorgemerkt",
+  "codingWorkbench.changes.fileState.unstaged": "Nicht vorgemerkt",
+  "codingWorkbench.changes.diff.title": "Diff der ausgewählten Datei",
+  "codingWorkbench.changes.diff.region": "Laufbezogenes Datei-Diff",
+  "codingWorkbench.changes.diff.loading": "Diff der ausgewählten Datei wird geladen…",
+  "codingWorkbench.changes.diff.empty": "Für diese geänderte Datei ist kein Text-Diff verfügbar.",
+  "codingWorkbench.changes.diff.error":
+    "Das Diff der ausgewählten Datei ist nicht verfügbar. Es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.diff.truncated":
+    "Dieses begrenzte Datei-Diff ist unvollständig, weil es das Serverlimit erreicht hat.",
+  "codingWorkbench.changes.diff.addedLine": "Hinzugefügte Zeile",
+  "codingWorkbench.changes.diff.deletedLine": "Gelöschte Zeile",
+  "codingWorkbench.changes.diff.contextLine": "Kontextzeile",
+  "codingWorkbench.changes.diff.metadataLine": "Diff-Metadaten",
+  "codingWorkbench.changes.diff.hunkHeader": "Hunk-Kopfzeile",
+  "codingWorkbench.changes.diff.hunkTruncated":
+    "Dieser Hunk ist unvollständig, weil das begrenzte Diff gekürzt wurde.",
+  "codingWorkbench.changes.diff.fileTruncated":
+    "Dieses Datei-Diff ist unvollständig, weil das begrenzte Diff gekürzt wurde.",
+  "codingWorkbench.changes.diff.binaryFile": "Binärdatei — kein Text-Diff verfügbar.",
+  "codingWorkbench.changes.diff.previousPath": " (zuvor {path})",
+  "codingWorkbench.changes.diff.elevatedReview": "Erweiterte Prüfung",
+  "codingWorkbench.activity.reasoningBoundary":
+    "Diese Zeitleiste zeigt beobachtbare Konversation und Arbeitsaktivität. Private Gedankengänge werden niemals offengelegt.",
+  "codingWorkbench.activity.status.idle":
+    "Starte einen Lauf, um seine Aktivität hier zu verfolgen.",
+  "codingWorkbench.activity.status.loading":
+    "Verbindung zur geschützten Aktivitätsprojektion wird hergestellt…",
+  "codingWorkbench.activity.status.live": "Geschützte Aktivität wird live aktualisiert.",
+  "codingWorkbench.activity.status.paused":
+    "Lauf pausiert. Das Transkript unten ist der letzte bestätigte Snapshot und keine Live-Aktivität.",
+  "codingWorkbench.activity.status.recovery":
+    "Wiederherstellung ist erforderlich. Das Transkript unten ist der letzte bestätigte Snapshot und keine Live-Aktivität.",
+  "codingWorkbench.activity.status.ended":
+    "Lauf beendet. Die endgültige bestätigte Aktivität wird angezeigt.",
+  "codingWorkbench.activity.status.unavailable":
+    "Die geschützte Aktivitätsprojektion ist nicht verfügbar. Inhaltsfreie Runtime-Ereignisse bleiben sichtbar.",
+  "codingWorkbench.activity.status.disconnected":
+    "Die Live-Aktivitätsverbindung wurde geschlossen. Zuvor bestätigte Inhalte werden nicht als live dargestellt.",
+  "codingWorkbench.activity.status.offline":
+    "Der Aktivitätsstrom ist offline. Zuvor bestätigte Inhalte werden nicht als live dargestellt.",
+  "codingWorkbench.activity.status.error":
+    "Der Aktivitätsstrom konnte nicht gelesen werden. Zuvor bestätigte Inhalte werden nicht als live dargestellt.",
+  "codingWorkbench.activity.retry": "Aktivität erneut verbinden",
+  "codingWorkbench.activity.truncated":
+    "Ältere oder zu große Aktivität wurde aus diesem begrenzten Transkript ausgelassen.",
+  "codingWorkbench.activity.dropped":
+    "{count} Aktivitätsaktualisierung(en) konnten nicht projiziert werden.",
+  "codingWorkbench.activity.truncationMark": "Ausgabe gekürzt",
+  "codingWorkbench.activity.role.user": "Du",
+  "codingWorkbench.activity.role.assistant": "Coding-Agent",
+  "codingWorkbench.activity.tool": "Tool-Aktivität: {tool}",
+  "codingWorkbench.activity.toolState.pending": "Ausstehend",
+  "codingWorkbench.activity.toolState.running": "Wird ausgeführt",
+  "codingWorkbench.activity.toolState.succeeded": "Erfolgreich",
+  "codingWorkbench.activity.toolState.failed": "Fehlgeschlagen",
+  "codingWorkbench.activity.toolState.denied": "Abgelehnt",
+  "codingWorkbench.activity.toolState.cancelled": "Abgebrochen",
+  "codingWorkbench.activity.plan.title": "Aktueller Plan",
+  "codingWorkbench.activity.plan.truncated": "Ein Teil dieses Plans wurde ausgelassen.",
+  "codingWorkbench.activity.planState.pending": "Ausstehend",
+  "codingWorkbench.activity.planState.active": "In Bearbeitung",
+  "codingWorkbench.activity.planState.completed": "Abgeschlossen",
+  "codingWorkbench.activity.planState.cancelled": "Abgebrochen",
   "codingWorkbench.source.eyebrow": "Modellquelle",
   "codingWorkbench.source.title": "Serverbestätigte Quelle auswählen",
   "codingWorkbench.source.group": "Runtime-Modellquelle",
@@ -161,6 +249,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.notApplicable": "Nicht anwendbar",
   "codingWorkbench.approval.noneRequested": "Nicht angefordert",
   "codingWorkbench.approval.unspecified": "Nicht spezifiziert",
+  "codingWorkbench.approval.research.title": "Ziel der Recherche",
+  "codingWorkbench.approval.research.host": "Öffentliche Domain",
+  "codingWorkbench.approval.research.requestLine": "Angefragter Pfad und Suchtext",
+  "codingWorkbench.approval.research.loading": "Ziel wird geladen …",
+  "codingWorkbench.approval.research.unavailable":
+    "Ziel nicht abrufbar. Fenster erneut koppeln, um es vor der Entscheidung zu sehen.",
   "codingWorkbench.approval.help":
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
   "codingWorkbench.approval.approve": "Einmal genehmigen",
@@ -235,10 +329,31 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.diff-summarized": "Diff zusammengefasst",
   "codingWorkbench.event.verification-summarized": "Verifizierung zusammengefasst",
   "codingWorkbench.event.artifact-produced": "Artefakt erstellt",
+  "codingWorkbench.event.research-performed": "Recherche durchgeführt",
+  "codingWorkbench.event.skill-invoked": "Skill aufgerufen",
+  "codingWorkbench.event.child-run-started": "Unteragent gestartet",
+  "codingWorkbench.event.child-run-completed": "Unteragent abgeschlossen",
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
   "codingWorkbench.event.detail": "Sequenz {sequence}. Revision {revision}.",
   "codingWorkbench.event.detailFailure":
     "Sequenz {sequence}. Revision {revision}. Fehler: {failure}.",
+  "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
+  "codingWorkbench.outcomeLabel.accepted": "Angenommen",
+  "codingWorkbench.outcomeLabel.denied": "Abgelehnt",
+  "codingWorkbench.outcomeLabel.unavailable": "Nicht verfügbar",
+  "codingWorkbench.outcomeLabel.limit-reached": "Limit erreicht",
+  "codingWorkbench.outcomeLabel.stopped": "Gestoppt",
+  "codingWorkbench.research.chipLabel": "Internet · Nur Recherche",
+  "codingWorkbench.research.facts": "Fakten zur Recherche-Berechtigung",
+  "codingWorkbench.research.scope": "Geltungsbereich",
+  "codingWorkbench.research.scopeValue": "Nur öffentliche Recherche",
+  "codingWorkbench.research.domains": "Erlaubte Domains",
+  "codingWorkbench.research.expiry": "Läuft ab",
+  "codingWorkbench.research.revoke": "Widerrufen",
+  "codingWorkbench.research.revoking": "Wird widerrufen…",
+  "codingWorkbench.research.revokeLabel":
+    "Internet-Recherche-Berechtigung für diesen Lauf und seine Unteragenten widerrufen",
+  "codingWorkbench.announcement.researchActive": "Internet-Recherche-Berechtigung aktiv.",
   "codingWorkbench.alert.actionFailed":
     "Die angeforderte Runtime-Aktion ist fehlgeschlagen. Prüfe den Live-Zustand.",
   "codingWorkbench.alert.authenticationRefreshFailed":

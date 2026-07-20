@@ -1,3 +1,5 @@
+import type { AuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts";
+
 import type { CodingToolDelegatePort, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 
@@ -20,7 +22,11 @@ interface GovernedCodingToolRead {
   readonly digest: string;
 }
 type GovernedCodingToolResult =
-  | { readonly status: "completed"; readonly read?: GovernedCodingToolRead | undefined }
+  | {
+      readonly status: "completed";
+      readonly read?: GovernedCodingToolRead | undefined;
+      readonly auxiliary?: AuxiliaryCapabilityOutcomeV1 | undefined;
+    }
   | { readonly status: "failed" };
 
 export interface CodingToolGovernedPorts {
@@ -32,6 +38,8 @@ export interface CodingToolGovernedPorts {
   readonly deliveryAuthority: GovernedCodingToolPort<"delivery">;
   readonly connectorAuthority: GovernedCodingToolPort<"connector">;
   readonly egressAuthority: GovernedCodingToolPort<"egress">;
+  readonly skillAuthority?: GovernedCodingToolPort<"skill"> | undefined;
+  readonly childAgentAuthority?: GovernedCodingToolPort<"child-agent"> | undefined;
 }
 
 export function createCodingToolGovernedDelegate(
@@ -42,13 +50,42 @@ export function createCodingToolGovernedDelegate(
       if (signal?.aborted === true) return { outcome: "failed" };
       if (!mutationGuard.check()) return { outcome: "failed" };
       const result = await dispatch(ports, request, signal, mutationGuard);
-      return request.action === "read" && result.status === "completed" && result.read !== undefined
-        ? { outcome: "completed", read: result.read }
-        : { outcome: result.status };
+      return governedOutcome(request.action, result);
     },
   };
 }
 
+// Repository reads AND research fetches (#2387) carry their governed payload back; skills and
+// read-only child agents carry their auxiliary outcome. Every other action, and every non-completed
+// result, returns the bare outcome only — a payload never rides out on a status the port did not
+// complete.
+const READ_BEARING_ACTIONS: ReadonlySet<CodingToolActionRequest["action"]> = new Set([
+  "read",
+  "egress",
+]);
+const AUXILIARY_BEARING_ACTIONS: ReadonlySet<CodingToolActionRequest["action"]> = new Set([
+  "skill",
+  "child-agent",
+]);
+
+function governedOutcome(
+  action: CodingToolActionRequest["action"],
+  result: GovernedCodingToolResult,
+): unknown {
+  if (result.status !== "completed") return { outcome: result.status };
+  if (READ_BEARING_ACTIONS.has(action) && result.read !== undefined) {
+    return { outcome: "completed", read: result.read };
+  }
+  if (AUXILIARY_BEARING_ACTIONS.has(action) && result.auxiliary !== undefined) {
+    return { outcome: "completed", auxiliary: result.auxiliary };
+  }
+  return { outcome: result.status };
+}
+
+// One exhaustive line per governed action class: the switch IS the routing table and the compiler
+// proves it total. A lookup object would need an `as never` cast to keep the per-action request
+// types, trading a proven narrowing for an unchecked one.
+// eslint-disable-next-line complexity -- exhaustive port routing table, see above
 function dispatch(
   ports: CodingToolGovernedPorts,
   request: CodingToolActionRequest,
@@ -72,5 +109,13 @@ function dispatch(
       return ports.connectorAuthority.execute(request, signal, mutationGuard);
     case "egress":
       return ports.egressAuthority.execute(request, signal, mutationGuard);
+    case "skill":
+      return ports.skillAuthority?.execute(request, signal, mutationGuard) ?? failed();
+    case "child-agent":
+      return ports.childAgentAuthority?.execute(request, signal, mutationGuard) ?? failed();
   }
+}
+
+function failed(): Promise<GovernedCodingToolResult> {
+  return Promise.resolve({ status: "failed" });
 }

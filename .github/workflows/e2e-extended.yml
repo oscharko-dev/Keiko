@@ -9,13 +9,20 @@ name: E2E Extended
 on:
   schedule:
     - cron: "0 6 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      code_task_real_binary:
+        description: Run only the #2483 real OpenCode macOS proof
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   extended-e2e:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.code_task_real_binary }}
     name: extended e2e (${{ matrix.suite }})
     runs-on: ubuntu-latest
     env:
@@ -79,14 +86,17 @@ jobs:
           path: test-results/
           retention-days: 14
 
-  # Issue #2474 — the Code-task journeys (#2385 tracer, #2386 authority) boot dedicated TEST-ONLY
-  # server entries through owned Playwright configs and are excluded from the generic collection,
-  # so no other lane exercises them. One sequential job instead of two matrix entries: each journey
-  # boot re-runs build:packages/build:ui, so pre-building once here keeps both boots incremental
-  # against the same artifacts instead of paying the full rebuild twice. The `!cancelled()` guard
-  # keeps the second journey's result independent of the first (same intent as fail-fast: false
-  # above); a red journey turns this lane red.
+  # Issue #2474 — the Code-task journeys (#2385 tracer, #2386 authority, #2387 research/skills/
+  # subagents) boot dedicated TEST-ONLY server entries through owned Playwright configs and are
+  # excluded from the generic collection, so no other lane exercises them. One sequential job
+  # instead of separate matrix entries: each journey boot re-runs build:packages/build:ui, so
+  # pre-building once here keeps every boot incremental against the same artifacts instead of
+  # paying the full rebuild per journey. The `!cancelled()` guard keeps each journey's result
+  # independent of the ones before it (same intent as fail-fast: false above); a red journey turns
+  # this lane red. Every new Code-task journey is appended here — a journey that runs in no lane is
+  # exactly the state #2474 exists to prevent.
   code-task-e2e:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.code_task_real_binary }}
     name: code-task e2e (scripted engine)
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -123,6 +133,9 @@ jobs:
       - name: Run test:e2e:code-task:authority
         if: ${{ !cancelled() }}
         run: npm run test:e2e:code-task:authority
+      - name: Run test:e2e:code-task-research-2387
+        if: ${{ !cancelled() }}
+        run: npm run test:e2e:code-task-research-2387
       # #2485: same failure-diagnosability aid as the extended matrix above.
       - name: Upload failure artifacts (traces, screenshots)
         if: failure()
@@ -131,3 +144,7 @@ jobs:
           name: code-task-e2e-failure
           path: test-results/
           retention-days: 14
+
+  code-task-real-binary:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.code_task_real_binary }}
+    uses: ./.github/workflows/code-task-real-binary.yml

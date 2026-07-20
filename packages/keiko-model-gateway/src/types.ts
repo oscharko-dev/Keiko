@@ -117,6 +117,11 @@ export interface OutboundHttpEgressConfig {
   // re-permit the "metadata"/"link-local" target classes -- never "multicast", and never via a
   // generic env var, so it cannot silently widen the crawler/manual-fetcher SSRF surface.
   readonly allowLinkLocalAndMetadata?: boolean | undefined;
+  // Set ONLY by the #2387 research-egress config. "loopback" is permitted by default because
+  // gatewayFetch also serves loopback sidecar traffic; research egress opts into the stricter
+  // posture where a loopback target is blocked, so a public research fetch can never be steered
+  // at a local service. It only tightens (never widens) the SSRF surface.
+  readonly denyLoopback?: boolean | undefined;
 }
 
 export interface CircuitBreakerConfig {
