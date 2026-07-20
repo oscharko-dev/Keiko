@@ -934,3 +934,69 @@ describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
     expect(settled?.researchGrant).toBeUndefined();
   });
 });
+
+// Issue #2637 — the trust classification an accepted research read asserts has to survive the
+// projection, or the timeline shows a fetch that succeeded and nothing about what it took in. The
+// #2387 normalized outcome rides the same seam and was equally undelivered before this.
+describe("auxiliary event facts reach the SSE frame", () => {
+  async function runningFixture(): Promise<ReturnType<typeof fixture>> {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-aux-0",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    return f;
+  }
+
+  it("forwards the untrusted classification and the outcome of an accepted research read", async () => {
+    const f = await runningFixture();
+
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-aux-1",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:01.000Z",
+      kind: "research-performed",
+      auxiliaryOutcome: "accepted",
+      contentTrust: "untrusted",
+      byteCount: 2048,
+    });
+
+    expect(f.eventHub.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: "runtime-event",
+        eventKind: "research-performed",
+        auxiliaryOutcome: "accepted",
+        contentTrust: "untrusted",
+      }),
+    );
+    // The frame stays content-free: the byte count is budget evidence, not an SSE field.
+    expect(f.eventHub.publish).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ byteCount: 2048 }),
+    );
+  });
+
+  it("omits the classification for an event that carries none", async () => {
+    const f = await runningFixture();
+
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-aux-2",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:02.000Z",
+      kind: "research-performed",
+      auxiliaryOutcome: "limit-reached",
+    });
+
+    expect(f.eventHub.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({ auxiliaryOutcome: "limit-reached" }),
+    );
+    expect(f.eventHub.publish).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ contentTrust: "untrusted" }),
+    );
+  });
+});

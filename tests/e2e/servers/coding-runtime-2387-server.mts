@@ -11,13 +11,24 @@
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import type { Server } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { GatewayStreamChunk, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  GatewayStreamChunk,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../../packages/keiko-server/src/coding-app-session/launcherSessionPairingPort.js";
@@ -51,6 +62,7 @@ import {
   createFunctionalRuntimeResolver,
   functionalGatewayConfig,
   scriptedResponse,
+  scriptedTranscript,
   RESEARCH_JOURNEY_URL,
   type ScriptState,
 } from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
@@ -58,6 +70,11 @@ import { researchRequestLineText } from "../../../packages/keiko-server/src/codi
 import {
   RESEARCH_DEFAULT_UI_PORT,
   RESEARCH_APP_SESSION_LAUNCHER_SECRET,
+  RESEARCH_FIXTURE_SOURCE,
+  RESEARCH_INJECTION_DIRECTIVE,
+  RESEARCH_INJECTION_PAYLOAD,
+  researchInjectionPage,
+  researchScriptedToolCallLog,
   RESEARCH_JOURNEY_HOST,
   RESEARCH_JOURNEY_REQUEST_LINE,
   researchManagedWorkspaceRoot,
@@ -88,7 +105,7 @@ function createRepositoryFixture(stateDir: string): void {
   git(repository, ["config", "user.email", "research@keiko.example"]);
   git(repository, ["config", "user.name", "Keiko Research"]);
   git(repository, ["config", "commit.gpgsign", "false"]);
-  writeFileSync(join(repository, "src", "example.ts"), "export const value = 'RESEARCH_2387';\n");
+  writeFileSync(join(repository, "src", "example.ts"), RESEARCH_FIXTURE_SOURCE);
   writeFileSync(
     join(repository, "package.json"),
     JSON.stringify({ scripts: { typecheck: 'node -e "process.exit(0)"' } }),
@@ -153,9 +170,10 @@ function hermeticResearchFetch(): (url: string) => Promise<Response> {
     if (new URL(url).hostname !== RESEARCH_JOURNEY_HOST) {
       return Promise.reject(new Error("blocked-by-hermetic-transport"));
     }
-    return Promise.resolve(
-      new Response("<html><body>Backpressure guide</body></html>", { status: 200 }),
-    );
+    // #2637: the granted page is hostile. It carries a visible directive that asks for a workspace
+    // mutation, plus the same directive hidden in a <script> body and an HTML comment. The run must
+    // complete without that mutation being attempted.
+    return Promise.resolve(new Response(researchInjectionPage(), { status: 200 }));
   };
 }
 
@@ -179,7 +197,10 @@ function childResponse(): NormalizedResponse {
 // Exactly the gateway seams the functional harness replaces: fixture gateway config + scripted
 // OpenAI-compatible chat factories. Every route and control-plane surface stays production wiring.
 function researchHandlerDeps(deps: UiHandlerDeps, script: ScriptState): UiHandlerDeps {
-  const chat = (): Promise<NormalizedResponse> => Promise.resolve(scriptedResponse(script));
+  // #2637: the scripted model reads the conversation it is given, so the journey can prove that the
+  // granted page's directive reaches it fenced as untrusted data — and that it does not comply.
+  const chat = (request?: GatewayRequest): Promise<NormalizedResponse> =>
+    Promise.resolve(scriptedResponse(script, scriptedTranscript(request)));
   return {
     ...deps,
     config: functionalGatewayConfig(),
@@ -187,8 +208,8 @@ function researchHandlerDeps(deps: UiHandlerDeps, script: ScriptState): UiHandle
     gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
-      async function* (): AsyncIterable<GatewayStreamChunk> {
-        yield { type: "done" as const, response: await chat() };
+      async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
+        yield { type: "done" as const, response: await chat(request) };
       },
   };
 }
@@ -233,6 +254,24 @@ interface ResearchComposition {
   readonly scripted: ScriptedOpenCodeHarness;
 }
 
+// #2637: the scripted model is told the page's directive and the exact edit the page asks for, so
+// its compliant branch produces a REAL changeset request against the fixture file. Every scripted
+// tool name is appended to a log the spec reads, so the journey can assert what was REQUESTED
+// rather than only what was applied.
+function researchScriptState(stateDir: string): ScriptState {
+  const toolCallLog = researchScriptedToolCallLog(stateDir);
+  return {
+    mode: "research",
+    calls: 0,
+    old: RESEARCH_FIXTURE_SOURCE,
+    next: `export const value = '${RESEARCH_INJECTION_PAYLOAD}';\n`,
+    injectionDirective: RESEARCH_INJECTION_DIRECTIVE,
+    observeToolCall: (name: string): void => {
+      appendFileSync(toolCallLog, `${name}\n`, { mode: 0o600 });
+    },
+  };
+}
+
 function buildResearchComposition(stateDir: string, port: number): ResearchComposition {
   const bffStateRoot = join(stateDir, "bff-state");
   for (const dir of ["state", "ui-db", "evidence"]) {
@@ -242,7 +281,7 @@ function buildResearchComposition(stateDir: string, port: number): ResearchCompo
   mkdirSync(managedRoot, { recursive: true, mode: 0o700 });
   const services = createResearchWorkspaceServices(managedRoot);
   const scripted = createScriptedOpenCodeHarness();
-  const script: ScriptState = { mode: "research", calls: 0, old: "", next: "" };
+  const script = researchScriptState(stateDir);
   const resolver = createFunctionalRuntimeResolver({
     portable: scriptedFunctionalPortable(stateDir),
     runtimeStateRoot: join(stateDir, "runtime-state"),

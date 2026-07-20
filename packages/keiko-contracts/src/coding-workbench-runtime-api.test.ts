@@ -459,6 +459,71 @@ describe("Coding Workbench runtime API failure branches", () => {
     ).toMatchObject({ ok: false, errors: ["failureCode is invalid"] });
   });
 
+  // #2637 (review #2646): the SSE boundary enforces the research/outcome binding, not just the field
+  // type. Every invalid combination below would let the timeline misstate what a run took in.
+  it("binds the #2637 contentTrust marker to an accepted research-performed frame", () => {
+    const frame = (extra: Record<string, unknown>): Record<string, unknown> => ({
+      schemaVersion: "1",
+      cursor: "cursor-trust",
+      sequence: 9,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 9,
+      ...extra,
+    });
+
+    const accepted = frame({
+      eventKind: "research-performed",
+      auxiliaryOutcome: "accepted",
+      contentTrust: "untrusted",
+    });
+    expect(validateCodingWorkbenchRuntimeSseEvent(accepted)).toEqual({ ok: true, value: accepted });
+
+    const required = "contentTrust is required on an accepted research-performed frame";
+    const forbidden = "contentTrust is only admissible on an accepted research-performed frame";
+
+    // Accepted research WITHOUT the marker.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent(
+        frame({ eventKind: "research-performed", auxiliaryOutcome: "accepted" }),
+      ),
+    ).toMatchObject({ ok: false, errors: [required] });
+    // Empty and malformed markers are not "present".
+    for (const contentTrust of ["", null, "trusted", 1]) {
+      expect(
+        validateCodingWorkbenchRuntimeSseEvent(
+          frame({ eventKind: "research-performed", auxiliaryOutcome: "accepted", contentTrust }),
+        ),
+      ).toMatchObject({ ok: false, errors: [required] });
+    }
+    // A denied research frame took nothing in.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent(
+        frame({
+          eventKind: "research-performed",
+          auxiliaryOutcome: "denied",
+          contentTrust: "untrusted",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errors: [forbidden] });
+    // A skill invocation is not a research read.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent(
+        frame({
+          eventKind: "skill-invoked",
+          auxiliaryOutcome: "accepted",
+          contentTrust: "untrusted",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errors: [forbidden] });
+    // Nor is a status frame.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent(frame({ kind: "status", contentTrust: "untrusted" })),
+    ).toMatchObject({ ok: false });
+  });
+
   it("carries a bounded #2387 auxiliaryOutcome on a runtime-event frame", () => {
     const event = {
       schemaVersion: "1",

@@ -23,6 +23,10 @@ import type {
 import { applyPatch, inspectPatch } from "@oscharko-dev/keiko-tools";
 
 import { createOpenCodeGatewayReadinessRegistry } from "../../coding-sidecar-gateway.js";
+import {
+  RESEARCH_UNTRUSTED_BEGIN_FENCE,
+  RESEARCH_UNTRUSTED_END_FENCE,
+} from "../researchContentQuarantine.js";
 import { createFakeSessionPairingPort } from "../../coding-app-session/_support.js";
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../coding-app-session/launcherSessionPairingPort.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../../deps.js";
@@ -56,6 +60,13 @@ export interface ScriptState {
   readonly old: string;
   readonly next: string;
   toolCallId?: string;
+  /**
+   * #2637: the visible directive the granted research page carries. Supplied by the e2e server
+   * entry, which owns the fixture page, so this harness holds no injection payload of its own.
+   */
+  readonly injectionDirective?: string;
+  /** Invoked with every scripted tool name so a journey can assert what the model REQUESTED. */
+  readonly observeToolCall?: (name: string) => void;
 }
 
 type FunctionalEditorAgentClient = ProductionCodingRuntimeResolverInput["editorAgentClient"];
@@ -223,7 +234,7 @@ function withScriptedModelSeams(
 ): UiHandlerDeps {
   const chat = (request: GatewayRequest): Promise<NormalizedResponse> => {
     observeGatewayRequest?.(request);
-    return Promise.resolve(scriptedResponse(script));
+    return Promise.resolve(scriptedResponse(script, scriptedTranscript(request)));
   };
   return {
     ...deps,
@@ -392,20 +403,64 @@ function workspace(root: string): WorkspaceInfo {
 /** The exact URL the #2387 research journey asks for; the request line binds the minted grant. */
 export const RESEARCH_JOURNEY_URL = "https://docs.example.org/guide/streams?topic=backpressure";
 
+/**
+ * A model that obeys instructions only where they carry authority. It complies with the page's
+ * directive exactly when ANY occurrence of that directive reaches it OUTSIDE a quarantine fence;
+ * only when every occurrence is fenced does it proceed with the ordinary journey. The three
+ * branches are distinguishable from the browser: the compliant branch requests a changeset edit,
+ * the correct branch produces the skill invocation the journey already asserts, and never observing
+ * the page produces neither — so the acceptance test cannot pass vacuously on a transcript that
+ * lost the tool result.
+ */
+function researchPostFetchResponse(transcript: string, script: ScriptState): NormalizedResponse {
+  const directive = script.injectionDirective ?? "";
+  if (directive === "") return normal();
+  let at = transcript.indexOf(directive);
+  if (at < 0) return normal();
+  while (at >= 0) {
+    // One unfenced copy is enough: a fenced copy sitting beside an unfenced one is exactly the
+    // failure this has to catch, so every occurrence is checked, not just the first.
+    if (!directiveIsFenced(transcript, at)) {
+      return tool("keiko_changeset_edit", edit(script));
+    }
+    at = transcript.indexOf(directive, at + directive.length);
+  }
+  return tool("keiko_skill", { skillId: "skl_repo-structure-summary@1" });
+}
+
+// True when the directive at `at` sits between a quarantine BEGIN fence and the END fence that
+// closes it. Mere presence of a fence somewhere in the transcript is not enough.
+function directiveIsFenced(transcript: string, at: number): boolean {
+  const begin = transcript.lastIndexOf(RESEARCH_UNTRUSTED_BEGIN_FENCE, at);
+  if (begin < 0) return false;
+  const end = transcript.indexOf(RESEARCH_UNTRUSTED_END_FENCE, begin);
+  return end > at;
+}
+
+/** Flattens the conversation the runtime sends the model into one searchable transcript. */
+export function scriptedTranscript(request: GatewayRequest | undefined): string {
+  return request === undefined ? "" : JSON.stringify(request.messages);
+}
+
 // #2387 journey turns. The blocking `question` steps are the halt points that keep every governed
 // fetch inside a RUNNING run (a paused run's sticky ingest guard would drop the content-free
 // research events): step 0 asks for the URL (no grant → permission request, fetch fails closed),
 // step 1 blocks on a question until the operator has approved, step 2 performs the governed fetch,
-// steps 3 and 4 invoke the approved skill and bounded child, and step 5 ends turn 1; step 6 (turn 2,
+// step 3 is the #2637 injection decision (it invokes the approved skill only when the page's
+// directive arrived fenced), step 4 runs the bounded child, and step 5 ends turn 1; step 6 (turn 2,
 // after revoke) blocks again and step 7 retries the fetch under a fresh approval request.
-function researchScriptedResponse(step: number): NormalizedResponse {
+function researchScriptedResponse(
+  step: number,
+  transcript: string,
+  script: ScriptState,
+): NormalizedResponse {
   if (step === 0 || step === 2 || step === 7) {
     return tool("keiko_research_fetch", { target: RESEARCH_JOURNEY_URL });
   }
   if (step === 1 || step === 6) return tool("question", question());
-  if (step === 3) {
-    return tool("keiko_skill", { skillId: "skl_repo-structure-summary@1" });
-  }
+  // #2637: step 3 is the decision the granted page tried to steer. Only a fenced directive lets the
+  // journey continue to its skill invocation.
+  if (step === 3) return researchPostFetchResponse(transcript, script);
   if (step === 4) {
     return tool("keiko_child_agent", {
       objective: "Inspect the repository structure without mutation",
@@ -415,9 +470,18 @@ function researchScriptedResponse(step: number): NormalizedResponse {
   return normal();
 }
 
-export function scriptedResponse(script: ScriptState): NormalizedResponse {
+export function scriptedResponse(script: ScriptState, transcript = ""): NormalizedResponse {
+  const response = scriptedResponseFor(script, transcript);
+  // Report what the model REQUESTED, whatever the runtime later does with it. A journey asserting
+  // "no mutation was attempted" needs the request, not the applied diff: a downstream denial leaves
+  // the workspace clean either way.
+  for (const call of response.toolCalls) script.observeToolCall?.(call.name);
+  return response;
+}
+
+function scriptedResponseFor(script: ScriptState, transcript: string): NormalizedResponse {
   const step = script.calls++;
-  if (script.mode === "research") return researchScriptedResponse(step);
+  if (script.mode === "research") return researchScriptedResponse(step, transcript, script);
   if (script.mode === "out-of-scope") {
     return step === 0
       ? tool("keiko_changeset_edit", {

@@ -191,8 +191,21 @@ export function eventDetail(
         failure: event.failureCode,
       })
     : t("codingWorkbench.event.detail", { sequence: event.sequence, revision: event.revision });
-  const outcome = eventOutcomeDetail(event, t);
-  return outcome.length > 0 ? `${base} ${outcome}` : base;
+  return [base, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
+    .filter((part) => part.length > 0)
+    .join(" ");
+}
+
+// #2637: an accepted research read handed quarantined public-page text to the run. The operator has
+// to be able to SEE that a turn took in third-party content, not just that a fetch succeeded — the
+// approval covered the destination, never what the page would say. Content-free: it reports the
+// trust classification the runtime asserted, never a byte of the page.
+function eventContentTrustDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (event.kind !== "runtime-event" || event.contentTrust !== "untrusted") return "";
+  return t("codingWorkbench.event.detailUntrustedContent");
 }
 
 // #2387: research-performed / skill-invoked / child-run-* frames carry a normalized outcome. It is

@@ -324,6 +324,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.detailFailure":
     "Sequence {sequence}. Revision {revision}. Failure: {failure}.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
+  "codingWorkbench.event.detailUntrustedContent":
+    "Untrusted content: the fetched page was quarantined as data, not instructions.",
   "codingWorkbench.outcomeLabel.accepted": "Accepted",
   "codingWorkbench.outcomeLabel.denied": "Denied",
   "codingWorkbench.outcomeLabel.unavailable": "Unavailable",

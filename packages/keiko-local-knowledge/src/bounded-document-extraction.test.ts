@@ -28,6 +28,8 @@ function options(
 }
 
 // A Compound File Binary (OLE2) header — the container shape of a password-protected OOXML file.
+const DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 const CFB_HEADER = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0x00, 0x00]);
 
 describe("extractBoundedDocumentText", () => {
@@ -199,6 +201,122 @@ describe("extractBoundedDocumentText", () => {
     expect(result.truncated).toBe(true);
     expect(result.extractedBytes).toBeLessThanOrEqual(8);
     expect(result.extractedBytes).toBeGreaterThan(0);
+  });
+
+  // Issue #2637: the `html` binding exists so governed research egress projects a fetched public
+  // page through this same hardened scanner instead of growing a second tag stripper.
+  it("extracts visible HTML text and drops script, style, and comment bodies", async () => {
+    const page = encode(
+      [
+        "<html><head><style>a{content:'STYLE_X'}</style><title>Guide</title></head><body>",
+        "<!-- COMMENT_X -->",
+        "<script>var s='SCRIPT_X';</script>",
+        "<p>visible prose</p>",
+        "</body></html>",
+      ].join(""),
+    );
+
+    const result = await extractBoundedDocumentText({ bytes: page, extension: "html" }, options());
+
+    expect(result.outcome).toBe("extracted");
+    expect(result.format).toBe("html");
+    expect(result.text).toContain("visible prose");
+    for (const hidden of ["STYLE_X", "COMMENT_X", "SCRIPT_X", "<p>"]) {
+      expect(result.text).not.toContain(hidden);
+    }
+  });
+
+  it("resolves HTML by extension alias and by media type", async () => {
+    const page = encode("<html><body><p>alias prose</p></body></html>");
+
+    for (const input of [
+      { bytes: page, extension: "htm" },
+      { bytes: page, extension: "", mediaType: "text/html" },
+      { bytes: page, extension: "", mediaType: "application/xhtml+xml" },
+      // A real Content-Type header carries parameters; the resolver matches on the essence.
+      { bytes: page, extension: "", mediaType: "text/html; charset=utf-8" },
+      { bytes: page, extension: "", mediaType: "TEXT/HTML ;charset=UTF-8" },
+    ]) {
+      const result = await extractBoundedDocumentText(input, options());
+      expect(result.format).toBe("html");
+      expect(result.text).toContain("alias prose");
+    }
+  });
+
+  it("reports an HTML page with no visible text as empty rather than leaking its markup", async () => {
+    const result = await extractBoundedDocumentText(
+      { bytes: encode("<html><body><script>hidden()</script></body></html>"), extension: "html" },
+      options(),
+    );
+
+    expect(result.outcome).toBe("empty");
+    expect(result.text).toBe("");
+  });
+
+  it("clamps oversized HTML to the output cap", async () => {
+    const result = await extractBoundedDocumentText(
+      { bytes: encode(`<p>${"prose ".repeat(2_000)}</p>`), extension: "html" },
+      options({ maxOutputBytes: 64 }),
+    );
+
+    expect(result.outcome).toBe("extracted");
+    expect(result.truncated).toBe(true);
+    expect(result.extractedBytes).toBeLessThanOrEqual(64);
+  });
+
+  it("resolves a parameterized media type for the office and pdf bindings too", async () => {
+    // The exact-equality compare this replaced missed these as well; the fix is at the resolver, not
+    // on the html branch alone.
+    for (const [mediaType, format] of [
+      ["application/pdf; charset=binary", "pdf"],
+      [`${DOCX_MEDIA_TYPE}; name=report.docx`, "docx"],
+    ] as const) {
+      const result = await extractBoundedDocumentText(
+        { bytes: encode("irrelevant"), extension: "", mediaType },
+        options(),
+      );
+      expect(result.format).toBe(format);
+      expect(result.outcome).not.toBe("unsupported-format");
+    }
+  });
+
+  // Qodo/CodeRabbit #2646: the scan loop consults the deadline only when a block is emitted, so an
+  // input with many scan events and almost no flushes could run past `timeoutMs`. The clock is
+  // injected: the first call establishes `startedAt`, every later call is past the deadline, so the
+  // cooperative check must trip deterministically rather than on wall-clock luck.
+  it("honours the deadline on a tag-dense page that emits almost no blocks", async () => {
+    let calls = 0;
+    const now = (): number => (calls++ === 0 ? 0 : 10_000);
+
+    const result = await extractBoundedDocumentText(
+      { bytes: encode('<div class="x" data-y="z">'.repeat(60_000)), extension: "html" },
+      options({ timeoutMs: 1_000, now }),
+    );
+
+    expect(result.diagnostics.map((d) => d.code)).toContain("PARSER_TIMEOUT");
+    expect(result.outcome).toBe("timed-out");
+  });
+
+  // A stopped scan records WHY it stopped exactly once. The trailing text keeps a pending block
+  // OPEN when the deadline trips, so the final unconditional `flushBlock` would re-evaluate the same
+  // limit and emit a duplicate — the invariant the cooperative scan-loop check broke (#2646 review).
+  it("records the timeout once when the deadline trips with a block still open", async () => {
+    let calls = 0;
+    const now = (): number => (calls++ === 0 ? 0 : 10_000);
+
+    const result = await extractBoundedDocumentText(
+      {
+        bytes: encode(
+          `<p>visible prose</p>${'<div class="x" data-y="z">'.repeat(60_000)}trailing text`,
+        ),
+        extension: "html",
+      },
+      options({ timeoutMs: 1_000, now }),
+    );
+
+    const codes = result.diagnostics.map((d) => d.code);
+    expect(codes.filter((code) => code === "PARSER_TIMEOUT")).toHaveLength(1);
+    expect(new Set(codes).size).toBe(codes.length);
   });
 
   it("keeps diagnostics free of absolute filesystem paths", async () => {

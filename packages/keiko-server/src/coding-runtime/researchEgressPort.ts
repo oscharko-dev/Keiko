@@ -20,6 +20,10 @@
 //   * Fetch budget is reserved BEFORE each outbound hop (initial and every redirect), so an
 //     exhausted grant performs zero network calls; the byte budget is reconciled after each read.
 //   * No `authorization`, `cookie`, or api-key header ever leaves; no cookie jar is kept.
+//   * The page that comes BACK is quarantined before the model sees it (#2637): none of the above
+//     constrains response content, so `researchContentQuarantine` projects the bytes through the
+//     hardened visible-text scanner and fences the result as untrusted data. See
+//     `docs/coding-runtime/research-content-threat-model.md` for what that does and does not stop.
 // Every failure drops the response body and returns a bare `failed`; every fail-closed denial and
 // every success emits a content-free `research-performed` event (byte count + outcome only — never
 // the page, the URL, the path, or the query).
@@ -41,6 +45,7 @@ import {
 
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import { quarantineResearchContent } from "./researchContentQuarantine.js";
 import {
   normalizeResearchHost,
   type ResearchChargeResult,
@@ -437,13 +442,21 @@ async function finalizeResearch(
     ctx.now(),
   );
   if (charge !== "ok") return denyResearch(ctx, state.runId, auxiliaryOutcomeForCharge(charge));
+  // #2637: the page NEVER reaches the model as fetched. It is projected through the read-only
+  // quarantine step first, which drops the channels a human previewing the page could not have seen
+  // and fences what survives as explicitly untrusted data. The accepted event says so, so the
+  // timeline can tell the operator that this run took in third-party content.
+  const read = await researchRead(bytes, ctx.now);
   emitResearchPerformed(ctx, state.runId, bytes.byteLength);
-  return { status: "completed", read: researchRead(bytes) };
+  return { status: "completed", read };
 }
 
-function researchRead(bytes: Uint8Array): GovernedResearchRead {
+// `byteCount` and `digest` stay bound to the bytes that actually came off the wire — they are the
+// budget and audit truth for the fetch, not a description of the quarantined projection.
+async function researchRead(bytes: Uint8Array, now: () => number): Promise<GovernedResearchRead> {
+  const quarantined = await quarantineResearchContent(bytes, now);
   return {
-    text: new TextDecoder("utf-8", { fatal: false }).decode(bytes),
+    text: quarantined.text,
     byteCount: bytes.byteLength,
     digest: createHash("sha256").update(bytes).digest("hex"),
   };
@@ -469,6 +482,11 @@ function emitResearchOutcome(
     occurredAt: new Date(ctx.now()).toISOString(),
     kind: "research-performed",
     auxiliaryOutcome,
+    // #2637: an accepted read handed quarantined page text to the model; the contract REQUIRES the
+    // classification on exactly that outcome, and rejects it on every denial (which produced no
+    // read at all). Keeping it here — next to the outcome it is bound to — is what makes the
+    // emitted event unable to describe a research read whose trust was never asserted.
+    ...(auxiliaryOutcome === "accepted" ? { contentTrust: "untrusted" as const } : {}),
     ...(byteCount === undefined ? {} : { byteCount }),
   };
   if (validateCodingWorkbenchRuntimeEvent(event).ok) {

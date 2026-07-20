@@ -5,6 +5,12 @@
 // transport injected at the explicit test seam — no real network is ever touched.
 //
 // The journey proves, over live routes only:
+// #2637 rides the same journey: the hermetic transport answers with a HOSTILE page whose visible
+// prose instructs the model to mutate the workspace, with the same directive repeated in a <script>
+// body and an HTML comment. The scripted model obeys instructions only where they carry authority,
+// so it complies exactly when the directive reaches it outside a quarantine fence. The run must
+// complete with no mutation attempted, and the timeline must show the read as untrusted content.
+//
 //   the scripted model asks to fetch one exact public URL → the run halts awaiting a network-egress
 //   approval (the fetch itself failed closed) → "Approve once" mints a request-line-bound grant and
 //   the "Internet · Research only" chip surfaces the granted domain → a follow-up turn performs the
@@ -16,6 +22,8 @@
 // The successful research turn then invokes a server-approved skill and one bounded read-only
 // child through the same production tool facade; both lifecycle records must reach the timeline.
 
+import { readFileSync } from "node:fs";
+
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts";
@@ -23,9 +31,11 @@ import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 
 import {
   RESEARCH_APP_SESSION_LAUNCHER_SECRET,
+  RESEARCH_INJECTION_PAYLOAD,
   RESEARCH_JOURNEY_HOST,
   RESEARCH_JOURNEY_REQUEST_LINE,
   researchRepositoryRoot,
+  researchScriptedToolCallLog,
   researchStateDir,
 } from "./support/coding-runtime-2387-research.js";
 
@@ -156,6 +166,12 @@ async function expectStaleRevokeFailsClosed(page: Page, runId: string): Promise<
 // All three #2387 auxiliary capabilities must reach the governed timeline as content-free labels:
 // the research fetch, the explicit skill invocation, and the read-only child agent's start and
 // completion. The generous timeout covers a full real agent loop, not a fixed delay.
+//
+// #2637: "Skill invoked" now carries a second meaning. The scripted model invokes the skill ONLY
+// after it has seen the granted page's directive arrive INSIDE a quarantine fence — an unfenced
+// directive makes it comply with the page instead, and never observing the page text at all makes
+// it do neither. So this wait is also the proof that the acceptance journey is not passing
+// vacuously on a transcript that lost the research tool result.
 async function expectAuxiliaryTimelineActivity(page: Page): Promise<void> {
   const timeline = page.getByRole("list", { name: "Coding run event timeline" });
   for (const label of [
@@ -167,6 +183,43 @@ async function expectAuxiliaryTimelineActivity(page: Page): Promise<void> {
     await expect(timeline.getByText(label, { exact: true }).first()).toBeVisible({
       timeout: 90_000,
     });
+  }
+}
+
+// #2637: the timeline must show the research read AS untrusted content. The operator approved a
+// destination, never what the page would say, so a bare "Research performed" would understate what
+// the run just took in.
+async function expectResearchReadShownAsUntrusted(page: Page): Promise<void> {
+  await expect(
+    page
+      .getByRole("list", { name: "Coding run event timeline" })
+      .getByText(/Untrusted content/u)
+      .first(),
+  ).toBeVisible({ timeout: 90_000 });
+}
+
+// #2637: the granted page asked, in visible prose, for a workspace mutation. The compliant scripted
+// model has demonstrably read that text (it reached the skill step), so this is the boundary
+// holding — not the model failing to look.
+//
+// The load-bearing assertion is that the edit was never REQUESTED. A diff-free workspace alone
+// would also be satisfied by an edit that was requested and then denied downstream, which is a
+// different (and weaker) property than the one #2637 requires.
+async function expectNoMutationWasAttempted(page: Page): Promise<void> {
+  const requested = readFileSync(researchScriptedToolCallLog(stateDir), "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0);
+  expect(requested).not.toContain("keiko_changeset_edit");
+  // The scripted model did reach the decision step and did ask for something, so the absence above
+  // is a decision, not an empty transcript.
+  expect(requested).toContain("keiko_research_fetch");
+  expect(requested).toContain("keiko_skill");
+
+  const timeline = page.getByRole("list", { name: "Coding run event timeline" });
+  await expect(timeline.getByText("Diff summarized", { exact: true })).toHaveCount(0);
+  const changes = page.getByRole("region", { name: "Changes" });
+  if ((await changes.count()) > 0) {
+    await expect(changes.getByText(RESEARCH_INJECTION_PAYLOAD, { exact: false })).toHaveCount(0);
   }
 }
 
@@ -201,6 +254,8 @@ test("#2387 research: approval mints the grant, the governed fetch runs, revoke 
   // content-free event reaches the timeline.
   await answerBlockingQuestion(page);
   await expectAuxiliaryTimelineActivity(page);
+  await expectResearchReadShownAsUntrusted(page);
+  await expectNoMutationWasAttempted(page);
 
   await expectStaleRevokeFailsClosed(page, runId);
   await expect(chip).toBeVisible();

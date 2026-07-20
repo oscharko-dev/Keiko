@@ -328,7 +328,9 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     this.subscribers.add(listener);
     return {
       admitted: true,
-      detach: (): void => void this.subscribers.delete(listener),
+      detach: (): void => {
+        this.subscribers.delete(listener);
+      },
     };
   }
 

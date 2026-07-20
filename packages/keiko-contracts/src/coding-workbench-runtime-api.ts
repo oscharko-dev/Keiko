@@ -6,6 +6,7 @@ import {
   isCodingWorkbenchModeWidening,
   resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchAuxiliaryStatus,
+  type CodingWorkbenchContentTrust,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchMode,
   type CodingWorkbenchPermissionRequest,
@@ -221,6 +222,13 @@ export type CodingWorkbenchRuntimeSseEvent =
        * exhausted budget or a cascaded stop as a failure. Absent for every other event kind.
        */
       readonly auxiliaryOutcome?: CodingWorkbenchAuxiliaryStatus | undefined;
+      /**
+       * #2637: present as `untrusted` on an accepted `research-performed` frame, so the timeline can
+       * tell the operator that the page text the run just took in is quarantined third-party data.
+       * A constant marker — it names the channel's trust, never a byte of the page. Absent on every
+       * other frame.
+       */
+      readonly contentTrust?: CodingWorkbenchContentTrust | undefined;
     };
 
 export function parseCodingWorkbenchRuntimeStartRequest(
