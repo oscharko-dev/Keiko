@@ -641,6 +641,15 @@ export class CodingRuntimeOrchestrator {
     const stopping = this.createEndStoppingTransition(kind, current);
     if (!stopping.ok) return stopping;
     const result = await this.executeEndRequest(kind, current.runId);
+    return this.completeEndRequest(kind, runId, result);
+  }
+
+  private completeEndRequest(
+    kind: "stop" | "takeover",
+    runId: string,
+    result: Awaited<ReturnType<CodingRuntimeManager["stop"]>> | undefined,
+  ): CodingRuntimeOrchestratorResult {
+    if (this.hasActiveRunChanged(runId)) return this.fail("runtime-failed");
     if (result?.ok) {
       const settled = this.endSettledResult(runId);
       if (settled !== undefined) return settled;
@@ -689,8 +698,13 @@ export class CodingRuntimeOrchestrator {
         ? await this.deps.manager.stop(runId)
         : await this.deps.manager.takeover(runId);
     } catch {
+      // Recovery-required remains the only safe projection when stop/takeover cannot be trusted.
       return undefined;
     }
+  }
+
+  private hasActiveRunChanged(runId: string): boolean {
+    return this.activeRunId !== undefined && this.activeRunId !== runId;
   }
 
   private endSettledResult(runId: string): CodingRuntimeOrchestratorResult | undefined {
