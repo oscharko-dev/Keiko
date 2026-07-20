@@ -332,14 +332,33 @@ async function proveRunChangesView(
   target: string,
 ): Promise<void> {
   const changes = page.getByRole("region", { name: "Run changes" });
-  await expect(
-    changes.getByRole("button", { name: new RegExp(AUTHORITY_TARGET_RELATIVE_PATH, "u") }),
-  ).toBeVisible({ timeout: 30_000 });
-  await expect(changes.getByRole("region", { name: "Run-scoped file diff" })).toContainText(
-    AUTHORITY_EDITED_CONTENT.trim(),
-  );
+  const fileButton = changes.getByRole("button", {
+    name: new RegExp(AUTHORITY_TARGET_RELATIVE_PATH, "u"),
+  });
+  await expect(fileButton).toBeVisible({ timeout: 30_000 });
+  const diffPane = changes.getByRole("region", { name: "Run-scoped file diff" });
+  await expect(diffPane).toContainText(AUTHORITY_EDITED_CONTENT.trim());
   await expect(changes.getByText(/^As of [0-9a-f]{7,40}$/u)).toBeVisible();
   await proveUnpairedClientReadsNoManagedDiff(stranger, new URL(page.url()).origin, target);
+  await proveChangesRefreshPreservesFocusAndContent(page, fileButton, diffPane);
+}
+
+// #2641 focus-survival extension: with a file row focused, any later change signal must NOT
+// unmount the file list or the diff pane. Pinning this in the browser catches a regression to
+// the pre-fix "reset to loading on refresh" behaviour that would blank the pane and drop focus.
+async function proveChangesRefreshPreservesFocusAndContent(
+  page: Page,
+  fileButton: Locator,
+  diffPane: Locator,
+): Promise<void> {
+  await fileButton.focus();
+  await expect(fileButton).toBeFocused();
+  // Give any late-arriving change signal from the stopping/stopped transitions a chance to
+  // refresh the panel. Focus must survive and the previously rendered diff content must remain
+  // visible throughout the settle window.
+  await page.waitForTimeout(1_500);
+  await expect(fileButton).toBeFocused();
+  await expect(diffPane).toContainText(AUTHORITY_EDITED_CONTENT.trim());
 }
 
 // #2478: revoking the app session (sign-out through the paired cookie jar) must surface as the

@@ -101,4 +101,83 @@ describe("coding app-session channel API", () => {
       }),
     ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
   });
+
+  // The four fail-closed guards in the stream consumer were previously untested; each is now
+  // pinned with a negative-branch test so a regression that swallows a broken frame or an
+  // over-budget buffer cannot pass CI.
+
+  it("fails closed with the transport status when the stream response is not 2xx", async () => {
+    const response = new Response(null, { status: 503 });
+    await expect(
+      streamCodingAppSessionChannelSnapshots({
+        signal: new AbortController().signal,
+        onSnapshot: vi.fn(),
+        fetchImpl: vi.fn().mockResolvedValue(response),
+      }),
+    ).rejects.toMatchObject({
+      code: "CODING_APP_SESSION_STREAM_UNAVAILABLE",
+      status: 503,
+    });
+  });
+
+  it("fails closed with 502 when the stream response has no readable body", async () => {
+    // A 200 response with a null body is a corrupted upstream — surfacing anything less than
+    // 502 would let the caller assume the projection is present when it is not.
+    const response = { ok: true, status: 200, body: null } as unknown as Response;
+    await expect(
+      streamCodingAppSessionChannelSnapshots({
+        signal: new AbortController().signal,
+        onSnapshot: vi.fn(),
+        fetchImpl: vi.fn().mockResolvedValue(response),
+      }),
+    ).rejects.toMatchObject({
+      code: "CODING_APP_SESSION_STREAM_UNAVAILABLE",
+      status: 502,
+    });
+  });
+
+  it("fails closed when a frame has an empty data field", async () => {
+    const response = streamResponse(["event: snapshot\ndata:\n\n"]);
+    await expect(
+      streamCodingAppSessionChannelSnapshots({
+        signal: new AbortController().signal,
+        onSnapshot: vi.fn(),
+        fetchImpl: vi.fn().mockResolvedValue(response),
+      }),
+    ).rejects.toMatchObject({
+      code: "CODING_APP_SESSION_STREAM_UNAVAILABLE",
+      status: 502,
+    });
+  });
+
+  it("fails closed when the parser cannot decode a frame as JSON", async () => {
+    const response = streamResponse(["event: snapshot\ndata: {not-json\n\n"]);
+    await expect(
+      streamCodingAppSessionChannelSnapshots({
+        signal: new AbortController().signal,
+        onSnapshot: vi.fn(),
+        fetchImpl: vi.fn().mockResolvedValue(response),
+      }),
+    ).rejects.toMatchObject({
+      code: "CODING_APP_SESSION_STREAM_UNAVAILABLE",
+      status: 502,
+    });
+  });
+
+  it("fails closed when the unterminated buffer grows past the channel's declared cap", async () => {
+    // Deliver a single event line (no terminating '\n\n'), padded until buffered chars exceed
+    // 2 * MAX_UTF8_BYTES. This must trip the 502 guard rather than accumulate indefinitely.
+    const chunk = "event: snapshot\ndata: " + "A".repeat(200_000);
+    const response = streamResponse([chunk, chunk, chunk]);
+    await expect(
+      streamCodingAppSessionChannelSnapshots({
+        signal: new AbortController().signal,
+        onSnapshot: vi.fn(),
+        fetchImpl: vi.fn().mockResolvedValue(response),
+      }),
+    ).rejects.toMatchObject({
+      code: "CODING_APP_SESSION_STREAM_UNAVAILABLE",
+      status: 502,
+    });
+  });
 });
