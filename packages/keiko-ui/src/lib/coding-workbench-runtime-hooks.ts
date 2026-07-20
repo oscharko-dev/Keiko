@@ -7,7 +7,7 @@ import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
   prepareCodingWorkbenchCodexSubscriptionSetup,
-} from "./api";
+} from "./coding-workbench-provider-api";
 import {
   codingWorkbenchFailureStatus,
   codingWorkbenchRuntimeApiError,
