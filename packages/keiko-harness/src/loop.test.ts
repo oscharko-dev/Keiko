@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { NormalizedResponse, ToolDefinition } from "@oscharko-dev/keiko-model-gateway";
 import { runLoop } from "./loop.js";
-import type { ModelPort } from "./ports.js";
+import type { ModelPort, ToolCallResult, ToolPort } from "./ports.js";
 import type { HarnessEvent, TaskInput } from "./types.js";
 import {
   buildContext,
@@ -435,14 +435,14 @@ describe("runLoop — limit breaches each map to their category", () => {
   // read-only ones a callsite meant to permit. Both task types that reach the tool-call
   // state (investigate-bug, editor-agent-turn) get the same two-way coverage: a read-only
   // tool still runs and only a command-executing tool is refused.
-  it("investigate-bug: maxCommandExecutions=0 still admits a read-only tool call", async () => {
+  it("investigate-bug: maxCommandExecutions=0 still admits a read-only tool call", async (): Promise<void> => {
     const { port } = scriptedModel([
       response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "read_file")] }),
       response({ content: "--- a/x\n+++ b/x\n+fix" }),
     ]);
     let executed = 0;
-    const readTool: import("./ports.js").ToolPort = {
-      execute: (req) => {
+    const readTool: ToolPort = {
+      execute: (req): Promise<ToolCallResult> => {
         executed += 1;
         return Promise.resolve({
           toolCallId: req.toolCallId,
@@ -451,7 +451,9 @@ describe("runLoop — limit breaches each map to their category", () => {
           commandExecuted: false,
         });
       },
-      listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
+      listTools: (): readonly ToolDefinition[] => [
+        { name: "read_file", description: "read", parameters: {} },
+      ],
     };
     const { ctx, sink } = buildContext({
       task: INVESTIGATE,
@@ -466,13 +468,13 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(failureCategory(sink.events())).toBeUndefined();
   });
 
-  it("investigate-bug: maxCommandExecutions=0 refuses a command-executing tool", async () => {
+  it("investigate-bug: maxCommandExecutions=0 refuses a command-executing tool", async (): Promise<void> => {
     const { port } = scriptedModel([
       response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "run_command")] }),
     ]);
     let executed = 0;
-    const commandTool: import("./ports.js").ToolPort = {
-      execute: (req) => {
+    const commandTool: ToolPort = {
+      execute: (req): Promise<ToolCallResult> => {
         executed += 1;
         return Promise.resolve({
           toolCallId: req.toolCallId,
@@ -481,7 +483,9 @@ describe("runLoop — limit breaches each map to their category", () => {
           commandExecuted: true,
         });
       },
-      listTools: () => [{ name: "run_command", description: "run", parameters: {} }],
+      listTools: (): readonly ToolDefinition[] => [
+        { name: "run_command", description: "run", parameters: {} },
+      ],
     };
     const { ctx, sink } = buildContext({
       task: INVESTIGATE,
@@ -496,14 +500,14 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(ctx.counters.commandExecutions).toBe(0);
   });
 
-  it("editor-agent-turn: maxCommandExecutions=0 still admits a read-only tool call", async () => {
+  it("editor-agent-turn: maxCommandExecutions=0 still admits a read-only tool call", async (): Promise<void> => {
     const { port } = scriptedModel([
       response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "read_file")] }),
       response({ content: "done" }),
     ]);
     let executed = 0;
-    const readTool: import("./ports.js").ToolPort = {
-      execute: (req) => {
+    const readTool: ToolPort = {
+      execute: (req): Promise<ToolCallResult> => {
         executed += 1;
         return Promise.resolve({
           toolCallId: req.toolCallId,
@@ -512,7 +516,9 @@ describe("runLoop — limit breaches each map to their category", () => {
           commandExecuted: false,
         });
       },
-      listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
+      listTools: (): readonly ToolDefinition[] => [
+        { name: "read_file", description: "read", parameters: {} },
+      ],
     };
     const { ctx, sink } = buildContext({
       task: EDITOR_AGENT,
@@ -527,13 +533,13 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(failureCategory(sink.events())).toBeUndefined();
   });
 
-  it("editor-agent-turn: maxCommandExecutions=0 refuses a command-executing tool", async () => {
+  it("editor-agent-turn: maxCommandExecutions=0 refuses a command-executing tool", async (): Promise<void> => {
     const { port } = scriptedModel([
       response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "run_command")] }),
     ]);
     let executed = 0;
-    const commandTool: import("./ports.js").ToolPort = {
-      execute: (req) => {
+    const commandTool: ToolPort = {
+      execute: (req): Promise<ToolCallResult> => {
         executed += 1;
         return Promise.resolve({
           toolCallId: req.toolCallId,
@@ -542,7 +548,9 @@ describe("runLoop — limit breaches each map to their category", () => {
           commandExecuted: true,
         });
       },
-      listTools: () => [{ name: "run_command", description: "run", parameters: {} }],
+      listTools: (): readonly ToolDefinition[] => [
+        { name: "run_command", description: "run", parameters: {} },
+      ],
     };
     const { ctx, sink } = buildContext({
       task: EDITOR_AGENT,
@@ -555,6 +563,37 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_COMMAND_EXECUTIONS");
     expect(executed).toBe(0);
     expect(ctx.counters.commandExecutions).toBe(0);
+  });
+
+  it("HARNESS_INTERNAL when a non-run_command tool claims commandExecuted:true", async (): Promise<void> => {
+    // Issue #2638 hardening: the pre-execution budget check is name-scoped to `run_command` while
+    // the counter increments on any result. A tool that claims a command under a different name
+    // could bypass the budget; the post-execution contract guard in runOneTool must fail closed.
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "read_file")] }),
+    ]);
+    const rogueTool: ToolPort = {
+      execute: (req): Promise<ToolCallResult> =>
+        Promise.resolve({
+          toolCallId: req.toolCallId,
+          output: "surprise",
+          durationMs: 0,
+          commandExecuted: true,
+        }),
+      listTools: (): readonly ToolDefinition[] => [
+        { name: "read_file", description: "read", parameters: {} },
+      ],
+    };
+    const { ctx, sink } = buildContext({
+      task: INVESTIGATE,
+      model: port,
+      tools: rogueTool,
+      limits: { maxCommandExecutions: 0 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("failed");
+    expect(failureCategory(sink.events())).toBe("HARNESS_INTERNAL");
+    expect(ctx.counters.commandExecutions).toBe(1);
   });
 
   it("wall-time exact boundary: elapsed === maxWallTimeMs does not exceed; elapsed > maxWallTimeMs does", async () => {

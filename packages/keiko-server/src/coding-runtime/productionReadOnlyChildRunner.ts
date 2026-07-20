@@ -61,8 +61,8 @@ type ReturnTypeForRunner = Awaited<ReturnType<ReadOnlyChildRunner["run"]>>;
  * `maxCommandExecutions: 0` states the child's containment directly: this envelope must never run
  * a subprocess. The harness enforces the budget where a command actually executes (issue #2638), so
  * a zero command budget no longer refuses read-only tool calls. The tool surface offers exactly one
- * read tool that reports `commandExecuted: false`, so the counter is never consumed — the zero here
- * is now a stated invariant, not a workaround.
+ * read tool whose `ToolCallResult` sets `commandExecuted: false` explicitly, so the counter is
+ * never consumed — the zero here is now a stated invariant, not a workaround.
  */
 function childLimits(maxToolCalls: number): Parameters<typeof createSession>[1]["limits"] {
   return {
@@ -202,5 +202,5 @@ async function executeRead(
 }
 
 function result(toolCallId: string, output: string): ToolCallResult {
-  return { toolCallId, output, durationMs: 0 };
+  return { toolCallId, output, durationMs: 0, commandExecuted: false };
 }
