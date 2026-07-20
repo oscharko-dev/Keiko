@@ -56,6 +56,8 @@ import { _resetEditorAgentAuditForTests, listEditorAgentActionAudit } from "./ag
 const SESSION_ID = "session-2489";
 const HASH = "a".repeat(64);
 const CEILING = "autonomous-delivery" as const;
+const DECL_TEXT = "export const sharedValue = 1;\n";
+const MAIN_TEXT = "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n";
 
 function runGit(root: string, args: readonly string[]): void {
   execFileSync("git", args, { cwd: root, stdio: "ignore" });
@@ -66,27 +68,20 @@ function buildWorkspace(): string {
   mkdirSync(join(root, "src"), { recursive: true });
   writeFileSync(
     join(root, "tsconfig.json"),
-    JSON.stringify(
-      {
-        compilerOptions: {
-          module: "NodeNext",
-          moduleResolution: "NodeNext",
-          target: "ES2022",
-          strict: true,
-        },
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        target: "ES2022",
       },
-      null,
-      2,
-    ),
+      include: ["src/**/*.ts"],
+    }),
     "utf8",
   );
   writeFileSync(join(root, "src", "a.ts"), "export const target = 1;\ntarget;\n", "utf8");
-  writeFileSync(join(root, "src", "decl.ts"), "export const sharedValue = 1;\n", "utf8");
-  writeFileSync(
-    join(root, "src", "main.ts"),
-    "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n",
-    "utf8",
-  );
+  writeFileSync(join(root, "src", "decl.ts"), DECL_TEXT, "utf8");
+  writeFileSync(join(root, "src", "main.ts"), MAIN_TEXT, "utf8");
   writeFileSync(join(root, "NEEDLE.md"), "producer-reachability-needle\n", "utf8");
   runGit(root, ["init", "-q", "-b", "main"]);
   runGit(root, ["config", "user.name", "Keiko Fixture"]);
@@ -422,7 +417,7 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
         operation: "definition",
         position: { line: 1, character: 19 },
         languageId: "typescript",
-        text: "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n",
+        text: MAIN_TEXT,
       }),
     );
     const response = await postProducerTurn(current.port);
