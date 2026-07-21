@@ -2686,6 +2686,7 @@ export type {
   ConnectorGraphState,
   UpdateCapsulePatch,
   CreateCapsuleSetBody,
+  SharedPodRefreshTerminal,
 } from "./local-knowledge.js";
 export {
   CAPSULE_METADATA_MAX_KEYS,
@@ -2702,6 +2703,7 @@ export {
   CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
   CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
   CONNECTOR_NODE_KINDS,
+  SHARED_POD_REFRESH_TERMINALS,
 } from "./local-knowledge.js";
 export type {
   DocumentStatus,

@@ -11,10 +11,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type {
-  DocumentId,
-  KnowledgeCapsuleId,
-  KnowledgeSourceId,
+import {
+  SHARED_POD_REFRESH_TERMINALS,
+  type DocumentId,
+  type KnowledgeCapsuleId,
+  type KnowledgeSourceId,
+  type ManualRefreshOutcome,
+  type SharedPodRefreshTerminal,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayRequest,
@@ -426,7 +429,7 @@ function stubChatGateway(): {
 }
 
 describe("repository pod capsule setting parity (M2.12)", () => {
-  it("honours contextualRetrieval when threaded through refreshRepositoryPod", async () => {
+  it("honours contextualRetrieval when threaded through refreshRepositoryPod", async (): Promise<void> => {
     createShell();
     const adapter = countingAdapter();
     const gateway = stubChatGateway();
@@ -450,7 +453,7 @@ describe("repository pod capsule setting parity (M2.12)", () => {
     }
   });
 
-  it("falls back to the raw strategy key when contextualRetrieval is not provided", async () => {
+  it("falls back to the raw strategy key when contextualRetrieval is not provided", async (): Promise<void> => {
     createShell();
     const adapter = countingAdapter();
     const result = await refreshRepositoryPod(indexingDeps(adapter), {
@@ -470,21 +473,45 @@ describe("repository pod capsule setting parity (M2.12)", () => {
 // Outcome 2 says an operator reading pod evidence should not need to learn a second dialect. The
 // repository pod persists its own run record (`repository_pod_runs`) with an `outcome` enum that
 // runs alongside the HTML-manual `ManualRefreshOutcome` enum. Neither is a superset of the other,
-// but for OPERATOR-facing vocabulary the failure/interrupted terminals must match — otherwise a
-// script or dashboard that surfaces one has to translate the other. This pins the shared terminals
-// so a future PR that renames `partial` on either side or removes `failed`/`cancelled` from either
-// enum has to update the other in the same change.
-const SHARED_REFRESH_OUTCOME_TERMINALS = ["partial", "failed", "cancelled"] as const;
+// but for OPERATOR-facing vocabulary the interrupt/failure terminals must match — otherwise a
+// script or dashboard that surfaces one has to translate the other. The shared floor lives in
+// `SHARED_POD_REFRESH_TERMINALS` (contracts, Issue #2633); the assertions below prove BOTH outcome
+// unions accept every shared terminal at COMPILE time (so a future PR that drops one from either
+// side breaks tsc), and one healthy-terminal runtime case anchors the vocabulary against the
+// actual persisted enum. That is deliberately narrower than inducing every terminal via forced
+// failure/cancellation — the failure modes are exercised end-to-end by the existing "indexes,
+// resolves path:line, refreshes incrementally, survives cancellation, and removes" journey test.
+type RepositoryPodOutcome = Awaited<ReturnType<typeof refreshRepositoryPod>>["run"]["outcome"];
+// `KNOWN_REPOSITORY_OUTCOMES` is the RUNTIME anchor: it exists at the value level so the test
+// below can assert against it, but its typed shape (`readonly RepositoryPodOutcome[]`) is what
+// gives the compile-time proof — a future PR that drops one of the shared terminals from the
+// repository outcome union fails tsc here before it can regress the runtime assertion. The same
+// technique is applied against `ManualRefreshOutcome` inside the second test below without
+// synthesising a throwaway binding that ESLint's no-unused-vars rule would reject.
+const KNOWN_REPOSITORY_OUTCOMES: readonly RepositoryPodOutcome[] = [
+  "succeeded",
+  ...SHARED_POD_REFRESH_TERMINALS,
+];
 
 describe("repository pod evidence vocabulary parity (M2.12)", () => {
-  it("emits outcomes drawn from the shared refresh vocabulary", async () => {
+  it("emits outcomes drawn from the shared refresh vocabulary", async (): Promise<void> => {
     createShell();
     const adapter = countingAdapter();
     const result = await refreshRepositoryPod(indexingDeps(adapter), { runId: "vocabulary-run" });
-    // `succeeded` is the repository pod's own healthy terminal (there is no updated/unchanged
-    // distinction because the run record's `counts` already carries that discrimination), and the
-    // remaining terminals must overlap with the shared refresh vocabulary.
-    const known: readonly string[] = ["succeeded", ...SHARED_REFRESH_OUTCOME_TERMINALS];
-    expect(known).toContain(result.run.outcome);
+    expect(KNOWN_REPOSITORY_OUTCOMES).toContain(result.run.outcome);
+  });
+
+  it("keeps every SHARED_POD_REFRESH_TERMINALS entry in both pod outcome vocabularies", (): void => {
+    // Companion runtime + type-level proof: the shared terminals are members of both outcome
+    // unions. The `manualOutcomeProof` binding is typed `readonly ManualRefreshOutcome[]`, so tsc
+    // rejects any future PR that drops one of the shared terminals from the manual enum; the
+    // runtime `expect` assertions then anchor the same claim against the repository union via
+    // `KNOWN_REPOSITORY_OUTCOMES`.
+    const manualOutcomeProof: readonly ManualRefreshOutcome[] = SHARED_POD_REFRESH_TERMINALS;
+    for (const terminal of SHARED_POD_REFRESH_TERMINALS) {
+      const asShared: SharedPodRefreshTerminal = terminal;
+      expect(KNOWN_REPOSITORY_OUTCOMES).toContain(asShared);
+      expect(manualOutcomeProof).toContain(asShared);
+    }
   });
 });

@@ -17,6 +17,7 @@ import {
   type KnowledgePodSummary,
   type KnowledgeSourceId,
   type KnowledgeSourceScope,
+  type SharedPodRefreshTerminal,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -85,9 +86,14 @@ export interface RepositoryPodChangeCounts {
   readonly rejectedEntries: number;
 }
 
+// `outcome` mixes ONE kind-specific healthy terminal (`succeeded`) with the shared
+// pod-refresh vocabulary reused across pod kinds. The shared terminals are pinned in contracts as
+// `SHARED_POD_REFRESH_TERMINALS` so the projection-parity guard in `knowledge-pods.test.ts` can
+// prove both this enum and `ManualRefreshOutcome` accept every shared terminal without hard
+// coding them in the test (Issue #2633 — Knowledge M2.12).
 export interface RepositoryPodRunRecord {
   readonly runId: string;
-  readonly outcome: "succeeded" | "partial" | "failed" | "cancelled";
+  readonly outcome: "succeeded" | SharedPodRefreshTerminal;
   readonly applied: boolean;
   readonly counts: RepositoryPodChangeCounts;
   readonly fingerprintSetDigest: string;

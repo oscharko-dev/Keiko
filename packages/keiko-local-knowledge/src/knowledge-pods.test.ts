@@ -8,6 +8,7 @@ import {
   htmlManualSourceKindTag,
   type CapsuleSetId,
   type KnowledgeCapsuleId,
+  type KnowledgePodSummary,
   type KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -1088,11 +1089,14 @@ describe("Knowledge Pod compatibility projection", () => {
 // `connectorSource`) may differ. Nothing enforced that promise. This regression guard fails when
 // a future PR adds a projection field a repository pod cannot answer, or removes one only a
 // folder pod projects, or when `sourceKinds` stops discriminating the two.
-const KIND_SPECIFIC_SUMMARY_KEYS: readonly (keyof import("@oscharko-dev/keiko-contracts").KnowledgePodSummary)[] =
-  ["manualSourceFingerprint", "manualRefresh", "connectorSource"];
+const KIND_SPECIFIC_SUMMARY_KEYS: readonly (keyof KnowledgePodSummary)[] = [
+  "manualSourceFingerprint",
+  "manualRefresh",
+  "connectorSource",
+];
 
 describe("Knowledge Pod projection parity (M2.12)", () => {
-  it("projects folder and repository capsules with the same summary field set", () => {
+  it("projects folder and repository capsules with the same summary field set", (): void => {
     const env = freshStore();
     try {
       const folderCapsuleId = "cap-folder-parity" as KnowledgeCapsuleId;
@@ -1152,11 +1156,19 @@ describe("Knowledge Pod projection parity (M2.12)", () => {
       // `counts`, `compatibility` — must expose the SAME key set for both pod kinds. A regression
       // here means a projection helper started answering with a different shape depending on
       // scope kind, which would fracture the shared vocabulary at exactly the surface an operator
-      // reads.
-      const blockKeys = ["retrieval", "privacy", "governance", "modelUsePolicy", "counts"] as const;
+      // reads. Keys are sorted so the comparison is set-equal rather than order-sensitive: two
+      // helpers producing the same set in a different insertion order still count as parity.
+      const blockKeys = [
+        "retrieval",
+        "privacy",
+        "governance",
+        "modelUsePolicy",
+        "counts",
+        "compatibility",
+      ] as const;
       for (const block of blockKeys) {
-        expect(Object.keys(folderSummary[block])).toStrictEqual(
-          Object.keys(repositorySummary[block]),
+        expect(Object.keys(folderSummary[block]).slice().sort()).toStrictEqual(
+          Object.keys(repositorySummary[block]).slice().sort(),
         );
       }
 
@@ -1174,7 +1186,7 @@ describe("Knowledge Pod projection parity (M2.12)", () => {
     }
   });
 
-  it("projects repository capsules across the full lifecycle range like folder capsules do", () => {
+  it("projects repository capsules across the full lifecycle range like folder capsules do", (): void => {
     // The refresh affordance is user-visible through the same lifecycle badge as every other pod
     // kind (draft → indexing → ready → stale → error). This test pins that mapping — a folder and
     // a repository capsule in the same `lifecycleState` project the same `readiness`. If that ever
