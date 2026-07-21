@@ -299,6 +299,10 @@ function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: strin
   }
   const logPath = config.research.toolCallLogPath(stateDir);
   const injectionDirective = config.research.injectionDirective;
+  // Truncate the log up front so a reused stateDir (a server restarted without the Playwright
+  // config's prepare step running first) cannot bleed a prior run's tool names into
+  // `expectNoMutationWasAttempted()` and falsely flip a clean current run to failed.
+  writeFileSync(logPath, "", { mode: 0o600 });
   return {
     mode: "research",
     calls: 0,

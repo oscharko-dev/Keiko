@@ -47,7 +47,15 @@ export function buildCodeTaskAcceptanceContribution({
   sourceTreeSha,
   cleanupResidue,
 }) {
-  const receiptByScenario = new Map(receipts.map((receipt) => [receipt.scenarioId, receipt]));
+  // Duplicate receipts would silently overwrite each other in the Map — a later `passed` could
+  // hide an earlier `failed` and still emit a contract-valid contribution, so reject up front.
+  const receiptByScenario = new Map();
+  for (const receipt of receipts) {
+    if (receiptByScenario.has(receipt.scenarioId)) {
+      throw new Error(`duplicate receipt for ${receipt.scenarioId}`);
+    }
+    receiptByScenario.set(receipt.scenarioId, receipt);
+  }
   const scenarios = descriptor.scenarios.map((scenario) => {
     const receipt = receiptByScenario.get(scenario.scenarioId);
     if (receipt === undefined) throw new Error(`missing receipt for ${scenario.scenarioId}`);

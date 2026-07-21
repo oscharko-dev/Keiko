@@ -106,6 +106,57 @@ describe("buildCodeTaskAcceptanceContribution", () => {
     expect(contribution.salvage).toHaveLength(2);
   });
 
+  it("throws when the receipts array is empty and any scenario is declared", () => {
+    expect(() =>
+      buildCodeTaskAcceptanceContribution({
+        descriptor: minimalDescriptor(),
+        receipts: [],
+        sourceCommitSha: COMMIT_SHA,
+        sourceTreeSha: TREE_SHA,
+        cleanupResidue: false,
+      }),
+    ).toThrow(/missing receipt for research-skills-child-unit-contracts/);
+  });
+
+  it("throws when two receipts share a scenarioId", () => {
+    expect(() =>
+      buildCodeTaskAcceptanceContribution({
+        descriptor: minimalDescriptor(),
+        receipts: [
+          scenarioReceipt("research-skills-child-unit-contracts"),
+          {
+            ...scenarioReceipt("research-skills-child-unit-contracts", ALT_DIGEST),
+            outcome: "failed",
+          },
+        ],
+        sourceCommitSha: COMMIT_SHA,
+        sourceTreeSha: TREE_SHA,
+        cleanupResidue: false,
+      }),
+    ).toThrow(/duplicate receipt for research-skills-child-unit-contracts/);
+  });
+
+  it("does not silently drop malformed receipt fields — the contract validator catches them downstream", () => {
+    const descriptor = minimalDescriptor();
+    const badReceipt = {
+      scenarioId: "research-skills-child-unit-contracts",
+      outcome: "not-a-real-outcome",
+      recordedAt: "yesterday",
+      digest: "0",
+    };
+    const contribution = buildCodeTaskAcceptanceContribution({
+      descriptor,
+      receipts: [badReceipt],
+      sourceCommitSha: COMMIT_SHA,
+      sourceTreeSha: TREE_SHA,
+      cleanupResidue: false,
+    });
+    expect(contribution.scenarios[0].outcome).toBe("not-a-real-outcome");
+    expect(contribution.scenarios[0].recordedAt).toBe("yesterday");
+    const validated = validateCodeTaskAcceptanceContribution(contribution);
+    expect(validated.ok).toBe(false);
+  });
+
   it("throws when a scenario has no matching receipt", () => {
     const descriptor = {
       ...minimalDescriptor(),

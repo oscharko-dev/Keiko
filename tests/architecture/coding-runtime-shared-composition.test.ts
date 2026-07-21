@@ -90,7 +90,11 @@ describe("Code-task Playwright server entries", () => {
 
       it("does not re-declare composition primitives owned by the shared entry", () => {
         const code = stripComments(readEntry(filename));
-        const leaked = FORBIDDEN_COMPOSITION_TOKENS.filter((token) => code.includes(token));
+        // Word-boundary match: a longer legitimate identifier that happens to contain a forbidden
+        // token (e.g. `buildUiHandlerDepsFactory`) must not false-fail this gate.
+        const leaked = FORBIDDEN_COMPOSITION_TOKENS.filter((token) =>
+          new RegExp(`\\b${token}\\b`).test(code),
+        );
         expect(
           leaked,
           `${filename} must not reference composition primitives that live in the shared entry`,

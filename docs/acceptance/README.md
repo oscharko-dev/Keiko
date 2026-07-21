@@ -8,7 +8,7 @@ contribution.
 
 ## Pipeline
 
-```
+```text
 docs/acceptance/code-task-<child>.json   ── descriptor  ┐
 <child journey run>                      ── receipts    ┼─▶ scripts/generate-code-task-acceptance.mjs
 git rev-parse HEAD / HEAD^{tree}         ── sha inputs  ┤          │
