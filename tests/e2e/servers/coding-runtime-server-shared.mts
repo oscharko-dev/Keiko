@@ -5,7 +5,14 @@
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import type { Server } from "node:http";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -25,14 +32,17 @@ import {
   scriptedFunctionalPortable,
   type ScriptedOpenCodeHarness,
 } from "../../../packages/keiko-server/src/coding-runtime/opencodeFunctionalHarness/_support.js";
+import type { ProductionCodingRuntimeResolverInput } from "../../../packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.js";
 import {
   createFunctionalRuntimeResolver,
   functionalGatewayConfig,
   productionDiscoveryBffDeps,
   scriptedResponse,
+  scriptedTranscript,
   type ScriptState,
 } from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
 import { readProductionWorkspaceHead } from "../../../packages/keiko-server/src/coding-runtime/productionWorkspaceHeadReader.js";
+import { researchRequestLineText } from "../../../packages/keiko-server/src/coding-runtime/researchEgressPort.js";
 import {
   buildCspHeader,
   extractInlineScriptHashes,
@@ -63,6 +73,36 @@ interface JourneyWorkspaceServices {
   readonly reconciliation: ReturnType<typeof createWorkspaceReconciliationService>;
 }
 
+/**
+ * #2642: the research seams the #2387 journey needs on top of the scripted composition. When
+ * present, the shared server opens the network-egress class, injects the hermetic transport, wires
+ * the read-only child model, projects the injection directive into the script state, records every
+ * scripted tool name to the journey-owned log, and asserts the URL/host/request-line invariants
+ * before it accepts a connection — so the entry file can stay declarative.
+ */
+export interface CodingRuntimeResearchJourneyConfig {
+  /** The public URL the scripted model asks to research. */
+  readonly journeyUrl: string;
+  /** The host the hermetic transport must answer for; all other hosts fail closed. */
+  readonly journeyHost: string;
+  /** The sanitized request line the approval panel must show for `journeyUrl`. */
+  readonly expectedRequestLine: string;
+  /** The visible directive the granted page carries; projected into the script state. */
+  readonly injectionDirective: string;
+  /**
+   * Builds the hermetic research transport. Called once per boot; the returned fetch is the ONLY
+   * network seam the resolver sees.
+   */
+  readonly hermeticFetch: () => (url: string) => Promise<Response>;
+  /**
+   * The scripted response the read-only child model returns. Production resolves the same model
+   * through the gateway; the journey holds this stub so the child never touches the network.
+   */
+  readonly childModelResponse: () => NormalizedResponse;
+  /** Path (derived from stateDir) the shared server appends every scripted tool name to. */
+  readonly toolCallLogPath: (stateDir: string) => string;
+}
+
 export interface CodingRuntimeJourneyServerConfig {
   readonly fixtureId: string;
   readonly fixtureLabel: string;
@@ -76,6 +116,8 @@ export interface CodingRuntimeJourneyServerConfig {
   readonly repositoryRoot: (stateDir: string) => string;
   readonly managedRoot: (stateDir: string) => string;
   readonly launcherSessionSecret?: string | undefined;
+  /** #2642: opt-in research runtime seams. Only meaningful when `runtime === "scripted"`. */
+  readonly research?: CodingRuntimeResearchJourneyConfig | undefined;
 }
 
 interface JourneyComposition {
@@ -149,10 +191,14 @@ function verificationRunner(fixtureLabel: string): Pick<VerificationRunnerManage
   };
 }
 
-function nextScriptedTurn(script: ScriptState, includeQuestion: boolean): NormalizedResponse {
-  let response = scriptedResponse(script);
+function nextScriptedTurn(
+  script: ScriptState,
+  includeQuestion: boolean,
+  transcript: string,
+): NormalizedResponse {
+  let response = scriptedResponse(script, transcript);
   while (!includeQuestion && response.toolCalls.some((call) => call.name === "question")) {
-    response = scriptedResponse(script);
+    response = scriptedResponse(script, transcript);
   }
   return response;
 }
@@ -162,8 +208,11 @@ function scriptedModelDeps(
   script: ScriptState,
   includeQuestion: boolean,
 ): UiHandlerDeps {
-  const chat = (): Promise<NormalizedResponse> =>
-    Promise.resolve(nextScriptedTurn(script, includeQuestion));
+  // #2642: research mode reads the fenced-untrusted transcript to prove the granted page's directive
+  // reaches the model without being complied with; productive/discovery/out-of-scope modes ignore
+  // the transcript, so passing it always is behaviour-preserving.
+  const chat = (request?: GatewayRequest): Promise<NormalizedResponse> =>
+    Promise.resolve(nextScriptedTurn(script, includeQuestion, scriptedTranscript(request)));
   return {
     ...deps,
     config: functionalGatewayConfig(),
@@ -171,9 +220,24 @@ function scriptedModelDeps(
     gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
-      async function* (): AsyncIterable<GatewayStreamChunk> {
-        yield { type: "done" as const, response: await chat() };
+      async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
+        yield { type: "done" as const, response: await chat(request) };
       },
+  };
+}
+
+function researchResolverSeams(
+  research: CodingRuntimeResearchJourneyConfig,
+): Partial<
+  Pick<ProductionCodingRuntimeResolverInput, "researchFetchImpl" | "childModelPortFactory">
+> & { readonly researchEgressEnabled: true } {
+  const fetchImpl = research.hermeticFetch();
+  return {
+    researchEgressEnabled: true,
+    researchFetchImpl: fetchImpl,
+    childModelPortFactory: () => ({
+      call: (): Promise<NormalizedResponse> => Promise.resolve(research.childModelResponse()),
+    }),
   };
 }
 
@@ -188,7 +252,7 @@ function scriptedComposition(
     mkdirSync(join(bffStateRoot, dir), { recursive: true, mode: 0o700 });
   }
   const scripted = createScriptedOpenCodeHarness();
-  const script = journeyScript(config);
+  const script = journeyScript(config, stateDir);
   const resolver = createFunctionalRuntimeResolver({
     portable: scriptedFunctionalPortable(stateDir),
     runtimeStateRoot: join(stateDir, "runtime-state"),
@@ -199,6 +263,7 @@ function scriptedComposition(
     verificationRunner: verificationRunner(config.fixtureLabel),
     runtimeEvidence: createCodingRuntimeEvidenceAggregator(createInMemoryEvidenceStore()),
     createSupervisor: scripted.createSupervisor,
+    ...(config.research === undefined ? {} : researchResolverSeams(config.research)),
   });
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
@@ -223,12 +288,26 @@ function scriptedComposition(
   return { deps: scriptedModelDeps(deps, script, config.includeQuestion), scripted };
 }
 
-function journeyScript(config: CodingRuntimeJourneyServerConfig): ScriptState {
+function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: string): ScriptState {
+  if (config.research === undefined) {
+    return {
+      mode: "productive",
+      calls: 0,
+      old: config.originalContent,
+      next: config.editedContent,
+    };
+  }
+  const logPath = config.research.toolCallLogPath(stateDir);
+  const injectionDirective = config.research.injectionDirective;
   return {
-    mode: "productive",
+    mode: "research",
     calls: 0,
     old: config.originalContent,
     next: config.editedContent,
+    injectionDirective,
+    observeToolCall: (name: string): void => {
+      appendFileSync(logPath, `${name}\n`, { mode: 0o600 });
+    },
   };
 }
 
@@ -288,7 +367,7 @@ function productionDiscoveryComposition(
     workspaceProvisioning: provisioning,
     workspaceLifecycle: services.lifecycle,
     workspaceReconciliation: services.reconciliation,
-    script: journeyScript(config),
+    script: journeyScript(config, stateDir),
     uiPort: port,
     ...(config.launcherSessionSecret === undefined
       ? {}
@@ -330,6 +409,19 @@ function registerShutdown(server: Server, composition: JourneyComposition): void
   process.once("SIGINT", close);
 }
 
+function assertResearchInvariants(research: CodingRuntimeResearchJourneyConfig): void {
+  // The journey URL constant and the hermetic transport must agree on the host, or every fetch
+  // would fail closed for the wrong reason and the journey would time out confusingly.
+  if (new URL(research.journeyUrl).hostname !== research.journeyHost) {
+    throw new Error("research journey host mismatch");
+  }
+  // The spec asserts the approval panel shows this exact request line; deriving it from the
+  // production sanitizer makes a silent drift between the fixture and the server impossible.
+  if (researchRequestLineText(new URL(research.journeyUrl)) !== research.expectedRequestLine) {
+    throw new Error("research journey request-line mismatch");
+  }
+}
+
 function assertProductionDiscovery(deps: UiHandlerDeps): void {
   if (
     deps.env.KEIKO_OPENCODE_REAL_BINARY !== undefined ||
@@ -365,6 +457,7 @@ function assertProductionDiscovery(deps: UiHandlerDeps): void {
 export async function runCodingRuntimeJourneyServer(
   config: CodingRuntimeJourneyServerConfig,
 ): Promise<void> {
+  if (config.research !== undefined) assertResearchInvariants(config.research);
   const rawStateDir = config.stateDir();
   mkdirSync(rawStateDir, { recursive: true });
   const stateDir = realpathSync(rawStateDir);

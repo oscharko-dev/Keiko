@@ -1,6 +1,13 @@
+// CLI wrapper around the pure projection at scripts/lib/code-task-acceptance.mjs. Reads the
+// descriptor and receipts JSON, joins them into a CodeTaskAcceptanceContributionV1 payload,
+// validates against the contract, and writes the result. docs/acceptance/README.md explains the
+// pipeline; the pure projection is directly unit-tested at scripts/__tests__/code-task-acceptance.test.mjs.
+
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { buildCodeTaskAcceptanceContribution } from "./lib/code-task-acceptance.mjs";
 
 function argument(name) {
   const index = process.argv.indexOf(`--${name}`);
@@ -20,34 +27,14 @@ const sourceCommitSha = argument("commit");
 const sourceTreeSha = argument("tree");
 const cleanupRoot = resolve(argument("cleanup-root"));
 const output = resolve(argument("output"));
-const receiptByScenario = new Map(receipts.map((receipt) => [receipt.scenarioId, receipt]));
 
-const scenarios = descriptor.scenarios.map((scenario) => {
-  const receipt = receiptByScenario.get(scenario.scenarioId);
-  if (receipt === undefined) throw new Error(`missing receipt for ${scenario.scenarioId}`);
-  return {
-    ...scenario,
-    outcome: receipt.outcome,
-    recordedAt: receipt.recordedAt,
-    artifactDigests: [receipt.digest],
-    receiptDigest: { outcome: "known", value: receipt.digest },
-  };
-});
-
-const contribution = {
-  kind: "code-task-acceptance-contribution",
-  schemaVersion: 1,
-  epicIssue: descriptor.epicIssue,
-  childIssue: descriptor.childIssue,
+const contribution = buildCodeTaskAcceptanceContribution({
+  descriptor,
+  receipts,
   sourceCommitSha,
   sourceTreeSha,
-  scenarios,
-  salvage: descriptor.salvage.map((row) => ({ ...row, verifiedAtSha: sourceCommitSha })),
-  knownLimitations: descriptor.knownLimitations,
-  cleanup: existsSync(cleanupRoot)
-    ? { state: "incomplete", residueCount: 1 }
-    : { state: "complete" },
-};
+  cleanupResidue: existsSync(cleanupRoot),
+});
 
 const contracts = await import(
   pathToFileURL(resolve("packages/keiko-contracts/dist/index.js")).href
