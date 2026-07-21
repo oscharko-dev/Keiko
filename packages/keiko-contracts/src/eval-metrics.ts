@@ -32,9 +32,26 @@ export function binaryNdcgAtK<Value>(
   relevant: readonly Value[],
   k: number,
 ): number {
-  const limit = Math.max(0, Math.floor(k));
+  // Fail-closed on malformed cutoffs. `Math.floor(NaN)` and `Math.floor(-1)` used to collapse to
+  // `0` through the max-clamp and reach the no-work-to-do fallback that returns `1`; a bad input
+  // silently classified as a perfect ranking is exactly the drift the retrieval-metrics gate
+  // exists to catch. `k = 0` remains the intentional no-relevance case that still returns `1`.
+  if (!Number.isFinite(k) || k < 0) return 0;
+  const limit = Math.floor(k);
   const relevantSet = new Set(relevant);
-  const actual = ranked.slice(0, limit).map((value): boolean => relevantSet.has(value));
+  // Deduplicate ranked values while preserving first-seen order. `rankedPaths()` in the server
+  // retrieval eval and the gate script already dedupe before calling in, so this preserves their
+  // byte-identical scorecards; without it a caller that forgot to dedupe could feed
+  // `["a", "a"]` and produce `nDCG > 1` — impossible for a normalised score.
+  const seen = new Set<Value>();
+  const uniqueRanked: Value[] = [];
+  for (const value of ranked) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      uniqueRanked.push(value);
+    }
+  }
+  const actual = uniqueRanked.slice(0, limit).map((value): boolean => relevantSet.has(value));
   const idealCount = Math.min(limit, relevantSet.size);
   const ideal = Array.from({ length: idealCount }, (): true => true);
   const idealGain = discountedGain(ideal);

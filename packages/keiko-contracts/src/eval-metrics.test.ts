@@ -73,9 +73,32 @@ describe("binaryNdcgAtK", () => {
   });
 
   it("clamps a fractional k down to its integer prefix so the discount table stays consistent", () => {
-    // `Math.max(0, Math.floor(k))` — negative and NaN inputs collapse to an empty prefix, so the
-    // no-work-to-do convention takes over.
+    // Fractional k → the integer prefix takes effect. Negative/NaN/Infinity now fail closed and
+    // are covered by the dedicated malformed-cutoff case below.
     expect(binaryNdcgAtK(["a", "b"], ["b"], 2.9)).toBeCloseTo(1 / Math.log2(3), 6);
-    expect(binaryNdcgAtK(["a", "b"], ["a"], -1)).toBe(1);
+    expect(binaryNdcgAtK(["a", "b"], ["b"], 2.1)).toBeCloseTo(1 / Math.log2(3), 6);
+  });
+
+  it("fails closed on non-finite or negative k so a bad input does not look like a perfect ranking", () => {
+    // Pre-hardening, `Math.max(0, Math.floor(NaN))` yielded `0` and the empty-prefix branch
+    // returned `1`, silently classifying malformed input as a perfect nDCG. Fail-closed returns
+    // `0` so the caller sees the shape of the input drift instead of a spuriously green metric.
+    expect(binaryNdcgAtK(["a", "b"], ["a"], Number.NaN)).toBe(0);
+    expect(binaryNdcgAtK(["a", "b"], ["a"], -1)).toBe(0);
+    expect(binaryNdcgAtK(["a", "b"], ["a"], -0.1)).toBe(0);
+    expect(binaryNdcgAtK(["a", "b"], ["a"], Number.POSITIVE_INFINITY)).toBe(0);
+    expect(binaryNdcgAtK(["a", "b"], ["a"], Number.NEGATIVE_INFINITY)).toBe(0);
+  });
+
+  it("deduplicates ranked values so a caller that forgot to dedupe cannot produce nDCG > 1", () => {
+    // A normalised nDCG must sit in `[0, 1]`. Pre-hardening, `["a", "a"]` with relevant `["a"]`
+    // scored `1 + 1/log2(3) ≈ 1.63` because both slots earned discount. Deduplicating ranked
+    // input in first-seen order preserves the unique-ranking result callers (server + gate
+    // script) already produce via their own `rankedPaths()` dedupe step.
+    expect(binaryNdcgAtK(["a", "a"], ["a"], 2)).toBe(1);
+    expect(binaryNdcgAtK(["a", "a", "b", "b"], ["b"], 3)).toBe(1 / Math.log2(3));
+    // Duplicates outside the prefix also collapse: unique-first-seen order is what indexes the
+    // discount, so `["a", "a", "b"]` at k=2 sees `["a", "b"]` and misses relevant `["c"]`.
+    expect(binaryNdcgAtK(["a", "a", "b"], ["c"], 2)).toBe(0);
   });
 });

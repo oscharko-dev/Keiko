@@ -38,13 +38,16 @@ const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".mjs", ".js"]
 // output; `\S[^)]*` refuses a bare `Math.log2(+ 2)` so an unrelated coincidence cannot false-match.
 const DISCOUNT_FORMULA_SENTINEL = /1\s*\/\s*Math\.log2\(\s*\S[^)]*\+\s*2\s*\)/u;
 
-// Function declarations that historically carried the retrieval-metrics primitives outside
-// contracts. `mean` is deliberately absent from the forbidden set: it is a generic aggregate name
-// used in other domains (e.g. the prompt-enhancer critic) and would false-flag unrelated code — the
-// discount-formula sentinel above is what pins the retrieval nDCG owner regardless of what a copy
-// calls itself.
+// Declarations that historically carried the retrieval-metrics primitives outside contracts. The
+// pattern catches every top-level binding form JavaScript allows for such a helper: a `function`
+// declaration, a `const`/`let`/`var` binding, or an `export` prefix on either. Matching on binding
+// form rather than function-declaration syntax alone means a rename to arrow-function form
+// (`const average = () => …`) is still caught. `mean` is deliberately absent from the forbidden
+// set: it is a generic aggregate name used in other domains (e.g. the prompt-enhancer critic) and
+// would false-flag unrelated code — the discount-formula sentinel above is what pins the retrieval
+// nDCG owner regardless of what a copy calls itself.
 const FORBIDDEN_FUNCTION_PATTERN =
-  /\bfunction\s+(average|ndcgAtK|binaryNdcgAtK|discountedGain)\s*[<(]/u;
+  /\b(?:function|const|let|var)\s+(?:average|ndcgAtK|binaryNdcgAtK|discountedGain)\b/u;
 
 function* sourceFiles(directory: string): Generator<string> {
   for (const entry of readdirSync(directory)) {
@@ -106,5 +109,17 @@ describe("retrieval-metrics primitives have exactly one owner", () => {
     // deduplication. IDCG is 1 for a single relevant item, so raw discount === normalized nDCG.
     expect(binaryNdcgAtK(["a", "b", "c"], ["b"], 3)).toBe(1 / Math.log2(3));
     expect(binaryNdcgAtK(["a", "b", "c"], ["x"], 3)).toBe(0);
+  });
+
+  it("fails closed on malformed cutoffs and dedupes ranked input so nDCG cannot exceed 1", () => {
+    // NaN, Infinity, and negatives collapse to a fail-closed `0` rather than the no-work-to-do
+    // `1` a plain floor+clamp would emit. `k = 0` stays the intentional no-relevance case.
+    expect(binaryNdcgAtK(["a", "b"], ["a"], Number.NaN)).toBe(0);
+    expect(binaryNdcgAtK(["a", "b"], ["a"], -1)).toBe(0);
+    expect(binaryNdcgAtK(["a", "b"], ["a"], Number.POSITIVE_INFINITY)).toBe(0);
+    expect(binaryNdcgAtK(["a"], ["a"], 0)).toBe(1);
+    // Deduplication guards against a normalised nDCG greater than 1: `["a", "a"]` with relevant
+    // `["a"]` used to score `1 + 1/log2(3) ≈ 1.63`; it now collapses to the unique ranking's `1`.
+    expect(binaryNdcgAtK(["a", "a"], ["a"], 2)).toBe(1);
   });
 });
