@@ -1,7 +1,7 @@
 import type { ParsedUnit } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it } from "vitest";
 
-import { codeParser, codeSymbolLabel } from "./code-parser.js";
+import { codeParser, codeSymbolLabel, isCodeSymbolDefinitionLine } from "./code-parser.js";
 import { selectionFromText } from "./parser-test-fixtures.js";
 import { createDefaultParserRegistry } from "./index.js";
 import { buildParserOptions } from "./registry.js";
@@ -177,7 +177,7 @@ describe("codeParser", () => {
     ["  public void render() {", "function render"],
     ["  private void render() {", "function render"],
     ["  protected abstract void update();", "function update"],
-  ])("anchors the Java void method %s", (line, expected) => {
+  ])("anchors the Java void method %s", (line, expected): void => {
     expect(codeSymbolLabel(line, "java")).toBe(expected);
   });
 
@@ -188,7 +188,14 @@ describe("codeParser", () => {
     ["  public virtual void Update(TimeSpan dt) {", "function Update"],
     ["  public sealed override void Dispose() {", "function Dispose"],
     ["  internal void Refresh() {", "function Refresh"],
-  ])("anchors the C# void method %s", (line, expected) => {
+    // `async void` is the C# event-handler idiom, and `public async Task<T>` is the standard
+    // shape for asynchronous methods. Both would fall through when `async` was not in the
+    // modifier alternation — `async` would take the return-type slot, forcing `void` (rejected
+    // as an anchor name) or `Task` (whose `<int>` overflows the pattern) into the name slot.
+    ["  private async void Button_Click(object sender, EventArgs e) {", "function Button_Click"],
+    ["  public async void OnClick() {", "function OnClick"],
+    ["  public async Task<int> ComputeAsync() {", "function ComputeAsync"],
+  ])("anchors the C# void method %s", (line, expected): void => {
     expect(codeSymbolLabel(line, "cs")).toBe(expected);
   });
 
@@ -201,8 +208,21 @@ describe("codeParser", () => {
     ["  public T[] toArray() {", "java", "function toArray"],
     ["  public Task<int> LoadAsync() {", "cs", "function LoadAsync"],
     ["  public string[] Slice(int begin) {", "cs", "function Slice"],
-  ])("keeps anchoring the generic or array return neighbour %s (%s)", (line, ext, expected) => {
-    expect(codeSymbolLabel(line, ext)).toBe(expected);
+  ])(
+    "keeps anchoring the generic or array return neighbour %s (%s)",
+    (line, ext, expected): void => {
+      expect(codeSymbolLabel(line, ext)).toBe(expected);
+    },
+  );
+
+  // The existing TypeScript form `public async foo(): Promise<S>` keeps anchoring after the
+  // C# `async` addition to the modifier alternation, because the greedy `(?:MOD\s+)*` backtracks
+  // to a one-modifier consumption when the two-modifier consumption fails to line up the name
+  // and parameter list — leaving `async` in the same return-type-slot role it played before.
+  it("keeps anchoring the TypeScript `public async` method form after the C# async modifier addition", () => {
+    expect(codeSymbolLabel("  public async generate(i: I): Promise<S> {", "ts")).toBe(
+      "function generate",
+    );
   });
 
   // The extension gate is the load-bearing property. `void expr();` in a .ts file was the
@@ -214,7 +234,7 @@ describe("codeParser", () => {
     "  void reload();",
     "  void handleEntry(entry as yauzl.Entry);",
     "  void serveGatewayRequest(req, res, deps, responses);",
-  ])("still blocks the TS/JS fire-and-forget expression %s", (line) => {
+  ])("still blocks the TS/JS fire-and-forget expression %s", (line): void => {
     expect(codeSymbolLabel(line, "ts")).toBeUndefined();
     expect(codeSymbolLabel(line, "js")).toBeUndefined();
     expect(codeSymbolLabel(line)).toBeUndefined();
@@ -244,7 +264,7 @@ describe("codeParser", () => {
     ["a SQL CHECK constraint", "  applied INTEGER NOT NULL CHECK (applied IN (0, 1)),"],
     ["a SQL PRIMARY KEY clause", "  PRIMARY KEY (capsule_id, source_id, run_id),"],
     ["a SQL FOREIGN KEY clause", "  FOREIGN KEY (capsule_id) REFERENCES capsules(id),"],
-  ])("does not mine %s as a symbol even for Java/C# extensions", (_case, line) => {
+  ])("does not mine %s as a symbol even for Java/C# extensions", (_case, line): void => {
     expect(codeSymbolLabel(line, "java")).toBeUndefined();
     expect(codeSymbolLabel(line, "cs")).toBeUndefined();
   });
@@ -254,6 +274,37 @@ describe("codeParser", () => {
   it("never captures `void` as an anchor name", () => {
     expect(codeSymbolLabel("void void() {", "cs")).toBeUndefined();
     expect(codeSymbolLabel("public void void() {", "java")).toBeUndefined();
+  });
+
+  // The exported helpers gained an optional `extension` argument in this PR, which makes them
+  // unsafe to pass directly as `Array` callbacks — JavaScript hands the callback
+  // `(value, index, array)`, so the numeric index becomes the `extension` and the internal
+  // `.toLowerCase()` would throw a TypeError. `symbolPatternsFor` narrows non-string arguments
+  // to the strict variant instead, so a caller that reaches around TypeScript with `as unknown as`
+  // still gets a clean answer and no crash. Freezing this pins the runtime guarantee that
+  // matches the type-level signature.
+  it("does not crash when called via Array callback shape", () => {
+    const linesArray = ["  void ignore();", "  public void render() {", "  x = 1;"];
+    expect(() => linesArray.findIndex((value) => isCodeSymbolDefinitionLine(value))).not.toThrow();
+    // `isCodeSymbolDefinitionLine` and `codeSymbolLabel` are also called with their bare
+    // reference to freeze the runtime guarantee — a caller that reaches around TypeScript to
+    // pass them directly still gets a clean answer, not a `TypeError` from `.toLowerCase()`
+    // on the numeric index. The unknown cast documents that the shape is intentionally the
+    // Array-callback shape here; the guarantee lives in `symbolPatternsFor`'s runtime narrow.
+    const asFinder = isCodeSymbolDefinitionLine as unknown as (
+      value: string,
+      index: number,
+      array: string[],
+    ) => boolean;
+    expect(() => linesArray.findIndex(asFinder)).not.toThrow();
+    const asLabelFinder = codeSymbolLabel as unknown as (
+      value: string,
+      index: number,
+      array: string[],
+    ) => string | undefined;
+    expect(() =>
+      linesArray.findIndex((value, index, array) => asLabelFinder(value, index, array)),
+    ).not.toThrow();
   });
 
   it("emits chunk boundaries and section paths for a Java void-methods fixture", () => {

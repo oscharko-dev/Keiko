@@ -128,11 +128,18 @@ const RESERVED_WORD_SET: ReadonlySet<string> = new Set<string>(
 //     from being the "conservative" table this module promises.
 // Modifier alternatives are literal tokens with no embedded whitespace so the alternation
 // stays deterministic per position — every added token (Java's original list plus C#'s
-// `override|virtual|sealed|internal`) is disjoint from `void expr;`-shaped expression
+// `override|virtual|sealed|internal|async`) is disjoint from `void expr;`-shaped expression
 // statements at line start because those never begin with a modifier keyword, and adding
-// them here does not enlarge the fire-and-forget false-positive surface.
+// them here does not enlarge the fire-and-forget false-positive surface. `async` sits in the
+// modifier position so `public async Task<int> ComputeAsync()` (a common C# shape whose type
+// argument list would otherwise leave the return-type slot pointed at `async` and the name
+// slot pointed at `Task`, terminating at `<int>`) and `async void OnClick(...)` (the C# event
+// handler idiom) both anchor to their method name; the existing TypeScript form
+// `public async foo(): Promise<S>` keeps working because the greedy `(?:MOD\s+)*` backtracks
+// to one modifier when the two-modifier greedy fails to line up name/params, so `async`
+// falls back into the return-type position that it already occupied before this addition.
 const METHOD_MODIFIER_ALTERNATION =
-  "(?:public|private|protected|static|final|abstract|synchronized|native|override|virtual|sealed|internal)";
+  "(?:public|private|protected|static|final|abstract|synchronized|native|override|virtual|sealed|internal|async)";
 
 function buildMethodDeclarationPattern(notReserved: string): RegExp {
   return new RegExp(
@@ -257,8 +264,15 @@ const SYMBOL_PATTERNS_ALLOW_VOID: readonly SymbolPattern[] = Object.freeze([
   { kind: "function", pattern: METHOD_DECLARATION_PATTERN_ALLOW_VOID },
 ]);
 
-function symbolPatternsFor(extension: string): readonly SymbolPattern[] {
-  return VOID_RETURN_LANGUAGE_EXTENSIONS.has(extension.toLowerCase())
+// `extension` is typed `unknown` so an accidental Array-callback usage — for example
+// `lines.findIndex(codeSymbolLabel as unknown as ...)` where the runtime hands the callback
+// `(value, index, array)` — falls through to the strict variant instead of crashing on the
+// numeric index at `.toLowerCase()`. Legitimate string callers pay nothing: `typeof x ===
+// "string"` narrows without an allocation, and TypeScript's public signature on
+// `codeSymbolLabel` still declares `extension: string`, so the type discipline is intact.
+function symbolPatternsFor(extension: unknown): readonly SymbolPattern[] {
+  const key = typeof extension === "string" ? extension.toLowerCase() : "";
+  return VOID_RETURN_LANGUAGE_EXTENSIONS.has(key)
     ? SYMBOL_PATTERNS_ALLOW_VOID
     : SYMBOL_PATTERNS_STRICT;
 }
