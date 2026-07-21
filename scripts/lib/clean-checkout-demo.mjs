@@ -19,7 +19,7 @@
 // wrapper). The heavy lifting is here so unit tests can drive the same journey without an extra
 // process boundary.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -39,7 +39,7 @@ import {
   requestOpenAIEmbedding,
   verifyEmbeddingCapability,
 } from "@oscharko-dev/keiko-model-gateway";
-import { rerankSelection } from "@oscharko-dev/keiko-server";
+import { buildRedactor, rerankSelection } from "@oscharko-dev/keiko-server";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -178,8 +178,10 @@ function resolveDemoVectorIndex(sqliteVecExtensionPath) {
 
 // Encryption is on (ADR-0153 D1 boundary): the store pins TEMP storage to memory when opened with
 // the vector runtime, so the ANN path is REACHABLE on an encrypted store. This is the same check
-// the closeout gate certifies — the demo replays it end-to-end.
-function openDemoStore(vectorIndex) {
+// the closeout gate certifies — the demo replays it end-to-end. Key material is generated per
+// invocation (`randomBytes`) rather than hard-coded, so nothing that could look like a committed
+// secret exists in the tree, and two runs open two distinct encrypted stores.
+function openDemoStore(vectorIndex, encryptionKey) {
   return openKnowledgeStore({
     dbPath: ":memory:",
     vectorIndex,
@@ -187,19 +189,19 @@ function openDemoStore(vectorIndex) {
       mode: "encrypted-key-provider",
       keyProvider: {
         providerId: "clean-checkout-demo",
-        resolveKey: () => new Uint8Array(32).fill(11),
+        resolveKey: () => encryptionKey,
       },
     },
   });
 }
 
-function buildGatewayConfig(mockOrigin, _dimensions) {
+function buildGatewayConfig(mockOrigin, secrets, _dimensions) {
   return {
     providers: [
       {
         modelId: EMBEDDING_MODEL_ID,
         baseUrl: `${mockOrigin}/v1`,
-        apiKey: "clean-checkout-demo-embedding-key",
+        apiKey: secrets.embeddingApiKey,
         apiKeyHeaderName: "authorization",
         timeoutMs: 30_000,
         maxRetries: 0,
@@ -228,24 +230,40 @@ function buildGatewayConfig(mockOrigin, _dimensions) {
     reranker: {
       modelId: RERANK_MODEL_ID,
       baseUrl: `${mockOrigin}/v1`,
-      apiKey: "clean-checkout-demo-rerank-key",
+      apiKey: secrets.rerankerApiKey,
       timeoutMs: 30_000,
     },
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
   };
 }
 
+// Per-run credentials so nothing in this file matches a secret-scanner rule for a hard-coded
+// token, and so two consecutive runs never share a "key". The mock server accepts any bearer, so
+// the values are safe to be ephemeral.
+function generateDemoSecrets() {
+  return {
+    storeEncryptionKey: randomBytes(32),
+    embeddingApiKey: randomBytes(24).toString("hex"),
+    rerankerApiKey: randomBytes(24).toString("hex"),
+  };
+}
+
 // A minimal `UiHandlerDeps`-shaped record — enough for `rerankSelection`. The facade only reads
-// `deps.env`, `deps.config`, and the optional `deps.rerankRequest`, which we leave as the default
-// so the transport runs against our loopback rerank endpoint. Cast to the type at the call site;
-// no fields the facade actually reads are missing.
+// `deps.env`, `deps.config`, `deps.redactor`, and the optional `deps.rerankRequest`, which we
+// leave as the default so the transport runs against our loopback rerank endpoint.
+//
+// The redactor is the standard `buildRedactor(env, config)` used across the server so this demo
+// exercises the same audit-redaction path as production, not a permissive string-cast. Nothing
+// hostile ever enters the demo's rerank documents (each is a synthetic `path:startLine-endLine`
+// string), but the point is that a future refactor that DID route sensitive text through this
+// path would find the standard redactor in place, not a pass-through that lets it slip out.
 function buildMinimalRerankDeps(gatewayConfig) {
   return {
     config: gatewayConfig,
     configPresent: true,
     env: process.env,
     egress: undefined,
-    redactor: (value) => String(value),
+    redactor: buildRedactor(process.env, gatewayConfig),
     // Everything below is unused by rerankSelection but kept present so a lookup that
     // accidentally destructures on us returns something defined instead of throwing.
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
@@ -551,14 +569,14 @@ function buildRerankerEvidence(rerankerEnabled, rerankerDisabled) {
   };
 }
 
-function assembleEvidence({ repoRoot, index, queries, elapsedMs }) {
+function assembleEvidence({ hygieneAtStart, index, queries, elapsedMs }) {
   const ann = extractAnnDiagnostic(queries.multiFile.result);
   return {
     demo: EVIDENCE_DEMO_ID,
     issue: EVIDENCE_ISSUE_REF,
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     cleanCheckout: {
-      ...checkoutHygieneSummary(repoRoot),
+      ...hygieneAtStart,
       indexedPathsRequested: DEMO_INDEXED_PATHS.length,
       indexedPathsResolved: index.indexedPathCount,
       fingerprintCount: index.fingerprintCount,
@@ -586,12 +604,18 @@ export async function runCleanCheckoutDemo({
 } = {}) {
   requireDemoOptions({ mockOrigin, embeddingDimensions });
   const startedAtMs = now();
+  // Hygiene snapshot BEFORE anything runs. The field names imply this is what the caller's
+  // checkout looked like at start-of-run, so measuring it after indexing would be a lie —
+  // anything that writes `.keiko` or a build tree mid-run would go undetected. The rest of the
+  // demo runs against `:memory:` and never writes to disk, but the discipline is worth keeping.
+  const hygieneAtStart = checkoutHygieneSummary(repoRoot);
+  const secrets = generateDemoSecrets();
   const vectorIndex = resolveDemoVectorIndex(sqliteVecExtensionPath);
-  const store = openDemoStore(vectorIndex);
+  const store = openDemoStore(vectorIndex, secrets.storeEncryptionKey);
   try {
     const embeddingAdapter = buildDemoEmbeddingAdapter({
       origin: mockOrigin,
-      apiKey: "clean-checkout-demo-embedding-key",
+      apiKey: secrets.embeddingApiKey,
       dimensions: embeddingDimensions,
     });
     const index = await indexDemoRepositoryPod({
@@ -600,7 +624,7 @@ export async function runCleanCheckoutDemo({
       repoRoot,
       ...(signal === undefined ? {} : { signal }),
     });
-    const gatewayConfig = buildGatewayConfig(mockOrigin, embeddingDimensions);
+    const gatewayConfig = buildGatewayConfig(mockOrigin, secrets, embeddingDimensions);
     const queries = await runDemoQueriesAndFacade({
       store,
       embeddingAdapter,
@@ -609,7 +633,7 @@ export async function runCleanCheckoutDemo({
       index,
     });
     return assembleEvidence({
-      repoRoot,
+      hygieneAtStart,
       index,
       queries,
       elapsedMs: now() - startedAtMs,
@@ -667,6 +691,36 @@ function failuresCleanCheckout(evidence) {
   if (record.workspaceRootExists !== true) failures.push("workspace-root-missing");
   if (record.indexedPathsResolved <= 0) failures.push("no-paths-indexed");
   if (record.fingerprintCount <= 0) failures.push("no-fingerprints-recorded");
+  // Partial indexing is a silent DoD failure: if the walk found only two of the three tracked
+  // files, the pod is still queryable and the multi-file AC would still turn green — but the
+  // "small real slice" the runbook advertises no longer holds. Every requested path must be
+  // resolved before the clean-checkout bullet passes.
+  if (record.indexedPathsRequested !== record.indexedPathsResolved) {
+    failures.push(
+      `partial-indexing:${String(record.indexedPathsResolved)}/${String(record.indexedPathsRequested)}`,
+    );
+  }
+  // The DoD wording asks the demo to run "from a clone with no .keiko state and no build
+  // artifacts". The demo's OWN state is guaranteed clean (`:memory:` store, no fixtures on disk)
+  // — these two fields report the caller's checkout state, so the reader can see whether the run
+  // matched the DoD's fresh-clone scenario. They are enforced when they can be honoured: on CI
+  // (a fresh clone) and inside the container-based runbook, both should be false; on a
+  // developer's dev-tree they may legitimately be true, so the runner sets
+  // `KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST=1` to record-only rather than enforce. The
+  // default is enforcement, because the DoD signature happens on a clean host and a permissive
+  // default would let a dev-tree run silently claim it.
+  if (
+    process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST !== "1" &&
+    record.keikoStatePresentAtStart === true
+  ) {
+    failures.push("keiko-state-present-at-start");
+  }
+  if (
+    process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST !== "1" &&
+    record.buildArtifactsPresentAtStart === true
+  ) {
+    failures.push("build-artifacts-present-at-start");
+  }
   return failures;
 }
 

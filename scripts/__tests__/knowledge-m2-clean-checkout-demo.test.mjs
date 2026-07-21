@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,9 +30,14 @@ const EMBEDDING_DIMENSIONS = 48;
 // missing extension never masks a real regression on a host that should have one.
 const provisionedExtensionPath = resolveProvisionedSqliteVecPath(REPO_ROOT);
 
+function sha256Hex(value) {
+  return createHash("sha256").update(String(value)).digest("hex");
+}
+
 describe("knowledge-m2 clean-checkout demo", () => {
   let mock;
   let evidence;
+  let priorAllowDirtyHost;
 
   beforeAll(async () => {
     if (provisionedExtensionPath === undefined) {
@@ -39,6 +45,14 @@ describe("knowledge-m2 clean-checkout demo", () => {
         "clean-checkout demo test needs the sqlite-vec extension provisioned. Run `npm run provision:sqlite-vec` first.",
       );
     }
+    // A developer running the vitest suite on their own checkout almost always has `.keiko` state
+    // and a `dist/` build tree — legitimate for dev work but not the DoD's "fresh clone" scenario
+    // the strict caller-hygiene enforcement in `failuresCleanCheckout` targets. Set the escape
+    // hatch to record-only for the duration of this suite so the test verifies the DEMO's own
+    // hygiene (indexed paths, fingerprints), while the strict clean-clone enforcement is verified
+    // separately by the negative-control test at the bottom.
+    priorAllowDirtyHost = process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST;
+    process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST = "1";
     mock = await startCleanCheckoutMockServer({ embeddingDimensions: EMBEDDING_DIMENSIONS });
     evidence = await runCleanCheckoutDemo({
       repoRoot: REPO_ROOT,
@@ -50,6 +64,11 @@ describe("knowledge-m2 clean-checkout demo", () => {
 
   afterAll(async () => {
     if (mock !== undefined) await mock.close();
+    if (priorAllowDirtyHost === undefined) {
+      delete process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST;
+    } else {
+      process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST = priorAllowDirtyHost;
+    }
   });
 
   it("emits the six DoD acceptance criteria in the evidence contract", () => {
@@ -104,11 +123,11 @@ describe("knowledge-m2 clean-checkout demo", () => {
     expect(evidence.abstention.abstained).toBe(true);
     expect(evidence.abstention.references).toBe(0);
     expect(evidence.abstention.noEvidence).toBe(true);
-    // Sanity — the query the demo drove is the one we advertise for the runbook.
-    expect(evidence.abstention.queryHash).toBe(
-      // fingerprinted below to guard against a copy-paste divergence.
-      evidence.abstention.queryHash,
-    );
+    // Independently-computed hash — catches a copy/paste divergence between the constant the
+    // runner hashes and the constant the runbook advertises. The prior `.toBe(itself)` was a
+    // no-op tautology.
+    expect(evidence.abstention.queryHash).toBe(sha256Hex(ABSTENTION_QUERY));
+    expect(evidence.multiFileQuery.queryHash).toBe(sha256Hex(MULTI_FILE_QUERY));
     expect(ABSTENTION_QUERY.length).toBeGreaterThan(0);
     expect(MULTI_FILE_QUERY).not.toBe(ABSTENTION_QUERY);
   });
@@ -171,6 +190,72 @@ describe("knowledge-m2 clean-checkout demo", () => {
     const abstention = acceptance.results.find((entry) => entry.id === "abstention");
     expect(abstention?.ok).toBe(false);
     expect(abstention?.failures.join("|")).toContain("references-emitted:3");
+  });
+
+  it("evaluateAcceptanceCriteria refuses evidence recording partial indexing on the clean-checkout bullet", () => {
+    const withPartialIndex = {
+      ...evidence,
+      cleanCheckout: {
+        ...evidence.cleanCheckout,
+        indexedPathsRequested: DEMO_INDEXED_PATHS.length,
+        indexedPathsResolved: DEMO_INDEXED_PATHS.length - 1,
+      },
+    };
+    const acceptance = evaluateAcceptanceCriteria(withPartialIndex);
+    const cleanCheckout = acceptance.results.find((entry) => entry.id === "clean-checkout");
+    expect(cleanCheckout?.ok).toBe(false);
+    expect(cleanCheckout?.failures.join("|")).toContain("partial-indexing:");
+  });
+
+  it("evaluateAcceptanceCriteria refuses evidence recording a dirty host under strict enforcement", () => {
+    // The strict path — no allow-dirty-host escape hatch — must reject an evidence object that
+    // records `.keiko` or `dist` present at run start. This is the enforcement the DoD signature
+    // depends on, so a run inside the container-based runbook (which has neither) still passes.
+    const priorAllow = process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST;
+    delete process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST;
+    try {
+      const dirtyHost = {
+        ...evidence,
+        cleanCheckout: {
+          ...evidence.cleanCheckout,
+          keikoStatePresentAtStart: true,
+          buildArtifactsPresentAtStart: true,
+        },
+      };
+      const acceptance = evaluateAcceptanceCriteria(dirtyHost);
+      const cleanCheckout = acceptance.results.find((entry) => entry.id === "clean-checkout");
+      expect(cleanCheckout?.ok).toBe(false);
+      expect(cleanCheckout?.failures).toContain("keiko-state-present-at-start");
+      expect(cleanCheckout?.failures).toContain("build-artifacts-present-at-start");
+    } finally {
+      if (priorAllow === undefined) {
+        delete process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST;
+      } else {
+        process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST = priorAllow;
+      }
+    }
+    // And the escape hatch, once set, must record without enforcing — the record-only mode the
+    // suite's `beforeAll` relies on.
+    process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST = "1";
+    try {
+      const dirtyHost = {
+        ...evidence,
+        cleanCheckout: {
+          ...evidence.cleanCheckout,
+          keikoStatePresentAtStart: true,
+          buildArtifactsPresentAtStart: true,
+        },
+      };
+      const acceptance = evaluateAcceptanceCriteria(dirtyHost);
+      const cleanCheckout = acceptance.results.find((entry) => entry.id === "clean-checkout");
+      expect(cleanCheckout?.ok).toBe(true);
+    } finally {
+      if (priorAllow === undefined) {
+        delete process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST;
+      } else {
+        process.env.KEIKO_CLEAN_CHECKOUT_DEMO_ALLOW_DIRTY_HOST = priorAllow;
+      }
+    }
   });
 
   it("evaluateAcceptanceCriteria refuses evidence claiming reranker paths differ while hashes agree", () => {

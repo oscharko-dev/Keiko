@@ -46,9 +46,13 @@ function log(message) {
   process.stderr.write(`clean-checkout-demo: ${message}\n`);
 }
 
+// `process.exit(1)` truncates a still-buffered `stderr.write` when stderr is redirected. Throwing
+// a labelled `Error` lets `main()` bubble it up naturally, the runtime flushes stderr on the way
+// out, and the top-level `.catch` maps to a non-zero exit code by writing the failure line then
+// setting `process.exitCode = 1`. Same visible behaviour, no lost line on `2>>log`.
+class CleanCheckoutDemoFailure extends Error {}
 function fail(message) {
-  log(`FAIL — ${message}`);
-  process.exit(1);
+  throw new CleanCheckoutDemoFailure(message);
 }
 
 function requestedDimensions() {
@@ -92,9 +96,16 @@ function requireProvisionedExtension() {
 async function main() {
   const dimensions = requestedDimensions();
   const sqliteVecExtensionPath = requireProvisionedExtension();
-  log(`sqlite-vec extension: ${sqliteVecExtensionPath}`);
+  // The stderr log line is what a reader sees while the demo is running. Loopback URLs and
+  // absolute filesystem paths are not repository-content-level secrets, but the repository's
+  // redaction discipline prefers status markers over raw endpoint / path strings, and the
+  // acceptance validator explicitly rejects `http(s)://` inside the evidence — the stderr trail
+  // should hold to the same bar. What matters here is "extension resolved" and "server up",
+  // both binary; the exact port and path are already visible to whoever needs them (the process
+  // owns the port, the disk owns the path).
+  log("sqlite-vec extension: resolved (provisioned)");
   const mock = await startCleanCheckoutMockServer({ embeddingDimensions: dimensions });
-  log(`mock server: ${mock.origin} (dimensions=${String(dimensions)})`);
+  log(`mock server: ready on loopback (dimensions=${String(dimensions)})`);
   let evidence;
   try {
     evidence = await runCleanCheckoutDemo({
@@ -136,6 +147,11 @@ const isDirectInvocation =
   existsSync(entryPoint);
 if (isDirectInvocation) {
   main().catch((cause) => {
-    fail(cause instanceof Error ? cause.message : "unknown failure");
+    const message = cause instanceof Error ? cause.message : "unknown failure";
+    log(`FAIL — ${message}`);
+    // Non-zero exit without `process.exit(1)` — Node flushes stderr at the natural end of the
+    // event loop, so the FAIL line above is guaranteed to reach `2>>log` before the process
+    // terminates. The prior `process.exit(1)` truncated it on redirection.
+    process.exitCode = 1;
   });
 }
