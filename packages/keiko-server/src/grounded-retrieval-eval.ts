@@ -25,11 +25,13 @@ import {
   type OpenAIEmbeddingRequest,
   type RerankOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
-import type {
-  EvalBudget,
-  EvalFloorResult,
-  KnowledgeCapsuleId,
-  KnowledgeSourceId,
+import {
+  binaryNdcgAtK,
+  mean,
+  type EvalBudget,
+  type EvalFloorResult,
+  type KnowledgeCapsuleId,
+  type KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createDefaultParserRegistry,
@@ -615,14 +617,12 @@ function rankedPaths(candidates: readonly SelectedCandidate<CasePayload>[]): rea
   return paths;
 }
 
-function ndcgAtK(paths: readonly string[], relevantPath: string, k: number): number {
-  const index = paths.slice(0, k).indexOf(relevantPath);
-  return index < 0 ? 0 : 1 / Math.log2(index + 2);
-}
-
-function average(values: readonly number[]): number {
-  return values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
-}
+// ADR-0152 D5 (Issue #2635): the retrieval nDCG@k discount and the mean across cases are the
+// canonical helpers in `@oscharko-dev/keiko-contracts`. `rankedPaths` above deduplicates before
+// calling in, so passing a single relevant path collapses IDCG to one and the discount reduces to
+// the exact shape the pre-consolidation local helper emitted — scorecard values stay
+// byte-identical against the ADR-0152 D5 gate floors (0.8 / 0.9 / 0.85 / 0.8 for grounded
+// retrieval), verified by a recorded PRE vs POST scorecard comparison on the PR.
 
 function observeEvalRetrieval(
   audit: EmbeddingAudit,
@@ -659,7 +659,7 @@ export async function runGroundedRetrievalQualityEval(
           id: evalCase.id,
           top1,
           recall,
-          ndcg: ndcgAtK(paths, evalCase.relevantPath, EVAL_K),
+          ndcg: binaryNdcgAtK(paths, [evalCase.relevantPath], EVAL_K),
           citationSupport: top1,
         };
       }),
@@ -702,10 +702,10 @@ function scorecardFor(
   return {
     mode,
     cases: perCase.length,
-    top1Rate: average(perCase.map((item) => item.top1)),
-    recallAtK: average(perCase.map((item) => item.recall)),
-    ndcgAtK: average(perCase.map((item) => item.ndcg)),
-    citationSupport: average(perCase.map((item) => item.citationSupport)),
+    top1Rate: mean(perCase.map((item): number => item.top1)),
+    recallAtK: mean(perCase.map((item): number => item.recall)),
+    ndcgAtK: mean(perCase.map((item): number => item.ndcg)),
+    citationSupport: mean(perCase.map((item): number => item.citationSupport)),
     failedCases: perCase.filter((item) => item.top1 === 0).map((item) => item.id),
   };
 }
