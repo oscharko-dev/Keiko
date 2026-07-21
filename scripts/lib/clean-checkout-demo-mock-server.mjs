@@ -19,13 +19,17 @@ const EMBEDDING_DIMENSIONS_DEFAULT = 32;
 export function deterministicEmbedding(input, dimensions) {
   const vector = new Array(dimensions).fill(0);
   const text = String(input);
-  for (let index = 0; index < text.length; index += 1) {
-    // `codePointAt` returns the same value as `charCodeAt` on the BMP characters this demo ever
-    // sees (ASCII source text and English prose), and correctly handles surrogate pairs if a
-    // future caller ever pushes non-BMP content through the mock — matches `sonarjs:S7758`.
-    const code = text.codePointAt(index) ?? 0;
+  // `for...of` on a string yields one entry per **code point** — including surrogate pairs. The
+  // earlier `for (i = 0; i < text.length; i += 1)` walked UTF-16 units, so a non-BMP character
+  // like "😀" (two 16-bit units) was hashed twice: `codePointAt(0)` returned the full 0x1F600
+  // and `codePointAt(1)` returned the low surrogate. Different embeddings for the same visible
+  // text — matches CodeRabbit's L26 finding and Sonar's `sonarjs:S7758`.
+  let index = 0;
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0;
     const slot = (code + index) % dimensions;
     vector[slot] = (vector[slot] ?? 0) + ((code % 31) + 1) / 32;
+    index += 1;
   }
   let sumOfSquares = 0;
   for (const value of vector) sumOfSquares += value * value;
@@ -143,15 +147,20 @@ export function startCleanCheckoutMockServer({ embeddingDimensions } = {}) {
 // a listener callback INSIDE `new Promise` INSIDE `startCleanCheckoutMockServer` — Sonar's
 // `sonarjs:S2004` flagged five function-nesting levels. Hoisting it here also makes it directly
 // unit-testable.
+//
+// The shutdown promise is CACHED (not just a `closed` boolean gate). CodeRabbit's L155 finding on
+// the earlier revision: a second caller was resolving immediately while `server.close()` was still
+// in flight, so a race could let the caller proceed before the socket was actually released.
+// Caching means both callers await the exact same shutdown Promise, and only resolve after the
+// underlying close completes.
 function makeIdempotentCloser(server) {
-  let closed = false;
-  return () =>
-    new Promise((closeResolve) => {
-      if (closed) {
-        closeResolve(undefined);
-        return;
-      }
-      closed = true;
-      server.close(() => closeResolve(undefined));
-    });
+  let shutdown;
+  return () => {
+    if (shutdown === undefined) {
+      shutdown = new Promise((closeResolve) => {
+        server.close(() => closeResolve(undefined));
+      });
+    }
+    return shutdown;
+  };
 }

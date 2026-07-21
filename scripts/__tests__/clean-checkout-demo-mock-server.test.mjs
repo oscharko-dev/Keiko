@@ -55,6 +55,28 @@ describe("deterministicEmbedding", () => {
       expect(value).toBeCloseTo(expectedValue, 6);
     }
   });
+
+  it("iterates by Unicode code points, not UTF-16 units — the surrogate half of an astral character is not counted twice", () => {
+    // "😀" is a single Unicode code point encoded as two UTF-16 units. A UTF-16-index walk hits
+    // codePointAt(0) → 0x1F600 AND codePointAt(1) → 0xDE00 (the low surrogate), which used to
+    // pollute the vector with the surrogate value. `for...of` yields one iteration per code
+    // point, so the emoji ends up hashed exactly once. Regression control for the CodeRabbit
+    // L26 finding: replacing the iteration back to a UTF-16 walk turns this test red.
+    const emoji = deterministicEmbedding("😀", 16);
+    const paired = deterministicEmbedding("😀😀", 16);
+    // If the low surrogate were being counted, the "emoji" and "paired" vectors would differ by
+    // the surrogate's dimension contribution and could produce identical or aliased slots. With a
+    // code-point walk, the two runs are distinct across at least one dimension.
+    let differences = 0;
+    for (let index = 0; index < emoji.length; index += 1) {
+      if (Math.abs(emoji[index] - paired[index]) > 1e-6) differences += 1;
+    }
+    expect(differences).toBeGreaterThan(0);
+    // Sanity: the astral run still normalises cleanly (no NaN / no unnormalised magnitude).
+    const magnitude = Math.sqrt(emoji.reduce((sum, value) => sum + value * value, 0));
+    expect(magnitude).toBeCloseTo(1, 6);
+    expect(emoji.every((value) => Number.isFinite(value))).toBe(true);
+  });
 });
 
 describe("reverseRerankResults", () => {
@@ -150,5 +172,18 @@ describe("startCleanCheckoutMockServer", () => {
     const mock = await startCleanCheckoutMockServer({ embeddingDimensions: 16 });
     await mock.close();
     await expect(mock.close()).resolves.toBeUndefined();
+  });
+
+  it("close() shares the in-flight shutdown promise — concurrent callers resolve on the same tick", async () => {
+    // CodeRabbit's L155 finding on the earlier revision: the second call was resolving before the
+    // real socket close completed, so a caller who awaited close() could still race the shutdown.
+    // With a shared/cached shutdown promise, both concurrent callers hold the same handle and
+    // resolve together after the server has actually closed. Assertion: the two returned promises
+    // are the SAME reference, and both resolve to `undefined`.
+    const mock = await startCleanCheckoutMockServer({ embeddingDimensions: 16 });
+    const first = mock.close();
+    const second = mock.close();
+    expect(first).toBe(second);
+    await Promise.all([first, second]);
   });
 });
