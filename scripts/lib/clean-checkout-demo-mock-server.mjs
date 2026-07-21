@@ -16,7 +16,7 @@ const EMBEDDING_DIMENSIONS_DEFAULT = 32;
 // A pure hash → unit-vector function. Chosen to give distinct-but-similar vectors for texts that
 // share tokens (the multi-file grounded query relies on this: the same tokens in two indexed files
 // yield overlapping vectors, so retrieval returns candidates from both).
-export function deterministicEmbedding(input, dimensions) {
+function deterministicEmbedding(input, dimensions) {
   const vector = new Array(dimensions).fill(0);
   const text = String(input);
   for (let index = 0; index < text.length; index += 1) {

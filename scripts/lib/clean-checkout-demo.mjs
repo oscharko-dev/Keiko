@@ -20,7 +20,7 @@
 // process boundary.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -132,7 +132,7 @@ function stableStringify(value) {
 // Build an OpenAI-compatible embedding adapter pointing at the given loopback endpoint. Uses the
 // SAME `requestOpenAIEmbedding` the production model gateway ships (no scripted override): the
 // only difference from a real provider call is that the endpoint is our loopback mock.
-export function buildDemoEmbeddingAdapter({ origin, apiKey, dimensions }) {
+function buildDemoEmbeddingAdapter({ origin, apiKey, dimensions }) {
   const endpoint = `${origin}/v1`;
   return {
     endpoint,
@@ -767,10 +767,4 @@ if (invokedDirectly) {
     "clean-checkout-demo library is not runnable directly; use scripts/knowledge-m2-clean-checkout-demo.mjs.",
   );
   process.exit(2);
-}
-
-// Exported for the CLI wrapper to print the version banner alongside the evidence.
-export function demoLibraryFingerprint() {
-  const source = readFileSync(fileURLToPath(import.meta.url), "utf8");
-  return sha256Hex(source);
 }
