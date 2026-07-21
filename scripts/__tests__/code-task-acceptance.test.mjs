@@ -153,6 +153,8 @@ describe("buildCodeTaskAcceptanceContribution", () => {
     });
     expect(contribution.scenarios[0].outcome).toBe("not-a-real-outcome");
     expect(contribution.scenarios[0].recordedAt).toBe("yesterday");
+    expect(contribution.scenarios[0].artifactDigests[0]).toBe("0");
+    expect(contribution.scenarios[0].receiptDigest).toEqual({ outcome: "known", value: "0" });
     const validated = validateCodeTaskAcceptanceContribution(contribution);
     expect(validated.ok).toBe(false);
   });
