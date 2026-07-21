@@ -258,25 +258,16 @@ function generateDemoSecrets() {
 // string), but the point is that a future refactor that DID route sensitive text through this
 // path would find the standard redactor in place, not a pass-through that lets it slip out.
 function buildMinimalRerankDeps(gatewayConfig) {
+  // Only the four fields `rerankSelection` actually reads: config, configPresent, env, egress,
+  // redactor. `rerankRequest` deliberately left off so the facade uses the default
+  // `requestLiteLLMRerank` transport (the production path we want the demo to exercise). No
+  // defensive stubs for fields the facade never touches — they were dead-code by construction.
   return {
     config: gatewayConfig,
     configPresent: true,
     env: process.env,
     egress: undefined,
     redactor: buildRedactor(process.env, gatewayConfig),
-    // Everything below is unused by rerankSelection but kept present so a lookup that
-    // accidentally destructures on us returns something defined instead of throwing.
-    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    registry: {
-      create: () => undefined,
-      get: () => undefined,
-      list: () => [],
-      cancel: () => undefined,
-    },
-    modelPortFactory: () => undefined,
-    store: { close: () => undefined },
-    // rerankRequest deliberately left undefined so the facade uses the default
-    // `requestLiteLLMRerank` transport (the production path we want the demo to exercise).
   };
 }
 
