@@ -190,7 +190,10 @@ async function discoveryExcerpt(
   const result = await readExcerpt(
     input.searchScope,
     { scopePath: atom.scopePath, ...range, maxBytes: MAX_DISCOVERY_EXCERPT_BYTES },
-    { fs: input.fs },
+    {
+      fs: input.fs,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    },
   );
   return result.content;
 }

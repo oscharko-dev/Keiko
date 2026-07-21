@@ -262,13 +262,26 @@ function captureVoiceChatSends(page: Page): {
       return;
     }
     if (pathname !== "/api/desktop/chat/stream") return;
-    const body = request.postDataJSON() as { readonly content?: unknown };
-    if (typeof body.content === "string") contents.push(body.content);
+    const payload: unknown = request.postDataJSON();
+    const content = voiceChatPayloadContent(payload);
+    if (content !== undefined) contents.push(content);
   });
   return {
     canonicalContents: () => contents,
     legacyCount: () => legacyCount,
   };
+}
+
+function voiceChatPayloadContent(payload: unknown): string | undefined {
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    !("content" in payload)
+  ) {
+    return undefined;
+  }
+  return typeof payload.content === "string" ? payload.content : undefined;
 }
 
 // Reads a counter from the browser-side window.__micStats instrument (see fakeRealtimeInit), so
@@ -331,6 +344,13 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 }
+
+test("voice dialogue @smoke — canonical payload parsing rejects non-object boundaries", () => {
+  for (const payload of [null, undefined, "spoken", 7, [], { content: 7 }]) {
+    expect(voiceChatPayloadContent(payload)).toBeUndefined();
+  }
+  expect(voiceChatPayloadContent({ content: "spoken turn" })).toBe("spoken turn");
+});
 
 test("voice dialogue @smoke — no-voice deployment offers no dialogue switch (AC4)", async ({
   page,

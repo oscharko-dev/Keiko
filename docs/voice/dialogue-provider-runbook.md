@@ -227,7 +227,24 @@ The browser smoke regenerates the acceptance screenshots under `docs/voice/evide
 (`1560-dialogue-session.png`, `1562-dialogue-mic-lifecycle.png`, `1563-dialogue-evaluation.png`,
 `1564-persona-*.png`). They contain no audio and no secrets.
 
-## 7. References
+## 7. Release impact
+
+Twin voice parity is a user-visible bug fix with `high` release-note priority. Spoken final
+transcripts now enter the canonical governed chat pipeline, so the visible turn, Memoria Viva,
+Knowledge Pod and repository grounding, citations, and the synthesized canonical answer match typed
+chat. Existing conversation, memory-proposal, and repository-index stores are affected without a
+schema migration, reindex, restart, or user remediation requirement.
+
+The release-note bullet for the next release is: “Align Digital Twin voice with governed chat and
+upgrade repository grounding to precise multi-hop retrieval.” The supported-from version is the first
+development build containing this change; remediation is `no-action-required`.
+
+`release-impact.catalog.json` is intentionally not edited on this feature branch without a target
+release version and release-owner approval reference. The normalized metadata above and in the pull
+request is the reviewable preparation record; the release owner adds the catalog entry at release cut,
+as required by the [release-impact runbook](../release/release-impact-runbook.md).
+
+## 8. References
 
 - **Safety validation & incident response:** [operator-runbook.md](operator-runbook.md) §4–§5.
 - **Configuration contract:** [capability-configuration.md](capability-configuration.md).
