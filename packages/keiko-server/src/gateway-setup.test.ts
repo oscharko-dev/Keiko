@@ -286,6 +286,7 @@ describe("handleGatewaySetup", () => {
         voiceApiKey: "audio-token",
         voiceSpeechToTextModelId: "transcribe-model",
         voiceRealtimeModelId: "realtime-model",
+        voiceRealtimeTranscriptionModelId: "realtime-transcribe-model",
         voiceSpeechOutputModelId: "speech-model",
         voiceOutputVoiceId: "alloy",
         voiceProviderLocality: "customer-hosted",
@@ -308,6 +309,12 @@ describe("handleGatewaySetup", () => {
       capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
       availableVoicePersonas: ["neutral"],
       providerLocality: "customer-hosted",
+    });
+    expect(
+      config.capabilities?.find((capability) => capability.id === "realtime-model"),
+    ).toMatchObject({
+      realtimeTranscriptionModel: "realtime-transcribe-model",
+      supportsSemanticTurnDetection: true,
     });
     const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
     expect(saved).not.toContain("audio-token");
@@ -343,6 +350,35 @@ describe("handleGatewaySetup", () => {
     expect(result.status).toBe(400);
     expect(JSON.stringify(result.body)).toContain(
       "Audio endpoint URL and credential are required when an audio model is selected.",
+    );
+    deps.store.close();
+  });
+
+  it("rejects a live transcription deployment without a Realtime role", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-transcription-role-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-transcription-role-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceRealtimeTranscriptionModelId: "realtime-transcribe-model",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain(
+      "voiceRealtimeTranscriptionModelId requires voiceRealtimeModelId",
     );
     deps.store.close();
   });

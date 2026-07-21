@@ -34,7 +34,7 @@ export function fingerprintFor(query: RetrievalQuery): string {
 // `maxMatchesReturned` budget was exhausted on the first alphabetically-scanned files and the
 // rest of a multi-file scope was never read (a `docs/` connect would only ever surface its
 // first file, never the file the question was actually about). We mirror the exploration
-// planner's fixed English stop-word policy (planner/anchors.ts in keiko-workflows - duplicated
+// planner's fixed English/German stop-word policy (planner/anchors.ts in keiko-workflows - duplicated
 // here rather than imported because the architecture forbids keiko-workspace depending on the
 // higher-level keiko-workflows package): strip surrounding punctuation, drop single-character and
 // stop-word tokens, and keep `adr-0022`/`file.ts`-style hyphenated and dotted identifiers intact.
@@ -197,13 +197,18 @@ const DEFINITION_INTENT_TOKENS: ReadonlySet<string> = new Set([
   "define",
   "defined",
   "definition",
+  "definieren",
+  "definiert",
   "declare",
   "declared",
   "declaration",
+  "deklariert",
   "implement",
   "implements",
   "implemented",
   "implementation",
+  "implementieren",
+  "implementiert",
 ]);
 
 const HTTP_METHOD_TOKENS: ReadonlySet<string> = new Set([
@@ -312,13 +317,30 @@ const memoizedContentTerms: (key: string) => readonly string[] = memoizeByString
   (key: string): readonly string[] => {
     const caseSensitive = key.startsWith("s");
     const queryText = key.slice(2);
-    const rawTokens = expandedQueryTerms(queryText, caseSensitive);
-    return uniqueStrings([
-      ...naturalLanguageContentGroups([rawTokens], caseSensitive).flat(),
-      ...technicalPhraseTerms(queryText, caseSensitive),
-    ]);
+    return uniqueStrings(naturalLanguageContentTermGroups(queryText, caseSensitive).flat());
   },
 );
+
+const memoizedContentTermGroups: (key: string) => readonly (readonly string[])[] =
+  memoizeByStringKey(8, (key: string): readonly (readonly string[])[] => {
+    const caseSensitive = key.startsWith("s");
+    const queryText = key.slice(2);
+    const groups = naturalLanguageContentGroups(
+      expandedQueryTermGroups(queryText, caseSensitive),
+      caseSensitive,
+    ).map(uniqueStrings);
+    return [
+      ...groups,
+      ...technicalPhraseTerms(queryText, caseSensitive).map((term) => [term] as const),
+    ];
+  });
+
+export function naturalLanguageContentTermGroups(
+  queryText: string,
+  caseSensitive: boolean,
+): readonly (readonly string[])[] {
+  return memoizedContentTermGroups(`${caseSensitive ? "s" : "i"} ${queryText}`);
+}
 
 export function naturalLanguageContentTerms(
   queryText: string,
@@ -373,7 +395,7 @@ function lineLooksLikeDeclaration(line: string): boolean {
   );
 }
 
-function lineLooksLikeSymbolDefinition(
+export function lineLooksLikeSymbolDefinition(
   line: string,
   symbolToken: string,
   caseSensitive: boolean,
@@ -392,7 +414,10 @@ function lineLooksLikeSymbolDefinition(
     new RegExp(`\\b${escaped}\\s*[:=]\\s*(?:async\\s*)?\\(`, flags),
     new RegExp(`\\b${modifiers}(?:def|func|fn|fun)\\s+${escaped}\\s*\\(`, flags),
     new RegExp(`\\btype\\s+${escaped}\\s+(?:struct|interface)\\b`, flags),
-    new RegExp(`\\b${modifiers}[A-Za-z_$][\\w$<>, ?.[\\]]+\\s+${escaped}\\s*\\(`, flags),
+    new RegExp(
+      `\\b${modifiers}(?!(?:await|return|throw|yield|new)\\b)[A-Za-z_$][\\w$<>, ?.[\\]]+\\s+${escaped}\\s*\\(`,
+      flags,
+    ),
   ];
   return patterns.some((pattern) => pattern.test(line));
 }
@@ -436,10 +461,9 @@ function adjustedDefinitionIntentScore(
   intent: NaturalLanguageIntent,
   caseSensitive: boolean,
 ): number {
-  if (!intent.definitionIntent) {
-    return baseScore;
-  }
-  let bonus = 0;
+  const routeBonus = lineLooksLikeRouteDeclaration(haystack, intent) ? 0.65 : 0;
+  if (!intent.definitionIntent) return Math.min(1, baseScore + routeBonus);
+  let bonus = routeBonus;
   let penalty = 0;
   for (const symbolToken of intent.symbolTokens) {
     if (!haystack.includes(symbolToken)) {
@@ -452,9 +476,6 @@ function adjustedDefinitionIntentScore(
     } else if (lineLooksLikeImport(line)) {
       penalty = Math.max(penalty, 0.2);
     }
-  }
-  if (lineLooksLikeRouteDeclaration(haystack, intent)) {
-    bonus = Math.max(bonus, 0.65);
   }
   return Math.max(0, Math.min(1, baseScore + bonus - penalty));
 }
@@ -489,15 +510,11 @@ function adjustedVersionDeclarationScore(
 }
 
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
-  const rawGroups = expandedQueryTermGroups(query.text, query.caseSensitive);
   const intentTokens = expandedQueryTerms(query.text, true);
   const normalizedTokens = naturalLanguageNormalizedTokens(intentTokens);
   // GRD-033: dedupe alternatives inside each original-token group so aliases/stems improve recall
   // without making every alias an additional required term in `hits/total`.
-  const tokenGroups = [
-    ...naturalLanguageContentGroups(rawGroups, query.caseSensitive).map(uniqueStrings),
-    ...technicalPhraseTerms(query.text, query.caseSensitive).map((term) => [term] as const),
-  ];
+  const tokenGroups = naturalLanguageContentTermGroups(query.text, query.caseSensitive);
   const intent = analyzeNaturalLanguageIntent(normalizedTokens, query.caseSensitive);
   // The ecosystem declaration-line patterns whose routing pattern matched this query (e.g. for a
   // Java question: maven.compiler/java.version; for a Go question: go/toolchain directives).

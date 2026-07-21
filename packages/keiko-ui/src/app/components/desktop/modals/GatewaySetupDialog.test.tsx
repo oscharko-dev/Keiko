@@ -438,6 +438,10 @@ describe("GatewaySetupDialog", () => {
       "transcribe",
     );
     await userEvent.type(screen.getByLabelText(/digital voice.*realtime deployment/i), "realtime");
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      "realtime-transcribe",
+    );
     await userEvent.type(screen.getByLabelText(/read aloud.*speech-output deployment/i), "tts");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
@@ -447,6 +451,7 @@ describe("GatewaySetupDialog", () => {
         voiceApiKey: "audio-token",
         voiceSpeechToTextModelId: "transcribe",
         voiceRealtimeModelId: "realtime",
+        voiceRealtimeTranscriptionModelId: "realtime-transcribe",
         voiceSpeechOutputModelId: "tts",
         voiceOutputVoiceId: "alloy",
       }),

@@ -1,7 +1,7 @@
 // Deterministic search-anchor extraction for the exploration planner (Epic #177, Issue #181).
 // Pure JS — no IO, no clock, no randomness. Given free-form prompt text, this module produces
 // a small, stable, weight-ordered set of search anchors. The stop-word list is intentionally
-// fixed and English-only; expanding language coverage is a follow-up issue.
+// fixed and bilingual (English/German) so supported prompts remain deterministic.
 
 const MAX_INPUT_LENGTH = 4096;
 
@@ -160,6 +160,7 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
 const QUOTED_SINGLE_RE = /'([^'\n]+)'/g;
 const BACKTICK_RE = /`([^`\n]+)`/g;
+const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // Bounded per-segment (<=64 chars) and per-depth (<=64 levels) repetition — generous for any
 // realistic repository path, but it caps the worst-case backtracking work a single scan position
 // can spend to a fixed constant instead of one growing with input length. The previous unbounded
@@ -176,7 +177,7 @@ const API_ROUTE_RE = /(^|[^A-Za-z0-9_.-])((?:\/[A-Za-z0-9_.:{}-]+){2,})/g;
 // would both satisfy the clarification gate for a vague question and seed symbol-file retrieval
 // with a non-symbol — see planner/plan.ts decideClarification and grounded symbolFileAnchorTerms.
 const CAMEL_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*[a-z0-9][A-Z][A-Za-z0-9_$]*)\b/g;
-const TOKEN_SPLIT_RE = /[^A-Za-z0-9_.]+/;
+const TOKEN_SPLIT_RE = /[^\p{L}\p{N}_.]+/u;
 const TECHNICAL_TERM_PATTERNS: readonly {
   readonly pattern: RegExp;
   readonly term: string;
@@ -230,7 +231,10 @@ function pushAnchor(
   kind: SearchAnchorKind,
   weight: number,
 ): void {
-  const term = raw.trim().toLowerCase();
+  const trimmed = raw.trim();
+  const withoutSentencePunctuation =
+    kind === "path" && trimmed.startsWith("/") ? trimmed.replace(/[:;,.-]+$/u, "") : trimmed;
+  const term = withoutSentencePunctuation.toLowerCase();
   if (term.length > 0) {
     out.push({ term, weight, kind });
   }
@@ -284,11 +288,12 @@ function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
 function tokenizeRemaining(remaining: string, out: MutableAnchor[]): number {
   let considered = 0;
   for (const raw of remaining.split(TOKEN_SPLIT_RE)) {
-    if (raw.length === 0) {
+    const normalizedRaw = raw.replace(/^\.+|\.+$/gu, "");
+    if (normalizedRaw.length === 0) {
       continue;
     }
     considered += 1;
-    const token = raw.toLowerCase();
+    const token = normalizedRaw.toLowerCase();
     if (token.length < 3) {
       continue;
     }
@@ -340,6 +345,7 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   let remaining = collectMatches(text, QUOTED_DOUBLE_RE, "quoted", 1, collected);
   remaining = collectMatches(remaining, QUOTED_SINGLE_RE, "quoted", 1, collected);
   remaining = collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected);
+  remaining = collectMatches(remaining, DOCUMENT_REFERENCE_RE, "identifier", 0.95, collected);
   remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
   remaining = collectMatches(remaining, PATH_RE, "path", 0.95, collected);
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);

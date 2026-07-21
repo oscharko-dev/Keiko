@@ -116,8 +116,33 @@ function seedIssue672Repo(): void {
   writeFileSync(
     join(ROOT, "packages/keiko-server/src/routes.ts"),
     "import { handleGroundedAsk } from './grounded-qa.js';\n" +
-      '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n',
+      "const routes = [\n" +
+      '  { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },\n' +
+      "  // Grounded repository-aware Q&A.\n" +
+      '  { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n' +
+      "];\n",
   );
+}
+
+function seedCrowdedHandlerTraceRepo(): void {
+  writeFileSync(
+    join(ROOT, "src/routes.ts"),
+    'const routes = [{ method: "POST", pattern: "/api/opaque/x7", handler: dispatchWorkUnit }];\n',
+  );
+  writeFileSync(
+    join(ROOT, "src/service.ts"),
+    "export async function dispatchWorkUnit(): Promise<void> {\n  await runPipeline();\n}\n",
+  );
+  writeFileSync(
+    join(ROOT, "src/pipeline.ts"),
+    "export async function runPipeline(): Promise<void> {\n  await executeStages();\n}\n",
+  );
+  for (let index = 0; index < 16; index += 1) {
+    writeFileSync(
+      join(ROOT, `src/a-reference-${String(index).padStart(2, "0")}.ts`),
+      "export async function referenceOnly(): Promise<void> { await dispatchWorkUnit(); }\n",
+    );
+  }
 }
 
 function seedIssue876Repo(): void {
@@ -577,7 +602,128 @@ describe("runGroundedExploration", () => {
         excerpt.content.includes("/api/chats/messages/grounded"),
       ),
     ).toBe(true);
+    expect(out.pack.files.map((file) => file.scopePath)).toContain(
+      "packages/keiko-server/src/grounded-qa.ts",
+    );
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "packages/keiko-server/src/grounded-qa.ts")
+        ?.excerpts.some((excerpt) => excerpt.content.includes("function handleGroundedAsk")),
+    ).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("follows a handler symbol discovered only in route evidence to its definition", async () => {
+    seedCrowdedHandlerTraceRepo();
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Welche Datei registriert POST /api/opaque/x7, welcher Handler steht dort und wo ist er definiert?",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files.map((file) => file.scopePath)).toContain("src/service.ts");
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "src/service.ts")
+        ?.excerpts.some(
+          (excerpt) =>
+            excerpt.content.includes("function dispatchWorkUnit") &&
+            excerpt.content.includes("runPipeline"),
+        ),
+    ).toBe(true);
+    expect(out.pack.files.map((file) => file.scopePath)).toContain("src/pipeline.ts");
+  });
+
+  it("avoids a redundant full structural adapter pass for an exact route trace", async () => {
+    seedCrowdedHandlerTraceRepo();
+    const adapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
+    const originalLookup = adapter.lookup;
+    let calls = 0;
+    adapter.lookup = (...args): ReturnType<typeof originalLookup> => {
+      calls += 1;
+      return originalLookup(...args);
+    };
+    try {
+      await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({
+            text: "Welche Datei registriert POST /api/opaque/x7, welcher Handler steht dort und wo ist er definiert?",
+          }),
+        }),
+        {
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+    } finally {
+      adapter.lookup = originalLookup;
+    }
+
+    expect(calls).toBe(0);
+  });
+
+  it("returns no evidence for a missing exact definition without partial-name citations", async () => {
+    const adapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
+    const originalLookup = adapter.lookup;
+    let calls = 0;
+    let semanticCalls = 0;
+    const semanticSearchProvider: SemanticSearchProvider = {
+      name: "irrelevant exact-definition fallback",
+      search: () => {
+        semanticCalls += 1;
+        return Promise.resolve([{ scopePath: "src/foo.ts", score: 0.99, line: 1 }]);
+      },
+    };
+    adapter.lookup = (...args): ReturnType<typeof originalLookup> => {
+      calls += 1;
+      return originalLookup(...args);
+    };
+    const out = await (async (): Promise<
+      Awaited<ReturnType<typeof retrieveConnectedContextPack>>
+    > => {
+      try {
+        return await retrieveConnectedContextPack(
+          input({
+            scope: happyScope({
+              kind: "workspace-root",
+              relativePaths: [],
+              explicitConnection: true,
+            }),
+            query: happyQuery({
+              text: "Wo ist KeikoNonexistentQuantumHandler987 definiert? Erfinde nichts.",
+            }),
+          }),
+          {
+            answerer: echoAnswerer,
+            nowMs: () => NOW,
+            detectWorkspace: () => fakeWorkspace(),
+            semanticSearchProvider,
+          },
+        );
+      } finally {
+        adapter.lookup = originalLookup;
+      }
+    })();
+
+    expect(calls).toBe(0);
+    expect(semanticCalls).toBe(0);
+    expect(out.pack.files).toEqual([]);
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);
   });
 
   it("retrieves Express-style API route declarations through the full context-pack path", async () => {
@@ -1737,6 +1883,123 @@ describe("runGroundedExploration", () => {
       lateFile?.excerpts.some((excerpt) => excerpt.content.includes("MyClass late target")),
     ).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("reads a discovered handler definition before a higher-scoring lexical decoy", async () => {
+    const lines = [
+      "// MyClass lexical decoy",
+      ...Array.from(
+        { length: 68 },
+        (_value, index) => `// filler ${String(index + 1)} ${"x".repeat(180)}`,
+      ),
+      "export async function LateHandler(): Promise<void> {",
+      "  await runPipeline();",
+      "}",
+    ];
+    writeFileSync(join(ROOT, "src/prioritized.ts"), `${lines.join("\n")}\n`);
+    const adapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
+    const originalLookup = adapter.lookup;
+    adapter.lookup = (): ReturnType<typeof originalLookup> =>
+      Promise.resolve([
+        {
+          schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+          stableId: "discovered-handler-definition",
+          scopePath: "src/prioritized.ts",
+          lineRange: { startLine: 70, endLine: 72 },
+          score: 0.1,
+          provenance: {
+            kind: "structural",
+            tool: "discovered-symbol-definition",
+            queryFingerprint: "fp-discovered-definition",
+          },
+          redactionState: "redacted",
+          emittedAtMs: NOW,
+          ledgerRef: undefined,
+        } satisfies EvidenceAtom,
+      ]);
+    try {
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({ kind: "files", relativePaths: ["src/prioritized.ts"] }),
+          query: happyQuery({ text: "Investigate MyClass in src/prioritized.ts" }),
+          budget: {
+            ...DEFAULT_EXPLORATION_BUDGET,
+            filesReadMax: 1,
+            excerptBytesMax: 260,
+          },
+        }),
+        {
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+      const target = out.pack.files.find((file) => file.scopePath === "src/prioritized.ts");
+      expect(target?.excerpts.some((excerpt) => excerpt.content.includes("LateHandler"))).toBe(
+        true,
+      );
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    } finally {
+      adapter.lookup = originalLookup;
+    }
+  });
+
+  it("keeps the complete wrapped Markdown statement around a matching line", async () => {
+    mkdirSync(join(ROOT, "docs/adr"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "docs/adr/ADR-0129-authority.md"),
+      "# ADR-0129 authority\n" +
+        "\n" +
+        "The three autonomy modes are product-wide.\n" +
+        "They are defined in ADR-0129 as Ask for approval,\n" +
+        "Supervised workspace, and\n" +
+        "Full access.\n",
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "directory", relativePaths: ["docs/adr"] }),
+        query: happyQuery({ text: "Which three autonomy modes are defined in ADR-0129?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const document = out.pack.files.find((file) => file.scopePath.includes("ADR-0129"));
+    expect(document?.excerpts.map((excerpt) => excerpt.content)).toEqual(
+      expect.arrayContaining([expect.stringContaining("Full access")]),
+    );
+  });
+
+  it("reads a bounded referenced ADR even when the requested fact is far from its title", async () => {
+    mkdirSync(join(ROOT, "docs/adr"), { recursive: true });
+    const filler = Array.from({ length: 78 }, (_value, index) => `context ${String(index + 1)}`);
+    writeFileSync(
+      join(ROOT, "docs/adr/ADR-0129-authority.md"),
+      [
+        "# ADR-0129 authority",
+        ...filler,
+        "Machine value: autonomous-delivery means Full access.",
+      ].join("\n"),
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "directory", relativePaths: ["docs/adr"] }),
+        query: happyQuery({ text: "Summarize ADR-0129 precisely." }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const document = out.pack.files.find((file) => file.scopePath.includes("ADR-0129"));
+    expect(document?.excerpts.map((excerpt) => excerpt.content)).toEqual(
+      expect.arrayContaining([expect.stringContaining("autonomous-delivery")]),
+    );
   });
 
   it("retains repeated same-file evidence windows without a false incomplete marker", async () => {

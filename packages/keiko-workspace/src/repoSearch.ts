@@ -58,6 +58,7 @@ import {
   lowValueRescuePolicy,
   policyOmissionReason,
   resolveSearchPolicy,
+  routeQueryTermsForSearch,
   withSemanticRankingDiagnostics,
   type SearchDiagnostics,
   type SearchHints,
@@ -912,8 +913,17 @@ function initialWorkspaceIndexSessionState(
   limits: SearchLimits,
   prepared: PreparedWorkspaceIndexSnapshot | undefined,
 ): SearchWorkspaceIndexSessionState {
-  const candidateSet =
-    prepared === undefined
+  const needsContentPrescore =
+    query.kind === "exact-symbol" ||
+    routeQueryTermsForSearch(query) !== undefined ||
+    runner.policy.intent === "targeted-code-search" ||
+    runner.policy.intent === "diagnostic-search";
+  const hasUnindexedFiles =
+    prepared?.entries.some((entry) => entry.stale || entry.record === undefined) ?? true;
+  const useLiveContentPrescore = needsContentPrescore && hasUnindexedFiles;
+  const candidateSet = useLiveContentPrescore
+    ? gatherCandidates(scope, query, limits, runner.fs, runner.policy)
+    : prepared === undefined
       ? gatherCandidatesWithoutContentPrescore(scope, query, limits, runner.fs, runner.policy)
       : workspaceIndexCandidateSet(prepared, query, runner.policy);
   return {
@@ -1082,6 +1092,57 @@ async function buildSearchWorkspaceIndexSession(
   });
 }
 
+const MATCH_DIVERSITY_FILE_RESERVE = 12;
+
+interface FileMatchEmissionPlan {
+  readonly reserved: readonly FileMatches[];
+  readonly remaining: readonly FileMatches[];
+}
+
+function strongestFileLine(match: FileMatches): FileMatches["best"][number] | undefined {
+  return [...match.best].sort(
+    (a, b) => b.score - a.score || a.startLine - b.startLine || a.endLine - b.endLine,
+  )[0];
+}
+
+function fileLineMaxScore(lines: FileMatches["best"]): number {
+  return lines.reduce((max, line) => Math.max(max, line.score), 0);
+}
+
+function shouldReserveFileDiversity(runner: SearchTextRunner): boolean {
+  return (
+    runner.query.kind === "natural-language" &&
+    (runner.policy.intent === "targeted-code-search" ||
+      runner.policy.intent === "diagnostic-search")
+  );
+}
+
+function planFileMatchEmission(
+  matches: readonly FileMatches[],
+  runner: SearchTextRunner,
+): FileMatchEmissionPlan {
+  if (!shouldReserveFileDiversity(runner)) return { reserved: [], remaining: matches };
+  const reserveCount = Math.min(
+    MATCH_DIVERSITY_FILE_RESERVE,
+    runner.limits.maxMatchesReturned,
+    matches.length,
+  );
+  const reserved: FileMatches[] = [];
+  const remaining: FileMatches[] = [];
+  const byCandidateOrder = [...matches].sort((a, b) => a.order - b.order);
+  for (const [index, match] of byCandidateOrder.entries()) {
+    const strongest = index < reserveCount ? strongestFileLine(match) : undefined;
+    if (strongest === undefined) {
+      remaining.push(match);
+      continue;
+    }
+    reserved.push({ ...match, best: [strongest], maxScore: strongest.score });
+    const rest = match.best.filter((line) => line !== strongest);
+    if (rest.length > 0) remaining.push({ ...match, best: rest, maxScore: fileLineMaxScore(rest) });
+  }
+  return { reserved, remaining };
+}
+
 async function runScanLoop(
   runner: SearchTextRunner,
   candidateSet: CandidateSet,
@@ -1113,8 +1174,17 @@ async function runScanLoop(
       matches.push(fileMatches);
     }
   }
-  matches.sort((a, b) => b.maxScore - a.maxScore || a.order - b.order);
-  for (const fileMatches of matches) {
+  const emission = planFileMatchEmission(matches, runner);
+  for (const fileMatches of emission.reserved) {
+    emitFileMatches(runner, state, atoms, fileMatches);
+  }
+  const remaining = [...emission.remaining].sort(
+    (a, b) =>
+      Number(b.definitionMatch === true) - Number(a.definitionMatch === true) ||
+      b.maxScore - a.maxScore ||
+      a.order - b.order,
+  );
+  for (const fileMatches of remaining) {
     emitFileMatches(runner, state, atoms, fileMatches);
   }
 }

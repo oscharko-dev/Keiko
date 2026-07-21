@@ -89,7 +89,10 @@ import {
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
-import { collectFollowSymbolTraceEvidence } from "./grounded-symbol-trace.js";
+import {
+  collectDiscoveredSymbolTraceEvidence,
+  collectFollowSymbolTraceEvidence,
+} from "./grounded-symbol-trace.js";
 import {
   defaultGitFileHistoryEvidenceProvider,
   type GitFileHistoryEvidenceProvider,
@@ -99,6 +102,11 @@ import {
   isConnectedDocumentPath,
   type DocumentEvidenceResult,
 } from "./grounded-document-evidence.js";
+import {
+  selectGroundedCandidateFiles,
+  selectGroundedEvidenceAtoms,
+} from "./grounded-evidence-selection.js";
+import { directDefinitionSymbol } from "./grounded-query-shape.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -510,6 +518,9 @@ function structuralQueriesForRing(
   ring: RetrievalRing,
   inputs: SearchInputs,
 ): readonly RetrievalQuery[] {
+  if (queryTargetsRouteImplementation(inputs.query.text)) {
+    return [inputs.query];
+  }
   const queries: RetrievalQuery[] = [];
   const seen = new Set<string>();
   for (const term of ring.anchorTerms) {
@@ -531,9 +542,11 @@ function structuralQueriesForRing(
 const MAX_STRUCTURAL_FOLLOW_UP_QUERIES = 6;
 
 function plannedSearchCallsForRing(ring: RetrievalRing, inputs: SearchInputs): number {
-  return ring.kind === "structural"
-    ? structuralQueriesForRing(ring, inputs).length + MAX_STRUCTURAL_FOLLOW_UP_QUERIES
-    : 1;
+  if (ring.kind !== "structural") return 1;
+  const followUpCount = queryTargetsRouteImplementation(inputs.query.text)
+    ? 0
+    : MAX_STRUCTURAL_FOLLOW_UP_QUERIES;
+  return structuralQueriesForRing(ring, inputs).length + followUpCount;
 }
 
 function mergeAtomsByStableId(
@@ -689,12 +702,17 @@ type NonLexicalRing = Omit<RetrievalRing, "kind"> & {
 };
 
 async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
-  const result = await searchText(inputs.searchScope, inputs.query, ring.searchLimits, {
+  const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
+  const query =
+    definitionSymbol === undefined
+      ? inputs.query
+      : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
+  const result = await searchText(inputs.searchScope, query, ring.searchLimits, {
     fs: inputs.fs,
     nowMs: inputs.nowMs,
     searchHints: { retrievalIntent: inputs.retrievalIntent },
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
-    ...(inputs.repoSemanticSearchProvider !== undefined
+    ...(definitionSymbol === undefined && inputs.repoSemanticSearchProvider !== undefined
       ? { semanticSearchProvider: inputs.repoSemanticSearchProvider }
       : {}),
   });
@@ -751,7 +769,7 @@ async function runNonLexicalAdapters(
     ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
   const results = await runAdapterQueries(registry, ring, queries, inputs);
   const followUpQueries =
-    ring.kind === "structural"
+    ring.kind === "structural" && !queryTargetsRouteImplementation(inputs.query.text)
       ? structuralFollowUpQueries(
           mergeAtomsByStableId(results, ring.searchLimits.maxMatchesReturned),
           inputs.query,
@@ -940,7 +958,7 @@ interface LineWindow {
 }
 
 const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
-const EXCERPT_CONTEXT_LINES = 2;
+const EXCERPT_CONTEXT_LINES = 0;
 const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
 const PROJECT_METADATA_QUERY_TERMS = [
   "abhängigkeit",
@@ -1047,9 +1065,18 @@ const SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(SYMBOL_FILE_EXTEN
 // files match the symbol globs (each read also re-stats + splits the file — see firstSymbolLine).
 const MAX_SYMBOL_LINE_READS = 64;
 const SYMBOL_FILE_MATCHES_MAX = 96;
+const DOCUMENT_REFERENCE_MATCHES_MAX = 8;
+const MAX_DOCUMENT_REFERENCE_ANCHORS = 4;
+const DOCUMENT_REFERENCE_ANCHOR_RE = /^(?:adr|rfc)-\d{3,6}$/u;
 const SYMBOL_FILE_SEARCH_LIMITS = {
   maxFilesScanned: 10_000,
   maxMatchesReturned: SYMBOL_FILE_MATCHES_MAX,
+  maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+  elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
+} as const;
+const DOCUMENT_REFERENCE_SEARCH_LIMITS = {
+  maxFilesScanned: 10_000,
+  maxMatchesReturned: DOCUMENT_REFERENCE_MATCHES_MAX,
   maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
   elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
 } as const;
@@ -1375,6 +1402,79 @@ function symbolFileQuery(input: OrchestratorInput, pattern: string): RetrievalQu
     maxResults: SYMBOL_FILE_MATCHES_MAX,
     emittedAtMs: input.query.emittedAtMs,
   };
+}
+
+function documentReferenceAnchorTerms(plan: ExplorationPlan): readonly string[] {
+  return plan.anchors
+    .filter(
+      (anchor) =>
+        (anchor.kind === "identifier" || anchor.kind === "quoted") &&
+        DOCUMENT_REFERENCE_ANCHOR_RE.test(anchor.term),
+    )
+    .map((anchor) => anchor.term)
+    .slice(0, MAX_DOCUMENT_REFERENCE_ANCHORS);
+}
+
+function documentReferenceQuery(input: OrchestratorInput, term: string): RetrievalQuery {
+  return {
+    kind: "file-pattern",
+    text: `**${term}*`,
+    caseSensitive: false,
+    maxResults: DOCUMENT_REFERENCE_MATCHES_MAX,
+    emittedAtMs: input.query.emittedAtMs,
+  };
+}
+
+function documentReferenceCoverageMarker(
+  term: string,
+  coverage: ContextCoverageDiagnostics,
+  nowMs: () => number,
+): UncertaintyMarker | undefined {
+  if (!coverage.incomplete) return undefined;
+  return {
+    kind: "scope-incomplete",
+    claim:
+      `Document reference discovery for "${term}" was incomplete: ` +
+      `reasons=${coverage.reasons.join(",")}; ` +
+      `filesScanned=${String(coverage.filesScanned)}, ` +
+      `filesSkipped=${String(coverage.filesSkipped)}, ` +
+      `matchesReturned=${String(coverage.matchesReturned)}.`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs(),
+  };
+}
+
+async function documentReferenceAtoms(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  signal: AbortSignal | undefined,
+): Promise<DeterministicContextEvidence> {
+  const terms = documentReferenceAnchorTerms(plan);
+  const results = await Promise.all(
+    terms.map(async (term) => {
+      throwIfCancelled(signal);
+      const result = await findFiles(
+        searchScope,
+        documentReferenceQuery(input, term),
+        DOCUMENT_REFERENCE_SEARCH_LIMITS,
+        {
+          fs,
+          nowMs,
+          ...(signal === undefined ? {} : { signal }),
+          searchHints: { retrievalIntent: plan.retrievalIntent },
+        },
+      );
+      return { term, result };
+    }),
+  );
+  const markers = results.flatMap(({ term, result }) => {
+    const marker = documentReferenceCoverageMarker(term, result.coverage, nowMs);
+    return marker === undefined ? [] : [marker];
+  });
+  return { atoms: results.flatMap(({ result }) => result.atoms), uncertainty: markers };
 }
 
 // eslint-disable-next-line complexity -- Guard chain keeps symbol-anchor filtering explicit.
@@ -1974,6 +2074,37 @@ interface DeterministicContextEvidence {
   readonly uncertainty: readonly UncertaintyMarker[];
 }
 
+function deterministicMetadataAtoms(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+): readonly EvidenceAtom[] {
+  const existsCache = createFileExistenceCache();
+  const queryFingerprint = projectMetadataQueryFingerprint(input.query);
+  return [
+    ...projectMetadataAtoms(
+      input,
+      plan.retrievalIntent,
+      searchScope,
+      fs,
+      nowMs,
+      queryFingerprint,
+      existsCache,
+    ),
+    ...repositoryOverviewAtoms(
+      input,
+      plan.retrievalIntent,
+      searchScope,
+      fs,
+      nowMs,
+      queryFingerprint,
+      existsCache,
+    ),
+  ];
+}
+
 async function deterministicContextEvidence(
   input: OrchestratorInput,
   plan: ExplorationPlan,
@@ -1982,9 +2113,7 @@ async function deterministicContextEvidence(
   nowMs: () => number,
   signal: AbortSignal | undefined,
 ): Promise<DeterministicContextEvidence> {
-  const existsCache = createFileExistenceCache();
-  const metadataQueryFingerprint = projectMetadataQueryFingerprint(input.query);
-  const [symbolDiscovery, traceEvidence] = await Promise.all([
+  const [symbolDiscovery, traceEvidence, referencedDocuments] = await Promise.all([
     symbolFileAtoms(input, plan, searchScope, fs, nowMs, signal),
     collectFollowSymbolTraceEvidence({
       scope: input.scope,
@@ -1996,31 +2125,20 @@ async function deterministicContextEvidence(
       nowMs,
       signal,
     }),
+    documentReferenceAtoms(input, plan, searchScope, fs, nowMs, signal),
   ]);
   return {
     atoms: [
       ...symbolDiscovery.atoms,
       ...traceEvidence.atoms,
-      ...projectMetadataAtoms(
-        input,
-        plan.retrievalIntent,
-        searchScope,
-        fs,
-        nowMs,
-        metadataQueryFingerprint,
-        existsCache,
-      ),
-      ...repositoryOverviewAtoms(
-        input,
-        plan.retrievalIntent,
-        searchScope,
-        fs,
-        nowMs,
-        metadataQueryFingerprint,
-        existsCache,
-      ),
+      ...referencedDocuments.atoms,
+      ...deterministicMetadataAtoms(input, plan, searchScope, fs, nowMs),
     ],
-    uncertainty: [...symbolDiscovery.uncertainty, ...traceEvidence.uncertainty],
+    uncertainty: [
+      ...symbolDiscovery.uncertainty,
+      ...traceEvidence.uncertainty,
+      ...referencedDocuments.uncertainty,
+    ],
   };
 }
 
@@ -2135,11 +2253,12 @@ function explicitlyTargetsLockfile(
 function refineCandidateOrdering(
   kept: readonly CandidateFile[],
   omitted: readonly OmittedContextEntry[],
-  queryText: string,
+  query: RetrievalQuery,
   anchors: readonly SearchAnchor[],
   diagnostics: ContextPackDiagnostics | undefined,
   nowMs: number,
 ): CandidateOrdering {
+  const queryText = query.text;
   const preferred: CandidateFile[] = [];
   const lockfiles: CandidateFile[] = [];
   const runtimeArtifacts: CandidateFile[] = [];
@@ -2173,7 +2292,10 @@ function refineCandidateOrdering(
     });
   }
   nextOmitted.sort(compareByScopePath);
-  const orderedPreferred = queryTargetsRouteImplementation(queryText)
+  const useSearchOrder =
+    queryTargetsRouteImplementation(queryText) ||
+    directDefinitionSymbol(query, anchors) !== undefined;
+  const orderedPreferred = useSearchOrder
     ? orderPreferredCandidates(preferred, diagnostics)
     : preferred;
   return {
@@ -2183,7 +2305,7 @@ function refineCandidateOrdering(
 }
 
 const ROUTE_METHOD_QUERY_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
-const ROUTE_PATH_QUERY_RE = /\/[A-Za-z0-9:_?&=./-]+/u;
+const ROUTE_PATH_QUERY_RE = /\/[A-Za-z0-9:_?&=./-]*[A-Za-z0-9_}/-]/u;
 const ROUTE_INTENT_QUERY_RE =
   /\b(?:api|endpoint|handler|implement|implements|implemented|route)\b/iu;
 
@@ -2203,33 +2325,12 @@ function orderPreferredCandidates(
   if (ranked.length === 0 || kept.length <= 1) {
     return kept;
   }
-  const order = new Map(ranked.map((candidate, index) => [candidate.scopePath, index]));
-  return [...kept].sort((a, b) => comparePreferredCandidate(a, b, order));
-}
-
-function comparePreferredCandidate(
-  a: CandidateFile,
-  b: CandidateFile,
-  order: ReadonlyMap<string, number>,
-): number {
-  const diagnosticOrder = compareDiagnosticOrder(order.get(a.scopePath), order.get(b.scopePath));
-  if (diagnosticOrder !== 0) {
-    return diagnosticOrder;
-  }
-  if (b.score !== a.score) {
-    return b.score - a.score;
-  }
-  return a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0;
-}
-
-function compareDiagnosticOrder(aIndex: number | undefined, bIndex: number | undefined): number {
-  if (aIndex !== undefined && bIndex !== undefined) {
-    return aIndex - bIndex;
-  }
-  if (aIndex !== undefined) {
-    return -1;
-  }
-  return bIndex !== undefined ? 1 : 0;
+  const byPath = new Map(kept.map((candidate) => [candidate.scopePath, candidate]));
+  const routeCandidate = ranked
+    .map((candidate) => byPath.get(candidate.scopePath))
+    .find((candidate) => candidate !== undefined);
+  if (routeCandidate === undefined) return kept;
+  return [routeCandidate, ...kept.filter((candidate) => candidate !== routeCandidate)];
 }
 
 function groupEvidenceAtomsByPath(
@@ -2284,17 +2385,71 @@ function windowContainsAtom(window: LineWindow, atom: EvidenceAtom): boolean {
   );
 }
 
-function strongestAtomScoreForWindow(
+interface ExcerptWindowStrength {
+  readonly tracePriority: number;
+  readonly score: number;
+}
+
+function tracePriority(atom: EvidenceAtom): number {
+  if (atom.provenance.tool === "discovered-symbol-definition") return 2;
+  if (atom.provenance.tool === "structural-edge-target") return 1;
+  return 0;
+}
+
+function windowsOverlap(a: LineWindow, b: LineWindow): boolean {
+  return a.startLine <= b.endLine && b.startLine <= a.endLine;
+}
+
+function mergeWindowsByTracePriority(atomsForPath: readonly EvidenceAtom[]): readonly LineWindow[] {
+  const selected: LineWindow[] = [];
+  for (const priority of [2, 1, 0]) {
+    const windows = mergeLineWindows(
+      atomsForPath.filter((atom) => tracePriority(atom) === priority).map(lineWindowForAtom),
+    );
+    selected.push(
+      ...windows.filter((window) => !selected.some((kept) => windowsOverlap(kept, window))),
+    );
+  }
+  return selected;
+}
+
+function strongerExcerptWindow(
+  candidate: ExcerptWindowStrength,
+  current: ExcerptWindowStrength,
+): ExcerptWindowStrength {
+  if (candidate.tracePriority !== current.tracePriority) {
+    return candidate.tracePriority > current.tracePriority ? candidate : current;
+  }
+  return candidate.score > current.score ? candidate : current;
+}
+
+function strongestAtomStrengthForWindow(
   window: LineWindow,
   atomsForPath: readonly EvidenceAtom[],
-): number {
-  let score = 0;
+): ExcerptWindowStrength {
+  let strength: ExcerptWindowStrength = { tracePriority: 0, score: 0 };
   for (const atom of atomsForPath) {
-    if (windowContainsAtom(window, atom) && atom.score > score) {
-      score = atom.score;
+    if (windowContainsAtom(window, atom)) {
+      strength = strongerExcerptWindow(
+        { tracePriority: tracePriority(atom), score: atom.score },
+        strength,
+      );
     }
   }
-  return score;
+  return strength;
+}
+
+function compareExcerptWindows(
+  a: LineWindow,
+  b: LineWindow,
+  atomsForPath: readonly EvidenceAtom[],
+): number {
+  const aStrength = strongestAtomStrengthForWindow(a, atomsForPath);
+  const bStrength = strongestAtomStrengthForWindow(b, atomsForPath);
+  const priorityDelta = bStrength.tracePriority - aStrength.tracePriority;
+  if (priorityDelta !== 0) return priorityDelta;
+  const scoreDelta = bStrength.score - aStrength.score;
+  return scoreDelta === 0 ? a.startLine - b.startLine : scoreDelta;
 }
 
 interface ExcerptWindowSelection {
@@ -2308,17 +2463,10 @@ function excerptLineWindows(
   if (atomsForPath === undefined || atomsForPath.length === 0) {
     return { windows: [DEFAULT_EXCERPT_WINDOW], omittedWindowCount: 0 };
   }
-  const merged = mergeLineWindows(atomsForPath.map(lineWindowForAtom));
+  const merged = mergeWindowsByTracePriority(atomsForPath);
   const selected = [...merged]
-    .sort((a, b) => {
-      const scoreDelta =
-        strongestAtomScoreForWindow(b, atomsForPath) - strongestAtomScoreForWindow(a, atomsForPath);
-      return scoreDelta === 0 ? a.startLine - b.startLine : scoreDelta;
-    })
-    .slice(0, MAX_EXCERPT_WINDOWS_PER_FILE)
-    .sort((a, b) =>
-      a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
-    );
+    .sort((a, b) => compareExcerptWindows(a, b, atomsForPath))
+    .slice(0, MAX_EXCERPT_WINDOWS_PER_FILE);
   return {
     windows: selected,
     omittedWindowCount: Math.max(0, merged.length - selected.length),
@@ -2579,6 +2727,7 @@ interface GroundedPackCacheLookupInputs {
   readonly deps: OrchestratorDeps;
   readonly plan: ExplorationPlan;
   readonly rings: RingRunSummary;
+  readonly atoms: readonly EvidenceAtom[];
   readonly ordered: CandidateOrdering;
   readonly cacheIdentity: PackCacheIdentity | undefined;
   readonly initialUsage: ExplorationUsage;
@@ -2670,6 +2819,7 @@ function cachedGroundedPack({
   deps,
   plan,
   rings,
+  atoms,
   ordered,
   cacheIdentity,
   initialUsage,
@@ -2683,7 +2833,7 @@ function cachedGroundedPack({
       scope: input.scope,
       query: input.query,
       budget: plan.budget,
-      atoms: rings.atoms,
+      atoms,
       ranked: ordered.kept,
       omittedFromRanking: [...rings.omitted, ...ordered.omitted],
       excerpts: new Map(),
@@ -2711,21 +2861,29 @@ function preparePackAssembly(
     { atoms, anchors: plan.anchors, context: { retrievalIntent: plan.retrievalIntent } },
     { nowMs },
   );
-  const ordered = refineCandidateOrdering(
+  const refined = refineCandidateOrdering(
     ranking.kept,
     ranking.omitted,
-    input.query.text,
+    input.query,
     plan.anchors,
     rings.diagnostics,
     nowMs(),
   );
+  const ordered = selectGroundedCandidateFiles({
+    ...refined,
+    scopeKind: input.scope.kind,
+    filesReadMax: plan.budget.filesReadMax,
+    nowMs: nowMs(),
+  });
+  const selectedPaths = new Set(ordered.kept.map((candidate) => candidate.scopePath));
+  const selectedAtoms = selectGroundedEvidenceAtoms(atoms, selectedPaths, input.scope.scopeId);
   return {
-    atoms,
+    atoms: selectedAtoms,
     initialUsage,
     ordered,
-    atomsByPath: groupEvidenceAtomsByPath(atoms),
+    atomsByPath: groupEvidenceAtomsByPath(selectedAtoms),
     evidenceUncertainty:
-      atoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [],
+      selectedAtoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [],
     keptPaths: ordered.kept.map((c) => c.scopePath),
   };
 }
@@ -2793,7 +2951,7 @@ async function augmentRingsWithDeterministicAtoms({
   nowMs,
 }: AssembleGroundedPackInputs): Promise<RingRunSummary> {
   const scopedRings = withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs);
-  return withDeterministicContextAtoms(
+  const deterministicRings = await withDeterministicContextAtoms(
     scopedRings,
     input,
     plan,
@@ -2802,6 +2960,23 @@ async function augmentRingsWithDeterministicAtoms({
     nowMs,
     deps.signal,
   );
+  const discoveredTrace = await collectDiscoveredSymbolTraceEvidence({
+    scope: input.scope,
+    query: input.query,
+    anchors: plan.anchors,
+    retrievalIntent: plan.retrievalIntent,
+    searchScope,
+    fs,
+    nowMs,
+    atoms: deterministicRings.atoms,
+    signal: deps.signal,
+    workspaceIndex: deps.workspaceIndexForRoot?.(searchScope.workspace.root),
+  });
+  return {
+    ...deterministicRings,
+    atoms: [...deterministicRings.atoms, ...discoveredTrace.atoms],
+    uncertainty: [...deterministicRings.uncertainty, ...discoveredTrace.uncertainty],
+  };
 }
 
 interface GroundedAssemblyContext {
@@ -2843,6 +3018,7 @@ async function prepareGroundedAssembly(
         deps,
         plan,
         rings: augmentedRings,
+        atoms: prepared.atoms,
         ordered: prepared.ordered,
         cacheIdentity,
         initialUsage: prepared.initialUsage,

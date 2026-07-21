@@ -310,6 +310,7 @@ interface SetupVoiceCapabilities {
   readonly speechInput: boolean;
   readonly speechOutput: boolean;
   readonly realtime: boolean;
+  readonly realtimeTranscriptionModel?: string | undefined;
 }
 
 function createDefaultVoiceCapabilityForSetup(
@@ -336,6 +337,10 @@ function createDefaultVoiceCapabilityForSetup(
     ...(capabilities.speechInput ? { supportsSpeechInput: true } : {}),
     ...(capabilities.speechOutput ? { supportsSpeechOutput: true } : {}),
     ...(capabilities.realtime ? { supportsRealtimeVoice: true } : {}),
+    ...(capabilities.realtime ? { supportsSemanticTurnDetection: true } : {}),
+    ...(capabilities.realtime && capabilities.realtimeTranscriptionModel !== undefined
+      ? { realtimeTranscriptionModel: capabilities.realtimeTranscriptionModel }
+      : {}),
     voiceProviderLocality: providerLocality,
     costClass: "low",
     latencyClass: "fast",
@@ -586,6 +591,9 @@ function setupVoiceProvidersFromCurrent(
           speechInput: modelSupportsSpeechInput(capability),
           speechOutput: modelSupportsSpeechOutput(capability),
           realtime: modelSupportsRealtimeVoice(capability),
+          ...(capability.realtimeTranscriptionModel === undefined
+            ? {}
+            : { realtimeTranscriptionModel: capability.realtimeTranscriptionModel }),
         },
         ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
       },
@@ -1196,17 +1204,22 @@ function hasNonEmptyListField(raw: Record<string, unknown>, key: string): boolea
   return Array.isArray(value) && value.some((item) => typeof item === "string" && item.trim());
 }
 
+const VOICE_PROVIDER_STRING_FIELDS = [
+  "voiceBaseUrl",
+  "voiceApiKey",
+  "voiceApiKeyHeaderName",
+  "voiceModelId",
+  "voiceSpeechToTextModelId",
+  "voiceRealtimeModelId",
+  "voiceRealtimeTranscriptionModelId",
+  "voiceSpeechOutputModelId",
+  "voiceOutputVoiceId",
+  "voiceProviderLocality",
+] as const;
+
 function hasVoiceProviderInput(raw: Record<string, unknown>): boolean {
   return (
-    hasNonBlankStringField(raw, "voiceBaseUrl") ||
-    hasNonBlankStringField(raw, "voiceApiKey") ||
-    hasNonBlankStringField(raw, "voiceApiKeyHeaderName") ||
-    hasNonBlankStringField(raw, "voiceModelId") ||
-    hasNonBlankStringField(raw, "voiceSpeechToTextModelId") ||
-    hasNonBlankStringField(raw, "voiceRealtimeModelId") ||
-    hasNonBlankStringField(raw, "voiceSpeechOutputModelId") ||
-    hasNonBlankStringField(raw, "voiceOutputVoiceId") ||
-    hasNonBlankStringField(raw, "voiceProviderLocality") ||
+    VOICE_PROVIDER_STRING_FIELDS.some((key) => hasNonBlankStringField(raw, key)) ||
     raw.voiceTimeoutMs !== undefined
   );
 }
@@ -1418,6 +1431,7 @@ interface VoiceRoleModelIds {
   readonly speechInput?: string | undefined;
   readonly speechOutput?: string | undefined;
   readonly realtime?: string | undefined;
+  readonly realtimeTranscription?: string | undefined;
 }
 
 function existingVoiceRoleModelIds(providers: readonly SetupVoiceProvider[]): VoiceRoleModelIds {
@@ -1425,6 +1439,8 @@ function existingVoiceRoleModelIds(providers: readonly SetupVoiceProvider[]): Vo
     speechInput: providers.find((provider) => provider.capabilities.speechInput)?.modelId,
     speechOutput: providers.find((provider) => provider.capabilities.speechOutput)?.modelId,
     realtime: providers.find((provider) => provider.capabilities.realtime)?.modelId,
+    realtimeTranscription: providers.find((provider) => provider.capabilities.realtime)
+      ?.capabilities.realtimeTranscriptionModel,
   };
 }
 
@@ -1463,14 +1479,30 @@ function voiceRoleModelIds(
     fallbacks.speechOutput,
   );
   const realtime = submittedVoiceModelId(raw, "voiceRealtimeModelId", fallbacks.realtime);
-  const routeError = firstRouteResult([speechInput, speechOutput, realtime]);
-  return (
-    routeError ?? {
-      speechInput: speechInput as string | undefined,
-      speechOutput: speechOutput as string | undefined,
-      realtime: realtime as string | undefined,
-    }
+  const realtimeTranscription = submittedVoiceModelId(
+    raw,
+    "voiceRealtimeTranscriptionModelId",
+    fallbacks.realtimeTranscription,
   );
+  const routeError = firstRouteResult([speechInput, speechOutput, realtime, realtimeTranscription]);
+  if (routeError !== undefined) {
+    return routeError;
+  }
+  if (realtimeTranscription !== undefined && realtime === undefined) {
+    return {
+      status: 400,
+      body: errorBody(
+        "BAD_REQUEST",
+        "voiceRealtimeTranscriptionModelId requires voiceRealtimeModelId.",
+      ),
+    };
+  }
+  return {
+    speechInput: speechInput as string | undefined,
+    speechOutput: speechOutput as string | undefined,
+    realtime: realtime as string | undefined,
+    realtimeTranscription: realtimeTranscription as string | undefined,
+  };
 }
 
 function setupVoiceProfiles(raw: Record<string, unknown>): readonly VoicePersonaVoice[] {
@@ -1498,6 +1530,15 @@ function providersForVoiceRoles(
       realtime: false,
     };
     ids.set(modelId, { ...current, [role]: true });
+  }
+  if (roleIds.realtime !== undefined && roleIds.realtimeTranscription !== undefined) {
+    const current = ids.get(roleIds.realtime);
+    if (current !== undefined) {
+      ids.set(roleIds.realtime, {
+        ...current,
+        realtimeTranscriptionModel: roleIds.realtimeTranscription,
+      });
+    }
   }
   return [...ids.entries()].map(([modelId, capabilities]) => ({
     ...shared,

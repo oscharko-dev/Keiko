@@ -5,15 +5,23 @@ const QUERY_TOKEN_RE = /[\p{L}\p{N}_$@./:-]+/gu;
 const TOKEN_SEPARATOR_RE = /[/@.:\-_]+/u;
 const STACK_LOCATION_SUFFIX_RE = /^(.+?):\d+(?::\d+)?$/u;
 const TEST_SUFFIX_RE = /(?:tests?|specs?)$/iu;
+const ATOMIC_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
 
 const MAX_EXPANDED_QUERY_TERMS = 48;
 const DOMAIN_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
+  ["abhängigkeit", ["dependency", "dependencies"]],
+  ["arbeit", ["work"]],
+  ["aufruf", ["call", "invoke", "invocation"]],
+  ["aufrufen", ["call", "invoke"]],
   ["auth", ["authentication", "authorize", "authorization", "login", "signin", "token", "jwt"]],
   ["authn", ["authentication", "login", "signin"]],
   ["authz", ["authorization", "permission", "policy", "role"]],
   ["authenticate", ["authentication", "auth", "login", "signin"]],
   ["authentication", ["auth", "authenticate", "login", "signin", "authn"]],
   ["authorization", ["authz", "permission", "policy", "role"]],
+  ["autonomie", ["autonomy"]],
+  ["beleg", ["evidence"]],
+  ["belegenden", ["evidence"]],
   ["failure", ["fail", "failed", "error", "exception", "crash"]],
   ["failed", ["fail", "failure", "error", "exception", "crash"]],
   ["failing", ["fail", "failure", "error", "exception", "crash"]],
@@ -33,7 +41,25 @@ const DOMAIN_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
   ["cart", ["checkout", "basket", "order", "purchase"]],
   ["checkout", ["cart", "basket", "order", "purchase", "payment"]],
   ["compute", ["calculate", "calculation", "computed"]],
+  ["datei", ["file"]],
+  ["dateien", ["file", "files"]],
+  ["definieren", ["define", "defined", "definition", "declare"]],
+  ["definiert", ["define", "defined", "definition", "declared"]],
+  ["deklariert", ["declare", "declared", "declaration"]],
+  ["drei", ["three"]],
+  ["fehler", ["failure", "error", "bug"]],
+  ["funktion", ["function"]],
+  ["implementieren", ["implement", "implemented", "implementation"]],
+  ["implementiert", ["implement", "implemented", "implementation"]],
   ["incorrect", ["wrong", "bug", "failure", "error"]],
+  ["invariante", ["invariant"]],
+  ["klasse", ["class"]],
+  ["konfiguration", ["config", "configuration"]],
+  ["modi", ["mode", "modes"]],
+  ["modus", ["mode", "modes"]],
+  ["paket", ["package"]],
+  ["quelle", ["source"]],
+  ["repository", ["repo", "codebase"]],
   ["total", ["sum", "amount", "subtotal", "grandtotal", "price"]],
   ["wrong", ["incorrect", "bug", "failure", "error", "regression"]],
 ]);
@@ -225,6 +251,9 @@ function expandToken(
   const token = stripStackLocationSuffix(rawToken);
   addTerm(out, seen, token, caseSensitive);
   addDomainAliases(out, seen, token, caseSensitive);
+  if (ATOMIC_DOCUMENT_REFERENCE_RE.test(token)) {
+    return;
+  }
   if (token.startsWith("/")) {
     addTerm(out, seen, stripLeadingRouteSlash(token), caseSensitive);
   }

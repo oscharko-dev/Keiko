@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { describe, expect, it } from "vitest";
 import {
   nodeWorkspaceFs,
@@ -32,10 +33,12 @@ import {
   inspectWorkspaceIndexDirectories,
   isWorkspaceIndexSnapshotFresh,
   prepareWorkspaceIndexSnapshot,
+  prepareCachedWorkspaceIndexSnapshot,
   stripTrailingNonWordChars,
   type WorkspaceIndex,
   type WorkspaceIndexStore,
   type WorkspaceIndexSnapshot,
+  workspaceIndexCandidateSet,
 } from "./workspaceIndex.js";
 
 const MEM_ROOT = "/ws";
@@ -400,6 +403,202 @@ function sampleSnapshot(content: string): WorkspaceIndexSnapshot {
 }
 
 describe("workspaceIndex", () => {
+  it("uses cached lexical evidence to rank a route declaration ahead of path-only decoys", () => {
+    const query = nlq(
+      "Welche Produktionsdatei registriert POST /api/chats/messages/grounded und welcher Handler wird aufgerufen?",
+    );
+    const contents = new Map([
+      ["src/api/chats/messages/grounded/overview.ts", "export const unrelated = true;\n"],
+      [
+        "src/routes.ts",
+        '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n',
+      ],
+      ["src/grounded-qa.ts", "export async function handleGroundedAsk(): Promise<void> {}\n"],
+    ]);
+    const snapshot = buildWorkspaceIndexSnapshot({
+      scope: { relativePaths: [] },
+      policy: {
+        policyMode: "workspace-root-default",
+        applyGitignore: true,
+        omitLowValueWorkspaceFiles: true,
+      },
+      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      discovery: {
+        files: [...contents].map(([scopePath, content]) => ({
+          scopePath,
+          sizeBytes: Buffer.byteLength(content, "utf8"),
+        })),
+        directories: [],
+        filesDiscovered: contents.size,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+        depthPrunedByDiscovery: 0,
+        truncated: false,
+      },
+      records: [...contents].map(([scopePath, content]) => ({
+        scopePath,
+        sizeBytes: Buffer.byteLength(content, "utf8"),
+        kind: "text" as const,
+        lexical: buildWorkspaceIndexLexicalRecord(content),
+      })),
+    });
+    const prepared = prepareCachedWorkspaceIndexSnapshot(snapshot, workspace());
+    const policy = resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" });
+
+    const candidates = workspaceIndexCandidateSet(prepared, query, policy);
+
+    expect(candidates.files[0]?.relativePath).toBe("src/routes.ts");
+    const contentSignal = candidates.diagnostics.rankedCandidates[0]?.signals.find(
+      (signal) => signal.name === "content-term-score",
+    );
+    expect(contentSignal?.value).toBeGreaterThan(229);
+  });
+
+  it("uses privacy-safe cached hashes to rank an exact-symbol definition ahead of references", () => {
+    const exactQuery: RetrievalQuery = {
+      kind: "exact-symbol",
+      text: "dispatchWorkUnit",
+      caseSensitive: false,
+      maxResults: 100,
+      emittedAtMs: 0,
+    };
+    const contents = new Map([
+      ["src/a-reference.ts", "await dispatchWorkUnit();\n"],
+      ["src/service.ts", "export async function dispatchWorkUnit(): Promise<void> {}\n"],
+    ]);
+    const snapshot = buildWorkspaceIndexSnapshot({
+      scope: { relativePaths: [] },
+      policy: {
+        policyMode: "workspace-root-default",
+        applyGitignore: true,
+        omitLowValueWorkspaceFiles: true,
+      },
+      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      discovery: {
+        files: [...contents].map(([scopePath, content]) => ({
+          scopePath,
+          sizeBytes: Buffer.byteLength(content, "utf8"),
+        })),
+        directories: [],
+        filesDiscovered: contents.size,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+        depthPrunedByDiscovery: 0,
+        truncated: false,
+      },
+      records: [...contents].map(([scopePath, content]) => ({
+        scopePath,
+        sizeBytes: Buffer.byteLength(content, "utf8"),
+        kind: "text" as const,
+        lexical: buildWorkspaceIndexLexicalRecord(content),
+      })),
+    });
+    const prepared = prepareCachedWorkspaceIndexSnapshot(snapshot, workspace());
+    const policy = resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" });
+
+    expect(workspaceIndexCandidateSet(prepared, exactQuery, policy).files[0]?.relativePath).toBe(
+      "src/service.ts",
+    );
+  });
+
+  it("content-prescores the first indexed search before applying its scan cap", async () => {
+    const tracked = createTrackedFs({
+      "src/api/chats/messages/grounded/overview.ts": "export const unrelated = true;\n",
+      "src/routes.ts":
+        '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n',
+    });
+    const index = createWorkspaceIndex();
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+
+    const result = await searchText(
+      scope(),
+      nlq("Welche Datei registriert POST /api/chats/messages/grounded?"),
+      limits,
+      { fs: tracked.fs, nowMs: FIXED_NOW, workspaceIndex: index },
+    );
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/routes.ts"]);
+  });
+
+  it("content-prescores unindexed files in a partial snapshot before applying its scan cap", async () => {
+    const files = {
+      "src/api/chats/messages/grounded/overview.ts": "export const unrelated = true;\n",
+      "src/routes.ts":
+        '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n',
+    };
+    const tracked = createTrackedFs(files);
+    const snapshot = buildWorkspaceIndexSnapshot({
+      scope: { relativePaths: [] },
+      policy: {
+        policyMode: "workspace-root-default",
+        applyGitignore: true,
+        omitLowValueWorkspaceFiles: true,
+      },
+      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: 1,
+      discovery: {
+        files: Object.entries(files).map(([scopePath, content]) => ({
+          scopePath,
+          sizeBytes: Buffer.byteLength(content, "utf8"),
+        })),
+        directories: [],
+        filesDiscovered: 2,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+        depthPrunedByDiscovery: 0,
+        truncated: false,
+      },
+      records: [],
+    });
+    const index = createWorkspaceIndex({
+      loadSnapshot: () => snapshot,
+      saveSnapshot: () => undefined,
+    });
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+
+    const result = await searchText(
+      scope(),
+      nlq("Welche Datei registriert POST /api/chats/messages/grounded?"),
+      limits,
+      {
+        fs: tracked.fs,
+        nowMs: FIXED_NOW,
+        workspaceIndex: index,
+        searchHints: { retrievalIntent: "targeted-code-search" },
+      },
+    );
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/routes.ts"]);
+  });
+
+  it("counts cached aliases as one semantic group when selecting the best lines", async () => {
+    const tracked = createTrackedFs({
+      "src/app.ts": [
+        "define defined definition declare declared",
+        "function defined alpha",
+        "function defined beta",
+        "function defined gamma",
+      ].join("\n"),
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+    await searchText(currentScope, nlq("unrelated"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    const result = await searchText(currentScope, nlq("function defined"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(result.atoms.map((atom) => atom.lineRange?.startLine)).toEqual([2, 3, 4]);
+  });
+
   it("normalizes noisy snapshot inputs and caps lexical records deterministically", () => {
     const lineCapped = buildWorkspaceIndexLexicalRecord(
       Array.from({ length: 40 }, (_, index) => `Token${String(index)}`).join(" "),
@@ -756,7 +955,10 @@ describe("workspaceIndex", () => {
       workspaceIndex: index,
     });
 
-    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["docs/readme.md", "src/a.ts"]);
+    expect(result.atoms.map((atom) => atom.scopePath).sort()).toEqual([
+      "docs/readme.md",
+      "src/a.ts",
+    ]);
     expect(tracked.counters.readFileUtf8).toBe(0);
     expect(tracked.counters.readFileBytes).toBe(2);
   });

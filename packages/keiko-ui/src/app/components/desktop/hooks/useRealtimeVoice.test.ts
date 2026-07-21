@@ -19,6 +19,8 @@ const ICE_GRACE_ABOVE = 6_000;
 // Mirrors the hook constant; the warm-up floor runs in parallel with negotiation and is intentionally
 // small (start-of-utterance capture is guaranteed by the server turn_detection prefix_padding).
 const SESSION_READY_WARMUP_MS = 150;
+// Mirrors the canonical pause-coalescing window in the hook.
+const CANONICAL_TURN_CONTINUATION_GRACE_MS = 1_600;
 
 // Fake WebRTC session with controllable callbacks.
 function makeFakeSession(
@@ -234,7 +236,7 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
 
   it("applies the requested turn-detection profile to session.update", async () => {
     const cases = [
-      { profile: "semantic", expected: { type: "semantic_vad", eagerness: "auto" } },
+      { profile: "semantic", expected: { type: "semantic_vad", eagerness: "low" } },
       {
         profile: "headset",
         expected: { type: "server_vad", threshold: 0.4, prefix_padding_ms: 200 },
@@ -272,6 +274,31 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
       );
       unmount();
     }
+  });
+
+  it("preserves server-owned VAD tuning for canonical chat turns", async () => {
+    const { session, fireConnectionState, fireDataChannelState, sendDataChannelEvent } =
+      makeFakeSession("v=0\r\nfake-offer", { exposeDataChannelState: true });
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({ negotiateResult: "v=0\r\nfake-answer" });
+    const onCanonicalUserTurn = vi.fn();
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        onCanonicalUserTurn,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    act(() => fireConnectionState("connected"));
+    act(() => fireDataChannelState("open"));
+
+    expect(sendDataChannelEvent).toHaveBeenCalledWith({
+      type: "session.update",
+      session: { type: "realtime" },
+    });
   });
 
   it("does not overwrite server-owned grounding instructions for client-retrieval sessions", async () => {
@@ -525,6 +552,135 @@ describe("useRealtimeVoice — microphone mute", () => {
 });
 
 describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
+  it("dispatches a settled final transcript without waiting for assistant audio", async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, fireDataChannelEvent } = makeFakeSession();
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({});
+      const onCanonicalUserTurn = vi.fn(async () => {});
+      const onVoiceTurnCommitted = vi.fn();
+      const { result } = renderHook(() =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          onCanonicalUserTurn,
+          onVoiceTurnCommitted,
+        }),
+      );
+
+      act(() => result.current.start());
+      await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+      act(() => {
+        fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "u-canonical" });
+        fireDataChannelEvent({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "u-canonical",
+          transcript: "Search the connected repository.",
+        });
+        vi.advanceTimersByTime(CANONICAL_TURN_CONTINUATION_GRACE_MS);
+      });
+
+      expect(onCanonicalUserTurn).toHaveBeenCalledTimes(1);
+      expect(onCanonicalUserTurn).toHaveBeenCalledWith({
+        turnId: "u-canonical",
+        text: "Search the connected repository.",
+      });
+      expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces VAD segments across a natural speaking pause before dispatching one canonical turn", async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, fireDataChannelEvent } = makeFakeSession();
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({});
+      const onCanonicalUserTurn = vi.fn();
+      const { result } = renderHook(() =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          onCanonicalUserTurn,
+        }),
+      );
+
+      act(() => result.current.start());
+      await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+      act(() => {
+        fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "u-first" });
+        fireDataChannelEvent({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "u-first",
+          transcript: "I am Oliver and I am 35 years old and would like to know",
+        });
+      });
+
+      expect(onCanonicalUserTurn).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(onCanonicalUserTurn).not.toHaveBeenCalled();
+      act(() => {
+        fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "u-second" });
+        fireDataChannelEvent({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "u-second",
+          transcript: "Would like to know which add-ons are relevant to software developers.",
+        });
+        vi.runAllTimers();
+      });
+
+      expect(onCanonicalUserTurn).toHaveBeenCalledOnce();
+      expect(onCanonicalUserTurn).toHaveBeenCalledWith({
+        turnId: "u-first",
+        text: "I am Oliver and I am 35 years old and would like to know which add-ons are relevant to software developers.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes a settled canonical transcript before cleaning up a failed connection", async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, fireConnectionState, fireDataChannelEvent } = makeFakeSession();
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({});
+      const onCanonicalUserTurn = vi.fn();
+      const { result } = renderHook(() =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          onCanonicalUserTurn,
+        }),
+      );
+
+      act(() => result.current.start());
+      await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+      act(() => {
+        fireDataChannelEvent({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "u-before-failure",
+          transcript: "Keep this finalized sentence.",
+        });
+        fireConnectionState("failed");
+      });
+
+      expect(onCanonicalUserTurn).toHaveBeenCalledOnce();
+      expect(onCanonicalUserTurn).toHaveBeenCalledWith({
+        turnId: "u-before-failure",
+        text: "Keep this finalized sentence.",
+      });
+      act(() => vi.runAllTimers());
+      expect(onCanonicalUserTurn).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("commits a non-grounding user + assistant voice turn as one paired callback", async () => {
     const { session, fireDataChannelEvent } = makeFakeSession();
     const transport = makeFakeTransport({ session });
@@ -642,6 +798,53 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
       fireDataChannelEvent({
         type: "response.done",
         response: { id: "r-late", status: "completed" },
+      });
+    });
+
+    expect(onVoiceTurnCommitted).toHaveBeenCalledTimes(1);
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Open the deploy log." },
+      { role: "assistant", content: "The deploy log is open." },
+    ]);
+  });
+
+  it("waits for a late final user transcript after response.done instead of persisting assistant-only", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        onVoiceTurnCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "u-latest" });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-latest",
+        item_id: "a-latest",
+        transcript: "The deploy log is open.",
+      });
+      fireDataChannelEvent({
+        type: "response.done",
+        response: { id: "r-latest", status: "completed" },
+      });
+    });
+    expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u-latest",
+        transcript: "Open the deploy log.",
       });
     });
 
@@ -906,6 +1109,94 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
       { role: "user", content: "Open the deploy log" },
       { role: "assistant", content: "The deploy log is open." },
     ]);
+  });
+
+  it("exposes only the ephemeral user transcript until the canonical turn commits", async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, fireDataChannelEvent } = makeFakeSession();
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({});
+      const onCanonicalUserTurn = vi.fn();
+      const { result } = renderHook(() =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          onCanonicalUserTurn,
+        }),
+      );
+
+      act(() => result.current.start());
+      await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+      expect(result.current.partialUserTranscript).toBeUndefined();
+      act(() => {
+        fireDataChannelEvent({
+          type: "conversation.item.input_audio_transcription.delta",
+          item_id: "u-visible",
+          delta: "Search the ",
+        });
+        fireDataChannelEvent({
+          type: "conversation.item.input_audio_transcription.delta",
+          item_id: "u-visible",
+          delta: "repository",
+        });
+      });
+      expect(result.current.partialUserTranscript).toBe("Search the repository");
+      act(() => {
+        fireDataChannelEvent({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "u-visible",
+          transcript: "Search the repository.",
+        });
+      });
+      expect(result.current.partialUserTranscript).toBe("Search the repository.");
+      expect(onCanonicalUserTurn).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(CANONICAL_TURN_CONTINUATION_GRACE_MS));
+      expect(result.current.partialUserTranscript).toBeUndefined();
+      expect(onCanonicalUserTurn).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the latest interim transcript as the canonical turn when final STT fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, fireDataChannelEvent } = makeFakeSession();
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({});
+      const onCanonicalUserTurn = vi.fn();
+      const { result } = renderHook(() =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          onCanonicalUserTurn,
+        }),
+      );
+
+      act(() => result.current.start());
+      await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+      act(() => {
+        fireDataChannelEvent({
+          type: "conversation.item.input_audio_transcription.delta",
+          item_id: "u-fallback",
+          delta: "Retain this turn",
+        });
+        fireDataChannelEvent({
+          type: "conversation.item.input_audio_transcription.failed",
+          item_id: "u-fallback",
+          error: { message: "final STT failed" },
+        });
+        vi.advanceTimersByTime(CANONICAL_TURN_CONTINUATION_GRACE_MS);
+      });
+
+      expect(onCanonicalUserTurn).toHaveBeenCalledWith({
+        turnId: "u-fallback",
+        text: "Retain this turn",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("persists buffered assistant speech when a response is cancelled", async () => {

@@ -38,12 +38,17 @@ const STRUCTURAL_TOOLS: ReadonlySet<string> = new Set([
   "import-graph",
   "test-source-pairing",
   "code-intelligence-index",
+  "discovered-symbol-definition",
   "structural-edge-target",
 ]);
 const SEMANTIC_TOOL_PREFIX = "repo.semanticSearch";
 
 function hasStructuralEdge(atoms: readonly EvidenceAtom[]): boolean {
   return atoms.some((atom) => STRUCTURAL_TOOLS.has(atom.provenance.tool));
+}
+
+function hasDiscoveredSymbolDefinition(atoms: readonly EvidenceAtom[]): boolean {
+  return atoms.some((atom) => atom.provenance.tool === "discovered-symbol-definition");
 }
 
 function bestLexicalScore(atoms: readonly EvidenceAtom[]): number {
@@ -89,6 +94,7 @@ export const DEFAULT_GENERATED_PATTERNS: readonly string[] = [
   "/build/",
   "/.next/",
   "/coverage/",
+  "/storybookstatic/",
   "/__snapshots__/",
   ".min.js",
   ".bundle.js",
@@ -271,6 +277,9 @@ export function extractSignals(
       value: isCanonicalMetadataFile(scopePath) ? 1 : 0,
     });
     baseSignals.push({ name: "structural-edge", value: hasStructuralEdge(atomsForPath) ? 1 : 0 });
+    if (hasDiscoveredSymbolDefinition(atomsForPath)) {
+      baseSignals.push({ name: "symbol-definition", value: 1 });
+    }
   }
   // baseScore intentionally stays over the original positive signals (it feeds nothing the new
   // weighted score touches; the filter uses computeScore output, not baseScore).

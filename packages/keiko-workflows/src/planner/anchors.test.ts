@@ -9,6 +9,20 @@ function run(text: string, maxAnchors = 8): AnchorExtractionResult {
 }
 
 describe("extractAnchors", () => {
+  it("preserves ADR and RFC references as high-confidence identifier anchors", () => {
+    const result = extractAnchors({
+      text: "Vergleiche ADR-0129 mit RFC-9110.",
+      maxAnchors: 8,
+    });
+
+    expect(result.anchors).toEqual(
+      expect.arrayContaining([
+        { term: "adr-0129", weight: 0.95, kind: "identifier" },
+        { term: "rfc-9110", weight: 0.95, kind: "identifier" },
+      ]),
+    );
+  });
+
   it("returns an empty result for empty text", () => {
     const result = run("");
     expect(result.anchors).toEqual([]);
@@ -47,6 +61,16 @@ describe("extractAnchors", () => {
     expect(route).toEqual({ term: "/api/payments/:id/refund", weight: 0.95, kind: "path" });
   });
 
+  it("does not retain sentence punctuation after an API route anchor", () => {
+    const result = run("Trace POST /api/chats/messages/grounded: route to handler.");
+
+    expect(result.anchors).toContainEqual({
+      term: "/api/chats/messages/grounded",
+      weight: 0.95,
+      kind: "path",
+    });
+  });
+
   it("captures a backtick span as an identifier anchor at weight 0.9", () => {
     const result = run("the `MyClass` symbol");
     const ident = result.anchors.find((a) => a.kind === "identifier" && a.term === "myclass");
@@ -71,6 +95,22 @@ describe("extractAnchors", () => {
     const ident = result.anchors.find((a) => a.term === "foo.bar");
     expect(ident).toBeDefined();
     expect(ident?.kind).toBe("identifier");
+  });
+
+  it("keeps Unicode letters and does not promote sentence-final words to identifiers", () => {
+    const result = run("Zeige den Übergang in die Orchestrierung. Nur belegte Aussagen.", 20);
+
+    expect(result.anchors).toContainEqual({
+      term: "übergang",
+      weight: 0.5,
+      kind: "literal",
+    });
+    expect(result.anchors).toContainEqual({
+      term: "orchestrierung",
+      weight: 0.5,
+      kind: "literal",
+    });
+    expect(result.anchors.some((anchor) => anchor.term.endsWith("."))).toBe(false);
   });
 
   it("classifies unquoted PascalCase symbols as identifiers", () => {

@@ -674,24 +674,6 @@ async function realtimeInstructions(
 
 export const _realtimeInstructionsForTests = realtimeInstructions;
 
-function realtimeGroundingEnabled(chatContext: VoiceSessionChatContext | undefined): boolean {
-  return chatContext?.grounding?.enabled === true;
-}
-
-function realtimeProviderSupportsTools(
-  config: GatewayConfig,
-  provider: ModelProviderConfig,
-): boolean {
-  const capability = findConfiguredCapability(config, provider.modelId);
-  if (capability === undefined) {
-    return false;
-  }
-  // Missing tool support is an explicit degradation, not a session blocker: the UI still records the
-  // full voice turn through /voice-turn, while grounded retrieval is only configured for providers
-  // that advertise function calling.
-  return capability.toolCalling;
-}
-
 // Resolves the realtime session voice from the provider's persona→voice mapping, guarded to a
 // realtime-valid id. Without an explicit voice the session would use the provider default; with a
 // TTS-only id (e.g. the operator-config `nova`) the realtime model rejects the session. The client's
@@ -759,7 +741,7 @@ function realtimeSessionTuning(
       ? {
           turnDetection: {
             type: "semantic_vad",
-            eagerness: "auto",
+            eagerness: "low",
             interrupt_response: true,
           },
         }
@@ -773,9 +755,6 @@ function buildNegotiationRequest(
   offerSdp: string,
   persona: VoicePersona | undefined,
   instructions: string,
-  groundingEnabled: boolean,
-  memoryToolEnabled: boolean,
-  toolsSupported: boolean,
   deps: UiHandlerDeps,
   signal: AbortSignal,
   safetyIdentifier?: string,
@@ -794,11 +773,14 @@ function buildNegotiationRequest(
     instructions,
     voiceId: resolveRealtimeVoiceId(provider, persona),
     ...realtimeSessionTuning(config, provider),
-    ...realtimeSessionTools(
-      groundingEnabled && toolsSupported,
-      memoryToolEnabled && toolsSupported,
-    ),
-    ...(groundingEnabled && !toolsSupported ? { disableAutomaticResponse: true } : {}),
+    // The realtime provider is the media/VAD/transcription plane only. Grounding and memory tools
+    // execute inside the canonical chat request after the final transcript, so advertising them here
+    // would create a second, competing answer path.
+    ...realtimeSessionTools(false, false),
+    // The realtime deployment owns media transport, VAD, and transcription only. Every final spoken
+    // turn is answered by the canonical chat pipeline so retrieval, MemoriaViva, governance, and the
+    // visible transcript cannot diverge from a competing provider-native response.
+    disableAutomaticResponse: true,
     ...(safetyIdentifier !== undefined ? { safetyIdentifier } : {}),
     offerSdp,
     signal,
@@ -1282,15 +1264,10 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
         return { ok: false, kind: "unsupported-model" };
       }
       const negotiate = deps.voiceRealtimeNegotiationRequest ?? requestRealtimeNegotiation;
-      const groundingEnabled = realtimeGroundingEnabled(chatContext);
-      const toolsSupported = realtimeProviderSupportsTools(config, provider);
-      const memoryToolEnabled = shouldIncludeRealtimeMemory(deps, chatContext) && toolsSupported;
-      const instructions = await realtimeInstructions(
-        deps,
-        chatContext,
-        groundingEnabled && toolsSupported,
-        memoryToolEnabled,
-      );
+      // The Realtime endpoint transcribes only. Do not duplicate recent chat, grounding metadata, or
+      // MemoriaViva into a provider session that is forbidden from answering; the canonical chat request
+      // resolves all three after the final transcript.
+      const instructions = await realtimeInstructions(deps, undefined, false, false);
       const safetyIdentifier =
         chatContext === undefined ? undefined : realtimeSafetyIdentifier(chatContext.chatId);
       return negotiate(
@@ -1300,9 +1277,6 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
           offerSdp,
           persona,
           instructions,
-          groundingEnabled,
-          memoryToolEnabled,
-          toolsSupported,
           deps,
           signal,
           safetyIdentifier,

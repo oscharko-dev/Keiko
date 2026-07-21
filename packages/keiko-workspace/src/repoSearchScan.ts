@@ -25,18 +25,24 @@ import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
 import { DEFAULT_BINARY_PROBE, decodeTextBytes, looksBinary } from "./binaryDetect.js";
 import { collectFromEntries } from "./repoSearchEntries.js";
+import {
+  bestCachedLexicalLines,
+  cachedExactSymbolDefinitionMatches,
+  cachedLexicalRecordMatches,
+  prepareCachedLexicalQuery,
+  type CachedLexicalQuery,
+} from "./repoSearchCachedLexical.js";
 import { collectBestLines, type ScoredLine } from "./repoSearchLineSelection.js";
 import { evidenceAtomStableId } from "./stableId.js";
-import type { LineMatcher } from "./repoSearchMatchers.js";
-import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
+import { lineLooksLikeSymbolDefinition, type LineMatcher } from "./repoSearchMatchers.js";
 import { collectSemanticSearchDocument, type SemanticSearchSession } from "./repoSearchSemantic.js";
-import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import {
   extraIgnoreLinesForSearch,
   legacyDiscoveryPolicy,
   orderCandidatesForSearch,
   policyOmissionReason,
   resolveSearchPolicy,
+  routeQueryTermsForSearch,
   scoreContentForSearch,
   shouldScoreContent,
   type SearchDiagnostics,
@@ -46,7 +52,6 @@ import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import type {
   PreparedWorkspaceIndexEntry,
   WorkspaceIndexDiscoveredFile,
-  WorkspaceIndexLexicalRecord,
   WorkspaceIndexRecord,
 } from "./workspaceIndex.js";
 import {
@@ -54,7 +59,6 @@ import {
   isWorkspaceIndexRecordCurrent,
   workspaceIndexContentFingerprint,
 } from "./workspaceIndex.js";
-import { createHash } from "node:crypto";
 
 const BINARY_PROBE_BYTES = DEFAULT_BINARY_PROBE.maxProbeBytes;
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -202,8 +206,14 @@ const DEFAULT_GATHER_QUERY: RetrievalQuery = {
 };
 
 const CONTENT_PRESCORE_MAX_BYTES = 65_536;
-const CONTENT_PRESCORE_MAX_FILES = 5_000;
+// Keep synchronous preview IO bounded well below the scan timer. Path-first selection still lets
+// route/symbol-shaped files into this set; reading thousands of previews could consume the entire
+// elapsed budget before the first candidate was actually scanned on large repositories.
+const CONTENT_PRESCORE_MAX_FILES = 512;
 const PROJECT_METADATA_CONTENT_PRESCORE_MAX_FILES = 256;
+const ROUTE_PRESCORE_MAX_FILES = 64;
+const ROUTE_REGISTRATION_PATH_RE =
+  /(?:^|[/_.-])(?:api|controllers?|endpoints?|http|routers?|routes?|routing)(?:[/_.-]|$)/iu;
 
 function isRetrievalQuery(value: unknown): value is RetrievalQuery {
   return typeof value === "object" && value !== null && "kind" in value && "text" in value;
@@ -237,6 +247,28 @@ function contentPrescoreLimit(
     : defaultLimit;
 }
 
+export function selectContentPrescoreFiles(
+  files: readonly DiscoveredFile[],
+  query: RetrievalQuery,
+  policy: SearchPolicy,
+  limit: number,
+): readonly DiscoveredFile[] {
+  if (files.length <= limit) return files;
+  const ordered = orderCandidatesForSearch(files, query, policy, 0, 0).files;
+  if (routeQueryTermsForSearch(query) === undefined || limit <= 0) {
+    return ordered.slice(0, limit);
+  }
+  const reservedLimit = Math.min(ROUTE_PRESCORE_MAX_FILES, Math.max(1, Math.floor(limit / 8)));
+  const routeCandidates = ordered
+    .filter((file) => ROUTE_REGISTRATION_PATH_RE.test(file.relativePath))
+    .slice(0, reservedLimit);
+  const reservedPaths = new Set(routeCandidates.map((file) => file.relativePath));
+  return [
+    ...routeCandidates,
+    ...ordered.filter((file) => !reservedPaths.has(file.relativePath)),
+  ].slice(0, limit);
+}
+
 function readContentPreview(
   scope: ScopeShape,
   file: DiscoveredFile,
@@ -267,10 +299,7 @@ function contentScoresForOrdering(
   }
   const scores = new Map<string, number>();
   const limit = contentPrescoreLimit(inputs.limits, files.length, inputs.policy);
-  const prescoreFiles =
-    inputs.policy.intent === "project-metadata" && files.length > limit
-      ? orderCandidatesForSearch(files, inputs.query, inputs.policy, 0, 0).files.slice(0, limit)
-      : files.slice(0, limit);
+  const prescoreFiles = selectContentPrescoreFiles(files, inputs.query, inputs.policy, limit);
   for (const file of prescoreFiles) {
     const preview = readContentPreview(scope, file, inputs.fs);
     if (preview === undefined) {
@@ -555,66 +584,6 @@ function currentRecordMetadata(
     sizeBytes: stat?.size ?? fallbackSizeBytes,
     ...(stat?.mtimeMs !== undefined ? { mtimeMs: stat.mtimeMs } : {}),
   };
-}
-
-function hashTerm(term: string): string {
-  return createHash("sha256").update(term).digest("hex");
-}
-
-function queryLexicalTerms(query: RetrievalQuery): readonly string[] {
-  if (query.kind === "regex" || query.kind === "file-pattern") {
-    return [];
-  }
-  if (query.kind === "exact-symbol") {
-    return expandedQueryTerms(query.text, query.caseSensitive);
-  }
-  return naturalLanguageContentTerms(query.text, query.caseSensitive);
-}
-
-function queryLexicalTermHashes(query: RetrievalQuery): readonly string[] {
-  return [...new Set(queryLexicalTerms(query).map((term) => hashTerm(term)))].sort((a, b) =>
-    a < b ? -1 : a > b ? 1 : 0,
-  );
-}
-
-function lexicalMatchesQuery(
-  record: WorkspaceIndexLexicalRecord,
-  queryTermHashes: ReadonlySet<string>,
-): boolean {
-  if (record.truncated || queryTermHashes.size === 0) {
-    return false;
-  }
-  return record.termHashes.some((termHash) => queryTermHashes.has(termHash));
-}
-
-function bestCachedLines(
-  record: WorkspaceIndexLexicalRecord,
-  queryTermHashes: ReadonlySet<string>,
-): readonly ScoredLine[] {
-  const best: ScoredLine[] = [];
-  for (const line of record.lines) {
-    let score = 0;
-    for (const termHash of line.termHashes) {
-      if (queryTermHashes.has(termHash)) {
-        score += 1;
-      }
-    }
-    if (score === 0) {
-      continue;
-    }
-    best.push({
-      line: line.startLine,
-      startLine: line.startLine,
-      endLine: line.endLine,
-      score,
-    });
-  }
-  return best
-    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.startLine - b.startLine))
-    .slice(0, 3)
-    .sort((a, b) =>
-      a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
-    );
 }
 
 function safeStat(
@@ -938,6 +907,7 @@ export interface FileMatches {
   readonly order: number;
   readonly best: readonly ScoredLine[];
   readonly maxScore: number;
+  readonly definitionMatch?: boolean | undefined;
 }
 
 function maxLineScore(best: readonly ScoredLine[]): number {
@@ -1018,23 +988,16 @@ function cachedLexicalRecord(
   cached: WorkspaceIndexRecord,
 ):
   | {
-      readonly lexical: WorkspaceIndexLexicalRecord;
-      readonly queryTermHashes: ReadonlySet<string>;
+      readonly lexical: NonNullable<WorkspaceIndexRecord["lexical"]>;
+      readonly query: CachedLexicalQuery;
     }
   | undefined {
-  if (
-    runner.query.kind === "regex" ||
-    runner.query.kind === "file-pattern" ||
-    runner.query.caseSensitive
-  ) {
-    return undefined;
-  }
   const lexical = cached.lexical;
   if (lexical === undefined || lexical.truncated) {
     return undefined;
   }
-  const queryTermHashes = new Set(queryLexicalTermHashes(runner.query));
-  return queryTermHashes.size === 0 ? undefined : { lexical, queryTermHashes };
+  const query = prepareCachedLexicalQuery(runner.query);
+  return query === undefined ? undefined : { lexical, query };
 }
 
 function cachedFileMatches(
@@ -1063,11 +1026,20 @@ function cachedFileMatches(
     return undefined;
   }
   state.filesScanned += 1;
-  if (!lexicalMatchesQuery(lexical.lexical, lexical.queryTermHashes)) {
+  if (!cachedLexicalRecordMatches(lexical.lexical, lexical.query)) {
     return "handled";
   }
-  const best = bestCachedLines(lexical.lexical, lexical.queryTermHashes);
-  return { relativePath: file.relativePath, order, best, maxScore: maxLineScore(best) };
+  const best = bestCachedLexicalLines(lexical.lexical, lexical.query);
+  return {
+    relativePath: file.relativePath,
+    order,
+    best,
+    maxScore: maxLineScore(best),
+    definitionMatch: cachedExactSymbolDefinitionMatches(
+      lexical.lexical,
+      lexical.query.exactSymbolHash,
+    ),
+  };
 }
 
 export async function scanFile(
@@ -1173,7 +1145,19 @@ function textFileMatches(
   if (best.length === 0) {
     return undefined;
   }
-  return { relativePath: file.relativePath, order, best, maxScore: maxLineScore(best) };
+  return {
+    relativePath: file.relativePath,
+    order,
+    best,
+    maxScore: maxLineScore(best),
+    definitionMatch:
+      runner.query.kind === "exact-symbol" &&
+      text
+        .split(/\r?\n/u)
+        .some((line) =>
+          lineLooksLikeSymbolDefinition(line, runner.query.text, runner.query.caseSensitive),
+        ),
+  };
 }
 
 export function emitFileMatches(

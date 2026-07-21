@@ -1255,14 +1255,15 @@ describe("handleGroundedAsk", () => {
 
   it("happy path: persists user + assistant messages and returns sorted citations", async () => {
     const { chatId } = await setupChatWithScope();
+    const assistantContent = "Inspected 2 file(s) [src/bar.ts] and [src/foo.ts:10-20].";
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "How does MyClass work?" })),
       deps(),
-      runner(packWithCitations(), "Inspected 2 file(s) ..."),
+      runner(packWithCitations(), assistantContent),
     );
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    expect(answer.content).toBe("Inspected 2 file(s) ...");
+    expect(answer.content).toBe(assistantContent);
     expect(answer.elapsedMs).toBe(42);
     // Citations sorted by score desc — atom-high before atom-low.
     expect(answer.citations.map((c) => c.stableId)).toEqual(["atom-high", "atom-low"]);
@@ -1278,7 +1279,38 @@ describe("handleGroundedAsk", () => {
     expect(userMsg?.role).toBe("user");
     expect(userMsg?.content).toBe("How does MyClass work?");
     expect(assistMsg?.role).toBe("assistant");
-    expect(assistMsg?.content).toBe("Inspected 2 file(s) ...");
+    expect(assistMsg?.content).toBe(assistantContent);
+  });
+
+  it("carries an enabled grounded turn through the shared MemoriaViva pipeline", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "Remember that I work as a software developer.",
+          memory: {
+            enabled: false,
+            budgetTokens: 1200,
+            mode: "governed-assist",
+            context: {
+              userId: "local-operator",
+              workspaceId: projectPath,
+              projectId: projectPath,
+              conversationId: chatId,
+            },
+          },
+        }),
+      ),
+      deps(),
+      runner(emptyPack(), "Acknowledged."),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer & {
+      readonly memory?: { readonly context: { readonly enabled: boolean } };
+    };
+    expect(answer.memory?.context.enabled).toBe(false);
   });
 
   it("returns empty citations + uncertainty when the pack carries none", async () => {
@@ -1718,7 +1750,7 @@ describe("handleGroundedAsk", () => {
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "How does the whole system work?" })),
       deps(),
-      runner(packWithCitations(), "overview"),
+      runner(packWithCitations(), "overview [src/bar.ts] [src/foo.ts:10-20]"),
     );
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);

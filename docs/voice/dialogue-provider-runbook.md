@@ -70,8 +70,9 @@ The Azure Foundry voice resource uses the `api-key` header form (not `Bearer`), 
 
 ## 3. Bringing up full dialogue mode
 
-To exercise the colleague-like dialogue end-to-end you must register **both** halves of the turn loop
-plus the personas. Using the Foundry development deployments:
+To exercise the colleague-like dialogue end-to-end, register the four product roles: optional batch
+dictation, Realtime media/VAD, live Realtime transcription, and exact-answer speech output. Using the Foundry
+development deployment aliases:
 
 ```jsonc
 {
@@ -86,6 +87,21 @@ plus the personas. Using the Foundry development deployments:
         "supportsSpeechInput": true,
         "voiceProviderLocality": "azure-foundry",
       },
+    },
+    {
+      "modelId": "keiko-realtime",
+      "baseUrl": "https://<your-foundry-host>/openai/v1",
+      "apiKeyHeaderName": "api-key",
+      "apiKeySecretRef": "voice/keiko-realtime",
+      "capability": {
+        "kind": "voice",
+        "supportsSpeechInput": true,
+        "supportsSpeechOutput": true,
+        "supportsRealtimeVoice": true,
+        "realtimeTranscriptionModel": "keiko-realtime-stt",
+        "voiceProviderLocality": "azure-foundry",
+      },
+      "voiceProfiles": [{ "persona": "neutral", "voiceId": "alloy" }],
     },
     {
       "modelId": "keiko-tts",
@@ -108,12 +124,9 @@ plus the personas. Using the Foundry development deployments:
 }
 ```
 
-With both providers reachable, the resolver reports STT and speech-output helper capability: dictation
-and read-aloud are available, but **Voice dialogue mode is not offered** unless the deployment also
-advertises a realtime provider (`supportsRealtimeVoice: true`, `transport.webrtcMedia: true`) and at
-least one `voiceProfiles` persona. Voice Dialogue is the Realtime WebRTC product path; STT+TTS is not a
-fluid-dialogue fallback unless an operator explicitly enables a degraded compatibility mode outside the
-default UI.
+Voice Dialogue is offered only when the deployment advertises Realtime WebRTC and at least one persona.
+`realtimeTranscriptionModel` must be the exact provider deployment alias accepted inside the Realtime
+session; it is not a second standalone provider record. STT+TTS alone is not a fluid-dialogue fallback.
 
 ## 4. Validating provider reachability without exposing secrets
 
@@ -158,13 +171,14 @@ Then walk the colleague-like conversation. Each step maps to an Epic #1556 accep
 
 1. **Ask** — open a chat, toggle **Voice dialogue mode** on, and speak. The switch starts the Realtime
    WebRTC session directly; there is no separate **Start realtime voice** or per-turn **Start speaking**
-   button. The provider data channel commits the user transcript into the existing chat history (AC1).
-2. **Listen** — the assistant answer arrives through the same Realtime session. Committed assistant
-   transcript text is appended to the existing chat history through `/api/desktop/chat/voice-turn`; raw
-   audio remains transient and is not stored (AC2).
-3. **Ground in files / context** — attach a file (or reference earlier chat) and ask about it; committed
-   Realtime turns are persisted in the same chat, so subsequent text and voice turns share the same
-   visible conversation history (AC2).
+   button. Low-eagerness semantic VAD and Keiko's continuation window treat short thinking pauses as part of
+   the same utterance before the settled transcript enters the existing chat history (AC1).
+2. **Listen** — the final user transcript is sent through the normal chat request. The visible canonical
+   assistant answer is synthesized through the configured speech-output role; the Realtime provider creates
+   no competing answer. Raw audio remains transient and is not stored (AC2).
+3. **Ground in files / context** — attach a file or Knowledge Pod and ask about it. Verify the spoken user
+   message, grounded answer, and sources appear in the same chat, and that MemoriaViva processes the turn
+   exactly as it does for typed input (AC2).
 4. **Switch voices** — open the **Voice profile** selector and choose **Male**, **Female**, then
    **Neutral**. The visible active-voice label updates; the next spoken turn uses the chosen persona.
    The selection persists across reload (stored content-free as the persona enum in `localStorage` key

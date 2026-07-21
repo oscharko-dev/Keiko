@@ -150,6 +150,7 @@ interface VoiceCredentialInputFields {
   readonly voiceApiKeyHeaderName: string;
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
+  readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceTimeoutMs: string;
 }
@@ -161,6 +162,7 @@ function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
     fields.voiceApiKeyHeaderName.trim() !== "" ||
     fields.voiceModelId.trim() !== "" ||
     fields.voiceRealtimeModelId.trim() !== "" ||
+    fields.voiceRealtimeTranscriptionModelId.trim() !== "" ||
     fields.voiceSpeechOutputModelId.trim() !== "" ||
     fields.voiceTimeoutMs.trim() !== ""
   );
@@ -290,6 +292,7 @@ interface VoiceCredentialPayloadInput {
   readonly voiceApiKeyHeaderName: string;
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
+  readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceProviderLocality: VoiceProviderLocality;
@@ -305,6 +308,7 @@ function buildVoiceCredentialFields(
   | "voiceApiKeyHeaderName"
   | "voiceSpeechToTextModelId"
   | "voiceRealtimeModelId"
+  | "voiceRealtimeTranscriptionModelId"
   | "voiceSpeechOutputModelId"
   | "voiceOutputVoiceId"
   | "voiceProviderLocality"
@@ -316,6 +320,7 @@ function buildVoiceCredentialFields(
     voiceApiKeyHeaderName: trimOrUndefined(input.voiceApiKeyHeaderName),
     voiceSpeechToTextModelId: trimOrUndefined(input.voiceModelId),
     voiceRealtimeModelId: trimOrUndefined(input.voiceRealtimeModelId),
+    voiceRealtimeTranscriptionModelId: trimOrUndefined(input.voiceRealtimeTranscriptionModelId),
     voiceSpeechOutputModelId: trimOrUndefined(input.voiceSpeechOutputModelId),
     voiceOutputVoiceId: trimOrUndefined(input.voiceOutputVoiceId),
     voiceProviderLocality: input.voiceProviderLocality,
@@ -335,6 +340,7 @@ interface GatewayFormFields {
   readonly voiceApiKeyHeaderName: string;
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
+  readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceProviderLocality: VoiceProviderLocality;
@@ -379,6 +385,7 @@ function voiceCredentialFieldsForMode(
     voiceApiKeyHeaderName: fields.voiceApiKeyHeaderName,
     voiceModelId: fields.voiceModelId,
     voiceRealtimeModelId: fields.voiceRealtimeModelId,
+    voiceRealtimeTranscriptionModelId: fields.voiceRealtimeTranscriptionModelId,
     voiceSpeechOutputModelId: fields.voiceSpeechOutputModelId,
     voiceOutputVoiceId: fields.voiceOutputVoiceId,
     voiceProviderLocality: fields.voiceProviderLocality,
@@ -952,6 +959,30 @@ function VoiceRealtimeDeploymentField({
   );
 }
 
+function VoiceRealtimeTranscriptionDeploymentField({
+  t,
+  value,
+  disabled,
+  onChange,
+}: VoiceRealtimeDeploymentFieldProps): ReactNode {
+  return (
+    <label className="gw-field">
+      <span>
+        {t("gatewaySetup.voice.realtimeTranscriptionDeployment")}{" "}
+        <span className="dlg-opt">{t("common.optional")}</span>
+      </span>
+      <input
+        className="gw-input mono"
+        value={value}
+        placeholder="your-realtime-transcription-deployment"
+        autoComplete="off"
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
 interface VoiceSpeechOutputDeploymentFieldProps {
   readonly t: I18nTranslate;
   readonly value: string;
@@ -1195,6 +1226,8 @@ interface VoiceDeploymentFieldsProps {
   readonly setVoiceModelId: Dispatch<SetStateAction<string>>;
   readonly voiceRealtimeModelId: string;
   readonly setVoiceRealtimeModelId: Dispatch<SetStateAction<string>>;
+  readonly voiceRealtimeTranscriptionModelId: string;
+  readonly setVoiceRealtimeTranscriptionModelId: Dispatch<SetStateAction<string>>;
   readonly voiceSpeechOutputModelId: string;
   readonly setVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>>;
   readonly voiceOutputVoiceId: string;
@@ -1225,6 +1258,12 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         value={props.voiceRealtimeModelId}
         disabled={props.disabled}
         onChange={props.setVoiceRealtimeModelId}
+      />
+      <VoiceRealtimeTranscriptionDeploymentField
+        t={props.t}
+        value={props.voiceRealtimeTranscriptionModelId}
+        disabled={props.disabled}
+        onChange={props.setVoiceRealtimeTranscriptionModelId}
       />
       <VoiceSpeechOutputDeploymentField
         t={props.t}
@@ -1306,6 +1345,8 @@ interface VoiceFieldsSectionProps {
   readonly setVoiceModelId: Dispatch<SetStateAction<string>>;
   readonly voiceRealtimeModelId: string;
   readonly setVoiceRealtimeModelId: Dispatch<SetStateAction<string>>;
+  readonly voiceRealtimeTranscriptionModelId: string;
+  readonly setVoiceRealtimeTranscriptionModelId: Dispatch<SetStateAction<string>>;
   readonly voiceSpeechOutputModelId: string;
   readonly setVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>>;
   readonly voiceOutputVoiceId: string;
@@ -1333,6 +1374,8 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
         setVoiceModelId={props.setVoiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
         setVoiceRealtimeModelId={props.setVoiceRealtimeModelId}
+        voiceRealtimeTranscriptionModelId={props.voiceRealtimeTranscriptionModelId}
+        setVoiceRealtimeTranscriptionModelId={props.setVoiceRealtimeTranscriptionModelId}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
         setVoiceSpeechOutputModelId={props.setVoiceSpeechOutputModelId}
         voiceOutputVoiceId={props.voiceOutputVoiceId}
@@ -1578,6 +1621,7 @@ export function GatewaySetupDialog({
   const [voiceApiKeyHeaderName, setVoiceApiKeyHeaderName] = useState("");
   const [voiceModelId, setVoiceModelId] = useState("");
   const [voiceRealtimeModelId, setVoiceRealtimeModelId] = useState("");
+  const [voiceRealtimeTranscriptionModelId, setVoiceRealtimeTranscriptionModelId] = useState("");
   const [voiceSpeechOutputModelId, setVoiceSpeechOutputModelId] = useState("");
   const [voiceOutputVoiceId, setVoiceOutputVoiceId] = useState("alloy");
   const [voiceProviderLocality, setVoiceProviderLocality] =
@@ -1675,6 +1719,7 @@ export function GatewaySetupDialog({
           voiceApiKeyHeaderName,
           voiceModelId,
           voiceRealtimeModelId,
+          voiceRealtimeTranscriptionModelId,
           voiceSpeechOutputModelId,
           voiceOutputVoiceId,
           voiceProviderLocality,
@@ -1718,6 +1763,7 @@ export function GatewaySetupDialog({
     voiceApiKeyHeaderName,
     voiceModelId,
     voiceRealtimeModelId,
+    voiceRealtimeTranscriptionModelId,
     voiceSpeechOutputModelId,
     voiceTimeoutMs,
   });
@@ -1777,6 +1823,8 @@ export function GatewaySetupDialog({
       setVoiceModelId={setVoiceModelId}
       voiceRealtimeModelId={voiceRealtimeModelId}
       setVoiceRealtimeModelId={setVoiceRealtimeModelId}
+      voiceRealtimeTranscriptionModelId={voiceRealtimeTranscriptionModelId}
+      setVoiceRealtimeTranscriptionModelId={setVoiceRealtimeTranscriptionModelId}
       voiceSpeechOutputModelId={voiceSpeechOutputModelId}
       setVoiceSpeechOutputModelId={setVoiceSpeechOutputModelId}
       voiceOutputVoiceId={voiceOutputVoiceId}

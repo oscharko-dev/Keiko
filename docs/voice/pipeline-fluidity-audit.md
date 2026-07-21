@@ -26,19 +26,42 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
 
 ## Current hardening pass (2026-07-09)
 
+### Canonical chat parity correction (2026-07-21)
+
+- **One conversation pipeline:** the Realtime provider now supplies WebRTC media, VAD, and final
+  transcription only. Automatic provider responses and Realtime tools are disabled. A final spoken
+  transcript is handed to the normal chat send path, so repository/Knowledge Pod retrieval, source
+  rendering, context, approvals, and MemoriaViva behave exactly like typed chat.
+- **Visible committed speech:** interim text is shown only as ephemeral Voice UI. The final user transcript
+  becomes the normal user chat message; raw audio and partial text remain unpersisted.
+- **Pause-safe turn settlement:** capable providers use low-eagerness semantic VAD. Keiko then holds each
+  final segment for a 1.6-second continuation window, pauses that timer when speech resumes, and merges
+  overlapping boundary words. A breath or thinking pause therefore does not start an answer over the user.
+- **One assistant answer:** the canonical visible chat answer is the sole persisted answer and the sole TTS
+  input. Barge-in cancels local playback and the in-flight canonical generation without persisting a partial
+  assistant response.
+- **Grounded memory parity:** repository and Knowledge Pod asks carry the ordinary governed memory request
+  and return its result after the grounded messages persist. Grounding no longer skips MemoriaViva capture.
+- **Azure deployment-name binding:** setup exposes a separate Digital Voice live-transcription role and
+  stores it as `realtimeTranscriptionModel` on the Realtime capability. This prevents an Azure model-family
+  default from being sent where the provider requires the deployment alias.
+
+### Earlier July 9 changes
+
 - **Atomic server-owned Realtime session:** standard-key WebRTC negotiation now sends GA multipart
   `sdp` + complete `session` configuration in one call. Ephemeral-session negotiation applies the same
   configuration while minting the token. Keiko's persona, recent chat, MemoriaViva priming, grounding
   tools, transcription, voice, and VAD are active before media starts.
 - **No client configuration rollback:** the browser no longer sends duplicate instructions, tools,
-  `tool_choice`, or transcription settings after connection. A narrow `session.update` carries only an
-  explicitly selected acoustic turn-detection profile, so it cannot erase server grounding or memory.
+  `tool_choice`, transcription settings, or a default VAD profile after connection. A narrow
+  `session.update` carries turn detection only when the user explicitly selects an acoustic profile, so the
+  browser cannot erase server grounding, memory, or patient semantic VAD.
 - **Single-copy memory priming:** initial MemoriaViva context is sent in server instructions only. Later
   memory changes can still be injected mid-session; a priming failure emits a redacted operator diagnostic
   instead of silently disappearing.
 - **Recognition and endpointing:** dialogue transcription defaults to `gpt-realtime-whisper`. Providers can
-  explicitly advertise `supportsSemanticTurnDetection` and a `realtimeTranscriptionModel`; unsupported
-  endpoints retain the conservative server-VAD path.
+  explicitly advertise `supportsSemanticTurnDetection` and a `realtimeTranscriptionModel`; supported
+  endpoints use low-eagerness semantic VAD, while unsupported endpoints retain conservative server VAD.
 - **No cut-off PCM on backpressure:** `ServerResponse.write() === false` now waits for `drain` instead of
   aborting and destroying the stream. Only a real client close cancels synthesis. Mid-stream failures are
   correlation-keyed in redacted diagnostics.

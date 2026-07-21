@@ -784,7 +784,22 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     });
 
     expect(askGroundedSpy).toHaveBeenCalledWith(
-      { chatId: groundedChat.id, content: "ground plural scope", modelId: "example-chat-model" },
+      {
+        chatId: groundedChat.id,
+        content: "ground plural scope",
+        modelId: "example-chat-model",
+        memory: {
+          enabled: true,
+          budgetTokens: 1200,
+          mode: "governed-assist",
+          context: {
+            conversationId: groundedChat.id,
+            projectId: groundedChat.projectPath,
+            workspaceId: groundedChat.projectPath,
+            userId: "local-operator",
+          },
+        },
+      },
       expect.any(AbortSignal),
     );
     expect(ungroundedSpy).not.toHaveBeenCalled();

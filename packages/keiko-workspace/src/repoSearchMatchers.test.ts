@@ -71,4 +71,44 @@ describe("buildMatcher definition intent scoring", () => {
       reference,
     );
   });
+
+  it("recognizes German definition intent", () => {
+    const matcher = buildMatcher(nlq("Wo ist PaymentService definiert?"));
+    const reference = matcher.match("PaymentService registry entry");
+    expect(matcher.match("export class PaymentService {")).toBeGreaterThan(reference);
+  });
+
+  it("ranks English architecture decisions for an equivalent German question", () => {
+    const matcher = buildMatcher(
+      nlq(
+        "Welche drei Autonomie-Modi definiert ADR-0129, und welche zentrale Human-Control-Invariante gilt für Repository-Arbeit?",
+      ),
+    );
+    const modes = matcher.match(
+      "Every autonomy-capable surface is governed by the three modes defined in ADR-0129.",
+    );
+    const adjacentDecision = matcher.match(
+      "For repository work targeting dev, accepted task authority permits branch commits.",
+    );
+
+    expect(modes).toBeGreaterThan(adjacentDecision);
+  });
+
+  it("prefers an exact document reference over another record in the same series", () => {
+    const matcher = buildMatcher(nlq("What does ADR-0129 define?"));
+
+    expect(matcher.match("ADR-0129 defines the authority model.")).toBeGreaterThan(
+      matcher.match("ADR-0135 defines the delivery model."),
+    );
+  });
+
+  it("boosts a route declaration for German call-path questions without a definition verb", () => {
+    const matcher = buildMatcher(nlq("Prüfe POST /api/chats/messages/grounded: Route zum Handler"));
+    const mention = matcher.match("POST /api/chats/messages/grounded route handler documentation");
+    const declaration = matcher.match(
+      '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },',
+    );
+
+    expect(declaration).toBeGreaterThan(mention);
+  });
 });

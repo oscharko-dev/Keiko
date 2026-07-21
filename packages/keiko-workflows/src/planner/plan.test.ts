@@ -176,7 +176,20 @@ describe("createExplorationPlan", () => {
     expect(p.state).toBe("ready");
     expect(p.retrievalIntent).toBe("targeted-code-search");
     expect(p.anchors.some((anchor) => anchor.term === "windowframe")).toBe(true);
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
     expect(p.clarification).toBeUndefined();
+  });
+
+  it("retains structural retrieval when a symbol question asks for usages", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({ text: "Where is WindowFrame defined and used?" });
+    const p = plan({ scope, query: q });
+
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
   });
 
   it("explicitConnection: workspace-root allows API route lookups", () => {
@@ -194,7 +207,22 @@ describe("createExplorationPlan", () => {
       weight: 0.95,
       kind: "path",
     });
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
     expect(p.clarification).toBeUndefined();
+  });
+
+  it("retains structural and git rings when an API route question asks for history", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({
+      text: "Show the recent git history of POST /api/payments/:id/refund",
+    });
+    const p = plan({ scope, query: q });
+
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
   });
 
   it("explicitConnection still requires at least one anchor (no-anchors holds)", () => {

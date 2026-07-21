@@ -74,7 +74,7 @@ import {
 } from "./grounded-faithfulness.js";
 import {
   appendGroundedAnswerEntailment,
-  buildCitations,
+  buildAnswerCitations,
   buildQuery,
   buildSelectedScopeFrom,
   clarificationRequest,
@@ -717,9 +717,10 @@ interface SourceCitationBundle {
 function sourceCitationBundles(
   sources: readonly RetrievedSource[],
   redactor: Redactor,
+  assistantContent: string,
 ): readonly SourceCitationBundle[] {
   return sources.map((source) => {
-    const citations = buildCitations(source.pack, redactor);
+    const citations = buildAnswerCitations(source.pack, assistantContent, redactor);
     return {
       source,
       citations,
@@ -812,7 +813,7 @@ function assembleMultiSourceAnswer(
   },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
-  const citationBundles = sourceCitationBundles(sources, redactor);
+  const citationBundles = sourceCitationBundles(sources, redactor, assistant.content);
   const citations = ids.abstained ? [] : mergedCitations(citationBundles);
   const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
     buildGroundedAnswerContextPackSummary(

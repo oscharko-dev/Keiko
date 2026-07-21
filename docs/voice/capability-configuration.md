@@ -27,7 +27,7 @@ The voice modality is refined by additive optional flags:
 | `supportsSpeechOutput`                | Speech output / synthesis (text → audio playback).                            |
 | `supportsSpeechSynthesisInstructions` | Synthesis accepts tone, pacing, and intonation instructions.                  |
 | `supportsRealtimeVoice`               | Realtime, full-duplex speech (interruptible, colleague-like).                 |
-| `supportsSemanticTurnDetection`       | Realtime endpoint accepts semantic VAD with automatic eagerness.              |
+| `supportsSemanticTurnDetection`       | Realtime endpoint accepts patient semantic VAD with low eagerness.            |
 | `realtimeTranscriptionModel`          | Input transcription model for the realtime dialogue session.                  |
 | `voiceProviderLocality`               | Where the provider runs: `azure-foundry`, `customer-hosted`, or `local-only`. |
 
@@ -52,11 +52,13 @@ Adding the `voice` kind is a structural change, so `CONVERSATION_CAPABILITY_CONT
 ### First-run setup for operators
 
 The credential dialog groups audio configuration by user-visible outcome and uses one shared audio
-connection:
+connection. Digital Voice has two explicit deployment roles because Azure and similar providers resolve the
+Realtime session model and its live transcription model independently:
 
 - **Dictate** needs the exact speech-to-text deployment name.
-- **Digital Voice** needs the exact Realtime deployment name. An STT deployment alone cannot enable
-  live conversation.
+- **Digital Voice · Realtime** needs the exact Realtime media/VAD deployment name.
+- **Digital Voice · live transcription** needs the exact deployment name accepted by that Realtime session
+  for `input_audio_transcription`. On Azure this is a deployment name, not the underlying model family name.
 - **Read aloud** optionally needs a text-to-speech deployment name.
 
 Enter the audio endpoint URL and credential once, then fill only the deployment roles the installation
@@ -107,13 +109,17 @@ realtime capability adds:
   "kind": "voice",
   "supportsRealtimeVoice": true,
   "supportsSemanticTurnDetection": true,
-  "realtimeTranscriptionModel": "gpt-realtime-whisper",
+  "realtimeTranscriptionModel": "your-realtime-transcription-deployment",
   "voiceProviderLocality": "customer-hosted",
 }
 ```
 
-Omit either tuning field when the configured endpoint does not support it. The server then uses its
-provider-compatible server-VAD and transcription defaults; the browser does not overwrite them.
+Omit semantic VAD when the configured endpoint does not support it. For provider endpoints that require
+deployment aliases, configure `realtimeTranscriptionModel` explicitly; otherwise a model-family default may
+not resolve and final user speech will never reach the chat. When advertised, Keiko selects low-eagerness
+semantic VAD on the server and preserves it in the browser; a 1.6-second client continuation window merges
+any provider-split phrase before chat submission. The setup wizard adds the semantic flag automatically for
+new Realtime voice entries. The browser never receives the transcription deployment name.
 
 ### Credentials
 

@@ -678,6 +678,20 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     });
 
     expect(askGrounded).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(askGrounded).mock.calls[0]?.[0]).toMatchObject({
+      chatId: "chat-grounded",
+      content: "Summarise the repo.",
+      memory: {
+        enabled: true,
+        budgetTokens: 1200,
+        mode: "governed-assist",
+        context: {
+          conversationId: "chat-grounded",
+          projectId: "/repo",
+          workspaceId: "/repo",
+        },
+      },
+    });
     // Exactly one of each reconcile fetch — no duplicate messages/chats refetch.
     expect(fetchChatMessages).toHaveBeenCalledTimes(1);
     expect(fetchChats).toHaveBeenCalledTimes(1);
@@ -876,7 +890,7 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     expect(result.current.error).toBe(CONTEXT_OVERSIZED_USER_MESSAGE);
   });
 
-  it("prefers the explicit text over the current draft and clears the draft afterward", async () => {
+  it("prefers the explicit text and preserves the user's typed draft", async () => {
     const { result } = await setupUngroundedSession();
     act(() => {
       result.current.setDraft("stale draft");
@@ -887,7 +901,7 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     });
 
     expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("spoken question wins");
-    expect(result.current.draft).toBe("");
+    expect(result.current.draft).toBe("stale draft");
   });
 
   it("ignores a whitespace-only explicit text (committed-only invariant)", async () => {

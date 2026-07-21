@@ -21,6 +21,7 @@ import {
 import type { WorkspaceFs, WorkspaceStat } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
+import { cachedContentScores } from "./repoSearchCachedLexical.js";
 import {
   orderCandidatesForSearch,
   type SearchDiagnostics,
@@ -1941,6 +1942,7 @@ export function workspaceIndexCandidateSet(
     relativePath: file.scopePath,
     sizeBytes: file.sizeBytes,
   }));
+  const contentScores = cachedContentScores(prepared.entries, query, policy);
   const ordered = orderCandidatesForSearch(
     files,
     query,
@@ -1948,6 +1950,8 @@ export function workspaceIndexCandidateSet(
     prepared.discovery.ignoredByDiscovery,
     prepared.discovery.deniedByDiscovery,
     prepared.discovery.depthPrunedByDiscovery,
+    0,
+    contentScores,
   );
   return {
     files: ordered.files,
