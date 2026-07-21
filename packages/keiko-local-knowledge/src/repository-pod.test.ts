@@ -203,7 +203,7 @@ function relativeSource(relativePath: string): string {
 function firstSymbolLine(text: string, start: number, end: number): number | undefined {
   const before = text.slice(0, start).split("\n").length;
   const lines = text.slice(start, end).split("\n");
-  const index = lines.findIndex(isCodeSymbolDefinitionLine);
+  const index = lines.findIndex((line) => isCodeSymbolDefinitionLine(line));
   return index < 0 ? undefined : before + index;
 }
 

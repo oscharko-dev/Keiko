@@ -164,4 +164,213 @@ describe("codeParser", () => {
     );
     expect(Date.now() - startedAt).toBeLessThan(1_500);
   });
+
+  // Issue #2636. The strict method pattern blocked `void` at the return-type position because
+  // `void expr();` is a legal JS/TS fire-and-forget expression statement. That block also made
+  // every Java or C# void method fall through to the surrounding section, giving those files
+  // arbitrary chunk boundaries and section paths that did not name the method — a systematic
+  // precision loss on any Java or C# repository. The route now switches on the file extension:
+  // where `void` at the head of a declaration line is only ever a return type (Java, C#), the
+  // pattern accepts it; elsewhere the strict block stays in place.
+  it.each([
+    ["public static void main(String[] args) {", "function main"],
+    ["  public void render() {", "function render"],
+    ["  private void render() {", "function render"],
+    ["  protected abstract void update();", "function update"],
+  ])("anchors the Java void method %s", (line, expected) => {
+    expect(codeSymbolLabel(line, "java")).toBe(expected);
+  });
+
+  it.each([
+    ["public static void Main(string[] args) {", "function Main"],
+    ["  private void Render() {", "function Render"],
+    ["  protected override void OnPaint(PaintEventArgs e) {", "function OnPaint"],
+    ["  public virtual void Update(TimeSpan dt) {", "function Update"],
+    ["  public sealed override void Dispose() {", "function Dispose"],
+    ["  internal void Refresh() {", "function Refresh"],
+  ])("anchors the C# void method %s", (line, expected) => {
+    expect(codeSymbolLabel(line, "cs")).toBe(expected);
+  });
+
+  // Generic and array return neighbours were called out in the acceptance criteria as
+  // over-matching probes: the void-allowing pattern must still anchor them, because it must
+  // not be a widened net that only lands on the enemy targets.
+  it.each([
+    ["  public List<String> getItems() {", "java", "function getItems"],
+    ["  public int[] slice(int begin) {", "java", "function slice"],
+    ["  public T[] toArray() {", "java", "function toArray"],
+    ["  public Task<int> LoadAsync() {", "cs", "function LoadAsync"],
+    ["  public string[] Slice(int begin) {", "cs", "function Slice"],
+  ])("keeps anchoring the generic or array return neighbour %s (%s)", (line, ext, expected) => {
+    expect(codeSymbolLabel(line, ext)).toBe(expected);
+  });
+
+  // The extension gate is the load-bearing property. `void expr();` in a .ts file was the
+  // reason the strict block existed at all — the repository has real fire-and-forget lines
+  // (`void reload();`, `void handleEntry(entry as yauzl.Entry);`), and mis-anchoring those
+  // would be exactly the systematic precision loss the C# fix aims to end, just aimed at
+  // TypeScript instead. This test freezes that.
+  it.each([
+    "  void reload();",
+    "  void handleEntry(entry as yauzl.Entry);",
+    "  void serveGatewayRequest(req, res, deps, responses);",
+  ])("still blocks the TS/JS fire-and-forget expression %s", (line) => {
+    expect(codeSymbolLabel(line, "ts")).toBeUndefined();
+    expect(codeSymbolLabel(line, "js")).toBeUndefined();
+    expect(codeSymbolLabel(line)).toBeUndefined();
+  });
+
+  it("does not anchor `void expr();` inside a TypeScript source that also declares real methods", () => {
+    const text = [
+      "export async function loop(): Promise<void> {",
+      "  void handleEntry(input);",
+      "  void reload();",
+      "  return;",
+      "}",
+      "",
+    ].join("\n");
+    const sections = sectionsFor(text, "ts");
+    expect(sections.map((section) => section.sectionPath)).toEqual([["function loop"]]);
+  });
+
+  // Every existing adversarial line must still produce no anchor when the extension is switched
+  // to Java or C#. The conservative-table promise in the module's own comment stays true: the
+  // void allow is a lookahead relaxation, not a widening of what counts as a declaration shape.
+  it.each([
+    ["a call site in a return statement", "  return buildSummary(store, capsuleId);"],
+    ["a throw site", '    throw new KnowledgeStoreError("repository root failed");'],
+    ["a bare constructor call", "  return new Map(entries);"],
+    ["a SQL table header", "CREATE TABLE IF NOT EXISTS pod_runs ("],
+    ["a SQL CHECK constraint", "  applied INTEGER NOT NULL CHECK (applied IN (0, 1)),"],
+    ["a SQL PRIMARY KEY clause", "  PRIMARY KEY (capsule_id, source_id, run_id),"],
+    ["a SQL FOREIGN KEY clause", "  FOREIGN KEY (capsule_id) REFERENCES capsules(id),"],
+  ])("does not mine %s as a symbol even for Java/C# extensions", (_case, line) => {
+    expect(codeSymbolLabel(line, "java")).toBeUndefined();
+    expect(codeSymbolLabel(line, "cs")).toBeUndefined();
+  });
+
+  // `void` never becomes an anchor name even where it is a valid return type — nothing declares
+  // a symbol literally called `void`, so a captured anchor of `void` is always a false positive.
+  it("never captures `void` as an anchor name", () => {
+    expect(codeSymbolLabel("void void() {", "cs")).toBeUndefined();
+    expect(codeSymbolLabel("public void void() {", "java")).toBeUndefined();
+  });
+
+  it("emits chunk boundaries and section paths for a Java void-methods fixture", () => {
+    const text = [
+      "// Widget class demonstrating void methods.",
+      "public final class Widget {",
+      "  public static void main(String[] args) {",
+      "    render();",
+      "  }",
+      "",
+      "  private void render() {",
+      '    System.out.println("draw");',
+      "  }",
+      "",
+      "  protected abstract void update();",
+      "",
+      "  public List<String> getItems() {",
+      "    return items;",
+      "  }",
+      "",
+      "  public int[] slice(int begin) {",
+      "    return new int[]{ begin };",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const sections = sectionsFor(text, "java");
+    expect(sections.map((section) => section.sectionPath)).toEqual([
+      ["java module"],
+      ["type Widget"],
+      ["function main"],
+      ["function render"],
+      ["function update"],
+      ["function getItems"],
+      ["function slice"],
+    ]);
+    expect(sections.map((section) => section.characterStart)).toEqual([
+      0,
+      text.indexOf("public final class Widget"),
+      text.indexOf("  public static void main"),
+      text.indexOf("  private void render"),
+      text.indexOf("  protected abstract void update"),
+      text.indexOf("  public List<String> getItems"),
+      text.indexOf("  public int[] slice"),
+    ]);
+    expect(sections[sections.length - 1]?.characterEnd).toBe(text.length);
+  });
+
+  it("emits chunk boundaries and section paths for a C# void-methods fixture", () => {
+    // The method bodies deliberately avoid `var name = ...` so the constant pattern does not
+    // fold a body-local variable into the section path. The exception cases in the issue —
+    // modifier combinations — are the load-bearing ones; body content is incidental.
+    const text = [
+      "// Widget class demonstrating void methods.",
+      "public sealed class Widget {",
+      "  public static void Main(string[] args) {",
+      "    Console.WriteLine(args.Length);",
+      "  }",
+      "",
+      "  private void Render() {",
+      '    Console.WriteLine("draw");',
+      "  }",
+      "",
+      "  protected override void OnPaint(PaintEventArgs e) {",
+      "    base.OnPaint(e);",
+      "  }",
+      "",
+      "  public virtual void Update(TimeSpan dt) {",
+      "    lastUpdate = dt;",
+      "  }",
+      "",
+      "  public List<string> GetItems() {",
+      "    return items;",
+      "  }",
+      "",
+      "  public int[] Slice(int begin) {",
+      "    return new int[]{ begin };",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const sections = sectionsFor(text, "cs");
+    expect(sections.map((section) => section.sectionPath)).toEqual([
+      ["csharp module"],
+      ["type Widget"],
+      ["function Main"],
+      ["function Render"],
+      ["function OnPaint"],
+      ["function Update"],
+      ["function GetItems"],
+      ["function Slice"],
+    ]);
+    expect(sections.map((section) => section.characterStart)).toEqual([
+      0,
+      text.indexOf("public sealed class Widget"),
+      text.indexOf("  public static void Main"),
+      text.indexOf("  private void Render"),
+      text.indexOf("  protected override void OnPaint"),
+      text.indexOf("  public virtual void Update"),
+      text.indexOf("  public List<string> GetItems"),
+      text.indexOf("  public int[] Slice"),
+    ]);
+    expect(sections[sections.length - 1]?.characterEnd).toBe(text.length);
+  });
+
+  // The added modifier alternatives (`override|virtual|sealed|internal`) are literal tokens
+  // with no whitespace character in them, so the alternation is still deterministic per
+  // position: the engine can only advance one modifier at a time, and there is no
+  // cross-alternative backtracking. A hostile dense run of modifiers followed by a line
+  // that never legally terminates must therefore parse in linear time, just like the
+  // pre-existing hostile-long-space case.
+  it("stays bounded on a hostile C# modifier-heavy line", () => {
+    const hostileLine = `${"public override sealed ".repeat(150)}xxxx`;
+    const text = `${hostileLine}\npublic void execute() {\n}\n`;
+    const startedAt = Date.now();
+    const sections = sectionsFor(text, "cs");
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(sections.map((section) => section.sectionPath)).toContainEqual(["function execute"]);
+  });
 });

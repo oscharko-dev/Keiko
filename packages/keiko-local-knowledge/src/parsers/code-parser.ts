@@ -27,6 +27,7 @@ const CODE_PARSER_VERSION = "1";
 
 const CODE_LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = Object.freeze({
   cjs: "javascript",
+  cs: "csharp",
   go: "go",
   java: "java",
   js: "javascript",
@@ -40,6 +41,15 @@ const CODE_LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = Object.free
   ts: "typescript",
   tsx: "typescript",
 });
+
+// Extensions where the method-declaration pattern must accept `void` at the return-type
+// position (Issue #2636). On these languages a `void` head is only ever a return type, so
+// blocking it there systematically misses every `void`-returning method and hands the
+// downstream chunker a boundary that does not name the method (which is a citation section
+// path). Elsewhere — TypeScript, JavaScript — `void expr();` is a legal fire-and-forget
+// expression statement (`void reload();`) and treating it as a declaration mislabels every
+// fire-and-forget in the repository, so the strict pattern still blocks `void` there.
+const VOID_RETURN_LANGUAGE_EXTENSIONS: ReadonlySet<string> = new Set(["java", "cs"]);
 
 interface SymbolPattern {
   readonly kind: "constant" | "function" | "type";
@@ -57,11 +67,15 @@ const MAX_SYMBOL_LINE_LENGTH = 4096;
 // scan before the first probe was ever reached, so `timeoutMs` could not stop it.
 const SYMBOL_SCAN_DEADLINE_STRIDE = 64;
 
-// Words that are never a declared symbol name and never the type of a declaration. Without
-// this guard the broad method-shaped pattern below mines control flow and call sites —
-// `for await (const x of xs) {`, `return build(a);`, `throw new StoreError(msg);` — as if they
-// were definitions.
-const RESERVED_WORDS = [
+// Words that never legitimately head the return-type position of a declaration line and would
+// otherwise turn control flow, calls, and expression statements into false anchors — a broad
+// method-shaped pattern would mine `for await (const x of xs) {`, `return build(a);`, and
+// `throw new StoreError(msg);` as declarations without this guard. `void` is deliberately NOT
+// in this list: on Java and C# it is only ever a return type (Issue #2636), and blocking it
+// here would systematically miss every void-returning method. On JS/TS `void` at the head of
+// a line IS an expression-statement operator (`void reload();`), so a separate `WITH_VOID`
+// variant carries the strict block for the pattern applied to those extensions.
+const RESERVED_STATEMENT_KEYWORDS = [
   "await",
   "break",
   "case",
@@ -89,13 +103,19 @@ const RESERVED_WORDS = [
   "throw",
   "try",
   "typeof",
-  "void",
   "while",
   "with",
   "yield",
 ] as const;
 
-const RESERVED_WORD_SET: ReadonlySet<string> = new Set<string>(RESERVED_WORDS);
+const RESERVED_STATEMENT_KEYWORDS_WITH_VOID = [...RESERVED_STATEMENT_KEYWORDS, "void"] as const;
+
+// Names that a captured symbol anchor must never equal. Superset of the return-type-blocking
+// list plus `void` — even where `void` may head a return type, nothing declares a symbol
+// literally called `void`, so a captured anchor of `void` is always a false positive.
+const RESERVED_WORD_SET: ReadonlySet<string> = new Set<string>(
+  RESERVED_STATEMENT_KEYWORDS_WITH_VOID,
+);
 
 // The broad method/call-shaped pattern, built from the reserved-word list so the two never
 // drift apart. Two properties matter and are load-bearing:
@@ -106,27 +126,45 @@ const RESERVED_WORD_SET: ReadonlySet<string> = new Set<string>(RESERVED_WORDS);
 //   * The line must terminate a declaration with `{` or `;`. Call sites, SQL fragments inside
 //     template literals, and constructor invocations do not, which is what kept this pattern
 //     from being the "conservative" table this module promises.
-const NOT_RESERVED = String.raw`(?!(?:${RESERVED_WORDS.join("|")})\b)`;
-const METHOD_DECLARATION_PATTERN = new RegExp(
-  [
-    String.raw`^\s*`,
-    String.raw`(?:(?:public|private|protected|static|final|abstract|synchronized|native)\s+)*`,
-    String.raw`(?:<[^<>]{1,200}>\s+)?`,
-    String.raw`${NOT_RESERVED}[A-Za-z_$][\w$.]{0,200}(?:<[^<>]{0,200}>)?\??(?:\[\]){0,8}\s+`,
-    String.raw`([A-Za-z_$][\w$]*)\s*`,
-    String.raw`\([^()]{0,400}\)`,
-    // Everything between the parameter list and the declaration terminator: the space before `{`,
-    // a TypeScript return-type annotation (`): Promise<string> {` — the dominant method form, and
-    // a recall hole if excluded), and a Java `throws` clause. One bounded class covers all three.
-    // It excludes `;{()`, so it can neither swallow the terminator nor let a call site through,
-    // and NOTHING whitespace-matching follows it — a class that can match spaces sitting in front
-    // of `\s+`/`\s*` is precisely the ambiguity that made the previous table backtrack
-    // quadratically, so the terminator is a disjoint single-character class instead.
-    "[^;{()]{0,200}",
-    String.raw`[{;]\s*$`,
-  ].join(""),
-  "u",
-);
+// Modifier alternatives are literal tokens with no embedded whitespace so the alternation
+// stays deterministic per position — every added token (Java's original list plus C#'s
+// `override|virtual|sealed|internal`) is disjoint from `void expr;`-shaped expression
+// statements at line start because those never begin with a modifier keyword, and adding
+// them here does not enlarge the fire-and-forget false-positive surface.
+const METHOD_MODIFIER_ALTERNATION =
+  "(?:public|private|protected|static|final|abstract|synchronized|native|override|virtual|sealed|internal)";
+
+function buildMethodDeclarationPattern(notReserved: string): RegExp {
+  return new RegExp(
+    [
+      String.raw`^\s*`,
+      String.raw`(?:${METHOD_MODIFIER_ALTERNATION}\s+)*`,
+      String.raw`(?:<[^<>]{1,200}>\s+)?`,
+      String.raw`${notReserved}[A-Za-z_$][\w$.]{0,200}(?:<[^<>]{0,200}>)?\??(?:\[\]){0,8}\s+`,
+      String.raw`([A-Za-z_$][\w$]*)\s*`,
+      String.raw`\([^()]{0,400}\)`,
+      // Everything between the parameter list and the declaration terminator: the space before `{`,
+      // a TypeScript return-type annotation (`): Promise<string> {` — the dominant method form, and
+      // a recall hole if excluded), and a Java `throws` clause. One bounded class covers all three.
+      // It excludes `;{()`, so it can neither swallow the terminator nor let a call site through,
+      // and NOTHING whitespace-matching follows it — a class that can match spaces sitting in front
+      // of `\s+`/`\s*` is precisely the ambiguity that made the previous table backtrack
+      // quadratically, so the terminator is a disjoint single-character class instead.
+      "[^;{()]{0,200}",
+      String.raw`[{;]\s*$`,
+    ].join(""),
+    "u",
+  );
+}
+
+const NOT_RESERVED_STRICT = String.raw`(?!(?:${RESERVED_STATEMENT_KEYWORDS_WITH_VOID.join(
+  "|",
+)})\b)`;
+const NOT_RESERVED_ALLOW_VOID = String.raw`(?!(?:${RESERVED_STATEMENT_KEYWORDS.join("|")})\b)`;
+
+const METHOD_DECLARATION_PATTERN_STRICT = buildMethodDeclarationPattern(NOT_RESERVED_STRICT);
+const METHOD_DECLARATION_PATTERN_ALLOW_VOID =
+  buildMethodDeclarationPattern(NOT_RESERVED_ALLOW_VOID);
 
 // Derived from grounded-orchestrator.ts's symbolDefinitionPatterns table (Issue #2569). Keep the
 // table local: importing a server module here would reverse the ADR-0019 dependency direction.
@@ -146,7 +184,12 @@ const KOTLIN_FUN_MODIFIER =
   "(?:public|private|protected|internal|open|override|suspend|inline|operator|tailrec)";
 const JVM_TYPE_MODIFIER = "(?:public|private|protected|abstract|final|sealed|data|open|internal)";
 
-const SYMBOL_PATTERNS: readonly SymbolPattern[] = Object.freeze([
+// Language-agnostic patterns applied on every line regardless of extension. These cover
+// TS/JS (function/class/const), Python (def), Go (func/type), Rust (fn/struct/trait/enum),
+// Kotlin (fun/data class/class), and the JVM type-declaration shape. The C-style method
+// pattern is intentionally last because it is the widest and would otherwise shadow the
+// narrower language-specific entries; it is applied per-extension below.
+const SYMBOL_PATTERNS_SHARED: readonly SymbolPattern[] = Object.freeze([
   {
     kind: "function",
     pattern: /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\b/u,
@@ -202,8 +245,23 @@ const SYMBOL_PATTERNS: readonly SymbolPattern[] = Object.freeze([
     kind: "constant",
     pattern: /^\s*(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/u,
   },
-  { kind: "function", pattern: METHOD_DECLARATION_PATTERN },
 ]);
+
+const SYMBOL_PATTERNS_STRICT: readonly SymbolPattern[] = Object.freeze([
+  ...SYMBOL_PATTERNS_SHARED,
+  { kind: "function", pattern: METHOD_DECLARATION_PATTERN_STRICT },
+]);
+
+const SYMBOL_PATTERNS_ALLOW_VOID: readonly SymbolPattern[] = Object.freeze([
+  ...SYMBOL_PATTERNS_SHARED,
+  { kind: "function", pattern: METHOD_DECLARATION_PATTERN_ALLOW_VOID },
+]);
+
+function symbolPatternsFor(extension: string): readonly SymbolPattern[] {
+  return VOID_RETURN_LANGUAGE_EXTENSIONS.has(extension.toLowerCase())
+    ? SYMBOL_PATTERNS_ALLOW_VOID
+    : SYMBOL_PATTERNS_STRICT;
+}
 
 interface CodeLine {
   readonly start: number;
@@ -232,9 +290,9 @@ function codeLines(text: string): readonly CodeLine[] {
   return lines;
 }
 
-export function codeSymbolLabel(line: string): string | undefined {
+export function codeSymbolLabel(line: string, extension = ""): string | undefined {
   if (line.length > MAX_SYMBOL_LINE_LENGTH) return undefined;
-  for (const candidate of SYMBOL_PATTERNS) {
+  for (const candidate of symbolPatternsFor(extension)) {
     const match = candidate.pattern.exec(line);
     const name = match?.[1];
     if (name !== undefined && !RESERVED_WORD_SET.has(name)) return `${candidate.kind} ${name}`;
@@ -242,8 +300,8 @@ export function codeSymbolLabel(line: string): string | undefined {
   return undefined;
 }
 
-export function isCodeSymbolDefinitionLine(line: string): boolean {
-  return codeSymbolLabel(line) !== undefined;
+export function isCodeSymbolDefinitionLine(line: string, extension = ""): boolean {
+  return codeSymbolLabel(line, extension) !== undefined;
 }
 
 // The scan aborts on the deadline/cancellation signal mid-file rather than only between
@@ -257,6 +315,7 @@ export function isCodeSymbolDefinitionLine(line: string): boolean {
 // definition line before any limit applied.
 function symbolAnchors(
   text: string,
+  extension: string,
   options: ParserOptions,
   startedAt: number,
 ): readonly SymbolAnchor[] {
@@ -271,7 +330,7 @@ function symbolAnchors(
     }
     const line = lines[index];
     if (line === undefined) continue;
-    const label = codeSymbolLabel(line.text);
+    const label = codeSymbolLabel(line.text, extension);
     if (label !== undefined) anchors.push({ characterStart: line.start, label });
   }
   return anchors;
@@ -311,10 +370,11 @@ function stopDiagnostic(
 function unitAnchors(
   text: string,
   language: string,
+  extension: string,
   options: ParserOptions,
   startedAt: number,
 ): readonly SymbolAnchor[] {
-  const anchors = symbolAnchors(text, options, startedAt);
+  const anchors = symbolAnchors(text, extension, options, startedAt);
   if (anchors.length === 0 || anchors[0]?.characterStart === 0) return anchors;
   return [{ characterStart: 0, label: `${language} module` }, ...anchors];
 }
@@ -326,7 +386,7 @@ function emitCodeSections(
   options: ParserOptions,
   startedAt: number,
 ): CodeEmission {
-  const anchors = unitAnchors(text, language, options, startedAt);
+  const anchors = unitAnchors(text, language, input.extension.toLowerCase(), options, startedAt);
   const effective =
     anchors.length === 0 ? [{ characterStart: 0, label: `${language} module` }] : anchors;
   const units: ParsedUnit[] = [];
