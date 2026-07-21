@@ -249,14 +249,26 @@ async function expectActiveComposerSettled(page: Page): Promise<void> {
   expect(Math.abs(centreOffset?.y ?? Number.POSITIVE_INFINITY)).toBeLessThan(1);
 }
 
-function captureCanonicalChatSends(page: Page): () => readonly string[] {
+function captureVoiceChatSends(page: Page): {
+  readonly canonicalContents: () => readonly string[];
+  readonly legacyCount: () => number;
+} {
   const contents: string[] = [];
+  let legacyCount = 0;
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname !== "/api/desktop/chat/stream") return;
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === "/api/desktop/chat/voice-turn") {
+      legacyCount += 1;
+      return;
+    }
+    if (pathname !== "/api/desktop/chat/stream") return;
     const body = request.postDataJSON() as { readonly content?: unknown };
     if (typeof body.content === "string") contents.push(body.content);
   });
-  return () => contents;
+  return {
+    canonicalContents: () => contents,
+    legacyCount: () => legacyCount,
+  };
 }
 
 // Reads a counter from the browser-side window.__micStats instrument (see fakeRealtimeInit), so
@@ -280,7 +292,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
 async function dialogueTurnFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit({ emitTranscript: true }));
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  const canonicalChatSends = captureCanonicalChatSends(page);
+  const chatSends = captureVoiceChatSends(page);
   await openComposer(page);
 
   await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
@@ -305,10 +317,11 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   const composer = page.locator(".cmp-input");
   await expect(composer).toHaveCount(1);
   await expect(page.getByRole("textbox", { name: "Chat message" })).toHaveCount(0);
-  await expect.poll(() => canonicalChatSends()).toContain("what is the deploy status");
+  await expect.poll(() => chatSends.canonicalContents()).toContain("what is the deploy status");
   const conversation = page.getByRole("log", { name: "Conversation" });
   await expect(conversation.getByText("what is the deploy status", { exact: true })).toBeVisible();
   await expect(conversation.getByText(/KEIKO_E2E_STREAM_OK/u)).toBeVisible();
+  expect(chatSends.legacyCount()).toBe(0);
   await expect(composer).toHaveValue("");
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 

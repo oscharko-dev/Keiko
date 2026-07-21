@@ -487,7 +487,7 @@ function seedScopedRepo(projectPath: string): void {
 }
 
 function insertGroundedTestMemory(vault: MemoryVaultStore, id: string, body: string): void {
-  const now = Date.now();
+  const now = NOW;
   vault.insertMemory({
     id: id as MemoryId,
     schemaVersion: "1",
@@ -1345,45 +1345,52 @@ describe("handleGroundedAsk", () => {
     const memoryDir = join(tmp, "grounded-memory-vault");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    insertGroundedTestMemory(memoryVault, "mem-package-manager", "Use pnpm for package installs.");
-    insertGroundedTestMemory(
-      memoryVault,
-      "mem-production-database",
-      "The production database uses PostgreSQL.",
-    );
+    try {
+      insertGroundedTestMemory(
+        memoryVault,
+        "mem-package-manager",
+        "Use pnpm for package installs.",
+      );
+      insertGroundedTestMemory(
+        memoryVault,
+        "mem-production-database",
+        "The production database uses PostgreSQL.",
+      );
 
-    const result = await handleGroundedAsk(
-      ctx(
-        JSON.stringify({
-          chatId,
-          content: "Which package manager should I use for installs?",
-          memory: {
-            enabled: true,
-            budgetTokens: 1200,
-            mode: "governed-assist",
-            context: {
-              userId: "local-operator",
-              workspaceId: projectPath,
-              projectId: projectPath,
-              conversationId: chatId,
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "Which package manager should I use for installs?",
+            memory: {
+              enabled: true,
+              budgetTokens: 1200,
+              mode: "governed-assist",
+              context: {
+                userId: "local-operator",
+                workspaceId: projectPath,
+                projectId: projectPath,
+                conversationId: chatId,
+              },
             },
-          },
-        }),
-      ),
-      deps(undefined, {}, { memoryVault }),
-      runner(emptyPack(), "The production database uses PostgreSQL."),
-    );
+          }),
+        ),
+        deps(undefined, {}, { memoryVault }),
+        runner(emptyPack(), "The production database uses PostgreSQL."),
+      );
 
-    expect(result.status).toBe(200);
-    const answer = result.body as GroundedAnswer & {
-      readonly memory?: {
-        readonly context: { readonly memories: readonly { readonly bodyExcerpt: string }[] };
+      expect(result.status).toBe(200);
+      const answer = result.body as GroundedAnswer & {
+        readonly memory?: {
+          readonly context: { readonly memories: readonly { readonly bodyExcerpt: string }[] };
+        };
       };
-    };
-    const recalled = answer.memory?.context.memories.map((memory) => memory.bodyExcerpt) ?? [];
-    expect(recalled).toContain("Use pnpm for package installs.");
-    expect(recalled).not.toContain("The production database uses PostgreSQL.");
-    memoryVault.close();
+      const recalled = answer.memory?.context.memories.map((memory) => memory.bodyExcerpt) ?? [];
+      expect(recalled).toContain("Use pnpm for package installs.");
+      expect(recalled).not.toContain("The production database uses PostgreSQL.");
+    } finally {
+      memoryVault.close();
+    }
   });
 
   it("keeps a successful grounded answer when optional memory enrichment fails", async () => {

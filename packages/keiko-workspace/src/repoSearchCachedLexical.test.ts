@@ -43,6 +43,7 @@ function entry(scopePath: string, content: string, stale = false): PreparedWorks
 
 describe("repoSearchCachedLexical", () => {
   it("rejects query shapes whose semantics cannot be reproduced from privacy-safe hashes", () => {
+    expect(prepareCachedLexicalQuery(query(""))).toBeUndefined();
     expect(prepareCachedLexicalQuery(query("handler", { caseSensitive: true }))).toBeUndefined();
     expect(prepareCachedLexicalQuery(query("handler", { kind: "regex" }))).toBeUndefined();
     expect(prepareCachedLexicalQuery(query("*.ts", { kind: "file-pattern" }))).toBeUndefined();
