@@ -59,6 +59,9 @@ import {
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
+import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -480,6 +483,29 @@ function seedScopedRepo(projectPath: string): void {
     "export function MyClass() {\n  return 'foo';\n}\n",
     "utf8",
   );
+}
+
+function insertGroundedTestMemory(vault: MemoryVaultStore, id: string, body: string): void {
+  const now = Date.now();
+  vault.insertMemory({
+    id: id as MemoryId,
+    schemaVersion: "1",
+    scope: { kind: "user", userId: "local-operator" as MemoryUserId },
+    type: "preference",
+    body,
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: now,
+      confidence: 1,
+      sensitivity: "public",
+    },
+    validity: { validFrom: now },
+    status: "accepted",
+    pinned: false,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+  });
 }
 
 async function runHandler(
@@ -1311,6 +1337,52 @@ describe("handleGroundedAsk", () => {
       readonly memory?: { readonly context: { readonly enabled: boolean } };
     };
     expect(answer.memory?.context.enabled).toBe(false);
+  });
+
+  it("retrieves grounded memory from the user question without assistant-answer bias", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const memoryDir = join(tmp, "grounded-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertGroundedTestMemory(memoryVault, "mem-package-manager", "Use pnpm for package installs.");
+    insertGroundedTestMemory(
+      memoryVault,
+      "mem-production-database",
+      "The production database uses PostgreSQL.",
+    );
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "Which package manager should I use for installs?",
+          memory: {
+            enabled: true,
+            budgetTokens: 1200,
+            mode: "governed-assist",
+            context: {
+              userId: "local-operator",
+              workspaceId: projectPath,
+              projectId: projectPath,
+              conversationId: chatId,
+            },
+          },
+        }),
+      ),
+      deps(undefined, {}, { memoryVault }),
+      runner(emptyPack(), "The production database uses PostgreSQL."),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer & {
+      readonly memory?: {
+        readonly context: { readonly memories: readonly { readonly bodyExcerpt: string }[] };
+      };
+    };
+    const recalled = answer.memory?.context.memories.map((memory) => memory.bodyExcerpt) ?? [];
+    expect(recalled).toContain("Use pnpm for package installs.");
+    expect(recalled).not.toContain("The production database uses PostgreSQL.");
+    memoryVault.close();
   });
 
   it("returns empty citations + uncertainty when the pack carries none", async () => {

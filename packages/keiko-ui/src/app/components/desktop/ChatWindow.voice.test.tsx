@@ -922,6 +922,51 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
         expect.any(AbortSignal),
       ),
     );
+
+    rerender(
+      <ChatSessionProvider
+        value={makeSession({
+          sendMessage,
+          messages: [
+            ...makeSessionWithAssistantMessage().messages,
+            {
+              id: "msg-2",
+              chatId: "chat-1",
+              role: "assistant",
+              content: "The release is green.",
+              timestamp: Date.now(),
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+            {
+              id: "msg-3",
+              chatId: "chat-1",
+              role: "assistant",
+              content: "This later text-only update must stay silent.",
+              timestamp: Date.now() + 1,
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+          ],
+          sending: false,
+          sendStatus: "completed",
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(api.synthesizeAssistantSpeech).toHaveBeenCalledTimes(1);
+    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
+      { persona: "male", text: "This later text-only update must stay silent." },
+      expect.any(AbortSignal),
+    );
   });
 
   it("uses the same dialogue switch to leave dialogue mode and run cleanup", async () => {

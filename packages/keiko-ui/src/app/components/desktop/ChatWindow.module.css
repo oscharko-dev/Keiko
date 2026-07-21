@@ -58,16 +58,18 @@
   width: auto;
 }
 
-.voiceContent {
-  display: flex;
+.cmp-voice-content {
+  position: relative;
+  display: grid;
   width: min(100%, 680px);
   min-width: 0;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
+  place-items: center;
 }
 
-.partialTranscript {
+.cmp-partial-transcript {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(50% + 34px);
   display: -webkit-box;
   overflow: hidden;
   max-width: 100%;

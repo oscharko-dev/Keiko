@@ -188,6 +188,11 @@ function latestAssistantMessage(messages: readonly ChatMessage[]): ChatMessage |
   }
   return undefined;
 }
+
+interface PendingVoiceAnswer {
+  readonly anchorId: string;
+  readonly replyMessageId?: string;
+}
 // GEN-PERF-CHAT-015 — below the windowing threshold every turn is fully rendered; with
 // code-block/citation-heavy answers that is ~150-200 DOM nodes per turn, all paying
 // layout/paint even when scrolled out of the window's viewport. content-visibility lets
@@ -2546,9 +2551,9 @@ function ComposerVoiceOverlay({
           data-composer-layer="voice"
           aria-hidden={voiceDialogActive ? undefined : true}
         >
-          <div className={styles.voiceContent}>
+          <div className={styles["cmp-voice-content"]}>
             {voiceDialogActive && partialUserTranscript !== undefined ? (
-              <p className={styles.partialTranscript} aria-live="off">
+              <p className={styles["cmp-partial-transcript"]} aria-live="off">
                 {partialUserTranscript}
               </p>
             ) : null}
@@ -2667,14 +2672,28 @@ function ComposerCoreImpl({
   // WebRTC realtime speech-to-speech; STT dictation remains a separate "speech to draft" feature.
   const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
   const latestAssistant = useMemo(() => latestAssistantMessage(messages), [messages]);
-  // `null` means no spoken turn is awaiting an answer. A committed transcript snapshots the previous
-  // assistant id; only a later canonical assistant message is eligible for speech, so entering Voice
-  // Dialogue never replays old chat history.
-  const [voiceAnswerAnchorId, setVoiceAnswerAnchorId] = useState<string | null>(null);
+  // A spoken turn snapshots the previous assistant id, then consumes exactly the first later assistant
+  // message. Freezing that reply id keeps unrelated typed/system answers silent while preserving the
+  // canonical visible message as the only synthesis input.
+  const [pendingVoiceAnswer, setPendingVoiceAnswer] = useState<PendingVoiceAnswer | null>(null);
+  useEffect(() => {
+    if (
+      pendingVoiceAnswer === null ||
+      pendingVoiceAnswer.replyMessageId !== undefined ||
+      latestAssistant === undefined ||
+      latestAssistant.id === pendingVoiceAnswer.anchorId
+    ) {
+      return;
+    }
+    setPendingVoiceAnswer({
+      anchorId: pendingVoiceAnswer.anchorId,
+      replyMessageId: latestAssistant.id,
+    });
+  }, [latestAssistant, pendingVoiceAnswer]);
   const voiceAnswer =
-    voiceAnswerAnchorId !== null && latestAssistant?.id !== voiceAnswerAnchorId
-      ? latestAssistant
-      : undefined;
+    pendingVoiceAnswer?.replyMessageId === undefined
+      ? undefined
+      : messages.find((message) => message.id === pendingVoiceAnswer.replyMessageId);
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
     // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and
@@ -2686,7 +2705,7 @@ function ComposerCoreImpl({
   });
   const commitCanonicalVoiceTurn = useCallback(
     ({ text }: { readonly turnId: string; readonly text: string }): Promise<void> => {
-      setVoiceAnswerAnchorId(latestAssistant?.id ?? "");
+      setPendingVoiceAnswer({ anchorId: latestAssistant?.id ?? "" });
       return sendMessage({ text });
     },
     [latestAssistant?.id, sendMessage],
@@ -2694,7 +2713,7 @@ function ComposerCoreImpl({
   const interruptCanonicalVoiceTurn = useCallback((): void => {
     playback.interrupt();
     cancelSend();
-    setVoiceAnswerAnchorId(null);
+    setPendingVoiceAnswer(null);
   }, [cancelSend, playback]);
   const realtimeVoice = useRealtimeVoice({
     persona: voiceDialog.persona,
@@ -2742,14 +2761,14 @@ function ComposerCoreImpl({
     if (!voiceDialogAvailable) {
       return;
     }
-    setVoiceAnswerAnchorId(null);
+    setPendingVoiceAnswer(null);
     voiceDialog.enter();
     realtimeVoice.start();
   }, [voiceDialog, voiceDialogAvailable, realtimeVoice]);
   const leaveVoiceDialog = useCallback(() => {
     realtimeVoice.stop();
     playback.stop();
-    setVoiceAnswerAnchorId(null);
+    setPendingVoiceAnswer(null);
     voiceDialog.leave();
   }, [playback, realtimeVoice, voiceDialog]);
   // The normal and dialogue layers use distinct controls so each state can cross-fade without

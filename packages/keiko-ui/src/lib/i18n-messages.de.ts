@@ -68,6 +68,8 @@ export const DE_MESSAGES = {
   "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime-Deployment",
   "gatewaySetup.voice.realtimeTranscriptionDeployment":
     "Digital Voice · Live-Transkriptions-Deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
+    "ihr-realtime-transkriptions-deployment",
   "gatewaySetup.voice.speechOutputDeployment": "Vorlesen · Speech-Output-Deployment",
   "gatewaySetup.voice.outputVoice": "Ausgabestimme",
   "gatewaySetup.voice.outputVoiceHint": "optional; Standard: alloy",

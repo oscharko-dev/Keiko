@@ -974,7 +974,7 @@ function VoiceRealtimeTranscriptionDeploymentField({
       <input
         className="gw-input mono"
         value={value}
-        placeholder="your-realtime-transcription-deployment"
+        placeholder={t("gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder")}
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}

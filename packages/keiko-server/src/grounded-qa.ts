@@ -1552,6 +1552,7 @@ async function attachGroundedMemory(
     },
     chat,
     runtime,
+    { retrievalContent: prepared.input.content },
   );
   return memory === undefined ? result : { ...result, body: { ...result.body, memory } };
 }

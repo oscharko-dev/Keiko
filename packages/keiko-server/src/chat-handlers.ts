@@ -1638,6 +1638,7 @@ export async function buildVoiceTurnMemoryResult(
   request: VoiceTurnAppendRequest,
   chat: Chat,
   memoryContext: ConversationMemoryRuntimeContext | undefined,
+  options: { readonly retrievalContent?: string | undefined } = {},
 ): Promise<ConversationMemoryResultWire | undefined> {
   if (request.memory === undefined) {
     return undefined;
@@ -1645,7 +1646,7 @@ export async function buildVoiceTurnMemoryResult(
   if (memoryContext === undefined) {
     return emptyMemoryResult(false);
   }
-  const content = voiceTurnCombinedText(request.messages);
+  const content = options.retrievalContent ?? voiceTurnCombinedText(request.messages);
   const memory = await buildMemoryResult(
     voiceTurnAsSendRequest(request, content),
     deps,
