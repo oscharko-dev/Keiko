@@ -11,19 +11,21 @@
 // VERIFIED here.
 
 import type { HtmlManualSourceKind } from "./html-manual-source.js";
+import { SHARED_POD_REFRESH_TERMINALS } from "./local-knowledge.js";
 import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 export const HTML_MANUAL_REFRESH_SCHEMA_VERSION = "1" as const;
 
-// Terminal outcome of a refresh run. `unchanged`/`updated` are healthy; `partial` completed with
-// failed or denied pages; `failed`/`cancelled` did not complete and MUST leave the prior pod usable.
+// Terminal outcome of a refresh run. `unchanged`/`updated` are healthy; the three
+// `SHARED_POD_REFRESH_TERMINALS` (`partial`/`failed`/`cancelled`) are the interoperability floor
+// shared with every other pod kind's refresh vocabulary (Issue #2633 — Knowledge M2.12): `partial`
+// completed with failed or denied pages; `failed`/`cancelled` did not complete and MUST leave the
+// prior pod usable.
 export const MANUAL_REFRESH_OUTCOMES = [
   "unchanged",
   "updated",
-  "partial",
-  "failed",
-  "cancelled",
+  ...SHARED_POD_REFRESH_TERMINALS,
 ] as const;
 export type ManualRefreshOutcome = (typeof MANUAL_REFRESH_OUTCOMES)[number];
 

@@ -1989,6 +1989,7 @@ function repositoryPodSourceId(
 }
 
 async function runRepositoryPodIndexingJob(
+  deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
   capsule: KnowledgeCapsule,
   sourceId: KnowledgeSourceId,
@@ -1997,6 +1998,10 @@ async function runRepositoryPodIndexingJob(
   signal: AbortSignal,
 ): Promise<IndexingTerminal | undefined> {
   let terminal: IndexingTerminal | undefined;
+  // The capsule setting is resolved through the SAME helper the folder path uses
+  // (`localKnowledgeContextualRetrievalOptions`), so a repository pod honours every
+  // contextualRetrieval field a folder pod honours — Issue #2633 parity gap.
+  const contextualRetrieval = localKnowledgeContextualRetrievalOptions(deps, capsule);
   await refreshRepositoryPod({
     store,
     capsuleId: capsule.id,
@@ -2006,6 +2011,7 @@ async function runRepositoryPodIndexingJob(
     workspaceFs: nodeWorkspaceFs,
     auditSink: createSqliteAuditSink(store),
     signal,
+    ...(contextualRetrieval === undefined ? {} : { contextualRetrieval }),
     onIndexEvent: (event) => {
       if (event.kind === "job-started") {
         localKnowledgeIndexingRegistry.attachJobId(String(capsule.id), event.jobId);
@@ -2093,6 +2099,7 @@ async function dispatchCapsuleIndexingJob(
   const podSourceId = repositoryPodSourceId(store, capsule);
   if (podSourceId !== undefined) {
     return await runRepositoryPodIndexingJob(
+      deps,
       store,
       capsule,
       podSourceId,

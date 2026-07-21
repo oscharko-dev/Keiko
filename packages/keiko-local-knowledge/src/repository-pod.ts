@@ -17,6 +17,7 @@ import {
   type KnowledgePodSummary,
   type KnowledgeSourceId,
   type KnowledgeSourceScope,
+  type SharedPodRefreshTerminal,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -34,6 +35,7 @@ import {
   scanRepositoryFingerprints,
   type RepositoryFileFingerprint,
 } from "./indexing/repository-fingerprints.js";
+import type { ContextualRetrievalOptions } from "./indexing/contextual-retrieval.js";
 import { runIndexingJob, type IndexingEvent, type IndexingResult } from "./indexing/index.js";
 import { buildKnowledgePodSummary } from "./knowledge-pods.js";
 import type { ParserRegistry } from "./parsers/index.js";
@@ -58,6 +60,12 @@ export interface RepositoryPodIndexingDeps extends RepositoryPodDeps {
   readonly discoveryOptions?: Omit<DiscoveryOptions, "respectGitIgnore" | "signal"> | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly onIndexEvent?: ((event: IndexingEvent) => void) | undefined;
+  // Threaded to `runIndexingJob` so a repository-scoped capsule honours the same
+  // `contextualRetrieval` capsule setting as every folder-scoped capsule. Without this the option
+  // was accepted at the PATCH layer and reported by `contextualRetrievalHealth`, but silently
+  // dropped on refresh — an unresolved parity gap between repository pods and folder pods
+  // (Issue #2633, epic Outcome 2).
+  readonly contextualRetrieval?: ContextualRetrievalOptions | undefined;
 }
 
 export interface CreateRepositoryPodShellInput {
@@ -78,9 +86,14 @@ export interface RepositoryPodChangeCounts {
   readonly rejectedEntries: number;
 }
 
+// `outcome` mixes ONE kind-specific healthy terminal (`succeeded`) with the shared
+// pod-refresh vocabulary reused across pod kinds. The shared terminals are pinned in contracts as
+// `SHARED_POD_REFRESH_TERMINALS` so the projection-parity guard in `knowledge-pods.test.ts` can
+// prove both this enum and `ManualRefreshOutcome` accept every shared terminal without hard
+// coding them in the test (Issue #2633 — Knowledge M2.12).
 export interface RepositoryPodRunRecord {
   readonly runId: string;
-  readonly outcome: "succeeded" | "partial" | "failed" | "cancelled";
+  readonly outcome: "succeeded" | SharedPodRefreshTerminal;
   readonly applied: boolean;
   readonly counts: RepositoryPodChangeCounts;
   readonly fingerprintSetDigest: string;
@@ -224,6 +237,9 @@ function runRepositoryIndexing(
       ...(deps.signal === undefined ? {} : { signal: deps.signal }),
       ...(deps.now === undefined ? {} : { now: deps.now }),
       ...(deps.idSource === undefined ? {} : { idSource: deps.idSource }),
+      ...(deps.contextualRetrieval === undefined
+        ? {}
+        : { contextualRetrieval: deps.contextualRetrieval }),
     }),
     deps.onIndexEvent,
   );
