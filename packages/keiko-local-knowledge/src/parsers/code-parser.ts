@@ -270,8 +270,14 @@ const SYMBOL_PATTERNS_ALLOW_VOID: readonly SymbolPattern[] = Object.freeze([
 // numeric index at `.toLowerCase()`. Legitimate string callers pay nothing: `typeof x ===
 // "string"` narrows without an allocation, and TypeScript's public signature on
 // `codeSymbolLabel` still declares `extension: string`, so the type discipline is intact.
+// The leading-dot strip matches the no-dot contract every internal caller already honours
+// (`ParserSelectionInput.extension` is documented that way) so a public consumer reaching in
+// with `path.extname()`-shaped input — `".cs"`, `".java"` — takes the same void-allowing
+// route as the internal pipeline. Without it a dotted extension would silently anchor to the
+// strict variant and reintroduce the very recall loss this PR closes.
 function symbolPatternsFor(extension: unknown): readonly SymbolPattern[] {
-  const key = typeof extension === "string" ? extension.toLowerCase() : "";
+  const raw = typeof extension === "string" ? extension.toLowerCase() : "";
+  const key = raw.startsWith(".") ? raw.slice(1) : raw;
   return VOID_RETURN_LANGUAGE_EXTENSIONS.has(key)
     ? SYMBOL_PATTERNS_ALLOW_VOID
     : SYMBOL_PATTERNS_STRICT;

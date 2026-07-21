@@ -307,6 +307,21 @@ describe("codeParser", () => {
     ).not.toThrow();
   });
 
+  // `ParserSelectionInput.extension` is documented as no-dot ("cs", "java", never ".cs"), and
+  // the internal parse path always honours that. But the public helpers are import surface for
+  // consumers who may reach them with `path.extname()`-shaped input, and silently reverting to
+  // the strict variant on a dotted extension would reintroduce the very recall loss this PR
+  // closes. `symbolPatternsFor` strips the leading dot so both shapes take the same route.
+  it.each([
+    ["  public void render() {", "java"],
+    ["  public void render() {", ".java"],
+    ["  public void Render() {", "cs"],
+    ["  public void Render() {", ".cs"],
+    ["  protected override void OnPaint() {", ".cs"],
+  ])("anchors %s equivalently for extension %s (with and without the leading dot)", (line, ext) => {
+    expect(codeSymbolLabel(line, ext)).toBeDefined();
+  });
+
   it("emits chunk boundaries and section paths for a Java void-methods fixture", () => {
     const text = [
       "// Widget class demonstrating void methods.",
