@@ -28,6 +28,13 @@ export const KEIKO_PRODUCT_VERSION = "0.2.15" as const;
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export { clampUnit } from "./numeric.js";
 
+// ─── Deterministic retrieval-evaluation primitives (ADR-0152 D5 amendment, Issue #2635) ──
+// One implementation of the retrieval `mean` and the binary nDCG@k discount formula. Every
+// evaluation harness — folded suites under `keiko-evaluations`, the gate script in `scripts/`,
+// and the server retrieval eval — imports these so the ADR-0152 D5 gate floors stay calibrated
+// against one math. `tests/architecture/eval-metrics-single-owner.test.ts` proves the invariant.
+export { binaryNdcgAtK, mean } from "./eval-metrics.js";
+
 // ─── Shared stable ordering helpers ─────────────────────────────────────────────
 export { sortedStrings } from "./stable-order.js";
 

@@ -290,10 +290,6 @@ export function recallAtK(paths, relevantPaths, k) {
   return hits / relevantPaths.length;
 }
 
-export function ndcgAtK(paths, relevantPaths, k) {
-  return binaryNdcgAtK(paths, relevantPaths, k);
-}
-
 export function evaluateQualityBudget(summary, budget) {
   const minimumResult = evaluateFloors(summary, {
     top1Rate: budget.minTop1Rate,
@@ -453,7 +449,7 @@ async function evaluateCase(testCase) {
     generatedLeakCount: leaked.length,
     recallAtK: recallAtK(paths, testCase.relevantPaths, EVAL_K),
     mrr: reciprocalRank(paths, testCase.relevantPaths),
-    ndcgAtK: ndcgAtK(paths, testCase.relevantPaths, EVAL_K),
+    ndcgAtK: binaryNdcgAtK(paths, testCase.relevantPaths, EVAL_K),
     observedTop: paths[0] ?? "",
     expectedTop: testCase.expectedTop,
     leaked,

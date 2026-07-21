@@ -367,6 +367,39 @@ package; `keiko-server`, `keiko-cli`, and `keiko-ui` remain forbidden.
 },
 ```
 
+> **Activation record (2026-07-21, Issue #2635).** D5 recorded the four-part fold as decided but
+> did not name where the deterministic numeric helpers — the mean across cases and the binary
+> nDCG@k discount — physically live. #2568 promoted `mean` and `binaryNdcgAtK` into
+> `packages/keiko-evaluations/src/metrics.ts` and repointed the folded harness and the gate script
+> at them; one caller was left behind because the obvious fix pointed the wrong way:
+> `packages/keiko-server/src/grounded-retrieval-eval.ts` still carried a local `average()` and a
+> locally-shaped `ndcgAtK()`, and `keiko-server` cannot import from `keiko-evaluations` (rule 6a
+> forbids the inward edge and D5 rule 3l does not re-open it). #2635 resolves this by moving the
+> helpers to `packages/keiko-contracts/src/eval-metrics.ts`, the leaf every package may depend on,
+> and re-exporting them from `keiko-evaluations/src/metrics.ts` so the harness SDK surface is
+> unchanged. `grounded-retrieval-eval.ts` and the gate script now import the canonical helpers
+> directly; `scripts/check-retrieval-quality.mjs` dropped a `ndcgAtK(...)` wrapper that only
+> renamed `binaryNdcgAtK(...)`.
+>
+> The one previously non-interchangeable shape was the server's `ndcgAtK(paths, relevantPath, k)`:
+> it took a single relevant path and returned the raw discounted gain, which coincides with the
+> normalized value only because IDCG is 1 for a single relevant item. The consolidation preserves
+> that exact value because `rankedPaths()` deduplicates before calling in, so
+> `binaryNdcgAtK(paths, [relevantPath], k)` reduces to the same per-position discount. A recorded
+> PRE vs POST comparison of the four-mode `GroundedRetrievalScorecard` (`baseline`,
+> `reranker-off`, `reranker-reversed`, `embedding-flat`) landed on the same SHA-256 —
+> `0b76eb620176b633d388a412f07958d0c81211bac78b8d5f17b99489e42ddd9d` — for both runs, with
+> `embedding-flat.ndcgAtK = 0.21309297535714578` matching to full IEEE-754 precision.
+>
+> Single-owner enforcement is structural, not name-based. `tests/architecture/eval-metrics-single-owner.test.ts`
+> looks for the nDCG@k discount-formula fingerprint (`1 / Math.log2(<expr> + 2)`) and the four
+> function-name signatures that historically carried the primitives (`average`, `ndcgAtK`,
+> `binaryNdcgAtK`, `discountedGain`); a copy that renames itself is still caught. The scan is
+> deliberately scoped to retrieval metrics — a bare `function mean(...)` in unrelated domain code
+> (e.g. the prompt-enhancer critic in `keiko-model-gateway`) is not a violation and is out of
+> scope for this issue; consolidating it would require its own decision because contracts owning a
+> generic `mean` used by an unrelated evaluator crosses a different boundary.
+
 The fold must not change any floor, fixture, proof, deterministic seed, or report meaning:
 
 - `PASS_THRESHOLDS` remains byte-identical, including the three hard `1.0` invariants
