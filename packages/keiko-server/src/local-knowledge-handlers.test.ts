@@ -33,6 +33,7 @@ import {
 import type {
   GatewayConfig,
   GatewayRequest,
+  NormalizedResponse,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -338,6 +339,97 @@ describe("stripTrailingSlashes", () => {
     expect(result).toBe(adversarial);
   });
 });
+
+// ─── M2.12 — repository-pod route helpers ───────────────────────────────────
+// Factored out of the "threads a repository capsule's contextualRetrieval setting through the
+// reindex route" test to keep the it block under the 50-line per-function limit and hoist the
+// SQLite typing off the double-cast. Every helper is scoped to the caller's temp dir; the temp dir
+// itself is still cleaned up by the file-wide afterEach + tempDirs stack, matching every other
+// test in this describe block. Issue #2633.
+interface ContextualRetrievalKeyRow {
+  readonly contextual_retrieval_key: string;
+}
+
+const REPOSITORY_CAPSULE_ID = "cap-1";
+const REPOSITORY_SOURCE_ID = "src-repo" as KnowledgeSourceId;
+
+function seedRepositoryFixture(tmp: string): string {
+  const repoRoot = join(tmp, "repo");
+  mkdirSync(join(repoRoot, "src"), { recursive: true });
+  writeFileSync(
+    join(repoRoot, "src", "billing.ts"),
+    [
+      "export interface Retry {}",
+      "",
+      "export function retryRelease(): string {",
+      '  return "billing rollout TS-999";',
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return repoRoot;
+}
+
+function seedRepositoryCapsule(tmp: string, repoRoot: string): void {
+  const { store, capId } = seedStore(tmp);
+  updateCapsuleDetails(store, capId, {
+    contextualRetrieval: { enabled: true, modelId: "capsule-chat", maxContextChars: 320 },
+  });
+  addSourceToCapsule(store, capId, {
+    id: REPOSITORY_SOURCE_ID,
+    displayName: "Repository",
+    tags: [],
+    scope: { kind: "repository", repositoryRoot: repoRoot },
+  });
+  store.close();
+}
+
+function repositoryContextualDeps(tmp: string, contextCalls: GatewayRequest[]): UiHandlerDeps {
+  const base = depsFor(tmp, gatewayConfigWithChatModels(["capsule-chat"]));
+  return {
+    ...base,
+    localKnowledgeContextualRetrievalChatGateway: {
+      chat: (request: GatewayRequest): Promise<NormalizedResponse> => {
+        contextCalls.push(request);
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: "Context: TS-999 billing rollout.",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "ctx-repo",
+            promptTokens: 1,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "low",
+          },
+        });
+      },
+    },
+  };
+}
+
+function repositoryContextualRetrievalKeys(tmp: string): readonly string[] {
+  const inspect = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+  });
+  try {
+    const rows = inspect._internal.db
+      .prepare(
+        "SELECT contextual_retrieval_key FROM chunks WHERE capsule_id = :c AND contextual_retrieval_key IS NOT NULL",
+      )
+      .all({ c: REPOSITORY_CAPSULE_ID }) as unknown as readonly ContextualRetrievalKeyRow[];
+    return rows.map((row) => row.contextual_retrieval_key);
+  } finally {
+    inspect.close();
+  }
+}
+
+function isContextualStrategyKey(key: string): boolean {
+  return key.startsWith("indexed-text=contextual-v1|");
+}
 
 describe("local-knowledge handlers", () => {
   it("connects a folder source to a capsule so it can be indexed", async () => {
@@ -1939,6 +2031,33 @@ describe("local-knowledge handlers", () => {
     expect(runs[1]?.added_files).toBe(0);
     expect(runs[1]?.changed_files).toBe(0);
     expect(runs[1]?.unchanged_files).toBeGreaterThan(0);
+  });
+
+  // Issue #2633 (Knowledge M2.12) — the capsule-level contextualRetrieval setting must reach a
+  // repository pod through the SAME server route a folder pod uses. Before this fix the route
+  // accepted and persisted the setting, `contextualRetrievalHealth` reported it, but the actual
+  // refresh silently dropped it — so the diagnostics surface and the indexing surface disagreed on
+  // whether contextual retrieval was actually running for a repository pod. The observable proof
+  // is on the `chunks` row: with the option flowing through, at least one chunk's
+  // `contextual_retrieval_key` starts with `indexed-text=contextual-v1|…`.
+  it("threads a repository capsule's contextualRetrieval setting through the reindex route", async (): Promise<void> => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const repoRoot = seedRepositoryFixture(tmp);
+    seedRepositoryCapsule(tmp, repoRoot);
+
+    const contextCalls: GatewayRequest[] = [];
+    const deps = repositoryContextualDeps(tmp, contextCalls);
+
+    const result = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "changed-files" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(contextCalls.length).toBeGreaterThan(0);
+    expect(contextCalls[0]?.modelId).toBe("capsule-chat");
+    expect(repositoryContextualRetrievalKeys(tmp).every(isContextualStrategyKey)).toBe(true);
   });
 
   it("maps full-reembed and full-rebuild modes to a force reindex even when files are unchanged", async () => {
