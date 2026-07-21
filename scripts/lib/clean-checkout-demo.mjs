@@ -362,6 +362,16 @@ async function retrieveAndAssembleCitations({
   };
 }
 
+// Deterministic byte-order string comparator used to keep the evidence's `citationFiles` list in
+// the same order on every host. The named helper replaces an inline nested ternary Sonar's
+// `sonarjs:javascript:S3358` flagged (nested ternaries hurt readability); a single named function
+// spells the intent out and lets the sort's arrow simply reference it.
+function byteOrderCompare(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function fileLineHashForCitations(citations) {
   return sha256Hex(
     stableStringify(
@@ -522,13 +532,10 @@ function buildMultiFileEvidence(multiFile) {
     citationCount: multiFile.citations.length,
     distinctFileCount: distinctFiles.size,
     spansMultipleFiles: distinctFiles.size >= 2,
-    // Explicit byte-order comparator instead of `.sort()`'s default: JavaScript's default sort
-    // is documented to be "locale-aware" for strings, which means the same list can come out in
-    // a different order on hosts with a non-C locale. This deterministic comparator gives the
-    // evidence a stable ordering across every host, and matches `sonarjs:javascript:S2871`.
-    citationFiles: [...distinctFiles].sort((left, right) =>
-      left < right ? -1 : left > right ? 1 : 0,
-    ),
+    // Byte-order comparator (see `byteOrderCompare` below) for a deterministic list across
+    // every host. Sorting with the default `.sort()` uses the runtime's locale-aware string
+    // ordering, so the recorded evidence would differ on hosts with a non-C locale.
+    citationFiles: [...distinctFiles].sort(byteOrderCompare),
     citationLinesResolved: multiFile.citations.every(
       (entry) => entry.startLine > 0 && entry.endLine >= entry.startLine,
     ),
