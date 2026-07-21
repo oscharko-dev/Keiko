@@ -643,7 +643,7 @@ describe("runGroundedExploration", () => {
     expect(out.pack.files.map((file) => file.scopePath)).toContain("src/pipeline.ts");
   });
 
-  it("avoids a redundant full structural adapter pass for an exact route trace", async () => {
+  it("runs one bounded structural adapter pass for an exact route trace", async () => {
     seedCrowdedHandlerTraceRepo();
     const adapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
     const originalLookup = adapter.lookup;
@@ -674,7 +674,7 @@ describe("runGroundedExploration", () => {
       adapter.lookup = originalLookup;
     }
 
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
   });
 
   it("returns no evidence for a missing exact definition without partial-name citations", async () => {
