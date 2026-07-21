@@ -225,6 +225,20 @@ describe("createExplorationPlan", () => {
     expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
   });
 
+  it("retains structural tracing from a route declaration to its handler", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({
+      text: "Trace POST /api/payments/:id/refund from route to handler",
+    });
+    const p = plan({ scope, query: q });
+
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
+  });
+
   it("explicitConnection still requires at least one anchor (no-anchors holds)", () => {
     // The relaxation only waives the generic/scope gates; a pure stop-word query has nothing to
     // search, so it must still ask for an anchor.

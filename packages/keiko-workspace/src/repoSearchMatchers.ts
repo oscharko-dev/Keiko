@@ -404,6 +404,7 @@ export function lineLooksLikeSymbolDefinition(
   const flags = caseSensitive ? "u" : "iu";
   const modifiers =
     "(?:(?:export|public|private|protected|internal|static|abstract|final|sealed|partial|data|open|override|virtual|readonly|async)\\s+)*";
+  const typedDeclarationToken = "[A-Za-z_$][\\w$<>,?.[\\]]*";
   const patterns = [
     new RegExp(`\\b${modifiers}function\\s+${escaped}\\b`, flags),
     new RegExp(`\\b${modifiers}(?:const|let|var)\\s+${escaped}\\b`, flags),
@@ -415,7 +416,7 @@ export function lineLooksLikeSymbolDefinition(
     new RegExp(`\\b${modifiers}(?:def|func|fn|fun)\\s+${escaped}\\s*\\(`, flags),
     new RegExp(`\\btype\\s+${escaped}\\s+(?:struct|interface)\\b`, flags),
     new RegExp(
-      `\\b${modifiers}(?!(?:await|return|throw|yield|new)\\b)[A-Za-z_$][\\w$<>, ?.[\\]]+\\s+${escaped}\\s*\\(`,
+      `\\b${modifiers}(?!(?:await|return|throw|yield|new)\\b)${typedDeclarationToken}(?:\\s+${typedDeclarationToken})*\\s+${escaped}\\s*\\(`,
       flags,
     ),
   ];

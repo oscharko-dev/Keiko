@@ -1,7 +1,12 @@
+import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 
-import { buildMatcher, normalizeNaturalLanguageToken } from "./repoSearchMatchers.js";
+import {
+  buildMatcher,
+  lineLooksLikeSymbolDefinition,
+  normalizeNaturalLanguageToken,
+} from "./repoSearchMatchers.js";
 
 function nlq(text: string): RetrievalQuery {
   return {
@@ -53,6 +58,20 @@ describe("normalizeNaturalLanguageToken", () => {
 });
 
 describe("buildMatcher definition intent scoring", () => {
+  it("matches typed declarations without unbounded whitespace backtracking", () => {
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "public Task<Result<User>> loadUser(UserId id) {",
+        "loadUser",
+        false,
+      ),
+    ).toBe(true);
+    const adversarial = `T${" ".repeat(40_000)}missing`;
+    const start = performance.now();
+    expect(lineLooksLikeSymbolDefinition(adversarial, "loadUser", false)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
   it("boosts JVM and .NET class declarations over plain references", () => {
     const matcher = buildMatcher(nlq("Where is PaymentService defined?"));
     const reference = matcher.match("PaymentService registry entry");

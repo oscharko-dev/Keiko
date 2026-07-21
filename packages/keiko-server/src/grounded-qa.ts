@@ -104,6 +104,7 @@ import {
   type ParsedConversationMemoryRequest,
 } from "./chat-handlers.js";
 import { resolveConversationMemoryContext } from "./memory-conversation-context.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 import {
   buildAnswerCitations as projectAnswerCitations,
   buildPackCitations,
@@ -1526,6 +1527,21 @@ function groundedAnswerBody(value: unknown): value is GroundedAnswer {
   );
 }
 
+function recordGroundedMemoryFailure(
+  deps: UiHandlerDeps,
+  assistantMessageId: string,
+  errorClass: string,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: assistantMessageId,
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: "grounded.memory",
+    source: "grounded-qa.attach-memory",
+    errorClass,
+    message: "grounded-memory-enrichment-failed",
+  });
+}
+
 async function attachGroundedMemory(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
@@ -1537,24 +1553,36 @@ async function attachGroundedMemory(
   }
   const chat = deps.store.findChatById(prepared.chat.id) ?? prepared.chat;
   const runtime = resolveConversationMemoryContext(deps, chat.projectPath, chat.id);
-  if (isRouteResult(runtime)) return runtime;
-  const memory = await buildVoiceTurnMemoryResult(
-    deps,
-    {
-      chatId: chat.id,
-      projectPath: chat.projectPath,
-      messages: [
-        { role: "user", content: prepared.input.content },
-        { role: "assistant", content: result.body.content },
-      ],
-      modelId: prepared.input.modelId,
-      memory: memoryRequest,
-    },
-    chat,
-    runtime,
-    { retrievalContent: prepared.input.content },
-  );
-  return memory === undefined ? result : { ...result, body: { ...result.body, memory } };
+  if (isRouteResult(runtime)) {
+    recordGroundedMemoryFailure(
+      deps,
+      result.body.assistantMessageId,
+      "GroundedMemoryContextUnavailable",
+    );
+    return result;
+  }
+  try {
+    const memory = await buildVoiceTurnMemoryResult(
+      deps,
+      {
+        chatId: chat.id,
+        projectPath: chat.projectPath,
+        messages: [
+          { role: "user", content: prepared.input.content },
+          { role: "assistant", content: result.body.content },
+        ],
+        modelId: prepared.input.modelId,
+        memory: memoryRequest,
+      },
+      chat,
+      runtime,
+      { retrievalContent: prepared.input.content },
+    );
+    return memory === undefined ? result : { ...result, body: { ...result.body, memory } };
+  } catch (error) {
+    recordGroundedMemoryFailure(deps, result.body.assistantMessageId, contentFreeErrorClass(error));
+    return result;
+  }
 }
 
 export async function handleGroundedAsk(

@@ -183,18 +183,21 @@ function buildRing(
 
 const DIRECT_ROUTE_METHOD_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
 const DIRECT_ROUTE_PATH_RE = /\/[A-Za-z0-9:_?&=./-]*[A-Za-z0-9_}/-]/u;
-const HISTORY_QUERY_RE = /\b(?:git|history|historie|recent|recency|zuletzt|changed|änderung)\b/iu;
+const HISTORY_QUERY_RE =
+  /(?:^|[^\p{L}\p{N}_])(?:git|history|historie|recent|recency|zuletzt|changed|änderung|änderungen)(?=$|[^\p{L}\p{N}_])/iu;
 const DEFINITION_LOOKUP_RE =
   /\b(?:defined|definition|declared|declaration|implemented|implementation|definiert|deklariert|implementiert)\b/iu;
 const SYMBOL_RELATION_RE =
   /\b(?:callers?|calls?|references?|referenziert|used|uses|verwendet|aufgerufen|aufrufe?)\b/iu;
+const ROUTE_TRAVERSAL_RE = /\b(?:handlers?|trace|traces|tracing|call[- ]?paths?|aufrufpfade?)\b/iu;
 const TEST_IDENTIFIER_RE = /(?:tests?|specs?)$/iu;
 
 function isDirectRouteLookup(query: RetrievalQuery): boolean {
   return (
     DIRECT_ROUTE_METHOD_RE.test(query.text) &&
     DIRECT_ROUTE_PATH_RE.test(query.text) &&
-    !HISTORY_QUERY_RE.test(query.text)
+    !HISTORY_QUERY_RE.test(query.text) &&
+    !ROUTE_TRAVERSAL_RE.test(query.text)
   );
 }
 

@@ -35,6 +35,14 @@ describe("directDefinitionSymbol", () => {
         [identifier],
       ),
     ).toBeUndefined();
+    for (const relation of ["usages", "Historie", "Änderungen"]) {
+      expect(
+        directDefinitionSymbol(
+          query(`Show the definition and ${relation} of KeikoNonexistentQuantumHandler987`),
+          [identifier],
+        ),
+      ).toBeUndefined();
+    }
   });
 
   it("rejects ambiguous multi-symbol definition questions", () => {
@@ -50,6 +58,25 @@ describe("directDefinitionSymbol", () => {
     expect(
       directDefinitionSymbol(query("Where is the source implementation for PaymentServiceTest?"), [
         { ...identifier, term: "paymentservicetest" },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("requires a definition verb and exactly one high-confidence identifier", () => {
+    expect(
+      directDefinitionSymbol(query("Inspect KeikoNonexistentQuantumHandler987"), [identifier]),
+    ).toBeUndefined();
+    expect(
+      directDefinitionSymbol(query("Where is KeikoNonexistentQuantumHandler987 defined?"), []),
+    ).toBeUndefined();
+    expect(
+      directDefinitionSymbol(query("Where is the payment route defined?"), [
+        { term: "/api/payments", weight: 0.95, kind: "path" },
+      ]),
+    ).toBeUndefined();
+    expect(
+      directDefinitionSymbol(query("Where is KeikoNonexistentQuantumHandler987 defined?"), [
+        { ...identifier, weight: 0.84 },
       ]),
     ).toBeUndefined();
   });

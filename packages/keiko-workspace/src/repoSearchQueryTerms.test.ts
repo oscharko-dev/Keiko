@@ -67,7 +67,10 @@ describe("expandedQueryTerms", () => {
     const terms = expandedQueryTerms("Compare ADR-0129 with RFC-9110", false);
 
     expect(terms).toEqual(expect.arrayContaining(["adr-0129", "rfc-9110"]));
-    expect(terms).not.toEqual(expect.arrayContaining(["adr", "0129", "rfc", "9110"]));
+    expect(terms).not.toContain("adr");
+    expect(terms).not.toContain("0129");
+    expect(terms).not.toContain("rfc");
+    expect(terms).not.toContain("9110");
   });
 
   it("adds morphology and debugging-domain aliases for code questions", () => {

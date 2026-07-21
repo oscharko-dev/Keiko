@@ -62,6 +62,7 @@ import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -1308,7 +1309,7 @@ describe("handleGroundedAsk", () => {
     expect(assistMsg?.content).toBe(assistantContent);
   });
 
-  it("carries an enabled grounded turn through the shared MemoriaViva pipeline", async () => {
+  it("preserves the disabled MemoriaViva branch for a grounded turn", async () => {
     const { chatId, projectPath } = await setupChatWithScope();
     const result = await handleGroundedAsk(
       ctx(
@@ -1382,6 +1383,67 @@ describe("handleGroundedAsk", () => {
     const recalled = answer.memory?.context.memories.map((memory) => memory.bodyExcerpt) ?? [];
     expect(recalled).toContain("Use pnpm for package installs.");
     expect(recalled).not.toContain("The production database uses PostgreSQL.");
+    memoryVault.close();
+  });
+
+  it("keeps a successful grounded answer when optional memory enrichment fails", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const memoryDir = join(tmp, "failing-grounded-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertGroundedTestMemory(memoryVault, "mem-package-manager", "Use pnpm for package installs.");
+    const failingMemoryVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        if (property === "listMemoriesByScope") {
+          return (): never => {
+            throw new Error("sensitive-memory-backend-detail");
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "Which package manager should I use?",
+          memory: {
+            enabled: true,
+            budgetTokens: 1200,
+            mode: "governed-assist",
+            context: {
+              userId: "local-operator",
+              workspaceId: projectPath,
+              projectId: projectPath,
+              conversationId: chatId,
+            },
+          },
+        }),
+      ),
+      deps(
+        undefined,
+        {},
+        {
+          memoryVault: failingMemoryVault,
+          diagnostics: { record: (record) => diagnostics.push(record) },
+        },
+      ),
+      runner(emptyPack(), "Use the package manager configured by the repository."),
+    );
+
+    expect(result.status).toBe(200);
+    expect((result.body as GroundedAnswer).content).toContain("package manager");
+    expect((result.body as GroundedAnswer & { readonly memory?: unknown }).memory).toBeUndefined();
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      operation: "grounded.memory",
+      source: "grounded-qa.attach-memory",
+      message: "grounded-memory-enrichment-failed",
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("sensitive-memory-backend-detail");
     memoryVault.close();
   });
 
