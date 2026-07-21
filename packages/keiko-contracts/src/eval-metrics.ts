@@ -34,9 +34,9 @@ export function binaryNdcgAtK<Value>(
 ): number {
   const limit = Math.max(0, Math.floor(k));
   const relevantSet = new Set(relevant);
-  const actual = ranked.slice(0, limit).map((value) => relevantSet.has(value));
+  const actual = ranked.slice(0, limit).map((value): boolean => relevantSet.has(value));
   const idealCount = Math.min(limit, relevantSet.size);
-  const ideal = Array.from({ length: idealCount }, () => true);
+  const ideal = Array.from({ length: idealCount }, (): true => true);
   const idealGain = discountedGain(ideal);
   return idealGain === 0 ? 1 : discountedGain(actual) / idealGain;
 }

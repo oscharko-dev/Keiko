@@ -702,10 +702,10 @@ function scorecardFor(
   return {
     mode,
     cases: perCase.length,
-    top1Rate: mean(perCase.map((item) => item.top1)),
-    recallAtK: mean(perCase.map((item) => item.recall)),
-    ndcgAtK: mean(perCase.map((item) => item.ndcg)),
-    citationSupport: mean(perCase.map((item) => item.citationSupport)),
+    top1Rate: mean(perCase.map((item): number => item.top1)),
+    recallAtK: mean(perCase.map((item): number => item.recall)),
+    ndcgAtK: mean(perCase.map((item): number => item.ndcg)),
+    citationSupport: mean(perCase.map((item): number => item.citationSupport)),
     failedCases: perCase.filter((item) => item.top1 === 0).map((item) => item.id),
   };
 }
