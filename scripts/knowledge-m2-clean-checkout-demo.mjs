@@ -146,12 +146,15 @@ const isDirectInvocation =
   import.meta.url === pathToFileURL(resolve(entryPoint)).href &&
   existsSync(entryPoint);
 if (isDirectInvocation) {
-  main().catch((cause) => {
+  // Top-level await instead of the promise chain Sonar's `sonarjs:S7785` flagged. The runtime
+  // (Node ≥ 20) supports it in ESM, and the reader sees the failure path linearly next to the
+  // success path. `process.exit(1)` remains AVOIDED so stderr flushes on the natural end of the
+  // event loop; setting `process.exitCode` is the flush-safe replacement.
+  try {
+    await main();
+  } catch (cause) {
     const message = cause instanceof Error ? cause.message : "unknown failure";
     log(`FAIL — ${message}`);
-    // Non-zero exit without `process.exit(1)` — Node flushes stderr at the natural end of the
-    // event loop, so the FAIL line above is guaranteed to reach `2>>log` before the process
-    // terminates. The prior `process.exit(1)` truncated it on redirection.
     process.exitCode = 1;
-  });
+  }
 }

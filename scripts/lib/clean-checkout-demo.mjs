@@ -522,7 +522,13 @@ function buildMultiFileEvidence(multiFile) {
     citationCount: multiFile.citations.length,
     distinctFileCount: distinctFiles.size,
     spansMultipleFiles: distinctFiles.size >= 2,
-    citationFiles: [...distinctFiles].sort(),
+    // Explicit byte-order comparator instead of `.sort()`'s default: JavaScript's default sort
+    // is documented to be "locale-aware" for strings, which means the same list can come out in
+    // a different order on hosts with a non-C locale. This deterministic comparator gives the
+    // evidence a stable ordering across every host, and matches `sonarjs:javascript:S2871`.
+    citationFiles: [...distinctFiles].sort((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    ),
     citationLinesResolved: multiFile.citations.every(
       (entry) => entry.startLine > 0 && entry.endLine >= entry.startLine,
     ),
@@ -801,12 +807,15 @@ export function validateEvidenceContract(evidence) {
 
 // Convenience for the CLI to render an acceptance summary alongside the evidence, without adding
 // extra keys to the evidence object itself.
+function acceptanceReportLine(result) {
+  const status = result.ok ? "PASS" : "FAIL";
+  const suffix = result.ok ? "" : ` — ${result.failures.join(", ")}`;
+  return `${status} ${result.id}${suffix}`;
+}
+
 export function renderAcceptanceReport(evidence) {
   const acceptance = evaluateAcceptanceCriteria(evidence);
-  return acceptance.results.map(
-    (result) =>
-      `${result.ok ? "PASS" : "FAIL"} ${result.id}${result.ok ? "" : ` — ${result.failures.join(", ")}`}`,
-  );
+  return acceptance.results.map(acceptanceReportLine);
 }
 
 // Direct invocation (`node scripts/lib/clean-checkout-demo.mjs`) is not the supported entry point

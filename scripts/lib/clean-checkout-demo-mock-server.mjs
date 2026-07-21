@@ -16,11 +16,14 @@ const EMBEDDING_DIMENSIONS_DEFAULT = 32;
 // A pure hash → unit-vector function. Chosen to give distinct-but-similar vectors for texts that
 // share tokens (the multi-file grounded query relies on this: the same tokens in two indexed files
 // yield overlapping vectors, so retrieval returns candidates from both).
-function deterministicEmbedding(input, dimensions) {
+export function deterministicEmbedding(input, dimensions) {
   const vector = new Array(dimensions).fill(0);
   const text = String(input);
   for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
+    // `codePointAt` returns the same value as `charCodeAt` on the BMP characters this demo ever
+    // sees (ASCII source text and English prose), and correctly handles surrogate pairs if a
+    // future caller ever pushes non-BMP content through the mock — matches `sonarjs:S7758`.
+    const code = text.codePointAt(index) ?? 0;
     const slot = (code + index) % dimensions;
     vector[slot] = (vector[slot] ?? 0) + ((code % 31) + 1) / 32;
   }
@@ -34,8 +37,11 @@ function deterministicEmbedding(input, dimensions) {
 // Reverse-order rerank. Deterministic and OBVIOUSLY distinguishable from the un-reranked order, so
 // the demo's evidence can prove the answer path CHANGES when the facade's external-reranking policy
 // permits the transport call.
-function reverseRerankResults(documents, topN) {
-  const bounded = Math.max(0, Math.min(topN | 0, documents.length));
+export function reverseRerankResults(documents, topN) {
+  // `Math.trunc(Number(topN))` gives the same integer coercion as the historical `topN | 0`
+  // without the deprecated bitwise-OR-on-a-Number idiom Sonar's `sonarjs:S7767` flags. `topN`
+  // arrives from the LiteLLM request body, so Number coercion is the correct primitive.
+  const bounded = Math.max(0, Math.min(Math.trunc(Number(topN)) || 0, documents.length));
   const reversedIndices = documents.map((_, index) => documents.length - 1 - index);
   return reversedIndices.slice(0, bounded).map((originalIndex, rank) => ({
     index: originalIndex,
@@ -128,14 +134,24 @@ export function startCleanCheckoutMockServer({ embeddingDimensions } = {}) {
       }
       const port = address.port;
       const origin = `http://127.0.0.1:${String(port)}`;
-      let closed = false;
-      const close = () =>
-        new Promise((closeResolve) => {
-          if (closed) return closeResolve(undefined);
-          closed = true;
-          server.close(() => closeResolve(undefined));
-        });
-      resolve({ origin, close, embeddingDimensions: dimensions });
+      resolve({ origin, close: makeIdempotentCloser(server), embeddingDimensions: dimensions });
     });
   });
+}
+
+// The listen-callback used to define its own `close` inline, which pushed a `new Promise` INSIDE
+// a listener callback INSIDE `new Promise` INSIDE `startCleanCheckoutMockServer` — Sonar's
+// `sonarjs:S2004` flagged five function-nesting levels. Hoisting it here also makes it directly
+// unit-testable.
+function makeIdempotentCloser(server) {
+  let closed = false;
+  return () =>
+    new Promise((closeResolve) => {
+      if (closed) {
+        closeResolve(undefined);
+        return;
+      }
+      closed = true;
+      server.close(() => closeResolve(undefined));
+    });
 }
