@@ -1460,6 +1460,7 @@ function voiceRoleModelIds(
   raw: Record<string, unknown>,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
+  correlationId: string | undefined,
 ): VoiceRoleModelIds | RouteResult {
   const hasNewRole = [
     "voiceSpeechToTextModelId",
@@ -1494,6 +1495,7 @@ function voiceRoleModelIds(
       body: errorBody(
         "BAD_REQUEST",
         "voiceRealtimeTranscriptionModelId requires voiceRealtimeModelId.",
+        correlationId,
       ),
     };
   }
@@ -1566,6 +1568,7 @@ function readSetupVoiceProviders(
   env: EnvSource,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
+  correlationId: string | undefined,
 ): readonly SetupVoiceProvider[] | RouteResult {
   if (!hasVoiceProviderInput(raw)) {
     return [];
@@ -1574,7 +1577,7 @@ function readSetupVoiceProviders(
     ? (currentSpeechInputProvider(current) ?? firstCurrentVoiceProvider(current))
     : undefined;
   const existingCapability = currentSpeechInputCapability(current, existing?.modelId);
-  const roleIds = voiceRoleModelIds(raw, current, preserveExisting);
+  const roleIds = voiceRoleModelIds(raw, current, preserveExisting, correlationId);
   const connection = setupVoiceConnection(raw, existing, preserveExisting);
   const apiKeyHeaderName = setupVoiceApiKeyHeaderName(raw, existing, preserveExisting);
   const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
@@ -1638,6 +1641,7 @@ function readSetupRequest(
   raw: unknown,
   env: EnvSource,
   current: GatewayConfig | undefined,
+  correlationId: string | undefined,
 ): SetupRequest | RouteResult {
   if (!isRecord(raw)) {
     return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
@@ -1659,7 +1663,13 @@ function readSetupRequest(
   if (isRouteResult(figmaAccessToken)) {
     return figmaAccessToken;
   }
-  const voiceProviders = readSetupVoiceProviders(raw, env, current, preserveExisting);
+  const voiceProviders = readSetupVoiceProviders(
+    raw,
+    env,
+    current,
+    preserveExisting,
+    correlationId,
+  );
   if (isRouteResult(voiceProviders)) {
     return voiceProviders;
   }
@@ -2190,7 +2200,7 @@ export async function handleGatewaySetup(
   if ("status" in bodyResult) {
     return bodyResult;
   }
-  const request = readSetupRequest(bodyResult.parsed, deps.env, current);
+  const request = readSetupRequest(bodyResult.parsed, deps.env, current, ctx.correlationId);
   if ("status" in request) {
     return request;
   }

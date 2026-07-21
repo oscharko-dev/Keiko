@@ -58,12 +58,13 @@ async function tempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-function ctx(body: unknown): RouteContext {
+function ctx(body: unknown, correlationId?: string): RouteContext {
   return {
     req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
     res: {} as RouteContext["res"],
     params: {},
     url: new URL("http://127.0.0.1/api/gateway/setup"),
+    ...(correlationId === undefined ? {} : { correlationId }),
   };
 }
 
@@ -366,20 +367,27 @@ describe("handleGatewaySetup", () => {
     });
 
     const result = await handleGatewaySetup(
-      ctx({
-        baseUrl: "https://llm.example.com/v1",
-        apiKey: "chat-token",
-        voiceBaseUrl: "https://audio.example.com/v1",
-        voiceApiKey: "audio-token",
-        voiceRealtimeTranscriptionModelId: "realtime-transcribe-model",
-      }),
+      ctx(
+        {
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "chat-token",
+          voiceBaseUrl: "https://audio.example.com/v1",
+          voiceApiKey: "audio-token",
+          voiceRealtimeTranscriptionModelId: "realtime-transcribe-model",
+        },
+        "corr-voice-transcription-role",
+      ),
       deps,
     );
 
     expect(result.status).toBe(400);
-    expect(JSON.stringify(result.body)).toContain(
-      "voiceRealtimeTranscriptionModelId requires voiceRealtimeModelId",
-    );
+    expect(result.body).toEqual({
+      error: {
+        code: "BAD_REQUEST",
+        correlationId: "corr-voice-transcription-role",
+        message: "voiceRealtimeTranscriptionModelId requires voiceRealtimeModelId.",
+      },
+    });
     deps.store.close();
   });
 
