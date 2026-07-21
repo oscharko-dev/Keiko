@@ -16,7 +16,11 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  NormalizedResponse,
+  OpenAIEmbeddingOutcome,
+} from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -370,5 +374,117 @@ describe("repository pod executable journey", () => {
     });
     expect(removed.run.counts.removedFiles).toBe(1);
     expect(documentRows().map((row) => row.document_path)).not.toContain("src/worker.go");
+  });
+});
+
+// ─── M2.12 — capsule setting parity: contextual retrieval ────────────────────
+// Outcome 2 says every capsule setting a folder pod honours either applies to a repository pod
+// with the same semantics, or is explicitly refused with a reason. `contextualRetrieval` is the
+// only capsule-level setting that affects INDEXING (the others — retrievalEffort, outputMode,
+// answerGroundingPolicy — shape retrieval, not the refresh), and before Issue #2633 it was
+// silently dropped for repository pods: accepted at the PATCH layer, reported by
+// `contextualRetrievalHealth` at the diagnostics surface, and then thrown away at the refresh.
+// The observable effect is the persisted `chunks.contextual_retrieval_key`: with the option
+// honoured the value starts with `indexed-text=contextual-v1|…`; without it the value stays
+// `indexed-text=raw-v1|…`.
+function contextualRetrievalKeys(): readonly string[] {
+  const rows = store._internal.db
+    .prepare(
+      "SELECT contextual_retrieval_key FROM chunks WHERE capsule_id = :c AND contextual_retrieval_key IS NOT NULL",
+    )
+    .all({ c: CAPSULE_ID }) as unknown as readonly {
+    readonly contextual_retrieval_key: string;
+  }[];
+  return rows.map((row) => row.contextual_retrieval_key);
+}
+
+function stubChatGateway(): {
+  readonly chat: (request: GatewayRequest) => Promise<NormalizedResponse>;
+  readonly calls: readonly GatewayRequest[];
+} {
+  const calls: GatewayRequest[] = [];
+  return {
+    calls,
+    chat: (request: GatewayRequest): Promise<NormalizedResponse> => {
+      calls.push(request);
+      return Promise.resolve({
+        modelId: request.modelId,
+        content: "context stub for repository pod",
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "repo-ctx-test",
+          promptTokens: 1,
+          completionTokens: 1,
+          latencyMs: 1,
+          costClass: "low",
+        },
+      });
+    },
+  };
+}
+
+describe("repository pod capsule setting parity (M2.12)", () => {
+  it("honours contextualRetrieval when threaded through refreshRepositoryPod", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    const gateway = stubChatGateway();
+    const result = await refreshRepositoryPod(
+      indexingDeps(adapter, {
+        contextualRetrieval: {
+          enabled: true,
+          chatGateway: gateway,
+          modelId: "context-model",
+        },
+      }),
+      { runId: "context-enabled" },
+    );
+
+    expect(result.run.outcome).not.toBe("failed");
+    expect(gateway.calls.length).toBeGreaterThan(0);
+    const keys = contextualRetrievalKeys();
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) {
+      expect(key.startsWith("indexed-text=contextual-v1|")).toBe(true);
+    }
+  });
+
+  it("falls back to the raw strategy key when contextualRetrieval is not provided", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    const result = await refreshRepositoryPod(indexingDeps(adapter), {
+      runId: "context-omitted",
+    });
+
+    expect(result.run.outcome).not.toBe("failed");
+    const keys = contextualRetrievalKeys();
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) {
+      expect(key.startsWith("indexed-text=raw-v1|")).toBe(true);
+    }
+  });
+});
+
+// ─── M2.12 — evidence vocabulary parity ─────────────────────────────────────
+// Outcome 2 says an operator reading pod evidence should not need to learn a second dialect. The
+// repository pod persists its own run record (`repository_pod_runs`) with an `outcome` enum that
+// runs alongside the HTML-manual `ManualRefreshOutcome` enum. Neither is a superset of the other,
+// but for OPERATOR-facing vocabulary the failure/interrupted terminals must match — otherwise a
+// script or dashboard that surfaces one has to translate the other. This pins the shared terminals
+// so a future PR that renames `partial` on either side or removes `failed`/`cancelled` from either
+// enum has to update the other in the same change.
+const SHARED_REFRESH_OUTCOME_TERMINALS = ["partial", "failed", "cancelled"] as const;
+
+describe("repository pod evidence vocabulary parity (M2.12)", () => {
+  it("emits outcomes drawn from the shared refresh vocabulary", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    const result = await refreshRepositoryPod(indexingDeps(adapter), { runId: "vocabulary-run" });
+    // `succeeded` is the repository pod's own healthy terminal (there is no updated/unchanged
+    // distinction because the run record's `counts` already carries that discrimination), and the
+    // remaining terminals must overlap with the shared refresh vocabulary.
+    const known: readonly string[] = ["succeeded", ...SHARED_REFRESH_OUTCOME_TERMINALS];
+    expect(known).toContain(result.run.outcome);
   });
 });

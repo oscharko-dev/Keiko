@@ -1079,3 +1079,149 @@ describe("Knowledge Pod compatibility projection", () => {
     }
   });
 });
+
+// ─── M2.12 — repository pod projection parity with the other pod kinds ──────
+// Issue #2633. `buildKnowledgePodSummary` is the SINGLE projection path shared by every pod kind
+// (there is deliberately no `folder-pod.ts`). Folder and repository capsules therefore SHOULD
+// produce structurally identical summaries by construction — only `sourceKinds` and any
+// source-kind-conditional optional block (`manualSourceFingerprint`, `manualRefresh`,
+// `connectorSource`) may differ. Nothing enforced that promise. This regression guard fails when
+// a future PR adds a projection field a repository pod cannot answer, or removes one only a
+// folder pod projects, or when `sourceKinds` stops discriminating the two.
+const KIND_SPECIFIC_SUMMARY_KEYS: readonly (keyof import("@oscharko-dev/keiko-contracts").KnowledgePodSummary)[] =
+  ["manualSourceFingerprint", "manualRefresh", "connectorSource"];
+
+describe("Knowledge Pod projection parity (M2.12)", () => {
+  it("projects folder and repository capsules with the same summary field set", () => {
+    const env = freshStore();
+    try {
+      const folderCapsuleId = "cap-folder-parity" as KnowledgeCapsuleId;
+      const folderSourceId = "src-folder-parity" as KnowledgeSourceId;
+      const repositoryCapsuleId = "cap-repository-parity" as KnowledgeCapsuleId;
+      const repositorySourceId = "src-repository-parity" as KnowledgeSourceId;
+
+      const folderCapsule = createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: folderCapsuleId,
+          displayName: "Folder Parity",
+          lifecycleState: "ready",
+        }),
+      );
+      addSourceToCapsule(env.store, folderCapsuleId, sampleSourceInput(folderSourceId));
+      seedIndexedDocument(env.store, folderCapsuleId, folderSourceId, "folder-parity");
+
+      const repositoryCapsule = createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: repositoryCapsuleId,
+          displayName: "Repository Parity",
+          lifecycleState: "ready",
+        }),
+      );
+      addSourceToCapsule(env.store, repositoryCapsuleId, {
+        ...sampleSourceInput(repositorySourceId),
+        scope: { kind: "repository", repositoryRoot: "/srv/repo" },
+      });
+      seedIndexedDocument(env.store, repositoryCapsuleId, repositorySourceId, "repository-parity");
+
+      const folderSummary = buildKnowledgePodSummary(env.store, folderCapsule);
+      const repositorySummary = buildKnowledgePodSummary(env.store, repositoryCapsule);
+
+      const folderKeys = new Set(Object.keys(folderSummary));
+      const repositoryKeys = new Set(Object.keys(repositorySummary));
+      const asymmetry = [
+        ...[...folderKeys].filter(
+          (key) =>
+            !repositoryKeys.has(key) &&
+            !KIND_SPECIFIC_SUMMARY_KEYS.includes(
+              key as (typeof KIND_SPECIFIC_SUMMARY_KEYS)[number],
+            ),
+        ),
+        ...[...repositoryKeys].filter(
+          (key) =>
+            !folderKeys.has(key) &&
+            !KIND_SPECIFIC_SUMMARY_KEYS.includes(
+              key as (typeof KIND_SPECIFIC_SUMMARY_KEYS)[number],
+            ),
+        ),
+      ];
+      expect(asymmetry).toStrictEqual([]);
+
+      // The nested projection blocks — `retrieval`, `privacy`, `governance`, `modelUsePolicy`,
+      // `counts`, `compatibility` — must expose the SAME key set for both pod kinds. A regression
+      // here means a projection helper started answering with a different shape depending on
+      // scope kind, which would fracture the shared vocabulary at exactly the surface an operator
+      // reads.
+      const blockKeys = ["retrieval", "privacy", "governance", "modelUsePolicy", "counts"] as const;
+      for (const block of blockKeys) {
+        expect(Object.keys(folderSummary[block])).toStrictEqual(
+          Object.keys(repositorySummary[block]),
+        );
+      }
+
+      // `sourceKinds` is the ONE field that discriminates the pod kind at the projection layer.
+      // Every other user-visible surface must agree.
+      expect(folderSummary.sourceKinds).toStrictEqual(["folder"]);
+      expect(repositorySummary.sourceKinds).toStrictEqual(["repository"]);
+      expect(folderSummary.readiness).toBe(repositorySummary.readiness);
+      expect(folderSummary.lifecycleState).toBe(repositorySummary.lifecycleState);
+
+      expect(validateKnowledgePodSummary(folderSummary).ok).toBe(true);
+      expect(validateKnowledgePodSummary(repositorySummary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("projects repository capsules across the full lifecycle range like folder capsules do", () => {
+    // The refresh affordance is user-visible through the same lifecycle badge as every other pod
+    // kind (draft → indexing → ready → stale → error). This test pins that mapping — a folder and
+    // a repository capsule in the same `lifecycleState` project the same `readiness`. If that ever
+    // diverges, the "same states" half of Issue #2633 AC3 is broken.
+    const env = freshStore();
+    try {
+      const states = ["draft", "indexing", "ready", "stale", "error"] as const;
+      for (const [index, state] of states.entries()) {
+        const folderId = `cap-folder-${state}` as KnowledgeCapsuleId;
+        const folderSourceId = `src-folder-${state}` as KnowledgeSourceId;
+        const repoId = `cap-repo-${state}` as KnowledgeCapsuleId;
+        const repoSourceId = `src-repo-${state}` as KnowledgeSourceId;
+        const folder = createCapsule(
+          env.store,
+          sampleCapsuleInput({
+            id: folderId,
+            lifecycleState: state,
+            storageReference: `f/${state}`,
+          }),
+        );
+        addSourceToCapsule(env.store, folderId, sampleSourceInput(folderSourceId));
+        const repository = createCapsule(
+          env.store,
+          sampleCapsuleInput({ id: repoId, lifecycleState: state, storageReference: `r/${state}` }),
+        );
+        addSourceToCapsule(env.store, repoId, {
+          ...sampleSourceInput(repoSourceId),
+          scope: { kind: "repository", repositoryRoot: `/srv/repo-${state}` },
+        });
+        // Seed at least one indexed document for `ready` and `stale` so the projection does not
+        // over-report "no retrieval vectors" on the healthy states.
+        if (state === "ready" || state === "stale") {
+          seedIndexedDocument(
+            env.store,
+            folderId,
+            folderSourceId,
+            `folder-${state}-${String(index)}`,
+          );
+          seedIndexedDocument(env.store, repoId, repoSourceId, `repo-${state}-${String(index)}`);
+        }
+        const folderSummary = buildKnowledgePodSummary(env.store, folder);
+        const repoSummary = buildKnowledgePodSummary(env.store, repository);
+        expect(repoSummary.readiness).toBe(folderSummary.readiness);
+        expect(repoSummary.lifecycleState).toBe(folderSummary.lifecycleState);
+      }
+    } finally {
+      env.cleanup();
+    }
+  });
+});

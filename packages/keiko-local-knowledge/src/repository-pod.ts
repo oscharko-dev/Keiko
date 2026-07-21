@@ -34,6 +34,7 @@ import {
   scanRepositoryFingerprints,
   type RepositoryFileFingerprint,
 } from "./indexing/repository-fingerprints.js";
+import type { ContextualRetrievalOptions } from "./indexing/contextual-retrieval.js";
 import { runIndexingJob, type IndexingEvent, type IndexingResult } from "./indexing/index.js";
 import { buildKnowledgePodSummary } from "./knowledge-pods.js";
 import type { ParserRegistry } from "./parsers/index.js";
@@ -58,6 +59,12 @@ export interface RepositoryPodIndexingDeps extends RepositoryPodDeps {
   readonly discoveryOptions?: Omit<DiscoveryOptions, "respectGitIgnore" | "signal"> | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly onIndexEvent?: ((event: IndexingEvent) => void) | undefined;
+  // Threaded to `runIndexingJob` so a repository-scoped capsule honours the same
+  // `contextualRetrieval` capsule setting as every folder-scoped capsule. Without this the option
+  // was accepted at the PATCH layer and reported by `contextualRetrievalHealth`, but silently
+  // dropped on refresh — an unresolved parity gap between repository pods and folder pods
+  // (Issue #2633, epic Outcome 2).
+  readonly contextualRetrieval?: ContextualRetrievalOptions | undefined;
 }
 
 export interface CreateRepositoryPodShellInput {
@@ -224,6 +231,9 @@ function runRepositoryIndexing(
       ...(deps.signal === undefined ? {} : { signal: deps.signal }),
       ...(deps.now === undefined ? {} : { now: deps.now }),
       ...(deps.idSource === undefined ? {} : { idSource: deps.idSource }),
+      ...(deps.contextualRetrieval === undefined
+        ? {}
+        : { contextualRetrieval: deps.contextualRetrieval }),
     }),
     deps.onIndexEvent,
   );

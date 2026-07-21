@@ -1941,6 +1941,93 @@ describe("local-knowledge handlers", () => {
     expect(runs[1]?.unchanged_files).toBeGreaterThan(0);
   });
 
+  // Issue #2633 (Knowledge M2.12) — the capsule-level contextualRetrieval setting must reach a
+  // repository pod through the SAME server route a folder pod uses. Before this fix the route
+  // accepted and persisted the setting, `contextualRetrievalHealth` reported it, but the actual
+  // refresh silently dropped it — so the diagnostics surface and the indexing surface disagreed on
+  // whether contextual retrieval was actually running for a repository pod. The observable proof
+  // is on the `chunks` row: with the option flowing through, at least one chunk's
+  // `contextual_retrieval_key` starts with `indexed-text=contextual-v1|…`.
+  it("threads a repository capsule's contextualRetrieval setting through the reindex route", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const repoRoot = join(tmp, "repo");
+    mkdirSync(join(repoRoot, "src"), { recursive: true });
+    writeFileSync(
+      join(repoRoot, "src", "billing.ts"),
+      [
+        "export interface Retry {}",
+        "",
+        "export function retryRelease(): string {",
+        '  return "billing rollout TS-999";',
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    updateCapsuleDetails(store, capId, {
+      contextualRetrieval: { enabled: true, modelId: "capsule-chat", maxContextChars: 320 },
+    });
+    addSourceToCapsule(store, capId, {
+      id: "src-repo" as never,
+      displayName: "Repository",
+      tags: [],
+      scope: { kind: "repository", repositoryRoot: repoRoot },
+    });
+    store.close();
+
+    const contextCalls: GatewayRequest[] = [];
+    const base = depsFor(tmp, gatewayConfigWithChatModels(["capsule-chat"]));
+    const deps: UiHandlerDeps = {
+      ...base,
+      localKnowledgeContextualRetrievalChatGateway: {
+        chat: (request) => {
+          contextCalls.push(request);
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "Context: TS-999 billing rollout.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "ctx-repo",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        },
+      },
+    };
+
+    const result = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "changed-files" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(contextCalls.length).toBeGreaterThan(0);
+    expect(contextCalls[0]?.modelId).toBe("capsule-chat");
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const keys = inspect._internal.db
+      .prepare(
+        "SELECT contextual_retrieval_key FROM chunks WHERE capsule_id = :c AND contextual_retrieval_key IS NOT NULL",
+      )
+      .all({ c: "cap-1" }) as unknown as readonly {
+      readonly contextual_retrieval_key: string;
+    }[];
+    inspect.close();
+    expect(keys.length).toBeGreaterThan(0);
+    expect(
+      keys.every((row) => row.contextual_retrieval_key.startsWith("indexed-text=contextual-v1|")),
+    ).toBe(true);
+  });
+
   it("maps full-reembed and full-rebuild modes to a force reindex even when files are unchanged", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
