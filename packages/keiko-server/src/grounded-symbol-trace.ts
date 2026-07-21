@@ -55,6 +55,8 @@ const ROUTER_HANDLER_RE =
 const CALLED_SYMBOL_RE = /\b([A-Za-z_$][A-Za-z0-9_$]{2,127})\s*\(/gu;
 const ROUTE_TRACE_QUERY_RE =
   /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b[^\n]*\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+/iu;
+const TEST_DIRECTORY_PATH_RE = /(?:^|\/)(?:tests?|__tests__)(?:\/|$)/iu;
+const TEST_FILE_PATH_RE = /\.(?:test|spec)\.[^/]+$/iu;
 const IGNORED_CALLED_SYMBOLS = new Set([
   "catch",
   "for",
@@ -151,7 +153,8 @@ function eligibleDiscoveryAtoms(atoms: readonly EvidenceAtom[]): readonly Eviden
   return atoms.filter(
     (atom) =>
       atom.lineRange !== undefined &&
-      !/(?:^|\/)(?:tests?|__tests__)(?:\/|$)|\.(?:test|spec)\.[^/]+$/iu.test(atom.scopePath),
+      !TEST_DIRECTORY_PATH_RE.test(atom.scopePath) &&
+      !TEST_FILE_PATH_RE.test(atom.scopePath),
   );
 }
 
