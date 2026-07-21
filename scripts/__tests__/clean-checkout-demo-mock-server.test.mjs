@@ -57,25 +57,28 @@ describe("deterministicEmbedding", () => {
   });
 
   it("iterates by Unicode code points, not UTF-16 units — the surrogate half of an astral character is not counted twice", () => {
-    // "😀" is a single Unicode code point encoded as two UTF-16 units. A UTF-16-index walk hits
-    // codePointAt(0) → 0x1F600 AND codePointAt(1) → 0xDE00 (the low surrogate), which used to
-    // pollute the vector with the surrogate value. `for...of` yields one iteration per code
-    // point, so the emoji ends up hashed exactly once. Regression control for the CodeRabbit
-    // L26 finding: replacing the iteration back to a UTF-16 walk turns this test red.
+    // "😀" is a single Unicode code point (0x1F600 = 128512) encoded as two UTF-16 units. A
+    // code-point walk hashes it exactly once at slot 0 with weight ((128512 % 31) + 1) / 32 =
+    // 0.5625, so after L2 normalisation the vector is a single unit spike at index 0. A UTF-16
+    // walk would ALSO push the low surrogate 0xDE00 (56832) into slot 1, so the resulting vector
+    // would have two non-zero components. Asserting the exact one-hot spike is what turns this
+    // test red the moment the loop is reverted — CodeRabbit L74 finding.
     const emoji = deterministicEmbedding("😀", 16);
+    const expected = new Array(16).fill(0);
+    expected[0] = 1;
+    for (let index = 0; index < 16; index += 1) {
+      expect(emoji[index]).toBeCloseTo(expected[index], 6);
+    }
+    // A second code point at the same slot (128512 + 1 code-point index) still lands on slot 1
+    // (128513 % 16 = 1), so the "two emoji" vector has two non-zero components and is distinct
+    // from the "one emoji" vector at multiple indices — the paired vector is a real regression
+    // control for "did we accidentally read the same character twice".
     const paired = deterministicEmbedding("😀😀", 16);
-    // If the low surrogate were being counted, the "emoji" and "paired" vectors would differ by
-    // the surrogate's dimension contribution and could produce identical or aliased slots. With a
-    // code-point walk, the two runs are distinct across at least one dimension.
     let differences = 0;
     for (let index = 0; index < emoji.length; index += 1) {
       if (Math.abs(emoji[index] - paired[index]) > 1e-6) differences += 1;
     }
     expect(differences).toBeGreaterThan(0);
-    // Sanity: the astral run still normalises cleanly (no NaN / no unnormalised magnitude).
-    const magnitude = Math.sqrt(emoji.reduce((sum, value) => sum + value * value, 0));
-    expect(magnitude).toBeCloseTo(1, 6);
-    expect(emoji.every((value) => Number.isFinite(value))).toBe(true);
   });
 });
 
