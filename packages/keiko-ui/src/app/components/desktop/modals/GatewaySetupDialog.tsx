@@ -344,9 +344,9 @@ function buildVoiceCredentialFields(
     ...(voiceRealtimeTranscriptionModelId === undefined
       ? {}
       : { voiceRealtimeTranscriptionModelId }),
-    ...(voiceRealtimeModelId === undefined && !input.voiceSemanticTurnDetectionConfigured
-      ? {}
-      : { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }),
+    ...(input.voiceSemanticTurnDetectionConfigured
+      ? { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }
+      : {}),
     ...(voiceSpeechOutputModelId === undefined ? {} : { voiceSpeechOutputModelId }),
     ...(voiceOutputVoiceId === undefined ? {} : { voiceOutputVoiceId }),
     voiceProviderLocality: input.voiceProviderLocality,

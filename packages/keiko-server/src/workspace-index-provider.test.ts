@@ -92,7 +92,7 @@ describe("workspace index provider", () => {
     }
   });
 
-  it("rebuilds the cached index when the encryption key changes", () => {
+  it("rebuilds the cached index when the encryption key changes", (): void => {
     const workspaceRoot = tempDir("keiko-index-workspace-");
     const runtimeStateDir = tempDir("keiko-index-state-");
     const env: Record<string, string | undefined> = {
@@ -114,7 +114,7 @@ describe("workspace index provider", () => {
     }
   });
 
-  it("emits a redacted diagnostic when key resolution fails", () => {
+  it("emits a redacted diagnostic when key resolution fails", (): void => {
     const workspaceRoot = tempDir("keiko-index-workspace-");
     const runtimeStateDir = tempDir("keiko-index-state-");
     const records: ServerDiagnosticRecord[] = [];
@@ -123,7 +123,11 @@ describe("workspace index provider", () => {
       const provider = createServerWorkspaceIndexProvider({
         runtimeStateDir,
         env: { KEIKO_WORKSPACE_INDEX_KEY: invalidKey },
-        diagnostics: { record: (record) => records.push(record) },
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
       });
 
       expect(provider(workspaceRoot)).toBeUndefined();

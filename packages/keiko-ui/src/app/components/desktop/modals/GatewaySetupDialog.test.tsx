@@ -464,6 +464,87 @@ describe("GatewaySetupDialog", () => {
     );
   });
 
+  it("does not carry stored semantic VAD support to an untouched replacement", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat", "replacement-realtime"],
+      providerCount: 2,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[
+          modelCapability("internal-chat"),
+          semanticRealtimeCapability("stored-realtime"),
+        ]}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).toBeChecked();
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      "replacement-realtime",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    const submitted = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(submitted).toMatchObject({
+      preserveExisting: true,
+      voiceRealtimeModelId: "replacement-realtime",
+    });
+    expect(submitted).not.toHaveProperty("voiceSupportsSemanticTurnDetection");
+  });
+
+  it("submits an explicit semantic VAD opt-out for a replacement", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat", "replacement-realtime"],
+      providerCount: 2,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[
+          modelCapability("internal-chat"),
+          semanticRealtimeCapability("stored-realtime"),
+        ]}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    const semanticTurnDetection = screen.getByRole("checkbox", {
+      name: /semantic turn detection/i,
+    });
+    expect(semanticTurnDetection).toBeChecked();
+    await userEvent.click(semanticTurnDetection);
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      "replacement-realtime",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preserveExisting: true,
+        voiceRealtimeModelId: "replacement-realtime",
+        voiceSupportsSemanticTurnDetection: false,
+      }),
+    );
+  });
+
   it("uses the Keiko styled select for provider locality and labels Foundry correctly", async () => {
     const user = userEvent.setup();
     render(
@@ -583,5 +664,13 @@ function modelCapability(id: string, kind: ModelCapability["kind"] = "chat"): Mo
     throughputHint: "test",
     preferredUseCases: ["Tests"],
     knownLimitations: [],
+  };
+}
+
+function semanticRealtimeCapability(id: string): ModelCapability {
+  return {
+    ...modelCapability(id, "voice"),
+    supportsRealtimeVoice: true,
+    supportsSemanticTurnDetection: true,
   };
 }
