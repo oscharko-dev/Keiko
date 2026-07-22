@@ -20,6 +20,7 @@
 // handleVoiceSpeak with in-memory stubs so no real provider or network is touched.
 
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { handleVoiceTranscribe, handleVoiceSpeak } from "./voice-handlers.js";
@@ -134,9 +135,16 @@ function b64(text: string): string {
 const VALID_AUDIO_B64 = b64(RAW_AUDIO_TEXT);
 
 function ctx(url: string, body: unknown): RouteContext {
+  const response = Object.assign(new EventEmitter(), {
+    closed: false,
+    destroyed: false,
+    writableEnded: false,
+  });
   return {
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
-    res: {} as RouteContext["res"],
+    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")], {
+      autoDestroy: false,
+    }) as IncomingMessage,
+    res: response as unknown as RouteContext["res"],
     params: {},
     url: new URL(url),
   };

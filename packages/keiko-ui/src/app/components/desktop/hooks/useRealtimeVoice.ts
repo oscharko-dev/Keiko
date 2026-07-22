@@ -10,12 +10,15 @@
 // Every failure resolves to a non-blocking `error` phase that leaves the composer fully usable (AC4).
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   type VoiceSessionChatContext,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  canonicalVoiceHasherIsReady,
+  canonicalVoiceSha256Hex,
+  prepareCanonicalVoiceHasher as prepareDefaultCanonicalVoiceHasher,
+} from "./canonical-voice-hasher";
 import {
   createBrowserVoiceRtcTransport,
   VoiceRtcError,
@@ -210,6 +213,7 @@ export interface UseRealtimeVoiceOptions {
   // Test seams: inject fake factories. Production uses the browser transport and the BFF client.
   readonly createTransport?: (() => VoiceRtcTransport) | undefined;
   readonly createControl?: (() => VoiceControlClient) | undefined;
+  readonly prepareCanonicalVoiceHasher?: (() => Promise<void>) | undefined;
   // Content-free admission guard owned by the canonical Chat outbox. Capture may start only while
   // that outbox still has regular capacity; its single reserve slot belongs to an already captured
   // provider final and must never be treated as permission to open another media session.
@@ -225,7 +229,11 @@ export interface UseRealtimeVoiceOptions {
   readonly onUserSpeechStart?: (() => void) | undefined;
 }
 
-export type CanonicalVoiceTurnHandoffResult = boolean | "accepted-stop" | void;
+type CanonicalVoiceTurnHandoffResult = boolean | "accepted-stop" | void;
+type FailedRealtimeTranscriptEvent = Extract<
+  ParsedRealtimeVoiceEvent,
+  { readonly kind: "user-transcript-failed" }
+>;
 
 interface CanonicalVoiceUserTurn {
   readonly turnId: string;
@@ -243,6 +251,15 @@ interface VoiceTurnDraft {
   fallbackTurnId: string;
 }
 
+function realtimeEventBelongsToSession(
+  event: ParsedRealtimeVoiceEvent,
+  sessionChatId: string | undefined,
+  currentChatId: string | undefined,
+): boolean {
+  if (sessionChatId === currentChatId) return true;
+  return sessionChatId !== undefined && event.kind === "user-transcript-committed";
+}
+
 interface PendingCanonicalUserTurn {
   readonly baseTurnId: string;
   readonly text: string;
@@ -255,7 +272,7 @@ function canonicalVoiceUserTurn(pending: PendingCanonicalUserTurn): CanonicalVoi
 
 function providerCanonicalTurnId(namespace: string, providerItemId: string): string {
   const identity = JSON.stringify(["canonical-realtime-turn-v1", namespace, providerItemId]);
-  const digest = bytesToHex(sha256(new TextEncoder().encode(identity)));
+  const digest = canonicalVoiceSha256Hex(identity);
   return `client-turn-${namespace}-${digest}`;
 }
 
@@ -478,6 +495,14 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   const sessionRef = useRef<VoiceRtcSession | undefined>(undefined);
   const controlRef = useRef<VoiceControlClient | undefined>(undefined);
   const startupAbortRef = useRef<AbortController | undefined>(undefined);
+  const canonicalVoiceHasherPreparedRef = useRef(
+    options.prepareCanonicalVoiceHasher === undefined && canonicalVoiceHasherIsReady(),
+  );
+  const prepareCanonicalVoiceHasherRef = useRef(
+    options.prepareCanonicalVoiceHasher ?? prepareDefaultCanonicalVoiceHasher,
+  );
+  prepareCanonicalVoiceHasherRef.current =
+    options.prepareCanonicalVoiceHasher ?? prepareDefaultCanonicalVoiceHasher;
   const startRef = useRef<(() => void) | undefined>(undefined);
   const sessionReadyWarmupTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const sessionReadinessDeadlineTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -908,20 +933,47 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     applyTurnSignal({ kind: "user-end-of-turn" });
   }, [applyTurnSignal, armPendingCanonicalUserTurn]);
 
+  const handleFailedUserTranscript = useCallback(
+    (event: FailedRealtimeTranscriptEvent): void => {
+      if (event.reason !== "limit-exceeded") {
+        retainPartialUserTranscript(event.itemId);
+        applyTurnSignal({ kind: "provider-failure", recoverable: true });
+        return;
+      }
+      const key = event.itemId ?? latestUserTranscriptDeltaKeyRef.current ?? "__current";
+      const reviewText = joinTranscriptSegments(
+        userTranscriptDeltaItemsRef.current.get(key),
+        event.reviewText ?? "",
+      );
+      if (reviewText.length === 0) {
+        canonicalTurnOverflowedRef.current = true;
+        surfaceCanonicalAdmissionFailure();
+        return;
+      }
+      userTranscriptDeltaItemsRef.current.set(key, boundedRealtimeTranscriptText(reviewText));
+      latestUserTranscriptDeltaKeyRef.current = key;
+      const pendingText = pendingCanonicalUserTurnRef.current?.text;
+      if (pendingText !== undefined) flushPendingCanonicalUserTurn();
+      if (!canonicalAdmissionBlockedRef.current) rejectOversizedCanonicalUserTurn(reviewText);
+    },
+    [
+      applyTurnSignal,
+      flushPendingCanonicalUserTurn,
+      rejectOversizedCanonicalUserTurn,
+      retainPartialUserTranscript,
+      surfaceCanonicalAdmissionFailure,
+    ],
+  );
+
   const handleRealtimeEvent = useCallback(
     (raw: unknown): void => {
       if (canonicalAdmissionBlockedRef.current) return;
       const event = parseRealtimeVoiceEvent(raw);
-      if (event === undefined) {
-        return;
-      }
+      if (event === undefined) return;
       // A final belongs to the authority-bound session even if React has rendered the next chat but
       // its cleanup effect has not closed the old transport yet. All other stale events are ignored.
-      if (sessionChatIdRef.current !== currentChatIdRef.current) {
-        if (sessionChatIdRef.current === undefined || event.kind !== "user-transcript-committed") {
-          return;
-        }
-      }
+      if (!realtimeEventBelongsToSession(event, sessionChatIdRef.current, currentChatIdRef.current))
+        return;
       switch (event.kind) {
         case "session-created":
           return;
@@ -948,30 +1000,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           appendUserTranscriptDelta(event);
           return;
         case "user-transcript-failed":
-          if (event.reason === "limit-exceeded") {
-            const key = event.itemId ?? latestUserTranscriptDeltaKeyRef.current ?? "__current";
-            const reviewText = joinTranscriptSegments(
-              userTranscriptDeltaItemsRef.current.get(key),
-              event.reviewText ?? "",
-            );
-            if (reviewText.length > 0) {
-              userTranscriptDeltaItemsRef.current.set(
-                key,
-                boundedRealtimeTranscriptText(reviewText),
-              );
-              latestUserTranscriptDeltaKeyRef.current = key;
-              const pendingText = pendingCanonicalUserTurnRef.current?.text;
-              if (pendingText !== undefined) flushPendingCanonicalUserTurn();
-              if (canonicalAdmissionBlockedRef.current) return;
-              rejectOversizedCanonicalUserTurn(reviewText);
-              return;
-            }
-            canonicalTurnOverflowedRef.current = true;
-            surfaceCanonicalAdmissionFailure();
-            return;
-          }
-          retainPartialUserTranscript(event.itemId);
-          applyTurnSignal({ kind: "provider-failure", recoverable: true });
+          handleFailedUserTranscript(event);
           return;
         case "error": {
           retainPartialUserTranscript();
@@ -982,15 +1011,12 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     },
     [
       appendUserTranscriptDelta,
-      applyTurnSignal,
       beginUserUtterance,
       commitUserTranscript,
       endUserUtterance,
+      handleFailedUserTranscript,
       maybeDispatchConnected,
-      rejectOversizedCanonicalUserTurn,
       retainPartialUserTranscript,
-      flushPendingCanonicalUserTurn,
-      surfaceCanonicalAdmissionFailure,
     ],
   );
 
@@ -1157,6 +1183,38 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     }
     if (canonicalAdmissionBlockedRef.current) {
       surfaceCanonicalAdmissionFailure();
+      return;
+    }
+    if (!canonicalVoiceHasherPreparedRef.current) {
+      dispatch({ type: "requesting" });
+      const startup = new AbortController();
+      startupAbortRef.current = startup;
+      void prepareCanonicalVoiceHasherRef
+        .current()
+        .then(() => {
+          if (
+            !mountedRef.current ||
+            startup.signal.aborted ||
+            startupAbortRef.current !== startup
+          ) {
+            return;
+          }
+          canonicalVoiceHasherPreparedRef.current = true;
+          startupAbortRef.current = undefined;
+          startRef.current?.();
+        })
+        .catch((error: unknown) => {
+          if (
+            !mountedRef.current ||
+            startup.signal.aborted ||
+            startupAbortRef.current !== startup
+          ) {
+            return;
+          }
+          cleanupRefs({ discardControl: false });
+          const { reason, message } = classifyError(error);
+          dispatch({ type: "error", reason, message });
+        });
       return;
     }
     latencyRef.current?.reset();

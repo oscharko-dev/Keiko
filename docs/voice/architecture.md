@@ -38,17 +38,21 @@ be elected (`packages/keiko-model-gateway/src/model-selection.ts`).
 
 ## 3. Provider profiles
 
-| Profile               | What the user gets                                            | Required provider capability         | Notes                                                         |
-| --------------------- | ------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------- |
-| `none`                | No voice UI; full non-voice Keiko                             | None                                 | Default and regulated baseline. Keiko fully usable.           |
-| `speech-to-text only` | Controlled composer **dictation** (audio → text, review/edit) | Speech input / transcription         | The `keiko-stt` Azure Foundry deployment class is an example. |
-| `speech output only`  | Optional assistant speech playback                            | Speech output                        | No realtime duplex input.                                     |
-| `full realtime voice` | Interruptible Twin interface over canonical chat              | Realtime input + chat + explicit TTS | Realtime never creates the assistant answer.                  |
+| Profile               | What the user gets                                            | Required capability/path                              | Notes                                                         |
+| --------------------- | ------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------- |
+| `none`                | No voice UI; full non-voice Keiko                             | None                                                  | Default and regulated baseline. Keiko fully usable.           |
+| `speech-to-text only` | Controlled composer **dictation** (audio → text, review/edit) | Speech input / transcription                          | The `keiko-stt` Azure Foundry deployment class is an example. |
+| `speech output only`  | Optional assistant speech playback                            | Speech output                                         | No realtime duplex input.                                     |
+| `full realtime voice` | Interruptible Twin interface over canonical chat              | Realtime input + explicit TTS; canonical chat handoff | Realtime never creates the assistant answer.                  |
 
 **STT-only is not "quiet full voice".** Batch dictation and Realtime live transcription have distinct
 lifecycles. Twin additionally requires canonical chat and an independently configured TTS provider. A
 regulated deployment may permit dictation while gating Twin. Neither STT-only nor Realtime-only may present
 itself as a spoken conversation (ADR-0154).
+
+The canonical chat handoff is a required Keiko product path, not an advertised voice-provider
+capability. Realtime input, canonical chat, and TTS may resolve through separate explicitly configured
+deployments; no model or deployment is assumed to provide all three.
 
 ## 4. Transport architecture
 

@@ -235,7 +235,8 @@ lifecycle — `session.setDraft(text)` then `await session.sendMessage()` — an
 is non-empty; a partial or empty transcript is never sent. The committed transcript is sent as a normal
 chat **message** (a question); no spoken action auto-executes. Any proposed action still flows through the
 #503 spoken-action governance and the existing `WorkflowHandoff` chain, which this controller has no path
-to reach (ADR-0104 D7 / AC5). No raw audio, transcript, or secret is persisted.
+to reach (ADR-0104 D7 / AC5). No raw audio, partial transcript, or secret is persisted; the settled
+final is persisted only through the canonical user-message path.
 
 ### D11 — Deterministic-first, Model-Gateway-only, and Orchestrator-authority invariants are unchanged
 

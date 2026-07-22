@@ -18,21 +18,23 @@ interface RequestBodyListeners {
   readonly onData: (chunk: Buffer | string) => void;
   readonly onEnd: () => void;
   readonly onError: (error: Error) => void;
+  readonly onAborted: () => void;
+  readonly onClose: () => void;
 }
 
 function attachRequestBodyListeners(req: IncomingMessage, listeners: RequestBodyListeners): void {
-  req.on("data", listeners.onData);
   req.once("end", listeners.onEnd);
   req.once("error", listeners.onError);
+  req.once("aborted", listeners.onAborted);
+  req.once("close", listeners.onClose);
+  req.on("data", listeners.onData);
 }
 
 function retainTerminalErrorSink(req: IncomingMessage): void {
   // The primary bounded-body failure already owns the response. A secondary stream error carries no
   // additional safe diagnostic value, but leaving it unhandled would let a malformed request crash
   // the process. Retain this body-free sink only until the request reaches a terminal stream event.
-  const absorbLateError = (error: Error): void => {
-    void error;
-  };
+  const absorbLateError = (): void => undefined;
   const release = (): void => {
     req.off("end", release);
     req.off("close", release);
@@ -47,53 +49,86 @@ function retainTerminalErrorSink(req: IncomingMessage): void {
   if (req.closed) release();
 }
 
+function requestAlreadyTerminated(req: IncomingMessage): boolean {
+  return req.readableAborted || req.destroyed || req.closed;
+}
+
+class BoundedRequestBodyReader {
+  private readonly chunks: Buffer[] = [];
+  private total = 0;
+  private settled = false;
+
+  public constructor(
+    private readonly req: IncomingMessage,
+    private readonly maxBytes: number,
+    private readonly signal: AbortSignal | undefined,
+    private readonly resolve: (body: string) => void,
+    private readonly reject: (error: Error) => void,
+  ) {}
+
+  public start(): void {
+    this.signal?.addEventListener("abort", this.onCancellation, { once: true });
+    attachRequestBodyListeners(this.req, {
+      onData: this.onData,
+      onEnd: this.onEnd,
+      onError: this.onRequestError,
+      onAborted: this.onCancellation,
+      onClose: this.onCancellation,
+    });
+    if (this.signal?.aborted === true || requestAlreadyTerminated(this.req)) this.onCancellation();
+  }
+
+  private readonly cleanup = (): void => {
+    this.req.off("data", this.onData);
+    this.req.off("end", this.onEnd);
+    this.req.off("error", this.onRequestError);
+    this.req.off("aborted", this.onCancellation);
+    this.req.off("close", this.onCancellation);
+    this.signal?.removeEventListener("abort", this.onCancellation);
+  };
+
+  private readonly rejectOnce = (error: Error, drain: boolean, retainErrorSink: boolean): void => {
+    if (this.settled) return;
+    this.settled = true;
+    this.chunks.length = 0;
+    this.cleanup();
+    if (retainErrorSink) retainTerminalErrorSink(this.req);
+    this.reject(error);
+    if (drain) this.req.resume();
+  };
+
+  private readonly onData = (chunk: Buffer | string): void => {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    this.total += buffer.length;
+    if (this.total > this.maxBytes) {
+      this.rejectOnce(new RequestBodyTooLargeError(), true, true);
+      return;
+    }
+    this.chunks.push(buffer);
+  };
+
+  private readonly onEnd = (): void => {
+    if (this.settled) return;
+    this.settled = true;
+    this.cleanup();
+    this.resolve(Buffer.concat(this.chunks).toString("utf8"));
+  };
+
+  private readonly onCancellation = (): void => {
+    this.rejectOnce(new RequestBodyCancelledError(), true, true);
+  };
+
+  private readonly onRequestError = (error: Error): void => {
+    this.rejectOnce(error, false, true);
+  };
+}
+
 export function readBoundedRequestBody(
   req: IncomingMessage,
   maxBytes: number,
   signal?: AbortSignal,
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let settled = false;
-    const cleanup = (): void => {
-      req.off("data", onData);
-      req.off("end", onEnd);
-      req.off("error", onRequestError);
-      signal?.removeEventListener("abort", onAbort);
-    };
-    const rejectOnce = (error: Error, drain = false, retainErrorSink = false): void => {
-      if (settled) return;
-      settled = true;
-      chunks.length = 0;
-      cleanup();
-      if (retainErrorSink) retainTerminalErrorSink(req);
-      reject(error);
-      if (drain) req.resume();
-    };
-    const onData = (chunk: Buffer | string): void => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      total += buffer.length;
-      if (total > maxBytes) {
-        rejectOnce(new RequestBodyTooLargeError(), true, true);
-        return;
-      }
-      chunks.push(buffer);
-    };
-    const onEnd = (): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(Buffer.concat(chunks).toString("utf8"));
-    };
-    const onAbort = (): void => {
-      rejectOnce(new RequestBodyCancelledError(), true, true);
-    };
-    const onRequestError = (error: Error): void => {
-      rejectOnce(error, false, true);
-    };
-    attachRequestBodyListeners(req, { onData, onEnd, onError: onRequestError });
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted === true) onAbort();
+    new BoundedRequestBodyReader(req, maxBytes, signal, resolve, reject).start();
   });
 }

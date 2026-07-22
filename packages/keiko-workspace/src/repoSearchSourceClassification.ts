@@ -622,7 +622,9 @@ function rustRawStringStart(
   syntax: SourceSyntax,
 ): { readonly close: string; readonly length: number } | undefined {
   if (!syntax.rustRawStrings) return undefined;
-  const prefixLength = line.startsWith("br", index) ? 2 : line.charAt(index) === "r" ? 1 : 0;
+  let prefixLength = 0;
+  if (line.startsWith("br", index)) prefixLength = 2;
+  else if (line.charAt(index) === "r") prefixLength = 1;
   if (prefixLength === 0 || /[\p{ID_Continue}$]/u.test(line.charAt(index - 1))) return undefined;
   let cursor = index + prefixLength;
   while (line.charAt(cursor) === "#") cursor += 1;
@@ -900,13 +902,19 @@ function advanceActiveMask(
   return advanceRegexLiteral(line, index, code, structural, state);
 }
 
-const PHP_HEREDOC_START_RE =
-  /<<<\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))/gu;
-const SHELL_HEREDOC_START_RE =
-  /<<(?!<)(-?)\s*(?:'([^'\r\n]+)'|"([^"\r\n]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/gu;
+const PHP_HEREDOC_START_RE = /<<<\s*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|([A-Za-z_]\w*))/gu;
+const SHELL_HEREDOC_START_RE = /<<(?!<)(-?)\s*(?:'([^'\r\n]+)'|"([^"\r\n]+)"|\\?([A-Za-z_]\w*))/gu;
 
 function heredocDelimiter(match: RegExpMatchArray, php: boolean): string | undefined {
   return php ? (match[1] ?? match[2] ?? match[3]) : (match[2] ?? match[3] ?? match[4]);
+}
+
+function heredocIndentation(
+  php: boolean,
+  shellIndentMarker: string | undefined,
+): HeredocDelimiter["indentation"] {
+  if (php) return "spaces";
+  return shellIndentMarker === "-" ? "tabs" : "none";
 }
 
 function appendHeredocStarts(
@@ -922,7 +930,7 @@ function appendHeredocStarts(
     const marker = php ? "<<<" : "<<";
     const close = heredocDelimiter(match, php);
     if (close === undefined || !structural.startsWith(marker, index)) continue;
-    const indentation = php ? "spaces" : match[1] === "-" ? "tabs" : "none";
+    const indentation = heredocIndentation(php, match[1]);
     state.heredocs.push({ close, indentation });
   }
 }
@@ -941,12 +949,9 @@ function queueHeredocStarts(
 }
 
 function heredocCloses(raw: string, delimiter: HeredocDelimiter): boolean {
-  const candidate =
-    delimiter.indentation === "spaces"
-      ? raw.trimStart()
-      : delimiter.indentation === "tabs"
-        ? raw.replace(/^\t+/u, "")
-        : raw;
+  let candidate = raw;
+  if (delimiter.indentation === "spaces") candidate = raw.trimStart();
+  else if (delimiter.indentation === "tabs") candidate = raw.replace(/^\t+/u, "");
   if (delimiter.indentation !== "spaces") return candidate === delimiter.close;
   const normalized = candidate.trimEnd();
   return normalized === delimiter.close || normalized === `${delimiter.close};`;
@@ -993,7 +998,7 @@ function yamlBlockScalarActive(raw: string, structural: string[], state: SourceM
   return true;
 }
 
-const YAML_BLOCK_SCALAR_HEADER_RE = /(?:^|:\s+|-\s+)[|>](?:([1-9])[+-]?|[+-]([1-9])?)?\s*$/u;
+const YAML_BLOCK_SCALAR_HEADER_RE = /(?:^|:\s+|-\s+)[|>](?:([1-9])[+-]?|[+-]([1-9])?)?$/u;
 
 function startYamlBlockScalar(
   structural: string,

@@ -55,6 +55,10 @@ export const EN_MESSAGES = {
   "common.on": "on",
   "common.off": "off",
   "common.advanced": "advanced",
+  "gatewaySetup.loading.title": "Preparing model gateway setup",
+  "gatewaySetup.loading.description":
+    "Loading the local setup controls. No provider request has been started.",
+  "gatewaySetup.loading.error": "The setup controls could not be loaded.",
   "gatewaySetup.voice.title": "Audio & Digital Voice",
   "gatewaySetup.voice.description":
     "Optional models for dictation, live conversation, and spoken answers.",

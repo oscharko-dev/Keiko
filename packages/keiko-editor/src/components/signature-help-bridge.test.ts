@@ -57,11 +57,15 @@ describe("signature-help pure mappers", () => {
   });
 
   it("drops runtime Markdown objects instead of exposing them to Monaco", () => {
-    const hostileSignature = {
+    const hostileSignature: EditorSignatureInformation = {
       label: "fn(value: string): void",
-      documentation: { value: "<img src=x onerror=alert(1)>", isTrusted: true },
+      documentation: "plain text",
       parameters: [{ label: "value" }],
-    } as unknown as EditorSignatureInformation;
+    };
+    // Simulate a hostile JavaScript host crossing the typed resolver boundary at runtime.
+    Object.defineProperty(hostileSignature, "documentation", {
+      value: { value: "<img src=x onerror=alert(1)>", isTrusted: true },
+    });
 
     expect(signatureToMonaco(hostileSignature)).toEqual({
       label: "fn(value: string): void",

@@ -185,8 +185,9 @@ export interface Chat {
   // When both are present, `localKnowledgeScope` equals `localKnowledgeScopes[0]`.
   readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[];
   readonly localKnowledgeScope: ChatLocalKnowledgeScope | undefined;
-  // Path-free server-issued concurrency token for the exact grounding/status scope. Voice queues
-  // echo it back so a final captured under one source set cannot later retrieve under another.
+  // Path-free server-issued concurrency token for the canonical retrieval-semantic grounding
+  // scope. Voice queues echo it back so a final captured under one source set cannot later
+  // retrieve under another; lifecycle metadata does not alter the token.
   readonly groundingScopeIdentity?: string | undefined;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -592,7 +593,8 @@ export function classifyAttachmentMime(mimeType: string): "image" | "document" |
 // would create multiple assistant answers. The matching code-unit ceiling is a cheap first guard;
 // the BFF enforces the byte ceiling authoritatively before admission.
 export const MAX_DESKTOP_CHAT_INPUT_BYTES = 256_000;
-export const MAX_DESKTOP_CHAT_INPUT_CHARS = MAX_DESKTOP_CHAT_INPUT_BYTES;
+// Keep the independent code-unit and UTF-8 byte ceilings explicit: callers must enforce both.
+export const MAX_DESKTOP_CHAT_INPUT_CHARS = 256_000;
 export const MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS = 256;
 export const GROUNDING_SCOPE_IDENTITY_PATTERN = /^gsi-v1:[0-9a-f]{64}$/u;
 

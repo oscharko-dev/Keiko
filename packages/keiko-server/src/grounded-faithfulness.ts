@@ -75,8 +75,8 @@ const NUMERIC_CITATION_RE = /\[(\d+)\]/gu;
 
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code < 32 || code === 127) return true;
+    const codePoint = value.codePointAt(index);
+    if (codePoint !== undefined && (codePoint < 32 || codePoint === 127)) return true;
   }
   return false;
 }

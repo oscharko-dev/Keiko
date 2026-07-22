@@ -133,7 +133,7 @@ import {
   resolveConversationMemoryContext,
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
-import { CONVERSATION_MEMORY_BLOCK_HEADER } from "./conversation-prompt.js";
+import { renderConversationMemoryContextBlock } from "./conversation-prompt.js";
 import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 import {
   buildAnswerCitations as projectAnswerCitations,
@@ -1712,7 +1712,9 @@ function groundedTurnConflict(
 function groundedAnswerContent(content: string, memory: ConversationMemoryResultWire): string {
   const memoryText = memory.context.text.trim();
   if (!memory.context.enabled || memoryText.length === 0) return content;
-  return ["User question:", content, "", CONVERSATION_MEMORY_BLOCK_HEADER, memoryText].join("\n");
+  return ["User question:", content, "", renderConversationMemoryContextBlock(memoryText)].join(
+    "\n",
+  );
 }
 
 function groundedMemoryPreparationFailure(

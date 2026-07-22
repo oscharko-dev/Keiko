@@ -57,6 +57,10 @@ export const DE_MESSAGES = {
   "common.on": "an",
   "common.off": "aus",
   "common.advanced": "erweitert",
+  "gatewaySetup.loading.title": "Modell-Gateway-Einrichtung wird vorbereitet",
+  "gatewaySetup.loading.description":
+    "Die lokalen Einrichtungsfelder werden geladen. Es wurde noch keine Anbieteranfrage gestartet.",
+  "gatewaySetup.loading.error": "Die Einrichtungsfelder konnten nicht geladen werden.",
   "gatewaySetup.voice.title": "Audio & Digital Voice",
   "gatewaySetup.voice.description":
     "Optionale Modelle für Diktat, Live-Unterhaltungen und vorgelesene Antworten.",

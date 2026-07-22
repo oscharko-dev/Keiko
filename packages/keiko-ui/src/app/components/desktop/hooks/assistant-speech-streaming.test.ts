@@ -218,6 +218,48 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
     expect(contexts).toHaveLength(2);
   });
 
+  it("reports a content-free diagnostic when AudioContext cleanup fails", async () => {
+    const close = vi.fn(() => Promise.reject(new Error("customer-audio-detail")));
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        readonly audioWorklet = { addModule: vi.fn(() => Promise.resolve()) };
+        readonly destination = {};
+        readonly close = close;
+        readonly resume = vi.fn(() => Promise.resolve());
+      },
+    );
+    vi.stubGlobal(
+      "AudioWorkletNode",
+      class {
+        readonly port = { postMessage: vi.fn(), close: vi.fn(), onmessage: null };
+        readonly connect = vi.fn();
+        readonly disconnect = vi.fn();
+      },
+    );
+
+    const sink = createBrowserAssistantSpeechStreamingSink();
+    const controller = new AbortController();
+    controller.abort();
+    await sink?.play({ text: "Hello" }, controller.signal, {
+      onStart: vi.fn(),
+      onEnded: vi.fn(),
+      onError: vi.fn(),
+    });
+    sink?.dispose();
+    sink?.dispose();
+    await Promise.resolve();
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(reportError).toHaveBeenCalledOnce();
+    const reported = reportError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(Error);
+    expect((reported as Error).message).toBe("Assistant speech audio context cleanup failed.");
+    expect((reported as Error).message).not.toContain("customer-audio-detail");
+  });
+
   it.each(["stop", "dispose"] as const)(
     "invalidates and closes a pending AudioWorklet setup exactly once on %s",
     async (teardown) => {

@@ -39,6 +39,7 @@ import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
 import { isVoiceDisabledByPolicy } from "./read-handlers.js";
+import { createRequestCancellation } from "./request-cancellation.js";
 import { toSpeakableText } from "./voice-speech-text.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
@@ -612,6 +613,7 @@ function buildTtsRequest(
   target: SpeechTarget,
   validated: ValidatedSpeech,
   deps: UiHandlerDeps,
+  signal: AbortSignal,
 ): TextToSpeechRequest {
   const egress = provider.egress ?? currentGatewayEgressConfig(deps);
   const capability = findConfiguredCapability(
@@ -635,6 +637,7 @@ function buildTtsRequest(
       : {}),
     voice: target.voiceId,
     ...(egress !== undefined ? { egress } : {}),
+    signal,
     timeoutMs: provider.timeoutMs,
   };
 }
@@ -697,10 +700,21 @@ export async function handleVoiceSpeak(
     return resolved;
   }
   const synthesize = deps.voiceSpeechRequest ?? requestTextToSpeech;
-  const outcome = await synthesize(
-    buildTtsRequest(resolved.provider, resolved.target, resolved.validated, deps),
-  );
-  return outcome.ok ? speechResult(outcome.value) : speechProviderErrorResult(deps, outcome.kind);
+  const cancellation = createRequestCancellation(ctx, "voice speech request cancelled");
+  try {
+    const outcome = await synthesize(
+      buildTtsRequest(
+        resolved.provider,
+        resolved.target,
+        resolved.validated,
+        deps,
+        cancellation.signal,
+      ),
+    );
+    return outcome.ok ? speechResult(outcome.value) : speechProviderErrorResult(deps, outcome.kind);
+  } finally {
+    cancellation.dispose();
+  }
 }
 
 // The streaming speak path requests raw PCM (the fastest provider format to first audio) and forwards
@@ -714,20 +728,9 @@ function buildStreamTtsRequest(
   signal: AbortSignal,
 ): TextToSpeechRequest {
   return {
-    ...buildTtsRequest(resolved.provider, resolved.target, resolved.validated, deps),
+    ...buildTtsRequest(resolved.provider, resolved.target, resolved.validated, deps, signal),
     responseFormat: STREAM_SPEECH_FORMAT,
-    signal,
   };
-}
-
-// Aborts the synthesis when the client disconnects (res "close" is the canonical signal), so a barge-in
-// or navigation stops the provider stream rather than producing audio no one will hear.
-function abortOnResClose(ctx: RouteContext): AbortController {
-  const controller = new AbortController();
-  ctx.res.on("close", () => {
-    controller.abort();
-  });
-  return controller;
 }
 
 function waitForResponseDrain(ctx: RouteContext, signal: AbortSignal): Promise<boolean> {
@@ -754,22 +757,22 @@ function waitForResponseDrain(ctx: RouteContext, signal: AbortSignal): Promise<b
 async function pipeAudioStream(
   ctx: RouteContext,
   body: ReadableStream<Uint8Array>,
-  controller: AbortController,
+  signal: AbortSignal,
   deps: UiHandlerDeps,
 ): Promise<void> {
   const reader = body.getReader();
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done || controller.signal.aborted) {
+      if (done || signal.aborted) {
         break;
       }
-      if (!ctx.res.write(value) && !(await waitForResponseDrain(ctx, controller.signal))) {
+      if (!ctx.res.write(value) && !(await waitForResponseDrain(ctx, signal))) {
         break;
       }
     }
   } catch (error) {
-    if (!controller.signal.aborted) {
+    if (!signal.aborted) {
       emitServerDiagnostic(
         deps.diagnostics,
         serverDiagnosticFromError({
@@ -799,17 +802,23 @@ export async function handleVoiceSpeakStream(
   if (isRouteResult(resolved)) {
     return resolved;
   }
-  const controller = abortOnResClose(ctx);
+  const cancellation = createRequestCancellation(ctx, "voice speech stream request cancelled");
   const synthesizeStream: (request: TextToSpeechRequest) => Promise<TextToSpeechStreamOutcome> =
     deps.voiceSpeechStreamRequest ?? requestTextToSpeechStream;
-  const outcome = await synthesizeStream(buildStreamTtsRequest(resolved, deps, controller.signal));
-  if (!outcome.ok) {
-    return speechProviderErrorResult(deps, outcome.kind);
+  try {
+    const outcome = await synthesizeStream(
+      buildStreamTtsRequest(resolved, deps, cancellation.signal),
+    );
+    if (!outcome.ok) {
+      return speechProviderErrorResult(deps, outcome.kind);
+    }
+    const mimeType = ALLOWED_SPEECH_MIME.has(outcome.value.mimeType)
+      ? outcome.value.mimeType
+      : DEFAULT_SPEECH_MIME;
+    ctx.res.writeHead(200, { "Content-Type": mimeType, "Cache-Control": "no-store" });
+    await pipeAudioStream(ctx, outcome.value.body, cancellation.signal, deps);
+    return STREAMING;
+  } finally {
+    cancellation.dispose();
   }
-  const mimeType = ALLOWED_SPEECH_MIME.has(outcome.value.mimeType)
-    ? outcome.value.mimeType
-    : DEFAULT_SPEECH_MIME;
-  ctx.res.writeHead(200, { "Content-Type": mimeType, "Cache-Control": "no-store" });
-  await pipeAudioStream(ctx, outcome.value.body, controller, deps);
-  return STREAMING;
 }

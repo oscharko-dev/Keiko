@@ -105,25 +105,24 @@ remains decodable; current Realtime sessions use the additive, input-only
 test-pinned expression of AC1: the `raw-media` redaction class is exclusive to media-plane
 descriptors, so a control message can never be raw audio.
 
-### D3 — Control-plane realization: loopback HTTP + SSE now; WebSocket upgrade is deferred to #497
+### D3 — Productive loopback WebSocket; HTTP/SSE baseline retained
 
 > **Current amendment:** ADR-0102 completed that deferred decision. Productive v1 control is the
 > capability-gated `loopback-websocket` route; the HTTP/SSE language below is the original #496
 > sequencing record.
-
+>
 > **Historical baseline, superseded by ADR-0102 and ADR-0154.** Issue #497 selected the loopback
 > WebSocket realization. The immutable v1 baseline remains
 > `VOICE_CONTROL_TRANSPORT_V1 = "loopback-http-sse"`; productive sessions advertise the additive
 > `VOICE_REALTIME_CONTROL_TRANSPORT = "loopback-websocket"` realization.
 
-"WebSocket is the authoritative control plane" describes a **role**, not a mandatory transport. The
-protocol's control transport is captured by `VoiceControlTransport`
-(`loopback-http-sse | loopback-websocket`), and the realization in effect for v1 is
-`VOICE_CONTROL_TRANSPORT_V1 = "loopback-http-sse"` — request/response over `POST /api/voice/*` plus
-server→client push over the existing `EventSource` channel. Re-opening a bidirectional WebSocket
-upgrade on the BFF (today hard-rejected) remains an **explicit, ADR-gated transport decision owned by
-Issue #497**, never an additive change smuggled in here. The protocol is defined so that a future
-switch to `loopback-websocket` is a transport realization detail, not a contract break.
+**Historical #496 sequencing record:** "WebSocket is the authoritative control plane" described a
+**role**, not a mandatory transport. The protocol captured both realizations in
+`VoiceControlTransport` (`loopback-http-sse | loopback-websocket`), while the then-current realization
+was `VOICE_CONTROL_TRANSPORT_V1 = "loopback-http-sse"` — request/response over
+`POST /api/voice/*` plus server→client push over `EventSource`. Reopening a bidirectional WebSocket
+upgrade was the explicit, ADR-gated transport decision owned by Issue #497. ADR-0102 made that decision
+for the single productive `/api/voice/control` route without breaking the immutable v1 baseline.
 
 ### D4 — Capability-gating and a deterministic fallback state table (AC2, AC3)
 
@@ -218,9 +217,10 @@ against every workspace manifest) keep this enforced.
 
 - Issue #497 has a stable, typed, versioned contract to implement transport against, with the
   capability-gating, replay, reconnect, idempotency, and redaction semantics fixed in advance.
-- The contract is additive and content-free: it adds no authority, no dependency, no transport, and no
-  trust-boundary change, and it does not bump `CONVERSATION_CAPABILITY_CONTRACT_VERSION`. It does not
-  reach the published root `@oscharko-dev/keiko` surface (it is consumed directly from
+- The contract is additive, with messages explicitly classified and redacted by kind: it adds no
+  authority, dependency, transport, or trust-boundary change, and it does not bump
+  `CONVERSATION_CAPABILITY_CONTRACT_VERSION`. It does not reach the published root
+  `@oscharko-dev/keiko` surface (it is consumed directly from
   `@oscharko-dev/keiko-contracts` by the transport packages), so `check:package-surface` is unchanged.
 - At the original #496 boundary, re-opening the BFF WebSocket upgrade and any CSP /
   `Permissions-Policy` relaxation for browser-direct media remained future, explicitly gated decisions

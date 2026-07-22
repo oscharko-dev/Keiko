@@ -9,12 +9,16 @@ configured capabilities support. Azure Foundry is **one** valid provider, never 
 
 See [architecture.md](architecture.md) §3 for full definitions.
 
-| Provider profile      | Voice affordance                  | Required advertised capability       |
-| --------------------- | --------------------------------- | ------------------------------------ |
-| `none`                | No voice UI                       | None                                 |
-| `speech-to-text only` | Composer dictation (audio → text) | Speech input / transcription         |
-| `speech output only`  | Assistant speech playback         | Speech output                        |
-| `full realtime voice` | Interruptible canonical Twin      | Realtime input + chat + explicit TTS |
+| Provider profile      | Voice affordance                  | Required capability/path                              |
+| --------------------- | --------------------------------- | ----------------------------------------------------- |
+| `none`                | No voice UI                       | None                                                  |
+| `speech-to-text only` | Composer dictation (audio → text) | Speech input / transcription                          |
+| `speech output only`  | Assistant speech playback         | Speech output                                         |
+| `full realtime voice` | Interruptible canonical Twin      | Realtime input + explicit TTS; canonical chat handoff |
+
+The canonical chat handoff is a required Keiko product path, not an advertised voice-provider
+capability. Realtime input, canonical chat, and TTS may resolve through separate explicitly configured
+deployments; no model or deployment is assumed to provide all three.
 
 ## 2. Environment profiles (deployment axis)
 

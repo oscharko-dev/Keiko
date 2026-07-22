@@ -2,11 +2,13 @@
 // happy and error paths goes through routeRequest dispatch and the SECURITY_HEADERS surface via the
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
 
+import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import type { IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
@@ -22,6 +24,13 @@ import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { handleDeleteChat, handleUpdateChat } from "./store-handlers.js";
+import {
+  CHAT_TURN_WAIT_CANCELLED,
+  createChatTurnSerializer,
+  type ChatTurnSerializer,
+} from "./chat-turn-serializer.js";
+import type { RouteContext } from "./routes.js";
 import {
   createCapsule,
   openKnowledgeStore,
@@ -34,6 +43,51 @@ const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" }
 const PATCH_HEADERS = POST_HEADERS;
 const DELETE_HEADERS = POST_HEADERS;
 const CHAT_MODEL = "example-chat-model";
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function directRouteContext(
+  path: string,
+  body = "",
+): {
+  readonly ctx: RouteContext;
+  readonly req: IncomingMessage;
+  readonly res: RouteContext["res"];
+} {
+  const req = Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
+  const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
+  res.writableEnded = false;
+  return {
+    ctx: { req, res, params: {}, url: new URL(`http://localhost${path}`) },
+    req,
+    res,
+  };
+}
+
+function observeSerializedSignal(
+  serializer: ChatTurnSerializer,
+  observed: ReturnType<typeof deferred<AbortSignal>>,
+): ChatTurnSerializer {
+  return {
+    runExclusive: <T>(
+      chatId: string,
+      signal: AbortSignal,
+      operation: () => T | Promise<T>,
+    ): Promise<T | typeof CHAT_TURN_WAIT_CANCELLED> => {
+      observed.resolve(signal);
+      return serializer.runExclusive(chatId, signal, operation);
+    },
+  };
+}
 
 let server: Server;
 let port: number;
@@ -679,6 +733,41 @@ describe("POST /api/chats", () => {
 
 // ─── Route 19: PATCH /api/chats ──────────────────────────────────────────────
 describe("PATCH /api/chats", () => {
+  it("cancels a queued status update when the request aborts", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const serializer = createChatTurnSerializer();
+    const predecessorStarted = deferred<undefined>();
+    const releasePredecessor = deferred<undefined>();
+    const predecessor = serializer.runExclusive(chat.id, new AbortController().signal, async () => {
+      predecessorStarted.resolve(undefined);
+      await releasePredecessor.promise;
+    });
+    await predecessorStarted.promise;
+    const observedSignal = deferred<AbortSignal>();
+    const fixture = directRouteContext(
+      `/api/chats?id=${encodeURIComponent(chat.id)}`,
+      JSON.stringify({ status: "closed" }),
+    );
+    const outcome = handleUpdateChat(
+      fixture.ctx,
+      deps({ chatTurnSerializer: observeSerializedSignal(serializer, observedSignal) }),
+    );
+    const signal = await observedSignal.promise;
+
+    fixture.req.emit("aborted");
+    const requestWasCancelled = signal.aborted;
+    releasePredecessor.resolve(undefined);
+    await predecessor;
+    const result = await outcome;
+
+    expect(requestWasCancelled).toBe(true);
+    expect(result.status).toBe(499);
+    expect(store.findChatById(chat.id)?.status).toBeUndefined();
+    expect(fixture.req.listenerCount("aborted")).toBe(0);
+    expect(fixture.res.listenerCount("close")).toBe(0);
+  });
+
   it("updates fields", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
@@ -1389,6 +1478,38 @@ describe("PATCH /api/chats", () => {
 
 // ─── Route 20: DELETE /api/chats ─────────────────────────────────────────────
 describe("DELETE /api/chats", () => {
+  it("cancels a queued deletion when the unfinished response closes", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const serializer = createChatTurnSerializer();
+    const predecessorStarted = deferred<undefined>();
+    const releasePredecessor = deferred<undefined>();
+    const predecessor = serializer.runExclusive(chat.id, new AbortController().signal, async () => {
+      predecessorStarted.resolve(undefined);
+      await releasePredecessor.promise;
+    });
+    await predecessorStarted.promise;
+    const observedSignal = deferred<AbortSignal>();
+    const fixture = directRouteContext(`/api/chats?id=${encodeURIComponent(chat.id)}`);
+    const outcome = handleDeleteChat(
+      fixture.ctx,
+      deps({ chatTurnSerializer: observeSerializedSignal(serializer, observedSignal) }),
+    );
+    const signal = await observedSignal.promise;
+
+    fixture.res.emit("close");
+    const requestWasCancelled = signal.aborted;
+    releasePredecessor.resolve(undefined);
+    await predecessor;
+    const result = await outcome;
+
+    expect(requestWasCancelled).toBe(true);
+    expect(result.status).toBe(499);
+    expect(store.findChatById(chat.id)).toBeDefined();
+    expect(fixture.req.listenerCount("aborted")).toBe(0);
+    expect(fixture.res.listenerCount("close")).toBe(0);
+  });
+
   it("deletes a chat, cascades to messages", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
@@ -1612,7 +1733,7 @@ describe("GET /api/chats/messages", () => {
     expect(body.messages.map((message) => message.content)).toEqual(["message-1", "message-2"]);
   });
 
-  it("keeps the latest completed canonical turn beyond the default history limit", async () => {
+  it("returns the newest default window including the latest completed canonical pair", async () => {
     store.createProject(projDir);
     const chat = store.createChat(projDir, "t", "m");
     store.createMessages(
@@ -1660,6 +1781,7 @@ describe("GET /api/chats/messages", () => {
     expect(
       store.completeChatTurn(chat.id, "final-voice-turn", identityContent, assistant.id).kind,
     ).toBe("completed");
+    expect(store.listMessages(chat.id)).toHaveLength(202);
 
     const res = await fetch(
       url(
@@ -1672,6 +1794,8 @@ describe("GET /api/chats/messages", () => {
     };
     expect(body.messages).toHaveLength(200);
     expect(body.messages[0]?.content).toBe("history-2");
+    expect(body.messages.some((message) => message.content === "history-0")).toBe(false);
+    expect(body.messages.some((message) => message.content === "history-1")).toBe(false);
     expect(body.messages.at(-2)).toMatchObject({
       id: admission.userMessage.id,
       role: "user",

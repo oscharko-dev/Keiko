@@ -244,9 +244,25 @@ describe("captureSalientFromTurn", () => {
     const request = { content: USER_TEXT, memory: { enabled: true } };
     try {
       for (let index = 0; index < 32; index += 1) {
-        scheduleMemorySalienceCapture(deps, request, ctx, "gpt-test", "ok", "desktop");
+        scheduleMemorySalienceCapture(
+          deps,
+          request,
+          ctx,
+          "gpt-test",
+          "ok",
+          "desktop",
+          `assistant-${String(index)}`,
+        );
       }
-      scheduleMemorySalienceCapture(deps, request, ctx, "gpt-test", "ok", "voice");
+      scheduleMemorySalienceCapture(
+        deps,
+        request,
+        ctx,
+        "gpt-test",
+        "ok",
+        "voice",
+        "assistant-dropped",
+      );
 
       expect(model.callCount()).toBe(0);
       await vi.waitFor(() => {
@@ -261,7 +277,15 @@ describe("captureSalientFromTurn", () => {
 
       model.resolveAll();
       await yieldToImmediate();
-      scheduleMemorySalienceCapture(deps, request, ctx, "gpt-test", "ok", "voice");
+      scheduleMemorySalienceCapture(
+        deps,
+        request,
+        ctx,
+        "gpt-test",
+        "ok",
+        "voice",
+        "assistant-retry",
+      );
       await vi.waitFor(() => {
         expect(model.callCount()).toBe(33);
       });
@@ -307,11 +331,14 @@ describe("captureSalientFromTurn", () => {
         context(),
         "gpt-test",
         "ok",
+        "desktop",
+        "assistant-failed-turn",
       ),
     ).resolves.toEqual([]);
     expect(diagnostics.record).toHaveBeenCalledWith(
       expect.objectContaining({
         errorClass: "Error",
+        correlationId: "assistant-failed-turn",
         message: "server-operation-failed",
         source: "memory-salience.captureSalientFromTurn",
       }),

@@ -554,7 +554,7 @@ function isOverviewPath(path: string, name: string): boolean {
 
 function isTestPath(path: string, scopePath: string): boolean {
   if (TEST_FILE_RE.test(path)) return true;
-  const originalName = basename(scopePath.split("\\").join("/"));
+  const originalName = basename(scopePath.replaceAll("\\", "/"));
   const extensionStart = originalName.lastIndexOf(".");
   const identifier = extensionStart < 0 ? originalName : originalName.slice(0, extensionStart);
   return stripTestIdentifierSuffix(identifier) !== undefined;

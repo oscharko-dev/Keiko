@@ -294,13 +294,10 @@ function failCancelledStreamTurn(
 async function streamAndPersist(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  prepared: PreparedDesktopChatSend,
-  callStream: NonNullable<import("@oscharko-dev/keiko-harness").ModelPort["callStream"]>,
+  admitted: AdmittedDesktopChatStream,
   controller: AbortController,
-  userMessage: ChatMessage,
-  gatewayTurn: GatewayTurnSnapshot,
-  messageCountBeforeTurn: number,
 ): Promise<void> {
+  const { prepared, callStream, userMessage, gatewayTurn, messageCountBeforeTurn } = admitted;
   const { request, modelId, memoryContext } = prepared;
   const startedAt = Date.now();
   const memory = await resolveMemory(deps, request, memoryContext);
@@ -480,16 +477,7 @@ async function executeAdmittedDesktopChatStream(
     ctx.res.writeHead(200, SSE_HEADERS);
     markStreamStarted();
     stopHeartbeat = startSseHeartbeat(ctx.res);
-    await streamAndPersist(
-      ctx,
-      deps,
-      turn.prepared,
-      turn.callStream,
-      controller,
-      turn.userMessage,
-      turn.gatewayTurn,
-      turn.messageCountBeforeTurn,
-    );
+    await streamAndPersist(ctx, deps, turn, controller);
   } catch (error) {
     writeStreamFailure(ctx, deps, turn.prepared.request, controller, error);
   } finally {
@@ -562,9 +550,8 @@ async function runDesktopChatStream(
         streamState.started = true;
       }),
   );
-  return result === CHAT_TURN_WAIT_CANCELLED
-    ? streamState.started
-      ? STREAMING
-      : { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
-    : result;
+  if (result !== CHAT_TURN_WAIT_CANCELLED) return result;
+  return streamState.started
+    ? STREAMING
+    : { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
 }

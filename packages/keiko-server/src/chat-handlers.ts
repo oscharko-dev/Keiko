@@ -1261,7 +1261,15 @@ export function runPostCommitConversationMemorySideEffects(
   });
   if (context === undefined) return;
   runPostCommitMemoryEffect(deps, correlationId, "chat.memory.salience", () => {
-    scheduleMemorySalienceCapture(deps, request, context, modelId, assistantText, "desktop");
+    scheduleMemorySalienceCapture(
+      deps,
+      request,
+      context,
+      modelId,
+      assistantText,
+      "desktop",
+      correlationId,
+    );
   });
 }
 
@@ -2049,6 +2057,7 @@ function scheduleCanonicalTurnSalienceCapture(
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
   modelId: string,
+  correlationId: string,
 ): void {
   if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
     return;
@@ -2064,6 +2073,7 @@ function scheduleCanonicalTurnSalienceCapture(
       modelId,
       pair.assistantText,
       "desktop",
+      correlationId,
     );
   }
 }
@@ -2081,7 +2091,7 @@ export function runPostCommitCanonicalTurnMemorySideEffects(
     recordConversationMemoryUse(deps, memory, assistantText);
   });
   runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.salience", () => {
-    scheduleCanonicalTurnSalienceCapture(deps, request, context, modelId);
+    scheduleCanonicalTurnSalienceCapture(deps, request, context, modelId, correlationId);
   });
 }
 

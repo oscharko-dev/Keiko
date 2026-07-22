@@ -174,11 +174,11 @@ export const PATH_RE = /(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}/g;
 const API_ROUTE_RE =
   /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
 const DEFINITION_TARGET_BEFORE_VERB_RE =
-  /\b([A-Za-z_$][A-Za-z0-9_$]{2,127})\s+(?:defined|declared|implemented|definiert|deklariert|implementiert)\b/giu;
+  /\b([a-z_$][a-z0-9_$]{2,127})\s+(?:defined|declared|implemented|definiert|deklariert|implementiert)\b/giu;
 const DEFINITION_TARGET_AFTER_VERB_RE =
-  /\b(?:define|declare|implement|definieren|deklarieren|implementieren)\s+(?:(?:we|wir|ich|du|sie|man)\s+)?([A-Za-z_$][A-Za-z0-9_$]{2,127})\b/giu;
+  /\b(?:define|declare|implement|definieren|deklarieren|implementieren)\s+(?:(?:we|wir|ich|du|sie|man)\s+)?([a-z_$][a-z0-9_$]{2,127})\b/giu;
 const DEFINITION_TARGET_AFTER_NOUN_RE =
-  /\b(?:definition|declaration|implementation|deklaration|implementierung)\s+(?:(?:of|von)\s+)?([A-Za-z_$][A-Za-z0-9_$]{2,127})\b/giu;
+  /\b(?:definition|declaration|implementation|deklaration|implementierung)\s+(?:(?:of|von)\s+)?([a-z_$][a-z0-9_$]{2,127})\b/giu;
 // Requires a genuine lower/digit -> upper transition so all-caps acronyms and SHOUTING words
 // (WHY, HTTP, BROKEN) are NOT mistaken for code identifiers. A spurious 0.85 identifier anchor
 // would both satisfy the clarification gate for a vague question and seed symbol-file retrieval

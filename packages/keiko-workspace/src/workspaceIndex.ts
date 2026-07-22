@@ -237,6 +237,11 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function compareStrings(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
 function normalizeScopePath(scopePath: string): string {
   return scopePath.split("\\").join("/");
 }
@@ -256,7 +261,7 @@ function normalizeRelativePaths(relativePaths: readonly string[]): readonly stri
     seen.add(scopePath);
     normalized.push(scopePath);
   }
-  normalized.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  normalized.sort(compareStrings);
   return normalized;
 }
 
@@ -330,14 +335,14 @@ function normalizeLexicalLine(
   }
   const termHashes = [
     ...new Set(line.termHashes.filter((term) => typeof term === "string" && term.length > 0)),
-  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  ].sort(compareStrings);
   const definitionTermHashes = [
     ...new Set(
       (Array.isArray(line.definitionTermHashes) ? line.definitionTermHashes : []).filter(
         (term) => typeof term === "string" && term.length > 0,
       ),
     ),
-  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  ].sort(compareStrings);
   return {
     startLine,
     endLine,
@@ -354,7 +359,7 @@ function normalizeLexicalRecord(
     .filter((line): line is WorkspaceIndexLexicalLine => line !== undefined);
   const termHashes = [
     ...new Set(lexical.termHashes.filter((term) => typeof term === "string" && term.length > 0)),
-  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  ].sort(compareStrings);
   if (termHashes.length === 0 && lines.length === 0) {
     return undefined;
   }
@@ -1222,7 +1227,7 @@ function comparePruneRetention(
     Number(b.generationId === currentGenerationId) - Number(a.generationId === currentGenerationId);
   if (generationOrder !== 0) return generationOrder;
   if (a.mtimeMs !== b.mtimeMs) return b.mtimeMs - a.mtimeMs;
-  return a.segment < b.segment ? -1 : a.segment > b.segment ? 1 : 0;
+  return compareStrings(a.segment, b.segment);
 }
 
 function orphanTempBudget(maxSnapshots: number): number {
@@ -1419,7 +1424,7 @@ async function committedSnapshotMatches(
     if (isMissingPathError(error)) return false;
     throw error;
   } finally {
-    await handle?.close().catch(() => undefined);
+    await handle?.close();
   }
 }
 
@@ -2054,7 +2059,7 @@ function prepareLexicalLine(
   const lexical = lexicalTermsForLine(line, routeMarkers);
   if (lexical.terms.length === 0) return undefined;
   const termHashes = [...new Set(lexical.terms.map((term) => hashLexicalTerm(term)))].sort(
-    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
+    compareStrings,
   );
   const definitions = new Set(
     definitionSymbolsInStructuralLine(structuralLine).map((symbol) => symbol.toLowerCase()),
@@ -2062,7 +2067,7 @@ function prepareLexicalLine(
   const definitionTermHashes = lexical.terms
     .filter((term) => definitions.has(term.toLowerCase()))
     .map((term) => hashLexicalTerm(term))
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort(compareStrings);
   return { definitionTermHashes, termHashes, truncated: lexical.truncated };
 }
 
@@ -2117,7 +2122,7 @@ export function buildWorkspaceIndexLexicalRecord(
   }
   return {
     truncated,
-    termHashes: [...termHashes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    termHashes: [...termHashes].sort(compareStrings),
     lines: lexicalLines,
   };
 }
@@ -2214,7 +2219,7 @@ function removedDirectoryFiles(
       removed.push(file.scopePath);
     }
   }
-  return removed.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return removed.sort(compareStrings);
 }
 
 function addedDirectoryPaths(
@@ -2232,7 +2237,7 @@ function addedDirectoryPaths(
       added.push(childPath);
     }
   }
-  return added.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return added.sort(compareStrings);
 }
 
 function removedDirectoryNames(

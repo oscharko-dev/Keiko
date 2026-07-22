@@ -46,6 +46,7 @@ const TARGET_SAMPLE_RATE = 24_000;
 const PRIME_FRAMES = 2_400;
 const WORKLET_URL = "/keiko-playback-worklet.js";
 const WORKLET_NAME = "keiko-playback";
+const AUDIO_CONTEXT_CLEANUP_ERROR = "Assistant speech audio context cleanup failed.";
 
 function streamingSupported(): boolean {
   return typeof AudioContext !== "undefined" && typeof AudioWorkletNode !== "undefined";
@@ -102,7 +103,7 @@ export function createBrowserAssistantSpeechStreamingSink():
     const activeClosure = contextClosures.get(ctx);
     if (activeClosure !== undefined) return activeClosure;
     const closure = ctx.close().catch(() => {
-      // close failure must not leave a stale context eligible for reuse
+      window.reportError(new Error(AUDIO_CONTEXT_CLEANUP_ERROR));
     });
     contextClosures.set(ctx, closure);
     return closure;

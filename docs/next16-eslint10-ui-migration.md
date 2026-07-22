@@ -4,13 +4,13 @@ Status: Issue #862 migration evidence, refreshed during the post-#2665 audit on 
 
 ## Migration decisions
 
-- `packages/keiko-ui` uses `next@16.2.11` and `eslint-config-next@16.2.11`, the latest stable Next 16 patch available during this run.
+- `packages/keiko-ui` uses the reviewed `next@16.2.10` and `eslint-config-next@16.2.10` baseline. The post-#2665 audit rejected a one-day-old 16.2.11 refresh after the PR dependency diff produced Socket recency and license-policy alerts.
 - Issue #2293 deliberately retained React `18.3.1`; the subsequent, independently verified React 19
   migration is recorded in [React 19 UI and editor migration](react19-ui-editor-migration.md).
 - The root package and UI workspace use `eslint@9.39.5`, the latest release accepted by every active Next plugin peer range. ESLint 10.7.0 was evaluated and rejected because `eslint-plugin-import`, `eslint-plugin-jsx-a11y`, and `eslint-plugin-react` still publish ESLint <=9 peer ranges; accepting npm's override would make `npm ls` invalid.
 - The lint entry point is now `eslint . --max-warnings=0`; `next lint` is no longer used.
 - `packages/keiko-ui/.eslintrc.json` was replaced by `packages/keiko-ui/eslint.config.mjs`, based on the peer-valid subset of `eslint-config-next/core-web-vitals` plus the strict flat `jsx-a11y` rules.
-- `eslint-config-next@16.2.11` still bundles React, import, JSX-a11y, and parser pieces whose published peer ranges do not accept ESLint 10. The UI config therefore reuses Next's own `@next/next`, React Hooks, TypeScript, and JSX-a11y plugin objects, but filters out the incompatible React/import rule layer and avoids Next's Babel parser shim.
+- `eslint-config-next@16.2.10` still bundles React, import, JSX-a11y, and parser pieces whose published peer ranges do not accept ESLint 10. The UI config therefore reuses Next's own `@next/next`, React Hooks, TypeScript, and JSX-a11y plugin objects, but filters out the incompatible React/import rule layer and avoids Next's Babel parser shim.
 - The flat config keeps the React Hooks rule level equivalent to the previous Next 15 lint baseline. React Hooks v7 adds compiler-oriented rules that were not part of the prior gate and surfaced existing application-code findings outside the allowed Issue #862 scope.
 
 ## Turbopack and package surface
@@ -21,13 +21,13 @@ The package-surface concern that motivated the previous tracing pin remains cove
 
 ## PostCSS advisory remediation
 
-The repository has a root `overrides.postcss` value of `8.5.22`; clean lockfile normalization makes
+The repository has a root `overrides.postcss` value of `8.5.18`; clean lockfile normalization makes
 Next, Vite, and Autoprefixer use that reviewed version instead of retaining stale nested PostCSS
 entries.
 
 Verified outcome:
 
-- `npm ls postcss --workspace @oscharko-dev/keiko-ui --all` reports `next@16.2.11 -> postcss@8.5.22 deduped`.
+- `npm ls postcss --workspace @oscharko-dev/keiko-ui --all` reports `next@16.2.10 -> postcss@8.5.18 deduped`.
 - `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui` passes with zero vulnerabilities.
 - `npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui` emits successfully.
 

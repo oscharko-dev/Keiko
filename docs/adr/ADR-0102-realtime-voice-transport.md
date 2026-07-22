@@ -122,7 +122,7 @@ can affect input transcription and response-disabled VAD only.
   proxied-SDP design keeps all signaling same-origin, so no `connect-src` / `webrtc` directive change is
   required. `default-src 'none'` and the rest of `csp.ts` are untouched.
 - **Supply chain.** No new runtime media package is added; the control plane reuses the existing `ws`
-  dependency (repo-wide since the CDP browser tooling; already pinned at `ws` 8.21.1 in `keiko-tools`)
+  dependency (repo-wide since the CDP browser tooling; already pinned at `ws` 8.21.0 in `keiko-tools`)
   and the media plane uses browser-native WebRTC. `ws` is now also declared explicitly in
   `keiko-server/package.json` for manifest correctness — this is a declaration of the existing
   dependency on its new consumer, not a new package in the repository. The #496 supply-chain denylist

@@ -8,7 +8,7 @@ voice child issue (#493–#506).
 
 The runtime dependency budget for the entire Voice Digital Twin is:
 
-- the **existing `ws` package** (resolved version **8.21.1**, MIT), declared in the root CLI
+- the **existing `ws` package** (resolved version **8.21.0**, MIT), declared in the root CLI
   [`package.json`](../../package.json),
   [`packages/keiko-tools/package.json`](../../packages/keiko-tools/package.json), and — added by Issue #497
   under [ADR-0102](../adr/ADR-0102-realtime-voice-transport.md) — also

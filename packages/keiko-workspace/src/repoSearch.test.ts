@@ -1640,6 +1640,18 @@ describe("readExcerpt (memFs)", () => {
     expect(r.atom.lineRange).toEqual({ startLine: 2, endLine: 3 });
   });
 
+  it("rejects an excerpt starting beyond the last file line", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "L1\nL2\nL3" });
+    const error = await readExcerpt(
+      scope,
+      { scopePath: "src/a.ts", startLine: 4, endLine: 4, maxBytes: 256 },
+      { fs, nowMs: FIXED_NOW },
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(RepoSearchUnsupportedFileError);
+    expect(error).toMatchObject({ reason: "outside-range" });
+  });
+
   it("truncates the excerpt to maxBytes and reports truncated=true", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "0123456789\n" });
     const r = await readExcerpt(

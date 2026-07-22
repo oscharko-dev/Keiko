@@ -78,7 +78,7 @@ voice surface was then **greenfield**:
 - **The browser↔BFF seam is loopback HTTP + Server-Sent Events.** The BFF is plain `node:http` bound to
   `127.0.0.1` and **hard-rejects every WebSocket upgrade**
   ([`server.ts`](../../packages/keiko-server/src/server.ts) lines 210–213); streaming uses `EventSource`
-  ([`useSSE.ts`](../../packages/keiko-ui/src/lib/useSSE.ts) line 53). The `ws` dependency (8.21.1) is present
+  ([`useSSE.ts`](../../packages/keiko-ui/src/lib/useSSE.ts) line 53). The `ws` dependency (8.21.0) is present
   only for the CDP-to-Chrome client ([`cdp-client.ts`](../../packages/keiko-tools/src/browser/cdp-client.ts))
   and is permit-list scoped to that client (decision ADR-0017, recorded in `cdp-client.ts`; ADR-0017 is an
   internal code-level decision with no standalone `docs/adr/` file).
@@ -128,20 +128,19 @@ disabling full conversation. STT-only must never present itself as full voice co
 > below describes the pre-#497 baseline, not the current transport.
 
 **WebSocket is the authoritative local control and signaling plane** for session lifecycle, capability
-gating, SDP/ICE signaling, policy state, audit events, interruption state, and replay metadata — a _role_ that
-is realized today on the existing loopback HTTP + Server-Sent Events seam (see the paragraph below), because
-the BFF does not currently accept WebSocket upgrades. **WebRTC is the preferred media and optional data plane**
-for real-time audio, used only when supported by browser, policy, provider, and runtime capability metadata.
-Raw audio over the control plane is not the default real-time transport. When WebRTC is unavailable, the system gracefully degrades to dictation-only or disabled voice;
-it never silently downgrades to streaming raw audio over the control plane.
+gating, SDP/ICE signaling, policy state, audit events, interruption state, and replay metadata. The
+productive realization is the single capability-gated loopback `/api/voice/control` WebSocket.
+**WebRTC is the preferred media and optional data plane** for real-time audio, used only when supported
+by browser, policy, provider, and runtime capability metadata. Raw audio over the control plane is not
+the default real-time transport. When WebRTC is unavailable, the system gracefully degrades to
+dictation-only or disabled voice; it never silently downgrades to streaming raw audio over the control
+plane.
 
-Because the current BFF binds loopback-only and hard-rejects WebSocket upgrades
-([`server.ts`](../../packages/keiko-server/src/server.ts) lines 210–213), the **local control plane is
-realized on the existing loopback HTTP + Server-Sent Events seam** (request/response over `POST /api/*`,
-server→client push over the existing `EventSource` channel). "WebSocket is authoritative" describes the
-control/signaling _role_ — local control rides the existing HTTP+SSE seam, and any future re-introduction of
-a bidirectional WebSocket upgrade is an explicit, ADR-gated change to be raised by the transport child issue
-(#496/#497), never smuggled in. The browser-side media path uses **native browser WebRTC APIs**
+**Historical pre-#497 baseline:** the BFF bound loopback-only and hard-rejected every WebSocket upgrade,
+so the local control role was temporarily realized over existing loopback HTTP + Server-Sent Events
+(request/response over `POST /api/*`, server→client push over `EventSource`). ADR-0102 subsequently
+reopened only `/api/voice/control`; every other upgrade remains rejected. The browser-side media path
+uses **native browser WebRTC APIs**
 (`RTCPeerConnection`, `getUserMedia`, `RTCDataChannel`) which are platform capabilities requiring zero npm
 dependencies. See [`docs/voice/architecture.md`](../voice/architecture.md).
 
@@ -151,8 +150,8 @@ the replay / reconnect / redaction semantics — is specified in
 [ADR-0101](ADR-0101-voice-control-media-capability-replay-protocol.md) and
 [`docs/voice/protocol.md`](../voice/protocol.md), with the typed contract in
 [`packages/keiko-contracts/src/voice-protocol.ts`](../../packages/keiko-contracts/src/voice-protocol.ts).
-The protocol keeps the v1 control transport on loopback HTTP + SSE; re-opening the WebSocket upgrade
-remains the explicit, ADR-gated decision owned by the transport child issue (#497).
+The immutable v1 baseline retains loopback HTTP + SSE as a decodable contract value; ADR-0102 added the
+productive `loopback-websocket` realization for the single approved route.
 
 ### D4 — Local-first data boundary: no external destinations except explicitly configured model endpoints (AC4)
 
@@ -271,7 +270,7 @@ columns) is [`docs/voice/deployment-profile-matrix.md`](../voice/deployment-prof
 
 ### D8 — Supply-chain policy: no new runtime media packages by default (supply-chain)
 
-The runtime dependency budget for voice is **the existing `ws` package (8.21.1) plus browser-native WebRTC
+The runtime dependency budget for voice is **the existing `ws` package (8.21.0) plus browser-native WebRTC
 APIs** — nothing more, by default. No `socket.io`, `simple-peer`, `peerjs`, `mediasoup`, `livekit`,
 server-side WebRTC stack, or other runtime media package may be added by default. WebRTC is treated as a
 browser platform capability, not an npm dependency (at most `adapter.js` as an optional compatibility shim, to

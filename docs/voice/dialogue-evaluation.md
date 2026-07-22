@@ -54,28 +54,27 @@ No ADR is added: the evaluation introduces no new architecture boundary and reus
 
 ## Historical capability profiles (AC1)
 
-The evaluation enumerates the five configured deployment profiles and asserts the dialogue controls are
-offered only when the deployment can both capture user speech and speak the answer (the full STT+TTS
-conjunction, ADR-0096 D2). The oracle is compared against the **real** production gate; a regressed gate
-that offered dialogue for a partial or no-voice deployment is caught and flips the verdict to `NO-GO`.
+The original evaluation enumerated five configured deployment profiles and asserted that dialogue
+controls were offered only when the deployment could both capture user speech and speak the answer (the
+full STT+TTS conjunction, ADR-0096 D2). That historical oracle was compared against the then-production
+gate; a gate that offered dialogue for a partial or no-voice deployment flipped the verdict to `NO-GO`.
 
 This was the Issue #1563 oracle. Under ADR-0154, the `stt-tts` row below resolves no productive dialogue
 transport and its current expected answer is **no**; Realtime WebRTC plus independent TTS and a persona is
 required.
 
-| Profile                      | `available` / `profile`   | WebRTC media | Dialogue offered? |
-| ---------------------------- | ------------------------- | ------------ | ----------------- |
-| `no-voice`                   | `false` / `none`          | no           | **no**            |
-| `stt-only`                   | `true` / `speech-to-text` | no           | **no**            |
-| `speech-output-only`         | `true` / `speech-output`  | no           | **no**            |
-| `stt-tts` (STT+TTS fallback) | `true` / `full-realtime`  | no           | **yes**           |
-| `realtime-capable`           | `true` / `full-realtime`  | yes          | **yes**           |
+| Profile                      | `available` / `profile`   | WebRTC media | Issue #1563 historical dialogue? | ADR-0154 current Twin?             |
+| ---------------------------- | ------------------------- | ------------ | -------------------------------- | ---------------------------------- |
+| `no-voice`                   | `false` / `none`          | no           | **no**                           | **no**                             |
+| `stt-only`                   | `true` / `speech-to-text` | no           | **no**                           | **no**                             |
+| `speech-output-only`         | `true` / `speech-output`  | no           | **no**                           | **no**                             |
+| `stt-tts` (STT+TTS fallback) | `true` / `full-realtime`  | no           | **yes**                          | **no**                             |
+| `realtime-capable`           | `true` / `full-realtime`  | yes          | **yes**                          | **yes**, with explicit TTS/persona |
 
-The "catch a no-voice deployment incorrectly rendering dialog controls" requirement is enforced two ways:
-the scorer runs against the real gate (positive proof that no-voice is not offered), and a unit test
-injects a deliberately broken gate to prove the comparator and the GO/NO-GO summary catch the regression.
-The browser smoke independently confirms the absence of the dialogue switch for `no-voice`, `stt-only`,
-and `speech-output-only`, and its presence for the STT+TTS fallback.
+The Issue #1563 column records the historical scorer and browser-smoke oracle, including the former
+STT+TTS fallback. It must not be read as current product acceptance. The ADR-0154 column records the
+current architecture: Twin requires Realtime WebRTC input plus independent explicit TTS and a mapped
+persona, and the renewed Oliver live-microphone acceptance remains deferred.
 
 ## Latency / interruption (AC2)
 

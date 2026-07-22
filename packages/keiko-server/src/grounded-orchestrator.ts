@@ -2371,16 +2371,16 @@ function lineWindowForAtom(atom: EvidenceAtom): LineWindow {
     range.startLine === range.endLine &&
     atom.provenance.kind !== "semantic-search" &&
     atom.provenance.kind !== "model-rerank";
-  const contextBefore = isDiscoveredDefinition
-    ? 0
-    : addSingleLineContext
-      ? SINGLE_LINE_EXCERPT_CONTEXT_LINES
-      : 0;
-  const contextAfter = isDiscoveredDefinition
-    ? DISCOVERED_DEFINITION_CONTEXT_AFTER
-    : addSingleLineContext
-      ? SINGLE_LINE_EXCERPT_CONTEXT_LINES
-      : 0;
+  let contextBefore: number;
+  let contextAfter: number;
+  if (isDiscoveredDefinition) {
+    contextBefore = 0;
+    contextAfter = DISCOVERED_DEFINITION_CONTEXT_AFTER;
+  } else {
+    const surroundingContext = addSingleLineContext ? SINGLE_LINE_EXCERPT_CONTEXT_LINES : 0;
+    contextBefore = surroundingContext;
+    contextAfter = surroundingContext;
+  }
   return {
     startLine: Math.max(1, range.startLine - contextBefore),
     endLine: range.endLine + contextAfter,

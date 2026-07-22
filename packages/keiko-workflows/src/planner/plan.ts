@@ -183,16 +183,144 @@ function buildRing(
 
 const DIRECT_ROUTE_METHOD_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
 const DIRECT_ROUTE_PATH_RE = /\/[A-Za-z0-9:_?&=.%+*{}/-]*[A-Za-z0-9_}/*-]/u;
-const HISTORY_QUERY_RE =
-  /(?:^|[^\p{L}\p{N}_])(?:git|history|historie|recent|recency|commits?|blame|evolution|introduced|added|modified|modifications?|renamed|removed|authored|zuletzt|changed|änderung|änderungen|geändert|eingeführt|hinzugefügt|umbenannt|entfernt|verlauf)(?=$|[^\p{L}\p{N}_])/iu;
-const DEFINITION_LOOKUP_RE =
-  /\b(?:define[ds]?|definition|declare[ds]?|declaration|implement(?:ed|s)?|implementation|definieren|definiert|deklarieren|deklariert|implementieren|implementiert)\b/iu;
-const SYMBOL_RELATION_RE =
-  /\b(?:call(?:ers?|s|ed|ing)?|callees?|consumers?|dependenc(?:y|ies)|dependents?|depends?|depended|depending|imports?|imported|importing|exports?|exported|exporting|invokes?|invoked|invoking|invocations?|reference[ds]?|referencing|referenziert|usages?|use[ds]?|using|verwend(?:et|en|est|e|ung)|nutz(?:t|en|ung)|genutzt|aufrufer|aufgerufen|aufrufen|aufrufe?|abhängig(?:e|en|er|es|keit|keiten)?|importiert|exportiert)\b/iu;
+const QUERY_TERM_RE = /[\p{L}\p{N}_]+/gu;
+const HISTORY_QUERY_TERMS: ReadonlySet<string> = new Set([
+  "git",
+  "history",
+  "historie",
+  "recent",
+  "recency",
+  "commit",
+  "commits",
+  "blame",
+  "evolution",
+  "introduced",
+  "added",
+  "modified",
+  "modification",
+  "modifications",
+  "renamed",
+  "removed",
+  "authored",
+  "zuletzt",
+  "changed",
+  "änderung",
+  "änderungen",
+  "geändert",
+  "eingeführt",
+  "hinzugefügt",
+  "umbenannt",
+  "entfernt",
+  "verlauf",
+]);
+const DEFINITION_LOOKUP_TERMS: ReadonlySet<string> = new Set([
+  "define",
+  "defined",
+  "defines",
+  "definition",
+  "declare",
+  "declared",
+  "declares",
+  "declaration",
+  "implement",
+  "implemented",
+  "implements",
+  "implementation",
+  "definieren",
+  "definiert",
+  "deklarieren",
+  "deklariert",
+  "implementieren",
+  "implementiert",
+]);
+const SYMBOL_RELATION_TERMS: ReadonlySet<string> = new Set([
+  "call",
+  "caller",
+  "callers",
+  "calls",
+  "called",
+  "calling",
+  "callee",
+  "callees",
+  "consumer",
+  "consumers",
+  "dependency",
+  "dependencies",
+  "dependent",
+  "dependents",
+  "depend",
+  "depends",
+  "depended",
+  "depending",
+  "import",
+  "imports",
+  "imported",
+  "importing",
+  "export",
+  "exports",
+  "exported",
+  "exporting",
+  "invoke",
+  "invokes",
+  "invoked",
+  "invoking",
+  "invocation",
+  "invocations",
+  "reference",
+  "references",
+  "referenced",
+  "referencing",
+  "referenziert",
+  "usage",
+  "usages",
+  "use",
+  "uses",
+  "used",
+  "using",
+  "verwendet",
+  "verwenden",
+  "verwendest",
+  "verwende",
+  "verwendung",
+  "nutzt",
+  "nutzen",
+  "nutzung",
+  "genutzt",
+  "aufrufer",
+  "aufgerufen",
+  "aufrufen",
+  "aufruf",
+  "aufrufe",
+  "abhängig",
+  "abhängige",
+  "abhängigen",
+  "abhängiger",
+  "abhängiges",
+  "abhängigkeit",
+  "abhängigkeiten",
+  "importiert",
+  "exportiert",
+]);
 const ROUTE_TRAVERSAL_RE = /\b(?:handlers?|trace|traces|tracing|call[- ]?paths?|aufrufpfade?)\b/iu;
 const IDENTIFIER_TOKEN_RE = /[A-Za-z_$][A-Za-z0-9_$]*/gu;
 const TEST_IDENTIFIER_SUFFIX_RE = /(?:Test|Tests|Spec|Specs)$/u;
 const DELIMITED_TEST_IDENTIFIER_SUFFIX_RE = /(?:^|[_$])(?:tests?|specs?)$/u;
+
+function hasQueryTerm(text: string, terms: ReadonlySet<string>): boolean {
+  return [...text.toLowerCase().matchAll(QUERY_TERM_RE)].some((match) => terms.has(match[0]));
+}
+
+function hasHistoryQuery(text: string): boolean {
+  return hasQueryTerm(text, HISTORY_QUERY_TERMS);
+}
+
+function hasDefinitionLookup(text: string): boolean {
+  return hasQueryTerm(text, DEFINITION_LOOKUP_TERMS);
+}
+
+function hasSymbolRelation(text: string): boolean {
+  return hasQueryTerm(text, SYMBOL_RELATION_TERMS);
+}
 
 function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
   const sourceToken = [...text.matchAll(IDENTIFIER_TOKEN_RE)]
@@ -209,16 +337,16 @@ function isDirectRouteLookup(query: RetrievalQuery): boolean {
   return (
     DIRECT_ROUTE_METHOD_RE.test(query.text) &&
     DIRECT_ROUTE_PATH_RE.test(query.text) &&
-    !HISTORY_QUERY_RE.test(query.text) &&
-    !SYMBOL_RELATION_RE.test(query.text) &&
+    !hasHistoryQuery(query.text) &&
+    !hasSymbolRelation(query.text) &&
     !ROUTE_TRAVERSAL_RE.test(query.text)
   );
 }
 
 function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
   return (
-    HISTORY_QUERY_RE.test(query.text) ||
-    SYMBOL_RELATION_RE.test(query.text) ||
+    hasHistoryQuery(query.text) ||
+    hasSymbolRelation(query.text) ||
     ROUTE_TRAVERSAL_RE.test(query.text)
   );
 }
@@ -228,9 +356,9 @@ export function directDefinitionSymbol(
   anchors: readonly SearchAnchor[],
 ): string | undefined {
   if (
-    !DEFINITION_LOOKUP_RE.test(query.text) ||
-    HISTORY_QUERY_RE.test(query.text) ||
-    SYMBOL_RELATION_RE.test(query.text)
+    !hasDefinitionLookup(query.text) ||
+    hasHistoryQuery(query.text) ||
+    hasSymbolRelation(query.text)
   ) {
     return undefined;
   }

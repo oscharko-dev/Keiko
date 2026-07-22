@@ -1267,13 +1267,19 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
 
     await enterDialogue();
     const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    let handoffAccepted: unknown;
     await act(async () => {
-      await Promise.resolve(
-        options?.onCanonicalUserTurn?.({
-          turnId: "voice-user-blocked",
-          text: "This send is blocked.",
-        }),
-      ).catch(() => undefined);
+      handoffAccepted = options?.onCanonicalUserTurn?.({
+        turnId: "voice-user-blocked",
+        text: "This send is blocked.",
+      });
+      await Promise.resolve();
+    });
+    expect(handoffAccepted).toBe(true);
+    expect(sendMessage).toHaveBeenCalledWith({
+      text: "This send is blocked.",
+      clientTurnId: "voice-user-blocked",
+      reportOutcome: true,
     });
 
     rerender(

@@ -190,7 +190,7 @@ nothing else ([supply-chain-policy.md](supply-chain-policy.md)).
 - **The epic's historical dependency delta was one manifest declaration.** Issue #497 added `ws` to
   [`packages/keiko-server/package.json`](../../packages/keiko-server/package.json) while the package was
   already present in the monorepo. Current manifests and `package-lock.json` consistently resolve `ws`
-  8.21.1 across the root CLI, `keiko-tools`, and `keiko-server`. The server declaration is the explicit,
+  8.21.0 across the root CLI, `keiko-tools`, and `keiko-server`. The server declaration is the explicit,
   ADR-gated decision recorded in
   [ADR-0102](../adr/ADR-0102-realtime-voice-transport.md) (re-opening the loopback WebSocket control plane);
   the dependency **count** is unchanged. `ws` is a WebSocket library (MIT), not a media/WebRTC package.

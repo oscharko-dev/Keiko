@@ -226,6 +226,11 @@ describe("createExplorationPlan", () => {
       expectedRings: ["lexical", "structural", "git-history"],
     },
     {
+      description: "retains structural retrieval when a symbol question asks where it is called",
+      text: "Where is WindowFrame defined and called?",
+      expectedRings: ["lexical", "structural", "git-history"],
+    },
+    {
       description: "keeps route relationship questions on the structural path",
       text: "Where is POST /api/payments/:id/refund defined and used?",
       expectedRings: ["lexical", "structural", "git-history"],

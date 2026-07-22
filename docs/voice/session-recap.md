@@ -86,16 +86,18 @@ After a user triggers recap and **approves candidates in the review queue:**
   the user approves them. A user who triggers recap but then closes the tab without reviewing
   candidates leaves them in a proposed state, never auto-promoting them to accepted.
 
-### Dormancy when voice is unavailable
+### Historical UI dormancy design when voice is unavailable
 
-When the voice profile is `"none"` or `"speech-output"` (no speech input capability):
+The original #504 UI design required the following behavior when the voice profile was `"none"` or
+`"speech-output"` (no speech input capability):
 
-- The recap UI control does not appear.
-- No network call to build recap candidates is made.
-- No local state is read or stored.
-- No observer fires.
+- The recap UI control would not appear.
+- No network call to build recap candidates would be made.
+- No local state would be read or stored.
+- No observer would fire.
 
-This is an **AC1 dormancy guarantee** by construction (see §3).
+This was the historical **AC1 dormancy guarantee** by construction (see §3). The current tree has no
+recap UI caller in any profile; the server route independently retains its capability gate.
 
 ## 3. Capability gating and dormancy
 
@@ -109,9 +111,10 @@ This is an **AC1 dormancy guarantee** by construction (see §3).
 | `speech-output`  | **no**              | No speech input; only assistant playback |
 | `full-realtime`  | **yes**             | Full WebRTC conversation produces text   |
 
-**AC1 enforcement (dormancy):** The UI hook short-circuits at the predicate before reading any
-stored state or making network calls. The "Review session" button does not render unless
-`voiceRecapAllowed(profile) === true` AND `committedSegmentCount > 0`.
+**Historical #504 AC1 UI design (not currently wired):** the planned hook would short-circuit at the
+predicate before reading stored state or making network calls. The planned "Review session" button
+would render only when `voiceRecapAllowed(profile) === true` AND `committedSegmentCount > 0`. No such
+hook or button exists in the current UI.
 
 ## 4. How recap derives memory candidates: reused governed capture
 
@@ -135,16 +138,21 @@ discarded, redacted, and provider-error segments are structurally excluded by co
 For STT dictation, the committed text may overlap with the dictated text submitted in `request.content`
 for per-turn capture. This overlap is handled by vault deduplication (see §5).
 
-### Extraction timing and flow
+### Historical #504 UI-to-route flow
 
-1. User presses "Review session" button in the recap control.
-2. UI hook sends `POST /api/voice/recap/build` with the committed text and transcript counts.
-3. Server receives the request and invokes `extractCandidatesFromUserText` once per committed span.
-4. For each `CaptureOutcome` of kind `"candidate"` that passes the `isPersistableMemoryCandidate` filter
-   (public, no required approval): insert into vault with `initialStatus: "proposed"`.
-5. Count rejections (sensitive, approval-gated, and other non-persistable outcomes) and return the proposal
-   count and vault ids to the client.
-6. Candidates automatically appear in the existing memory review queue.
+The original planned product flow was:
+
+1. The user would press the "Review session" button in the recap control.
+2. The UI hook would send `POST /api/voice/recap/build` with the committed text and transcript counts.
+3. The server would invoke `extractCandidatesFromUserText` once per committed span.
+4. For each `CaptureOutcome` of kind `"candidate"` that passed the
+   `isPersistableMemoryCandidate` filter (public, no required approval), the server would insert a vault
+   proposal with `initialStatus: "proposed"`.
+5. The server would count non-persistable outcomes and return the proposal count and vault ids.
+6. The candidates would appear in the existing memory review queue.
+
+The route still implements the bounded server portion of this flow for an explicit caller, but there
+is no current product UI caller or legacy transcript-segment feed.
 
 ### Content redaction before candidate storage
 
@@ -192,35 +200,37 @@ For STT dictation sessions, the same text can produce candidates twice:
 in the primary use case. For STT dictation, vault dedup and review-queue visibility provide the path
 to user control.
 
-## 6. UI control and user agency
+## 6. Historical #504 UI control and user agency
 
-### The "Review session" button
+### Planned "Review session" button
 
-When `voiceRecapAllowed(profile) === true` and the committed transcript contains at least one
-segment:
+The original design specified that, when `voiceRecapAllowed(profile) === true` and the committed
+transcript contained at least one segment:
 
-- A "Review session" button appears in the ChatWindow voice controls (alongside dictation and
-  realtime indicators).
-- On click, the button triggers the recap build endpoint and navigates to the memory review queue,
+- A "Review session" button would appear in the ChatWindow voice controls alongside dictation and
+  realtime indicators.
+- On click, the button would trigger the recap build endpoint and navigate to the memory review queue,
   filtered to show recap candidates.
-- No modal, no multi-step confirmation flow, no additional "confirm capture" prompt.
+- No modal, multi-step confirmation flow, or additional "confirm capture" prompt was planned.
+
+That component and hook are absent from the current tree.
 
 ### Post-trigger state
 
-After recap completes:
+In the historical UI design, after recap completed:
 
-- The client receives `{ candidatesProposed: number; candidatesRejected: number }` (counts only, no
+- The client would receive `{ candidatesProposed: number; candidatesRejected: number }` (counts only, no
   text).
-- The UI navigates to the review queue with a filter or highlight showing the newly proposed
+- The UI would navigate to the review queue with a filter or highlight showing the newly proposed
   candidates.
-- The user can accept, reject, or edit candidates using the existing review UI.
-- Closing the review queue without action leaves candidates in `status: "proposed"` until the user
+- The user could accept, reject, or edit candidates using the existing review UI.
+- Closing the review queue without action would leave candidates in `status: "proposed"` until the user
   acts on them.
 
 ### Design-system tokens
 
-The recap button reuses existing design-system tokens; no new CSS classes are introduced.
-`design-system/globals.css` is untouched.
+The planned recap button was specified to reuse existing design-system tokens without introducing new
+CSS classes. There is no current recap component or recap-specific styling.
 
 ## 7. Content-free invariants
 
@@ -252,10 +262,11 @@ assistant's response is context for salience scoring, not a fact to be stored ab
 but carries no assistant response text, making it safe to store in audit records without risk of
 storing assistant claims as user facts.
 
-## 9. Trigger is user-driven, not automatic
+## 9. Historical trigger decision; the route remains explicit
 
-Recap is **triggered explicitly by the user**, not automatically when a voice session ends. This
-decision is load-bearing:
+The original UI design made recap **explicitly user-triggered**, never automatic when a voice session
+ended. The current server route likewise has no automatic caller, but no product UI invokes it. The
+historical decision was load-bearing for three reasons:
 
 1. **Ambiguous session boundaries:** Keiko has no single "session close" event. STT dictation is
    per-message; full-realtime WebSocket disconnects on idle, navigation, or explicit close. An
@@ -263,9 +274,9 @@ decision is load-bearing:
    producing unwanted proposals.
 2. **User agency over retention:** The "no unreviewed transcript claims as durable truth" guarantee
    requires active user control. Passive automatic extraction violates this principle.
-3. **Synchronous with intent:** A user-triggered action at the moment of button press captures the
-   committed state authoritative to the user's intent. An automatic trigger on disconnect would race
-   against corrections still in flight.
+3. **Synchronous with intent:** The planned button press would capture the committed state authoritative
+   to the user's intent. An automatic trigger on disconnect would race against corrections still in
+   flight.
 
 ## 10. Deferred: visible session transcript summary
 

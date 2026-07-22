@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => ({
   updateChatLocalKnowledgeScopes: vi.fn(),
   recordReadsContextRelationship: vi.fn(),
   registerSw: vi.fn(),
+  gatewaySetupDialogModuleLoaded: vi.fn(),
   useKeyboardShortcuts: vi.fn(),
   undo: vi.fn(),
   redo: vi.fn(),
@@ -172,9 +173,10 @@ vi.mock("./modals/UnifiedQuickAccessPalette", () => ({
   UnifiedQuickAccessPalette: () => <div data-testid="quick-access-palette" />,
 }));
 
-vi.mock("./modals/GatewaySetupDialog", () => ({
-  GatewaySetupDialog: () => <div role="dialog" aria-label="Gateway setup" />,
-}));
+vi.mock("./modals/GatewaySetupDialog", () => {
+  mocks.gatewaySetupDialogModuleLoaded();
+  return { GatewaySetupDialog: () => <div role="dialog" aria-label="Gateway setup" /> };
+});
 
 vi.mock("./modals/NewWindowDialog", () => ({
   NewWindowDialog: () => <div role="dialog" aria-label="New window" />,
@@ -190,7 +192,9 @@ vi.mock("./install/InstallBanner", () => ({
 
 vi.mock("./widgets", () => ({}));
 
-import { AppShell, openOrFocusSearchWindow } from "./AppShell";
+import { AppShell, GatewaySetupLoading, openOrFocusSearchWindow } from "./AppShell";
+
+const gatewaySetupLoadsAtShellImport = mocks.gatewaySetupDialogModuleLoaded.mock.calls.length;
 
 function chat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -342,6 +346,15 @@ describe("AppShell grounding connections", () => {
     mocks.state.workspaceRendered = false;
     mocks.state.rightRailRendered = false;
     document.documentElement.removeAttribute("data-input-modality");
+  });
+
+  it("does not load the gateway setup implementation during ordinary shell startup", async () => {
+    expect(gatewaySetupLoadsAtShellImport).toBe(0);
+
+    await renderMounted();
+
+    expect(mocks.gatewaySetupDialogModuleLoaded).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Gateway setup" })).toBeNull();
   });
 
   it("tracks pointer and keyboard modality for focus ring policy", async () => {
@@ -559,11 +572,33 @@ describe("AppShell grounding connections", () => {
       selectedModel: "",
     };
 
-    await renderMounted();
+    render(<AppShell />);
+    const loadingDialog = screen.getByRole("dialog", {
+      name: "Preparing model gateway setup",
+    });
+    expect(loadingDialog).toHaveFocus();
+    expect(within(loadingDialog).getByRole("status")).toHaveTextContent("Loading...");
+    await screen.findByRole("dialog", { name: "Gateway setup" });
 
     expect(screen.getByRole("dialog", { name: "Gateway setup" })).toBeInTheDocument();
     expect(screen.queryByTestId("left-rail")).toBeNull();
     expect(screen.queryByTestId("right-rail")).toBeNull();
+  });
+
+  it("keeps a redacted retry surface available when gateway setup loading fails", async () => {
+    const retry = vi.fn();
+    const user = userEvent.setup();
+    render(<GatewaySetupLoading error={new Error("credential=must-not-render")} retry={retry} />);
+
+    const dialog = screen.getByRole("dialog", { name: "Preparing model gateway setup" });
+    expect(dialog).toHaveFocus();
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "The setup controls could not be loaded.",
+    );
+    expect(screen.queryByText(/must-not-render/u)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledOnce();
   });
 
   it("dispatches undo, redo, focus-status, and search shortcuts through the shell handler", async () => {

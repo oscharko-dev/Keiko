@@ -4575,6 +4575,38 @@ function ChatWindowLog({
 // Extracted from ChatWindow (SonarCloud S3776) — the composer form and its two error-notice
 // slots (Issue #1560's single stable composer render site, see the render-site comment kept at
 // the call site).
+function ComposerSendNotice({
+  canonicalVoiceTurnRequiresRetry,
+  retryPendingCanonicalVoiceTurn,
+  error,
+  clearError,
+}: {
+  readonly canonicalVoiceTurnRequiresRetry: boolean;
+  readonly retryPendingCanonicalVoiceTurn: (() => void) | undefined;
+  readonly error: string | undefined;
+  readonly clearError: (() => void) | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  if (canonicalVoiceTurnRequiresRetry) {
+    return (
+      <div className={styles.pendingVoiceTurnNotice} role="alert">
+        <span>{t("chat.voice.pendingTurn")}</span>
+        <button
+          type="button"
+          className="cmp-voice-btn cmp-voice-btn-primary"
+          onClick={retryPendingCanonicalVoiceTurn}
+        >
+          {t("chat.voice.retryPendingTurn")}
+        </button>
+      </div>
+    );
+  }
+  if (error === undefined) return null;
+  return (
+    <ErrorNoticeFromError error={error} fallback={t("chat.error.send")} onDismiss={clearError} />
+  );
+}
+
 function ChatWindowComposerFooter({
   visible,
   activeChat,
@@ -4624,24 +4656,12 @@ function ChatWindowComposerFooter({
               controlsNarrow={effectiveControlsNarrow}
               barCompact={effectiveBarCompact}
             />
-            {canonicalVoiceTurnRequiresRetry ? (
-              <div className={styles.pendingVoiceTurnNotice} role="alert">
-                <span>{t("chat.voice.pendingTurn")}</span>
-                <button
-                  type="button"
-                  className="cmp-voice-btn cmp-voice-btn-primary"
-                  onClick={retryPendingCanonicalVoiceTurn}
-                >
-                  {t("chat.voice.retryPendingTurn")}
-                </button>
-              </div>
-            ) : error !== undefined ? (
-              <ErrorNoticeFromError
-                error={error}
-                fallback={t("chat.error.send")}
-                onDismiss={clearError}
-              />
-            ) : null}
+            <ComposerSendNotice
+              canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry}
+              retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
+              error={error}
+              clearError={clearError}
+            />
           </form>
         </div>
       ) : null}

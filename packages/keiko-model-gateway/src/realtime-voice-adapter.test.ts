@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
@@ -64,8 +64,6 @@ describe("requestRealtimeNegotiation", () => {
       name: "legacy_grounding",
       parameters: {},
     };
-    const legacyChoice: RealtimeSessionToolChoice = "none";
-
     expect(DEFAULT_REALTIME_TRANSCRIPTION_MODEL).toBe("gpt-realtime-whisper");
     expect(DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL).toBe("gpt-realtime-whisper");
     expect(DEFAULT_REALTIME_VOICE).toBe("alloy");
@@ -80,7 +78,7 @@ describe("requestRealtimeNegotiation", () => {
     expect(isRealtimeVoice("alloy")).toBe(true);
     expect(resolveRealtimeVoice("unsupported")).toBe(DEFAULT_REALTIME_VOICE);
     expect(legacyTool.name).toBe("legacy_grounding");
-    expect(legacyChoice).toBe("none");
+    expectTypeOf<"none">().toExtend<RealtimeSessionToolChoice>();
   });
 
   it("keeps the published legacy request shape type-compatible but fails closed without an alias", async () => {

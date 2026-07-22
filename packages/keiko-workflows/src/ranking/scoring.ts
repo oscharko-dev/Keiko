@@ -105,10 +105,7 @@ function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function intentPositiveWeightTotal(weights: ScoringWeights): number {
-  if ((weights.symbolDefinition ?? 0) <= 0) {
-    return 1;
-  }
+function nonDefinitionPositiveWeightTotal(weights: ScoringWeights): number {
   const positiveWeights = [
     weights.provenanceBestScore,
     weights.lexicalScore,
@@ -120,7 +117,6 @@ function intentPositiveWeightTotal(weights: ScoringWeights): number {
     weights.stacktracePositionBonus,
     weights.canonicalMetadata,
     weights.structuralEdge,
-    weights.symbolDefinition,
     weights.gitRecency,
     weights.gitChurn,
   ];
@@ -128,14 +124,25 @@ function intentPositiveWeightTotal(weights: ScoringWeights): number {
   for (const weight of positiveWeights) {
     total += Math.max(0, weight ?? 0);
   }
-  return Math.max(1, total);
+  return total;
+}
+
+function normalizeNonDefinitionScore(raw: number, weights: ScoringWeights): number {
+  const definitionWeight = Math.max(0, weights.symbolDefinition ?? 0);
+  if (definitionWeight === 0) return raw;
+  const headroom = Math.max(0, 1 - Math.min(1, definitionWeight));
+  if (headroom === 0) return 0;
+  const positiveWeightTotal = nonDefinitionPositiveWeightTotal(weights);
+  if (positiveWeightTotal <= headroom) return raw;
+  return (raw * headroom) / positiveWeightTotal;
 }
 
 export function computeScore(
   signals: ExtractedSignals,
   weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS,
 ): number {
-  let raw = 0;
+  let nonDefinitionRaw = 0;
+  let definitionContribution = 0;
   let generatedPenalty = 0;
   for (const signal of signals.signals) {
     const key = SIGNAL_WEIGHT_KEYS[signal.name];
@@ -149,12 +156,18 @@ export function computeScore(
     const contribution = signal.value * weight;
     if (signal.name === "generated-penalty") {
       generatedPenalty += contribution;
+    } else if (signal.name === "symbol-definition") {
+      definitionContribution += contribution;
     } else {
-      raw += contribution;
+      nonDefinitionRaw += contribution;
     }
   }
-  // Intent-conditioned signals are tie-breakers only if base scores retain headroom. Normalize
-  // boosted vectors by their maximum positive weight so a direct-definition signal cannot vanish
-  // behind the unit clamp. DEFAULT weights retain their historical byte-identical behavior.
-  return clampUnit(raw / intentPositiveWeightTotal(weights) + generatedPenalty);
+  // A boosted definition keeps its configured share. The remaining positive vector is normalized
+  // only into the headroom left by that share, preventing saturation from erasing the definition
+  // distinction. Weights without a positive definition retain the historical scoring path.
+  return clampUnit(
+    normalizeNonDefinitionScore(nonDefinitionRaw, weights) +
+      definitionContribution +
+      generatedPenalty,
+  );
 }

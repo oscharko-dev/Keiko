@@ -3,9 +3,10 @@
 
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useLayoutEffect } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { DEFAULT_VOICE_PROTOCOL_TIMEOUTS } from "@oscharko-dev/keiko-contracts";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { prepareCanonicalVoiceHasher } from "./canonical-voice-hasher";
 import { useRealtimeVoice } from "./useRealtimeVoice";
 import { VoiceControlError, type VoiceControlClient } from "./voice-realtime-client";
 import { VoiceRtcError, type VoiceRtcSession, type VoiceRtcTransport } from "./voice-rtc-transport";
@@ -14,6 +15,10 @@ const ICE_GRACE_ABOVE_MS = 6_000;
 const SESSION_READY_WARMUP_MS = 150;
 const CANONICAL_TURN_CONTINUATION_GRACE_MS = 1_600;
 const CANONICAL_TURN_ID_PATTERN = /^client-turn-[a-f0-9]{32}-(?:\d+|[a-f0-9]{64}(?:-\d+)?)$/u;
+
+beforeAll(async () => {
+  await prepareCanonicalVoiceHasher();
+});
 
 interface CapturedCanonicalTurn {
   readonly turnId: string;
@@ -110,6 +115,20 @@ function makeFakeControl(
     },
     close,
   };
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function renderVoice(options: {
@@ -1369,6 +1388,94 @@ describe("useRealtimeVoice reconnect and teardown", () => {
     });
     await waitFor(() => expect(result.current.phase).toBe("negotiating"));
     expect(close).not.toHaveBeenCalled();
+  });
+
+  it("prepares canonical hashing once before creating media or control transports", async () => {
+    const preparation = deferred<void>();
+    const prepareCanonicalVoiceHasher = vi.fn(() => preparation.promise);
+    const fake = makeFakeSession();
+    const transport = makeFakeTransport({ session: fake.session });
+    const { client } = makeFakeControl();
+    const createTransport = vi.fn(() => transport);
+    const createControl = vi.fn(() => client);
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport,
+        createControl,
+        prepareCanonicalVoiceHasher,
+      }),
+    );
+
+    act(() => {
+      result.current.start();
+      result.current.start();
+    });
+
+    expect(result.current.phase).toBe("requesting");
+    expect(prepareCanonicalVoiceHasher).toHaveBeenCalledOnce();
+    expect(createTransport).not.toHaveBeenCalled();
+    expect(createControl).not.toHaveBeenCalled();
+
+    await act(async () => {
+      preparation.resolve(undefined);
+      await preparation.promise;
+    });
+
+    await waitFor(() => expect(createTransport).toHaveBeenCalledOnce());
+    expect(createControl).toHaveBeenCalledOnce();
+    expect(transport.connect).toHaveBeenCalledOnce();
+  });
+
+  it("does not create media or control transports when hashing preparation is aborted", async () => {
+    const preparation = deferred<void>();
+    const fake = makeFakeSession();
+    const createTransport = vi.fn(() => makeFakeTransport({ session: fake.session }));
+    const createControl = vi.fn(() => makeFakeControl().client);
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport,
+        createControl,
+        prepareCanonicalVoiceHasher: () => preparation.promise,
+      }),
+    );
+
+    act(() => {
+      result.current.start();
+      result.current.stop();
+    });
+    await act(async () => {
+      preparation.resolve(undefined);
+      await preparation.promise;
+    });
+
+    expect(result.current.phase).toBe("idle");
+    expect(createTransport).not.toHaveBeenCalled();
+    expect(createControl).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before media or network access when hashing preparation fails", async () => {
+    const preparation = deferred<void>();
+    const fake = makeFakeSession();
+    const createTransport = vi.fn(() => makeFakeTransport({ session: fake.session }));
+    const createControl = vi.fn(() => makeFakeControl().client);
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport,
+        createControl,
+        prepareCanonicalVoiceHasher: () => preparation.promise,
+      }),
+    );
+
+    act(() => result.current.start());
+    await act(async () => {
+      preparation.reject(new Error("hash module unavailable"));
+      await expect(preparation.promise).rejects.toThrow("hash module unavailable");
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.error?.message).toBe("Real-time voice could not be started.");
+    expect(createTransport).not.toHaveBeenCalled();
+    expect(createControl).not.toHaveBeenCalled();
   });
 
   it("uses the latest same-chat callback snapshot for a final after scope or model refresh", async () => {

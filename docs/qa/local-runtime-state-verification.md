@@ -165,6 +165,9 @@ $ npx vitest run scripts/__tests__/check-local-state.test.mjs
 - The keyfile key tier stores the key beside the ciphertext; regulated deployments should prefer an
   injected `KEIKO_*_KEY` (from a secrets manager) or the OS keychain.
 - Cleartext metadata leaks the shape of stored data, not its content.
+- The UI database (`keiko-ui.db`) stores project, chat, and message content under owner-only
+  `0o700`/`0o600` permissions, but application-level encryption remains deferred by ADR-0013 D10.
+  Deployments that require chat-at-rest confidentiality must use host full-disk encryption.
 - The read-only auditor confirms the Local Knowledge encryption marker, verifies that the
   key-verification probe is present and sealed (`kv1.` envelope), and checks every populated
   reconstructive Local Knowledge column for sealed values. It does not decrypt the probe (no key is

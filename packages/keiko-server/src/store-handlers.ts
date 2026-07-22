@@ -46,6 +46,7 @@ import {
 } from "./grounded-turn-registry.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
+import { createRequestCancellation } from "./request-cancellation.js";
 // Issue #184 — workspace-relative path gate. isValidScopePath is the canonical validator from
 // @oscharko-dev/keiko-contracts/connected-context (issue #178). Reusing it here keeps the BFF
 // boundary aligned with the rest of the connected-repo surface and avoids regex drift.
@@ -921,17 +922,22 @@ export async function handleUpdateChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runHandler(async () => {
-    const id = requireQuery(ctx, "id");
-    const body = await readJsonObject(ctx.req);
-    const patch = buildChatPatch(deps, body);
-    const apply = (): RouteResult => applyChatUpdate(deps, id, patch);
-    if (!patchTouchesGroundingScope(patch) && patch.status === undefined) return apply();
-    const result = await runSerializedChatTurn(deps, id, new AbortController().signal, apply);
-    return result === CHAT_TURN_WAIT_CANCELLED
-      ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
-      : result;
-  });
+  const cancellation = createRequestCancellation(ctx, "chat update request cancelled");
+  try {
+    return await runHandler(async () => {
+      const id = requireQuery(ctx, "id");
+      const body = await readJsonObject(ctx.req);
+      const patch = buildChatPatch(deps, body);
+      const apply = (): RouteResult => applyChatUpdate(deps, id, patch);
+      if (!patchTouchesGroundingScope(patch) && patch.status === undefined) return apply();
+      const result = await runSerializedChatTurn(deps, id, cancellation.signal, apply);
+      return result === CHAT_TURN_WAIT_CANCELLED
+        ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+        : result;
+    });
+  } finally {
+    cancellation.dispose();
+  }
 }
 
 function applyChatUpdate(deps: UiHandlerDeps, id: string, patch: UpdateChatPatch): RouteResult {
@@ -962,23 +968,23 @@ export async function handleDeleteChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runHandler(async () => {
-    const id = requireQuery(ctx, "id");
-    const result = await runSerializedChatTurn(
-      deps,
-      id,
-      new AbortController().signal,
-      (): RouteResult => {
+  const cancellation = createRequestCancellation(ctx, "chat delete request cancelled");
+  try {
+    return await runHandler(async () => {
+      const id = requireQuery(ctx, "id");
+      const result = await runSerializedChatTurn(deps, id, cancellation.signal, (): RouteResult => {
         deps.store.deleteChat(id);
         clearGroundedContextIndexesForConversation(id);
         clearGroundedTurnsForConversation(id);
         return { status: 204, body: null };
-      },
-    );
-    return result === CHAT_TURN_WAIT_CANCELLED
-      ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
-      : result;
-  });
+      });
+      return result === CHAT_TURN_WAIT_CANCELLED
+        ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+        : result;
+    });
+  } finally {
+    cancellation.dispose();
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────

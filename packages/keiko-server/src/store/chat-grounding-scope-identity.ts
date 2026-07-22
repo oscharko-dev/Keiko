@@ -16,28 +16,61 @@ function localKnowledgeScopes(chat: Chat): readonly ChatLocalKnowledgeScope[] {
   );
 }
 
+interface CanonicalConnectedScope {
+  readonly kind: ChatConnectedScope["kind"];
+  readonly relativePaths: readonly string[];
+  readonly root: string;
+}
+
+interface CanonicalLocalKnowledgeScope {
+  readonly kind: ChatLocalKnowledgeScope["kind"];
+  readonly id: string;
+}
+
+function compareCanonical(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function normalizePath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
+function normalizePaths(paths: readonly string[]): readonly string[] {
+  return [...new Set(paths.map(normalizePath))].sort(compareCanonical);
+}
+
+function deduplicateAndSort<T>(values: readonly T[]): readonly T[] {
+  const byCanonicalValue = new Map(values.map((value) => [JSON.stringify(value), value]));
+  return [...byCanonicalValue.entries()]
+    .sort(([left], [right]) => compareCanonical(left, right))
+    .map(([, value]) => value);
+}
+
+function canonicalConnectedScopes(chat: Chat): readonly CanonicalConnectedScope[] {
+  return deduplicateAndSort(
+    connectedScopes(chat).map((scope) => ({
+      kind: scope.kind,
+      relativePaths: normalizePaths(scope.relativePaths),
+      root: normalizePath(scope.root ?? chat.projectPath),
+    })),
+  );
+}
+
+function canonicalLocalKnowledgeScope(
+  scope: ChatLocalKnowledgeScope,
+): CanonicalLocalKnowledgeScope {
+  return {
+    kind: scope.kind,
+    id: scope.kind === "capsule" ? scope.capsuleId : scope.capsuleSetId,
+  };
+}
+
 function canonicalGroundingScope(chat: Chat): string {
   return JSON.stringify({
-    status: chat.status ?? "open",
-    connected: connectedScopes(chat).map((scope) => ({
-      kind: scope.kind,
-      relativePaths: scope.relativePaths,
-      connectedAtMs: scope.connectedAtMs,
-      root: scope.root ?? null,
-    })),
-    local: localKnowledgeScopes(chat).map((scope) =>
-      scope.kind === "capsule"
-        ? {
-            kind: scope.kind,
-            capsuleId: scope.capsuleId,
-            connectedAtMs: scope.connectedAtMs,
-          }
-        : {
-            kind: scope.kind,
-            capsuleSetId: scope.capsuleSetId,
-            connectedAtMs: scope.connectedAtMs,
-          },
-    ),
+    connected: canonicalConnectedScopes(chat),
+    local: deduplicateAndSort(localKnowledgeScopes(chat).map(canonicalLocalKnowledgeScope)),
   });
 }
 

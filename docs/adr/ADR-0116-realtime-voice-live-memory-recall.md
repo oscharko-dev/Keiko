@@ -35,15 +35,15 @@ memory.
 
 ## Decision
 
-### D1 — A mid-session `recall_keiko_memory` realtime function tool
+### D1 — Historical mid-session `recall_keiko_memory` realtime function tool
 
-A second realtime function tool, `recall_keiko_memory`, is advertised to the provider whenever the
-session has MemoriaViva enabled AND the negotiated provider supports tool calling
+The original implementation advertised a second realtime function tool, `recall_keiko_memory`, when
+the session had MemoriaViva enabled and the negotiated provider supported tool calling
 (`shouldIncludeRealtimeMemory(deps, chatContext) && realtimeProviderSupportsTools(...)`). The provider
-calls it with a short retrieval CUE describing what to remember; the browser forwards the call to a
-new additive BFF route `POST /api/voice/realtime/memory-tool`. Its historical implementation file,
-`voice-realtime-memory-tool.ts`, was removed when ADR-0154 superseded this provider-owned path. The
-route retrieved and returned a content-safe spoken instruction plus the recalled block.
+called it with a short retrieval cue describing what to remember; the browser forwarded the call to
+the then-additive BFF route `POST /api/voice/realtime/memory-tool`. ADR-0154 removed that route and its
+`voice-realtime-memory-tool.ts` implementation, so it remains unregistered. While it existed, the route
+retrieved and returned a content-safe spoken instruction plus the recalled block.
 
 Unlike the grounded tool, memory recall **persists nothing to the chat**: a recall is an internal
 remembering act, not a visible question/answer turn. Its only side effects are the vault access

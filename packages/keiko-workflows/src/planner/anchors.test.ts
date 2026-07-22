@@ -146,6 +146,17 @@ describe("extractAnchors", () => {
     });
   });
 
+  it.each(["Define reconcile_order", "Definieren wir reconcile_order"])(
+    "classifies an after-verb definition target in %s",
+    (prompt) => {
+      expect(run(prompt).anchors).toContainEqual({
+        term: "reconcile_order",
+        weight: 0.85,
+        kind: "identifier",
+      });
+    },
+  );
+
   it("classifies a lowercase symbol after a German definition noun as an identifier", () => {
     const result = run("Definition von reconcile_order");
 

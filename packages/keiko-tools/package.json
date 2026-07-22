@@ -41,7 +41,7 @@
     "@oscharko-dev/keiko-sandbox": "0.2.15",
     "@oscharko-dev/keiko-security": "0.2.15",
     "@oscharko-dev/keiko-workspace": "0.2.15",
-    "ws": "^8.21.1"
+    "ws": "^8.21.0"
   },
   "private": true
 }

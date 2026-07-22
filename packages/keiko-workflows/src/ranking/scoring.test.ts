@@ -163,6 +163,20 @@ describe("weightsForIntent / isIntentBoosted", () => {
     expect(boostedScore).toBeGreaterThan(defaultScore);
   });
 
+  it("preserves the configured direct-definition share for a definition-only hit", () => {
+    const definitionOnly: ExtractedSignals = {
+      scopePath: "src/handler.ts",
+      signals: [{ name: "symbol-definition", value: 1 }],
+      baseScore: 0,
+      generatedHint: false,
+    };
+
+    expect(computeScore(definitionOnly, weightsForIntent("targeted-code-search"))).toBeCloseTo(
+      0.3,
+      10,
+    );
+  });
+
   it("keeps a direct definition ahead when strong base and structural signals would otherwise saturate", () => {
     const common: ExtractedSignals = {
       scopePath: "src/handler.ts",
@@ -184,6 +198,10 @@ describe("weightsForIntent / isIntentBoosted", () => {
     };
     const weights = weightsForIntent("targeted-code-search");
 
-    expect(computeScore(definition, weights)).toBeGreaterThan(computeScore(common, weights));
+    const commonScore = computeScore(common, weights);
+    const definitionScore = computeScore(definition, weights);
+
+    expect(definitionScore).toBeGreaterThan(commonScore);
+    expect(definitionScore - commonScore).toBeCloseTo(0.3, 10);
   });
 });

@@ -3,8 +3,10 @@
 // retrieval ring and treated as generic prose by another.
 
 const ROUTE_QUERY_PATH_RE = /\/[A-Za-z0-9:_?&=./{}%+*-]*[A-Za-z0-9_}/*-]/u;
-const ROOT_ROUTE_QUERY_PATH_RE =
-  /(?:\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\/)(?=\s|[?.,;:]|$)|(?:^|\s)(\/)(?=\s+(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b))/iu;
+const ROOT_ROUTE_AFTER_METHOD_RE =
+  /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\/(?=\s|[?.,;:]|$)/iu;
+const ROOT_ROUTE_BEFORE_METHOD_RE =
+  /(?:^|\s)\/(?=\s+(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b)/iu;
 const ROOT_ROUTE_DECLARATION_PATH_RE = /\/(?=["'`])/u;
 const ROUTE_QUERY_METHOD_RE = /\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
 const REPOSITORY_HTTP_METHODS = [
@@ -18,23 +20,33 @@ const REPOSITORY_HTTP_METHODS = [
 ] as const;
 const ROUTE_DECLARATION_MARKER_PREFIX = "keiko-internal-route-declaration-v2";
 export const REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES = 4;
-const ROUTE_DECLARATION_START_RE =
-  /\b(?:router|app|server|r)\.(?:get|post|put|patch|delete|head|options)\s*\(|\b(?:router|r)\.handlefunc\s*\(|\broute::(?:get|post|put|patch|delete|head|options)\s*\(|@(?:get|post|put|patch|delete|head|options)(?:mapping)?\b|@requestmapping\b|\[\s*route\s*\(|\[\s*http(?:get|post|put|patch|delete|head|options)\s*(?:\(|\])|\bhttp(?:get|post|put|patch|delete|head|options)\s*\(|#\[(?:get|post|put|patch|delete|head|options)\s*\(|\bmap(?:get|post|put|patch|delete|head|options)\s*\(|(?:^|[;{]\s*)(?:get|post|put|patch|delete|head|options)(?:\s*\(|\s+)|\.route\s*\(/giu;
+const ROUTE_DECLARATION_START_PATTERNS = [
+  /\b(?:router|app|server|r)\.(?:get|post|put|patch|delete|head|options)\s*\(/giu,
+  /\b(?:router|r)\.handlefunc\s*\(/giu,
+  /\broute::(?:get|post|put|patch|delete|head|options)\s*\(/giu,
+  /@(?:get|post|put|patch|delete|head|options)(?:mapping)?\b/giu,
+  /@requestmapping\b/giu,
+  /\[\s*route\s*\(/giu,
+  /\[\s*http(?:get|post|put|patch|delete|head|options)\s*[\](]/giu,
+  /\bhttp(?:get|post|put|patch|delete|head|options)\s*\(/giu,
+  /#\[(?:get|post|put|patch|delete|head|options)\s*\(/giu,
+  /\bmap(?:get|post|put|patch|delete|head|options)\s*\(/giu,
+  /(?:^|[;{]\s*)(?:get|post|put|patch|delete|head|options)\s*\(/giu,
+  /(?:^|[;{]\s*)(?:get|post|put|patch|delete|head|options)\s+/giu,
+  /\.route\s*\(/giu,
+] as const;
 const CONFIGURED_ROUTE_METHOD_RE =
   /["']?method["']?\s*:\s*["']?(get|post|put|patch|delete|head|options)\b/iu;
-const CONFIGURED_ROUTE_PATH_RE =
-  /["']?(?:path|pattern)["']?\s*:\s*(?:["'](\/(?:[A-Za-z0-9:_?&=./{}%+*-]*[A-Za-z0-9_}/*-])?)["']|(\/(?:[A-Za-z0-9:_?&=./{}%+*-]*[A-Za-z0-9_}/*-])?)(?=\s|,|\}))/iu;
+const CONFIGURED_ROUTE_PATH_FIELD_RE = /["']?(?:path|pattern)["']?\s*:\s*/iu;
 const CONFIGURED_ROUTE_HANDLER_RE = /["']?handler["']?\s*:/iu;
 const CONFIGURED_ROUTE_FIELD_RE = /^(?:["']?(?:method|path|pattern|handler)["']?)\s*:/iu;
-const YAML_SEQUENCE_ITEM_RE = /^(\s*)-(?:\s+(.*))?$/u;
 const SPRING_REQUEST_MAPPING_PATH_RE =
-  /\b(?:path|value)\s*=\s*(?:\{\s*)?["'](\/(?:[A-Za-z0-9:_?&=./{}%+*-]*[A-Za-z0-9_}/*-])?)["']/iu;
+  /\b(?:path|value)\s*=\s*(?:\{\s*)?["'](\/(?:[A-Z0-9:_?&=./{}%+*-]*[A-Z0-9_}/*-])?)["']/iu;
 const SPRING_REQUEST_MAPPING_METHOD_RE =
   /\bmethod\s*=\s*(?:\{\s*)?requestmethod\.(get|post|put|patch|delete|head|options)\b/iu;
 const ASP_NET_ROUTE_RE =
-  /\[\s*route\s*\(\s*["'](\/(?:[A-Za-z0-9:_?&=./{}%+*-]*[A-Za-z0-9_}/*-])?)["']\s*\)\s*\]/iu;
-const ASP_NET_HTTP_METHOD_RE =
-  /\[\s*http(get|post|put|patch|delete|head|options)\s*(?:\(\s*["'](\/(?:[A-Za-z0-9:_?&=./{}%+*-]*[A-Za-z0-9_}/*-])?)["']\s*\))?\s*\]/iu;
+  /\[\s*route\s*\(\s*["'](\/(?:[A-Z0-9:_?&=./{}%+*-]*[A-Z0-9_}/*-])?)["']\s*\)\s*\]/iu;
+const ASP_NET_HTTP_METHOD_START_RE = /\[\s*http(get|post|put|patch|delete|head|options)\b/iu;
 const RAILS_TO_OPTION_RE = /,\s*to\s*:/iu;
 
 export interface RepositoryRouteQuery {
@@ -43,8 +55,11 @@ export interface RepositoryRouteQuery {
 }
 
 function routeQueryPath(text: string): string | undefined {
-  const root = ROOT_ROUTE_QUERY_PATH_RE.exec(text);
-  return ROUTE_QUERY_PATH_RE.exec(text)?.[0] ?? root?.[1] ?? root?.[2];
+  const path = ROUTE_QUERY_PATH_RE.exec(text)?.[0];
+  if (path !== undefined) return path;
+  return ROOT_ROUTE_AFTER_METHOD_RE.test(text) || ROOT_ROUTE_BEFORE_METHOD_RE.test(text)
+    ? "/"
+    : undefined;
 }
 
 function routeDeclarationPath(text: string): string | undefined {
@@ -83,10 +98,48 @@ function routeMethodMatches(haystack: string, method: string): boolean {
   );
 }
 
+function isAsciiWordCharacter(char: string): boolean {
+  if (char === "_") return true;
+  const code = char.codePointAt(0) ?? -1;
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function skipWhitespace(text: string, start: number): number {
+  let cursor = start;
+  while (/\s/u.test(text.charAt(cursor))) cursor += 1;
+  return cursor;
+}
+
+function methodListBody(haystack: string, start: number): string | undefined {
+  let cursor = skipWhitespace(haystack, start);
+  if (haystack.charAt(cursor) === "=" || haystack.charAt(cursor) === ":") {
+    cursor = skipWhitespace(haystack, cursor + 1);
+  }
+  const open = haystack.charAt(cursor);
+  if (open !== "(" && open !== "[") return undefined;
+  const bodyStart = cursor + 1;
+  const end = Math.min(haystack.length, bodyStart + 501);
+  for (cursor = bodyStart; cursor < end; cursor += 1) {
+    const char = haystack.charAt(cursor);
+    if (char === ")" || char === "]") return haystack.slice(bodyStart, cursor);
+  }
+  return undefined;
+}
+
 function explicitMethodListMatches(haystack: string, method: string): boolean {
-  const lists = haystack.matchAll(/\bmethods\s*(?:=|:)?\s*(?:\(|\[)([^\])]{0,500})[\])]/giu);
-  for (const list of lists) {
-    const body = list[1] ?? "";
+  let searchFrom = 0;
+  while (searchFrom < haystack.length) {
+    const start = haystack.indexOf("methods", searchFrom);
+    if (start < 0) return false;
+    searchFrom = start + "methods".length;
+    if (
+      isAsciiWordCharacter(haystack.charAt(start - 1)) ||
+      isAsciiWordCharacter(haystack.charAt(searchFrom))
+    ) {
+      continue;
+    }
+    const body = methodListBody(haystack, searchFrom);
+    if (body === undefined) continue;
     if (
       body.includes(`"${method}"`) ||
       body.includes(`'${method}'`) ||
@@ -98,10 +151,58 @@ function explicitMethodListMatches(haystack: string, method: string): boolean {
   return false;
 }
 
+function isRoutePathCharacter(char: string): boolean {
+  return char.length === 1 && (isAsciiWordCharacter(char) || ":?&=./{}%+*-".includes(char));
+}
+
+function isRoutePathTerminal(char: string): boolean {
+  return char.length === 1 && (isAsciiWordCharacter(char) || "}/*-".includes(char));
+}
+
+interface ConfiguredRoutePathValue {
+  readonly cursor: number;
+  readonly quote: string | undefined;
+}
+
+function configuredRoutePathValue(text: string): ConfiguredRoutePathValue | undefined {
+  const field = CONFIGURED_ROUTE_PATH_FIELD_RE.exec(text);
+  if (field === null) return undefined;
+  let cursor = field.index + field[0].length;
+  const quote = text.charAt(cursor);
+  if (quote !== '"' && quote !== "'") return { cursor, quote: undefined };
+  cursor += 1;
+  return { cursor, quote };
+}
+
+function configuredRoutePathTerminates(text: string, cursor: number, quote?: string): boolean {
+  const terminator = text.charAt(cursor);
+  if (quote !== undefined) return terminator === quote;
+  return (
+    terminator.length === 0 || /\s/u.test(terminator) || terminator === "," || terminator === "}"
+  );
+}
+
+function configuredRoutePath(text: string): string | undefined {
+  const value = configuredRoutePathValue(text);
+  if (value === undefined) return undefined;
+  const pathStart = value.cursor;
+  if (text.charAt(pathStart) !== "/") return undefined;
+  let cursor = pathStart;
+  while (isRoutePathCharacter(text.charAt(cursor))) cursor += 1;
+  const path = text.slice(pathStart, cursor);
+  if (
+    !configuredRoutePathTerminates(text, cursor, value.quote) ||
+    (path.length > 1 && !isRoutePathTerminal(path.at(-1) ?? ""))
+  ) {
+    return undefined;
+  }
+  return path;
+}
+
 function configuredRouteMethodMatches(haystack: string, method: string): boolean {
   return (
     CONFIGURED_ROUTE_HANDLER_RE.test(haystack) &&
-    CONFIGURED_ROUTE_PATH_RE.test(haystack) &&
+    configuredRoutePath(haystack) !== undefined &&
     CONFIGURED_ROUTE_METHOD_RE.exec(haystack)?.[1]?.toLowerCase() === method
   );
 }
@@ -160,14 +261,19 @@ function aspNetRouteMarkers(code: string, structural: string): readonly string[]
   const shape = structural.toLowerCase();
   const frameworkShape = /\[\s*(?:route\s*\(|http(?:get|post|put|patch|delete|head|options)\b)/u;
   if (!frameworkShape.test(shape)) return undefined;
-  const methodMatch = ASP_NET_HTTP_METHOD_RE.exec(code);
+  const methodMatch = ASP_NET_HTTP_METHOD_START_RE.exec(code);
   if (methodMatch === null) return [];
+  const attributeEnd = structural.indexOf("]", methodMatch.index + methodMatch[0].length);
+  const inlinePath =
+    attributeEnd < 0
+      ? undefined
+      : routeDeclarationPath(code.slice(methodMatch.index, attributeEnd + 1));
   const separateRoute = ASP_NET_ROUTE_RE.exec(code);
   const separatePath =
     separateRoute !== null && separateRoute.index < methodMatch.index
       ? separateRoute[1]
       : undefined;
-  const path = methodMatch[2] ?? separatePath;
+  const path = inlinePath ?? separatePath;
   return path === undefined ? [] : [repositoryRouteDeclarationMarker(methodMatch[1] ?? "", path)];
 }
 
@@ -209,8 +315,7 @@ function specializedRouteMarkers(code: string, structural: string): readonly str
 function configuredRouteMarker(candidate: string): string | undefined {
   if (!CONFIGURED_ROUTE_HANDLER_RE.test(candidate)) return undefined;
   const method = CONFIGURED_ROUTE_METHOD_RE.exec(candidate)?.[1];
-  const pathMatch = CONFIGURED_ROUTE_PATH_RE.exec(candidate);
-  const path = pathMatch?.[1] ?? pathMatch?.[2];
+  const path = configuredRoutePath(candidate);
   return method === undefined || path === undefined
     ? undefined
     : repositoryRouteDeclarationMarker(method, path);
@@ -255,10 +360,12 @@ function yamlFieldOffset(structural: string, after = 0): number | undefined {
 }
 
 function yamlSequenceItem(structural: string): YamlSequenceItem | undefined {
-  const match = YAML_SEQUENCE_ITEM_RE.exec(structural);
-  if (match === null) return undefined;
-  const indent = match[1]?.length ?? 0;
-  return { fieldOffset: yamlFieldOffset(structural, indent + 1), indent };
+  let cursor = skipWhitespace(structural, 0);
+  const indent = cursor;
+  if (structural.charAt(cursor) !== "-") return undefined;
+  cursor += 1;
+  if (cursor < structural.length && !/\s/u.test(structural.charAt(cursor))) return undefined;
+  return { fieldOffset: yamlFieldOffset(structural, cursor), indent };
 }
 
 function firstYamlFieldOffset(
@@ -317,7 +424,7 @@ function configuredYamlRouteMarkers(code: string, structural: string): readonly 
     structural: structuralLines[index] ?? "",
   }));
   return lines.flatMap((line, index) => {
-    if (!YAML_SEQUENCE_ITEM_RE.test(line.structural)) return [];
+    if (yamlSequenceItem(line.structural) === undefined) return [];
     const marker = configuredRouteMarker(yamlRouteCandidate(lines, index));
     return marker === undefined ? [] : [marker];
   });
@@ -331,8 +438,12 @@ interface RouteSourceSegment {
 }
 
 function routeStartOffsets(structural: string): readonly number[] {
-  ROUTE_DECLARATION_START_RE.lastIndex = 0;
-  return [...structural.matchAll(ROUTE_DECLARATION_START_RE)].map((match) => match.index);
+  const offsets = new Set<number>();
+  for (const pattern of ROUTE_DECLARATION_START_PATTERNS) {
+    pattern.lastIndex = 0;
+    for (const match of structural.matchAll(pattern)) offsets.add(match.index);
+  }
+  return [...offsets].sort((a, b) => a - b);
 }
 
 function segmentsForLine(

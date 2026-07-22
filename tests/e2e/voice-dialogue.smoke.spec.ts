@@ -27,6 +27,7 @@ const GROUNDING_PARITY_TRANSCRIPT = "Where is repositoryParityStatus defined?";
 const GROUNDING_PARITY_CLAIM = "repositoryParityStatus is defined in the repository fixture";
 const GROUNDING_PARITY_ANSWER = `${GROUNDING_PARITY_CLAIM} [src/repository-parity.ts:2].`;
 const CHAT_MODEL_ID = "e2e-chat-model";
+const PROVIDER_CANONICAL_TURN_ID_PATTERN = /^client-turn-[0-9a-f]{32}-[0-9a-f]{64}$/u;
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const tempProjects: string[] = [];
 
@@ -669,7 +670,7 @@ function expectCanonicalVoiceSend(
     projectPath,
     content: expectedContent,
     modelId: expect.any(String),
-    clientTurnId: expect.stringMatching(/^client-turn-[0-9a-f]{32}-1$/u),
+    clientTurnId: expect.stringMatching(PROVIDER_CANONICAL_TURN_ID_PATTERN),
     memory: {
       enabled: expect.any(Boolean),
       budgetTokens: expect.any(Number),
@@ -939,7 +940,7 @@ function expectGroundedSendParity(
   expectGroundedPayloadScope(payloads[0], typedChat);
   expectGroundedPayloadScope(payloads[1], voiceChat);
   expect(payloads[1]).toMatchObject({
-    clientTurnId: expect.stringMatching(/^client-turn-[0-9a-f]{32}-1$/u),
+    clientTurnId: expect.stringMatching(PROVIDER_CANONICAL_TURN_ID_PATTERN),
   });
   expect(typedCapture.legacyPaths()).toEqual([]);
   expect(voiceCapture.legacyPaths()).toEqual([]);

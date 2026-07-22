@@ -16,8 +16,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+type OpenFileHandle = Awaited<ReturnType<typeof import("node:fs/promises").open>>;
+
 const fsHooks = vi.hoisted(() => ({
-  afterOpen: undefined as ((path: string) => void) | undefined,
+  afterOpen: undefined as ((path: string, handle: OpenFileHandle) => void) | undefined,
   afterRename: undefined as ((oldPath: string, newPath: string) => void) | undefined,
   beforeRemove: undefined as ((path: string) => void) | undefined,
   beforeRename: undefined as
@@ -46,7 +48,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         mode === undefined
           ? await original.open(path, flags)
           : await original.open(path, flags, mode);
-      fsHooks.afterOpen?.(String(path));
+      fsHooks.afterOpen?.(String(path), handle);
       return handle;
     },
     rename: async (
@@ -517,6 +519,41 @@ describe("file workspace index runtime-directory identity", () => {
       expect(retainedForeign).toBe(true);
     } finally {
       fsHooks.afterRename = undefined;
+      rmSync(runtimeDir, { force: true, recursive: true });
+    }
+  });
+
+  it("fails closed and reports a content-free save failure when verification close rejects", async () => {
+    const runtimeDir = await mkdtemp(join(tmpdir(), "keiko-index-close-failure-"));
+    const privateScopePath = "src/private/customer-record.ts";
+    const failures: { readonly reason: string }[] = [];
+    try {
+      const store = createFileWorkspaceIndexStore({
+        runtimeDir,
+        encryptionKey: KEY,
+        onSaveFailure: (failure): void => {
+          failures.push(failure);
+        },
+      });
+      fsHooks.afterOpen = (path, handle): void => {
+        if (!path.endsWith(".json")) return;
+        fsHooks.afterOpen = undefined;
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementationOnce(async (): Promise<void> => {
+          await close();
+          throw new Error("synthetic snapshot verification close failure");
+        });
+      };
+
+      await expect(store.saveSnapshot("close-failure", snapshot(privateScopePath))).rejects.toThrow(
+        "synthetic snapshot verification close failure",
+      );
+
+      expect(failures).toEqual([{ reason: "write-or-cleanup-failure" }]);
+      expect(JSON.stringify(failures)).not.toContain(privateScopePath);
+      expect(readdirSync(runtimeDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      fsHooks.afterOpen = undefined;
       rmSync(runtimeDir, { force: true, recursive: true });
     }
   });

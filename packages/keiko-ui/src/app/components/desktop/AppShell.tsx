@@ -1,6 +1,6 @@
 "use client";
 
-import dynamic from "next/dynamic";
+import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
@@ -21,7 +21,6 @@ import {
   readWorkspaceCameraSmoothness,
   WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
 } from "./workspace-appearance";
-import { GatewaySetupDialog } from "./modals/GatewaySetupDialog";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
 import { Palette } from "./modals/Palette";
 import { type Cfg } from "./modals/PermControl";
@@ -79,6 +78,66 @@ import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
 const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bindings: [] };
+
+export function GatewaySetupLoading({ error, retry }: DynamicOptionsLoadingProps): ReactNode {
+  const t = useTranslate();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const failed = error !== null && error !== undefined;
+  useEffect(() => {
+    dialogRef.current?.focus();
+  }, []);
+
+  const recover = (): void => {
+    if (retry !== undefined) {
+      retry();
+      return;
+    }
+    window.location.reload();
+  };
+
+  return (
+    <div className="gw-setup-backdrop" role="presentation">
+      <div
+        ref={dialogRef}
+        className="gw-setup"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="gw-setup-loading-title"
+        aria-describedby="gw-setup-loading-description"
+        aria-busy={!failed}
+        tabIndex={-1}
+      >
+        <div className="gw-form">
+          <div className="gw-head">
+            <h1 id="gw-setup-loading-title">{t("gatewaySetup.loading.title")}</h1>
+            <p id="gw-setup-loading-description">{t("gatewaySetup.loading.description")}</p>
+          </div>
+          {failed ? (
+            <div className="gw-error" role="alert">
+              {t("gatewaySetup.loading.error")}
+            </div>
+          ) : (
+            <div className="gw-pending" role="status" aria-live="polite">
+              {t("common.loading")}
+            </div>
+          )}
+          {failed ? (
+            <div className="gw-actions">
+              <button className="gw-submit" type="button" onClick={recover}>
+                {t("common.retry")}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const GatewaySetupDialog = dynamic(
+  () => import("./modals/GatewaySetupDialog").then((mod) => mod.GatewaySetupDialog),
+  { ssr: false, loading: GatewaySetupLoading },
+);
 
 const UnifiedQuickAccessPalette = dynamic(
   () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),

@@ -8,12 +8,9 @@ import type {
   BffError,
   ChatConnectedScope,
   ChatLocalKnowledgeScope,
-  Chat,
-  ChatMessage,
   ChatResponse,
   ChatsResponse,
   ConversationMemoryRequestWire,
-  ConversationMemoryResultWire,
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
@@ -449,6 +446,7 @@ export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
 // voice affordance at all (AC1).
 let voiceCapabilityRequest: Promise<{ voice: VoiceCapabilityResolution }> | undefined;
 const voiceCapabilityInvalidationListeners = new Set<() => void>();
+const VOICE_CAPABILITY_INVALIDATION_ERROR = "Voice capability invalidation listener failed.";
 
 export function clearVoiceCapabilityCacheForTests(): void {
   voiceCapabilityRequest = undefined;
@@ -463,9 +461,16 @@ export function subscribeVoiceCapabilityInvalidation(listener: () => void): () =
 
 function invalidateVoiceCapability(): void {
   voiceCapabilityRequest = undefined;
-  for (const listener of voiceCapabilityInvalidationListeners) {
-    listener();
+  let listenerFailed = false;
+  const listeners = [...voiceCapabilityInvalidationListeners];
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch {
+      listenerFailed = true;
+    }
   }
+  if (listenerFailed) window.reportError(new Error(VOICE_CAPABILITY_INVALIDATION_ERROR));
 }
 
 export async function fetchVoiceCapability(): Promise<{ voice: VoiceCapabilityResolution }> {

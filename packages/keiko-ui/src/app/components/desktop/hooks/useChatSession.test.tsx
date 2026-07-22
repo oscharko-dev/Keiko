@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
 import {
@@ -32,6 +32,14 @@ import {
   useConversationMemorySettings,
 } from "./memorySettings";
 import { loadMemoryAutonomyMode } from "@/lib/memory-api";
+import {
+  clearCanonicalVoiceHasherForTests,
+  prepareCanonicalVoiceHasher,
+} from "./canonical-voice-hasher";
+
+beforeAll(async () => {
+  await prepareCanonicalVoiceHasher();
+});
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {
@@ -984,28 +992,37 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   });
 
   it("recognizes the existing canonical user row while a same-id retry is still active", async () => {
-    const canonicalUser = message({
-      id: "existing-canonical-user",
-      chatId: "chat-grounded",
-      content: "active canonical question",
-      timestamp: 10_000,
-    });
-    const { result } = await setupGroundedSession([canonicalUser]);
-    vi.mocked(askGrounded).mockRejectedValueOnce(
-      new ApiError("CHAT_TURN_IN_PROGRESS", "still active", 409),
-    );
-    vi.mocked(fetchChatMessages).mockResolvedValueOnce({ messages: [canonicalUser] });
-    let outcome: SendMessageOutcome | undefined;
-
-    await act(async () => {
-      outcome = await result.current.sendMessage({
-        text: "active canonical question",
-        clientTurnId: "same-provider-item",
-        reportOutcome: true,
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const canonicalUser = message({
+        id: "existing-canonical-user",
+        chatId: "chat-grounded",
+        content: "active canonical question",
+        timestamp: 10_000,
       });
-    });
+      const { result } = await setupGroundedSession();
+      vi.mocked(fetchChatMessages).mockClear();
+      vi.mocked(askGrounded).mockRejectedValueOnce(
+        new ApiError("CHAT_TURN_IN_PROGRESS", "still active", 409),
+      );
+      vi.mocked(fetchChatMessages).mockResolvedValueOnce({ messages: [canonicalUser] });
+      let outcome: SendMessageOutcome | undefined;
 
-    expect(outcome).toEqual({ status: "in-progress" });
+      await act(async () => {
+        outcome = await result.current.sendMessage({
+          text: "active canonical question",
+          clientTurnId: "same-provider-item",
+          reportOutcome: true,
+        });
+      });
+
+      expect(outcome).toEqual({ status: "in-progress" });
+      expect(fetchChatMessages).toHaveBeenCalledOnce();
+      expect(result.current.messages).toEqual([canonicalUser]);
+      expect(result.current.messages.some((entry) => entry.id.startsWith("local-"))).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 
@@ -1264,6 +1281,31 @@ describe("useChatSession canonical Voice FIFO", () => {
       memory: undefined,
     } as unknown as Awaited<ReturnType<typeof sendDesktopChat>>;
   }
+
+  it("fails closed without retaining a transcript when hashing was not prepared", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const sentinel = "unprepared private spoken sentinel";
+    clearCanonicalVoiceHasherForTests();
+
+    try {
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(sentinel, "unprepared-hasher-turn"),
+        );
+      });
+
+      expect(delivery).toBeUndefined();
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+      expect(canonicalVoicePageOutboxRetainsPlaintextForTests(sentinel)).toBe(false);
+      expect(rendered.result.current.messages).not.toContainEqual(
+        expect.objectContaining({ content: sentinel }),
+      );
+      expect(rendered.result.current.error).toContain("could not be added to chat");
+    } finally {
+      await prepareCanonicalVoiceHasher();
+    }
+  });
 
   it("persists a 16,001-character final as one user turn with one assistant before the next utterance", async () => {
     const rendered = await setupVoiceQueueSession();

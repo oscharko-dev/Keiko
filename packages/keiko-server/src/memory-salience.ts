@@ -235,6 +235,7 @@ function logSalienceDiagnostic(
 
 function emitSalienceFailureDiagnostic(
   deps: UiHandlerDeps,
+  correlationId: string,
   operation: string,
   source: string,
   error: unknown,
@@ -242,7 +243,7 @@ function emitSalienceFailureDiagnostic(
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId,
       operation,
       source,
       error,
@@ -443,9 +444,11 @@ function logSalienceCaptureFailure(
   surface: SalienceCaptureSurface,
   error: unknown,
   deps: UiHandlerDeps,
+  correlationId: string,
 ): void {
   emitSalienceFailureDiagnostic(
     deps,
+    correlationId,
     `memory.salience.capture.${surface}`,
     "memory-salience.scheduleMemorySalienceCapture",
     error,
@@ -470,6 +473,7 @@ export function scheduleMemorySalienceCapture(
   modelId: string,
   assistantText: string,
   surface: SalienceCaptureSurface,
+  correlationId: string,
 ): void {
   if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
     return;
@@ -480,9 +484,17 @@ export function scheduleMemorySalienceCapture(
   }
   pendingSalienceCaptures += 1;
   setImmediate(() => {
-    void captureSalientFromTurn(deps, request, context, modelId, assistantText, surface)
+    void captureSalientFromTurn(
+      deps,
+      request,
+      context,
+      modelId,
+      assistantText,
+      surface,
+      correlationId,
+    )
       .catch((error: unknown) => {
-        logSalienceCaptureFailure(surface, error, deps);
+        logSalienceCaptureFailure(surface, error, deps, correlationId);
       })
       .finally(() => {
         pendingSalienceCaptures -= 1;
@@ -621,10 +633,17 @@ function recordTurnCaptureRefusal(
   });
 }
 
+function activeSalienceVault(
+  deps: UiHandlerDeps,
+  request: SalienceTurnRequest,
+): MemoryVaultStore | undefined {
+  return request.memory?.enabled === true ? deps.memoryVault : undefined;
+}
+
 // Captures salient memories from a completed chat turn. Never throws — any failure (model error,
-// vault error, malformed output) yields [] so the chat response is unaffected. `surface` defaults
-// to "desktop" so every pre-existing caller (direct test invocations included) is byte-identical;
-// the scheduler is the only caller that passes an explicit "voice" surface.
+// vault error, malformed output) yields [] so the chat response is unaffected. Direct callers that
+// do not own a committed message id receive one capture-scoped fallback correlation id; post-commit
+// schedulers pass the assistant message id so every diagnostic for that turn stays correlated.
 export async function captureSalientFromTurn(
   deps: UiHandlerDeps,
   request: SalienceTurnRequest,
@@ -632,13 +651,12 @@ export async function captureSalientFromTurn(
   modelId: string,
   assistantText: string,
   surface: SalienceCaptureSurface = "desktop",
+  correlationId: string = randomUUID(),
 ): Promise<readonly ConversationMemoryActionWire[]> {
-  const vault = deps.memoryVault;
-  if (request.memory === undefined || !request.memory.enabled || vault === undefined) {
-    return [];
-  }
+  const vault = activeSalienceVault(deps, request);
+  if (vault === undefined) return [];
   try {
-    const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
+    const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory?.mode);
     const captureContext = buildSalienceContext(context);
     const extraction = await extractTurnSalienceOutcomes(
       deps,
@@ -669,6 +687,7 @@ export async function captureSalientFromTurn(
     // Boundary: salience must never break the chat path. Log and continue.
     emitSalienceFailureDiagnostic(
       deps,
+      correlationId,
       "memory.salience.capture",
       "memory-salience.captureSalientFromTurn",
       error,

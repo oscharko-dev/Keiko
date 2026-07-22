@@ -1352,16 +1352,21 @@ interface RetrievedSources {
   readonly connectorSourceCount: number;
 }
 
+interface HybridContextPackInput {
+  readonly ctx: HybridGroundedAskCtx;
+  readonly sources: RetrievedSources;
+  readonly selected: readonly SelectedCandidate<HybridPayload>[];
+  readonly limits: ReturnType<typeof currentGroundingLimits>;
+  readonly assistant: GroundedAnswerResult;
+  readonly knowledgeCitationCount: number;
+  readonly reranker: GroundedRerankerDiagnostics;
+}
+
 function buildHybridContextPack(
-  ctx: HybridGroundedAskCtx,
-  sources: RetrievedSources,
-  selected: readonly SelectedCandidate<HybridPayload>[],
-  limits: ReturnType<typeof currentGroundingLimits>,
+  input: HybridContextPackInput,
   summary: GroundedAnswerContextPackSummary,
-  assistant: GroundedAnswerResult,
-  knowledgeCitationCount: number,
-  reranker: GroundedRerankerDiagnostics,
 ): HybridGroundedAnswer["contextPack"] {
+  const { ctx, sources, selected, limits, assistant, knowledgeCitationCount, reranker } = input;
   const selectedConnectorCount = selected.filter((s) => s.kind === "connector").length;
   return {
     kind: "hybrid",
@@ -1420,28 +1425,15 @@ function hybridAnswerUncertainty(
 }
 
 function hybridAnswerContextPack(
-  ctx: HybridGroundedAskCtx,
-  sources: RetrievedSources,
-  selected: readonly SelectedCandidate<HybridPayload>[],
-  cited: readonly SelectedCandidate<HybridPayload>[],
-  limits: ReturnType<typeof currentGroundingLimits>,
-  assistant: GroundedAnswerResult,
-  knowledgeCitationCount: number,
-  reranker: GroundedRerankerDiagnostics,
+  input: HybridContextPackInput & {
+    readonly cited: readonly SelectedCandidate<HybridPayload>[];
+  },
 ): HybridGroundedAnswer["contextPack"] {
+  const { ctx, sources, cited } = input;
   const summary = folderSummary(sources.folders, cited, ctx.deps.redactor, {
     contextProfile: ctx.contextProfile,
   });
-  return buildHybridContextPack(
-    ctx,
-    sources,
-    selected,
-    limits,
-    summary,
-    assistant,
-    knowledgeCitationCount,
-    reranker,
-  );
+  return buildHybridContextPack(input, summary);
 }
 
 function hybridEvidenceForAnswer(
@@ -1565,16 +1557,16 @@ function assembleHybridAnswer(
     omittedCount: sources.folders.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs,
     retrievalActivity: projection.retrievalActivity,
-    contextPack: hybridAnswerContextPack(
+    contextPack: hybridAnswerContextPack({
       ctx,
       sources,
       selected,
-      projection.cited,
+      cited: projection.cited,
       limits,
       assistant,
-      projection.knowledgeCitations.length,
+      knowledgeCitationCount: projection.knowledgeCitations.length,
       reranker,
-    ),
+    }),
   };
 }
 

@@ -106,6 +106,55 @@ describe("useVoiceCapability", () => {
     await waitFor(() => expect(result.current).toEqual(FULL_REALTIME));
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+
+  it("isolates invalidation listeners and snapshots the current subscriber cohort", async () => {
+    const setupResponse = {
+      ok: true,
+      testedModelId: "chat",
+      testedModelIds: ["chat"],
+      providerCount: 1,
+      models: [],
+      config: { schemaVersion: "1", providers: [] },
+    } as const;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(setupResponse))),
+    );
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    const lateListener = vi.fn();
+    const remainingListener = vi.fn();
+    let unsubscribeThrowing = (): void => undefined;
+    let unsubscribeLate = (): void => undefined;
+    const throwingListener = vi.fn(() => {
+      unsubscribeThrowing();
+      unsubscribeLate = api.subscribeVoiceCapabilityInvalidation(lateListener);
+      throw new Error("customer-content-must-not-escape");
+    });
+    unsubscribeThrowing = api.subscribeVoiceCapabilityInvalidation(throwingListener);
+    const unsubscribeRemaining = api.subscribeVoiceCapabilityInvalidation(remainingListener);
+
+    try {
+      await expect(api.setupGateway({ deploymentNames: ["chat"] })).resolves.toEqual(setupResponse);
+      expect(throwingListener).toHaveBeenCalledOnce();
+      expect(remainingListener).toHaveBeenCalledOnce();
+      expect(lateListener).not.toHaveBeenCalled();
+      expect(reportError).toHaveBeenCalledOnce();
+      const reported = reportError.mock.calls[0]?.[0];
+      expect(reported).toBeInstanceOf(Error);
+      expect((reported as Error).message).toBe("Voice capability invalidation listener failed.");
+      expect((reported as Error).message).not.toContain("customer-content-must-not-escape");
+
+      await expect(api.setupGateway({ deploymentNames: ["chat"] })).resolves.toEqual(setupResponse);
+      expect(remainingListener).toHaveBeenCalledTimes(2);
+      expect(lateListener).toHaveBeenCalledOnce();
+      expect(reportError).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribeThrowing();
+      unsubscribeRemaining();
+      unsubscribeLate();
+    }
+  });
 });
 
 describe("supportsDictation", () => {

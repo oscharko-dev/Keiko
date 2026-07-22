@@ -75,6 +75,10 @@ import {
 } from "./chat-turn-identity.js";
 import { handleUpdateChat } from "./store-handlers.js";
 import { createChatTurnSerializer, type ChatTurnSerializer } from "./chat-turn-serializer.js";
+import {
+  CONVERSATION_MEMORY_FENCE_END,
+  CONVERSATION_MEMORY_FENCE_START,
+} from "./conversation-prompt.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -2295,10 +2299,19 @@ describe("handleGroundedAsk", () => {
         };
       };
       const recalled = answer.memory?.context.memories.map((memory) => memory.bodyExcerpt) ?? [];
+      const generationQuestion = answerQuestion ?? "";
       expect(recalled).toContain("Use pnpm for package installs.");
       expect(recalled).not.toContain("The production database uses PostgreSQL.");
-      expect(answerQuestion).toContain("Use pnpm for package installs.");
-      expect(answerQuestion).not.toContain("The production database uses PostgreSQL.");
+      expect(generationQuestion).toContain("Use pnpm for package installs.");
+      expect(generationQuestion).not.toContain("The production database uses PostgreSQL.");
+      expect(generationQuestion).toContain(CONVERSATION_MEMORY_FENCE_START);
+      expect(generationQuestion).toContain(CONVERSATION_MEMORY_FENCE_END);
+      expect(generationQuestion.indexOf(CONVERSATION_MEMORY_FENCE_START)).toBeLessThan(
+        generationQuestion.indexOf("Use pnpm for package installs."),
+      );
+      expect(generationQuestion.indexOf("Use pnpm for package installs.")).toBeLessThan(
+        generationQuestion.indexOf(CONVERSATION_MEMORY_FENCE_END),
+      );
       expect(answerOnlyContextAvailable).toBe(true);
       expect(
         memoryVault
