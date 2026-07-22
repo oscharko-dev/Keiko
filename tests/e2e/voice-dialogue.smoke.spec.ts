@@ -17,6 +17,13 @@
 import { expect, test, type Page } from "@playwright/test";
 import { evidenceScreenshotPath } from "./support/evidence.js";
 
+declare global {
+  interface Window {
+    readonly __micStats?: Readonly<Record<string, number>>;
+    readonly __providerNativeOutputEvents?: number;
+  }
+}
+
 const FULL_REALTIME_WEBRTC_CAPABILITY = {
   voice: {
     available: true,
@@ -291,17 +298,11 @@ function voiceChatPayloadContent(payload: unknown): string | undefined {
 // Reads a counter from the browser-side window.__micStats instrument (see fakeRealtimeInit), so
 // the lifecycle assertions are on observable call counts rather than on timing.
 async function micStat(page: Page, field: "getUserMedia" | "stopped"): Promise<number | undefined> {
-  return page.evaluate(
-    (key) => (window as unknown as { __micStats?: Record<string, number> }).__micStats?.[key],
-    field,
-  );
+  return page.evaluate((key) => window.__micStats?.[key], field);
 }
 
 async function providerNativeOutputEvents(page: Page): Promise<number | undefined> {
-  return page.evaluate(
-    () =>
-      (window as unknown as { __providerNativeOutputEvents?: number }).__providerNativeOutputEvents,
-  );
+  return page.evaluate(() => window.__providerNativeOutputEvents);
 }
 
 async function noVoiceFlow(page: Page): Promise<void> {

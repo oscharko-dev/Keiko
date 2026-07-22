@@ -81,6 +81,30 @@ function firstProviderApiKey(deps: Parameters<typeof currentGatewayConfig>[0]): 
 }
 
 describe("handleGatewaySetup", () => {
+  it("includes the request correlation id when the setup body is not an object", async () => {
+    const uiDir = await tempDir("keiko-gw-invalid-ui-");
+    const evidenceDir = await tempDir("keiko-gw-invalid-ev-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+
+    const result = await handleGatewaySetup(ctx(null, "corr-invalid-setup-body"), deps);
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Request body must be a JSON object.",
+          correlationId: "corr-invalid-setup-body",
+        },
+      },
+    });
+  });
+
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
     const uiDir = await tempDir("keiko-gw-ui-");
     const evidenceDir = await tempDir("keiko-gw-ev-");

@@ -1637,6 +1637,13 @@ function setupRequiresGatewayVerification(
   );
 }
 
+function setupObjectBodyRequiredResult(correlationId: string | undefined): RouteResult {
+  return {
+    status: 400,
+    body: errorBody("BAD_REQUEST", "Request body must be a JSON object.", correlationId),
+  };
+}
+
 function readSetupRequest(
   raw: unknown,
   env: EnvSource,
@@ -1644,7 +1651,7 @@ function readSetupRequest(
   correlationId: string | undefined,
 ): SetupRequest | RouteResult {
   if (!isRecord(raw)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
+    return setupObjectBodyRequiredResult(correlationId);
   }
   const preserveExisting = shouldPreserveExisting(raw, current);
   const credentials = readSetupGatewayCredentials(raw, env, current, preserveExisting);
