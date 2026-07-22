@@ -1,7 +1,8 @@
 import type { ReactNode, RefObject } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { axe } from "jest-axe";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
@@ -11,6 +12,7 @@ import type {
 } from "@/lib/types";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow, Connection } from "./windows/types";
+import appShellStyles from "./AppShell.module.css";
 
 interface WorkspaceHookOptions {
   readonly onScopeBind?: (
@@ -56,7 +58,47 @@ const mocks = vi.hoisted(() => ({
   useKeyboardShortcuts: vi.fn(),
   undo: vi.fn(),
   redo: vi.fn(),
+  dialogShowModal: vi.fn(function dialogShowModal(this: HTMLDialogElement): void {
+    if (this.open) throw new DOMException("The dialog is already open.", "InvalidStateError");
+    this.setAttribute("open", "");
+  }),
+  dialogClose: vi.fn(function dialogClose(this: HTMLDialogElement): void {
+    this.removeAttribute("open");
+  }),
 }));
+
+let originalDialogShowModal: PropertyDescriptor | undefined;
+let originalDialogClose: PropertyDescriptor | undefined;
+
+function appShellCssClass(name: keyof typeof appShellStyles): string {
+  const value = appShellStyles[name];
+  if (value === undefined) throw new Error(`missing AppShell CSS module class ${name}`);
+  return value;
+}
+
+function installDialogMethod(
+  name: "showModal" | "close",
+  method: () => void,
+): PropertyDescriptor | undefined {
+  const previous = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, name);
+  Object.defineProperty(HTMLDialogElement.prototype, name, {
+    configurable: true,
+    writable: true,
+    value: method,
+  });
+  return previous;
+}
+
+function restoreDialogMethod(
+  name: "showModal" | "close",
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor === undefined) {
+    Reflect.deleteProperty(HTMLDialogElement.prototype, name);
+    return;
+  }
+  Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
+}
 
 vi.mock("@/lib/api", () => ({
   fetchConfig: mocks.fetchConfig,
@@ -301,6 +343,20 @@ async function renderMounted(): Promise<void> {
 }
 
 describe("AppShell grounding connections", () => {
+  beforeAll((): void => {
+    originalDialogShowModal = installDialogMethod("showModal", mocks.dialogShowModal);
+    originalDialogClose = installDialogMethod("close", mocks.dialogClose);
+  });
+
+  afterAll((): void => {
+    restoreDialogMethod("showModal", originalDialogShowModal);
+    restoreDialogMethod("close", originalDialogClose);
+  });
+
+  afterEach((): void => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.state.groundingLimits = DEFAULT_GROUNDING_LIMITS;
@@ -585,20 +641,52 @@ describe("AppShell grounding connections", () => {
     expect(screen.queryByTestId("right-rail")).toBeNull();
   });
 
-  it("keeps a redacted retry surface available when gateway setup loading fails", async () => {
+  it("keeps a redacted retry surface available when gateway setup loading fails", async (): Promise<void> => {
     const retry = vi.fn();
-    const user = userEvent.setup();
-    render(<GatewaySetupLoading error={new Error("credential=must-not-render")} retry={retry} />);
+    const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+    const { container, unmount } = render(
+      <GatewaySetupLoading error={new Error("credential=must-not-render")} retry={retry} />,
+    );
 
     const dialog = screen.getByRole("dialog", { name: "Preparing model gateway setup" });
+    expect(dialog.tagName).toBe("DIALOG");
+    expect(mocks.dialogShowModal).toHaveBeenCalledOnce();
+    expect(mocks.dialogShowModal.mock.contexts[0]).toBe(dialog);
+    expect(dialog).toHaveAttribute("open");
+    expect(dialog).not.toHaveAttribute("role");
+    expect(dialog.parentElement).toHaveClass("gw-setup-backdrop");
+    expect(dialog.parentElement).not.toHaveAttribute("role");
+    expect(dialog).toHaveClass("gw-setup", appShellCssClass("gatewaySetupDialog"));
+    expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(dialog).toHaveFocus();
+    const showModalOrder = mocks.dialogShowModal.mock.invocationCallOrder[0];
+    const focusOrder = focusSpy.mock.invocationCallOrder[0];
+    expect(showModalOrder).toBeDefined();
+    expect(focusOrder).toBeDefined();
+    if (showModalOrder === undefined || focusOrder === undefined) {
+      throw new Error("expected modal activation and focus calls");
+    }
+    expect(showModalOrder).toBeLessThan(focusOrder);
     expect(within(dialog).getByRole("alert")).toHaveTextContent(
       "The setup controls could not be loaded.",
     );
     expect(screen.queryByText(/must-not-render/u)).toBeNull();
 
+    const cancelEvent = new Event("cancel", { cancelable: true });
+    expect(dialog.dispatchEvent(cancelEvent)).toBe(false);
+    expect(cancelEvent.defaultPrevented).toBe(true);
+    expect(dialog).toHaveAttribute("open");
+    expect(mocks.dialogClose).not.toHaveBeenCalled();
+
+    const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledOnce();
+    expect(await axe(container)).toHaveNoViolations();
+
+    unmount();
+    expect(mocks.dialogClose).toHaveBeenCalledOnce();
+    expect(mocks.dialogClose.mock.contexts[0]).toBe(dialog);
+    expect(dialog).not.toHaveAttribute("open");
   });
 
   it("dispatches undo, redo, focus-status, and search shortcuts through the shell handler", async () => {

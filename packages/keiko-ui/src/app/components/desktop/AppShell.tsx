@@ -2,7 +2,7 @@
 
 import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, SyntheticEvent } from "react";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { AnnouncerProvider } from "./context/AnnouncerContext";
@@ -75,16 +75,32 @@ import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
 import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
+import styles from "./AppShell.module.css";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
 const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bindings: [] };
 
-export function GatewaySetupLoading({ error, retry }: DynamicOptionsLoadingProps): ReactNode {
+function preventGatewaySetupDismissal(event: SyntheticEvent<HTMLDialogElement>): void {
+  event.preventDefault();
+}
+
+export function GatewaySetupLoading({
+  error,
+  retry,
+}: Readonly<DynamicOptionsLoadingProps>): ReactNode {
   const t = useTranslate();
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const failed = error !== null && error !== undefined;
-  useEffect(() => {
-    dialogRef.current?.focus();
+  useEffect((): (() => void) | undefined => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+
+    if (!dialog.open) dialog.showModal();
+    dialog.focus();
+
+    return (): void => {
+      if (dialog.open) dialog.close();
+    };
   }, []);
 
   const recover = (): void => {
@@ -96,16 +112,16 @@ export function GatewaySetupLoading({ error, retry }: DynamicOptionsLoadingProps
   };
 
   return (
-    <div className="gw-setup-backdrop" role="presentation">
-      <div
+    <div className="gw-setup-backdrop">
+      <dialog
         ref={dialogRef}
-        className="gw-setup"
-        role="dialog"
+        className={`gw-setup ${styles.gatewaySetupDialog}`}
         aria-modal="true"
         aria-labelledby="gw-setup-loading-title"
         aria-describedby="gw-setup-loading-description"
         aria-busy={!failed}
         tabIndex={-1}
+        onCancel={preventGatewaySetupDismissal}
       >
         <div className="gw-form">
           <div className="gw-head">
@@ -129,7 +145,7 @@ export function GatewaySetupLoading({ error, retry }: DynamicOptionsLoadingProps
             </div>
           ) : null}
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }

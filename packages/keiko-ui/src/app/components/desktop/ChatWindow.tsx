@@ -189,6 +189,17 @@ interface PendingVoiceAnswer {
   readonly dialogGeneration: number;
 }
 
+interface CanonicalVoiceTurnOutcomeContext {
+  readonly activeChatId: string | undefined;
+  readonly admittedTurnIds: Set<string>;
+  readonly chatId: string;
+  readonly composerMounted: boolean;
+  readonly currentDialogGeneration: number;
+  readonly deliveryKey: string;
+  readonly dialogGeneration: number;
+  readonly setPendingVoiceAnswer: (answer: PendingVoiceAnswer) => void;
+}
+
 async function deliverCanonicalVoiceTurn(
   sendMessage: ChatSessionApi["sendMessage"],
   text: string,
@@ -204,6 +215,32 @@ function rememberAdmittedCanonicalVoiceTurn(ids: Set<string>, deliveryKey: strin
     if (oldest !== undefined) ids.delete(oldest);
   }
   ids.add(deliveryKey);
+}
+
+function applyCanonicalVoiceTurnOutcome(
+  outcome: SendMessageOutcome,
+  context: CanonicalVoiceTurnOutcomeContext,
+): SendMessageOutcome {
+  if (
+    outcome.status === "completed" ||
+    (outcome.status === "cancelled" && outcome.userPersisted) ||
+    (outcome.status === "failed" && outcome.userPersisted === true)
+  ) {
+    rememberAdmittedCanonicalVoiceTurn(context.admittedTurnIds, context.deliveryKey);
+  }
+  if (
+    outcome.status === "completed" &&
+    context.composerMounted &&
+    context.activeChatId === context.chatId &&
+    context.currentDialogGeneration === context.dialogGeneration
+  ) {
+    context.setPendingVoiceAnswer({
+      chatId: context.chatId,
+      assistantMessageId: outcome.assistantMessageId,
+      dialogGeneration: context.dialogGeneration,
+    });
+  }
+  return outcome;
 }
 // GEN-PERF-CHAT-015 — below the windowing threshold every turn is fully rendered; with
 // code-block/citation-heavy answers that is ~150-200 DOM nodes per turn, all paying
@@ -2760,39 +2797,19 @@ function ComposerCoreImpl({
       if (enqueueCanonicalVoiceTurn !== undefined && queued === undefined) return false;
       const pauseCapture = queued !== undefined && canonicalVoiceCaptureMustPause?.() === true;
       const delivery = (queued ?? deliverCanonicalVoiceTurn(sendMessage, text, turnId))
-        .then((outcome) => {
-          if (outcome.status === "completed") {
-            rememberAdmittedCanonicalVoiceTurn(
-              admittedCanonicalVoiceTurnIdsRef.current,
-              deliveryKey,
-            );
-            if (
-              composerMountedRef.current &&
-              activeChatIdRef.current === chatId &&
-              voiceDialogGenerationRef.current === dialogGeneration
-            ) {
-              setPendingVoiceAnswer({
-                chatId,
-                assistantMessageId: outcome.assistantMessageId,
-                dialogGeneration,
-              });
-            }
-          }
-          if (outcome.status === "cancelled" && outcome.userPersisted) {
-            rememberAdmittedCanonicalVoiceTurn(
-              admittedCanonicalVoiceTurnIdsRef.current,
-              deliveryKey,
-            );
-          }
-          if (outcome.status === "failed" && outcome.userPersisted === true) {
-            rememberAdmittedCanonicalVoiceTurn(
-              admittedCanonicalVoiceTurnIdsRef.current,
-              deliveryKey,
-            );
-          }
-          return outcome;
-        })
-        .finally(() => {
+        .then((outcome): SendMessageOutcome =>
+          applyCanonicalVoiceTurnOutcome(outcome, {
+            activeChatId: activeChatIdRef.current,
+            admittedTurnIds: admittedCanonicalVoiceTurnIdsRef.current,
+            chatId,
+            composerMounted: composerMountedRef.current,
+            currentDialogGeneration: voiceDialogGenerationRef.current,
+            deliveryKey,
+            dialogGeneration,
+            setPendingVoiceAnswer,
+          }),
+        )
+        .finally((): void => {
           canonicalVoiceTurnDeliveriesRef.current.delete(deliveryKey);
         });
       canonicalVoiceTurnDeliveriesRef.current.set(deliveryKey, delivery);
