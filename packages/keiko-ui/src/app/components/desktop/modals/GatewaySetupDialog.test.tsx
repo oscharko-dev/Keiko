@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, setupGateway } from "@/lib/api";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { ModelCapability } from "@/lib/types";
 import { GatewaySetupDialog } from "./GatewaySetupDialog";
 
@@ -24,6 +25,7 @@ describe("GatewaySetupDialog", () => {
     document.documentElement.removeAttribute("data-keiko-modal-open");
     delete document.documentElement.dataset.keikoGatewaySetupOpenCount;
     document.documentElement.removeAttribute("data-keiko-gateway-setup-open");
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
   });
 
   it("announces dialog semantics, focuses the first field, traps tab focus, and closes on Escape", async () => {
@@ -399,13 +401,86 @@ describe("GatewaySetupDialog", () => {
       voiceBaseUrl: "https://voice-gateway.example.com/openai/v1",
       voiceApiKey: "voice-token",
       voiceApiKeyHeaderName: "api-key",
-      voiceOutputVoiceId: "alloy",
       voiceSpeechToTextModelId: "keiko-stt",
-      voiceProviderLocality: "azure-foundry",
     });
     expect(await screen.findByRole("status")).toHaveTextContent(
       /updated audio and digital voice settings/i,
     );
+  });
+
+  it("rejects new audio credentials without an explicit voice deployment", async () => {
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://models.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "model-token");
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://audio.example.com/v1",
+    );
+    await userEvent.type(screen.getByLabelText(/audio credential/i), "audio-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /enter at least one explicit voice deployment/i,
+    );
+  });
+
+  it("renders German preserve hints for the complete stored audio connection", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <GatewaySetupDialog preserveExisting storedModels={[modelCapability("internal-chat")]} />
+      </I18nProvider>,
+    );
+
+    await userEvent.click(screen.getByText("Audio- und Digital-Voice-Einstellungen aktualisieren"));
+
+    expect(screen.getByLabelText(/Audio-Endpunkt-URL.*leer lassen/i)).toHaveAttribute(
+      "placeholder",
+      "Mit Zugangsdaten, Lokalität und ausdrücklichen Zielrollen ersetzen",
+    );
+    expect(
+      screen.getByText(/um einen audio-endpunkt zu ersetzen.*neue zugangsdaten/i),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Audio-Zugangsdaten.*leer lassen/i)).toHaveAttribute(
+      "placeholder",
+      "Nur ausfüllen, um die gespeicherten Audio-Zugangsdaten zu ersetzen",
+    );
+    expect(screen.getByLabelText(/Audio-Authentifizierungs-Header/i)).toHaveAttribute(
+      "placeholder",
+      "Leer lassen, um den gespeicherten Header beizubehalten",
+    );
+    expect(screen.getByLabelText(/Audio-Zeitlimit/i)).toHaveAttribute(
+      "placeholder",
+      "Leer lassen, um das gespeicherte Zeitlimit beizubehalten",
+    );
+  });
+
+  it("summarizes stored voice roles and live replacement input in preserve mode", async () => {
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[modelCapability("internal-chat"), speechInputCapability("stored-stt")]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+
+    expect(
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Voice off.*Read aloud off/iu),
+    ).toBeInTheDocument();
+
+    const realtimeDeployment = screen.getByLabelText(/Digital Voice.*Realtime deployment/i);
+    await userEvent.type(realtimeDeployment, "replacement-realtime");
+    expect(
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Voice on.*Read aloud off/iu),
+    ).toBeInTheDocument();
+
+    await userEvent.clear(realtimeDeployment);
+    expect(
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Voice off.*Read aloud off/iu),
+    ).toBeInTheDocument();
   });
 
   it("explains and submits separate Dictate, Digital Voice, and read-aloud deployments", async () => {
@@ -424,7 +499,9 @@ describe("GatewaySetupDialog", () => {
 
     expect(screen.getByText(/dictate requires a speech-to-text deployment/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/digital voice requires a separate realtime deployment/i),
+      screen.getByText(
+        /digital voice requires a realtime media deployment and its compatible live-transcription deployment/i,
+      ),
     ).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText(/base url/i), "https://models.example.com/v1");
     await userEvent.type(screen.getByLabelText(/api token/i), "model-token");
@@ -448,6 +525,7 @@ describe("GatewaySetupDialog", () => {
     expect(semanticTurnDetection).not.toBeChecked();
     await userEvent.click(semanticTurnDetection);
     await userEvent.type(screen.getByLabelText(/read aloud.*speech-output deployment/i), "tts");
+    await userEvent.type(screen.getByLabelText(/output voice/i), "provider-neutral");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
     expect(setupGateway).toHaveBeenCalledWith(
@@ -459,9 +537,185 @@ describe("GatewaySetupDialog", () => {
         voiceRealtimeTranscriptionModelId: "realtime-transcribe",
         voiceSupportsSemanticTurnDetection: true,
         voiceSpeechOutputModelId: "tts",
-        voiceOutputVoiceId: "alloy",
+        voiceOutputVoiceId: "provider-neutral",
       }),
     );
+  });
+
+  it("does not inherit stored Semantic VAD when configuring a new gateway", () => {
+    render(<GatewaySetupDialog storedModels={[semanticRealtimeCapability("stored-realtime")]} />);
+
+    expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).not.toBeChecked();
+  });
+
+  it.each([
+    {
+      label: "enabled",
+      storedRealtime: realtimeCapability("stored-realtime"),
+      initiallyChecked: false,
+    },
+    {
+      label: "disabled",
+      storedRealtime: semanticRealtimeCapability("stored-realtime"),
+      initiallyChecked: true,
+    },
+  ])(
+    "invalidates explicitly $label Semantic VAD when the Realtime deployment changes",
+    async ({ storedRealtime, initiallyChecked }) => {
+      vi.mocked(setupGateway).mockRejectedValueOnce(
+        new ApiError("EXPECTED_TEST_STOP", "Stop after capturing the request.", 400),
+      );
+      render(
+        <GatewaySetupDialog
+          preserveExisting
+          storedModels={[modelCapability("internal-chat"), storedRealtime]}
+        />,
+      );
+      await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+      const semanticTurnDetection = screen.getByRole("checkbox", {
+        name: /semantic turn detection/i,
+      });
+      expect(semanticTurnDetection).toHaveProperty("checked", initiallyChecked);
+
+      await userEvent.click(semanticTurnDetection);
+      await userEvent.type(
+        screen.getByLabelText(/digital voice.*realtime deployment/i),
+        "replacement-realtime",
+      );
+      expect(semanticTurnDetection).not.toBeChecked();
+      await userEvent.type(
+        screen.getByLabelText(/digital voice.*live transcription deployment/i),
+        "replacement-transcription",
+      );
+      await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+      await screen.findByRole("alert");
+
+      const submitted = vi.mocked(setupGateway).mock.calls[0]?.[0];
+      expect(submitted).not.toHaveProperty("voiceSupportsSemanticTurnDetection");
+    },
+  );
+
+  it("invalidates a live-transcription alias when the Realtime deployment changes", async () => {
+    render(<GatewaySetupDialog />);
+    const realtimeDeployment = screen.getByLabelText(/digital voice.*realtime deployment/i);
+    const transcriptionDeployment = screen.getByLabelText(
+      /digital voice.*live transcription deployment/i,
+    );
+
+    await userEvent.type(realtimeDeployment, "realtime-a");
+    await userEvent.type(transcriptionDeployment, "transcription-a");
+    await userEvent.clear(realtimeDeployment);
+    await userEvent.type(realtimeDeployment, "realtime-b");
+
+    expect(transcriptionDeployment).toHaveValue("");
+  });
+
+  it("invalidates an output voice when the speech-output deployment changes", async () => {
+    render(<GatewaySetupDialog />);
+    const speechOutputDeployment = screen.getByLabelText(/read aloud.*speech-output deployment/i);
+    const outputVoice = screen.getByLabelText(/output voice/i);
+
+    await userEvent.type(speechOutputDeployment, "tts-a");
+    await userEvent.type(outputVoice, "provider-a-neutral");
+    await userEvent.clear(speechOutputDeployment);
+    await userEvent.type(speechOutputDeployment, "tts-b");
+
+    expect(outputVoice).toHaveValue("");
+  });
+
+  it("invalidates every provider-bound voice role when a stored audio endpoint changes", async () => {
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[
+          modelCapability("internal-chat"),
+          semanticRealtimeCapability("stored-realtime"),
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    const semanticTurnDetection = screen.getByRole("checkbox", {
+      name: /semantic turn detection/i,
+    });
+    await userEvent.type(
+      screen.getByLabelText(/dictate.*speech-to-text deployment/i),
+      "replacement-stt",
+    );
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      "replacement-realtime",
+    );
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      "replacement-transcription",
+    );
+    await userEvent.click(semanticTurnDetection);
+    await userEvent.type(
+      screen.getByLabelText(/read aloud.*speech-output deployment/i),
+      "replacement-tts",
+    );
+    await userEvent.type(screen.getByLabelText(/output voice/i), "replacement-neutral");
+
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://replacement-audio.example.com/v1",
+    );
+    await userEvent.tab();
+
+    expect(screen.getByLabelText(/dictate.*speech-to-text deployment/i)).toHaveValue("");
+    expect(screen.getByLabelText(/digital voice.*realtime deployment/i)).toHaveValue("");
+    expect(screen.getByLabelText(/digital voice.*live transcription deployment/i)).toHaveValue("");
+    expect(semanticTurnDetection).not.toBeChecked();
+    expect(screen.getByLabelText(/read aloud.*speech-output deployment/i)).toHaveValue("");
+    expect(screen.getByLabelText(/output voice/i)).toHaveValue("");
+  });
+
+  it("preserves dependent values while their previously absent provider is first configured", async () => {
+    render(<GatewaySetupDialog />);
+    const semanticTurnDetection = screen.getByRole("checkbox", {
+      name: /semantic turn detection/i,
+    });
+    const transcriptionDeployment = screen.getByLabelText(
+      /digital voice.*live transcription deployment/i,
+    );
+    const outputVoice = screen.getByLabelText(/output voice/i);
+    await userEvent.type(transcriptionDeployment, "first-transcription");
+    await userEvent.click(semanticTurnDetection);
+    await userEvent.type(outputVoice, "first-provider-neutral");
+
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      "first-realtime",
+    );
+    await userEvent.type(
+      screen.getByLabelText(/read aloud.*speech-output deployment/i),
+      "first-tts",
+    );
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://first-audio.example.com/v1",
+    );
+
+    expect(transcriptionDeployment).toHaveValue("first-transcription");
+    expect(semanticTurnDetection).toBeChecked();
+    expect(outputVoice).toHaveValue("first-provider-neutral");
+  });
+
+  it("requires an explicit provider voice before configuring speech output", async () => {
+    render(<GatewaySetupDialog />);
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://models.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "model-token");
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://audio.example.com/v1",
+    );
+    await userEvent.type(screen.getByLabelText(/audio credential/i), "audio-token");
+    await userEvent.type(screen.getByLabelText(/read aloud.*speech-output deployment/i), "tts");
+
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/explicit provider voice id/i);
   });
 
   it("does not carry stored semantic VAD support to an untouched replacement", async () => {
@@ -488,9 +742,16 @@ describe("GatewaySetupDialog", () => {
 
     await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
     expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).toBeChecked();
+    const realtimeDeployment = screen.getByLabelText(/digital voice.*realtime deployment/i);
+    await userEvent.type(realtimeDeployment, "replacement-realtime");
+    expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).not.toBeChecked();
+    await userEvent.clear(realtimeDeployment);
+    expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).toBeChecked();
+    await userEvent.type(realtimeDeployment, "replacement-realtime");
+    expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).not.toBeChecked();
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*realtime deployment/i),
-      "replacement-realtime",
+      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      "replacement-transcription",
     );
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
@@ -498,8 +759,217 @@ describe("GatewaySetupDialog", () => {
     expect(submitted).toMatchObject({
       preserveExisting: true,
       voiceRealtimeModelId: "replacement-realtime",
+      voiceRealtimeTranscriptionModelId: "replacement-transcription",
     });
     expect(submitted).not.toHaveProperty("voiceSupportsSemanticTurnDetection");
+  });
+
+  it("does not require the unchanged transcription alias for a scoped credential rotation", async () => {
+    vi.mocked(setupGateway).mockRejectedValueOnce(
+      new ApiError("EXPECTED_TEST_STOP", "Stop after capturing the request.", 400),
+    );
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[modelCapability("internal-chat"), realtimeCapability("stored-realtime")]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "rotated-token");
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      "stored-realtime",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+    await screen.findByRole("alert");
+
+    const submitted = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(submitted).toMatchObject({
+      preserveExisting: true,
+      voiceApiKey: "rotated-token",
+      voiceRealtimeModelId: "stored-realtime",
+    });
+    expect(submitted).not.toHaveProperty("voiceRealtimeTranscriptionModelId");
+  });
+
+  it("binds untouched Semantic VAD state to the elected Realtime provider", async () => {
+    vi.mocked(setupGateway).mockRejectedValueOnce(
+      new ApiError("EXPECTED_TEST_STOP", "Stop after capturing the request.", 400),
+    );
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[
+          modelCapability("internal-chat"),
+          realtimeCapability("elected-realtime"),
+          semanticRealtimeCapability("secondary-realtime"),
+        ]}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    const semanticTurnDetection = screen.getByRole("checkbox", {
+      name: /semantic turn detection/i,
+    });
+    expect(semanticTurnDetection).not.toBeChecked();
+
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      "secondary-realtime",
+    );
+    expect(semanticTurnDetection).not.toBeChecked();
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      "secondary-transcription",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+    await screen.findByRole("alert");
+
+    const submitted = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(submitted).toMatchObject({
+      preserveExisting: true,
+      voiceRealtimeModelId: "secondary-realtime",
+      voiceRealtimeTranscriptionModelId: "secondary-transcription",
+    });
+    expect(submitted).not.toHaveProperty("voiceSupportsSemanticTurnDetection");
+  });
+
+  it("shows Semantic VAD for the cheapest runtime-elected Realtime provider", async () => {
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[
+          modelCapability("internal-chat"),
+          { ...realtimeCapability("realtime-high"), costClass: "high" },
+          { ...semanticRealtimeCapability("realtime-low"), costClass: "low" },
+        ]}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+
+    expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).toBeChecked();
+  });
+
+  it("resets untouched Semantic VAD when an entered endpoint targets Realtime", async () => {
+    vi.mocked(setupGateway).mockRejectedValueOnce(
+      new ApiError("EXPECTED_TEST_STOP", "Stop after capturing the request.", 400),
+    );
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[
+          modelCapability("internal-chat"),
+          semanticRealtimeCapability("stored-realtime"),
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    const semanticTurnDetection = screen.getByRole("checkbox", {
+      name: /semantic turn detection/i,
+    });
+    expect(semanticTurnDetection).toBeChecked();
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      " https://audio.example.com/v1/// ",
+    );
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "replacement-token");
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      "stored-realtime",
+    );
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      "stored-transcription",
+    );
+    await userEvent.click(screen.getByRole("combobox", { name: /provider locality/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Microsoft Foundry" }));
+    expect(semanticTurnDetection).not.toBeChecked();
+
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+    await screen.findByRole("alert");
+
+    const submitted = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(submitted).toMatchObject({
+      preserveExisting: true,
+      voiceBaseUrl: "https://audio.example.com/v1///",
+      voiceApiKey: "replacement-token",
+      voiceProviderLocality: "azure-foundry",
+      voiceRealtimeModelId: "stored-realtime",
+      voiceRealtimeTranscriptionModelId: "stored-transcription",
+    });
+    expect(submitted).not.toHaveProperty("voiceSupportsSemanticTurnDetection");
+  });
+
+  it("explains the fields required to replace a stored audio endpoint", async () => {
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[
+          modelCapability("internal-chat"),
+          semanticRealtimeCapability("stored-realtime"),
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://replacement-audio.example.com/v1",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /requires a fresh credential.*provider locality.*deployment role/i,
+    );
+  });
+
+  it("requires a compatible live-transcription deployment before replacing Realtime", async () => {
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[
+          modelCapability("internal-chat"),
+          semanticRealtimeCapability("stored-realtime"),
+        ]}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      "replacement-realtime",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /enter the compatible live-transcription deployment for this realtime deployment/i,
+    );
+  });
+
+  it("rejects a live-transcription deployment without an explicit Realtime deployment", async () => {
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedApiKeyHeaderName="authorization"
+        storedModels={[modelCapability("internal-chat")]}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      "orphan-transcription",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /live-transcription deployment requires an explicit Realtime deployment/i,
+    );
   });
 
   it("submits an explicit semantic VAD opt-out for a replacement", async () => {
@@ -529,20 +999,28 @@ describe("GatewaySetupDialog", () => {
       name: /semantic turn detection/i,
     });
     expect(semanticTurnDetection).toBeChecked();
-    await userEvent.click(semanticTurnDetection);
     await userEvent.type(
       screen.getByLabelText(/digital voice.*realtime deployment/i),
       "replacement-realtime",
     );
+    await userEvent.type(
+      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      "replacement-transcription",
+    );
+    expect(semanticTurnDetection).not.toBeChecked();
+    await userEvent.click(semanticTurnDetection);
+    await userEvent.click(semanticTurnDetection);
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
-    expect(setupGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preserveExisting: true,
-        voiceRealtimeModelId: "replacement-realtime",
-        voiceSupportsSemanticTurnDetection: false,
-      }),
-    );
+    const submitted = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(submitted).toMatchObject({
+      preserveExisting: true,
+      voiceRealtimeModelId: "replacement-realtime",
+      voiceRealtimeTranscriptionModelId: "replacement-transcription",
+      voiceSupportsSemanticTurnDetection: false,
+    });
+    expect(submitted).not.toHaveProperty("voiceOutputVoiceId");
+    expect(submitted).not.toHaveProperty("voiceProviderLocality");
   });
 
   it("uses the Keiko styled select for provider locality and labels Foundry correctly", async () => {
@@ -572,6 +1050,45 @@ describe("GatewaySetupDialog", () => {
     expect(screen.getByRole("listbox", { name: /provider locality/i })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Microsoft Foundry" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Azure Foundry" })).not.toBeInTheDocument();
+  });
+
+  it("submits output voice and provider locality only after the operator changes them", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat", "stored-realtime"],
+      providerCount: 2,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[
+          modelCapability("internal-chat"),
+          semanticRealtimeCapability("stored-realtime"),
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+
+    const outputVoice = screen.getByLabelText(/output voice/i);
+    await userEvent.clear(outputVoice);
+    await userEvent.type(outputVoice, "customer-neutral");
+    await userEvent.click(screen.getByRole("combobox", { name: /provider locality/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Customer-hosted" }));
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    const submitted = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(submitted).toMatchObject({
+      preserveExisting: true,
+      voiceOutputVoiceId: "customer-neutral",
+      voiceProviderLocality: "customer-hosted",
+    });
+    expect(submitted).not.toHaveProperty("voiceSupportsSemanticTurnDetection");
   });
 
   it("submits a Figma access token without requiring other fields in update mode", async () => {
@@ -668,9 +1185,21 @@ function modelCapability(id: string, kind: ModelCapability["kind"] = "chat"): Mo
 }
 
 function semanticRealtimeCapability(id: string): ModelCapability {
+  return realtimeCapability(id, true);
+}
+
+function realtimeCapability(id: string, supportsSemanticTurnDetection = false): ModelCapability {
   return {
     ...modelCapability(id, "voice"),
     supportsRealtimeVoice: true,
-    supportsSemanticTurnDetection: true,
+    realtimeTranscriptionModel: `${id}-transcription`,
+    ...(supportsSemanticTurnDetection ? { supportsSemanticTurnDetection: true } : {}),
+  };
+}
+
+function speechInputCapability(id: string): ModelCapability {
+  return {
+    ...modelCapability(id, "voice"),
+    supportsSpeechInput: true,
   };
 }

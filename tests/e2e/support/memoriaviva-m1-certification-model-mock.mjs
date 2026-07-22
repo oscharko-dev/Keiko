@@ -6,6 +6,10 @@ const PORT = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32554");
 const HOST = "127.0.0.1";
 const REPLY_MARKER = "KEIKO_M1_CERT_STREAM_OK";
 const REPLY_TOKENS = [REPLY_MARKER, " deterministic", " response."];
+const REPLY_TEXT = REPLY_TOKENS.join("");
+const SALIENCE_SYSTEM_PROMPT_MARKER =
+  "You extract durable memories from a chat turn so an assistant can remember the user across future conversations.";
+const SALIENCE_USER_PREFIX = "User said:\n";
 
 const CANDIDATES = [
   ["M1_GOVERNED_CAPTURE", "M1_GOVERNED_CAPTURE: The fixture uses a governed release cadence."],
@@ -70,8 +74,46 @@ function streamCompletion(res) {
   res.end();
 }
 
-function salienceContent(rawRequest) {
-  const match = CANDIDATES.find(([marker]) => rawRequest.includes(marker));
+function parseRequest(rawRequest) {
+  let parsed;
+  try {
+    parsed = JSON.parse(rawRequest);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  if (!Array.isArray(parsed.messages)) return null;
+  const messages = parsed.messages;
+  if (
+    !messages.every(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        !Array.isArray(message) &&
+        typeof message.role === "string" &&
+        typeof message.content === "string",
+    )
+  ) {
+    return null;
+  }
+  return { messages, stream: parsed.stream === true };
+}
+
+function isSalienceRequest(messages) {
+  return messages.some(
+    (message) =>
+      message.role === "system" && message.content.startsWith(SALIENCE_SYSTEM_PROMPT_MARKER),
+  );
+}
+
+function currentSalienceUserText(messages) {
+  const current = messages.at(-1);
+  if (current?.role !== "user" || !current.content.startsWith(SALIENCE_USER_PREFIX)) return null;
+  return current.content.slice(SALIENCE_USER_PREFIX.length);
+}
+
+function salienceContent(userText) {
+  const match = CANDIDATES.find(([marker]) => userText.includes(marker));
   if (match === undefined) return "[]";
   return JSON.stringify([
     {
@@ -85,7 +127,13 @@ function salienceContent(rawRequest) {
   ]);
 }
 
-function bufferedCompletion(res, rawRequest) {
+function completionContent(messages) {
+  if (!isSalienceRequest(messages)) return REPLY_TEXT;
+  const userText = currentSalienceUserText(messages);
+  return userText === null ? "[]" : salienceContent(userText);
+}
+
+function bufferedCompletion(res, content) {
   const body = {
     id: "chatcmpl-m1-cert",
     object: "chat.completion",
@@ -94,7 +142,7 @@ function bufferedCompletion(res, rawRequest) {
     choices: [
       {
         index: 0,
-        message: { role: "assistant", content: salienceContent(rawRequest) },
+        message: { role: "assistant", content },
         finish_reason: "stop",
       },
     ],
@@ -102,6 +150,11 @@ function bufferedCompletion(res, rawRequest) {
   };
   res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
+}
+
+function invalidRequest(res) {
+  res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify({ error: "invalid fixture model request" }));
 }
 
 const server = createServer((req, res) => {
@@ -116,14 +169,13 @@ const server = createServer((req, res) => {
     return;
   }
   void readBody(req).then((raw) => {
-    let stream;
-    try {
-      stream = JSON.parse(raw || "{}").stream === true;
-    } catch {
-      stream = false;
+    const request = parseRequest(raw);
+    if (request === null) {
+      invalidRequest(res);
+      return;
     }
-    if (stream) streamCompletion(res);
-    else bufferedCompletion(res, raw);
+    if (request.stream) streamCompletion(res);
+    else bufferedCompletion(res, completionContent(request.messages));
   });
 });
 

@@ -1,128 +1,80 @@
-# Voice dialogue session (Issue #1560, Epic #1556)
+# Voice dialogue session
 
-> **Superseded architecture note:** Voice Dialogue is now Realtime WebRTC-first. The product dialogue
-> switch starts `useRealtimeVoice` directly when `full-realtime + persona + browser WebRTC` are
-> available, and committed Realtime transcripts append to the existing chat history through
-> `/api/desktop/chat/voice-turn`. The STT+TTS turn loop documented below remains historical Epic #1556
-> context and is not the default dialogue mode; STT and TTS remain separate dictation/read-aloud helper
-> surfaces unless an operator explicitly enables a degraded compatibility path.
+Voice Dialogue is a second input/output interface for the same canonical desktop chat. Its current
+architecture is governed by
+[ADR-0154](../adr/ADR-0154-canonical-twin-voice-pipeline.md), which supersedes the provider-owned
+assistant paths described by ADR-0096 and ADR-0116.
 
-The **voice dialogue session** is the orchestration layer that turns the shipped voice surface into an
-actual colleague-like conversation: it coordinates microphone capture, transcript commit, chat send, the
-assistant response, speech output, interruption (barge-in), and the next listening turn. It is an
-optional, **capability-gated** `keiko-ui` controller — it adds no server route, no Model Gateway adapter,
-and no contract change. The authoritative decision record is
-[ADR-0096](../adr/ADR-0096-voice-dialogue-session-orchestration.md).
+## Canonical turn pipeline
 
-This issue is the deferred hook wiring that [ADR-0104](../adr/ADR-0104-voice-turn-manager.md) (D11) called
-out: it drives the existing deterministic turn manager **live** rather than building a second state
-machine.
+Realtime has exactly three responsibilities: microphone media transport, voice activity detection,
+and final user transcription. The browser negotiates an input-only WebRTC audio track. It does not
+accept a remote provider-audio track, configure assistant instructions or tools, or request a native
+provider response.
 
-## Module boundary
+After the continuation window settles, each provider-final transcript is admitted once through the
+same `sendMessage` path as typed Composer input. That path owns the user message, conversation/project/
+workspace/user scopes, Memoria Viva, retrieval, grounding, citations, the visible assistant message,
+and persistence. There is no `/api/desktop/chat/voice-turn` endpoint and no Voice-specific retrieval,
+memory, or assistant route.
 
-The controller is split to mirror the established `voice-turn-manager.ts` (pure) + hook (React) shape:
+The visible canonical assistant message is the only speech source. Its exact persisted message id is
+returned by the chat send outcome and used to arm text-to-speech; a concurrently arriving assistant
+message cannot be selected by recency. Speech-safe projection may remove URLs and citation appendices
+from audio, while the visible message retains its grounding and citation metadata.
 
-| Module                             | Role                                                                                                                                                                                                                                                                                                                    |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hooks/voice-dialogue-session.ts`  | **Pure, React-free, I/O-free** core: the fallback-matrix predicate, the event→`VoiceTurnSignal` mapping, and the effect→sink routing. Exhaustively unit-tested with no React environment.                                                                                                                               |
-| `hooks/useVoiceDialogueSession.ts` | **Thin** React hook: composes its own `useDictation`, `useAssistantSpeech`, the chat session, one live `createVoiceTurnManager`, and the pure core; owns the master cleanup. Exposes `{ dialogueAvailable, state, listening, speaking, canInterrupt, muted, onListen, onInterrupt, onStop, toggleMute, turnSnapshot }`. |
+## Capability gate
 
-The per-turn UI lives in `VoiceDialogMode.tsx` as `VoiceDialogTurnControls` (a mic "Speak" toggle plus a
-barge-in "Interrupt"), rendered next to the #1559 `VoiceDialogControls` cluster while dialogue is active.
+`voiceDialogueModeForResolution` offers the switch only when all of these are true:
 
-## The STT+TTS production turn loop
+- a reachable Realtime capability and WebRTC media transport are available;
+- an independent speech-output capability is available;
+- at least one persona has an explicit provider voice-id mapping on that speech-output provider; and
+- the browser supports microphone capture, `RTCPeerConnection`, and send-only transceivers.
 
-No realtime provider is deployed and the realtime data channel surfaces no live transcript, so the
-deterministic turn loop is driven by the **dictation (STT-batch)** capture path, which is
-transport-agnostic. The loop is half-duplex (listen, then speak) with responsive barge-in:
+Realtime-only, STT-only, speech-output-only, unresolved, unreachable, policy-disabled, missing-persona,
+and non-WebRTC configurations all fail closed. Realtime never contributes an output persona. Composer
+dictation and Read Aloud remain independently capability-gated helper surfaces.
 
-1. **Enter** (user gesture: the dialogue switch): arm dictation-driven listening. The realtime media
-   connection is **not** started — it had no transcript consumer and would double-capture the mic.
-2. **Listen**: the mic toggle starts capture and applies `user-speech-start` → `listening`.
-3. **End of turn**: stopping capture settles a transcript (`preview`); the controller applies
-   `user-end-of-turn` → `thinking`.
-4. **Send**: only the reviewed, trimmed, non-empty transcript reaches chat, through the **existing**
-   lifecycle — `session.setDraft(text)` then `await session.sendMessage()`. The spoken turn appears as a
-   normal chat message; no spoken action auto-executes.
-5. **Think**: the chat `sendStatus` keeps the floor on `thinking` until speech starts.
-6. **Speak**: the settled assistant message is synthesized by `useAssistantSpeech` (given the live turn
-   manager) → `assistant-speech-start` → `speaking`; on end → `assistant-speech-end{completed}` →
-   `yielding` → `idle`; listening re-arms for the next turn.
-7. **Provider failure**: an STT/TTS/chat error is classified recoverable → `recovering`, else `disabled`;
-   the text chat stays fully usable throughout.
+## Settlement, interruption, and teardown
 
-### Profile nuance (load-bearing)
+Provider final events are deduplicated by their bounded item identity. A short continuation window
+joins natural pauses and self-corrections before one canonical admission. A repeated final after
+reconnect cannot create a duplicate message. Oversized transcripts fail closed rather than being
+truncated into a different user statement.
 
-In the STT+TTS fallback the deployment profile is still `full-realtime`, so the live turn manager has
-`floorControl = true`. The dictation `preview` therefore maps to `user-end-of-turn` (the floor-control
-path, `listening → thinking`), **not** `dictation-commit` — the full-realtime admission gate rejects
-`dictation-commit` (`usesManualCommit` is false) and the turn would strand in `listening`. The
-`dictation-commit` path belongs only to a genuine `speech-to-text` deployment, which the matrix never
-offers dialogue for. See [ADR-0096](../adr/ADR-0096-voice-dialogue-session-orchestration.md) D4.
+Barge-in stops canonical TTS playback and returns the floor to microphone capture. It does not cancel
+or create a provider-native assistant response because no such response exists.
 
-## Barge-in (interruption)
+Stop or mode leave flushes an already final transcript immediately, exactly once. Component unmount
+does the same before invalidating asynchronous callbacks and without scheduling React state updates.
+A partial transcription delta without a provider final is not promoted during stop or unmount. All
+settlement, warm-up, reconnect, ICE-grace, and input-rearm timers are cleared, and microphone tracks,
+the data channel, peer connection, and control socket are closed. Recoverable transport replacement
+preserves the control identity for bounded replay; deliberate teardown emits `session.close` so the
+server removes terminal resume state immediately.
 
-While the assistant holds the floor, activating the mic — or pressing **Interrupt** — applies
-`user-interrupt{atMs}`. The turn manager emits content-free effects that the hook routes to typed sinks:
-`stop-playback` → `playback.interrupt(atMs)` (the #1558 teardown), and `cancel-speech-generation` →
-`session.cancelSend()` when a chat request is in flight. A mic activation then continues into
-`user-speech-start` → `listening`, so the user takes the floor immediately. Effects are executed in a
-React-safe callback, never synchronously inside a turn-manager observer (avoids re-entrant `apply`).
+The Realtime hook owns no admission retry. After its one synchronous final handoff, the canonical Chat
+session owns an immutable, bounded FIFO keyed by chat and canonical turn id. The handoff captures the
+original chat/model/memory target and projects the user message immediately, so leaving Voice,
+switching chats, or replacing media cannot drop or re-scope it. `not-sent` and reconciled
+`in-progress` outcomes are retried only inside the Chat queue's finite window with the same id.
+Completion is used to arm TTS only for that exact assistant message; a persisted cancellation and a
+terminal failure never arm speech.
 
-## Fallback matrix (capability gating)
+## Privacy and failure behavior
 
-`voiceDialogueModeForResolution(resolution, browserCaptureSupported)` is total over the capability ladder
-and fail-closed everywhere:
+Raw audio remains ephemeral and is never persisted. Transcript text is kept out of the content-free
+turn-manager signals and latency observations. Provider error bodies, endpoints, credentials, SDP,
+and voice ids never enter browser-visible errors, logs, or evidence.
 
-| Profile / resolution          | Mic capture | Spoken answer | Barge-in | Dialogue offered          |
-| ----------------------------- | ----------- | ------------- | -------- | ------------------------- |
-| `none` / unresolved / failed  | —           | —             | —        | **No** (dormant)          |
-| `speech-to-text` (STT-only)   | dictation   | No (text)     | —        | **No** (no spoken answer) |
-| `speech-output` (output-only) | —           | Yes           | —        | **No** (no user capture)  |
-| `full-realtime`               | dictation   | Yes (TTS)     | Yes      | **Yes**                   |
-
-Dialogue is offered **iff** `supportsDictation && supportsSpeechOutput && browserCaptureSupported &&
-personas.length > 0` — the conjunction that is true only for `full-realtime`. This is identical whether or
-not the browser has WebRTC media: a `full-realtime` deployment in a browser **without** WebRTC media now
-correctly offers dialogue and runs it over the STT+TTS loop, instead of being wrongly hidden. This is the
-**production fallback fix** (ADR-0096 D3): regulated deployments expose speech I/O without full-duplex
-realtime media, and that case must offer dialogue. `supportsRealtimeVoice` remains the stricter gate that
-decides only whether the realtime media adjunct may be negotiated — never whether dialogue is offered.
-
-## Master cleanup
-
-Leaving, an explicit stop, an unmount, or the deployment flipping `!available` mid-session all run **one**
-idempotent teardown: `dictation.cancel()`, `playback.stop()`, `turnManager.apply({kind:"session-closed"})`
-then `turnManager.reset()`, clear controller state, and `voiceDialog.leave()`. Every reference is cleared
-and re-checked so repeated calls are safe.
-
-## Realtime-transcript deferral (ADR-0096 D8)
-
-Surfacing **live realtime transcripts** to the turn loop is explicitly **out of scope** for #1560: no
-transcript producer exists on the realtime data channel, no realtime provider is deployed (so a realtime
-path would have no CI counterpart), and routing through the already-governed `POST /api/voice/transcribe`
-seam keeps every transcript on one audited ingress. The deferral is non-lossy: a future realtime
-transcript event maps onto the **same** `user-speech-start` / `user-end-of-turn` controller seam.
-
-## Privacy invariants
-
-Both invariants carry forward unchanged. **Content-free turn manager:** transcript text and audio never
-enter a turn-manager signal or observer — only enum kinds, integers, and millisecond deltas.
-**Committed-only chat send:** only the reviewed, committed, non-empty transcript reaches chat; a partial
-or empty transcript is never sent. No raw audio, transcript, or secret is persisted. See
-[privacy-contract.md](privacy-contract.md).
-
-## Optional and capability-gated
-
-Like every other voice surface, the dialogue session is optional. A no-voice, STT-only, or
-speech-output-only deployment shows no dialogue switch and no turn controls, and the composer stays fully
-text-capable. The dialogue runs half-duplex in the deployed path; literal full-duplex overlap awaits a
-realtime transcript provider behind the same controller seam.
+Generic provider-session errors close the media and control resources immediately while leaving any
+partial transcript visible for review; partial text is never promoted as a final. The written chat
+remains usable when capture, transcription, synthesis, or playback fails.
 
 ## Related
 
-- [ADR-0096](../adr/ADR-0096-voice-dialogue-session-orchestration.md) — the orchestration decision record.
-- [ADR-0104](../adr/ADR-0104-voice-turn-manager.md) — the deterministic turn manager this controller drives live.
-- [ADR-0095](../adr/ADR-0095-voice-assistant-speech-synthesis.md) / [assistant-speech-synthesis.md](assistant-speech-synthesis.md) — the speech engine and its `turnManager` / `interrupt` seam.
-- [dictation-ui.md](dictation-ui.md) — the STT capture path the loop drives.
-- [privacy-contract.md](privacy-contract.md) — content-free and committed-only invariants.
+- [ADR-0154](../adr/ADR-0154-canonical-twin-voice-pipeline.md)
+- [realtime-transport.md](realtime-transport.md)
+- [assistant-speech-synthesis.md](assistant-speech-synthesis.md)
+- [privacy-contract.md](privacy-contract.md)

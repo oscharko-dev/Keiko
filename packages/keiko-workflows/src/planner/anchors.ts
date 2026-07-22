@@ -171,7 +171,14 @@ const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // exercise the pattern directly, past extractAnchors's MAX_INPUT_LENGTH guard, for the S8786
 // regression test.
 export const PATH_RE = /(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}/g;
-const API_ROUTE_RE = /(^|[^A-Za-z0-9_.-])((?:\/[A-Za-z0-9_.:{}-]+){2,})/g;
+const API_ROUTE_RE =
+  /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
+const DEFINITION_TARGET_BEFORE_VERB_RE =
+  /\b([A-Za-z_$][A-Za-z0-9_$]{2,127})\s+(?:defined|declared|implemented|definiert|deklariert|implementiert)\b/giu;
+const DEFINITION_TARGET_AFTER_VERB_RE =
+  /\b(?:define|declare|implement|definieren|deklarieren|implementieren)\s+(?:(?:we|wir|ich|du|sie|man)\s+)?([A-Za-z_$][A-Za-z0-9_$]{2,127})\b/giu;
+const DEFINITION_TARGET_AFTER_NOUN_RE =
+  /\b(?:definition|declaration|implementation|deklaration|implementierung)\s+(?:(?:of|von)\s+)?([A-Za-z_$][A-Za-z0-9_$]{2,127})\b/giu;
 // Requires a genuine lower/digit -> upper transition so all-caps acronyms and SHOUTING words
 // (WHY, HTTP, BROKEN) are NOT mistaken for code identifiers. A spurious 0.85 identifier anchor
 // would both satisfy the clarification gate for a vague question and seed symbol-file retrieval
@@ -264,6 +271,7 @@ function collectMatches(
   kind: SearchAnchorKind,
   weight: number,
   out: MutableAnchor[],
+  accept: (value: string) => boolean = () => true,
 ): string {
   const re = new RegExp(pattern.source, pattern.flags);
   const parts: string[] = [];
@@ -272,14 +280,22 @@ function collectMatches(
   while (match !== null) {
     const full = match[0];
     const captured = match[2] ?? match[1] ?? full;
-    pushAnchor(out, captured, kind, weight);
     parts.push(source.slice(cursor, match.index));
-    parts.push(" ".repeat(full.length));
+    if (accept(captured)) {
+      pushAnchor(out, captured, kind, weight);
+      parts.push(" ".repeat(full.length));
+    } else {
+      parts.push(full);
+    }
     cursor = match.index + full.length;
     match = re.exec(source);
   }
   parts.push(source.slice(cursor));
   return parts.join("");
+}
+
+function isDefinitionTarget(value: string): boolean {
+  return !STOP_WORDS.has(value.toLowerCase());
 }
 
 function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
@@ -366,6 +382,30 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   remaining = collectMatches(remaining, DOCUMENT_REFERENCE_RE, "identifier", 0.95, collected);
   remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
   remaining = collectMatches(remaining, PATH_RE, "path", 0.95, collected);
+  remaining = collectMatches(
+    remaining,
+    DEFINITION_TARGET_BEFORE_VERB_RE,
+    "identifier",
+    0.85,
+    collected,
+    isDefinitionTarget,
+  );
+  remaining = collectMatches(
+    remaining,
+    DEFINITION_TARGET_AFTER_VERB_RE,
+    "identifier",
+    0.85,
+    collected,
+    isDefinitionTarget,
+  );
+  remaining = collectMatches(
+    remaining,
+    DEFINITION_TARGET_AFTER_NOUN_RE,
+    "identifier",
+    0.85,
+    collected,
+    isDefinitionTarget,
+  );
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);
   const tokensConsidered = tokenizeRemaining(remaining, collected);

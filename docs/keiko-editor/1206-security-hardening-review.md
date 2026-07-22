@@ -14,6 +14,10 @@ issue, so this review proves the consolidated posture, adds cross-cutting regres
 the confirmed audit gaps: an explicit LLM10 token-window ceiling, reserve-before-call enforcement for
 that ceiling, and prompt redaction on both live editor model surfaces.
 
+Maintenance update (2026-07-22): the independent PR #2665 audit advanced the root DOMPurify
+override from 3.4.11 to the current patched 3.x release, 3.4.12. The Monaco version, closed Markdown
+sinks, CSP posture, and durable upgrade requirement are unchanged.
+
 ## 1. Method
 
 The review ran a read-only audit across seven trust-boundary dimensions (browser→provider boundary,
@@ -126,7 +130,7 @@ it before bounding prefix/suffix, and `completionRoutes.ts` passes the same
 | `monaco-editor`         | 0.55.1                    | MIT                   | Editor core + language workers, served same-origin; no CDN.                    |
 | `@monaco-editor/react`  | 4.7.0                     | MIT                   | React wrapper; single-maintainer community package (bus-factor note below).    |
 | `@monaco-editor/loader` | 1.7.0 (root `overrides`)  | MIT                   | Pinned to neutralize the wrapper's default CDN loader.                         |
-| `dompurify`             | 3.4.11 (root `overrides`) | MPL-2.0 OR Apache-2.0 | npm-resolved version, patched for CVE-2026-0540 (≥ 3.3.2). See DOMPurify note. |
+| `dompurify`             | 3.4.12 (root `overrides`) | MPL-2.0 OR Apache-2.0 | npm-resolved version, patched for CVE-2026-0540 (≥ 3.3.2). See DOMPurify note. |
 
 All four are permissive, OSI-approved licenses. The workspace license gate
 (`scripts/check-workspace-supply-chain.mjs`) emits a per-workspace SBOM for every package and confirms
@@ -137,15 +141,18 @@ test-intelligence dependency entered the closure.
 
 There are two DOMPurify copies, and the review records both:
 
-- **npm-resolved**: `dompurify@3.4.11`, pinned by the root `overrides` (`package.json`). This is on the
+- **npm-resolved**: `dompurify@3.4.12`, pinned by the root `overrides` (`package.json`). This is on the
   patched 3.x line (≥ 3.3.2) and is what `npm ls dompurify` reports.
 - **Vendored inside `monaco-editor`**: `monaco-editor@0.55.1` bundles its own DOMPurify 3.2.7 relatively
   (`node_modules/monaco-editor/esm/vs/base/browser/dompurify/dompurify.js`), which the npm override
   cannot replace. The advisories against 3.2.7 are rated moderate (below the `--audit-level=high` CI
-  gate), and the runtime sink is closed by design: per ADR-0042 D3.7, the editor disables every Monaco
-  markdown-rendering surface and renders hover content as inert HTML-escaped text, so the vendored
-  sanitizer only ever processes escaped, non-attacker-controlled text. The durable fix remains
-  upgrading `monaco-editor` to a release that vendors DOMPurify ≥ 3.3.2 once one exists.
+  gate). The current editor no longer disables every assistance surface: governed bridges can enable
+  parameter hints, code-action lightbulbs, and inlay hints. Those mappers expose primitive strings
+  only, completion has no documentation field, and runtime guards drop non-string
+  completion/signature metadata. Suggest documentation and other `IMarkdownString` paths stay off;
+  hover is inert-fenced before Monaco sees it. The vendored sanitizer therefore never receives active
+  markup. The durable fix remains upgrading `monaco-editor` to a release that vendors DOMPurify ≥
+  3.3.2 once one exists.
 
 `npm audit --audit-level=high` reports zero high/critical advisories for the closure.
 

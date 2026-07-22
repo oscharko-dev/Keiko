@@ -65,6 +65,7 @@ describe("buildMatcher definition intent scoring", () => {
     ).toBe(true);
     const adversarial = `T${" ".repeat(40_000)}missing`;
     expect(lineLooksLikeSymbolDefinition(adversarial, "loadUser", false)).toBe(false);
+    expect(lineLooksLikeSymbolDefinition("Return loadUser() {", "loadUser", false)).toBe(true);
   });
 
   it("does not classify JavaScript unary-expression calls as typed declarations", () => {
@@ -74,6 +75,111 @@ describe("buildMatcher definition intent scoring", () => {
     expect(
       lineLooksLikeSymbolDefinition("public Task<User> loadUser(UserId id) {", "loadUser", false),
     ).toBe(true);
+  });
+
+  it.each([
+    "value instanceof loadUser()",
+    '"loadUser" in loadUser()',
+    "for (const value of loadUser()) {}",
+    "else loadUser()",
+    "do loadUser()",
+    "case loadUser():",
+    "default loadUser()",
+    "with loadUser()",
+    "assert loadUser()",
+    "raise loadUser()",
+  ])("does not classify control-flow calls as typed declarations: %s", (line) => {
+    expect(lineLooksLikeSymbolDefinition(line, "loadUser", false)).toBe(false);
+  });
+
+  it("recognizes implemented JVM and .NET void methods without admitting unary calls", () => {
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "void handleRequest(Request request) {",
+        "handleRequest",
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "public void handleRequest(Request request) {",
+        "handleRequest",
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "internal async void HandleRequest(Request request) => await dispatch(request);",
+        "HandleRequest",
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "public abstract void handleRequest(Request request);",
+        "handleRequest",
+        false,
+      ),
+    ).toBe(true);
+    expect(lineLooksLikeSymbolDefinition("void handleRequest()", "handleRequest", false)).toBe(
+      false,
+    );
+  });
+
+  it("does not classify Go goroutine or deferred calls as declarations", () => {
+    expect(lineLooksLikeSymbolDefinition("go handler()", "handler", false)).toBe(false);
+    expect(lineLooksLikeSymbolDefinition("defer handler()", "handler", false)).toBe(false);
+  });
+
+  it.each([
+    "// function loadUser() {}",
+    "# function loadUser() {}",
+    "/* function loadUser() {} */",
+    'const documentation = "function loadUser() {}";',
+  ])("does not classify commented or quoted examples as definitions: %s", (line) => {
+    expect(lineLooksLikeSymbolDefinition(line, "loadUser", false)).toBe(false);
+  });
+
+  it("recognizes Go receiver methods and JavaScript shorthand methods as definitions", () => {
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "func (service *PaymentService) authorize(payment Payment) error {",
+        "authorize",
+        false,
+      ),
+    ).toBe(true);
+    expect(lineLooksLikeSymbolDefinition("async authorize(payment) {", "authorize", false)).toBe(
+      true,
+    );
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "authorize(payment: Payment): Promise<Result> {",
+        "authorize",
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "abstract authorize(payment: Payment): Promise<Result>;",
+        "authorize",
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "public PaymentService() => initialize();",
+        "PaymentService",
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it("boosts lowercase symbol definitions over references", () => {
+    const matcher = buildMatcher(nlq("Where is handler defined?"));
+
+    expect(matcher.match("function handler() {")).toBeGreaterThan(
+      matcher.match("handler is called by the request router"),
+    );
   });
 
   it("boosts JVM and .NET class declarations over plain references", () => {
@@ -133,5 +239,16 @@ describe("buildMatcher definition intent scoring", () => {
     );
 
     expect(declaration).toBeGreaterThan(mention);
+  });
+
+  it.each([
+    '[HttpGet("/orders/{order_id}")] public IActionResult GetOrder() {',
+    '#[get("/orders/{order_id}")] async fn get_order() {',
+    '.route("/orders/{order_id}", get(get_order))',
+  ])("boosts polyglot route declaration syntax: %s", (line) => {
+    const matcher = buildMatcher(nlq("Trace GET /orders/{order_id} to its handler"));
+    const mention = matcher.match("GET /orders/{order_id} is documented for API consumers");
+
+    expect(matcher.match(line)).toBeGreaterThan(mention);
   });
 });

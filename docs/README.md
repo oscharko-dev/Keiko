@@ -51,7 +51,7 @@ agent context.
   crypto, no randomness, no imports from other Keiko packages.
 - Runtime requirements are Node.js >=24.18.0 <25 and npm 11.16.0 for repository development. See
   [Runtime toolchain](runtime-toolchain.md) for migration and rollback guidance.
-- UI and editor hosts use React 19.2.7. See
+- UI and editor hosts use React 19.2.8. See
   [React 19 UI and editor migration](react19-ui-editor-migration.md) for compatibility, verification,
   and rollback guidance.
 

@@ -3,9 +3,9 @@
 Implemented by Issue [#495](https://github.com/oscharko-dev/Keiko/issues/495) (Epic #491). This document
 describes the user-facing speech-to-text dictation experience in the chat composer. It builds on the
 capability metadata from [#493](capability-configuration.md) and the BFF speech-to-text route from
-[#494](dictation-endpoint.md). It is **STT dictation only** — it never offers full Voice Digital Twin
-conversation, assistant speech playback, or realtime transport (those remain out of scope per
-[ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md)).
+[#494](dictation-endpoint.md). It is **STT dictation only** — it never offers Twin conversation,
+assistant speech playback, or Realtime transport. Those are a separate surface governed by
+[ADR-0154](../adr/ADR-0154-canonical-twin-voice-pipeline.md).
 
 ## Capability gating
 

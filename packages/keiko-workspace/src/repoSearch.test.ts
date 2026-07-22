@@ -1628,6 +1628,18 @@ describe("readExcerpt (memFs)", () => {
     expect(r.atom.provenance.kind).toBe("excerpt-read");
   });
 
+  it("clamps the evidence range to the last line that exists in the file", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "L1\nL2\nL3" });
+    const r = await readExcerpt(
+      scope,
+      { scopePath: "src/a.ts", startLine: 2, endLine: 100, maxBytes: 256 },
+      { fs, nowMs: FIXED_NOW },
+    );
+
+    expect(r.content).toBe("L2\nL3");
+    expect(r.atom.lineRange).toEqual({ startLine: 2, endLine: 3 });
+  });
+
   it("truncates the excerpt to maxBytes and reports truncated=true", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "0123456789\n" });
     const r = await readExcerpt(

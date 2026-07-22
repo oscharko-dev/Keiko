@@ -276,8 +276,10 @@ describe("production runtime singleton manager", () => {
     const manager = createProductionRuntimeManager(runs, authority);
 
     await expect(manager.start(launch("run-1"))).resolves.toMatchObject({ ok: true });
-    expect(authority.transition).toHaveBeenNthCalledWith(1, "run-1", "ready", expect.any(String));
-    expect(authority.transition).toHaveBeenNthCalledWith(2, "run-1", "running", expect.any(String));
+    expect(authority.transition.mock.calls).toEqual([
+      ["run-1", "ready", expect.any(String)],
+      ["run-1", "running", expect.any(String)],
+    ]);
     expect(manager.health()).toEqual({ status: "running" });
   });
 
@@ -314,7 +316,7 @@ describe("production runtime singleton manager", () => {
     const manager = createProductionRuntimeManager(runs, authority);
 
     await expect(manager.start(launch("run-1"))).resolves.toMatchObject({ ok: false });
-    expect(authority.abandonUnlaunched).toHaveBeenCalledWith("run-1", expect.any(String));
+    expect(authority.abandonUnlaunched.mock.calls).toEqual([["run-1", expect.any(String)]]);
     expect(failed.dispose).toHaveBeenCalledTimes(1);
     expect(failed.controller.signal.aborted).toBe(true);
     expect(runs.size).toBe(0);

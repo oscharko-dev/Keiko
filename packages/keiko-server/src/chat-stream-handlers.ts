@@ -1,7 +1,7 @@
 // Desktop chat SSE streaming BFF route (#152). ADDITIVE to the buffered /api/desktop/chat path,
 // which stays byte-identical as the client's fallback. This handler reuses the buffered path's
-// front-matter (prepareDesktopChatSend → parse, validate, #149 guardrail, memory) and its
-// message-assembly (buildGatewayMessages) so the streamed prompt is identical, then streams content
+// front-matter (parseDesktopChatSend → validate, #149 guardrail, memory) and its
+// message assembly so the streamed prompt is identical, then streams content
 // deltas as SSE `token` events and persists the turn EXACTLY like persistModelChatTurn on `done`.
 //
 // Redaction is applied per token AND on the final content (#154): a model echoing a context secret
@@ -13,7 +13,7 @@ import { writeOrDestroy } from "./sse-write.js";
 import { STREAMING, errorBody, type HandlerOutcome, type RouteContext } from "./routes.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import type { UiHandlerDeps } from "./deps.js";
-import type { Chat, ChatMessage } from "./store/index.js";
+import type { ChatMessage } from "./store/index.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type {
   ConversationMemoryActionWire,
@@ -22,20 +22,31 @@ import type {
   DesktopChatStreamEvent,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
-  abortDesktopChatOnDisconnect,
-  buildChatPatch,
+  commitChatAfterTurn,
   buildGatewayAssembly,
   buildMemoryResult,
+  captureGatewayTurnSnapshot,
   collectMemoryActions,
+  completeDesktopChatTurn,
   createAssistantMessage,
-  createUserMessage,
   desktopChatErrorResult,
   emptyMemoryResult,
-  prepareDesktopChatSend,
+  failDesktopChatTurn,
+  admitDesktopChatTurn,
+  inspectDesktopChatTurn,
+  parseDesktopChatSend,
   recordChatCompaction,
-  recordConversationMemoryUse,
+  validateDesktopChatSend,
+  validateDesktopChatExecution,
+  validateCurrentDesktopChatSend,
+  runPostCommitConversationMemorySideEffects,
+  type ParsedDesktopChatSend,
+  type PreparedDesktopChatSend,
   type SendDesktopChatRequest,
+  type GatewayTurnSnapshot,
 } from "./chat-handlers.js";
+import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
+import { createRequestCancellation } from "./request-cancellation.js";
 
 // One SSE message. JSON.stringify never emits a raw newline inside a string (newlines escape to
 // `\n`), so a single `data:` line is always valid framing — no manual escaping, mirroring sse.ts.
@@ -82,6 +93,44 @@ interface StreamTermination {
   backpressure: boolean;
 }
 
+function requestIsAborted(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
+function reportStreamIteratorCleanupFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: ctx.correlationId ?? "unknown",
+      operation: "POST /api/desktop/chat/stream",
+      source: "chat.stream.iterator-cleanup",
+      error,
+      redact: (message) => String(deps.redactor(message)),
+    }),
+  );
+}
+
+function releaseStreamIterator(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  iterator: AsyncIterator<import("@oscharko-dev/keiko-model-gateway").GatewayStreamChunk>,
+): void {
+  try {
+    const cleanup = iterator.return?.();
+    if (cleanup !== undefined) {
+      void cleanup.catch((error: unknown) => {
+        reportStreamIteratorCleanupFailure(ctx, deps, error);
+      });
+    }
+  } catch (error) {
+    reportStreamIteratorCleanupFailure(ctx, deps, error);
+  }
+}
+
 async function streamConversation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -89,24 +138,30 @@ async function streamConversation(
   controller: AbortController,
   termination: StreamTermination,
 ): Promise<StreamedTurn | undefined> {
-  for await (const chunk of stream) {
-    if (controller.signal.aborted) return undefined;
-    if (chunk.type === "delta") {
-      writeOrDestroy(
-        ctx.res,
-        sseMessage({ event: "token", data: { text: deps.redactor(chunk.token) as string } }),
-        controller,
-        () => {
-          // Distinct, observable signal: this termination is a slow-client backpressure kill, not a
-          // user cancel. Carries no body bytes. The subsequent abort() surfaces as a stream end.
-          termination.backpressure = true;
-        },
-      );
-    } else {
-      return { response: chunk.response };
+  const iterator = stream[Symbol.asyncIterator]();
+  try {
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done === true) return undefined;
+      const chunk = next.value;
+      if (controller.signal.aborted) return undefined;
+      if (chunk.type === "delta") {
+        writeOrDestroy(
+          ctx.res,
+          sseMessage({ event: "token", data: { text: deps.redactor(chunk.token) as string } }),
+          controller,
+          () => {
+            termination.backpressure = true;
+          },
+        );
+        if (requestIsAborted(controller.signal)) return undefined;
+      } else {
+        return { response: chunk.response };
+      }
     }
+  } finally {
+    releaseStreamIterator(ctx, deps, iterator);
   }
-  return undefined;
 }
 
 // A backpressure kill destroys the socket; writing another SSE frame to it is a no-op at best and can
@@ -123,28 +178,46 @@ function writeTerminalFrame(ctx: RouteContext, frame: string): void {
 // threaded in here rather than created again — creating it twice would duplicate the turn.
 async function persistStreamedTurn(
   deps: UiHandlerDeps,
-  request: SendDesktopChatRequest,
-  chat: Chat,
-  modelId: string,
+  prepared: PreparedDesktopChatSend,
   memory: ConversationMemoryResultWire,
-  memoryContext: ConversationMemoryRuntimeContext | undefined,
   turn: StreamedTurn,
   userMessage: ChatMessage,
-): Promise<DesktopChatSendResponse> {
+  signal: AbortSignal,
+): Promise<DesktopChatSendResponse | undefined> {
+  const { request, chat, modelId, memoryContext } = prepared;
   const redactedContent = deps.redactor(turn.response.content) as string;
-  const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
-  recordConversationMemoryUse(deps, memory, redactedContent);
   const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
     deps,
     request,
     memoryContext,
-    modelId,
-    redactedContent,
   );
-  const updatedChat = deps.store.updateChat(request.chatId, buildChatPatch(chat, request, modelId));
+  if (signal.aborted) return undefined;
+  const createdAssistant = createAssistantMessage(
+    deps,
+    request,
+    redactedContent,
+    modelId,
+    userMessage,
+  );
+  const updatedChat = commitChatAfterTurn(deps, chat, request, modelId);
+  const [canonicalUser, assistantMessage] = completeDesktopChatTurn(
+    deps,
+    prepared,
+    userMessage,
+    createdAssistant,
+  );
+  runPostCommitConversationMemorySideEffects(
+    deps,
+    request,
+    memoryContext,
+    modelId,
+    memory,
+    redactedContent,
+    assistantMessage.id,
+  );
   return {
     chat: updatedChat,
-    messages: [userMessage, assistantMessage],
+    messages: [canonicalUser, assistantMessage],
     usage: turn.response.usage,
     memory: { ...memory, actions },
   };
@@ -206,53 +279,57 @@ function errorEvent(
 }
 
 // Streams the gateway response and writes the terminal SSE event. Persists the user turn BEFORE
-// building the prompt so buildGatewayMessages (which reads store.listMessages) includes the current
-// message — otherwise a fresh chat sends `[system]` only (model hallucinates) and a history chat
-// ends on an `assistant` turn (some providers reject it 400). Mirrors the buffered
-// persistModelChatTurn ordering exactly (#152). On cancel the user turn stays persisted (saved for
-// retry) with no assistant message — identical to the buffered path's no-rollback-on-error contract.
+// capturing the prompt snapshot so it includes the current message by stable id. On cancel the user
+// turn stays persisted (saved for retry) with no assistant message, matching the buffered path.
+function failCancelledStreamTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  emitTerminal: boolean,
+): void {
+  failDesktopChatTurn(deps, request);
+  if (emitTerminal) writeTerminalFrame(ctx, sseMessage({ event: "cancelled", data: {} }));
+}
+
 async function streamAndPersist(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  prepared: {
-    request: SendDesktopChatRequest;
-    chat: Chat;
-    modelId: string;
-    memoryContext: ConversationMemoryRuntimeContext | undefined;
-  },
+  prepared: PreparedDesktopChatSend,
   callStream: NonNullable<import("@oscharko-dev/keiko-harness").ModelPort["callStream"]>,
   controller: AbortController,
+  userMessage: ChatMessage,
+  gatewayTurn: GatewayTurnSnapshot,
+  messageCountBeforeTurn: number,
 ): Promise<void> {
-  const { request, chat, modelId, memoryContext } = prepared;
-  const memory = await resolveMemory(deps, request, memoryContext);
-  // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage, mirroring the buffered
-  // path's lifecycle moment so the compaction-evidence runId is identical across both paths.
-  const messageCountBeforeTurn = deps.store.countMessages(request.chatId);
+  const { request, modelId, memoryContext } = prepared;
   const startedAt = Date.now();
-  const userMessage = createUserMessage(deps, request);
-  const assembly = buildGatewayAssembly(deps, request, memory, modelId);
-  const messages = assembly.messages;
-  const stream = callStream({ modelId, messages }, controller.signal);
+  const memory = await resolveMemory(deps, request, memoryContext);
+  if (requestIsAborted(controller.signal)) {
+    failCancelledStreamTurn(ctx, deps, request, true);
+    return;
+  }
+  const assembly = buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn);
+  const stream = callStream({ modelId, messages: assembly.messages }, controller.signal);
   const termination: StreamTermination = { backpressure: false };
   const turn = await streamConversation(ctx, deps, stream, controller, termination);
-  if (turn === undefined || controller.signal.aborted) {
+  if (turn === undefined || requestIsAborted(controller.signal)) {
     // A backpressure kill already destroyed the socket; do not write-after-destroy nor relabel it as
     // a user cancel. Only an actual (non-backpressure) cancel emits the `cancelled` terminal event.
-    if (!termination.backpressure) {
-      writeTerminalFrame(ctx, sseMessage({ event: "cancelled", data: {} }));
-    }
+    failCancelledStreamTurn(ctx, deps, request, !termination.backpressure);
     return;
   }
   const payload = await persistStreamedTurn(
     deps,
-    request,
-    chat,
-    modelId,
+    prepared,
     memory,
-    memoryContext,
     turn,
     userMessage,
+    controller.signal,
   );
+  if (payload === undefined) {
+    failCancelledStreamTurn(ctx, deps, request, true);
+    return;
+  }
   recordChatCompaction(deps, {
     compaction: assembly.compaction,
     request,
@@ -267,53 +344,227 @@ export async function handleSendDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<HandlerOutcome> {
-  // GEN-PERF-CHATSTREAM-001 — reject before any work (and before any SSE header) so the
-  // client degrades to the buffered path instead of stacking an unbounded upstream fan-out.
-  if (activeChatStreams >= maxActiveChatStreams()) {
-    return {
-      status: 429,
-      body: errorBody("TOO_MANY_STREAMS", "Too many concurrent chat streams; retry buffered."),
-    };
-  }
-  activeChatStreams += 1;
+  const cancellation = createRequestCancellation(ctx, "desktop chat stream cancelled");
   try {
-    return await runDesktopChatStream(ctx, deps);
+    // GEN-PERF-CHATSTREAM-001 — reject before any work (and before any SSE header) so the
+    // client degrades to the buffered path instead of stacking an unbounded upstream fan-out.
+    if (activeChatStreams >= maxActiveChatStreams()) {
+      return {
+        status: 429,
+        body: errorBody("TOO_MANY_STREAMS", "Too many concurrent chat streams; retry buffered."),
+      };
+    }
+    activeChatStreams += 1;
+    try {
+      return await runDesktopChatStream(ctx, deps, cancellation.controller);
+    } finally {
+      activeChatStreams -= 1;
+    }
   } finally {
-    activeChatStreams -= 1;
+    cancellation.dispose();
   }
+}
+
+type StreamCall = NonNullable<import("@oscharko-dev/keiko-harness").ModelPort["callStream"]>;
+
+interface PreparedDesktopChatStream {
+  readonly kind: "ready";
+  readonly parsed: ParsedDesktopChatSend;
+}
+
+type DesktopChatStreamPreparation =
+  | PreparedDesktopChatStream
+  | { readonly kind: "outcome"; readonly outcome: HandlerOutcome }
+  | { readonly kind: "replay"; readonly response: DesktopChatSendResponse };
+
+function streamingUnsupportedOutcome(): HandlerOutcome {
+  return {
+    status: 400,
+    body: errorBody("STREAMING_UNSUPPORTED", "Streaming is not available for this model."),
+  };
+}
+
+function streamingReplayOutcome(
+  ctx: RouteContext,
+  response: DesktopChatSendResponse,
+): HandlerOutcome {
+  ctx.res.writeHead(200, SSE_HEADERS);
+  writeTerminalFrame(ctx, sseMessage({ event: "done", data: response }));
+  ctx.res.end();
+  return STREAMING;
+}
+
+function inspectedStreamPreparation(
+  inspection: ReturnType<typeof inspectDesktopChatTurn>,
+): DesktopChatStreamPreparation | undefined {
+  if (inspection.kind === "rejected") return { kind: "outcome", outcome: inspection.result };
+  return inspection.kind === "replay"
+    ? { kind: "replay", response: inspection.response }
+    : undefined;
+}
+
+function nonAdmittedStreamOutcome(
+  ctx: RouteContext,
+  admission: Exclude<ReturnType<typeof admitDesktopChatTurn>, { readonly kind: "admitted" }>,
+): HandlerOutcome {
+  if (admission.kind === "rejected") return admission.result;
+  return streamingReplayOutcome(ctx, admission.response);
+}
+
+async function prepareDesktopChatStream(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+): Promise<DesktopChatStreamPreparation> {
+  const parsed = await parseDesktopChatSend(ctx, deps, signal);
+  if ("status" in parsed) return { kind: "outcome", outcome: parsed };
+  const prepared = validateDesktopChatSend(parsed, deps);
+  if ("status" in prepared) return { kind: "outcome", outcome: prepared };
+  const inspection = inspectDesktopChatTurn(deps, prepared);
+  const inspected = inspectedStreamPreparation(inspection);
+  if (inspected !== undefined) return inspected;
+  return {
+    kind: "ready",
+    parsed,
+  };
+}
+
+function resolveDesktopChatStreamCall(
+  prepared: PreparedDesktopChatSend,
+  deps: UiHandlerDeps,
+): StreamCall | HandlerOutcome {
+  const invalidExecution = validateDesktopChatExecution(
+    prepared.request,
+    prepared.chat,
+    prepared.modelId,
+    deps,
+  );
+  if (invalidExecution !== undefined) return invalidExecution;
+  const model = deps.modelPortFactory(prepared.modelId);
+  return model?.callStream === undefined
+    ? streamingUnsupportedOutcome()
+    : model.callStream.bind(model);
+}
+
+interface AdmittedDesktopChatStream {
+  readonly prepared: PreparedDesktopChatSend;
+  readonly callStream: StreamCall;
+  readonly userMessage: ChatMessage;
+  readonly gatewayTurn: GatewayTurnSnapshot;
+  readonly messageCountBeforeTurn: number;
+}
+
+function writeStreamFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  controller: AbortController,
+  error: unknown,
+): void {
+  failDesktopChatTurn(deps, request);
+  const event: DesktopChatStreamEvent = requestIsAborted(controller.signal)
+    ? { event: "cancelled", data: {} }
+    : { event: "error", data: errorEvent(error, deps, ctx.correlationId) };
+  writeTerminalFrame(ctx, sseMessage(event));
+}
+
+async function executeAdmittedDesktopChatStream(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  turn: AdmittedDesktopChatStream,
+  controller: AbortController,
+  markStreamStarted: () => void,
+): Promise<HandlerOutcome> {
+  let stopHeartbeat: (() => void) | undefined;
+  try {
+    ctx.res.writeHead(200, SSE_HEADERS);
+    markStreamStarted();
+    stopHeartbeat = startSseHeartbeat(ctx.res);
+    await streamAndPersist(
+      ctx,
+      deps,
+      turn.prepared,
+      turn.callStream,
+      controller,
+      turn.userMessage,
+      turn.gatewayTurn,
+      turn.messageCountBeforeTurn,
+    );
+  } catch (error) {
+    writeStreamFailure(ctx, deps, turn.prepared.request, controller, error);
+  } finally {
+    stopHeartbeat?.();
+    ctx.res.end();
+  }
+  return STREAMING;
+}
+
+async function runAdmittedDesktopChatStream(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  start: PreparedDesktopChatStream,
+  controller: AbortController,
+  markStreamStarted: () => void,
+): Promise<HandlerOutcome> {
+  const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
+  if ("status" in prepared) return prepared;
+  const legacyCall =
+    prepared.request.clientTurnId === undefined
+      ? resolveDesktopChatStreamCall(prepared, deps)
+      : undefined;
+  if (legacyCall !== undefined && typeof legacyCall !== "function") return legacyCall;
+  const messageCountBeforeTurn = deps.store.countMessages(prepared.request.chatId);
+  const admission = admitDesktopChatTurn(deps, prepared);
+  if (admission.kind !== "admitted") return nonAdmittedStreamOutcome(ctx, admission);
+  const callStream = legacyCall ?? resolveDesktopChatStreamCall(prepared, deps);
+  if (typeof callStream !== "function") {
+    failDesktopChatTurn(deps, prepared.request);
+    return callStream;
+  }
+  const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);
+  return executeAdmittedDesktopChatStream(
+    ctx,
+    deps,
+    {
+      prepared,
+      callStream,
+      userMessage: admission.userMessage,
+      gatewayTurn,
+      messageCountBeforeTurn,
+    },
+    controller,
+    markStreamStarted,
+  );
+}
+
+interface DesktopChatStreamState {
+  started: boolean;
 }
 
 async function runDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  controller: AbortController,
 ): Promise<HandlerOutcome> {
-  const prepared = await prepareDesktopChatSend(ctx, deps);
-  if ("status" in prepared) return prepared;
-  const model = deps.modelPortFactory(prepared.modelId);
-  if (model?.callStream === undefined) {
-    return {
-      status: 400,
-      body: errorBody("STREAMING_UNSUPPORTED", "Streaming is not available for this model."),
-    };
+  const start = await prepareDesktopChatStream(ctx, deps, controller.signal);
+  if (controller.signal.aborted) {
+    return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
   }
-  const callStream = model.callStream.bind(model);
-  const controller = abortDesktopChatOnDisconnect(ctx);
-  ctx.res.writeHead(200, SSE_HEADERS);
-  const stopHeartbeat = startSseHeartbeat(ctx.res);
-  try {
-    await streamAndPersist(ctx, deps, prepared, callStream, controller);
-  } catch (error) {
-    if (controller.signal.aborted) {
-      writeTerminalFrame(ctx, sseMessage({ event: "cancelled", data: {} }));
-    } else {
-      writeTerminalFrame(
-        ctx,
-        sseMessage({ event: "error", data: errorEvent(error, deps, ctx.correlationId) }),
-      );
-    }
-  } finally {
-    stopHeartbeat();
-    ctx.res.end();
-  }
-  return STREAMING;
+  if (start.kind === "outcome") return start.outcome;
+  if (start.kind === "replay") return streamingReplayOutcome(ctx, start.response);
+  const streamState: DesktopChatStreamState = { started: false };
+  const result = await runSerializedChatTurn(
+    deps,
+    start.parsed.request.chatId,
+    controller.signal,
+    () =>
+      runAdmittedDesktopChatStream(ctx, deps, start, controller, () => {
+        streamState.started = true;
+      }),
+  );
+  return result === CHAT_TURN_WAIT_CANCELLED
+    ? streamState.started
+      ? STREAMING
+      : { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+    : result;
 }

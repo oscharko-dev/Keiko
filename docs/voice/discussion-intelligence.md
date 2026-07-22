@@ -11,6 +11,13 @@ the voice binding lives in
 server orchestration lives in
 [`packages/keiko-server/src/discussion-prompt.ts`](../../packages/keiko-server/src/discussion-prompt.ts).
 
+> **Current integration note (ADR-0154):** the text-first contract and server prompt orchestration
+> remain reusable. The dedicated `discussion-voice.ts` binding is not called by the current product,
+> and its transcript-segment/interruption flow is historical integration scaffolding rather than Twin
+> release evidence. A settled Voice turn enters the same canonical chat operation as typed text; when
+> that Chat session carries a discussion mode, the ordinary server path applies the same directives.
+> Realtime never owns a separate discussion or answer path.
+
 ## 0. Discussion intelligence is TEXT-FIRST
 
 > **Text is the primary input path.** Discussion intelligence is available in every deployment,
@@ -308,17 +315,17 @@ binding observes the turn manager snapshot; it does not modify turn manager stat
 
 ### Integration with the transcript segment store (#500)
 
-The transcript store ([ADR-0105](../adr/ADR-0105-voice-transcript-segment-semantics.md)) enforces the
-committed-only boundary. Discussion input from voice is read from `selectCommittedVoiceTranscript`,
-never directly from the segment array.
+The original #502 Voice binding read `selectCommittedVoiceTranscript` rather than a raw segment array.
+That binding remains isolated and tested but is not wired into current Twin. ADR-0154 instead settles a
+final in `useRealtimeVoice` and sends it through canonical chat, so discussion prompt orchestration sees
+the same message/request boundary as typed input.
 
 ### Integration with assistant speech output (#501)
 
-The playback controller ([ADR-0106](../adr/ADR-0106-voice-assistant-speech-output-playback.md)) handles
-the spoken assistant response. When the playback phase transitions to `interrupted`, the turn manager
-records it. The discussion binding observes the turn manager, not the playback controller directly. The
-content-free `DiscussionTurnSummary` is available to later consumers (#503, #504) from
-`@oscharko-dev/keiko-contracts` without importing the UI.
+The current playback path speaks only the completed canonical assistant message through the explicit TTS
+provider. Barge-in stops that local playback; it does not create, cancel, or resume a provider assistant
+response. The historical discussion binding's turn-manager observer remains a reusable content-free
+contract but is not the productive playback integration.
 
 ### Governed spoken action handoff (#503)
 

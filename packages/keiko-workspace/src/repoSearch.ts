@@ -2196,6 +2196,18 @@ async function readExcerptLines(
   }
 }
 
+function assertExcerptStartWithinLines(
+  request: ReadExcerptRequest,
+  lines: readonly string[],
+): void {
+  if (request.startLine > lines.length) {
+    throw new RepoSearchUnsupportedFileError(
+      "cannot read excerpt outside the file line range",
+      "outside-range",
+    );
+  }
+}
+
 export async function readExcerpt(
   scope: SearchScope,
   request: ReadExcerptRequest,
@@ -2227,12 +2239,18 @@ export async function readExcerpt(
   // then clamp the returned content to the caller's request.maxBytes budget. For files larger than
   // the read cap, the optional raw-byte port can still serve early windows from the bounded prefix.
   const allLines = await readExcerptLines(scope, request, fs, target.path);
+  assertExcerptStartWithinLines(request, allLines);
+  const sourceEndLine = Math.min(request.endLine, allLines.length);
   const slice = allLines.slice(request.startLine - 1, request.endLine).join("\n");
   const clamped = clampToBytes(slice, request.maxBytes);
+  const returnedLineCount = clamped.excerpt.split("\n").length;
+  const returnedEndLine = clamped.truncated
+    ? Math.min(sourceEndLine, request.startLine + returnedLineCount - 1)
+    : sourceEndLine;
   const atom = buildAtom({
     scopeId: scope.scopeId,
     scopePath: request.scopePath,
-    lineRange: { startLine: request.startLine, endLine: request.endLine },
+    lineRange: { startLine: request.startLine, endLine: returnedEndLine },
     provenanceKind: "excerpt-read",
     tool: "repo.readExcerpt",
     queryFingerprint: buildExcerptFingerprint(request),

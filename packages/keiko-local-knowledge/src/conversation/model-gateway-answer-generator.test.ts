@@ -107,6 +107,28 @@ describe("ModelGatewayAnswerGenerator", () => {
     ]);
   });
 
+  it("uses the generation-only answer question when one is supplied", async () => {
+    const refs = [reference("ch-1", "alpha.txt")];
+    const pack = assembleGroundedContext(refs);
+    const gw = fakeGateway("Use pnpm [1].");
+    const generator = new ModelGatewayAnswerGenerator({
+      chatGateway: gw.chat,
+      modelId: "test-model",
+      policy: "best-effort",
+    });
+
+    await generator.generate({
+      query: {
+        ...query,
+        answerQuestion: "User question:\nwhat is alpha?\n\nIncluded memory context:\nUse pnpm.",
+      },
+      pack,
+      references: refs,
+    });
+
+    expect(gw.calls[0]?.messages[1]?.content).toContain("Included memory context:\nUse pnpm.");
+  });
+
   it("refuses to call the gateway when grounding rejects (require-citations + empty refs)", async () => {
     const pack = assembleGroundedContext([]);
     const gatewayCalled = vi.fn((): Promise<NormalizedResponse> => {

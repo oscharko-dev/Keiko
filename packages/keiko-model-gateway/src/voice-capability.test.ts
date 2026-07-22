@@ -108,8 +108,7 @@ describe("resolveVoiceCapabilityFromCapabilities — STT-only profile (AC2)", ()
     const result = resolve([voiceCap({ supportsSpeechInput: true })]);
     expect(result.profile).not.toBe("full-realtime");
     expect(result.transport.webrtcMedia).toBe(false);
-    // The control plane role is active for any non-none profile (ADR-0100 D3).
-    expect(result.transport.websocketControl).toBe(true);
+    expect(result.transport.websocketControl).toBe(false);
   });
 });
 
@@ -118,7 +117,7 @@ describe("resolveVoiceCapabilityFromCapabilities — speech-output-only profile"
     const result = resolve([voiceCap({ id: "tts", supportsSpeechOutput: true })]);
     expect(result.available).toBe(true);
     expect(result.profile).toBe("speech-output");
-    expect(result.transport.webrtcMedia).toBe(false);
+    expect(result.transport).toEqual({ websocketControl: false, webrtcMedia: false });
   });
 });
 
@@ -128,15 +127,6 @@ describe("resolveVoiceCapabilityFromCapabilities — full voice profile (AC3)", 
     expect(result.available).toBe(true);
     expect(result.profile).toBe("full-realtime");
     expect(result.transport).toEqual({ websocketControl: true, webrtcMedia: true });
-  });
-
-  it("advertises realtime tool calling only when the realtime voice provider supports tools", () => {
-    const withoutTools = resolve([voiceCap({ supportsRealtimeVoice: true, toolCalling: false })]);
-    expect(withoutTools.capabilities.realtimeToolCalling).toBeUndefined();
-
-    const withTools = resolve([voiceCap({ supportsRealtimeVoice: true, toolCalling: true })]);
-    expect(withTools.profile).toBe("full-realtime");
-    expect(withTools.capabilities.realtimeToolCalling).toBe(true);
   });
 
   it("reports full-realtime when BOTH speech input and speech output are available", () => {
@@ -150,6 +140,7 @@ describe("resolveVoiceCapabilityFromCapabilities — full voice profile (AC3)", 
       speechOutput: true,
       realtimeVoice: false,
     });
+    expect(result.transport).toEqual({ websocketControl: false, webrtcMedia: false });
   });
 
   it("does NOT report full-realtime for speech input alone (the AC3 guard)", () => {
@@ -247,6 +238,15 @@ describe("resolveVoiceCapability — GatewayConfig binder", () => {
     expect(result.available).toBe(true);
     expect(result.profile).toBe("speech-to-text");
     expect(result.providerLocality).toBe("azure-foundry");
+  });
+
+  it("does not advertise Realtime when a legacy config omits the transcription deployment", () => {
+    const result = resolveVoiceCapability(
+      configWith([voiceCap({ supportsRealtimeVoice: true, supportsSpeechOutput: true })]),
+    );
+
+    expect(result.capabilities.realtimeVoice).toBe(false);
+    expect(result.transport.webrtcMedia).toBe(false);
   });
 
   it("never elects a voice capability that names no configured provider (fail-closed)", () => {
@@ -361,17 +361,55 @@ describe("selectRealtimeVoiceModel (Issue #497)", () => {
   it("selects the configured realtime-voice provider", () => {
     expect(
       selectRealtimeVoiceModel(
-        configWith([voiceCap({ id: "keiko-realtime", supportsRealtimeVoice: true })]),
+        configWith([
+          voiceCap({
+            id: "keiko-realtime",
+            supportsRealtimeVoice: true,
+            realtimeTranscriptionModel: "keiko-realtime-transcription",
+          }),
+        ]),
       ),
     ).toBe("keiko-realtime");
   });
 
-  it("prefers the cheapest configured realtime-voice provider", () => {
+  it("does not elect a Realtime provider without an explicit transcription deployment", () => {
+    expect(
+      selectRealtimeVoiceModel(
+        configWith([voiceCap({ id: "incomplete", supportsRealtimeVoice: true })]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("prefers the cheapest complete realtime-voice provider", () => {
     const config = configWith([
-      voiceCap({ id: "rt-expensive", supportsRealtimeVoice: true, costClass: "high" }),
-      voiceCap({ id: "rt-cheap", supportsRealtimeVoice: true, costClass: "low" }),
+      voiceCap({
+        id: "rt-expensive",
+        supportsRealtimeVoice: true,
+        realtimeTranscriptionModel: "expensive-transcription",
+        costClass: "high",
+      }),
+      voiceCap({
+        id: "rt-cheap",
+        supportsRealtimeVoice: true,
+        realtimeTranscriptionModel: "cheap-transcription",
+        costClass: "low",
+      }),
     ]);
     expect(selectRealtimeVoiceModel(config)).toBe("rt-cheap");
+  });
+
+  it("skips an incomplete cheap provider in favor of a complete provider", () => {
+    const config = configWith([
+      voiceCap({ id: "rt-incomplete", supportsRealtimeVoice: true, costClass: "low" }),
+      voiceCap({
+        id: "rt-complete",
+        supportsRealtimeVoice: true,
+        realtimeTranscriptionModel: "complete-transcription",
+        costClass: "high",
+      }),
+    ]);
+
+    expect(selectRealtimeVoiceModel(config)).toBe("rt-complete");
   });
 
   it("never elects a realtime capability that names no configured provider (fail-closed)", () => {
@@ -442,7 +480,7 @@ describe("resolveVoiceCapabilityFromCapabilities — available voice personas (I
     expect(result.availableVoicePersonas).toEqual(["male", "neutral"]);
   });
 
-  it("unions personas across reachable speech-output and realtime providers, deduped + sorted", () => {
+  it("ignores personas on realtime-only providers because TTS owns assistant output", () => {
     const result = resolve([
       voiceCap({ id: "keiko-tts", supportsSpeechOutput: true, supportedVoicePersonas: ["female"] }),
       voiceCap({
@@ -451,7 +489,7 @@ describe("resolveVoiceCapabilityFromCapabilities — available voice personas (I
         supportedVoicePersonas: ["male", "female"],
       }),
     ]);
-    expect(result.availableVoicePersonas).toEqual(["male", "female"]);
+    expect(result.availableVoicePersonas).toEqual(["female"]);
   });
 
   it("excludes personas advertised only by an unreachable provider", () => {
@@ -536,17 +574,14 @@ describe("selectVoicePersonaVoice (Issue #1557, ADR-0094 D2/D6)", () => {
     });
   });
 
-  it("maps a persona on a realtime provider", () => {
+  it("does not map a persona on a realtime-only provider", () => {
     const config = configWithVoiceProfiles([
       {
         capability: voiceCap({ id: "keiko-realtime", supportsRealtimeVoice: true }),
         voiceProfiles: [{ persona: "neutral", voiceId: "rt-neutral" }],
       },
     ]);
-    expect(selectVoicePersonaVoice(config, "neutral")).toEqual({
-      modelId: "keiko-realtime",
-      voiceId: "rt-neutral",
-    });
+    expect(selectVoicePersonaVoice(config, "neutral")).toBeUndefined();
   });
 
   it("returns undefined when the persona is not mapped by any provider", () => {

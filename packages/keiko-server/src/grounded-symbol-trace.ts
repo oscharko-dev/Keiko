@@ -48,7 +48,6 @@ const MAX_DISCOVERY_ATOMS = 12;
 const MAX_DISCOVERED_SYMBOLS = 4;
 const MAX_DISCOVERED_TRACE_HOPS = 2;
 const MAX_DISCOVERY_EXCERPT_BYTES = 4096;
-const DISCOVERED_DEFINITION_CONTEXT_LINES = 24;
 const CONFIGURED_HANDLER_RE = /\bhandler\s*:\s*([A-Za-z_$][A-Za-z0-9_$]{1,127})\b/gu;
 const ROUTER_HANDLER_RE =
   /\b(?:router|app|server)\s*\.\s*(?:get|post|put|patch|delete|head|options)\s*\([^,\n]+,\s*([a-z_$][a-z0-9_$]{1,127})\b/giu;
@@ -251,13 +250,7 @@ function discoveredTraceAtom(
   isDeclaration: boolean,
 ): EvidenceAtom {
   const tool = isDeclaration ? "discovered-symbol-definition" : "structural-edge-target";
-  const lineRange =
-    isDeclaration && atom.lineRange !== undefined
-      ? {
-          startLine: Math.max(1, atom.lineRange.startLine - 2),
-          endLine: atom.lineRange.endLine + DISCOVERED_DEFINITION_CONTEXT_LINES,
-        }
-      : atom.lineRange;
+  const lineRange = atom.lineRange;
   const provenance = {
     kind: "structural" as const,
     tool,

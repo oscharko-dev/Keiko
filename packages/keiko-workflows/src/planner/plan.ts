@@ -182,13 +182,13 @@ function buildRing(
 }
 
 const DIRECT_ROUTE_METHOD_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
-const DIRECT_ROUTE_PATH_RE = /\/[A-Za-z0-9:_?&=./-]*[A-Za-z0-9_}/-]/u;
+const DIRECT_ROUTE_PATH_RE = /\/[A-Za-z0-9:_?&=.%+*{}/-]*[A-Za-z0-9_}/*-]/u;
 const HISTORY_QUERY_RE =
-  /(?:^|[^\p{L}\p{N}_])(?:git|history|historie|recent|recency|zuletzt|changed|änderung|änderungen)(?=$|[^\p{L}\p{N}_])/iu;
+  /(?:^|[^\p{L}\p{N}_])(?:git|history|historie|recent|recency|commits?|blame|evolution|introduced|added|modified|modifications?|renamed|removed|authored|zuletzt|changed|änderung|änderungen|geändert|eingeführt|hinzugefügt|umbenannt|entfernt|verlauf)(?=$|[^\p{L}\p{N}_])/iu;
 const DEFINITION_LOOKUP_RE =
-  /\b(?:defined|definition|declared|declaration|implemented|implementation|definiert|deklariert|implementiert)\b/iu;
+  /\b(?:define[ds]?|definition|declare[ds]?|declaration|implement(?:ed|s)?|implementation|definieren|definiert|deklarieren|deklariert|implementieren|implementiert)\b/iu;
 const SYMBOL_RELATION_RE =
-  /\b(?:callers?|calls?|called|references?|referenced|referenziert|used|uses|verwendet|aufgerufen|aufrufe?)\b/iu;
+  /\b(?:call(?:ers?|s|ed|ing)?|callees?|consumers?|dependenc(?:y|ies)|dependents?|depends?|depended|depending|imports?|imported|importing|exports?|exported|exporting|invokes?|invoked|invoking|invocations?|reference[ds]?|referencing|referenziert|usages?|use[ds]?|using|verwend(?:et|en|est|e|ung)|nutz(?:t|en|ung)|genutzt|aufrufer|aufgerufen|aufrufen|aufrufe?|abhängig(?:e|en|er|es|keit|keiten)?|importiert|exportiert)\b/iu;
 const ROUTE_TRAVERSAL_RE = /\b(?:handlers?|trace|traces|tracing|call[- ]?paths?|aufrufpfade?)\b/iu;
 const IDENTIFIER_TOKEN_RE = /[A-Za-z_$][A-Za-z0-9_$]*/gu;
 const TEST_IDENTIFIER_SUFFIX_RE = /(?:Test|Tests|Spec|Specs)$/u;
@@ -215,22 +215,32 @@ function isDirectRouteLookup(query: RetrievalQuery): boolean {
   );
 }
 
-function isDirectSymbolDefinitionLookup(
+function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
+  return (
+    HISTORY_QUERY_RE.test(query.text) ||
+    SYMBOL_RELATION_RE.test(query.text) ||
+    ROUTE_TRAVERSAL_RE.test(query.text)
+  );
+}
+
+export function directDefinitionSymbol(
   query: RetrievalQuery,
   anchors: readonly SearchAnchor[],
-): boolean {
+): string | undefined {
   if (
     !DEFINITION_LOOKUP_RE.test(query.text) ||
     HISTORY_QUERY_RE.test(query.text) ||
     SYMBOL_RELATION_RE.test(query.text)
   ) {
-    return false;
+    return undefined;
   }
   const identifiers = anchors.filter(
     (anchor) => anchor.kind === "identifier" && anchor.weight >= 0.85,
   );
   const symbol = identifiers[0]?.term;
-  return identifiers.length === 1 && symbol !== undefined && !isTestIdentifier(query.text, symbol);
+  return identifiers.length === 1 && symbol !== undefined && !isTestIdentifier(query.text, symbol)
+    ? symbol
+    : undefined;
 }
 
 function composeRings(
@@ -240,11 +250,15 @@ function composeRings(
   budget: ExplorationBudget,
 ): readonly RetrievalRing[] {
   const rings: RetrievalRing[] = [buildRing("lexical", anchors, budget)];
-  const directLookup = isDirectRouteLookup(query) || isDirectSymbolDefinitionLookup(query, anchors);
+  const directLookup =
+    isDirectRouteLookup(query) || directDefinitionSymbol(query, anchors) !== undefined;
   if (!directLookup && (hasKind(anchors, "identifier") || hasKind(anchors, "path"))) {
     rings.push(buildRing("structural", anchors, budget));
   }
-  if (!directLookup && scope.relativePaths.length === 0) {
+  if (
+    !directLookup &&
+    (scope.relativePaths.length === 0 || requiresRelationshipOrHistoryRings(query))
+  ) {
     rings.push(buildRing("git-history", anchors, budget));
   }
   return rings;
@@ -289,6 +303,7 @@ function decideClarification(
   anchors: readonly SearchAnchor[],
   scope: SelectedScope,
   intent: RetrievalIntent,
+  query: RetrievalQuery,
 ): ClarificationDecision {
   if (anchors.length === 0) {
     return {
@@ -312,6 +327,9 @@ function decideClarification(
     };
   }
   if (scope.relativePaths.length === 0 && anchors.length < 2) {
+    if (scope.explicitConnection === true && directDefinitionSymbol(query, anchors) !== undefined) {
+      return { state: "ready", clarification: undefined };
+    }
     return {
       state: "clarification-needed",
       clarification: buildClarification("scope-empty", SCOPE_EMPTY_QUESTIONS, 2),
@@ -407,7 +425,12 @@ export function createExplorationPlan(
     text: input.query.text,
     maxAnchors: resolved.maxAnchors,
   });
-  const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
+  const decision = decideClarification(
+    extraction.anchors,
+    input.scope,
+    classification.intent,
+    input.query,
+  );
   const rings =
     decision.state === "ready"
       ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget)

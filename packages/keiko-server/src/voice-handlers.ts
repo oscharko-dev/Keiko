@@ -20,7 +20,6 @@ import {
   requestTextToSpeech,
   requestTextToSpeechStream,
   resolveVoiceCapability,
-  selectSpeechOutputModel,
   selectSpeechToTextModel,
   selectVoicePersonaVoice,
   VOICE_PERSONAS,
@@ -570,22 +569,20 @@ function validateSpeakRequest(
 
 interface SpeechTarget {
   readonly modelId: string;
-  readonly voiceId?: string;
+  readonly voiceId: string;
 }
 
 // Resolves the model + provider voice id to synthesize with (Issue #1557 seam, ADR-0094 D6). A
-// requested persona is honored when mapped; otherwise the first persona-mapped provider in canonical
-// order is used; otherwise the cheapest speech-output model with the adapter's default voice. The
-// resolved voice id stays server-side and never reaches a response.
+// requested persona must resolve exactly; without a selection, the first explicitly mapped voice in
+// canonical persona order is used. A speech-output capability without an explicit provider voice is
+// unavailable rather than inheriting a provider-specific default. The resolved voice id stays
+// server-side and never reaches a response.
 function resolveSpeechTarget(
   config: GatewayConfig,
   persona: VoicePersona | undefined,
 ): SpeechTarget | undefined {
   if (persona !== undefined) {
-    const mapped = selectVoicePersonaVoice(config, persona);
-    if (mapped !== undefined) {
-      return mapped;
-    }
+    return selectVoicePersonaVoice(config, persona);
   }
   for (const candidate of VOICE_PERSONAS) {
     const mapped = selectVoicePersonaVoice(config, candidate);
@@ -593,8 +590,7 @@ function resolveSpeechTarget(
       return mapped;
     }
   }
-  const modelId = selectSpeechOutputModel(config);
-  return modelId === undefined ? undefined : { modelId };
+  return undefined;
 }
 
 // The audio container requested for interactive assistant speech. Opus (audio/ogg) is browser-playable
@@ -637,7 +633,7 @@ function buildTtsRequest(
     ...(capability?.supportsSpeechSynthesisInstructions === true
       ? { instructions: KEIKO_SPEECH_INSTRUCTIONS }
       : {}),
-    ...(target.voiceId !== undefined ? { voice: target.voiceId } : {}),
+    voice: target.voiceId,
     ...(egress !== undefined ? { egress } : {}),
     timeoutMs: provider.timeoutMs,
   };

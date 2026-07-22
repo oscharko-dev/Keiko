@@ -29,6 +29,11 @@ its companion blueprint. ADR-0045 performs the dependency review and records the
 out-of-process LSP decision, the staged rollout order, and the per-language security model; it relaxes
 nothing in this ADR.
 
+Amended 2026-07-22 during the independent PR #2665 audit: D3.7 now records the current root
+DOMPurify override at `3.4.12` and the governed assistance surfaces added since the original
+closed-sink review. This is a patched-version and assurance maintenance update; the Monaco pin,
+browser-tier boundary, plain-text/inert projections, and durable-upgrade requirement are unchanged.
+
 > **Authority semantics superseded in part by
 > [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).** The original blanket
 > patch-review wording below is historical. A human now establishes bounded authority by selecting
@@ -41,7 +46,7 @@ nothing in this ADR.
 
 ## Version
 
-1.1
+1.2
 
 ## Context
 
@@ -137,14 +142,17 @@ base branch):
 7. **Monaco DOMPurify supply-chain control (#1196 host mount).** Mounting Monaco in `keiko-ui` brings
    `monaco-editor`'s declared `dompurify@3.2.7` dependency into keiko-ui's audit closure, tripping the
    `ui` job's `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui`. The control is a
-   root `overrides: { dompurify: "3.4.11" }` pinning the patched DOMPurify line (the advisories affect
+   root `overrides: { dompurify: "3.4.12" }` pinning the patched DOMPurify line (the advisories affect
    `<= 3.4.10`); `monaco-editor` stays at the `0.55.1` pin and the `npm audit fix` downgrade to `0.53.0`
-   is not taken. The override does not replace Monaco's vendored DOMPurify copy, but the mounted editor
-   disables every Markdown-rendering sink in `buildEditorOptions` (hover, suggest docs, parameter hints,
-   inline suggest, code lens, lightbulb, inlay hints, links) and wires no completion/diagnostics
-   provider, so the vendored sanitiser never executes and runtime exposure is nil. The durable fix
-   remains upgrading Monaco to a release vendoring DOMPurify `>= 3.3.2` once one exists. Detailed in the
-   `@oscharko-dev/keiko-editor` README supply-chain note.
+   is not taken. The override does not replace Monaco's vendored DOMPurify copy. Governed providers
+   may explicitly enable hover, completion, parameter hints, code-action lightbulbs, and inlay hints;
+   their bridges enumerate plain-string fields and never forward `IMarkdownString` or trusted-Markdown
+   objects. Hover is the sole Markdown renderer and wraps server text in an inert code fence longer
+   than every content backtick run. Suggest documentation, links, code lens, the inline-suggest
+   toolbar, and syntax-highlighted ghost text remain disabled. Runtime guards discard non-string
+   completion/signature metadata even if an untyped host violates the TypeScript contract. The
+   durable fix remains upgrading Monaco to a release vendoring DOMPurify `>= 3.3.2` once one exists.
+   Detailed in the `@oscharko-dev/keiko-editor` README supply-chain note.
 
 ### D4 — Server-side deterministic language service is the single source of truth
 

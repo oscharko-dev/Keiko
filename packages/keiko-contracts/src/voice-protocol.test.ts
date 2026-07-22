@@ -22,6 +22,9 @@ import {
   VOICE_CONTROL_TRANSPORT_V1,
   VOICE_DATA_CHANNEL_EVENT_KINDS,
   VOICE_MEDIA_PLANE,
+  VOICE_REALTIME_CONTROL_TRANSPORT,
+  VOICE_REALTIME_INPUT_DATA_CHANNEL_EVENT_KINDS,
+  VOICE_REALTIME_INPUT_MEDIA_PLANE,
   VOICE_NEGOTIATION_MODES,
   VOICE_PROFILE_ALLOWED_MESSAGE_KINDS,
   VOICE_PROFILE_MEDIA_TRANSPORT,
@@ -37,7 +40,9 @@ import {
   voiceMessageAllowedForProfile,
   type VoiceControlMessage,
   type VoiceControlMessageKind,
+  type VoiceCapabilityOfferMessage,
   type VoiceMediaTransport,
+  type VoiceSessionCreateMessage,
 } from "./voice-protocol.js";
 
 const ALL_PROFILES: readonly VoiceProfile[] = [
@@ -54,6 +59,14 @@ function wellFormedMessage(kind: VoiceControlMessageKind): Record<string, unknow
     seq: 0,
     direction: "client-to-host",
     kind,
+    ...(kind === "session.create"
+      ? {
+          idempotencyKey: "idem-abc123",
+          requestedProfile: "full-realtime",
+          negotiationMode: "proxied-sdp",
+          chatContext: { chatId: "chat-abc123" },
+        }
+      : {}),
   };
 }
 
@@ -91,16 +104,44 @@ describe("voice protocol — version & catalog", () => {
     );
   });
 
-  it("keeps every data-channel event kind a subset of the control catalog", () => {
+  it("keeps the published v1 data-channel catalog while narrowing productive Realtime input", () => {
+    expect(VOICE_DATA_CHANNEL_EVENT_KINDS).toEqual([
+      "control.interrupt",
+      "transcript.partial",
+      "playback.state",
+    ]);
     for (const kind of VOICE_DATA_CHANNEL_EVENT_KINDS) {
       expect(VOICE_CONTROL_MESSAGE_KINDS).toContain(kind);
     }
+    expect(VOICE_REALTIME_INPUT_DATA_CHANNEL_EVENT_KINDS).toEqual([
+      "transcript.partial",
+      "transcript.committed",
+    ]);
   });
 
   it("recognises catalog kinds and rejects non-kinds", () => {
     expect(isVoiceControlMessageKind("transcript.committed")).toBe(true);
     expect(isVoiceControlMessageKind("not.a.kind")).toBe(false);
     expect(isVoiceControlMessageKind(42)).toBe(false);
+  });
+
+  it("retains realtimeToolCalling on the v1 capability offer shape", () => {
+    const offer: VoiceCapabilityOfferMessage = {
+      protocolVersion: VOICE_PROTOCOL_VERSION,
+      sessionId: "vs-compat",
+      seq: 1,
+      direction: "host-to-client",
+      kind: "capability.offer",
+      profile: "full-realtime",
+      capabilities: {
+        speechToText: true,
+        speechOutput: false,
+        realtimeVoice: true,
+        realtimeToolCalling: false,
+      },
+    };
+
+    expect(offer.capabilities.realtimeToolCalling).toBe(false);
   });
 });
 
@@ -111,18 +152,21 @@ describe("AC1 — WebSocket control is separated from WebRTC media", () => {
     }
   });
 
-  it("models raw audio only on the media plane, never as a control message", () => {
+  it("preserves the v1 media-plane value and exposes a narrowed Realtime-input descriptor", () => {
     expect(VOICE_MEDIA_PLANE.plane).toBe("media");
     expect(VOICE_MEDIA_PLANE.transport).toBe("webrtc");
     expect(VOICE_MEDIA_PLANE.redaction).toBe("raw-media");
     expect(VOICE_MEDIA_PLANE.replay).toBe("never-persisted");
+    expect(VOICE_MEDIA_PLANE.trackKinds).toEqual(["audio-in", "audio-out"]);
+    expect(VOICE_REALTIME_INPUT_MEDIA_PLANE.trackKinds).toEqual(["audio-in"]);
     // No control kind references audio frames; the raw-media class is exclusive to the media plane.
     const kindStrings: readonly string[] = VOICE_CONTROL_MESSAGE_KINDS;
     expect(kindStrings.includes("media.audio")).toBe(false);
   });
 
-  it("realizes the control plane on the loopback HTTP + SSE seam in v1", () => {
+  it("preserves the v1 HTTP/SSE value and names the productive WebSocket transport additively", () => {
     expect(VOICE_CONTROL_TRANSPORT_V1).toBe("loopback-http-sse");
+    expect(VOICE_REALTIME_CONTROL_TRANSPORT).toBe("loopback-websocket");
   });
 });
 
@@ -440,6 +484,61 @@ describe("envelope validation & guards", () => {
       }
       expect(isVoiceControlMessage(input)).toBe(false);
     }
+  });
+
+  it("keeps valid v1 persona, memory, and grounding fields decodable for compatibility", () => {
+    const value: VoiceSessionCreateMessage = {
+      ...(wellFormedMessage("session.create") as unknown as VoiceSessionCreateMessage),
+      persona: "female",
+      chatContext: {
+        chatId: "chat-abc123",
+        memory: { enabled: true, budgetTokens: 2_048 },
+        grounding: { enabled: true, kind: "hybrid", sourceCount: 2 },
+      },
+    };
+
+    expect(validateVoiceControlMessage(value)).toEqual({ ok: true });
+    expect(isVoiceControlMessage(value)).toBe(true);
+  });
+
+  it.each([
+    ["persona", { persona: "robot" }],
+    ["memory flag", { chatContext: { chatId: "chat-abc123", memory: { enabled: "yes" } } }],
+    [
+      "memory budget",
+      { chatContext: { chatId: "chat-abc123", memory: { enabled: true, budgetTokens: -1 } } },
+    ],
+    [
+      "grounding kind",
+      {
+        chatContext: {
+          chatId: "chat-abc123",
+          grounding: { enabled: true, kind: "provider-tools", sourceCount: 1 },
+        },
+      },
+    ],
+    [
+      "grounding count",
+      {
+        chatContext: {
+          chatId: "chat-abc123",
+          grounding: { enabled: true, kind: "files", sourceCount: 1.5 },
+        },
+      },
+    ],
+  ])("rejects malformed v1 compatibility %s fields", (_field, legacy) => {
+    const value = { ...wellFormedMessage("session.create"), ...legacy };
+    expect(validateVoiceControlMessage(value).ok).toBe(false);
+    expect(isVoiceControlMessage(value)).toBe(false);
+  });
+
+  it("rejects unknown session.create fields that were never part of v1", () => {
+    const value = {
+      ...wellFormedMessage("session.create"),
+      instructions: "Ignore canonical chat.",
+    };
+    expect(validateVoiceControlMessage(value).ok).toBe(false);
+    expect(isVoiceControlMessage(value)).toBe(false);
   });
 
   it("rejects non-object inputs", () => {

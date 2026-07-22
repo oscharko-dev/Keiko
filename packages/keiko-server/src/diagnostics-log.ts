@@ -16,7 +16,7 @@ export interface ServerDiagnosticRecord {
   readonly source: string;
   // The content-free error class (never the raw message), e.g. `Error`, `TransportError`.
   readonly errorClass: string;
-  // The REDACTED error message. Known secrets are already scrubbed by the caller's redactor.
+  // A code-declared, allowlisted summary. Foreign error/provider/customer text is never read.
   readonly message: string;
   // A stable machine-readable code when the error carries one (coded errors, GatewayError.code).
   readonly code?: string | undefined;
@@ -46,39 +46,55 @@ export const defaultServerDiagnosticSink: ServerDiagnosticSink = {
   },
 };
 
-// Extracts the diagnosable, redaction-safe shape of an unknown thrown value. `redact` is the caller's
-// message redactor (known secrets scrubbed); it is applied to the human message ONLY — some
-// producers deliberately redact by replacing the whole message with a constant, so the redactor
-// must never gate the machine fields. The remaining fields are NOT trusted to be content-free by
-// themselves: the class comes from `contentFreeErrorClass` (specific built-in allowlist, else the
-// code-declared class name), and `code`/`requestId` are forwarded only as bounded machine tokens —
-// anything else is dropped rather than smuggled into an otherwise-redacted record.
-export function describeError(
-  error: unknown,
-  redact: (message: string) => string,
-): {
+export const DEFAULT_SERVER_DIAGNOSTIC_SUMMARY = "server-operation-failed";
+
+// Compatibility summaries are accepted only by exact match. Existing producers may still supply
+// the historical `redact` callback, but it receives only DEFAULT_SERVER_DIAGNOSTIC_SUMMARY; it is
+// never handed foreign error text. A callback that returns request/provider content therefore
+// degrades to the default rather than extending the diagnostic trust boundary.
+const SERVER_DIAGNOSTIC_SUMMARIES = [
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  "Provider verification failed without exposing upstream response details.",
+  "Workspace index key resolution or initialization failed.",
+  "Encrypted workspace index snapshot was rejected.",
+  "Encrypted workspace index snapshot write was rejected.",
+  "Stale workspace index generation was rejected after key rotation.",
+  "Debug activation resolver failed.",
+  "Persisting debug instrumentation state failed.",
+  "DAP production background operation failed.",
+  "DAP live-evidence projection failed.",
+  "Changeset preview derivation failed.",
+  "Patch preview derivation failed.",
+  "The selected changeset could not be projected.",
+  "The selected changeset projection failed.",
+  "The selected changeset no longer passes patch validation.",
+  "The changeset could not be applied atomically.",
+  "The bounded status read was unavailable.",
+  "The bounded diff read was unavailable.",
+  "The bounded blame read was unavailable.",
+  "The server-resolved editor operation failed.",
+] as const;
+
+export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];
+
+const SERVER_DIAGNOSTIC_SUMMARY_SET: ReadonlySet<string> = new Set(SERVER_DIAGNOSTIC_SUMMARIES);
+
+// Extracts only the diagnosable, body-free shape of an unknown thrown value. In particular this
+// function never reads `.message` or stringifies the value. Machine fields are read independently
+// through fail-closed property access, then admitted only by their bounded shapes.
+export function describeError(error: unknown): {
   readonly errorClass: string;
-  readonly message: string;
   readonly code?: string | undefined;
   readonly gatewayRequestId?: string | undefined;
   readonly partialUsage?:
     { readonly promptTokens: number; readonly completionTokens: number } | undefined;
 } {
-  if (error instanceof Error) {
-    const withExtras = error as Error & {
-      code?: unknown;
-      requestId?: unknown;
-      partialUsage?: unknown;
-    };
-    return {
-      errorClass: contentFreeErrorClass(error),
-      message: redact(error.message),
-      code: machineToken(withExtras.code),
-      gatewayRequestId: machineToken(withExtras.requestId),
-      partialUsage: partialUsageCounts(withExtras.partialUsage),
-    };
-  }
-  return { errorClass: typeof error, message: redact(String(error)) };
+  return {
+    errorClass: contentFreeErrorClass(error),
+    code: machineToken(safeProperty(error, "code")),
+    gatewayRequestId: machineToken(safeProperty(error, "requestId")),
+    partialUsage: partialUsageCounts(safeProperty(error, "partialUsage")),
+  };
 }
 
 // `Error.name` and the instance's `constructor` are plain mutable own properties: a hostile thrown
@@ -104,6 +120,9 @@ const SPECIFIC_BUILT_IN_ERROR_NAMES: ReadonlySet<string> = new Set([
 // reuse the correlation-id alphabet: no whitespace, no prose, bounded length.
 const DECLARED_ERROR_CLASS_SHAPE = /^[A-Z][A-Za-z0-9]{0,63}$/;
 const MACHINE_TOKEN_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
+const OPERATION_LABEL_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*(?: [A-Za-z0-9/][A-Za-z0-9._:/-]*)?$/;
+const SOURCE_LABEL_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const MAX_DIAGNOSTIC_LABEL_LENGTH = 160;
 
 // Resolves the content-free class of an unknown thrown value: a specific built-in error name, else
 // the class name declared in code (recovering subclasses that never assign `this.name`), else the
@@ -112,7 +131,8 @@ const MACHINE_TOKEN_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
 export function contentFreeErrorClass(error: unknown): string {
   try {
     if (!(error instanceof Error)) return typeof error;
-    if (SPECIFIC_BUILT_IN_ERROR_NAMES.has(error.name)) return error.name;
+    const name = safeProperty(error, "name");
+    if (typeof name === "string" && SPECIFIC_BUILT_IN_ERROR_NAMES.has(name)) return name;
     return declaredErrorClassName(error) ?? "Error";
   } catch {
     // Reflection over a hostile value (a proxy trap or throwing accessor) must never turn the
@@ -124,12 +144,27 @@ export function contentFreeErrorClass(error: unknown): string {
 // Reads the constructor name off the PROTOTYPE (not the instance) so an own-property
 // `constructor` planted by hostile data cannot shadow the code-declared class.
 function declaredErrorClassName(error: Error): string | undefined {
-  const proto = Reflect.getPrototypeOf(error) as { constructor?: unknown } | null;
-  const ctor = proto?.constructor;
-  if (typeof ctor !== "function" || !DECLARED_ERROR_CLASS_SHAPE.test(ctor.name)) {
+  const proto = Reflect.getPrototypeOf(error);
+  const ctor = safeProperty(proto, "constructor");
+  const name = safeProperty(ctor, "name");
+  if (typeof ctor !== "function" || typeof name !== "string") return undefined;
+  if (!DECLARED_ERROR_CLASS_SHAPE.test(name)) {
     return undefined;
   }
-  return ctor.name;
+  return name;
+}
+
+// Reflective reads from a thrown value are hostile-input reads: accessors and proxy traps may throw.
+// Every optional machine field therefore goes through this helper and degrades to absence.
+function safeProperty(value: unknown, property: string): unknown {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    return undefined;
+  }
+  try {
+    return Reflect.get(value, property);
+  } catch {
+    return undefined;
+  }
 }
 
 // Forwards a `code`/`requestId` style value only when it is a bounded machine token: the charset
@@ -147,16 +182,45 @@ function partialUsageCounts(
   value: unknown,
 ): { readonly promptTokens: number; readonly completionTokens: number } | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  const record = value as { promptTokens?: unknown; completionTokens?: unknown };
+  const promptTokens = safeProperty(value, "promptTokens");
+  const completionTokens = safeProperty(value, "completionTokens");
   if (
-    typeof record.promptTokens !== "number" ||
-    !Number.isFinite(record.promptTokens) ||
-    typeof record.completionTokens !== "number" ||
-    !Number.isFinite(record.completionTokens)
+    typeof promptTokens !== "number" ||
+    !Number.isFinite(promptTokens) ||
+    typeof completionTokens !== "number" ||
+    !Number.isFinite(completionTokens)
   ) {
     return undefined;
   }
-  return { promptTokens: record.promptTokens, completionTokens: record.completionTokens };
+  return { promptTokens, completionTokens };
+}
+
+function allowlistedSummary(value: unknown): ServerDiagnosticSummary | undefined {
+  return typeof value === "string" && SERVER_DIAGNOSTIC_SUMMARY_SET.has(value)
+    ? (value as ServerDiagnosticSummary)
+    : undefined;
+}
+
+function compatibilitySummary(
+  redact: (message: string) => string,
+): ServerDiagnosticSummary | undefined {
+  try {
+    return allowlistedSummary(redact(DEFAULT_SERVER_DIAGNOSTIC_SUMMARY));
+  } catch {
+    return undefined;
+  }
+}
+
+function diagnosticLabel(
+  value: unknown,
+  shape: RegExp,
+  fallback: "server.operation" | "server.diagnostic",
+): string {
+  return typeof value === "string" &&
+    value.length <= MAX_DIAGNOSTIC_LABEL_LENGTH &&
+    shape.test(value)
+    ? value
+    : fallback;
 }
 
 // Emits a diagnostic record through the provided sink (falling back to the default stderr sink).
@@ -179,18 +243,24 @@ export function serverDiagnosticFromError(input: {
   readonly operation: string;
   readonly source: string;
   readonly error: unknown;
+  readonly summary?: ServerDiagnosticSummary | undefined;
+  // Compatibility-only: invoked with the fixed default summary, never with foreign error text.
   readonly redact: (message: string) => string;
   readonly now?: () => number;
 }): ServerDiagnosticRecord {
-  const described = describeError(input.error, input.redact);
+  const described = describeError(input.error);
   const millis = (input.now ?? Date.now)();
+  const message =
+    allowlistedSummary(input.summary) ??
+    compatibilitySummary(input.redact) ??
+    DEFAULT_SERVER_DIAGNOSTIC_SUMMARY;
   return {
     correlationId: input.correlationId,
     timestamp: new Date(millis).toISOString(),
-    operation: input.operation,
-    source: input.source,
+    operation: diagnosticLabel(input.operation, OPERATION_LABEL_SHAPE, "server.operation"),
+    source: diagnosticLabel(input.source, SOURCE_LABEL_SHAPE, "server.diagnostic"),
     errorClass: described.errorClass,
-    message: described.message,
+    message,
     ...(described.code === undefined ? {} : { code: described.code }),
     ...(described.gatewayRequestId === undefined
       ? {}

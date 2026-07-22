@@ -21,6 +21,26 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe("runMigrations", () => {
+  it("v13 adds content-free canonical turn identity, content digest, and uniqueness", () => {
+    const db = openMem();
+    runMigrations(db);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(13);
+    const columns = (
+      db.prepare("PRAGMA table_info(chat_messages)").all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(columns).toEqual(
+      expect.arrayContaining(["client_turn_id", "client_turn_state", "client_turn_content_digest"]),
+    );
+    const index = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type='index'" +
+          " AND name='uniq_chat_messages_client_turn_role'",
+      )
+      .get() as { sql: string };
+    expect(index.sql).toContain("chat_id, client_turn_id, role");
+    expect(index.sql).toContain("client_turn_id IS NOT NULL");
+  });
+
   it("v11 creates the singleton canonical memory autonomy policy", () => {
     const db = openMem();
     runMigrations(db);

@@ -1,15 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
-  DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
   DEFAULT_REALTIME_TURN_DETECTION,
   DEFAULT_REALTIME_VOICE,
-  isRealtimeVoice,
   MAX_SDP_BYTES,
   REALTIME_VOICES,
+  isRealtimeVoice,
   requestRealtimeNegotiation,
   resolveRealtimeVoice,
+  type RealtimeFunctionTool,
+  type RealtimeSessionToolChoice,
+  type RealtimeNegotiationRequest,
 } from "./realtime-voice-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 
@@ -19,6 +22,19 @@ const OFFER_SDP =
   "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
 const ANSWER_SDP =
   "v=0\r\no=- 2 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+const CONFIGURED_TRANSCRIPTION_MODEL = "configured-realtime-transcription";
+
+type TestNegotiationRequest = Omit<RealtimeNegotiationRequest, "transcriptionModel"> &
+  Partial<Pick<RealtimeNegotiationRequest, "transcriptionModel">>;
+
+function requestConfiguredRealtimeNegotiation(
+  request: TestNegotiationRequest,
+): ReturnType<typeof requestRealtimeNegotiation> {
+  return requestRealtimeNegotiation({
+    transcriptionModel: CONFIGURED_TRANSCRIPTION_MODEL,
+    ...request,
+  });
+}
 
 type NarrowFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -42,7 +58,57 @@ function bodyToText(init: RequestInit): string {
 }
 
 describe("requestRealtimeNegotiation", () => {
-  it("uses the GA unified multipart call so server-owned session context is applied atomically", async () => {
+  it("retains the published 0.2.15 compatibility symbols outside the productive session path", () => {
+    const legacyTool: RealtimeFunctionTool = {
+      type: "function",
+      name: "legacy_grounding",
+      parameters: {},
+    };
+    const legacyChoice: RealtimeSessionToolChoice = "none";
+
+    expect(DEFAULT_REALTIME_TRANSCRIPTION_MODEL).toBe("gpt-realtime-whisper");
+    expect(DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL).toBe("gpt-realtime-whisper");
+    expect(DEFAULT_REALTIME_VOICE).toBe("alloy");
+    expect(REALTIME_VOICES).toContain("alloy");
+    expect(DEFAULT_REALTIME_TURN_DETECTION).toEqual({
+      type: "server_vad",
+      threshold: 0.5,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 500,
+      interrupt_response: true,
+    });
+    expect(isRealtimeVoice("alloy")).toBe(true);
+    expect(resolveRealtimeVoice("unsupported")).toBe(DEFAULT_REALTIME_VOICE);
+    expect(legacyTool.name).toBe("legacy_grounding");
+    expect(legacyChoice).toBe("none");
+  });
+
+  it("keeps the published legacy request shape type-compatible but fails closed without an alias", async () => {
+    let networkCalls = 0;
+    const legacyRequest: RealtimeNegotiationRequest = {
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-realtime",
+      instructions: "legacy assistant instruction",
+      voiceId: "alloy",
+      tools: [{ type: "function", name: "legacy_grounding", parameters: {} }],
+      toolChoice: "auto",
+      disableAutomaticResponse: true,
+      offerSdp: OFFER_SDP,
+      fetchImpl: mockFetch(() => {
+        networkCalls += 1;
+        return sdp(ANSWER_SDP);
+      }),
+    };
+
+    await expect(requestRealtimeNegotiation(legacyRequest)).resolves.toEqual({
+      ok: false,
+      kind: "unsupported-model",
+    });
+    expect(networkCalls).toBe(0);
+  });
+
+  it("uses the GA unified multipart call with the media-only session applied atomically", async () => {
     let seenUrl = "";
     let seenMethod = "";
     let seenContentType = "";
@@ -58,11 +124,10 @@ describe("requestRealtimeNegotiation", () => {
       return sdp(ANSWER_SDP);
     });
 
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
-      instructions: "You are Keiko with the current chat and memory context.",
       offerSdp: OFFER_SDP,
       fetchImpl,
     });
@@ -78,7 +143,8 @@ describe("requestRealtimeNegotiation", () => {
     expect(multipart).toContain(OFFER_SDP);
     expect(multipart).toContain('name="session"');
     expect(multipart).toContain('"model":"keiko-realtime"');
-    expect(multipart).toContain("current chat and memory context");
+    expect(multipart).not.toContain("instructions");
+    expect(multipart).not.toContain("tool_choice");
   });
 
   it("supports a custom apiKeyHeaderName (Azure api-key) and url-encodes the model id", async () => {
@@ -89,7 +155,7 @@ describe("requestRealtimeNegotiation", () => {
       seenUrl = url;
       return sdp(ANSWER_SDP);
     });
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       apiKeyHeaderName: "api-key",
@@ -128,7 +194,7 @@ describe("requestRealtimeNegotiation", () => {
       return sdp(ANSWER_SDP);
     });
 
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       apiKeyHeaderName: "api-key",
@@ -158,7 +224,7 @@ describe("requestRealtimeNegotiation", () => {
     expect(seen[1]?.apiKey).toBeUndefined();
   });
 
-  it("applies grounded session config (instructions, voice, transcription, explicit server_vad) in the ephemeral body", async () => {
+  it("mints a media-only realtime session with transcription and response-disabled VAD", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {
       if (url.endsWith("/realtime/client_secrets")) {
@@ -171,14 +237,12 @@ describe("requestRealtimeNegotiation", () => {
       return sdp(ANSWER_SDP);
     });
 
-    await requestRealtimeNegotiation({
+    await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       apiKeyHeaderName: "api-key",
       realtimeAuthMode: "ephemeral-session",
       modelId: "keiko-realtime",
-      instructions: "You are Keiko.",
-      voiceId: "shimmer",
       transcriptionModel: "whisper-1",
       offerSdp: OFFER_SDP,
       fetchImpl,
@@ -191,13 +255,15 @@ describe("requestRealtimeNegotiation", () => {
         type: "realtime",
         model: "keiko-realtime",
         output_modalities: ["audio"],
-        instructions: "You are Keiko.",
         audio: {
           input: {
-            turn_detection: DEFAULT_REALTIME_TURN_DETECTION,
+            turn_detection: {
+              ...DEFAULT_REALTIME_TURN_DETECTION,
+              interrupt_response: false,
+              create_response: false,
+            },
             transcription: { model: "whisper-1" },
           },
-          output: { voice: "shimmer" },
         },
       },
     });
@@ -216,13 +282,12 @@ describe("requestRealtimeNegotiation", () => {
       return sdp(ANSWER_SDP);
     });
 
-    await requestRealtimeNegotiation({
+    await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       apiKeyHeaderName: "api-key",
       realtimeAuthMode: "ephemeral-session",
       modelId: "keiko-realtime",
-      instructions: "You are Keiko.",
       safetyIdentifier: "keiko-voice-abc123",
       offerSdp: OFFER_SDP,
       fetchImpl,
@@ -232,7 +297,7 @@ describe("requestRealtimeNegotiation", () => {
     expect(parsed.session.safety_identifier).toBe("keiko-voice-abc123");
   });
 
-  it("includes realtime function tools and tool_choice in the ephemeral session body", async () => {
+  it("drops legacy assistant instructions, voice, and tools even from an untyped caller", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {
       if (url.endsWith("/realtime/client_secrets")) {
@@ -245,46 +310,34 @@ describe("requestRealtimeNegotiation", () => {
       return sdp(ANSWER_SDP);
     });
 
-    await requestRealtimeNegotiation({
+    const legacyRequest = {
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       realtimeAuthMode: "ephemeral-session",
       modelId: "keiko-realtime",
       offerSdp: OFFER_SDP,
+      instructions: "legacy provider assistant instruction",
+      voiceId: "shimmer",
       tools: [
         {
           type: "function",
           name: "search_keiko_grounding",
-          description: "Search connected Keiko grounding sources.",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: { query: { type: "string" } },
-            required: ["query"],
-          },
+          parameters: { type: "object" },
         },
       ],
-      toolChoice: { type: "function", function: { name: "search_keiko_grounding" } },
+      toolChoice: "auto",
       fetchImpl,
-    });
+    } as TestNegotiationRequest;
+    await requestConfiguredRealtimeNegotiation(legacyRequest);
 
-    expect(JSON.parse(clientSecretBody)).toMatchObject({
-      session: {
-        type: "realtime",
-        model: "keiko-realtime",
-        tools: [
-          {
-            type: "function",
-            name: "search_keiko_grounding",
-            description: "Search connected Keiko grounding sources.",
-          },
-        ],
-        tool_choice: { type: "function", function: { name: "search_keiko_grounding" } },
-      },
-    });
+    const session = (JSON.parse(clientSecretBody) as { session: Record<string, unknown> }).session;
+    expect(session.instructions).toBeUndefined();
+    expect(session.tools).toBeUndefined();
+    expect(session.tool_choice).toBeUndefined();
+    expect((session.audio as { output?: unknown }).output).toBeUndefined();
   });
 
-  it("uses fail-safe input transcription and explicit VAD when optional session fields are not supplied", async () => {
+  it("uses configured input transcription and explicit VAD when optional fields are not supplied", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {
       if (url.endsWith("/realtime/client_secrets")) {
@@ -297,7 +350,7 @@ describe("requestRealtimeNegotiation", () => {
       return sdp(ANSWER_SDP);
     });
 
-    await requestRealtimeNegotiation({
+    await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       apiKeyHeaderName: "api-key",
@@ -316,9 +369,13 @@ describe("requestRealtimeNegotiation", () => {
     expect(parsed.session.instructions).toBeUndefined();
     expect(parsed.session.audio.output).toBeUndefined();
     expect(parsed.session.audio.input.transcription).toEqual({
-      model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+      model: CONFIGURED_TRANSCRIPTION_MODEL,
     });
-    expect(parsed.session.audio.input.turn_detection).toEqual(DEFAULT_REALTIME_TURN_DETECTION);
+    expect(parsed.session.audio.input.turn_detection).toEqual({
+      ...DEFAULT_REALTIME_TURN_DETECTION,
+      interrupt_response: false,
+      create_response: false,
+    });
   });
 
   it("builds transcription-only ephemeral sessions for live dictation", async () => {
@@ -334,7 +391,7 @@ describe("requestRealtimeNegotiation", () => {
       return sdp(ANSWER_SDP);
     });
 
-    await requestRealtimeNegotiation({
+    await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       realtimeAuthMode: "ephemeral-session",
@@ -342,15 +399,6 @@ describe("requestRealtimeNegotiation", () => {
       sessionType: "transcription",
       transcriptionLanguage: "en",
       offerSdp: OFFER_SDP,
-      instructions: "must not be forwarded",
-      voiceId: "shimmer",
-      tools: [
-        {
-          type: "function",
-          name: "search_keiko_grounding",
-          parameters: { type: "object" },
-        },
-      ],
       safetyIdentifier: "must-not-be-forwarded",
       fetchImpl,
     });
@@ -373,7 +421,7 @@ describe("requestRealtimeNegotiation", () => {
         audio: {
           input: {
             transcription: {
-              model: DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+              model: CONFIGURED_TRANSCRIPTION_MODEL,
               language: "en",
               delay: DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
             },
@@ -388,7 +436,7 @@ describe("requestRealtimeNegotiation", () => {
     expect(parsed.session.safety_identifier).toBeUndefined();
   });
 
-  it("can disable automatic server-VAD responses while keeping transcription enabled", async () => {
+  it("always disables provider-native responses despite hostile turn-detection overrides", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {
       if (url.endsWith("/realtime/client_secrets")) {
@@ -401,13 +449,17 @@ describe("requestRealtimeNegotiation", () => {
       return sdp(ANSWER_SDP);
     });
 
-    await requestRealtimeNegotiation({
+    await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       realtimeAuthMode: "ephemeral-session",
       modelId: "keiko-realtime",
       offerSdp: OFFER_SDP,
-      disableAutomaticResponse: true,
+      turnDetection: {
+        ...DEFAULT_REALTIME_TURN_DETECTION,
+        interrupt_response: true,
+        create_response: true,
+      },
       fetchImpl,
     });
 
@@ -415,30 +467,31 @@ describe("requestRealtimeNegotiation", () => {
       session: { audio: { input: Record<string, unknown> } };
     };
     expect(parsed.session.audio.input.transcription).toEqual({
-      model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+      model: CONFIGURED_TRANSCRIPTION_MODEL,
     });
     expect(parsed.session.audio.input.turn_detection).toEqual({
       ...DEFAULT_REALTIME_TURN_DETECTION,
+      interrupt_response: false,
       create_response: false,
     });
   });
 
-  describe("resolveRealtimeVoice (guard against TTS-only voice ids)", () => {
-    it("passes through realtime-valid voices", () => {
-      for (const voice of REALTIME_VOICES) {
-        expect(isRealtimeVoice(voice)).toBe(true);
-        expect(resolveRealtimeVoice(voice)).toBe(voice);
-      }
+  it("fails closed before network access when the transcription alias is blank", async () => {
+    let called = false;
+    const outcome = await requestConfiguredRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-realtime",
+      transcriptionModel: "   ",
+      offerSdp: OFFER_SDP,
+      fetchImpl: mockFetch(() => {
+        called = true;
+        return sdp(ANSWER_SDP);
+      }),
     });
 
-    it("falls back to the default for TTS-only or unknown voices", () => {
-      // 'nova'/'onyx' are valid TTS voices but rejected by the realtime model (live: HTTP 400).
-      expect(isRealtimeVoice("nova")).toBe(false);
-      expect(resolveRealtimeVoice("nova")).toBe(DEFAULT_REALTIME_VOICE);
-      expect(resolveRealtimeVoice("onyx")).toBe(DEFAULT_REALTIME_VOICE);
-      expect(resolveRealtimeVoice(undefined)).toBe(DEFAULT_REALTIME_VOICE);
-      expect(resolveRealtimeVoice("")).toBe(DEFAULT_REALTIME_VOICE);
-    });
+    expect(outcome).toEqual({ ok: false, kind: "unsupported-model" });
+    expect(called).toBe(false);
   });
 
   it("appends /realtime/calls without doubling a trailing slash on the endpoint", async () => {
@@ -447,7 +500,7 @@ describe("requestRealtimeNegotiation", () => {
       seenUrl = url;
       return sdp(ANSWER_SDP);
     });
-    await requestRealtimeNegotiation({
+    await requestConfiguredRealtimeNegotiation({
       endpoint: "https://realtime.example.invalid/v1/",
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -458,7 +511,7 @@ describe("requestRealtimeNegotiation", () => {
   });
 
   it("rejects an answer that is not a well-formed SDP (no v= line) as invalid-response", async () => {
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -469,7 +522,7 @@ describe("requestRealtimeNegotiation", () => {
   });
 
   it("rejects an empty answer body as invalid-response", async () => {
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -481,7 +534,7 @@ describe("requestRealtimeNegotiation", () => {
 
   it("rejects an answer larger than MAX_SDP_BYTES as invalid-response (unbounded-body defense)", async () => {
     const huge = "v=0\r\n" + "a=".repeat(MAX_SDP_BYTES);
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -501,7 +554,7 @@ describe("requestRealtimeNegotiation", () => {
     [422, "negotiation-failed"],
     [500, "transport"],
   ])("maps HTTP %i to %s", async (status, kind) => {
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -512,7 +565,7 @@ describe("requestRealtimeNegotiation", () => {
   });
 
   it("maps a transport throw to transport", async () => {
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -531,7 +584,7 @@ describe("requestRealtimeNegotiation", () => {
     ["PROXY_BLOCKED_BY_POLICY", "proxy-blocked-by-policy"],
     ["TLS_CA_FAILURE", "tls-ca-failure"],
   ] as const)("maps egress error %s to %s", async (code, kind) => {
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -544,7 +597,7 @@ describe("requestRealtimeNegotiation", () => {
   });
 
   it("maps a thrown TimeoutError to timeout and a caller-aborted signal to cancelled", async () => {
-    const timeout = await requestRealtimeNegotiation({
+    const timeout = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -557,7 +610,7 @@ describe("requestRealtimeNegotiation", () => {
 
     const controller = new AbortController();
     controller.abort();
-    const cancelled = await requestRealtimeNegotiation({
+    const cancelled = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
@@ -571,22 +624,26 @@ describe("requestRealtimeNegotiation", () => {
   });
 
   it("maps a fired internal timeout signal to timeout (timeoutSignal.aborted branch)", async () => {
-    const outcome = await requestRealtimeNegotiation({
-      endpoint: ENDPOINT,
-      apiKey: SECRET_API_KEY,
-      modelId: "keiko-realtime",
-      offerSdp: OFFER_SDP,
-      timeoutMs: 1,
-      fetchImpl: mockFetch(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        throw new DOMException("aborted", "AbortError");
-      }),
-    });
-    expect(outcome).toEqual({ ok: false, kind: "timeout" });
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
+    try {
+      const outcome = await requestConfiguredRealtimeNegotiation({
+        endpoint: ENDPOINT,
+        apiKey: SECRET_API_KEY,
+        modelId: "keiko-realtime",
+        offerSdp: OFFER_SDP,
+        timeoutMs: 1,
+        fetchImpl: mockFetch(() => {
+          throw new DOMException("aborted", "AbortError");
+        }),
+      });
+      expect(outcome).toEqual({ ok: false, kind: "timeout" });
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it("never leaks the provider URL, offer SDP, or credential into the outcome on failure", async () => {
-    const outcome = await requestRealtimeNegotiation({
+    const outcome = await requestConfiguredRealtimeNegotiation({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, hkdfSync, randomUUID } from "node:crypto";
 import { constants as fsConstants, lstatSync, realpathSync } from "node:fs";
 import {
   chmod,
@@ -8,8 +8,6 @@ import {
   open,
   readdir,
   rename,
-  rm,
-  stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -23,6 +21,13 @@ import type { WorkspaceFs, WorkspaceStat } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { cachedContentScores } from "./repoSearchCachedLexical.js";
+import { stripTestIdentifierSuffix } from "./repoSearchIdentifier.js";
+import { definitionSymbolsInStructuralLine } from "./repoSearchMatchers.js";
+import {
+  REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES,
+  repositoryRouteDeclarationMarkers,
+} from "./repoSearchRoutes.js";
+import { repositorySourceLines } from "./repoSearchSourceClassification.js";
 import {
   orderCandidatesForSearch,
   type SearchDiagnostics,
@@ -34,7 +39,7 @@ import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
-export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 2;
+export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 4;
 
 export type WorkspaceIndexRecordKind = "text" | "binary" | "size-exceeded";
 
@@ -58,6 +63,7 @@ export interface WorkspaceIndexLexicalLine {
   readonly startLine: number;
   readonly endLine: number;
   readonly termHashes: readonly string[];
+  readonly definitionTermHashes?: readonly string[] | undefined;
 }
 
 export interface WorkspaceIndexLexicalRecord {
@@ -117,6 +123,13 @@ export interface FileWorkspaceIndexStoreOptions {
   readonly maxSnapshotBytes?: number | undefined;
   readonly maxSnapshots?: number | undefined;
   readonly maxSnapshotEntries?: number | undefined;
+  /** Server-owned key-generation fence. Omit only for generation-isolated low-level stores. */
+  readonly isGenerationActive?: (() => boolean) | undefined;
+  readonly onLoadFailure?:
+    | ((failure: { readonly reason: "authentication-or-corruption" | "invalid-snapshot" }) => void)
+    | undefined;
+  readonly onSaveFailure?:
+    ((failure: { readonly reason: "write-or-cleanup-failure" }) => void) | undefined;
 }
 
 export interface WorkspaceIndex {
@@ -196,11 +209,20 @@ interface PreparedEntryOutcomeSkipped {
 
 type PreparedEntryOutcome = PreparedEntryOutcomeRetained | PreparedEntryOutcomeSkipped;
 
-const FILE_WORKSPACE_INDEX_PREFIX = "workspace-index-";
+const FILE_WORKSPACE_INDEX_PREFIX = "workspace-index-v2-";
 const FILE_WORKSPACE_INDEX_EXTENSION = ".json";
 const FILE_WORKSPACE_INDEX_SEGMENT_RE =
-  /^workspace-index-[0-9a-f]{64}\.json(?:\.[0-9a-f]{16}\.tmp)?$/u;
+  /^workspace-index-v2-([0-9a-f]{64})-[0-9a-f]{64}\.json(?:\.[0-9a-f]{16}\.tmp)?$/u;
+const LEGACY_FILE_WORKSPACE_INDEX_SEGMENT_RE =
+  /^workspace-index-(?:[0-9a-f]{64}-)?[0-9a-f]{64}\.json(?:\.[0-9a-f]{16}\.tmp)?$/u;
 const RUNTIME_DIR_MARKER_SEGMENT = "workspace-index-runtime-id";
+const FILE_WORKSPACE_INDEX_ENVELOPE_VERSION = 2;
+const FILE_WORKSPACE_INDEX_LOCATOR_SALT = "keiko-workspace-index:file-locator-salt:v2";
+const FILE_WORKSPACE_INDEX_LOCATOR_INFO = "keiko-workspace-index:scope-locator:v2";
+const FILE_WORKSPACE_INDEX_GENERATION_INFO = "keiko-workspace-index:key-generation:v2";
+const FILE_WORKSPACE_INDEX_TEMP_MAX_AGE_MS = 15 * 60 * 1000;
+const FILE_WORKSPACE_INDEX_TEMP_PRESSURE_MIN_AGE_MS = 30 * 1000;
+const FILE_WORKSPACE_INDEX_MAX_TEMP_FILES = 32;
 const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOTS = 128;
 const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES = 16_384;
@@ -309,10 +331,18 @@ function normalizeLexicalLine(
   const termHashes = [
     ...new Set(line.termHashes.filter((term) => typeof term === "string" && term.length > 0)),
   ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const definitionTermHashes = [
+    ...new Set(
+      (Array.isArray(line.definitionTermHashes) ? line.definitionTermHashes : []).filter(
+        (term) => typeof term === "string" && term.length > 0,
+      ),
+    ),
+  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return {
     startLine,
     endLine,
     termHashes,
+    ...(definitionTermHashes.length === 0 ? {} : { definitionTermHashes }),
   };
 }
 
@@ -542,12 +572,16 @@ interface FileWorkspaceIndexStoreConfig {
   readonly runtimeDir: string;
   readonly encryptionKey: Buffer;
   readonly encryptionKeyId: string;
+  readonly locatorKey: Buffer;
+  readonly storageGenerationId: string;
   readonly runtimeDirIdentity: RuntimeDirIdentity | undefined;
   readonly workspaceRoot: string | undefined;
   readonly allowWorkspaceLocalRuntimeDir: boolean;
   readonly maxSnapshotBytes: number;
   readonly maxSnapshots: number;
   readonly maxSnapshotEntries: number;
+  readonly isGenerationActive: FileWorkspaceIndexStoreOptions["isGenerationActive"];
+  readonly onLoadFailure: FileWorkspaceIndexStoreOptions["onLoadFailure"];
 }
 
 interface RuntimeDirIdentity {
@@ -776,10 +810,21 @@ function fileWorkspaceIndexStoreConfig(
   if (options.encryptionKey.byteLength !== 32) {
     throw new Error("workspace index encryption key must contain exactly 32 bytes");
   }
+  const encryptionKey = Buffer.from(options.encryptionKey);
+  const encryptionKeyId = createHash("sha256").update(encryptionKey).digest("hex");
+  const locatorKey = deriveWorkspaceIndexHmacKey(encryptionKey, FILE_WORKSPACE_INDEX_LOCATOR_INFO);
+  const generationKey = deriveWorkspaceIndexHmacKey(
+    encryptionKey,
+    FILE_WORKSPACE_INDEX_GENERATION_INFO,
+  );
+  const storageGenerationId = hmacHex(generationKey, FILE_WORKSPACE_INDEX_GENERATION_INFO);
+  generationKey.fill(0);
   return {
     runtimeDir,
-    encryptionKey: Buffer.from(options.encryptionKey),
-    encryptionKeyId: createHash("sha256").update(options.encryptionKey).digest("hex"),
+    encryptionKey,
+    encryptionKeyId,
+    locatorKey,
+    storageGenerationId,
     runtimeDirIdentity: resolvedRuntimeDirIdentity(
       runtimeDir,
       workspaceRoot,
@@ -796,11 +841,28 @@ function fileWorkspaceIndexStoreConfig(
       options.maxSnapshotEntries,
       DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES,
     ),
+    isGenerationActive: options.isGenerationActive,
+    onLoadFailure: options.onLoadFailure,
   };
 }
 
-function snapshotFileSegment(storageKey: string): string {
-  return `${FILE_WORKSPACE_INDEX_PREFIX}${sha256Hex(storageKey)}${FILE_WORKSPACE_INDEX_EXTENSION}`;
+function deriveWorkspaceIndexHmacKey(encryptionKey: Buffer, info: string): Buffer {
+  return Buffer.from(
+    hkdfSync("sha256", encryptionKey, FILE_WORKSPACE_INDEX_LOCATOR_SALT, info, 32),
+  );
+}
+
+function hmacHex(key: Buffer, value: string): string {
+  return createHmac("sha256", key).update(value).digest("hex");
+}
+
+function snapshotFileSegment(
+  storageKey: string,
+  storageGenerationId: string,
+  locatorKey: Buffer,
+): string {
+  const locator = hmacHex(locatorKey, `${FILE_WORKSPACE_INDEX_LOCATOR_INFO}\0${storageKey}`);
+  return `${FILE_WORKSPACE_INDEX_PREFIX}${storageGenerationId}-${locator}${FILE_WORKSPACE_INDEX_EXTENSION}`;
 }
 
 function tempSnapshotFileSegment(finalSegment: string): string {
@@ -813,11 +875,18 @@ function assertSafePathSegment(segment: string): string {
     segment.includes("\u0000") ||
     segment.includes("/") ||
     segment.includes("\\") ||
-    !FILE_WORKSPACE_INDEX_SEGMENT_RE.test(segment)
+    !isSafeWorkspaceIndexSegment(segment)
   ) {
     throw new Error(`unsafe workspace index file segment: ${segment}`);
   }
   return segment;
+}
+
+function isSafeWorkspaceIndexSegment(segment: string): boolean {
+  return (
+    FILE_WORKSPACE_INDEX_SEGMENT_RE.test(segment) ||
+    LEGACY_FILE_WORKSPACE_INDEX_SEGMENT_RE.test(segment)
+  );
 }
 
 function runtimeFilePath(runtimeDir: string, segment: string): string {
@@ -829,12 +898,28 @@ function runtimeFilePath(runtimeDir: string, segment: string): string {
   return path;
 }
 
-function snapshotPath(runtimeDir: string, storageKey: string): string {
-  return runtimeFilePath(runtimeDir, snapshotFileSegment(storageKey));
+function snapshotPath(
+  runtimeDir: string,
+  storageKey: string,
+  storageGenerationId: string,
+  locatorKey: Buffer,
+): string {
+  return runtimeFilePath(
+    runtimeDir,
+    snapshotFileSegment(storageKey, storageGenerationId, locatorKey),
+  );
 }
 
-function tempSnapshotPath(runtimeDir: string, storageKey: string): string {
-  return runtimeFilePath(runtimeDir, tempSnapshotFileSegment(snapshotFileSegment(storageKey)));
+function tempSnapshotPath(
+  runtimeDir: string,
+  storageKey: string,
+  storageGenerationId: string,
+  locatorKey: Buffer,
+): string {
+  return runtimeFilePath(
+    runtimeDir,
+    tempSnapshotFileSegment(snapshotFileSegment(storageKey, storageGenerationId, locatorKey)),
+  );
 }
 
 function countSnapshotEntries(snapshot: WorkspaceIndexSnapshot): number {
@@ -863,12 +948,10 @@ function bestEffortChmod(path: string, mode: number): Promise<void> {
   return chmod(path, mode).catch(() => undefined);
 }
 
-// A content-freshness fingerprint for a snapshot file: mtime (ms) + byte size. Two reads
-// of the SAME file that agree on both fields observed the same bytes, so a parsed +
-// normalized snapshot may be reused without re-reading / re-parsing / re-normalizing.
+// Bind parsed cache entries to the complete ciphertext bytes. Filesystem metadata is not a
+// content identity: an atomic replacement can deliberately preserve both size and mtime.
 interface SnapshotFileFingerprint {
-  readonly mtimeMs: number;
-  readonly size: number;
+  readonly ciphertextDigest: string;
 }
 
 interface SnapshotReadResult {
@@ -892,7 +975,9 @@ async function safeReadSnapshotFile(
       ? undefined
       : {
           raw: raw.toString("utf8"),
-          fingerprint: { mtimeMs: fileStat.mtimeMs, size: fileStat.size },
+          fingerprint: {
+            ciphertextDigest: createHash("sha256").update(raw).digest("hex"),
+          },
         };
   } catch {
     return undefined;
@@ -923,44 +1008,139 @@ async function readSnapshotHandleWithinLimit(
   return undefined;
 }
 
+type StoredSnapshotParseResult =
+  | { readonly status: "loaded"; readonly snapshot: WorkspaceIndexSnapshot }
+  | { readonly status: "stale-format" }
+  | {
+      readonly status: "rejected";
+      readonly reason: "authentication-or-corruption" | "invalid-snapshot";
+    };
+
+function isLegacyUnwrappedSnapshot(value: object): boolean {
+  const candidate = value as {
+    readonly version?: unknown;
+    readonly discovery?: unknown;
+    readonly records?: unknown;
+  };
+  return (
+    typeof candidate.version === "number" &&
+    candidate.version < WORKSPACE_INDEX_SNAPSHOT_VERSION &&
+    typeof candidate.discovery === "object" &&
+    candidate.discovery !== null &&
+    Array.isArray(candidate.records)
+  );
+}
+
+function storedSnapshotEnvelopeMatches(
+  value: object,
+  runtimeDirBinding: string,
+  storageKey: string,
+): value is { readonly snapshot?: unknown } {
+  const envelope = value as {
+    readonly version?: unknown;
+    readonly runtimeDirBinding?: unknown;
+    readonly storageKeyHash?: unknown;
+    readonly snapshot?: unknown;
+  };
+  return (
+    envelope.version === FILE_WORKSPACE_INDEX_ENVELOPE_VERSION &&
+    envelope.runtimeDirBinding === runtimeDirBinding &&
+    envelope.storageKeyHash === sha256Hex(storageKey)
+  );
+}
+
 function parseStoredSnapshot(
   raw: string,
   encryptionKey: Buffer,
   maxSnapshotEntries: number,
-): WorkspaceIndexSnapshot | undefined {
+  runtimeDirBinding: string,
+  storageKey: string,
+): StoredSnapshotParseResult {
+  let plaintext: string;
   try {
-    const parsed = JSON.parse(openString(encryptionKey, raw)) as WorkspaceIndexSnapshot;
-    const normalized = normalizeSnapshot(parsed);
-    if (normalized === undefined || !snapshotFitsStoreBounds(normalized, maxSnapshotEntries)) {
-      return undefined;
-    }
-    return normalized;
+    plaintext = openString(encryptionKey, raw);
   } catch {
-    return undefined;
+    return { status: "rejected", reason: "authentication-or-corruption" };
   }
+  try {
+    const parsed: unknown = JSON.parse(plaintext);
+    if (typeof parsed !== "object" || parsed === null) {
+      return { status: "rejected", reason: "authentication-or-corruption" };
+    }
+    if (isLegacyUnwrappedSnapshot(parsed)) {
+      return { status: "stale-format" };
+    }
+    if (!storedSnapshotEnvelopeMatches(parsed, runtimeDirBinding, storageKey)) {
+      return { status: "rejected", reason: "authentication-or-corruption" };
+    }
+    const normalized = normalizeSnapshot(parsed.snapshot as WorkspaceIndexSnapshot);
+    if (normalized === undefined || !snapshotFitsStoreBounds(normalized, maxSnapshotEntries)) {
+      return { status: "rejected", reason: "invalid-snapshot" };
+    }
+    return { status: "loaded", snapshot: normalized };
+  } catch {
+    return { status: "rejected", reason: "invalid-snapshot" };
+  }
+}
+
+function sealStoredSnapshot(
+  encryptionKey: Buffer,
+  snapshot: WorkspaceIndexSnapshot,
+  runtimeDirBinding: string,
+  storageKey: string,
+): string {
+  return sealString(
+    encryptionKey,
+    JSON.stringify({
+      version: FILE_WORKSPACE_INDEX_ENVELOPE_VERSION,
+      runtimeDirBinding,
+      storageKeyHash: sha256Hex(storageKey),
+      snapshot,
+    }),
+  );
 }
 
 // GEN-PERF-CHAT-003: the grounded-ask path reloads the same workspace snapshot per request
 // (createWorkspaceIndex is memoized per (root,runtimeDir) but holds no parsed snapshot), so
 // every ask re-read the file, re-ran JSON.parse and the O(records) normalizeSnapshot. We
 // memoize the parsed + normalized snapshot per resolved snapshot-file path, keyed by the
-// file's mtime+size fingerprint. Any write to the snapshot changes mtime (atomic rename
-// with fresh content) so the fingerprint diverges and the cache re-parses — conservative,
-// correctness-first invalidation. The cache holds already-parsed snapshots in process memory only;
-// disk remains AES-256-GCM sealed. It is bounded by an LRU over file paths.
+// complete ciphertext digest. A cache hit therefore reuses only bytes that were previously
+// authenticated with the same key and runtime binding. The cache holds already-parsed snapshots
+// in process memory only; disk remains AES-256-GCM sealed. It is bounded by an LRU over file paths.
 const MAX_PARSED_SNAPSHOT_CACHE_ENTRIES = 32;
+const FILE_STORE_MUTATION_TAILS = new Map<string, Promise<void>>();
 
 interface ParsedSnapshotCacheEntry {
   readonly fingerprint: SnapshotFileFingerprint;
   readonly encryptionKeyId: string;
   readonly maxSnapshotEntries: number;
+  readonly runtimeDirBinding: string;
   readonly snapshot: WorkspaceIndexSnapshot | undefined;
 }
 
 const PARSED_SNAPSHOT_CACHE = new Map<string, ParsedSnapshotCacheEntry>();
 
+async function runSerializedFileStoreMutation<T>(
+  key: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const predecessor = FILE_STORE_MUTATION_TAILS.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => {
+    release = resolveGate;
+  });
+  FILE_STORE_MUTATION_TAILS.set(key, gate);
+  await predecessor;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (FILE_STORE_MUTATION_TAILS.get(key) === gate) FILE_STORE_MUTATION_TAILS.delete(key);
+  }
+}
+
 function sameSnapshotFingerprint(a: SnapshotFileFingerprint, b: SnapshotFileFingerprint): boolean {
-  return a.mtimeMs === b.mtimeMs && a.size === b.size;
+  return a.ciphertextDigest === b.ciphertextDigest;
 }
 
 function readParsedSnapshotCache(
@@ -968,11 +1148,13 @@ function readParsedSnapshotCache(
   fingerprint: SnapshotFileFingerprint,
   encryptionKeyId: string,
   maxSnapshotEntries: number,
+  runtimeDirBinding: string,
 ): ParsedSnapshotCacheEntry | undefined {
   const entry = PARSED_SNAPSHOT_CACHE.get(path);
   if (
     entry?.encryptionKeyId !== encryptionKeyId ||
     entry.maxSnapshotEntries !== maxSnapshotEntries ||
+    entry.runtimeDirBinding !== runtimeDirBinding ||
     !sameSnapshotFingerprint(entry.fingerprint, fingerprint)
   ) {
     return undefined;
@@ -993,51 +1175,308 @@ function writeParsedSnapshotCache(path: string, entry: ParsedSnapshotCacheEntry)
   }
 }
 
-async function pruneWorkspaceIndexSnapshots(
+interface SnapshotPruneCandidate extends SnapshotFileIdentity {
+  readonly segment: string;
+  readonly generationId: string | undefined;
+  readonly mtimeMs: number;
+  readonly temporary: boolean;
+}
+
+function snapshotSegmentGenerationId(segment: string): string | undefined {
+  return FILE_WORKSPACE_INDEX_SEGMENT_RE.exec(segment)?.[1];
+}
+
+async function inspectSnapshotPruneCandidate(
   runtimeDir: string,
+  segment: string,
+): Promise<SnapshotPruneCandidate | undefined> {
+  const path = runtimeFilePath(runtimeDir, segment);
+  let stat;
+  try {
+    stat = await lstat(path);
+  } catch (error) {
+    if (isMissingPathError(error)) return undefined;
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
+  return {
+    path,
+    segment,
+    generationId: snapshotSegmentGenerationId(segment),
+    mtimeMs: stat.mtimeMs,
+    temporary: segment.endsWith(".tmp"),
+    dev: stat.dev,
+    ino: stat.ino,
+  };
+}
+
+function comparePruneRetention(
+  currentGenerationId: string,
+  protectedPath: string,
+  a: SnapshotPruneCandidate,
+  b: SnapshotPruneCandidate,
+): number {
+  const protectedOrder = Number(b.path === protectedPath) - Number(a.path === protectedPath);
+  if (protectedOrder !== 0) return protectedOrder;
+  const generationOrder =
+    Number(b.generationId === currentGenerationId) - Number(a.generationId === currentGenerationId);
+  if (generationOrder !== 0) return generationOrder;
+  if (a.mtimeMs !== b.mtimeMs) return b.mtimeMs - a.mtimeMs;
+  return a.segment < b.segment ? -1 : a.segment > b.segment ? 1 : 0;
+}
+
+function orphanTempBudget(maxSnapshots: number): number {
+  return Math.max(4, Math.min(maxSnapshots, FILE_WORKSPACE_INDEX_MAX_TEMP_FILES));
+}
+
+function orphanTempIsPrunable(
+  candidate: SnapshotPruneCandidate,
+  retentionIndex: number,
   maxSnapshots: number,
-): Promise<void> {
+  nowMs: number,
+): boolean {
+  const ageMs = Math.max(0, nowMs - candidate.mtimeMs);
+  return (
+    ageMs >= FILE_WORKSPACE_INDEX_TEMP_MAX_AGE_MS ||
+    (retentionIndex >= orphanTempBudget(maxSnapshots) &&
+      ageMs >= FILE_WORKSPACE_INDEX_TEMP_PRESSURE_MIN_AGE_MS)
+  );
+}
+
+async function listSnapshotPruneCandidates(
+  runtimeDir: string,
+): Promise<readonly SnapshotPruneCandidate[]> {
   let entries;
   try {
     entries = await readdir(runtimeDir, { withFileTypes: true });
   } catch {
-    return;
+    return [];
   }
-  const files = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && FILE_WORKSPACE_INDEX_SEGMENT_RE.test(entry.name))
-      .map(async (entry) => ({
-        path: runtimeFilePath(runtimeDir, entry.name),
-        stat: await stat(runtimeFilePath(runtimeDir, entry.name)),
-      })),
-  );
-  const sortedByNewest = [...files];
-  sortedByNewest.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
-  const excess = sortedByNewest.slice(maxSnapshots);
-  await Promise.all(excess.map(async (entry) => rm(entry.path, { force: true })));
+  const candidates: SnapshotPruneCandidate[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !isSafeWorkspaceIndexSegment(entry.name)) continue;
+    const candidate = await inspectSnapshotPruneCandidate(runtimeDir, entry.name);
+    if (candidate !== undefined) candidates.push(candidate);
+  }
+  return candidates;
 }
 
-async function atomicWriteSnapshotFile(
-  path: string,
-  tempPath: string,
-  content: string,
+async function removePruneCandidates(
+  candidates: readonly SnapshotPruneCandidate[],
+  config: FileWorkspaceIndexStoreConfig,
+  safeRuntimeDir: RuntimeDirGuard,
+  guarded: GuardedRuntimeDir,
 ): Promise<void> {
-  await writeFile(tempPath, content, { encoding: "utf8", mode: 0o600 });
-  await bestEffortChmod(tempPath, 0o600);
+  for (const candidate of candidates) {
+    assertWorkspaceIndexGenerationActive(config);
+    if (!(await runtimeDirStillGuarded(safeRuntimeDir, guarded))) return;
+    if (!(await removeExactSnapshotFile(candidate))) {
+      throw new Error("workspace index prune candidate identity changed");
+    }
+  }
+}
+
+async function pruneWorkspaceIndexSnapshots(
+  config: FileWorkspaceIndexStoreConfig,
+  runtimeDir: string,
+  protectedPath: string,
+  safeRuntimeDir: RuntimeDirGuard,
+  guarded: GuardedRuntimeDir,
+): Promise<void> {
+  assertWorkspaceIndexGenerationActive(config);
+  if (!(await runtimeDirStillGuarded(safeRuntimeDir, guarded))) return;
+  const candidates = await listSnapshotPruneCandidates(runtimeDir);
+  assertWorkspaceIndexGenerationActive(config);
+  if (!(await runtimeDirStillGuarded(safeRuntimeDir, guarded))) return;
+  const scopedFinals = candidates.filter(
+    (candidate) =>
+      !candidate.temporary &&
+      candidate.generationId !== undefined &&
+      (config.isGenerationActive !== undefined ||
+        candidate.generationId === config.storageGenerationId),
+  );
+  scopedFinals.sort((a, b) =>
+    comparePruneRetention(config.storageGenerationId, protectedPath, a, b),
+  );
+  const tempFiles = candidates.filter((candidate) => candidate.temporary);
+  tempFiles.sort((a, b) => comparePruneRetention(config.storageGenerationId, "", a, b));
+  const expiredTemps = tempFiles.filter((candidate, index) =>
+    orphanTempIsPrunable(candidate, index, config.maxSnapshots, Date.now()),
+  );
+  const legacyFinals =
+    config.isGenerationActive === undefined
+      ? []
+      : candidates.filter(
+          (candidate) => !candidate.temporary && candidate.generationId === undefined,
+        );
+  await removePruneCandidates(
+    [...scopedFinals.slice(config.maxSnapshots), ...legacyFinals, ...expiredTemps],
+    config,
+    safeRuntimeDir,
+    guarded,
+  );
+}
+
+interface SnapshotFileIdentity {
+  readonly path: string;
+  readonly dev: number;
+  readonly ino: number;
+}
+
+interface OpenSnapshotTempFile extends SnapshotFileIdentity {
+  readonly handle: FileHandle;
+}
+
+async function createSnapshotTempFile(tempPath: string): Promise<OpenSnapshotTempFile> {
+  const handle = await open(
+    tempPath,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+    0o600,
+  );
   try {
-    await rename(tempPath, path);
+    const fileStat = await handle.stat();
+    if (!fileStat.isFile()) {
+      throw new Error("workspace index temp snapshot is not a regular file");
+    }
+    return { handle, path: tempPath, dev: fileStat.dev, ino: fileStat.ino };
   } catch (error) {
-    await unlink(tempPath).catch(() => undefined);
+    await handle.close();
     throw error;
   }
-  await bestEffortChmod(path, 0o600);
 }
 
-type RuntimeDirGuard = () => Promise<string | undefined>;
+async function writeSnapshotTempFile(temp: OpenSnapshotTempFile, content: string): Promise<void> {
+  await temp.handle.writeFile(content, { encoding: "utf8" });
+  await temp.handle.sync();
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { readonly code?: unknown }).code === "ENOENT"
+  );
+}
+
+async function snapshotPathMatchesIdentity(snapshot: SnapshotFileIdentity): Promise<boolean> {
+  let pathStat;
+  try {
+    pathStat = await lstat(snapshot.path);
+  } catch (error) {
+    if (isMissingPathError(error)) return false;
+    throw error;
+  }
+  return pathStat.isFile() && pathStat.dev === snapshot.dev && pathStat.ino === snapshot.ino;
+}
+
+function snapshotQuarantinePath(path: string): string {
+  const segment = basename(path);
+  const extensionEnd = segment.indexOf(FILE_WORKSPACE_INDEX_EXTENSION);
+  if (extensionEnd < 0) throw new Error("workspace index snapshot path has no file extension");
+  const finalSegment = segment.slice(0, extensionEnd + FILE_WORKSPACE_INDEX_EXTENSION.length);
+  return runtimeFilePath(dirname(path), tempSnapshotFileSegment(finalSegment));
+}
+
+async function removeExactSnapshotFile(snapshot: SnapshotFileIdentity): Promise<boolean> {
+  if (!(await snapshotPathMatchesIdentity(snapshot))) return false;
+  const quarantinePath = snapshotQuarantinePath(snapshot.path);
+  try {
+    await rename(snapshot.path, quarantinePath);
+  } catch (error) {
+    if (isMissingPathError(error)) return false;
+    throw error;
+  }
+  const quarantined = { ...snapshot, path: quarantinePath };
+  if (!(await snapshotPathMatchesIdentity(quarantined))) return false;
+  await unlink(quarantinePath);
+  return true;
+}
+
+async function committedSnapshotMatches(
+  snapshot: SnapshotFileIdentity,
+  expectedRaw: string,
+): Promise<boolean> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(snapshot.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const stat = await handle.stat();
+    const expected = Buffer.from(expectedRaw, "utf8");
+    if (
+      !stat.isFile() ||
+      stat.dev !== snapshot.dev ||
+      stat.ino !== snapshot.ino ||
+      stat.size !== expected.byteLength
+    ) {
+      return false;
+    }
+    const actual = await readSnapshotHandleWithinLimit(handle, expected.byteLength);
+    if (actual?.byteLength !== expected.byteLength) return false;
+    const expectedDigest = createHash("sha256").update(expected).digest("hex");
+    const actualDigest = createHash("sha256").update(actual).digest("hex");
+    return actualDigest === expectedDigest;
+  } catch (error) {
+    if (isMissingPathError(error)) return false;
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function abandonSnapshotTempFile(temp: OpenSnapshotTempFile, cause: unknown): Promise<never> {
+  const failures: unknown[] = [cause];
+  try {
+    await temp.handle.truncate(0);
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await temp.handle.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    if (!(await removeExactSnapshotFile(temp))) {
+      failures.push(new Error("workspace index temp snapshot path changed before cleanup"));
+    }
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) {
+    throw cause;
+  }
+  throw new AggregateError(failures, "workspace index temp snapshot cleanup failed");
+}
+
+async function commitSnapshotTempFile(path: string, tempPath: string): Promise<void> {
+  await rename(tempPath, path);
+}
+
+interface GuardedRuntimeDir {
+  readonly identity: RuntimeDirIdentity;
+  readonly binding: string;
+}
+
+type RuntimeDirGuard = () => Promise<GuardedRuntimeDir | undefined>;
+
+function runtimeDirBinding(identity: RuntimeDirIdentity): string {
+  return sha256Hex(
+    JSON.stringify({
+      realPath: identity.realPath,
+      dev: identity.dev ?? null,
+      ino: identity.ino ?? null,
+      marker: identity.marker ?? null,
+    }),
+  );
+}
+
+function guardedRuntimeDir(identity: RuntimeDirIdentity): GuardedRuntimeDir {
+  return { identity, binding: runtimeDirBinding(identity) };
+}
 
 function createRuntimeDirGuard(config: FileWorkspaceIndexStoreConfig): RuntimeDirGuard {
   let expectedRuntimeDirIdentity = config.runtimeDirIdentity;
-  return async (): Promise<string | undefined> => {
+  return async (): Promise<GuardedRuntimeDir | undefined> => {
     const current = await runtimeDirIdentityIfSafe(
       config.runtimeDir,
       config.workspaceRoot,
@@ -1048,7 +1487,7 @@ function createRuntimeDirGuard(config: FileWorkspaceIndexStoreConfig): RuntimeDi
     }
     if (expectedRuntimeDirIdentity === undefined) {
       expectedRuntimeDirIdentity = current;
-      return current.realPath;
+      return guardedRuntimeDir(current);
     }
     if (
       expectedRuntimeDirIdentity.marker === undefined &&
@@ -1056,27 +1495,61 @@ function createRuntimeDirGuard(config: FileWorkspaceIndexStoreConfig): RuntimeDi
       sameRuntimeDirIdentity(expectedRuntimeDirIdentity, current)
     ) {
       expectedRuntimeDirIdentity = current;
-      return current.realPath;
+      return guardedRuntimeDir(current);
     }
     return sameRuntimeDirIdentity(expectedRuntimeDirIdentity, current)
-      ? current.realPath
+      ? guardedRuntimeDir(current)
       : undefined;
   };
 }
 
-async function statSnapshotFingerprint(
-  path: string,
-  maxSnapshotBytes: number,
-): Promise<SnapshotFileFingerprint | undefined> {
-  try {
-    const fileStat = await lstat(path);
-    if (!fileStat.isFile() || fileStat.size > maxSnapshotBytes) {
-      return undefined;
-    }
-    return { mtimeMs: fileStat.mtimeMs, size: fileStat.size };
-  } catch {
-    return undefined;
+async function runtimeDirStillGuarded(
+  safeRuntimeDir: RuntimeDirGuard,
+  expected: GuardedRuntimeDir,
+): Promise<boolean> {
+  const current = await safeRuntimeDir();
+  return current?.binding === expected.binding;
+}
+
+function workspaceIndexGenerationIsActive(config: FileWorkspaceIndexStoreConfig): boolean {
+  return config.isGenerationActive?.() !== false;
+}
+
+function inactiveWorkspaceIndexGenerationError(): Error {
+  return new Error("workspace index storage generation is no longer active");
+}
+
+function assertWorkspaceIndexGenerationActive(config: FileWorkspaceIndexStoreConfig): void {
+  if (!workspaceIndexGenerationIsActive(config)) {
+    throw inactiveWorkspaceIndexGenerationError();
   }
+}
+
+function parseAndCacheStoredSnapshot(
+  config: FileWorkspaceIndexStoreConfig,
+  path: string,
+  read: SnapshotReadResult,
+  runtimeDirBinding: string,
+  storageKey: string,
+): WorkspaceIndexSnapshot | undefined {
+  const parsed = parseStoredSnapshot(
+    read.raw,
+    config.encryptionKey,
+    config.maxSnapshotEntries,
+    runtimeDirBinding,
+    storageKey,
+  );
+  if (!workspaceIndexGenerationIsActive(config)) return undefined;
+  const snapshot = parsed.status === "loaded" ? parsed.snapshot : undefined;
+  if (parsed.status === "rejected") config.onLoadFailure?.({ reason: parsed.reason });
+  writeParsedSnapshotCache(path, {
+    fingerprint: read.fingerprint,
+    encryptionKeyId: config.encryptionKeyId,
+    maxSnapshotEntries: config.maxSnapshotEntries,
+    runtimeDirBinding,
+    snapshot,
+  });
+  return snapshot;
 }
 
 async function loadFileWorkspaceIndexSnapshot(
@@ -1084,38 +1557,184 @@ async function loadFileWorkspaceIndexSnapshot(
   safeRuntimeDir: RuntimeDirGuard,
   storageKey: string,
 ): Promise<WorkspaceIndexSnapshot | undefined> {
-  const runtimeDir = await safeRuntimeDir();
-  if (runtimeDir === undefined) {
+  if (!workspaceIndexGenerationIsActive(config)) return undefined;
+  const guarded = await safeRuntimeDir();
+  if (guarded === undefined) {
     return undefined;
   }
-  const path = snapshotPath(runtimeDir, storageKey);
-  // Cheap freshness probe first: if a prior parse for this exact file bytes (mtime+size) is
-  // cached we skip the read + JSON.parse + normalizeSnapshot entirely. lstat (no follow)
-  // mirrors the O_NOFOLLOW guard on the real read below.
-  const fingerprint = await statSnapshotFingerprint(path, config.maxSnapshotBytes);
-  if (fingerprint !== undefined) {
-    const cached = readParsedSnapshotCache(
-      path,
-      fingerprint,
-      config.encryptionKeyId,
-      config.maxSnapshotEntries,
-    );
-    if (cached !== undefined) {
-      return cached.snapshot;
-    }
-  }
+  const path = snapshotPath(
+    guarded.identity.realPath,
+    storageKey,
+    config.storageGenerationId,
+    config.locatorKey,
+  );
   const read = await safeReadSnapshotFile(path, config.maxSnapshotBytes);
   if (read === undefined) {
     return undefined;
   }
-  const snapshot = parseStoredSnapshot(read.raw, config.encryptionKey, config.maxSnapshotEntries);
-  writeParsedSnapshotCache(path, {
-    fingerprint: read.fingerprint,
-    encryptionKeyId: config.encryptionKeyId,
-    maxSnapshotEntries: config.maxSnapshotEntries,
-    snapshot,
-  });
-  return snapshot;
+  if (!(await runtimeDirStillGuarded(safeRuntimeDir, guarded))) {
+    return undefined;
+  }
+  const cached = readParsedSnapshotCache(
+    path,
+    read.fingerprint,
+    config.encryptionKeyId,
+    config.maxSnapshotEntries,
+    guarded.binding,
+  );
+  if (cached !== undefined) {
+    return workspaceIndexGenerationIsActive(config) ? cached.snapshot : undefined;
+  }
+  const snapshot = parseAndCacheStoredSnapshot(config, path, read, guarded.binding, storageKey);
+  return workspaceIndexGenerationIsActive(config) ? snapshot : undefined;
+}
+
+async function writeAndCommitGuardedSnapshot(
+  config: FileWorkspaceIndexStoreConfig,
+  safeRuntimeDir: RuntimeDirGuard,
+  guarded: GuardedRuntimeDir,
+  path: string,
+  tempPath: string,
+  raw: string,
+): Promise<SnapshotFileIdentity> {
+  assertWorkspaceIndexGenerationActive(config);
+  const temp = await createSnapshotTempFile(tempPath);
+  if (!workspaceIndexGenerationIsActive(config)) {
+    await abandonSnapshotTempFile(temp, inactiveWorkspaceIndexGenerationError());
+  }
+  if (!(await runtimeDirStillGuarded(safeRuntimeDir, guarded))) {
+    await abandonSnapshotTempFile(
+      temp,
+      new Error("workspace index runtime directory identity changed before snapshot write"),
+    );
+  }
+  try {
+    await writeSnapshotTempFile(temp, raw);
+  } catch (error) {
+    await abandonSnapshotTempFile(temp, error);
+  }
+  if (!workspaceIndexGenerationIsActive(config)) {
+    await abandonSnapshotTempFile(temp, inactiveWorkspaceIndexGenerationError());
+  }
+  if (!(await runtimeDirStillGuarded(safeRuntimeDir, guarded))) {
+    await abandonSnapshotTempFile(
+      temp,
+      new Error("workspace index runtime directory identity changed after snapshot write"),
+    );
+  }
+  const committed = await commitWrittenSnapshot(temp, path, tempPath, raw);
+  const generationActive = workspaceIndexGenerationIsActive(config);
+  const runtimeDirGuarded = await runtimeDirStillGuarded(safeRuntimeDir, guarded);
+  if (!generationActive || !runtimeDirGuarded) {
+    if (!(await removeExactSnapshotFile(committed))) {
+      throw new Error("workspace index committed snapshot path changed before cleanup");
+    }
+    if (!generationActive) throw inactiveWorkspaceIndexGenerationError();
+    throw new Error("workspace index runtime directory identity changed after snapshot commit");
+  }
+  return committed;
+}
+
+async function rejectCommittedSnapshotFromRetiredGeneration(
+  config: FileWorkspaceIndexStoreConfig,
+  committed: SnapshotFileIdentity,
+): Promise<void> {
+  if (workspaceIndexGenerationIsActive(config)) return;
+  if (!(await removeExactSnapshotFile(committed))) {
+    throw new Error("workspace index retired snapshot path changed before cleanup");
+  }
+  throw inactiveWorkspaceIndexGenerationError();
+}
+
+function normalizeSnapshotWithinBounds(
+  config: FileWorkspaceIndexStoreConfig,
+  snapshot: WorkspaceIndexSnapshot,
+): WorkspaceIndexSnapshot | undefined {
+  const normalized = normalizeSnapshot(snapshot);
+  return normalized !== undefined && snapshotFitsStoreBounds(normalized, config.maxSnapshotEntries)
+    ? normalized
+    : undefined;
+}
+
+function sealedSnapshotWithinBounds(
+  config: FileWorkspaceIndexStoreConfig,
+  snapshot: WorkspaceIndexSnapshot,
+  runtimeDirBinding: string,
+  storageKey: string,
+): string | undefined {
+  const raw = sealStoredSnapshot(config.encryptionKey, snapshot, runtimeDirBinding, storageKey);
+  return Buffer.byteLength(raw, "utf8") <= config.maxSnapshotBytes ? raw : undefined;
+}
+
+function snapshotStorePaths(
+  config: FileWorkspaceIndexStoreConfig,
+  runtimeDir: string,
+  storageKey: string,
+): { readonly path: string; readonly tempPath: string } {
+  const path = snapshotPath(runtimeDir, storageKey, config.storageGenerationId, config.locatorKey);
+  const tempPath = tempSnapshotPath(
+    runtimeDir,
+    storageKey,
+    config.storageGenerationId,
+    config.locatorKey,
+  );
+  return { path, tempPath };
+}
+
+async function pruneCommittedSnapshot(
+  config: FileWorkspaceIndexStoreConfig,
+  safeRuntimeDir: RuntimeDirGuard,
+  guarded: GuardedRuntimeDir,
+  committed: SnapshotFileIdentity,
+): Promise<void> {
+  try {
+    await pruneWorkspaceIndexSnapshots(
+      config,
+      guarded.identity.realPath,
+      committed.path,
+      safeRuntimeDir,
+      guarded,
+    );
+  } catch (error) {
+    if (!workspaceIndexGenerationIsActive(config)) {
+      await rejectCommittedSnapshotFromRetiredGeneration(config, committed);
+    }
+    throw error;
+  }
+  await rejectCommittedSnapshotFromRetiredGeneration(config, committed);
+}
+
+async function commitWrittenSnapshot(
+  temp: OpenSnapshotTempFile,
+  path: string,
+  tempPath: string,
+  raw: string,
+): Promise<SnapshotFileIdentity> {
+  try {
+    await temp.handle.close();
+  } catch (error) {
+    await abandonSnapshotTempFile(temp, error);
+  }
+  if (!(await snapshotPathMatchesIdentity(temp))) {
+    throw new Error("workspace index temp snapshot identity changed before commit");
+  }
+  try {
+    await commitSnapshotTempFile(path, tempPath);
+  } catch (error) {
+    if (!(await removeExactSnapshotFile(temp))) {
+      throw new AggregateError(
+        [error, new Error("workspace index temp snapshot path changed before cleanup")],
+        "workspace index commit and temp cleanup both failed",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  const committed = { ...temp, path };
+  if (!(await committedSnapshotMatches(committed, raw))) {
+    throw new Error("workspace index committed snapshot identity changed");
+  }
+  return committed;
 }
 
 async function saveFileWorkspaceIndexSnapshot(
@@ -1124,26 +1743,31 @@ async function saveFileWorkspaceIndexSnapshot(
   storageKey: string,
   snapshot: WorkspaceIndexSnapshot,
 ): Promise<void> {
-  const normalized = normalizeSnapshot(snapshot);
-  if (normalized === undefined || !snapshotFitsStoreBounds(normalized, config.maxSnapshotEntries)) {
-    return;
-  }
-  const raw = sealString(config.encryptionKey, JSON.stringify(normalized));
-  if (Buffer.byteLength(raw, "utf8") > config.maxSnapshotBytes) {
-    return;
-  }
+  assertWorkspaceIndexGenerationActive(config);
+  const normalized = normalizeSnapshotWithinBounds(config, snapshot);
+  if (normalized === undefined) return;
   await mkdir(config.runtimeDir, { recursive: true, mode: 0o700 });
-  const runtimeDir = await safeRuntimeDir();
-  if (runtimeDir === undefined) {
-    return;
-  }
+  assertWorkspaceIndexGenerationActive(config);
+  const guarded = await safeRuntimeDir();
+  if (guarded === undefined) return;
+  const runtimeDir = guarded.identity.realPath;
+  const raw = sealedSnapshotWithinBounds(config, normalized, guarded.binding, storageKey);
+  if (raw === undefined) return;
   await bestEffortChmod(runtimeDir, 0o700);
-  await atomicWriteSnapshotFile(
-    snapshotPath(runtimeDir, storageKey),
-    tempSnapshotPath(runtimeDir, storageKey),
+  const { path, tempPath } = snapshotStorePaths(config, runtimeDir, storageKey);
+  const committed = await writeAndCommitGuardedSnapshot(
+    config,
+    safeRuntimeDir,
+    guarded,
+    path,
+    tempPath,
     raw,
   );
-  await pruneWorkspaceIndexSnapshots(runtimeDir, config.maxSnapshots);
+  await rejectCommittedSnapshotFromRetiredGeneration(config, committed);
+  // Avoid retaining the prior parsed object even when an idempotent write produces identical
+  // ciphertext bytes through a deterministic test double.
+  PARSED_SNAPSHOT_CACHE.delete(path);
+  await pruneCommittedSnapshot(config, safeRuntimeDir, guarded, committed);
 }
 
 export function createFileWorkspaceIndexStore(
@@ -1151,11 +1775,33 @@ export function createFileWorkspaceIndexStore(
 ): WorkspaceIndexStore {
   const config = fileWorkspaceIndexStoreConfig(options);
   const safeRuntimeDir = createRuntimeDirGuard(config);
+  const mutationRuntimeDir =
+    config.runtimeDirIdentity?.realPath ?? existingRealPath(config.runtimeDir);
+  const mutationScope =
+    config.isGenerationActive === undefined ? config.storageGenerationId : "active-generation";
+  const mutationKey = `${mutationRuntimeDir}\u0000${mutationScope}`;
   return {
     loadSnapshot: async (storageKey) =>
       loadFileWorkspaceIndexSnapshot(config, safeRuntimeDir, storageKey),
-    saveSnapshot: async (storageKey, snapshot) =>
-      saveFileWorkspaceIndexSnapshot(config, safeRuntimeDir, storageKey, snapshot),
+    saveSnapshot: async (storageKey, snapshot): Promise<void> => {
+      try {
+        await runSerializedFileStoreMutation(mutationKey, () =>
+          saveFileWorkspaceIndexSnapshot(config, safeRuntimeDir, storageKey, snapshot),
+        );
+      } catch (error) {
+        if (!workspaceIndexGenerationIsActive(config)) throw error;
+        try {
+          options.onSaveFailure?.({ reason: "write-or-cleanup-failure" });
+        } catch (reportingError) {
+          throw new AggregateError(
+            [error, reportingError],
+            "workspace index save and failure reporting both failed",
+            { cause: reportingError },
+          );
+        }
+        throw error;
+      }
+    },
   };
 }
 
@@ -1283,11 +1929,6 @@ function camelParts(token: string): readonly string[] {
   return parts;
 }
 
-function stripTestSuffix(token: string): string | undefined {
-  const stripped = token.replace(/(?:tests?|specs?)$/iu, "");
-  return stripped.length >= 3 && stripped.length < token.length ? stripped : undefined;
-}
-
 function addTerm(out: string[], seen: Set<string>, term: string): void {
   const trimmed = term.trim();
   if (trimmed.length < 2 || !/[\p{L}\p{N}]/u.test(trimmed)) {
@@ -1330,7 +1971,7 @@ function expandContentToken(token: string): readonly string[] {
     return out;
   }
   addTerm(out, seen, normalized.toLowerCase());
-  const strippedTest = stripTestSuffix(normalized);
+  const strippedTest = stripTestIdentifierSuffix(normalized);
   if (strippedTest !== undefined) {
     addTerm(out, seen, strippedTest.toLowerCase());
   }
@@ -1338,7 +1979,7 @@ function expandContentToken(token: string): readonly string[] {
     .split(WORKSPACE_INDEX_TOKEN_SEPARATOR_RE)
     .filter((part) => part.length > 0)) {
     addTerm(out, seen, part.toLowerCase());
-    const derived = stripTestSuffix(part);
+    const derived = stripTestIdentifierSuffix(part);
     if (derived !== undefined) {
       addTerm(out, seen, derived.toLowerCase());
     }
@@ -1359,7 +2000,10 @@ interface WorkspaceIndexLineTerms {
   readonly truncated: boolean;
 }
 
-function lexicalTermsForLine(line: string): WorkspaceIndexLineTerms {
+function lexicalTermsForLine(
+  line: string,
+  routeMarkers: readonly string[],
+): WorkspaceIndexLineTerms {
   const terms: string[] = [];
   const seen = new Set<string>();
   for (const match of line.matchAll(WORKSPACE_INDEX_TEXT_TOKEN_RE)) {
@@ -1374,43 +2018,99 @@ function lexicalTermsForLine(line: string): WorkspaceIndexLineTerms {
       terms.push(term);
     }
   }
+  for (const marker of routeMarkers) {
+    if (seen.has(marker)) continue;
+    if (terms.length >= MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_LINE) {
+      return { terms, truncated: true };
+    }
+    seen.add(marker);
+    terms.push(marker);
+  }
   return { terms, truncated: false };
 }
 
-export function buildWorkspaceIndexLexicalRecord(content: string): WorkspaceIndexLexicalRecord {
+function routeMarkersAt(
+  sourceLines: ReturnType<typeof repositorySourceLines>,
+  index: number,
+): readonly string[] {
+  const window = sourceLines.slice(index, index + REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES);
+  return repositoryRouteDeclarationMarkers(
+    window.map((line) => line.code).join("\n"),
+    window.map((line) => line.structural).join("\n"),
+  );
+}
+
+interface PreparedLexicalLine {
+  readonly definitionTermHashes: readonly string[];
+  readonly termHashes: readonly string[];
+  readonly truncated: boolean;
+}
+
+function prepareLexicalLine(
+  line: string,
+  structuralLine: string,
+  routeMarkers: readonly string[],
+): PreparedLexicalLine | undefined {
+  const lexical = lexicalTermsForLine(line, routeMarkers);
+  if (lexical.terms.length === 0) return undefined;
+  const termHashes = [...new Set(lexical.terms.map((term) => hashLexicalTerm(term)))].sort(
+    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
+  );
+  const definitions = new Set(
+    definitionSymbolsInStructuralLine(structuralLine).map((symbol) => symbol.toLowerCase()),
+  );
+  const definitionTermHashes = lexical.terms
+    .filter((term) => definitions.has(term.toLowerCase()))
+    .map((term) => hashLexicalTerm(term))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return { definitionTermHashes, termHashes, truncated: lexical.truncated };
+}
+
+function addFileTermHashes(hashes: readonly string[], target: Set<string>): boolean {
+  for (const hash of hashes) {
+    if (target.size >= MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_FILE) return false;
+    target.add(hash);
+  }
+  return true;
+}
+
+function lexicalLineRecord(
+  prepared: PreparedLexicalLine,
+  index: number,
+): WorkspaceIndexLexicalLine {
+  return {
+    startLine: index + 1,
+    endLine: index + 1,
+    termHashes: prepared.termHashes,
+    ...(prepared.definitionTermHashes.length === 0
+      ? {}
+      : { definitionTermHashes: prepared.definitionTermHashes }),
+  };
+}
+
+export function buildWorkspaceIndexLexicalRecord(
+  content: string,
+  scopePath?: string,
+): WorkspaceIndexLexicalRecord {
   const lines = content.split("\n");
+  const sourceLines = repositorySourceLines(content, scopePath);
   const lexicalLines: WorkspaceIndexLexicalLine[] = [];
   const termHashes = new Set<string>();
   let truncated = false;
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const lineLexical = lexicalTermsForLine(line);
-    const lineTerms = lineLexical.terms;
-    if (lineTerms.length === 0) {
-      continue;
-    }
-    if (lineLexical.truncated) {
-      truncated = true;
-    }
+    const prepared = prepareLexicalLine(
+      lines[index] ?? "",
+      sourceLines[index]?.structural ?? "",
+      routeMarkersAt(sourceLines, index),
+    );
+    if (prepared === undefined) continue;
+    if (prepared.truncated) truncated = true;
     if (lexicalLines.length >= MAX_WORKSPACE_INDEX_LEXICAL_LINES) {
       truncated = true;
       break;
     }
-    const hashed = [...new Set(lineTerms.map((term) => hashLexicalTerm(term)))].sort((a, b) =>
-      a < b ? -1 : a > b ? 1 : 0,
-    );
-    for (const termHash of hashed) {
-      if (termHashes.size >= MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_FILE) {
-        truncated = true;
-        break;
-      }
-      termHashes.add(termHash);
-    }
-    lexicalLines.push({
-      startLine: index + 1,
-      endLine: index + 1,
-      termHashes: hashed,
-    });
+    if (!addFileTermHashes(prepared.termHashes, termHashes)) truncated = true;
+    lexicalLines.push(lexicalLineRecord(prepared, index));
     if (truncated) {
       break;
     }

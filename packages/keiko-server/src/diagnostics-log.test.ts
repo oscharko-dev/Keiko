@@ -18,12 +18,10 @@ import {
 const identity = (message: string): string => message;
 
 describe("describeError (RB-6)", () => {
-  it("extracts class + message from an Error and applies the redactor", () => {
-    const described = describeError(new TypeError("bad value"), (m) =>
-      m.replace("bad", "[redacted]"),
-    );
+  it("extracts a content-free class without reading the error message", () => {
+    const described = describeError(new TypeError("bad value"));
     expect(described.errorClass).toBe("TypeError");
-    expect(described.message).toBe("[redacted] value");
+    expect(described).not.toHaveProperty("message");
   });
 
   it("captures a machine code and a gateway requestId when present", () => {
@@ -31,15 +29,14 @@ describe("describeError (RB-6)", () => {
       code: "GATEWAY_TRANSPORT",
       requestId: "gw-req-42",
     });
-    const described = describeError(error, identity);
+    const described = describeError(error);
     expect(described.code).toBe("GATEWAY_TRANSPORT");
     expect(described.gatewayRequestId).toBe("gw-req-42");
   });
 
   it("handles a non-Error throw without crashing", () => {
-    const described = describeError("just a string", identity);
+    const described = describeError("just a string");
     expect(described.errorClass).toBe("string");
-    expect(described.message).toBe("just a string");
     expect(described.code).toBeUndefined();
   });
 });
@@ -67,12 +64,10 @@ describe("contentFreeErrorClass (mutable Error.name hardening)", (): void => {
         this.name = new.target.name;
       }
     }
-    expect(describeError(new GatewayShapedError("x"), identity).errorClass).toBe(
-      "GatewayShapedError",
-    );
+    expect(describeError(new GatewayShapedError("x")).errorClass).toBe("GatewayShapedError");
     const tampered = new GatewayShapedError("x");
     tampered.name = "leaked request text";
-    expect(describeError(tampered, identity).errorClass).toBe("GatewayShapedError");
+    expect(describeError(tampered).errorClass).toBe("GatewayShapedError");
   });
 
   it("recovers the declared class of a subclass that never assigns this.name", (): void => {
@@ -83,7 +78,7 @@ describe("contentFreeErrorClass (mutable Error.name hardening)", (): void => {
   it("lets specific built-in names ride on generic instances", (): void => {
     const abort = new Error("aborted");
     abort.name = "AbortError";
-    expect(describeError(abort, identity).errorClass).toBe("AbortError");
+    expect(describeError(abort).errorClass).toBe("AbortError");
   });
 
   it("degrades to the generic class when no declared class name exists", (): void => {
@@ -136,7 +131,7 @@ describe("describeError machine-token bounds for code and requestId", (): void =
       code: "customer email jane@example.com",
       requestId: "she said: hello world",
     });
-    const described = describeError(hostile, identity);
+    const described = describeError(hostile);
     expect(described.code).toBeUndefined();
     expect(described.gatewayRequestId).toBeUndefined();
   });
@@ -146,14 +141,137 @@ describe("describeError machine-token bounds for code and requestId", (): void =
       code: "GATEWAY_TIMEOUT",
       requestId: "req-7",
     });
-    const described = describeError(coded, (): string => "diagnostic suppressed");
+    const described = describeError(coded);
     expect(described.code).toBe("GATEWAY_TIMEOUT");
     expect(described.gatewayRequestId).toBe("req-7");
-    expect(described.message).toBe("diagnostic suppressed");
   });
 });
 
 describe("emitServerDiagnostic (RB-6)", () => {
+  it("keeps arbitrary provider and customer body text out of the diagnostic record", () => {
+    const bodyMarker = "fixture-customer-provider-body-marker";
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-body-free",
+      operation: "POST /api/desktop/chat/stream",
+      source: "unit",
+      error: Object.assign(new Error(`upstream body: ${bodyMarker}`), {
+        code: "GATEWAY_TRANSPORT",
+        requestId: "gw-body-free-7",
+        partialUsage: { promptTokens: 41, completionTokens: 7 },
+      }),
+      redact: () => bodyMarker,
+      now: () => 0,
+    });
+
+    expect(record).toMatchObject({
+      correlationId: "cid-body-free",
+      operation: "POST /api/desktop/chat/stream",
+      source: "unit",
+      errorClass: "Error",
+      message: "server-operation-failed",
+      code: "GATEWAY_TRANSPORT",
+      gatewayRequestId: "gw-body-free-7",
+      partialUsage: { promptTokens: 41, completionTokens: 7 },
+    });
+    expect(JSON.stringify(record)).not.toContain(bodyMarker);
+  });
+
+  it("degrades throwing error properties without raising a second failure", () => {
+    const propertyMarker = "fixture-hostile-error-property-marker";
+    const hostile = new Error("placeholder");
+    for (const property of ["message", "code", "requestId", "partialUsage"] as const) {
+      Object.defineProperty(hostile, property, {
+        configurable: true,
+        get(): never {
+          throw new Error(`${propertyMarker}-${property}`);
+        },
+      });
+    }
+
+    expect(() =>
+      serverDiagnosticFromError({
+        correlationId: "cid-hostile-properties",
+        operation: "unit.hostile-properties",
+        source: "unit",
+        error: hostile,
+        redact: identity,
+        now: () => 0,
+      }),
+    ).not.toThrow();
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-hostile-properties",
+      operation: "unit.hostile-properties",
+      source: "unit",
+      error: hostile,
+      redact: identity,
+      now: () => 0,
+    });
+    expect(record).toMatchObject({
+      errorClass: "Error",
+      message: "server-operation-failed",
+    });
+    expect(record.code).toBeUndefined();
+    expect(record.gatewayRequestId).toBeUndefined();
+    expect(record.partialUsage).toBeUndefined();
+    expect(JSON.stringify(record)).not.toContain(propertyMarker);
+  });
+
+  it("degrades hostile proxies and nested usage getters without raising a second failure", () => {
+    const trapMarker = "fixture-hostile-proxy-trap-marker";
+    const partialUsage = Object.defineProperties(
+      {},
+      {
+        promptTokens: {
+          get(): never {
+            throw new Error(`${trapMarker}-promptTokens`);
+          },
+        },
+        completionTokens: { value: 7 },
+      },
+    );
+    const hostile = new Proxy(Object.assign(new Error("placeholder"), { partialUsage }), {
+      get(target, property, receiver): unknown {
+        if (property === "message" || property === "code" || property === "requestId") {
+          throw new Error(`${trapMarker}-${property}`);
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-hostile-proxy",
+      operation: "unit.hostile-proxy",
+      source: "unit",
+      error: hostile,
+      redact: identity,
+      now: () => 0,
+    });
+    expect(record).toMatchObject({
+      errorClass: "Error",
+      message: "server-operation-failed",
+    });
+    expect(record.code).toBeUndefined();
+    expect(record.gatewayRequestId).toBeUndefined();
+    expect(record.partialUsage).toBeUndefined();
+    expect(JSON.stringify(record)).not.toContain(trapMarker);
+  });
+
+  it("replaces unbounded operation and source content with fixed labels", () => {
+    const labelMarker = "fixture-customer-operation-marker";
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-hostile-labels",
+      operation: `POST /api/chat?prompt=${labelMarker}`,
+      source: `unit source ${labelMarker}`,
+      error: new Error("placeholder"),
+      redact: identity,
+      now: () => 0,
+    });
+
+    expect(record.operation).toBe("server.operation");
+    expect(record.source).toBe("server.diagnostic");
+    expect(JSON.stringify(record)).not.toContain(labelMarker);
+  });
+
   it("routes the record to the provided sink", () => {
     const records: ServerDiagnosticRecord[] = [];
     const record = serverDiagnosticFromError({
@@ -236,7 +354,7 @@ describe("describeError partial-usage passthrough", () => {
       code: "GATEWAY_TRANSPORT",
       partialUsage: { promptTokens: 41, completionTokens: 7, streamedChars: 999 },
     });
-    const described = describeError(error, (message) => message);
+    const described = describeError(error);
     // Counts survive; the char counter (and anything else) is not forwarded.
     expect(described.partialUsage).toEqual({ promptTokens: 41, completionTokens: 7 });
   });
@@ -245,11 +363,11 @@ describe("describeError partial-usage passthrough", () => {
     const hostile = Object.assign(new Error("x"), {
       partialUsage: { promptTokens: "41 tokens of content", completionTokens: 7 },
     });
-    expect(describeError(hostile, (m) => m).partialUsage).toBeUndefined();
+    expect(describeError(hostile).partialUsage).toBeUndefined();
     const nan = Object.assign(new Error("x"), {
       partialUsage: { promptTokens: Number.NaN, completionTokens: 7 },
     });
-    expect(describeError(nan, (m) => m).partialUsage).toBeUndefined();
-    expect(describeError(new Error("x"), (m) => m).partialUsage).toBeUndefined();
+    expect(describeError(nan).partialUsage).toBeUndefined();
+    expect(describeError(new Error("x")).partialUsage).toBeUndefined();
   });
 });

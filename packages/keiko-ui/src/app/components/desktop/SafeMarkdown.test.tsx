@@ -610,6 +610,19 @@ describe("SafeMarkdown — scheme rejection", () => {
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(0);
   });
+
+  it("keeps hostile partial and completed streamed links inert across rerenders", () => {
+    const { container, rerender } = render(<SafeMarkdown source="[portal](java" />);
+    rerender(<SafeMarkdown source={'<svg onload="pwned()">[portal](javascript:alert(1))</svg>'} />);
+
+    expect(container.querySelector("a, svg, script, [onload]")).toBeNull();
+
+    rerender(<SafeMarkdown source="[portal](https://example.com)" />);
+    const link = screen.getByRole("link", { name: /portal/u });
+    expect(link).toHaveAttribute("href", "https://example.com");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
 });
 
 // ---------------------------------------------------------------------------

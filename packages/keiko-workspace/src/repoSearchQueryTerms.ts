@@ -1,10 +1,11 @@
 // Deterministic query-term expansion for repository retrieval. Kept in keiko-workspace so both
 // candidate ordering and line matching interpret code-shaped prompts the same way.
 
+import { stripTestIdentifierSuffix } from "./repoSearchIdentifier.js";
+
 const QUERY_TOKEN_RE = /[\p{L}\p{N}_$@./:-]+/gu;
 const TOKEN_SEPARATOR_RE = /[/@.:\-_]+/u;
 const STACK_LOCATION_SUFFIX_RE = /^(.+?):\d+(?::\d+)?$/u;
-const TEST_SUFFIX_RE = /(?:tests?|specs?)$/iu;
 const ATOMIC_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
 
 const MAX_EXPANDED_QUERY_TERMS = 48;
@@ -106,11 +107,6 @@ function stripLeadingRouteSlash(token: string): string {
   return out;
 }
 
-function stripTestSuffix(token: string): string | undefined {
-  const stripped = token.replace(TEST_SUFFIX_RE, "");
-  return stripped.length >= 3 && stripped.length < token.length ? stripped : undefined;
-}
-
 function isAsciiUpper(char: string): boolean {
   const code = char.codePointAt(0) ?? 0;
   return code >= 65 && code <= 90;
@@ -162,7 +158,7 @@ function addIdentifierDerivatives(
   token: string,
   caseSensitive: boolean,
 ): void {
-  const strippedTest = stripTestSuffix(token);
+  const strippedTest = stripTestIdentifierSuffix(token);
   if (strippedTest !== undefined) {
     addTerm(out, seen, strippedTest, caseSensitive);
   }
@@ -257,6 +253,7 @@ function expandToken(
   if (token.startsWith("/")) {
     addTerm(out, seen, stripLeadingRouteSlash(token), caseSensitive);
   }
+  addIdentifierDerivatives(out, seen, token, caseSensitive);
   const segments = token.split(TOKEN_SEPARATOR_RE).filter((segment) => segment.length > 0);
   for (const segment of segments) {
     addTerm(out, seen, segment, caseSensitive);

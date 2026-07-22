@@ -1,13 +1,19 @@
-# Voice dialogue mode — verification report (Issue #1563)
+# Voice dialogue mode — historical verification report (Issue #1563)
 
-**Verdict: GO.** The colleague-like voice dialogue mode (Epic #1556) passes the production evaluation
-across all four acceptance criteria. This report is the closure evidence for Issue
+**Historical verdict: GO at the Issue #1563 head.** The then-current colleague-like voice dialogue mode
+(Epic #1556) passed its production evaluation. This report is the archived closure evidence for Issue
 [#1563](https://github.com/oscharko-dev/Keiko/issues/1563). The evaluation specification is
 [dialogue-evaluation.md](dialogue-evaluation.md).
 
-The deterministic suites run with no live voice provider, no model call, no clock or network read, and no
-stored audio. The browser smoke drives the real application through headless Chromium with injected
-fakes. Wall-clock provider latency is closed by a manual headphone walkthrough (below).
+The deterministic suites ran with no live voice provider, model call, clock, or network read, and no stored
+audio. The browser smoke drove the application through headless Chromium with injected fakes. The manual
+headphone walkthrough recorded below belongs only to that historical closure. It is not the renewed Oliver
+live-microphone acceptance test for ADR-0154; that current test remains deferred to the agreed office
+appointment.
+
+ADR-0154 supersedes this report's STT+TTS dialogue fallback. Current Twin Voice requires input-only
+Realtime transcription, canonical chat, and independent TTS, and current readiness comes from exact-head
+gates plus the separately recorded live test.
 
 ## Result summary
 
@@ -75,25 +81,24 @@ status in [evidence/1563-dialogue-evaluation.png](evidence/1563-dialogue-evaluat
 
 ## Commands and outcomes
 
-| Command                                                                                                                  | Outcome                                                                                                             |
-| ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `npx vitest run --config packages/keiko-ui/vitest.config.ts src/app/components/desktop/hooks/voice-dialogue-evaluation/` | 41 tests passed (index 25, latency 6, cleanup 2, accessibility 8)                                                   |
-| `npm run test:coverage:ui`                                                                                               | PASS — keiko-ui Lines 89.20%, Statements 85.59%, Branches 75.80%, Functions 87.57% (above release target 88% lines) |
-| `npm run test:e2e:smoke` (voice-dialogue spec)                                                                           | 6 browser tests passed                                                                                              |
-| `npm run typecheck`                                                                                                      | PASS                                                                                                                |
-| `npm run lint`                                                                                                           | PASS (0 warnings)                                                                                                   |
-| `npm run arch:check`                                                                                                     | PASS (no dependency violations; import policy passed)                                                               |
-| `npm run build:ui`                                                                                                       | PASS (ES2019 compatibility; CSP hashes written)                                                                     |
+| Command                                                                                                                  | Outcome                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `npx vitest run --config packages/keiko-ui/vitest.config.ts src/app/components/desktop/hooks/voice-dialogue-evaluation/` | PASS at the archived Issue #1563 head; current discovery belongs to the exact run.                    |
+| `npm run test:coverage:ui`                                                                                               | PASS at the archived head; current floors and values come from the committed baseline and exact gate. |
+| `npm run test:e2e:smoke` (voice-dialogue spec)                                                                           | PASS at the archived head; the scenario implemented the now-superseded STT+TTS flow.                  |
+| `npm run typecheck`                                                                                                      | PASS                                                                                                  |
+| `npm run lint`                                                                                                           | PASS (0 warnings)                                                                                     |
+| `npm run arch:check`                                                                                                     | PASS (no dependency violations; import policy passed)                                                 |
+| `npm run build:ui`                                                                                                       | PASS (ES2019 compatibility; CSP hashes written)                                                       |
 
 ## Known limitations
 
 - **Wall-clock provider latency** (STT transcribe, TTS synthesis) is provider- and network-dependent and
   is out of the deterministic harness boundary, consistent with the Voice Digital Twin harness (#505,
   `evaluation-harness.md` §6). The deterministic suite proves the measurement, recording, and budget
-  scoring; the provider legs carry a budget for the manual headphone walkthrough. **Manual walkthrough
-  (headphones):** entering dialogue, speaking a turn, hearing the spoken answer, and barging in were
-  exercised against the real surface; the browser smoke captures the listening state as the checked-in
-  artifact.
+  scoring; the provider legs carried a budget for the historical manual headphone walkthrough. That
+  walkthrough exercised the then-current surface and must not be cited as the renewed ADR-0154/Oliver
+  microphone test, which remains outstanding. The browser artifact is synthetic UI evidence only.
 - **Realtime (WebRTC) media** is not exercised by dialogue mode; the colleague dialogue path is STT+TTS
   (ADR-0096 D3/D7). The realtime transport (#497) has its own browser smoke.
 

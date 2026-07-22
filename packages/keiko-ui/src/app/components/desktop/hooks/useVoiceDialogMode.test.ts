@@ -64,7 +64,11 @@ class StubMediaRecorder {
   static isTypeSupported = (): boolean => true;
 }
 
-class StubRTCPeerConnection {}
+class StubRTCPeerConnection {
+  addTransceiver(): never {
+    throw new Error("availability tests do not create a peer connection");
+  }
+}
 
 beforeEach(() => {
   localStorage.clear();
@@ -139,6 +143,12 @@ describe("useVoiceDialogMode — availability gating", () => {
       configurable: true,
       value: { getUserMedia: vi.fn() },
     });
+    const { result } = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
+    expect(result.current.available).toBe(false);
+  });
+
+  it("is unavailable when WebRTC cannot enforce a send-only microphone transceiver", () => {
+    vi.stubGlobal("RTCPeerConnection", class {});
     const { result } = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
     expect(result.current.available).toBe(false);
   });

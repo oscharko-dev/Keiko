@@ -157,12 +157,13 @@ function normalizeQueryText(queryText: string): string {
 function searchableTokens(normalized: string): readonly string[] {
   return (
     normalized
-      .split(/[^a-z0-9_.-]+/u)
+      .split(/[^\p{L}\p{N}_.-]+/u)
       .filter((token) => token.length >= 3 && !BASIC_STOP_WORDS.has(token))
       // `.`, `-` and `_` are kept inside tokens (so `package.json`/`tsconfig.base` survive), but a
       // token built only from those separators (e.g. `...`, `--`, `__`) is not searchable. Require at
-      // least one alphanumeric character so a pure-punctuation prompt resolves to clarification-needed.
-      .filter((token) => /[a-z0-9]/u.test(token))
+      // least one Unicode letter or number so a pure-punctuation prompt resolves to clarification,
+      // while non-Latin repository questions still reach the language-agnostic retrieval fallback.
+      .filter((token) => /[\p{L}\p{N}]/u.test(token))
   );
 }
 

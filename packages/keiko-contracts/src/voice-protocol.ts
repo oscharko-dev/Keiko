@@ -11,9 +11,9 @@
 //
 // The protocol separates two planes (AC1): the WebSocket control / signaling plane (every message
 // kind in this module) and the WebRTC media plane (raw audio frames). Raw audio is never a control
-// message and is never replayed or persisted by default (AC5). Today the control-plane role is
-// realized on the existing loopback HTTP + Server-Sent Events seam; a bidirectional WebSocket upgrade
-// is an explicit, ADR-gated transport decision owned by Issue #497 (ADR-0100 D3 / ADR-0101).
+// message and is never replayed or persisted by default (AC5). The control-plane role is realized on
+// the single capability-gated loopback WebSocket path selected by Issue #497 and narrowed to
+// media-input/transcription authority by ADR-0154.
 
 import type {
   VoicePersona,
@@ -40,9 +40,9 @@ export type VoicePlane = "control" | "media";
 
 export const VOICE_PLANES: readonly VoicePlane[] = ["control", "media"] as const;
 
-// How the authoritative control / signaling plane is realized on the transport. `loopback-http-sse`
-// is the realization today (POST /api/* request/response + EventSource push); `loopback-websocket` is
-// the ADR-gated future realization (re-opening the BFF upgrade path) owned by Issue #497.
+// How the authoritative control / signaling plane is realized on the transport. The current Voice
+// implementation re-opens exactly one capability-gated loopback WebSocket path; HTTP/SSE remains in
+// the union only for compatibility with older protocol records.
 export type VoiceControlTransport = "loopback-http-sse" | "loopback-websocket";
 
 export const VOICE_CONTROL_TRANSPORTS: readonly VoiceControlTransport[] = [
@@ -50,13 +50,17 @@ export const VOICE_CONTROL_TRANSPORTS: readonly VoiceControlTransport[] = [
   "loopback-websocket",
 ] as const;
 
-// The realization in effect for v1. Recorded as a constant so the spec and the implementing transport
-// issue (#497) share one source of truth and any change is an explicit edit, not a silent drift.
+// Published v1 transport literal. It describes the original HTTP/SSE realization and is immutable:
+// changing a versioned public constant in place breaks persisted records and downstream consumers.
 export const VOICE_CONTROL_TRANSPORT_V1: VoiceControlTransport = "loopback-http-sse";
+
+// Productive Twin Voice control transport. Named separately from the immutable v1 compatibility
+// constant so the capability-gated WebSocket implementation can evolve additively (ADR-0154).
+export const VOICE_REALTIME_CONTROL_TRANSPORT: VoiceControlTransport = "loopback-websocket";
 
 // Media-plane transport per the graceful-degradation ladder. `gateway-batch` is the dictation /
 // speech-output realization (audio rides the existing JSON request envelope and is forwarded once
-// through the Model Gateway egress seam); `webrtc` is the real-time full-duplex realization.
+// through the Model Gateway egress seam); `webrtc` is Realtime microphone input/transcription only.
 export type VoiceMediaTransport = "none" | "gateway-batch" | "webrtc";
 
 export const VOICE_MEDIA_TRANSPORTS: readonly VoiceMediaTransport[] = [
@@ -125,14 +129,17 @@ export const VOICE_MESSAGE_DIRECTIONS: readonly VoiceMessageDirection[] = [
 // ─── Media plane descriptor ─────────────────────────────────────────────────────
 export type VoiceMediaTrackKind = "audio-in" | "audio-out";
 
+// Immutable v1 catalog. `audio-out` remains decodable for compatibility, but productive Realtime
+// negotiation uses VOICE_REALTIME_INPUT_MEDIA_PLANE and never grants provider output authority.
 export const VOICE_MEDIA_TRACK_KINDS: readonly VoiceMediaTrackKind[] = [
   "audio-in",
   "audio-out",
 ] as const;
 
-// The single descriptor for the WebRTC media plane. It is intentionally NOT a control message: it
+// Immutable v1 descriptor for the WebRTC media plane. It is intentionally NOT a control message: it
 // records that raw audio is media-plane, never-persisted, raw-media-classified, and carried over
-// native browser WebRTC only. This is the typed expression of AC1's control/media separation.
+// native browser WebRTC only. Productive input-only authority is narrowed by the additive descriptor
+// below without mutating this published value.
 export interface VoiceMediaPlaneDescriptor {
   readonly plane: "media";
   readonly transport: "webrtc";
@@ -145,6 +152,14 @@ export const VOICE_MEDIA_PLANE: VoiceMediaPlaneDescriptor = {
   plane: "media",
   transport: "webrtc",
   trackKinds: VOICE_MEDIA_TRACK_KINDS,
+  replay: "never-persisted",
+  redaction: "raw-media",
+} as const;
+
+export const VOICE_REALTIME_INPUT_MEDIA_PLANE: VoiceMediaPlaneDescriptor = {
+  plane: "media",
+  transport: "webrtc",
+  trackKinds: ["audio-in"],
   replay: "never-persisted",
   redaction: "raw-media",
 } as const;
@@ -191,9 +206,8 @@ export const VOICE_CONTROL_MESSAGE_KINDS: readonly VoiceControlMessageKind[] = [
   "error",
 ] as const;
 
-// Optional low-latency RTCDataChannel event subset. When a data channel is negotiated for the
-// full-realtime profile it MAY mirror this control subset for lower latency than the control plane;
-// it never carries new authority and never carries raw audio. Every entry is also a control kind.
+// Immutable v1 low-latency RTCDataChannel event subset. The provider-output literals remain
+// decodable for compatibility but do not grant productive direction/allowlist authority.
 export type VoiceDataChannelEventKind =
   "control.interrupt" | "transcript.partial" | "playback.state";
 
@@ -202,6 +216,13 @@ export const VOICE_DATA_CHANNEL_EVENT_KINDS: readonly VoiceDataChannelEventKind[
   "transcript.partial",
   "playback.state",
 ] as const;
+
+// Productive Realtime data events are input transcription only. This separate additive surface is
+// what current consumers use; it cannot reactivate a provider-native assistant response path.
+export type VoiceRealtimeInputDataChannelEventKind = "transcript.partial" | "transcript.committed";
+
+export const VOICE_REALTIME_INPUT_DATA_CHANNEL_EVENT_KINDS: readonly VoiceRealtimeInputDataChannelEventKind[] =
+  ["transcript.partial", "transcript.committed"] as const;
 
 // ─── Supporting enums ─────────────────────────────────────────────────────────
 export type VoiceSessionCloseReason =
@@ -279,6 +300,8 @@ interface VoiceControlEnvelope<K extends VoiceControlMessageKind> {
   readonly kind: K;
 }
 
+// Legacy v1 session context remains in the decoder/type surface only. Productive transports own a
+// narrower authority check and reject or ignore these fields before provider negotiation.
 export interface VoiceSessionMemoryContext {
   readonly enabled: boolean;
   readonly budgetTokens?: number | undefined;
@@ -303,13 +326,15 @@ export interface VoiceSessionCreateMessage extends VoiceControlEnvelope<"session
   readonly idempotencyKey: string;
   readonly requestedProfile: VoiceProfile;
   readonly negotiationMode: VoiceNegotiationMode;
-  // Optional product voice persona ("male" | "female" | "neutral") the client selected. Content-free
-  // (an enum, never a provider voice id); the host resolves it server-side to a realtime-valid voice so
-  // the spoken voice matches the user's choice. Absent ⇒ the host uses its configured default voice.
+  // The shared control envelope also serves Composer live dictation, whose explicit input-language
+  // hint is accepted only on that separate path. Twin Voice rejects it and uses deployment-owned
+  // transcription configuration.
+  readonly transcriptionLanguage?: string | undefined;
+  // Legacy v1 product persona. Compatibility-only: current Twin Voice does not forward it to the
+  // provider and resolves spoken output separately through canonical TTS.
   readonly persona?: VoicePersona | undefined;
-  // Active chat context for server-side realtime instructions and MemoriaViva retrieval. Carries only
-  // the chat id plus memory flags; the host resolves project ownership and never receives provider
-  // credential material from the browser.
+  // Active chat identity plus legacy compatibility metadata. Current productive Twin Voice accepts
+  // only chatId at its transport authority boundary.
   readonly chatContext?: VoiceSessionChatContext | undefined;
 }
 
@@ -540,6 +565,31 @@ export const DEFAULT_VOICE_PROTOCOL_TIMEOUTS: VoiceProtocolTimeouts = {
 export type VoiceProtocolValidation =
   { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
+const VOICE_SESSION_CREATE_FIELDS: ReadonlySet<string> = new Set([
+  "protocolVersion",
+  "sessionId",
+  "seq",
+  "direction",
+  "kind",
+  "idempotencyKey",
+  "requestedProfile",
+  "negotiationMode",
+  "transcriptionLanguage",
+  "persona",
+  "chatContext",
+]);
+const VOICE_SESSION_CHAT_CONTEXT_FIELDS: ReadonlySet<string> = new Set([
+  "chatId",
+  "memory",
+  "grounding",
+]);
+const VOICE_SESSION_MEMORY_FIELDS: ReadonlySet<string> = new Set(["enabled", "budgetTokens"]);
+const VOICE_SESSION_GROUNDING_FIELDS: ReadonlySet<string> = new Set([
+  "enabled",
+  "sourceCount",
+  "kind",
+]);
+
 // ─── Type guards & lookups ───────────────────────────────────────────────────────
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -551,6 +601,104 @@ function isNonEmptyTrimmed(value: unknown): value is string {
 
 function isFiniteNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function hasOnlyFields(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function isVoiceProfile(value: unknown): value is VoiceProfile {
+  return (
+    value === "none" ||
+    value === "speech-to-text" ||
+    value === "speech-output" ||
+    value === "full-realtime"
+  );
+}
+
+function profileNegotiationMatches(profile: unknown, negotiationMode: unknown): boolean {
+  if (!isVoiceProfile(profile)) return true;
+  if (!isVoiceNegotiationMode(negotiationMode)) return true;
+  return VOICE_PROFILE_NEGOTIATION_MODE[profile] === negotiationMode;
+}
+
+function isOptionalTranscriptionLanguage(value: unknown): boolean {
+  return value === undefined || isNonEmptyTrimmed(value);
+}
+
+function isOptionalVoicePersona(value: unknown): value is VoicePersona | undefined {
+  return value === undefined || value === "male" || value === "female" || value === "neutral";
+}
+
+function isOptionalSessionMemoryContext(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isRecord(value) &&
+    hasOnlyFields(value, VOICE_SESSION_MEMORY_FIELDS) &&
+    typeof value.enabled === "boolean" &&
+    (value.budgetTokens === undefined || isFiniteNonNegativeInteger(value.budgetTokens))
+  );
+}
+
+function isVoiceSessionGroundingKind(value: unknown): value is VoiceSessionGroundingKind {
+  return value === "files" || value === "knowledge" || value === "hybrid" || value === "multi";
+}
+
+function isOptionalSessionGroundingContext(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isRecord(value) &&
+    hasOnlyFields(value, VOICE_SESSION_GROUNDING_FIELDS) &&
+    typeof value.enabled === "boolean" &&
+    isFiniteNonNegativeInteger(value.sourceCount) &&
+    isVoiceSessionGroundingKind(value.kind)
+  );
+}
+
+function isOptionalSessionChatContext(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isRecord(value) &&
+    hasOnlyFields(value, VOICE_SESSION_CHAT_CONTEXT_FIELDS) &&
+    isNonEmptyTrimmed(value.chatId) &&
+    isOptionalSessionMemoryContext(value.memory) &&
+    isOptionalSessionGroundingContext(value.grounding)
+  );
+}
+
+function validateSessionCreateOptions(value: Record<string, unknown>, reasons: string[]): void {
+  if (!isOptionalTranscriptionLanguage(value.transcriptionLanguage)) {
+    reasons.push("session.create transcriptionLanguage invalid");
+  }
+  if (!isOptionalVoicePersona(value.persona)) {
+    reasons.push("session.create persona invalid");
+  }
+  if (!isOptionalSessionChatContext(value.chatContext)) {
+    reasons.push("session.create chatContext invalid");
+  }
+}
+
+function validateSessionCreatePayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_SESSION_CREATE_FIELDS)) {
+    reasons.push("session.create fields invalid");
+  }
+  if (value.seq !== 0 || value.direction !== "client-to-host") {
+    reasons.push("session.create envelope invalid");
+  }
+  if (!isNonEmptyTrimmed(value.idempotencyKey)) {
+    reasons.push("session.create idempotencyKey invalid");
+  }
+  const profile = value.requestedProfile;
+  if (!isVoiceProfile(profile)) {
+    reasons.push("session.create requestedProfile invalid");
+  }
+  if (!isVoiceNegotiationMode(value.negotiationMode)) {
+    reasons.push("session.create negotiationMode invalid");
+  }
+  if (!profileNegotiationMatches(profile, value.negotiationMode)) {
+    reasons.push("session.create profile negotiation mismatch");
+  }
+  validateSessionCreateOptions(value, reasons);
 }
 
 export function isVoiceControlMessageKind(value: unknown): value is VoiceControlMessageKind {
@@ -622,29 +770,22 @@ function validateEnvelope(value: Record<string, unknown>, reasons: string[]): vo
   }
 }
 
-// Structural guard for the shared envelope (version + sessionId + seq + direction + kind). Per-kind
-// payload typing is recovered by narrowing on `kind` once the envelope is known to be well-formed.
+// Structural guard for the shared envelope plus the v1-compatible session.create payload. Productive
+// transports apply their own narrower direction/authority allowlists after this decoder.
 export function isVoiceControlMessage(value: unknown): value is VoiceControlMessage {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    isVoiceProtocolVersionSupported(value.protocolVersion) &&
-    isNonEmptyTrimmed(value.sessionId) &&
-    isFiniteNonNegativeInteger(value.seq) &&
-    isVoiceMessageDirection(value.direction) &&
-    isVoiceControlMessageKind(value.kind)
-  );
+  return validateVoiceControlMessage(value).ok;
 }
 
-// Deep validation of the shared envelope, returning every reason it is malformed. Per-kind payload
-// fields are owned and validated by the implementing transport issue (#497); the contract pins the
-// envelope, the kind catalog, and the version-compatibility rule.
+// Deep validation of the shared envelope plus the published v1-compatible session.create shape,
+// returning every reason it is malformed. It grants no productive authority by itself.
 export function validateVoiceControlMessage(value: unknown): VoiceProtocolValidation {
   if (!isRecord(value)) {
     return { ok: false, reasons: ["message must be an object"] };
   }
   const reasons: string[] = [];
   validateEnvelope(value, reasons);
+  if (value.kind === "session.create") {
+    validateSessionCreatePayload(value, reasons);
+  }
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }

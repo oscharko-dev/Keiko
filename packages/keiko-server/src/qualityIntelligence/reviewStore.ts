@@ -1017,6 +1017,76 @@ const regenerationAudit = (args: {
   toState: args.toState,
 });
 
+function migratedCandidateAudit(
+  artifact: QiReviewStateArtifact,
+  preserved: ReadonlySet<string>,
+  oldRunId: string,
+): QiReviewAuditEntry[] {
+  const migrated: QiReviewAuditEntry[] = [];
+  for (const entry of artifact.auditLog) {
+    if (
+      entry.scope === "candidate" &&
+      entry.candidateId !== undefined &&
+      preserved.has(entry.candidateId)
+    ) {
+      migrated.push({ ...stripAuditChainFields(entry), sourceRunId: oldRunId });
+    }
+  }
+  return migrated;
+}
+
+function appendPreservedCandidateReviews(
+  artifact: QiReviewStateArtifact,
+  candidateIds: ReadonlySet<string>,
+  input: MigrateReviewStateForRegenerationInput,
+  candidateStates: Record<string, ReviewState>,
+  audit: QiReviewAuditEntry[],
+): void {
+  for (const candidateId of candidateIds) {
+    const state = candidateReviewStateOf(artifact, candidateId);
+    const explicit = hasExplicitCandidateState(artifact, candidateId);
+    const audited = hasCandidateAudit(artifact, candidateId);
+    if (explicit) candidateStates[candidateId] = state;
+    if (!explicit && !audited) continue;
+    audit.push(
+      regenerationAudit({
+        action: "regenerate-preserved",
+        now: input.now,
+        candidateId,
+        oldRunId: input.oldRunId,
+        fromState: state,
+        toState: state,
+        redact: input.redact,
+      }),
+    );
+  }
+}
+
+function appendReopenedCandidateReviews(
+  artifact: QiReviewStateArtifact,
+  candidateIds: ReadonlySet<string>,
+  input: MigrateReviewStateForRegenerationInput,
+  audit: QiReviewAuditEntry[],
+): void {
+  for (const candidateId of candidateIds) {
+    const state = candidateReviewStateOf(artifact, candidateId);
+    const explicit = hasExplicitCandidateState(artifact, candidateId);
+    const audited = hasCandidateAudit(artifact, candidateId);
+    if (state === "open" && !explicit && !audited) continue;
+    audit.push(
+      regenerationAudit({
+        action: "regenerate-reopened",
+        now: input.now,
+        candidateId,
+        oldRunId: input.oldRunId,
+        fromState: state,
+        toState: "open",
+        redact: input.redact,
+      }),
+    );
+  }
+}
+
 /**
  * Carry review state from an immutable source run into a newly materialised regenerate-stale run.
  * Fresh/preserved candidates keep their candidate review state and candidate audit entries in the
@@ -1026,65 +1096,15 @@ const regenerationAudit = (args: {
  */
 export const migrateReviewStateForRegeneration = (
   input: MigrateReviewStateForRegenerationInput,
-  // eslint-disable-next-line max-lines-per-function, complexity
 ): QiReviewStateArtifact | undefined => {
   const oldArtifact = loadRunReviewState(input.oldRunId, input.evidenceDir);
   if (oldArtifact === undefined) return undefined;
   const preserved = new Set(input.preservedCandidateIds);
   const stale = new Set(input.staleCandidateIds);
   const candidateStates = toNullProtoStates({});
-  const migratedAudit: QiReviewAuditEntry[] = [];
-  for (const entry of oldArtifact.auditLog) {
-    if (
-      entry.scope === "candidate" &&
-      entry.candidateId !== undefined &&
-      preserved.has(entry.candidateId)
-    ) {
-      migratedAudit.push({ ...stripAuditChainFields(entry), sourceRunId: input.oldRunId });
-    }
-  }
-  for (const candidateId of preserved) {
-    const state = candidateReviewStateOf(oldArtifact, candidateId);
-    if (hasExplicitCandidateState(oldArtifact, candidateId)) {
-      candidateStates[candidateId] = state;
-    }
-    if (
-      hasExplicitCandidateState(oldArtifact, candidateId) ||
-      hasCandidateAudit(oldArtifact, candidateId)
-    ) {
-      migratedAudit.push(
-        regenerationAudit({
-          action: "regenerate-preserved",
-          now: input.now,
-          candidateId,
-          oldRunId: input.oldRunId,
-          fromState: state,
-          toState: state,
-          redact: input.redact,
-        }),
-      );
-    }
-  }
-  for (const candidateId of stale) {
-    const state = candidateReviewStateOf(oldArtifact, candidateId);
-    if (
-      state !== "open" ||
-      hasExplicitCandidateState(oldArtifact, candidateId) ||
-      hasCandidateAudit(oldArtifact, candidateId)
-    ) {
-      migratedAudit.push(
-        regenerationAudit({
-          action: "regenerate-reopened",
-          now: input.now,
-          candidateId,
-          oldRunId: input.oldRunId,
-          fromState: state,
-          toState: "open",
-          redact: input.redact,
-        }),
-      );
-    }
-  }
+  const migratedAudit = migratedCandidateAudit(oldArtifact, preserved, input.oldRunId);
+  appendPreservedCandidateReviews(oldArtifact, preserved, input, candidateStates, migratedAudit);
+  appendReopenedCandidateReviews(oldArtifact, stale, input, migratedAudit);
   if (Object.keys(candidateStates).length === 0 && migratedAudit.length === 0) return undefined;
   const next: QiReviewStateArtifact = {
     qiReviewSchemaVersion: QI_REVIEW_SCHEMA_VERSION,

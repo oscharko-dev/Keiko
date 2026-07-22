@@ -274,11 +274,14 @@ Monaco's runtime style injection satisfy this with no relaxation (ADR-0042 D3.4)
 ### Supply chain
 
 `monaco-editor@0.55.1` declares `dompurify@3.2.7` (moderate advisories affecting `<= 3.4.10`). The
-control is a root `overrides: { dompurify: "3.4.11" }` that installs the patched line — not a silencing
+control is a root `overrides: { dompurify: "3.4.12" }` that installs the patched line — not a silencing
 pin — while Monaco stays at `0.55.1`. Monaco also bundles a vendored DOMPurify copy reachable only
-through Markdown-rendering sinks; the mounted editor keeps those sinks off (suggest docs, parameter
-hints, code lens, lightbulb, inlay hints, links) and renders hover quick-info as an inert, escaped code
-fence, so the vendored sanitiser never processes active markup. The lockfile integrity hashes, the SBOM
+through Markdown-rendering sinks. Governed bridges may enable parameter hints, the code-action
+lightbulb, and inlay hints, but project primitive strings only; completion has no documentation field,
+and non-string completion/signature metadata is discarded at runtime. Suggest documentation, code
+lens, links, and the inline-suggest toolbar remain disabled. Hover quick-info is wrapped in an inert,
+escaped code fence, so the vendored sanitiser never processes active markup. The lockfile integrity
+hashes, the SBOM
 
 - license gate (`npm run check:workspace-supply-chain`), and the no-CDN policy bound the supply-chain
   exposure.

@@ -9,12 +9,12 @@ configured capabilities support. Azure Foundry is **one** valid provider, never 
 
 See [architecture.md](architecture.md) §3 for full definitions.
 
-| Provider profile      | Voice affordance                       | Required advertised capability         |
-| --------------------- | -------------------------------------- | -------------------------------------- |
-| `none`                | No voice UI                            | None                                   |
-| `speech-to-text only` | Composer dictation (audio → text)      | Speech input / transcription           |
-| `speech output only`  | Assistant speech playback              | Speech output                          |
-| `full realtime voice` | Interruptible full-duplex conversation | Realtime speech / speech-in-speech-out |
+| Provider profile      | Voice affordance                  | Required advertised capability       |
+| --------------------- | --------------------------------- | ------------------------------------ |
+| `none`                | No voice UI                       | None                                 |
+| `speech-to-text only` | Composer dictation (audio → text) | Speech input / transcription         |
+| `speech output only`  | Assistant speech playback         | Speech output                        |
+| `full realtime voice` | Interruptible canonical Twin      | Realtime input + chat + explicit TTS |
 
 ## 2. Environment profiles (deployment axis)
 
@@ -30,11 +30,11 @@ Each cell states the **expected effective voice profile** and the **data-egress 
 combination. "Configured endpoint" always means an endpoint declared as a Model Gateway provider with a
 `ModelCapability` record and selected through runtime capability metadata (ADR-0100 D4/D5).
 
-| Environment \ Capability       | `none`                 | `speech-to-text only`                                 | `speech output only`                            | `full realtime voice`                                      |
-| ------------------------------ | ---------------------- | ----------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
-| **Azure Foundry dev/academic** | No voice UI; no egress | Dictation; audio/transcript → configured Azure STT    | Speech playback; text → configured Azure TTS    | Full duplex; audio ↔ configured Azure realtime endpoint    |
-| **Customer-hosted controlled** | No voice UI; no egress | Dictation; audio/transcript → configured customer STT | Speech playback; text → configured customer TTS | Full duplex; audio ↔ configured customer realtime endpoint |
-| **No-voice**                   | No voice UI; no egress | n/a (no STT configured → degrades to `none`)          | n/a (degrades to `none`)                        | n/a (degrades to `none`)                                   |
+| Environment \ Capability       | `none`                 | `speech-to-text only`                                 | `speech output only`                            | `full realtime voice`                                    |
+| ------------------------------ | ---------------------- | ----------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------- |
+| **Azure Foundry dev/academic** | No voice UI; no egress | Dictation; audio/transcript → configured Azure STT    | Speech playback; text → configured Azure TTS    | Mic → Realtime transcription; final → chat; answer → TTS |
+| **Customer-hosted controlled** | No voice UI; no egress | Dictation; audio/transcript → configured customer STT | Speech playback; text → configured customer TTS | Mic → Realtime transcription; final → chat; answer → TTS |
+| **No-voice**                   | No voice UI; no egress | n/a (no STT configured → degrades to `none`)          | n/a (degrades to `none`)                        | n/a (degrades to `none`)                                 |
 
 **Reading the matrix:**
 
@@ -46,28 +46,33 @@ combination. "Configured endpoint" always means an endpoint declared as a Model 
 
 ## 4. Transport and network requirements per profile
 
-| Profile               | Control plane       | Media plane                         | Firewall / NAT notes                                                                                                                      |
-| --------------------- | ------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `none`                | n/a                 | n/a                                 | No voice egress.                                                                                                                          |
-| `speech-to-text only` | Loopback HTTP + SSE | Audio to configured STT via gateway | Outbound to the configured STT endpoint via `gatewayFetch` (proxy/CA-aware).                                                              |
-| `speech output only`  | Loopback HTTP + SSE | Audio from configured TTS           | Outbound to the configured TTS endpoint via `gatewayFetch`.                                                                               |
-| `full realtime voice` | Loopback HTTP + SSE | Native browser WebRTC (DTLS-SRTP)   | TURN relay usually required in controlled networks: UDP 3478, relay port range, TCP 443. STUN/TURN URLs + short-lived creds configurable. |
+| Profile               | Control plane       | Media plane                          | Firewall / NAT notes                                                                       |
+| --------------------- | ------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `none`                | n/a                 | n/a                                  | No voice egress.                                                                           |
+| `speech-to-text only` | Loopback HTTP + SSE | Audio to configured STT via gateway  | Outbound to the configured STT endpoint via `gatewayFetch` (proxy/CA-aware).               |
+| `speech output only`  | Loopback HTTP + SSE | Audio from configured TTS            | Outbound to the configured TTS endpoint via `gatewayFetch`.                                |
+| `full realtime voice` | Loopback WebSocket  | Send-only browser WebRTC (DTLS-SRTP) | No caller-supplied STUN/TURN configuration; unsupported network paths fail closed to text. |
 
-The control plane is loopback-only in all profiles (the BFF binds `127.0.0.1` and rejects WebSocket upgrades —
-see [architecture.md](architecture.md) §4.1). Media transport is the only plane that may traverse the network,
-and only to configured endpoints / relays.
+The control plane is loopback-only in all profiles. The BFF binds `127.0.0.1`, accepts the single
+capability-gated `/api/voice/control` upgrade, and rejects every other WebSocket upgrade (see
+[architecture.md](architecture.md) §4.1). Media transport is the only browser plane that may traverse the
+network, and the shipped path has no caller-supplied STUN/TURN or custom relay configuration.
 
 ## 5. Credential posture per environment
 
-| Environment                | Long-lived secret location     | Browser credential                                          |
-| -------------------------- | ------------------------------ | ----------------------------------------------------------- |
-| Azure Foundry dev/academic | Sealed vault on the Keiko host | Short-lived ephemeral session token, or none (proxied-SDP). |
-| Customer-hosted controlled | Sealed vault on the Keiko host | Short-lived ephemeral session token, or none (proxied-SDP). |
-| No-voice                   | n/a                            | n/a                                                         |
+| Environment                | Long-lived secret location     | Browser credential                               |
+| -------------------------- | ------------------------------ | ------------------------------------------------ |
+| Azure Foundry dev/academic | Sealed vault on the Keiko host | None; the host performs proxied-SDP negotiation. |
+| Customer-hosted controlled | Sealed vault on the Keiko host | None; the host performs proxied-SDP negotiation. |
+| No-voice                   | n/a                            | n/a                                              |
 
 In every environment the long-lived provider key stays on the Keiko host as sealed vault material
 (`apiKeySecretRef`, [ADR-0046](../adr/ADR-0046-local-credential-vault.md)); see
 [privacy-contract.md](privacy-contract.md) §2.
+
+`direct-ephemeral` remains a typed protocol value for a separately approved future browser-direct
+realization. It is not wired by the shipped client and must not be described as the current credential
+posture.
 
 ## 6. Product voice personas (Issue #1557)
 
@@ -87,5 +92,5 @@ The persona → provider voice-id mapping lives on the credential-tier provider 
 `availableVoicePersonas` (and the derived `supportedVoicePersonas` on the model list) carry only the persona
 literals, so the operator picks personas per deployment without exposing provider voice identifiers. The five
 existing Azure Foundry deployment classes (`keiko-stt`, `keiko-tts`, `keiko-audio-output`, `keiko-realtime`,
-`keiko-realtime-stt`) are represented purely by `modelId` + capability flags + `voiceProfiles` — no deployment
-name is hard-coded into product behavior.
+`keiko-realtime-stt`) are represented by `modelId` plus capability flags; `voiceProfiles` is used only for
+speech-output providers. No deployment name is hard-coded into product behavior.

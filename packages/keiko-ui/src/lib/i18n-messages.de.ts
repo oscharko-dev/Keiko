@@ -61,7 +61,7 @@ export const DE_MESSAGES = {
   "gatewaySetup.voice.description":
     "Optionale Modelle für Diktat, Live-Unterhaltungen und vorgelesene Antworten.",
   "gatewaySetup.voice.guidance":
-    "Konfiguriere nur, was du brauchst: Diktieren benötigt ein Speech-to-Text-Deployment. Digital Voice benötigt ein separates Realtime-Deployment. Für die unten ausgewählten Deployments werden dieselbe Audio-Verbindung und dieselben Zugangsdaten verwendet. Verwende die exakten Deployment-Namen deines Anbieters.",
+    "Konfiguriere nur, was du brauchst: Diktieren benötigt ein Speech-to-Text-Deployment. Digital Voice benötigt ein Realtime-Media-Deployment und das damit kompatible Live-Transkriptions-Deployment. Vorlesen benötigt ein Speech-Output-Deployment. Deployment-Namen sind anbieterspezifisch. Um einen Audio-Endpunkt zu ersetzen, gib neue Zugangsdaten und die Anbieter-Lokalität sowie jede zu verschiebende Rolle erneut an; ausgelassene Rollen behalten ihre gespeicherte Verbindung.",
   "gatewaySetup.voice.selectedCapabilities":
     "Ausgewählte Funktionen: Diktieren {dictate} · Digital Voice {digitalVoice} · Vorlesen {readAloud}.",
   "gatewaySetup.voice.dictateDeployment": "Diktieren · Speech-to-Text-Deployment",
@@ -70,21 +70,38 @@ export const DE_MESSAGES = {
     "Digital Voice · Live-Transkriptions-Deployment",
   "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
     "ihr-realtime-transkriptions-deployment",
-  "gatewaySetup.voice.semanticTurnDetection": "Semantische Sprecherwechsel-Erkennung",
+  "gatewaySetup.voice.realtimeTranscriptionRequiredLabel": "mit Realtime erforderlich",
+  "gatewaySetup.voice.realtimeTranscriptionRequired":
+    "Gib das kompatible Live-Transkriptions-Deployment für dieses Realtime-Deployment ein.",
+  "gatewaySetup.voice.realtimeRequired":
+    "Ein Live-Transkriptions-Deployment erfordert ein ausdrückliches Realtime-Deployment.",
+  "gatewaySetup.voice.deploymentRequired":
+    "Gib mindestens ein ausdrückliches Voice-Deployment an: Speech-to-Text, Realtime mit Live-Transkription oder Speech Output.",
+  "gatewaySetup.voice.endpointMigrationRequired":
+    "Zum Ersetzen eines gespeicherten Audio-Endpunkts sind neue Zugangsdaten, eine ausdrücklich gewählte Anbieter-Lokalität und mindestens eine zu verschiebende Deployment-Rolle erforderlich.",
+  "gatewaySetup.voice.semanticTurnDetection": "Semantische Turn-Ende-Erkennung (Semantic VAD)",
   "gatewaySetup.voice.semanticTurnDetectionHint":
-    "Nur aktivieren, wenn das Realtime-Deployment Semantic VAD ausdrücklich unterstützt.",
+    "Nur aktivieren, wenn dieses Realtime-Deployment Semantic VAD ausdrücklich unterstützt. Beim Austausch des Deployments wird diese Funktion zurückgesetzt.",
   "gatewaySetup.voice.speechOutputDeployment": "Vorlesen · Speech-Output-Deployment",
   "gatewaySetup.voice.outputVoice": "Ausgabestimme",
-  "gatewaySetup.voice.outputVoiceHint": "optional; Standard: alloy",
+  "gatewaySetup.voice.outputVoiceHint":
+    "für Vorlesen erforderlich; verwende eine vom gewählten Anbieter unterstützte ID",
+  "gatewaySetup.voice.outputVoiceRequired":
+    "Beim Konfigurieren oder Austauschen eines Speech-Output-Deployments ist eine ausdrückliche Anbieter-Stimmen-ID erforderlich.",
   "gatewaySetup.voice.endpointUrl": "Audio-Endpunkt-URL",
+  "gatewaySetup.voice.preserveExistingHint": "leer lassen, um den gespeicherten Wert beizubehalten",
   "gatewaySetup.voice.endpointReplacePlaceholder":
-    "Nur ausfüllen, um die gespeicherte Audio-URL zu ersetzen",
+    "Mit Zugangsdaten, Lokalität und ausdrücklichen Zielrollen ersetzen",
   "gatewaySetup.voice.credential": "Audio-Zugangsdaten",
   "gatewaySetup.voice.credentialReplacePlaceholder":
     "Nur ausfüllen, um die gespeicherten Audio-Zugangsdaten zu ersetzen",
   "gatewaySetup.voice.credentialPlaceholder": "Audio-Zugangsdaten einfügen",
   "gatewaySetup.voice.authHeader": "Audio-Authentifizierungs-Header",
+  "gatewaySetup.voice.authHeaderPreservePlaceholder":
+    "Leer lassen, um den gespeicherten Header beizubehalten",
   "gatewaySetup.voice.timeout": "Audio-Zeitlimit (ms)",
+  "gatewaySetup.voice.timeoutPreservePlaceholder":
+    "Leer lassen, um das gespeicherte Zeitlimit beizubehalten",
   "gatewaySetup.voice.storedAria": "Gespeicherte Audio-Zugangsdaten",
   "gatewaySetup.voice.audioModels": "Audio-Modelle",
   "gatewaySetup.voice.updateSettings": "Audio- und Digital-Voice-Einstellungen aktualisieren",
@@ -241,6 +258,9 @@ export const DE_MESSAGES = {
   "chat.voice.interrupt": "Assistenz unterbrechen",
   "chat.voice.interruptShort": "Unterbrechen",
   "chat.voice.interruptAvailable": "Verfügbar, während Keiko spricht.",
+  "chat.voice.pendingTurn":
+    "Dein gesprochener Beitrag wartet noch auf eine bestätigte Antwort. Versuche ihn erneut, bevor du eine weitere Nachricht sendest.",
+  "chat.voice.retryPendingTurn": "Gesprochenen Beitrag erneut versuchen",
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.load": "Chat konnte nicht geladen werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",

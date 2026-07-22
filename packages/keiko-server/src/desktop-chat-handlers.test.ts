@@ -26,6 +26,7 @@ import type {
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_CONTEXT_PROFILE, deriveContextProfile } from "@oscharko-dev/keiko-contracts";
+import { MAX_DESKTOP_CHAT_INPUT_BYTES } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -361,6 +362,263 @@ describe("desktop chat routes", () => {
     expect(body.chat).toMatchObject({ projectPath: projectDir, selectedModel: modelId });
   });
 
+  it("retains the canonical user when a validated buffered model has no runtime adapter", async () => {
+    await restartWithDeps(deps(fakeModel("unused"), { modelPortFactory: () => undefined }));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Keep the adapter-failure transcript",
+        clientTurnId: "adapter-failure-transcript",
+      }),
+    });
+
+    expect(sendRes.status).toBe(400);
+    expect(store.listMessages(created.chat.id)).toMatchObject([
+      { role: "user", content: "Keep the adapter-failure transcript" },
+    ]);
+  });
+
+  it("durably admits a canonical user before a removed deployment is restored", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const request = {
+      chatId: created.chat.id,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "Keep the removed-deployment transcript",
+      clientTurnId: "removed-deployment-turn",
+    };
+
+    await restartWithDeps(
+      deps(fakeModel("unused"), {
+        config: customModelConfig("replacement-chat-model"),
+        configPresent: true,
+      }),
+    );
+    const unavailable = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+
+    expect(unavailable.status).toBe(400);
+    expect(store.listMessages(created.chat.id)).toMatchObject([
+      { role: "user", content: "Keep the removed-deployment transcript" },
+    ]);
+
+    await restartWithDeps(deps(fakeModel("deployment restored")));
+    const restored = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+
+    expect(restored.status).toBe(200);
+    expect(store.listMessages(created.chat.id)).toMatchObject([
+      { role: "user", content: "Keep the removed-deployment transcript" },
+      { role: "assistant", content: "deployment restored" },
+    ]);
+  });
+
+  it("rejects changed model semantics when retrying a failed canonical turn", async () => {
+    const chat = store.createChat(projectDir, "failed semantic retry", CHAT_MODEL);
+    const request = {
+      chatId: chat.id,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "Keep one immutable retry identity",
+      clientTurnId: "failed-semantic-retry",
+    };
+    await restartWithDeps(deps(fakeModel("unused"), { modelPortFactory: () => undefined }));
+    const failed = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    expect(failed.status).toBe(400);
+    expect(store.listMessages(chat.id)).toMatchObject([
+      { role: "user", content: "Keep one immutable retry identity" },
+    ]);
+
+    await restartWithDeps(
+      deps(fakeModel("must not run"), {
+        config: customModelConfig("different-semantic-model"),
+      }),
+    );
+    const conflict = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ ...request, modelId: "different-semantic-model" }),
+    });
+    expect(conflict.status).toBe(409);
+    expect(seenRequests).toHaveLength(0);
+    expect(store.listMessages(chat.id)).toHaveLength(1);
+  });
+
+  it("fails a captured plain turn closed when the grounding scope changes", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as {
+      chat: { id: string; groundingScopeIdentity: string };
+    };
+    store.updateChat(created.chat.id, {
+      connectedScopes: [
+        { kind: "directory", relativePaths: ["src"], root: projectDir, connectedAtMs: 10 },
+      ],
+    });
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Do not answer against a different scope",
+        clientTurnId: "plain-scope-drift",
+        expectedGroundingScopeIdentity: created.chat.groundingScopeIdentity,
+      }),
+    });
+
+    expect(sendRes.status).toBe(409);
+    expect(seenRequests).toHaveLength(0);
+    expect(store.listMessages(created.chat.id)).toMatchObject([
+      { role: "user", content: "Do not answer against a different scope" },
+    ]);
+
+    const currentScopeIdentity = store.findChatById(created.chat.id)?.groundingScopeIdentity;
+    expect(currentScopeIdentity).toMatch(/^gsi-v1:[0-9a-f]{64}$/u);
+    if (currentScopeIdentity === undefined) throw new Error("expected a projected scope identity");
+    const changedIdentityRetry = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Do not answer against a different scope",
+        clientTurnId: "plain-scope-drift",
+        expectedGroundingScopeIdentity: currentScopeIdentity,
+      }),
+    });
+    const conflict = (await changedIdentityRetry.json()) as { error: { code: string } };
+    expect(conflict.error.code).toBe("CHAT_TURN_IDEMPOTENCY_CONFLICT");
+    expect(store.listMessages(created.chat.id)).toHaveLength(1);
+
+    const wrongRoute = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "A matching grounded token still cannot use plain chat",
+        clientTurnId: "plain-grounded-mode",
+        expectedGroundingScopeIdentity: currentScopeIdentity,
+      }),
+    });
+    expect(wrongRoute.status).toBe(409);
+    expect(store.listMessages(created.chat.id)).toMatchObject([
+      { role: "user", content: "Do not answer against a different scope" },
+      { role: "user", content: "A matching grounded token still cannot use plain chat" },
+    ]);
+    expect(seenRequests).toHaveLength(0);
+  });
+
+  it("never lets a tokenless plain Composer request bypass a grounded chat route", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    store.updateChat(created.chat.id, {
+      connectedScopes: [{ kind: "files", relativePaths: ["src/index.ts"], connectedAtMs: 10 }],
+    });
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Do not bypass repository grounding",
+      }),
+    });
+
+    expect(sendRes.status).toBe(409);
+    expect(store.listMessages(created.chat.id)).toEqual([]);
+    expect(seenRequests).toHaveLength(0);
+  });
+
+  it("rejects malformed scope identities and unsafe payloads before admission", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const baseRequest = {
+      chatId: created.chat.id,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "Keep hostile context out of the turn log",
+      clientTurnId: "pre-admission-trust-guard",
+    };
+    const malformed = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ ...baseRequest, expectedGroundingScopeIdentity: "not-a-token" }),
+    });
+    const unsafeMime = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        ...baseRequest,
+        attachments: [{ kind: "image", mimeType: "image/svg+xml", sizeBytes: 100 }],
+      }),
+    });
+    const oversized = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        ...baseRequest,
+        documentContext: Array.from({ length: 5 }, (_, index) => ({
+          id: `large-${String(index)}`,
+          displayName: `large-${String(index)}.txt`,
+          mimeType: "text/plain",
+          sizeBytes: 60_000,
+          extractedBytes: 60_000,
+          truncated: false,
+          text: "x",
+        })),
+      }),
+    });
+
+    expect([malformed.status, unsafeMime.status, oversized.status]).toEqual([400, 400, 400]);
+    expect(store.listMessages(created.chat.id)).toEqual([]);
+    expect(seenRequests).toHaveLength(0);
+  });
+
   it("persists user and assistant messages while calling the configured model port", async () => {
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
@@ -402,6 +660,453 @@ describe("desktop chat routes", () => {
     const persistedRoles = store.listMessages(created.chat.id).map((message) => message.role);
     expect(persistedRoles).toHaveLength(2);
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
+  });
+
+  it("admits a long canonical final atomically and rejects content beyond the UTF-8 hard cap", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const longFinal = `${"a".repeat(8_000)} ${"b".repeat(8_000)}`;
+    const accepted = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: longFinal,
+        clientTurnId: "long-canonical-final",
+      }),
+    });
+
+    expect(accepted.status).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.messages.at(-1)).toEqual({ role: "user", content: longFinal });
+    expect(store.listMessages(created.chat.id)).toMatchObject([
+      { role: "user", content: longFinal },
+      { role: "assistant", content: "test response" },
+    ]);
+
+    const rejected = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "x".repeat(MAX_DESKTOP_CHAT_INPUT_BYTES + 1),
+        clientTurnId: "overlong-canonical-final",
+      }),
+    });
+
+    expect(rejected.status).toBe(400);
+    expect(seenRequests).toHaveLength(1);
+    expect(store.listMessages(created.chat.id)).toHaveLength(2);
+  });
+
+  it("replays a completed canonical turn without a second model call or message pair", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const clientTurnId = `${created.chat.id}:voice-turn-1`;
+    const request = {
+      chatId: created.chat.id,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "Persist this canonical turn once",
+      clientTurnId,
+    };
+
+    const first = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    const firstBody = (await first.json()) as { messages: readonly { id: string }[] };
+    await restartWithDeps(
+      deps(fakeModel("must not run"), {
+        config: customModelConfig("retired-model"),
+        modelPortFactory: (): never => {
+          throw new Error("completed replay reached provider resolution");
+        },
+      }),
+    );
+    const replay = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    const replayBody = (await replay.json()) as { messages: readonly { id: string }[] };
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(replayBody.messages.map((message) => message.id)).toEqual(
+      firstBody.messages.map((message) => message.id),
+    );
+    expect(seenRequests).toHaveLength(1);
+    expect(store.listMessages(created.chat.id)).toHaveLength(2);
+
+    const implicitModelReplay = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ ...request, modelId: undefined }),
+    });
+    const implicitModelBody = (await implicitModelReplay.json()) as {
+      messages: readonly { id: string }[];
+    };
+    expect(implicitModelReplay.status).toBe(200);
+    expect(implicitModelBody.messages.map((message) => message.id)).toEqual(
+      firstBody.messages.map((message) => message.id),
+    );
+    expect(seenRequests).toHaveLength(1);
+
+    const modelConflict = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ ...request, modelId: "different-semantic-model" }),
+    });
+    expect(modelConflict.status).toBe(409);
+    expect(seenRequests).toHaveLength(1);
+    expect(store.listMessages(created.chat.id)).toHaveLength(2);
+
+    const conflict = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ ...request, content: "Divergent content must fail closed" }),
+    });
+    expect(conflict.status).toBe(409);
+    expect(seenRequests).toHaveLength(1);
+    expect(store.listMessages(created.chat.id)).toHaveLength(2);
+  });
+
+  it("rejects an overlapping canonical retry until the original turn can replay", async () => {
+    let releaseModel: ((response: NormalizedResponse) => void) | undefined;
+    let modelStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      modelStarted = resolve;
+    });
+    const pending = new Promise<NormalizedResponse>((resolve) => {
+      releaseModel = resolve;
+    });
+    let modelCalls = 0;
+    const deferredModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        modelCalls += 1;
+        modelStarted?.();
+        return pending;
+      },
+    };
+    await restartWithDeps(deps(deferredModel));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const request = {
+      chatId: created.chat.id,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "Complete this overlapping voice request once.",
+      clientTurnId: "provider\u0000item\n日本語",
+    };
+
+    const firstResponse = fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    await started;
+    const overlapping = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    const overlappingBody = await overlapping.text();
+
+    expect(overlapping.status).toBe(409);
+    expect(overlappingBody).not.toContain("provider");
+    expect(modelCalls).toBe(1);
+    expect(store.listMessages(created.chat.id)).toHaveLength(1);
+    releaseModel?.({
+      modelId: CHAT_MODEL,
+      content: "Canonical answer.",
+      finishReason: "stop",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: "overlap-test",
+        promptTokens: 1,
+        completionTokens: 1,
+        latencyMs: 1,
+        costClass: "low",
+      },
+    });
+    const first = await firstResponse;
+    const firstBody = (await first.json()) as { messages: readonly { id: string }[] };
+    const replay = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    const replayBody = (await replay.json()) as { messages: readonly { id: string }[] };
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(replayBody.messages.map((message) => message.id)).toEqual(
+      firstBody.messages.map((message) => message.id),
+    );
+    expect(modelCalls).toBe(1);
+    expect(store.listMessages(created.chat.id)).toHaveLength(2);
+  });
+
+  it("rejects a closed canonical chat before admission and reuses the same id after restore", async () => {
+    const chat = store.createChat(projectDir, "closed canonical", CHAT_MODEL);
+    store.updateChat(chat.id, { status: "closed" });
+    const request = {
+      chatId: chat.id,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "Admit only after this chat is restored.",
+      clientTurnId: "closed-then-restored-turn",
+    };
+
+    const closed = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    expect(closed.status).toBe(409);
+    await expect(closed.json()).resolves.toMatchObject({ error: { code: "CHAT_CLOSED" } });
+    expect(store.listMessages(chat.id)).toHaveLength(0);
+    expect(seenRequests).toHaveLength(0);
+
+    store.updateChat(chat.id, { status: "open" });
+    const restored = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    expect(restored.status).toBe(200);
+    expect(store.listMessages(chat.id)).toHaveLength(2);
+    expect(seenRequests).toHaveLength(1);
+
+    store.updateChat(chat.id, { status: "closed" });
+    const replay = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    expect(replay.status).toBe(200);
+    expect(store.listMessages(chat.id)).toHaveLength(2);
+    expect(seenRequests).toHaveLength(1);
+  });
+
+  it("lets an admitted send finish before a concurrent close enters the same chat lane", async () => {
+    let releaseModel: ((response: NormalizedResponse) => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const pending = new Promise<NormalizedResponse>((resolve) => {
+      releaseModel = resolve;
+    });
+    await restartWithDeps(
+      deps({
+        call(request): Promise<NormalizedResponse> {
+          seenRequests.push(request);
+          markStarted?.();
+          return pending;
+        },
+      }),
+    );
+    const chat = store.createChat(projectDir, "send before close", CHAT_MODEL);
+    const send = fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Finish this admitted turn.",
+        clientTurnId: "send-wins-close-race",
+      }),
+    });
+    await started;
+    const close = fetch(`${base()}/api/chats?id=${encodeURIComponent(chat.id)}`, {
+      method: "PATCH",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ status: "closed" }),
+    });
+    const closeSettledEarly = await Promise.race([
+      close.then(() => true),
+      new Promise<boolean>((resolve) =>
+        setImmediate(() => {
+          resolve(false);
+        }),
+      ),
+    ]);
+    expect(closeSettledEarly).toBe(false);
+
+    releaseModel?.({
+      modelId: CHAT_MODEL,
+      content: "Completed before close.",
+      finishReason: "stop",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: "send-close-race",
+        promptTokens: 1,
+        completionTokens: 1,
+        latencyMs: 1,
+        costClass: "low",
+      },
+    });
+    const [sendResponse, closeResponse] = await Promise.all([send, close]);
+
+    expect(sendResponse.status).toBe(200);
+    expect(closeResponse.status).toBe(200);
+    expect(store.findChatById(chat.id)?.status).toBe("closed");
+    expect(store.listMessages(chat.id)).toHaveLength(2);
+    expect(seenRequests).toHaveLength(1);
+  });
+
+  it("keeps the staged assistant invisible when canonical memory persistence fails", async () => {
+    const memoryDir = join(tmp, "canonical-memory-failure-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const failingMemoryVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        if (property === "insertMemory") {
+          return (): never => {
+            throw new Error("memory persistence failed");
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    await restartWithDeps(
+      deps(fakeModel("First answer must stay staged."), { memoryVault: failingMemoryVault }),
+    );
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const request = {
+      chatId: created.chat.id,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "Remember that canonical memory persistence must finish first.",
+      clientTurnId: "memory-before-completion",
+      memory: { enabled: true, budgetTokens: 900, context: {} },
+    };
+
+    const failed = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    const persistedAfterFailure = store.listMessages(created.chat.id);
+
+    expect(failed.status).toBe(500);
+    expect(persistedAfterFailure).toHaveLength(1);
+    expect(persistedAfterFailure[0]).toMatchObject({ role: "user", content: request.content });
+    await restartWithDeps(deps(fakeModel("Recovered canonical answer."), { memoryVault }));
+    const retried = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+    const retriedBody = (await retried.json()) as { messages: readonly { id: string }[] };
+
+    expect(retried.status).toBe(200);
+    expect(retriedBody.messages[0]?.id).toBe(persistedAfterFailure[0]?.id);
+    expect(store.listMessages(created.chat.id)).toHaveLength(2);
+    memoryVault.close();
+  });
+
+  it("reuses deterministic memory rows when chat completion fails after capture", async () => {
+    const memoryDir = join(tmp, "canonical-memory-completion-retry-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    let failCompletion = true;
+    const completionFailingStore: UiStore = {
+      ...store,
+      completeChatTurn: (...args) => {
+        if (failCompletion) {
+          failCompletion = false;
+          return { kind: "conflict" };
+        }
+        return store.completeChatTurn(...args);
+      },
+    };
+    try {
+      await restartWithDeps(
+        deps(fakeModel("First captured answer stays staged."), {
+          memoryVault,
+          store: completionFailingStore,
+        }),
+      );
+      const createRes = await fetch(`${base()}/api/desktop/chats`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+      });
+      const created = (await createRes.json()) as { chat: { id: string } };
+      const request = {
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Remember that I am a software developer.",
+        clientTurnId: "memory-after-capture-completion-retry",
+        memory: { enabled: true, budgetTokens: 900, context: {} },
+      };
+
+      const failed = await fetch(`${base()}/api/desktop/chat`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify(request),
+      });
+      const memoryIdsAfterFailure = listAllMemories(memoryVault).map((memory) => memory.id);
+      expect(failed.status).toBe(500);
+      expect(memoryIdsAfterFailure.length).toBeGreaterThan(0);
+      expect(store.listMessages(created.chat.id)).toHaveLength(1);
+
+      await restartWithDeps(deps(fakeModel("Recovered captured answer."), { memoryVault }));
+      const retried = await fetch(`${base()}/api/desktop/chat`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify(request),
+      });
+      const retriedBody = (await retried.json()) as { messages: readonly { id: string }[] };
+      const replay = await fetch(`${base()}/api/desktop/chat`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify(request),
+      });
+      const replayBody = (await replay.json()) as { messages: readonly { id: string }[] };
+
+      expect(retried.status).toBe(200);
+      expect(replay.status).toBe(200);
+      expect(replayBody.messages.map((message) => message.id)).toEqual(
+        retriedBody.messages.map((message) => message.id),
+      );
+      expect(listAllMemories(memoryVault).map((memory) => memory.id)).toEqual(
+        memoryIdsAfterFailure,
+      );
+      expect(store.listMessages(created.chat.id)).toHaveLength(2);
+    } finally {
+      memoryVault.close();
+    }
   });
 
   it("compacts long chat history from the active model profile resolver when the singleton profile is absent", async () => {
@@ -483,343 +1188,6 @@ describe("desktop chat routes", () => {
           message.role === "user" && message.content.includes("Automated structured summary"),
       ),
     ).toBe(false);
-  });
-
-  it("appends realtime voice turns without calling the chat model", async () => {
-    const createRes = await fetch(`${base()}/api/desktop/chats`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
-    });
-    const created = (await createRes.json()) as { chat: { id: string; title: string } };
-
-    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({
-        chatId: created.chat.id,
-        projectPath: projectDir,
-        messages: [
-          { role: "user", content: "open the deploy log" },
-          { role: "assistant", content: "The deploy log is open." },
-        ],
-      }),
-    });
-
-    expect(appendRes.status).toBe(200);
-    const body = (await appendRes.json()) as {
-      chat: { id: string; title: string };
-      messages: { role: string; content: string; runId?: string }[];
-    };
-    expect(seenRequests).toHaveLength(0);
-    expect(body.chat).toMatchObject({
-      id: created.chat.id,
-      title: "open the deploy log",
-    });
-    expect(body.messages.map((message) => [message.role, message.content])).toEqual([
-      ["user", "open the deploy log"],
-      ["assistant", "The deploy log is open."],
-    ]);
-    expect(body.messages.some((message) => message.runId !== undefined)).toBe(false);
-
-    const persisted = store.listMessages(created.chat.id);
-    expect(persisted.map((message) => [message.role, message.content])).toEqual([
-      ["user", "open the deploy log"],
-      ["assistant", "The deploy log is open."],
-    ]);
-  });
-
-  it("replays an idempotent realtime voice turn without duplicating persisted messages", async () => {
-    const createRes = await fetch(`${base()}/api/desktop/chats`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
-    });
-    const created = (await createRes.json()) as { chat: { id: string } };
-    const payload = {
-      chatId: created.chat.id,
-      projectPath: projectDir,
-      idempotencyKey: "voice-turn-replay-1",
-      messages: [
-        { role: "user", content: "open the deploy log", timestamp: 1_700_000_000_000 },
-        { role: "assistant", content: "The deploy log is open.", timestamp: 1_700_000_000_001 },
-      ],
-    };
-
-    const first = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify(payload),
-    });
-    const firstBody = (await first.json()) as {
-      error?: { code?: string; message?: string };
-      messages?: { id: string; runId?: string }[];
-    };
-    const second = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify(payload),
-    });
-    const secondBody = (await second.json()) as {
-      error?: { code?: string; message?: string };
-      messages?: { id: string; runId?: string }[];
-    };
-
-    expect(first.status, JSON.stringify(firstBody.error)).toBe(200);
-    expect(second.status, JSON.stringify(secondBody.error)).toBe(200);
-    expect(secondBody.messages?.map((message) => message.id)).toEqual(
-      firstBody.messages?.map((message) => message.id),
-    );
-    expect(firstBody.messages?.some((message) => message.runId !== undefined)).toBe(false);
-    expect(store.listMessages(created.chat.id)).toHaveLength(2);
-    expect(seenRequests).toHaveLength(0);
-  });
-
-  it("rejects divergent realtime voice-turn reuse of an idempotency key", async () => {
-    const createRes = await fetch(`${base()}/api/desktop/chats`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
-    });
-    const created = (await createRes.json()) as { chat: { id: string } };
-    const basePayload = {
-      chatId: created.chat.id,
-      projectPath: projectDir,
-      idempotencyKey: "voice-turn-conflict-1",
-      messages: [
-        { role: "user", content: "open the deploy log", timestamp: 1_700_000_000_000 },
-        { role: "assistant", content: "The deploy log is open.", timestamp: 1_700_000_000_001 },
-      ],
-    };
-    const first = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify(basePayload),
-    });
-    const second = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({
-        ...basePayload,
-        messages: [
-          { role: "user", content: "open a different log", timestamp: 1_700_000_000_000 },
-          { role: "assistant", content: "The deploy log is open.", timestamp: 1_700_000_000_001 },
-        ],
-      }),
-    });
-
-    const firstBody = (await first.clone().json()) as {
-      error?: { code?: string; message?: string };
-    };
-    expect(first.status, JSON.stringify(firstBody.error)).toBe(200);
-    expect(second.status).toBe(409);
-    const conflict = (await second.json()) as { error?: { code?: string } };
-    expect(conflict.error?.code).toBe("VOICE_TURN_IDEMPOTENCY_CONFLICT");
-    expect(store.listMessages(created.chat.id)).toHaveLength(2);
-  });
-
-  it("captures MemoriaViva proposals from realtime voice turns without generating a second chat answer", async () => {
-    const memoryDir = join(tmp, "voice-turn-memory-vault");
-    mkdirSync(memoryDir);
-    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    await restartWithDeps(
-      deps(fakeModel("unused"), {
-        memoryVault,
-        modelPortFactory: () => undefined,
-      }),
-    );
-
-    const createRes = await fetch(`${base()}/api/desktop/chats`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
-    });
-    const created = (await createRes.json()) as { chat: { id: string; title: string } };
-
-    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({
-        chatId: created.chat.id,
-        projectPath: projectDir,
-        messages: [
-          { role: "user", content: "remember that my preferred database is postgres" },
-          { role: "assistant", content: "I will remember that preference." },
-        ],
-        memory: {
-          enabled: true,
-          budgetTokens: 900,
-          context: {},
-        },
-      }),
-    });
-
-    expect(appendRes.status).toBe(200);
-    const body = (await appendRes.json()) as {
-      messages: { role: string; content: string; runId?: string }[];
-      memory?: { actions: { kind: string; proposalId?: string }[] };
-    };
-    expect(seenRequests).toHaveLength(0);
-    expect(body.messages.map((message) => [message.role, message.content])).toEqual([
-      ["user", "remember that my preferred database is postgres"],
-      ["assistant", "I will remember that preference."],
-    ]);
-    expect(body.memory?.actions[0]?.kind).toBe("candidate");
-    const proposalId = body.memory?.actions[0]?.proposalId;
-    expect(proposalId).toBeDefined();
-    if (proposalId !== undefined) {
-      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
-    }
-    memoryVault.close();
-  });
-
-  it("does not capture assistant-only realtime voice turns as user memories", async () => {
-    const memoryDir = join(tmp, "voice-turn-assistant-only-memory-vault");
-    mkdirSync(memoryDir);
-    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    await restartWithDeps(
-      deps(fakeModel("unused"), {
-        memoryVault,
-        modelPortFactory: () => undefined,
-      }),
-    );
-
-    const createRes = await fetch(`${base()}/api/desktop/chats`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
-    });
-    const created = (await createRes.json()) as { chat: { id: string } };
-
-    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({
-        chatId: created.chat.id,
-        projectPath: projectDir,
-        messages: [{ role: "assistant", content: "remember that my preferred shell is fish" }],
-        memory: {
-          enabled: true,
-          budgetTokens: 900,
-          context: {},
-        },
-      }),
-    });
-
-    expect(appendRes.status).toBe(200);
-    const body = (await appendRes.json()) as {
-      memory?: { actions: { kind: string; proposalId?: string }[] };
-    };
-    expect(body.memory?.actions).toEqual([]);
-    expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
-    expect(seenRequests).toHaveLength(0);
-    memoryVault.close();
-  });
-
-  it("does not wait for model-assisted salience capture before returning a realtime voice turn", async () => {
-    const memoryDir = join(tmp, "voice-turn-async-salience-vault");
-    mkdirSync(memoryDir);
-    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const neverResolvingSalienceModel: ModelPort = {
-      call(request): Promise<NormalizedResponse> {
-        seenRequests.push(request);
-        return new Promise<NormalizedResponse>((resolve) => {
-          void resolve;
-        });
-      },
-    };
-    await restartWithDeps(deps(neverResolvingSalienceModel, { memoryVault }));
-
-    const createRes = await fetch(`${base()}/api/desktop/chats`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
-    });
-    const created = (await createRes.json()) as { chat: { id: string } };
-
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const appendRes = await Promise.race([
-      fetch(`${base()}/api/desktop/chat/voice-turn`, {
-        method: "POST",
-        headers: POST_JSON_HEADERS,
-        body: JSON.stringify({
-          chatId: created.chat.id,
-          projectPath: projectDir,
-          messages: [
-            { role: "user", content: "remember that my voice IDE is Keiko" },
-            { role: "assistant", content: "I will remember that." },
-          ],
-          memory: {
-            enabled: true,
-            budgetTokens: 900,
-            context: {},
-          },
-        }),
-      }),
-      new Promise<Response>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error("voice-turn response waited for salience capture"));
-        }, 250);
-      }),
-    ]);
-    if (timeout !== undefined) clearTimeout(timeout);
-
-    expect(appendRes.status).toBe(200);
-    const body = (await appendRes.json()) as {
-      memory?: { actions: { kind: string; proposalId?: string }[] };
-    };
-    expect(body.memory?.actions[0]?.kind).toBe("candidate");
-    await vi.waitFor(() => {
-      expect(seenRequests).toHaveLength(1);
-    });
-    memoryVault.close();
-  });
-
-  it("captures model-assisted voice salience per committed user and assistant round", async () => {
-    const memoryDir = join(tmp, "voice-turn-paired-salience-vault");
-    mkdirSync(memoryDir);
-    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    await restartWithDeps(deps(fakeModel("[]"), { memoryVault }));
-
-    const createRes = await fetch(`${base()}/api/desktop/chats`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
-    });
-    const created = (await createRes.json()) as { chat: { id: string } };
-
-    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({
-        chatId: created.chat.id,
-        projectPath: projectDir,
-        messages: [
-          { role: "user", content: "My keyboard layout is Colemak." },
-          { role: "assistant", content: "Got it." },
-          { role: "user", content: "My editor theme is Solarized." },
-          { role: "assistant", content: "Noted." },
-        ],
-        memory: {
-          enabled: true,
-          budgetTokens: 900,
-          context: {},
-        },
-      }),
-    });
-
-    expect(appendRes.status).toBe(200);
-    await vi.waitFor(() => {
-      expect(seenRequests).toHaveLength(2);
-    });
-    const saliencePrompts = seenRequests.map((request) =>
-      request.messages.map((message) => message.content).join("\n"),
-    );
-    expect(saliencePrompts[0]).toContain("Colemak");
-    expect(saliencePrompts[0]).not.toContain("Solarized");
-    expect(saliencePrompts[1]).toContain("Solarized");
-    expect(saliencePrompts[1]).not.toContain("Colemak");
-    memoryVault.close();
   });
 
   it("does not wait for model-assisted salience capture before returning a desktop chat turn", async () => {
@@ -953,6 +1321,50 @@ describe("desktop chat routes", () => {
     expect(JSON.stringify(seenRequests[0]?.messages)).not.toContain("stale answer");
     expect(store.findMessageById(assistant.id)?.content).toBe("replacement answer");
     expect(store.listMessages(chat.id).map((message) => message.id)).toContain(assistant.id);
+  });
+
+  it("rejects regeneration of a closed chat without model work or message mutation", async () => {
+    const chat = store.createChat(projectDir, "closed regeneration", CHAT_MODEL);
+    store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "original question",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const assistant = store.createMessage({
+      chatId: chat.id,
+      role: "assistant",
+      content: "original answer",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    store.updateChat(chat.id, { status: "closed" });
+
+    const response = await fetch(`${base()}/api/desktop/chat/regenerate`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        assistantMessageId: assistant.id,
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "CHAT_CLOSED" } });
+    expect(seenRequests).toHaveLength(0);
+    expect(store.findMessageById(assistant.id)?.content).toBe("original answer");
+    expect(store.listMessages(chat.id)).toHaveLength(2);
   });
 
   it("rejects regeneration when the assistant turn is not the latest conversational message", async () => {
@@ -1174,6 +1586,48 @@ describe("desktop chat routes", () => {
       expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
     }
     expect(memoryVault.getAccessStats([recalled.id]).get(recalled.id)?.accessCount ?? 0).toBe(0);
+    memoryVault.close();
+  });
+
+  it("persists the canonical user before a fallible buffered-memory retrieval", async () => {
+    const memoryDir = join(tmp, "failing-buffered-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const failingMemoryVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        if (property === "listMemoriesByScope") {
+          return (): never => {
+            throw new Error("memory retrieval failed");
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    await restartWithDeps(deps(fakeModel("must not answer"), { memoryVault: failingMemoryVault }));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Keep this buffered final transcript",
+        memory: { enabled: true, budgetTokens: 900, context: {} },
+      }),
+    });
+
+    expect(sendRes.status).toBe(500);
+    expect(seenRequests).toEqual([]);
+    expect(store.listMessages(created.chat.id)).toMatchObject([
+      { role: "user", content: "Keep this buffered final transcript" },
+    ]);
     memoryVault.close();
   });
 

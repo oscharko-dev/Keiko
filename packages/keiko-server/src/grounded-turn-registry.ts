@@ -2,6 +2,7 @@ import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connect
 
 const DEFAULT_TTL_MS = 15 * 60_000;
 const DEFAULT_MAX_ENTRIES = 256;
+const pendingCanonicalTurns = new Map<string, GroundedTurnRecord>();
 
 export interface GroundedTurnRecord {
   readonly assistantMessageId: string;
@@ -122,6 +123,27 @@ export function rememberGroundedTurn(record: GroundedTurnRecord, nowMs?: () => n
   groundedTurnRegistry.remember(record, nowMs);
 }
 
+export function stageGroundedTurn(record: GroundedTurnRecord): void {
+  if (!pendingCanonicalTurns.has(record.assistantMessageId)) {
+    const oldest = pendingCanonicalTurns.keys().next().value;
+    if (pendingCanonicalTurns.size >= DEFAULT_MAX_ENTRIES && oldest !== undefined) {
+      pendingCanonicalTurns.delete(oldest);
+    }
+  }
+  pendingCanonicalTurns.set(record.assistantMessageId, recordForHandoffRegistry(record));
+}
+
+export function commitGroundedTurn(assistantMessageId: string): void {
+  const record = pendingCanonicalTurns.get(assistantMessageId);
+  if (record === undefined) return;
+  pendingCanonicalTurns.delete(assistantMessageId);
+  rememberGroundedTurn(record);
+}
+
+export function discardGroundedTurn(assistantMessageId: string): void {
+  pendingCanonicalTurns.delete(assistantMessageId);
+}
+
 export function lookupGroundedTurn(
   assistantMessageId: string,
   nowMs?: () => number,
@@ -130,13 +152,20 @@ export function lookupGroundedTurn(
 }
 
 export function clearGroundedTurnsForConversation(chatId: string): void {
+  for (const [key, record] of pendingCanonicalTurns) {
+    if (record.chatId === chatId) pendingCanonicalTurns.delete(key);
+  }
   groundedTurnRegistry.clearConversation(chatId);
 }
 
 export function clearGroundedTurnsForWorkspace(workspaceRoot: string): void {
+  for (const [key, record] of pendingCanonicalTurns) {
+    if (record.workspaceRoot === workspaceRoot) pendingCanonicalTurns.delete(key);
+  }
   groundedTurnRegistry.clearWorkspace(workspaceRoot);
 }
 
 export function clearAllGroundedTurns(): void {
+  pendingCanonicalTurns.clear();
   groundedTurnRegistry.clearAll();
 }

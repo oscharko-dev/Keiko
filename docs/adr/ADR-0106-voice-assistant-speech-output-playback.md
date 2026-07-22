@@ -6,6 +6,11 @@
 
 Accepted (Issue #501, Epic #491, 2026-06-25)
 
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md). Productive assistant speech now
+comes only from an explicit speech-output provider after the canonical assistant message has been
+persisted. Realtime WebRTC is input-only and has no `audio-out` track or provider-native assistant
+response path.
+
 ## Version
 
 0.2.0
@@ -73,8 +78,11 @@ text, secret-bearing signaling, or raw audio. This is the AC3/AC4 invariant expr
 playback record can never become a channel for audio or credentials. The settled lifecycle facts
 (`interrupted`, `canceled`, `failed`, `complete`) are `replayable`; the in-flight phases and
 `unavailable` are `ephemeral`, so a reconnect re-delivers how the turn ended but never re-plays audio.
-`VOICE_PLAYBACK_AUDIO_PLANE` re-pins the ADR-0101 `VOICE_MEDIA_PLANE` (`never-persisted`, `raw-media`,
-media-plane only): raw assistant audio is media-plane and is never a field on any playback type.
+`VOICE_PLAYBACK_AUDIO_PLANE` preserves the immutable v1 WebRTC-media baseline. Productive assistant
+audio uses the additive `VOICE_CANONICAL_PLAYBACK_AUDIO_PLANE` descriptor for the existing
+output-only `gateway-batch` TTS/BFF seam (`never-persisted`, `raw-media`). It is deliberately distinct
+from the ADR-0101 Realtime media plane, which carries microphone `audio-in` only; raw assistant audio
+is never a field on any playback type.
 
 The table deliberately omits a `paused → failed` edge: a paused utterance is locally buffered and under
 the user's control, so a provider failure while paused is resolved by the user (stop / resume /
@@ -106,11 +114,11 @@ turn manager. No effect grants workflow authority, triggers a model call, or wri
 ### D6 — No new TTS deployment, dependency, or destination (Scope / Out of Scope; AC3)
 
 This issue ships no TTS model, no new runtime dependency, and no new server route or external
-destination. The optional spoken audio, when a provider supports it, rides the existing Model Gateway
-egress (`gateway-batch`) and the ADR-0101/0102/0061 WebRTC media plane (`audio-out`); the playback
-controller only ever *names* those seams through content-free effects. Provider credentials and audio
-payloads therefore flow through the same approved local seams already governed by the privacy contract;
-the playback layer adds no path to them (AC3).
+destination. As amended by ADR-0154, optional spoken audio is synthesized from the completed
+canonical assistant message through an explicitly configured Model Gateway speech-output provider
+(`gateway-batch`) and played locally. It does not use the Realtime WebRTC media plane, which carries
+`audio-in` only. The playback controller names content-free effects; provider credentials and audio
+payloads remain inside the approved local seams governed by the privacy contract (AC3).
 
 ### D7 — Capability-gated, accessible UI; text is always the universal path (AC1; Deliverable: UI/a11y)
 
@@ -135,6 +143,11 @@ playback-capable profile unless policy enables it, and the Replay control is ren
 
 ## Consequences
 
+> **Current amendment:** the no-route and dormant-live-audio consequences below describe the original
+> Issue #501 delivery. Productive speech now uses `/api/voice/speak/stream` with
+> `/api/voice/speak` as the buffered fallback, both backed by an explicit Model Gateway
+> speech-output provider. The controller and no-audio-persistence decisions remain normative.
+
 ### Positive
 
 - Keiko remains fully usable with no voice model: the controller is dormant and the UI renders text only,
@@ -142,8 +155,8 @@ playback-capable profile unless policy enables it, and the Replay control is ren
 - Speech output is interruptible and the turn manager is kept consistent by construction (AC2).
 - Raw assistant audio is never stored or made a field of any playback type; the content-free redaction
   totality table makes a regression a compile/test failure (AC3/AC4).
-- No new TTS model, dependency, server route, or external destination; the change is additive and
-  surface-neutral.
+- Original Issue #501 added no TTS model, dependency, server route, or external destination; its
+  controller change was additive and surface-neutral.
 - Later issues (#502/#504) consume a content-free playback outcome from the contract without forking the
   controller.
 
@@ -152,9 +165,9 @@ playback-capable profile unless policy enables it, and the Replay control is ren
 - The eight-phase lifecycle is richer than the five wire states, so contributors must consult the
   phase↔wire mapping rather than assume a 1:1 correspondence (mitigated by the documented mapping and the
   same lesson recorded in ADR-0104/0105).
-- The live audio integration (driving `prepare`/`play-started`/`complete` from a real provider) is
-  deferred to the issue that deploys a speech-output provider; until then the controller is exercised by
-  tests and remains dormant in production.
+- At Issue #501 closure, live provider integration was deferred and the controller remained dormant in
+  that environment. The later synthesis implementation has completed that integration through the same
+  controller boundary.
 
 ### Neutral
 
@@ -181,12 +194,11 @@ content-free effects, preserving the single-responsibility boundary and keeping 
 Rejected by Out of Scope and AC4. Replay re-requests synthesis from the provider (`request-synthesis`);
 no raw audio is retained. Replay is additionally policy-gated and off by default.
 
-### Alternative 4: Wire a full live render path now
+### Alternative 4: Wire a full live render path in Issue #501 (historical)
 
-Deferred, consistent with ADR-0103/0104/0063: with no speech-output provider deployed there is no real
-audio to drive, so the render-path wiring of provider-driven `prepare`/`play-started`/`complete` and of
-a live turn manager is left to the issue that deploys speech output. The integration seams
-(`useVoicePlayback`, `forwardVoicePlaybackToTurnManager`) are shipped and tested.
+This was deferred by Issue #501 because its environment had no speech-output provider. The later
+synthesis implementation now drives provider-backed `prepare`/`play-started`/`complete` behavior through
+the same shipped integration seams (`useVoicePlayback`, `forwardVoicePlaybackToTurnManager`).
 
 ## Related
 

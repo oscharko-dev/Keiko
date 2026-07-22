@@ -74,9 +74,11 @@ export interface MonacoSignatureHelpRegistrar {
 export function signatureToMonaco(
   signature: EditorSignatureInformation,
 ): MonacoSignatureInformation {
+  const documentation =
+    typeof signature.documentation === "string" ? signature.documentation : undefined;
   return {
     label: signature.label,
-    ...(signature.documentation === undefined ? {} : { documentation: signature.documentation }),
+    ...(documentation === undefined ? {} : { documentation }),
     parameters: signature.parameters.map((parameter) => ({ label: parameter.label })),
   };
 }

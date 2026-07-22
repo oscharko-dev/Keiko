@@ -6,16 +6,23 @@
 
 Accepted (Issue #497, Epic #491, 2026-06-24)
 
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md). The proxied-SDP and loopback
+WebSocket trust boundaries remain, but Realtime is now input-only: the browser offers exactly
+`sendonly`, the provider answer is exactly `recvonly`, and both directions are validated by the BFF.
+Realtime receives no assistant instructions, tools, memory, grounding context, persona, or output
+voice and is never an assistant-response authority. Canonical chat generates the answer and an
+independent, explicitly configured TTS provider may speak that persisted answer.
+
 ## Version
 
-0.3.0
+0.3.1
 
 ## Context
 
 [ADR-0100](ADR-0100-voice-digital-twin-capability-architecture.md) (D3) and
-[ADR-0101](ADR-0101-voice-control-media-capability-replay-protocol.md) (D3) established that "WebSocket
-is the authoritative control plane" is a **role**, realized for v1 on the loopback HTTP + Server-Sent
-Events seam because the BFF binds `127.0.0.1` and **hard-rejects every WebSocket upgrade**
+[ADR-0101](ADR-0101-voice-control-media-capability-replay-protocol.md) (D3) originally established that
+"WebSocket is the authoritative control plane" was a **role**, then realized for v1 on the loopback
+HTTP + Server-Sent Events seam because the BFF bound `127.0.0.1` and **hard-rejected every WebSocket upgrade**
 ([`server.ts`](../../packages/keiko-server/src/server.ts)). Both ADRs deferred one decision to the
 transport child issue: **whether to re-open a bidirectional WebSocket upgrade on the BFF**, as "an
 explicit, ADR-gated change … never smuggled in." This ADR records that decision and the realtime
@@ -33,6 +40,10 @@ the `loopback-websocket` control transport the #496 contract already models
 
 ### D1 — Re-open the BFF WebSocket upgrade, narrowly and capability-gated
 
+> **Current amendment:** ADR-0154 keeps this narrowly gated WebSocket route but changes the
+> productive v1 constant to `"loopback-websocket"`. The earlier statement below that the SSE
+> baseline constant remained unchanged records the original #497 migration only.
+
 The BFF re-opens the upgrade for the **single loopback path `/api/voice/control`**, and **only** when
 the resolved voice capability is the `full-realtime` profile and voice is not disabled by policy
 (`isVoiceRealtimeCapable` = `voice.available && voice.transport.webrtcMedia`, mirroring
@@ -46,6 +57,11 @@ message, exactly as the contract anticipated a "transport realization detail, no
 
 ### D2 — Proxied-SDP media negotiation; no long-lived credential reaches the browser (AC2)
 
+> **Current amendment:** the proxied-SDP credential boundary remains. ADR-0154 supersedes the
+> assistant-session payload described below: current negotiation carries input transcription and
+> response-disabled VAD only, with exact `sendonly`/`recvonly` audio direction. It carries no
+> instructions, tools, memory, grounding, persona, output voice, or response authority.
+
 Real-time media uses **native browser WebRTC** (`RTCPeerConnection` / `getUserMedia` /
 `RTCDataChannel`, zero npm dependencies). Negotiation uses the contract's preferred **`proxied-sdp`**
 mode: the browser creates the SDP offer and sends it over the control plane; the Keiko host performs
@@ -58,7 +74,8 @@ credential — neither the long-lived key nor an ephemeral token. The contract's
 but is **not** the default and is **not** wired browser-direct in #497, so no CSP relaxation for
 browser-direct provider/STUN/TURN traffic is required.
 
-For standard server API-key authentication, the adapter uses the GA unified WebRTC call: one
+**Historical #497 assistant-session payload (superseded by ADR-0154):** for standard server API-key
+authentication, the adapter originally used the GA unified WebRTC call: one
 `multipart/form-data` request carries the `sdp` offer and the complete `session` JSON. Instructions,
 voice, input transcription, turn detection, grounding tools, tool posture, current chat context, and
 MemoriaViva priming are therefore applied atomically before media starts. For providers configured with
@@ -66,10 +83,11 @@ MemoriaViva priming are therefore applied atomically before media starts. For pr
 session JSON and then submits the SDP with that short-lived token. Neither path exposes a credential to
 the browser.
 
-The server is the single owner of session persona, tools, memory, grounding, transcription, and default
-turn detection. The browser may send a narrow `session.update` only for an explicitly selected acoustic
-turn-detection profile. It never re-advertises tools or replaces server instructions, preventing client
-state from erasing governance and retrieval context after negotiation.
+In that superseded design, the server was the single owner of session persona, tools, memory,
+grounding, transcription, and default turn detection. The browser could send a narrow
+`session.update` only for an explicitly selected acoustic turn-detection profile. ADR-0154 removes
+assistant instructions, tools, memory, and grounding from Realtime entirely; current session updates
+can affect input transcription and response-disabled VAD only.
 
 ### D3 — Security posture for the re-opened upgrade (ADR-0100 D6)
 
@@ -77,15 +95,18 @@ state from erasing governance and retrieval context after negotiation.
   upgrade reuses the existing loopback `isAllowedHost` check (`host-check.ts`) — it validates the
   `Host` and (when present) `Origin` are loopback on the bound port and **rejects opaque
   `Origin: null`** and any non-loopback origin, giving the upgrade the same strictness as the HTTP path.
-- **Secrets never logged.** SDP / ICE payloads are opaque `secret-bearing` strings forwarded verbatim
-  and never logged or persisted. Every host→client frame passes the existing BFF redactor before send.
-  Transcript text (`reviewable-text`) is run through `stripUnsafeFormatChars` (bidi / zero-width /
-  C0–C1 strip) before it may enter the bounded replay buffer (protocol §8).
+- **Secrets never logged.** SDP, including non-trickle ICE candidates, is opaque `secret-bearing` data
+  forwarded without content logging and never persisted. The shipped path has no standalone candidate
+  relay. Every host→client frame passes the existing BFF redactor before send. The generic protocol
+  retains transcript kinds for compatibility, but the productive Twin BFF rejects browser-originated
+  `transcript.partial` and `transcript.committed` control frames. Provider finals travel through the
+  browser's bounded canonical-Chat queue instead; the BFF replay buffer therefore remains content-free
+  and never stores transcript text (ADR-0154).
 - **No raw audio on the control plane (AC1).** A binary WebSocket frame is rejected and the socket is
   closed; raw audio rides only the WebRTC media plane and is never persisted.
 - **Bounded state, deterministic teardown.** Per-session sequence numbers + idempotency on
-  `(sessionId, seq)`; a bounded (≤200) replay-eligible-only buffer is the local "replay diagnostics"
-  record (AC6); a bounded resume window (60 s) lets a reconnect resume by idempotency key. Sessions tear
+  `(sessionId, seq)`; a bounded (≤200) content-free, replay-eligible-only buffer is the local "replay
+  diagnostics" record (AC6); a bounded resume window (60 s) lets a reconnect resume by idempotency key. Sessions tear
   down deterministically on `session.close`, socket close (browser close / route change), provider
   failure, and server shutdown; an in-flight negotiation is aborted on cancel/close.
 
@@ -101,7 +122,7 @@ state from erasing governance and retrieval context after negotiation.
   proxied-SDP design keeps all signaling same-origin, so no `connect-src` / `webrtc` directive change is
   required. `default-src 'none'` and the rest of `csp.ts` are untouched.
 - **Supply chain.** No new runtime media package is added; the control plane reuses the existing `ws`
-  dependency (repo-wide since the CDP browser tooling; already pinned at `ws` 8.21.0 in `keiko-tools`)
+  dependency (repo-wide since the CDP browser tooling; already pinned at `ws` 8.21.1 in `keiko-tools`)
   and the media plane uses browser-native WebRTC. `ws` is now also declared explicitly in
   `keiko-server/package.json` for manifest correctness — this is a declaration of the existing
   dependency on its new consumer, not a new package in the repository. The #496 supply-chain denylist
@@ -109,9 +130,11 @@ state from erasing governance and retrieval context after negotiation.
 
 ### D5 — No new persisted local-runtime state
 
-The transport persists **no** new on-disk state: the replay buffer is in-memory, bounded, and
-ephemeral, and raw audio is never written. Persisting transcripts, recap, and memory candidates is a
-later issue (#504); their `docs/local-runtime-state-contract.md` rows are added there, not here.
+The transport persists **no** new on-disk state: the content-free replay buffer is in-memory, bounded,
+and ephemeral, and raw audio is never written. ADR-0154 separately routes each final user transcript
+through the existing canonical Chat persistence path; this transport never owns a transcript store.
+Recap and memory-candidate state remain governed by their owning subsystems and the
+`docs/local-runtime-state-contract.md` registry.
 
 ## Consequences
 

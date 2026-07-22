@@ -50,6 +50,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "n
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
+import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import type { ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -455,6 +456,9 @@ export interface UiHandlerDeps {
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the
   // in-memory store via createInMemoryUiStore; production wiring resolves a node:sqlite file path.
   readonly store: UiStore;
+  // One chat has one canonical execution order across buffered, SSE, and grounded entry points.
+  // Tests may inject a deterministic serializer; production falls back to one registry per store.
+  readonly chatTurnSerializer?: ChatTurnSerializer | undefined;
   // Resolved UI database file path when known. Project onboarding uses this to prevent the UI DB
   // and selected repositories from overlapping on disk.
   readonly uiDbPath?: string | undefined;

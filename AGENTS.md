@@ -146,7 +146,7 @@ evidence.
 | You changed…                                   | Also run                                                                                                                                                                                |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Anything under `packages/keiko-ui/`            | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §7) |
-| A package's **public exports** / a new package | `npm run build && npm run check:package-surface`                                                                                                                                        |
+| A package's **public exports** / a new package | `npm run check:package-surface:assembled`                                                                                                                                               |
 | Retrieval / RAG / grounding                    | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                            |
 | Context lanes / compaction                     | `check:context-quality`                                                                                                                                                                 |
 | Server error handling / diagnostics            | `check:error-observability`                                                                                                                                                             |
@@ -276,8 +276,9 @@ These cost real time when rediscovered. They are all real and current.
   list) — changing the ruler requires re-measuring with it. Real per-PR perf protection lives in
   the deterministic bundle gates (`check:editor-release-evidence`, `check:editor-bundle-size`).
 - **New package exports drift `check:package-surface`.** Adding a public export changes the
-  packaged surface contract; run `npm run build && npm run check:package-surface` and update the
-  expected surface, or CI goes red on the release job.
+  packaged surface contract; run `npm run check:package-surface:assembled` and update the expected
+  surface. The aggregate builds the product, prepares the CLI mode, builds the UI, removes
+  build-only and host-native artifacts, and then runs the fail-closed surface checker.
 - **A new long-lived integration branch (`feat/…`) must be added in THREE places in
   `.github/workflows/ci.yml`**: the `push:` trigger list, the `pull_request:` trigger list, AND
   the protected-branch-gate `case` allowlist (`refs/heads/<branch>:` and `*:<branch>` patterns) —

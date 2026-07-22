@@ -61,6 +61,23 @@ describe("extractAnchors", () => {
     expect(route).toEqual({ term: "/api/payments/:id/refund", weight: 0.95, kind: "path" });
   });
 
+  it.each(["/health", "/files/*path", "/orders/{order_id}"])(
+    "captures bounded API route shape %s",
+    (routePath) => {
+      expect(run(`Trace GET ${routePath} to its handler`).anchors).toContainEqual({
+        term: routePath,
+        weight: 0.95,
+        kind: "path",
+      });
+    },
+  );
+
+  it("does not extract a route anchor from an absolute web URL", () => {
+    expect(run("Read https://example.com/docs for context").anchors).not.toContainEqual(
+      expect.objectContaining({ kind: "path" }),
+    );
+  });
+
   it("does not retain sentence punctuation after an API route anchor", () => {
     const result = run("Trace POST /api/chats/messages/grounded: route to handler.");
 
@@ -117,6 +134,26 @@ describe("extractAnchors", () => {
     const result = run("Wo ist WindowFrame implementiert?");
     const ident = result.anchors.find((a) => a.term === "windowframe");
     expect(ident).toEqual({ term: "windowframe", weight: 0.85, kind: "identifier" });
+  });
+
+  it("classifies a lowercase symbol next to an explicit definition verb as an identifier", () => {
+    const result = run("Where is reconcile_order defined?");
+
+    expect(result.anchors).toContainEqual({
+      term: "reconcile_order",
+      weight: 0.85,
+      kind: "identifier",
+    });
+  });
+
+  it("classifies a lowercase symbol after a German definition noun as an identifier", () => {
+    const result = run("Definition von reconcile_order");
+
+    expect(result.anchors).toContainEqual({
+      term: "reconcile_order",
+      weight: 0.85,
+      kind: "identifier",
+    });
   });
 
   it("does not mistake all-caps acronyms or SHOUTING words for camel identifiers", () => {

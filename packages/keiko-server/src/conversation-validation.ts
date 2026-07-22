@@ -86,6 +86,12 @@ function checkAttachment(
   if (attachment.kind === "document" && !capability.supportsDocumentInput) {
     return fail("CONVERSATION_UNSUPPORTED_MODALITY", MSG_UNSUPPORTED_MODALITY);
   }
+  return checkAttachmentSafety(attachment);
+}
+
+function checkAttachmentSafety(
+  attachment: ConversationAttachment,
+): ConversationValidationResult | undefined {
   const mimeOk =
     attachment.kind === "image"
       ? isAllowedImageMime(attachment.mimeType)
@@ -95,6 +101,17 @@ function checkAttachment(
   }
   if (attachment.sizeBytes > MAX_ATTACHMENT_BYTES) {
     return fail("CONVERSATION_OVERSIZED_CONTEXT", MSG_OVERSIZED_CONTEXT);
+  }
+  return undefined;
+}
+
+function checkAttachmentsSafety(
+  attachments: readonly ConversationAttachment[] | undefined,
+): ConversationValidationResult | undefined {
+  if (attachments === undefined) return undefined;
+  for (const attachment of attachments) {
+    const failure = checkAttachmentSafety(attachment);
+    if (failure !== undefined) return failure;
   }
   return undefined;
 }
@@ -145,4 +162,13 @@ export function validateConversationPayload(
   const documentFailure = checkDocumentContextBudget(input.documentContext);
   if (documentFailure !== undefined) return documentFailure;
   return { ok: true };
+}
+
+export function validateConversationPayloadSafety(
+  input: Pick<ConversationValidationInput, "attachments" | "documentContext">,
+): ConversationValidationResult {
+  const attachmentFailure = checkAttachmentsSafety(input.attachments);
+  if (attachmentFailure !== undefined) return attachmentFailure;
+  const documentFailure = checkDocumentContextBudget(input.documentContext);
+  return documentFailure ?? { ok: true };
 }

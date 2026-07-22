@@ -1585,7 +1585,7 @@ describe("GET /api/chats/messages", () => {
     expect(body.messages.map((message) => message.content)).toEqual(["hello"]);
   });
 
-  it("applies the limit query", async () => {
+  it("applies the limit query to the newest messages in chronological order", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
     for (let i = 0; i < 3; i++) {
@@ -1609,7 +1609,79 @@ describe("GET /api/chats/messages", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { messages: { content: string }[] };
     expect(body.messages).toHaveLength(2);
-    expect(body.messages.map((message) => message.content)).toEqual(["message-0", "message-1"]);
+    expect(body.messages.map((message) => message.content)).toEqual(["message-1", "message-2"]);
+  });
+
+  it("keeps the latest completed canonical turn beyond the default history limit", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    store.createMessages(
+      Array.from({ length: 200 }, (_unused, index) => ({
+        chatId: chat.id,
+        role: "system" as const,
+        content: `history-${String(index)}`,
+        timestamp: index + 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      })),
+    );
+    const identityContent = "canonical-final-voice-turn-v1";
+    const admission = store.admitChatTurn(
+      "final-voice-turn",
+      {
+        chatId: chat.id,
+        role: "user",
+        content: "latest final voice transcript",
+        timestamp: 201,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      { identityContent },
+    );
+    expect(admission.kind).toBe("admitted");
+    if (admission.kind !== "admitted") throw new Error("expected canonical admission");
+    const assistant = store.createTurnAssistant(admission.userMessage.id, {
+      chatId: chat.id,
+      role: "assistant",
+      content: "latest canonical assistant response",
+      timestamp: 202,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(
+      store.completeChatTurn(chat.id, "final-voice-turn", identityContent, assistant.id).kind,
+    ).toBe("completed");
+
+    const res = await fetch(
+      url(
+        `/api/chats/messages?chatId=${encodeURIComponent(chat.id)}&projectPath=${encodeURIComponent(projDir)}`,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      messages: { id: string; role: string; content: string }[];
+    };
+    expect(body.messages).toHaveLength(200);
+    expect(body.messages[0]?.content).toBe("history-2");
+    expect(body.messages.at(-2)).toMatchObject({
+      id: admission.userMessage.id,
+      role: "user",
+      content: "latest final voice transcript",
+    });
+    expect(body.messages.at(-1)).toMatchObject({
+      id: assistant.id,
+      role: "assistant",
+      content: "latest canonical assistant response",
+    });
   });
 
   it("returns 400 for an invalid message limit", async () => {

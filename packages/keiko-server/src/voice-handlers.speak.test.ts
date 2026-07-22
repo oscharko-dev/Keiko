@@ -61,8 +61,8 @@ const SPEECH_OUTPUT_CONFIG: GatewayConfig = {
   ],
 };
 
-// A speech-output provider WITHOUT any persona mapping: synthesis still works with the adapter's
-// default voice (no voiceProfiles configured).
+// A speech-output provider WITHOUT any persona mapping. The route must fail closed before egress;
+// provider voice names are not portable and there is no universal default.
 const SPEECH_OUTPUT_NO_PERSONA_CONFIG: GatewayConfig = {
   ...SPEECH_OUTPUT_CONFIG,
   providers: [
@@ -246,6 +246,24 @@ describe("POST /api/voice/speak — capability gate (AC1/AC4)", () => {
     expect(errorCode(result.body)).toBe("VOICE_UNAVAILABLE");
   });
 
+  it("returns 503 without egress for a Realtime-only media deployment", async () => {
+    const realtimeOnly: GatewayConfig = {
+      ...STT_ONLY_CONFIG,
+      capabilities: (STT_ONLY_CONFIG.capabilities ?? []).map((capability) => ({
+        ...capability,
+        supportsSpeechInput: false,
+        supportsRealtimeVoice: true,
+      })),
+    };
+    const { deps, seen } = speakDeps({ config: realtimeOnly });
+
+    const result = await handleVoiceSpeak(ctx({ text: "hello" }), deps);
+
+    expect(result.status).toBe(503);
+    expect(errorCode(result.body)).toBe("VOICE_UNAVAILABLE");
+    expect(seen).toHaveLength(0);
+  });
+
   it("returns 503 VOICE_UNAVAILABLE when voice is disabled by policy, even with a provider", async () => {
     const { deps, seen } = speakDeps({ env: { KEIKO_VOICE_DISABLED: "1" } });
     const result = await handleVoiceSpeak(ctx({ text: "hello" }), deps);
@@ -311,22 +329,20 @@ describe("POST /api/voice/speak — successful synthesis (AC1/AC2)", () => {
     expect(seen[0]?.voice).toBe("ember-internal-voice-id-112233");
   });
 
-  it("synthesizes with the adapter default voice when the provider maps no personas", async () => {
+  it("fails closed before provider egress when no explicit voice is mapped", async () => {
     const { deps, seen } = speakDeps({ config: SPEECH_OUTPUT_NO_PERSONA_CONFIG });
     const result = await handleVoiceSpeak(ctx({ text: "spoken answer" }), deps);
-    expect(result.status).toBe(200);
-    // No voice id is pinned by the BFF; the adapter applies its provider-neutral default.
-    expect(seen[0]?.voice).toBeUndefined();
+    expect(result.status).toBe(503);
+    expect(errorCode(result.body)).toBe("VOICE_UNAVAILABLE");
+    expect(seen).toHaveLength(0);
   });
 
-  it("falls back to a mapped voice in canonical order when the requested persona is unmapped", async () => {
-    // SPEECH_OUTPUT_CONFIG maps female + male but NOT neutral. A request for the unmapped persona must
-    // still synthesize, using the first persona-mapped provider in canonical order (male) rather than
-    // rejecting (D4 fallback contract).
+  it("fails closed when the requested persona has no exact provider mapping", async () => {
     const { deps, seen } = speakDeps();
     const result = await handleVoiceSpeak(ctx({ text: "spoken answer", persona: "neutral" }), deps);
-    expect(result.status).toBe(200);
-    expect(seen[0]?.voice).toBe("ember-internal-voice-id-112233");
+    expect(result.status).toBe(503);
+    expect(errorCode(result.body)).toBe("VOICE_UNAVAILABLE");
+    expect(seen).toHaveLength(0);
   });
 });
 

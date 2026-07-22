@@ -79,7 +79,7 @@ only and reaches every governed capability through host-injected callbacks, so a
 embed it. A standalone host performs three steps — install the local Monaco runtime once, implement
 the host port, and render the controlled `KeikoCodeEditor`.
 
-The package declares `react` and `react-dom` (`^19.2.7`) as **peer** dependencies and pins
+The package declares `react` and `react-dom` (`^19.2.8`) as **peer** dependencies and pins
 `monaco-editor` (`0.55.1`) and `@monaco-editor/react` (`4.7.0`); the host installs all four. Monaco is
 a browser-only module that imports CSS, so the editor surface must be loaded behind a client-only
 boundary (for example `next/dynamic(..., { ssr: false })` or an equivalent lazy import) — never during
@@ -401,7 +401,7 @@ All dependencies are pinned and permissively licensed. The package manifest decl
 | `@monaco-editor/react`          | `4.7.0`        | MIT        | React lifecycle wrapper for Monaco. Its default loader fetches Monaco from a CDN unless configured.                                       |
 | `@monaco-editor/loader`         | `1.7.0`        | MIT        | Transitive loader used by `@monaco-editor/react`; pinned via a root `overrides` entry.                                                    |
 | `@oscharko-dev/keiko-contracts` | workspace      | Apache-2.0 | Shared contracts. Imported **type-only** (`WorkspaceLanguage`, `FileContent`); no value import.                                           |
-| `react`, `react-dom`            | `^19.2.7` peer | MIT        | Provided by the host (`keiko-ui` ships React 19.2.7). Declared as **peer** dependencies so React is never bundled as a duplicate runtime. |
+| `react`, `react-dom`            | `^19.2.8` peer | MIT        | Provided by the host (`keiko-ui` ships React 19.2.8). Declared as **peer** dependencies so React is never bundled as a duplicate runtime. |
 
 Notes:
 
@@ -423,17 +423,21 @@ Notes:
   downgrade. #1196 mounts the editor in `keiko-ui`, so the chain
   `keiko-ui → keiko-editor → monaco-editor → dompurify` now enters keiko-ui's audit closure and the
   `ui` CI job's `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui` gate fails. The
-  resolution is a root `overrides: { dompurify: "3.4.11" }` entry:
-  - **Patched version, not a silencing pin.** `3.4.11` is the fixed DOMPurify line (the advisories
+  resolution is a root `overrides: { dompurify: "3.4.12" }` entry:
+  - **Patched version, not a silencing pin.** `3.4.12` is the fixed DOMPurify line (the advisories
     affect `<= 3.4.10`), so the override removes the vulnerable package from the installed npm tree
     rather than masking the warning. `monaco-editor` stays pinned at the ADR-0042-mandated `0.55.1`;
     `npm audit`'s own `fixAvailable` (a `0.53.0` downgrade) is still **not** taken.
-  - **Runtime sink independently closed.** Monaco still bundles a **vendored** DOMPurify copy
+  - **Runtime rendering independently constrained.** Monaco still bundles a **vendored** DOMPurify copy
     (`esm/vs/base/browser/dompurify/dompurify.js`) that the override does not replace; that copy is
     reached only through Markdown-rendering surfaces (hover tooltips, suggest-widget docs, parameter
-    hints, the inline-suggest toolbar, other `IMarkdownString` sinks). The mounted editor keeps
-    `suggest` docs, `parameterHints`, `codeLens`, `lightbulb`, `inlayHints`, and `links` off in
-    `buildEditorOptions`. **Inline suggest** (`inlineSuggest.enabled`) is enabled only when a governed
+    hints, the inline-suggest toolbar, other `IMarkdownString` sinks). The mounted editor enables
+    parameter hints, the code-action lightbulb, and inlay hints only when their governed host
+    providers are wired. Their bridge mappers expose primitive labels and documentation strings only;
+    completion suggestions have no documentation field, and runtime guards discard non-string
+    completion/signature metadata rather than forwarding an untyped `IMarkdownString`. Suggest
+    documentation, `codeLens`, and `links` remain off. **Inline suggest**
+    (`inlineSuggest.enabled`) is enabled only when a governed
     inline-completion provider is wired (#1200); even then it keeps `showToolbar: "never"` and
     `syntaxHighlightingEnabled: false`, and ghost text renders as plain text, so no Markdown sink is
     reached. **Hover** (`hover.enabled`) is enabled only when a governed hover provider is wired
@@ -445,14 +449,14 @@ Notes:
     providers for completion, hover, diagnostics, formatting, symbols, code actions, rename,
     references, and inlay hints, so Monaco cannot re-enable productive local language-service flows
     behind the host's back; the #1201 providers are governed bridges to the deterministic server
-    language service, not Monaco's local worker. Runtime exposure is therefore nil — the closed-sink
-    basis #1193 relied on, now enforced for hover by inert rendering and for every other Markdown
-    sink by construction options and runtime defaults.
+    language service, not Monaco's local worker. The original all-sinks-disabled posture is therefore
+    superseded by a narrower executable invariant: active markup never crosses a bridge, hover input
+    is inert-fenced, and every other enabled governed surface receives primitive plain text only.
   - **Eventual fix unchanged.** The durable remediation is still upgrading `monaco-editor` to a release
     that vendors DOMPurify `>= 3.3.2`; as of #1201 no such release exists (the latest `0.56.0-dev`
     builds still vendor and pin `3.2.7`), so the patched override plus inert hover rendering are the
-    interim controls. Revisit when a suggest-docs / parameter-hint / other Markdown surface is wired or
-    a newer Monaco ships.
+    interim controls. Revisit when a suggest-documentation or other `IMarkdownString` surface is wired,
+    or when a newer Monaco ships.
 - `monaco-editor` and `@monaco-editor/react` are consumed by the #1193 runtime helpers and mounted by
   `keiko-ui` through the #1196 client-only Workspace editor surface.
 

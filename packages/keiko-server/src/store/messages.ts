@@ -45,6 +45,9 @@ interface MessageRow {
   readonly task_type: string | null;
   readonly grounded_answer_json: string | null;
   readonly grounded_preview_citations_json: string | null;
+  readonly client_turn_id: string | null;
+  readonly client_turn_state: string | null;
+  readonly client_turn_content_digest: string | null;
 }
 
 function parseGroundedAnswer(raw: string | null): GroundedAnswer | undefined {
@@ -92,7 +95,7 @@ function rowToMessage(row: MessageRow): ChatMessage {
 }
 
 const COLUMNS =
-  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json";
+  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, rowid ASC`;
 const SQL_LIST_LIMITED = `
@@ -107,7 +110,20 @@ FROM (
 ORDER BY timestamp ASC, __rowid ASC`;
 const SQL_LIST_PREFIX_LIMITED = `${SQL_LIST} LIMIT ?`;
 const SQL_COUNT = "SELECT COUNT(*) AS count FROM chat_messages WHERE chat_id = ?";
+const SQL_LATEST_MESSAGE_ID = `
+  SELECT id
+  FROM chat_messages
+  WHERE chat_id = ?
+  ORDER BY timestamp DESC, rowid DESC
+  LIMIT 1
+`;
 const SQL_FIND_BY_ID = `SELECT ${COLUMNS} FROM chat_messages WHERE id = ? LIMIT 1`;
+const SQL_FIND_BY_CLIENT_TURN = `
+  SELECT ${COLUMNS}
+  FROM chat_messages
+  WHERE chat_id = ? AND client_turn_id = ? AND role IN ('user', 'assistant')
+  ORDER BY timestamp ASC, rowid ASC
+`;
 const SQL_CHAT_EXISTS = "SELECT 1 FROM chats WHERE id = ?";
 const SQL_REPLACE_ASSISTANT_CONTENT = `
   UPDATE chat_messages
@@ -117,8 +133,8 @@ const SQL_REPLACE_ASSISTANT_CONTENT = `
 `;
 const SQL_INSERT = `
 INSERT INTO chat_messages
-  (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING ${COLUMNS}
 `;
 
@@ -156,7 +172,7 @@ function validateRunSummaryScope(msg: NewChatMessage): void {
   }
 }
 
-function validateMessage(msg: NewChatMessage): void {
+export function validateMessage(msg: NewChatMessage): void {
   if (!ROLES.has(msg.role)) throw invalidRequest("Invalid role.");
   if (msg.content.length === 0) throw invalidRequest("Content is required.");
   validateRunIdentifiers(msg);
@@ -165,6 +181,40 @@ function validateMessage(msg: NewChatMessage): void {
     throw invalidRequest("Invalid workflowStatus.");
   }
   if (msg.taskType !== undefined) validateTaskType(msg.taskType);
+}
+
+export function isLatestChatMessage(db: DatabaseSync, chatId: string, messageId: string): boolean {
+  const row = db.prepare(SQL_LATEST_MESSAGE_ID).get(chatId) as unknown as
+    { readonly id: string } | undefined;
+  return row?.id === messageId;
+}
+
+export interface ClientTurnOwner {
+  readonly clientTurnId: string;
+  readonly state: ClientTurnRecord["state"];
+  readonly userMessage: ChatMessage;
+}
+
+export function findClientTurnOwner(
+  db: DatabaseSync,
+  userMessageId: string,
+): ClientTurnOwner | undefined {
+  const row = db
+    .prepare(
+      `
+        SELECT ${COLUMNS}
+        FROM chat_messages
+        WHERE id = ? AND role = 'user' AND client_turn_id IS NOT NULL
+        LIMIT 1
+      `,
+    )
+    .get(userMessageId) as unknown as MessageRow | undefined;
+  if (typeof row?.client_turn_id !== "string") return undefined;
+  return {
+    clientTurnId: row.client_turn_id,
+    state: parseClientTurnState(row.client_turn_state),
+    userMessage: rowToMessage(row),
+  };
 }
 
 function processShortResult(
@@ -263,11 +313,106 @@ export function findMessageById(db: DatabaseSync, id: string): ChatMessage | und
   return row === undefined ? undefined : rowToMessage(row);
 }
 
+export interface ClientTurnRecord {
+  readonly userMessage?: ChatMessage | undefined;
+  readonly assistantMessage?: ChatMessage | undefined;
+  readonly state?: "pending" | "completed" | "failed" | undefined;
+  readonly contentDigest?: string | undefined;
+}
+
+function parseClientTurnState(value: string | null): ClientTurnRecord["state"] {
+  if (value === null) return undefined;
+  if (value === "pending" || value === "completed" || value === "failed") return value;
+  throw new UiStoreError("INTERNAL", "Stored client turn state is invalid.", 500);
+}
+
+export function findClientTurn(
+  db: DatabaseSync,
+  chatId: string,
+  clientTurnId: string,
+): ClientTurnRecord {
+  const rows = db
+    .prepare(SQL_FIND_BY_CLIENT_TURN)
+    .all(chatId, clientTurnId) as unknown as MessageRow[];
+  const userRow = rows.find((row) => row.role === "user");
+  const assistantRow = rows.find((row) => row.role === "assistant");
+  return {
+    ...(userRow === undefined ? {} : { userMessage: rowToMessage(userRow) }),
+    ...(assistantRow === undefined ? {} : { assistantMessage: rowToMessage(assistantRow) }),
+    ...(userRow === undefined ? {} : { state: parseClientTurnState(userRow.client_turn_state) }),
+    ...(userRow?.client_turn_content_digest === null || userRow === undefined
+      ? {}
+      : { contentDigest: userRow.client_turn_content_digest }),
+  };
+}
+
+export function linkAssistantToClientTurn(
+  db: DatabaseSync,
+  chatId: string,
+  assistantMessageId: string,
+  clientTurnId: string,
+): void {
+  const linked = db
+    .prepare(
+      `
+        UPDATE chat_messages
+        SET client_turn_id = ?
+        WHERE id = ? AND chat_id = ? AND role = 'assistant' AND client_turn_id IS NULL
+      `,
+    )
+    .run(clientTurnId, assistantMessageId, chatId);
+  if (linked.changes !== 1) throw notFound("Message");
+  const completed = db
+    .prepare(
+      `
+        UPDATE chat_messages
+        SET client_turn_state = 'completed'
+        WHERE chat_id = ? AND client_turn_id = ? AND role = 'user'
+          AND client_turn_state = 'pending'
+      `,
+    )
+    .run(chatId, clientTurnId);
+  if (completed.changes !== 1) throw notFound("Message");
+}
+
+export function markClientTurnState(
+  db: DatabaseSync,
+  chatId: string,
+  clientTurnId: string,
+  from: "failed" | "pending",
+  to: "failed" | "pending",
+): boolean {
+  const result = db
+    .prepare(
+      `
+        UPDATE chat_messages
+        SET client_turn_state = ?
+        WHERE chat_id = ? AND client_turn_id = ? AND role = 'user'
+          AND client_turn_state = ?
+      `,
+    )
+    .run(to, chatId, clientTurnId, from);
+  return result.changes === 1;
+}
+
+export function recoverInterruptedClientTurns(db: DatabaseSync): void {
+  db.prepare(
+    `
+      UPDATE chat_messages
+      SET client_turn_state = 'failed'
+      WHERE role = 'user' AND client_turn_id IS NOT NULL AND client_turn_state = 'pending'
+    `,
+  ).run();
+}
+
 export function insertMessage(
   db: DatabaseSync,
   id: string,
   msg: NewChatMessage,
   redactString: (s: string) => string,
+  clientTurnId?: string,
+  clientTurnState?: "pending",
+  clientTurnContentDigest?: string,
 ): ChatMessage {
   validateMessage(msg);
   const chatExists = db.prepare(SQL_CHAT_EXISTS).get(msg.chatId) !== undefined;
@@ -290,6 +435,9 @@ export function insertMessage(
       msg.taskType ?? null,
       groundedAnswer,
       groundedPreviewCitations,
+      clientTurnId ?? null,
+      clientTurnState ?? null,
+      clientTurnContentDigest ?? null,
     ) as unknown as MessageRow;
   return rowToMessage(row);
 }

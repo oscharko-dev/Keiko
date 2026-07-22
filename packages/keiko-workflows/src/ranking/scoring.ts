@@ -1,6 +1,6 @@
 // Weighted scoring composition for ranked candidates (Epic #177, Issue #182).
-// Pure function: signal vector × weight vector → clamped unit score. The default positive
-// weights sum to 0.95 and the generated penalty weight is 0.30; the filter layer's
+// Pure function: signal vector × weight vector → clamped unit score. The generated penalty
+// weight is 0.30; the filter layer's
 // `omitGenerated` default keeps generated files OUT of the kept set regardless of score,
 // so the scoring penalty is a secondary defence (a fully-positive generated file scores
 // 0.65). Callers may override weights to tune ring-specific behaviour; never uses
@@ -105,11 +105,38 @@ function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function intentPositiveWeightTotal(weights: ScoringWeights): number {
+  if ((weights.symbolDefinition ?? 0) <= 0) {
+    return 1;
+  }
+  const positiveWeights = [
+    weights.provenanceBestScore,
+    weights.lexicalScore,
+    weights.semanticScore,
+    weights.provenanceCount,
+    weights.anchorOverlap,
+    weights.pathDepthAffinity,
+    weights.testPairBonus,
+    weights.stacktracePositionBonus,
+    weights.canonicalMetadata,
+    weights.structuralEdge,
+    weights.symbolDefinition,
+    weights.gitRecency,
+    weights.gitChurn,
+  ];
+  let total = 0;
+  for (const weight of positiveWeights) {
+    total += Math.max(0, weight ?? 0);
+  }
+  return Math.max(1, total);
+}
+
 export function computeScore(
   signals: ExtractedSignals,
   weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS,
 ): number {
   let raw = 0;
+  let generatedPenalty = 0;
   for (const signal of signals.signals) {
     const key = SIGNAL_WEIGHT_KEYS[signal.name];
     if (key === undefined) {
@@ -119,7 +146,15 @@ export function computeScore(
     if (weight === undefined) {
       continue;
     }
-    raw += signal.value * weight;
+    const contribution = signal.value * weight;
+    if (signal.name === "generated-penalty") {
+      generatedPenalty += contribution;
+    } else {
+      raw += contribution;
+    }
   }
-  return clampUnit(raw);
+  // Intent-conditioned signals are tie-breakers only if base scores retain headroom. Normalize
+  // boosted vectors by their maximum positive weight so a direct-definition signal cannot vanish
+  // behind the unit clamp. DEFAULT weights retain their historical byte-identical behavior.
+  return clampUnit(raw / intentPositiveWeightTotal(weights) + generatedPenalty);
 }

@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  candidateBucketForPath,
   legacyDiscoveryPolicy,
   orderCandidatesForSearch,
   policyOmissionReason,
   resolveSearchPolicy,
+  routeQueryTermsForSearch,
   scoreContentForSearch,
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
@@ -180,6 +182,21 @@ describe("orderCandidatesForSearch", () => {
     expect(declarationScore).toBeGreaterThan(140);
   });
 
+  it("preserves root, brace, and wildcard paths in polyglot route questions", () => {
+    expect(routeQueryTermsForSearch(query("Where is GET / defined?"))).toEqual({
+      method: "get",
+      path: "/",
+    });
+    expect(routeQueryTermsForSearch(query("Where is GET /orders/{order_id}?"))).toEqual({
+      method: "get",
+      path: "/orders/{order_id}",
+    });
+    expect(routeQueryTermsForSearch(query("Trace DELETE /files/*path to its handler"))).toEqual({
+      method: "delete",
+      path: "/files/*path",
+    });
+  });
+
   it("ranks an exact-symbol definition above call sites without changing match semantics", () => {
     const exactQuery: RetrievalQuery = {
       kind: "exact-symbol",
@@ -275,6 +292,28 @@ describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
     // The three generated artifacts collapse into low-value; only the hand-authored source is not.
     expect(diagnostics.candidateBuckets["low-value"]).toBe(3);
     expect(diagnostics.candidateBuckets.source).toBe(1);
+  });
+
+  it("recognizes PascalCase test suffixes without misclassifying ordinary names", () => {
+    expect(candidateBucketForPath("src/PaymentServiceTest.java")).toBe("test");
+    expect(candidateBucketForPath("src/PaymentServiceTests.cs")).toBe("test");
+    expect(candidateBucketForPath("src/Contest.java")).toBe("source");
+    expect(candidateBucketForPath("src/Latest.ts")).toBe("source");
+    expect(candidateBucketForPath("src/ApplicationContest.cs")).toBe("source");
+  });
+
+  it.each([
+    '[HttpGet("/orders/{order_id}")] public IActionResult GetOrder() {',
+    '#[get("/orders/{order_id}")] async fn get_order() {',
+    '.route("/orders/{order_id}", get(get_order))',
+  ])("boosts a polyglot route declaration: %s", (declaration) => {
+    const routeQuery = query("Trace GET /orders/{order_id} to its handler");
+    const documentation = "GET /orders/{order_id} is documented for API consumers.";
+
+    expect(scoreContentForSearch(routeQuery, declaration, metadataPolicy)).toBeGreaterThan(140);
+    expect(scoreContentForSearch(routeQuery, declaration, metadataPolicy)).toBeGreaterThan(
+      scoreContentForSearch(routeQuery, documentation, metadataPolicy),
+    );
   });
 
   it("ranks hand-authored config above source wrappers for config-key lookup", () => {

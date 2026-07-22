@@ -5,7 +5,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
   chmodIfPresent,
@@ -21,9 +22,13 @@ import {
 import type {
   Chat,
   ChatMessage,
+  ChatTurnAdmission,
+  ChatTurnCompletion,
+  ChatTurnInspection,
   CreateChatOptions,
   NewChatMessage,
   Project,
+  StoredPdfCitationPreviewCitation,
   UiStore,
   UiStoreFactoryOptions,
   UpdateChatOptions,
@@ -49,16 +54,24 @@ import {
   updateChat as sqlUpdateChat,
 } from "./chats.js";
 import {
+  type ClientTurnRecord,
   countMessages as sqlCountMessages,
+  findClientTurn as sqlFindClientTurn,
+  findClientTurnOwner as sqlFindClientTurnOwner,
   findMessageById as sqlFindMessageById,
   attachGroundedAnswer as sqlAttachGroundedAnswer,
   findGroundedPreviewCitations as sqlFindGroundedPreviewCitations,
   insertMessage as sqlInsertMessage,
+  isLatestChatMessage as sqlIsLatestChatMessage,
   listMessages as sqlListMessages,
   listMessagesLimited as sqlListMessagesLimited,
   listMessagesPrefixLimited as sqlListMessagesPrefixLimited,
+  linkAssistantToClientTurn as sqlLinkAssistantToClientTurn,
+  markClientTurnState as sqlMarkClientTurnState,
+  recoverInterruptedClientTurns as sqlRecoverInterruptedClientTurns,
   replaceAssistantMessageContent as sqlReplaceAssistantMessageContent,
   updateMessage as sqlUpdateMessage,
+  validateMessage as sqlValidateMessage,
 } from "./messages.js";
 import { validateProjectPath } from "./validation.js";
 import {
@@ -126,8 +139,73 @@ function createMessageRecord(
   db: DatabaseSync,
   options: ResolvedFactoryOptions,
   msg: NewChatMessage,
+  clientTurnId?: string,
+  clientTurnState?: "pending",
+  messageId = options.newId(),
+  clientTurnContentDigest?: string,
 ): ChatMessage {
-  return sqlInsertMessage(db, options.newId(), msg, options.redactString);
+  return sqlInsertMessage(
+    db,
+    messageId,
+    msg,
+    options.redactString,
+    clientTurnId,
+    clientTurnState,
+    clientTurnContentDigest,
+  );
+}
+
+interface StagedTurnAssistant {
+  readonly clientTurnId: string;
+  readonly userMessageId: string;
+  readonly message: ChatMessage;
+  readonly draft: NewChatMessage;
+  readonly previewCitations?: readonly StoredPdfCitationPreviewCitation[] | undefined;
+}
+
+type StagedTurnAssistants = Map<string, StagedTurnAssistant>;
+
+function stagedMessage(id: string, draft: NewChatMessage): ChatMessage {
+  return {
+    id,
+    chatId: draft.chatId,
+    role: draft.role,
+    content: draft.content,
+    timestamp: draft.timestamp,
+    runId: draft.runId,
+    workflowId: draft.workflowId,
+    workflowStatus: draft.workflowStatus,
+    shortResult: draft.shortResult,
+    taskType: draft.taskType,
+    ...(draft.groundedAnswer === undefined ? {} : { groundedAnswer: draft.groundedAnswer }),
+  };
+}
+
+function createTurnAssistantRecord(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  staged: StagedTurnAssistants,
+  userMessageId: string,
+  draft: NewChatMessage,
+): ChatMessage {
+  sqlValidateMessage(draft);
+  if (draft.role !== "assistant") {
+    throw invalidRequest("Canonical chat turn completion requires assistant role.");
+  }
+  const owner = sqlFindClientTurnOwner(db, userMessageId);
+  if (owner === undefined) return createMessageRecord(db, options, draft);
+  if (owner.state !== "pending" || owner.userMessage.chatId !== draft.chatId) {
+    throw invalidRequest("Canonical assistant does not match the admitted chat turn.");
+  }
+  const id = options.newId();
+  const message = stagedMessage(id, draft);
+  staged.set(id, {
+    clientTurnId: owner.clientTurnId,
+    userMessageId,
+    message,
+    draft,
+  });
+  return message;
 }
 
 function createProjectRecord(
@@ -156,6 +234,278 @@ function deleteProjectRecord(db: DatabaseSync, path: string): void {
   sqlDeleteProject(db, normalized);
 }
 
+function validateClientTurnId(clientTurnId: string): void {
+  if (clientTurnId.length === 0 || clientTurnId.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS) {
+    throw invalidRequest("Invalid clientTurnId.");
+  }
+}
+
+function storedClientTurnId(chatId: string, clientTurnId: string): string {
+  return createHash("sha256")
+    .update(JSON.stringify([chatId, clientTurnId]), "utf8")
+    .digest("hex");
+}
+
+function storedClientTurnContentDigest(
+  chatId: string,
+  clientTurnId: string,
+  content: string,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify([chatId, clientTurnId, content]), "utf8")
+    .digest("hex");
+}
+
+function clientTurnContentMatches(
+  turn: ClientTurnRecord,
+  expectedDigest: string,
+  legacyContent: string,
+): boolean {
+  return turn.contentDigest === undefined
+    ? turn.userMessage?.content === legacyContent
+    : turn.contentDigest === expectedDigest;
+}
+
+function withImmediateTransaction<T>(db: DatabaseSync, operation: () => T): T {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function existingTurnAdmission(
+  db: DatabaseSync,
+  chatId: string,
+  clientTurnId: string,
+  userContent: string,
+  contentDigest: string,
+): ChatTurnAdmission | undefined {
+  const turn = sqlFindClientTurn(db, chatId, clientTurnId);
+  const user = turn.userMessage;
+  if (user === undefined) return undefined;
+  if (!clientTurnContentMatches(turn, contentDigest, userContent) || turn.state === undefined) {
+    return { kind: "conflict" };
+  }
+  if (turn.state === "completed" && turn.assistantMessage !== undefined) {
+    return { kind: "replay", userMessage: user, assistantMessage: turn.assistantMessage };
+  }
+  if (turn.state === "failed") {
+    if (!sqlIsLatestChatMessage(db, chatId, user.id)) return { kind: "conflict" };
+    if (!sqlMarkClientTurnState(db, chatId, clientTurnId, "failed", "pending")) {
+      return { kind: "in-progress", userMessage: user };
+    }
+    return { kind: "admitted", userMessage: user };
+  }
+  return { kind: "in-progress", userMessage: user };
+}
+
+function inspectChatTurnRecord(
+  db: DatabaseSync,
+  chatId: string,
+  clientTurnId: string,
+  userContent: string,
+): ChatTurnInspection {
+  validateClientTurnId(clientTurnId);
+  const storedTurnId = storedClientTurnId(chatId, clientTurnId);
+  const turn = sqlFindClientTurn(db, chatId, storedTurnId);
+  const user = turn.userMessage;
+  if (user === undefined) return { kind: "missing" };
+  const contentDigest = storedClientTurnContentDigest(chatId, clientTurnId, userContent);
+  if (!clientTurnContentMatches(turn, contentDigest, userContent) || turn.state === undefined) {
+    return { kind: "conflict" };
+  }
+  if (turn.state === "completed") {
+    return turn.assistantMessage === undefined
+      ? { kind: "conflict" }
+      : { kind: "replay", userMessage: user, assistantMessage: turn.assistantMessage };
+  }
+  if (turn.state === "failed") {
+    return sqlIsLatestChatMessage(db, chatId, user.id)
+      ? { kind: "retryable", userMessage: user }
+      : { kind: "conflict" };
+  }
+  return { kind: "in-progress", userMessage: user };
+}
+
+function admitChatTurnRecord(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  clientTurnId: string,
+  userMessage: NewChatMessage,
+  admissionOptions?: { readonly identityContent: string },
+): ChatTurnAdmission {
+  validateClientTurnId(clientTurnId);
+  if (userMessage.role !== "user") throw invalidRequest("Chat turn admission requires user role.");
+  const storedTurnId = storedClientTurnId(userMessage.chatId, clientTurnId);
+  const identityContent = admissionOptions?.identityContent ?? userMessage.content;
+  const contentDigest = storedClientTurnContentDigest(
+    userMessage.chatId,
+    clientTurnId,
+    identityContent,
+  );
+  return withImmediateTransaction(db, () => {
+    const existing = existingTurnAdmission(
+      db,
+      userMessage.chatId,
+      storedTurnId,
+      identityContent,
+      contentDigest,
+    );
+    if (existing !== undefined) return existing;
+    const admitted = createMessageRecord(
+      db,
+      options,
+      userMessage,
+      storedTurnId,
+      "pending",
+      undefined,
+      contentDigest,
+    );
+    sqlTouchChat(db, userMessage.chatId, options.now());
+    return { kind: "admitted", userMessage: admitted };
+  });
+}
+
+interface ChatTurnCommitPlan {
+  readonly kind: "commit";
+  readonly userMessage: ChatMessage;
+  readonly pendingAssistant: StagedTurnAssistant;
+}
+
+function stagedAssistantMatchesTurn(
+  pending: StagedTurnAssistant | undefined,
+  storedTurnId: string,
+  userMessageId: string,
+  chatId: string,
+): pending is StagedTurnAssistant {
+  return (
+    pending?.clientTurnId === storedTurnId &&
+    pending.userMessageId === userMessageId &&
+    pending.draft.chatId === chatId
+  );
+}
+
+function planChatTurnCompletion(
+  turn: ClientTurnRecord,
+  staged: StagedTurnAssistants,
+  storedTurnId: string,
+  chatId: string,
+  userContent: string,
+  contentDigest: string,
+  assistantMessageId: string,
+): ChatTurnCompletion | ChatTurnCommitPlan {
+  const user = turn.userMessage;
+  if (user === undefined) return { kind: "conflict" };
+  if (!clientTurnContentMatches(turn, contentDigest, userContent)) return { kind: "conflict" };
+  if (turn.assistantMessage !== undefined) {
+    return turn.state === "completed" && turn.assistantMessage.id === assistantMessageId
+      ? { kind: "completed", userMessage: user, assistantMessage: turn.assistantMessage }
+      : { kind: "conflict" };
+  }
+  const pending = staged.get(assistantMessageId);
+  return turn.state === "pending" &&
+    stagedAssistantMatchesTurn(pending, storedTurnId, user.id, chatId)
+    ? { kind: "commit", userMessage: user, pendingAssistant: pending }
+    : { kind: "conflict" };
+}
+
+function persistStagedAssistant(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  assistantMessageId: string,
+  pending: StagedTurnAssistant,
+): ChatMessage {
+  const assistant = createMessageRecord(
+    db,
+    options,
+    pending.draft,
+    undefined,
+    undefined,
+    assistantMessageId,
+  );
+  return pending.previewCitations !== undefined && pending.draft.groundedAnswer !== undefined
+    ? sqlAttachGroundedAnswer(
+        db,
+        assistantMessageId,
+        pending.draft.groundedAnswer,
+        pending.previewCitations,
+        options.redactString,
+      )
+    : assistant;
+}
+
+function completeChatTurnRecord(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  staged: StagedTurnAssistants,
+  chatId: string,
+  clientTurnId: string,
+  userContent: string,
+  assistantMessageId: string,
+): ChatTurnCompletion {
+  validateClientTurnId(clientTurnId);
+  const storedTurnId = storedClientTurnId(chatId, clientTurnId);
+  const contentDigest = storedClientTurnContentDigest(chatId, clientTurnId, userContent);
+  const result = withImmediateTransaction<ChatTurnCompletion>(db, () => {
+    const turn = sqlFindClientTurn(db, chatId, storedTurnId);
+    const plan = planChatTurnCompletion(
+      turn,
+      staged,
+      storedTurnId,
+      chatId,
+      userContent,
+      contentDigest,
+      assistantMessageId,
+    );
+    if (plan.kind !== "commit") return plan;
+    const assistant = persistStagedAssistant(
+      db,
+      options,
+      assistantMessageId,
+      plan.pendingAssistant,
+    );
+    sqlLinkAssistantToClientTurn(db, chatId, assistantMessageId, storedTurnId);
+    return { kind: "completed", userMessage: plan.userMessage, assistantMessage: assistant };
+  });
+  if (result.kind === "completed") staged.delete(assistantMessageId);
+  return result;
+}
+
+function failChatTurnRecord(db: DatabaseSync, chatId: string, clientTurnId: string): string {
+  validateClientTurnId(clientTurnId);
+  const storedTurnId = storedClientTurnId(chatId, clientTurnId);
+  sqlMarkClientTurnState(db, chatId, storedTurnId, "pending", "failed");
+  return storedTurnId;
+}
+
+function attachGroundedAnswerRecord(
+  db: DatabaseSync,
+  staged: StagedTurnAssistants,
+  id: string,
+  answer: Parameters<UiStore["attachGroundedAnswer"]>[1],
+  previewCitations: readonly StoredPdfCitationPreviewCitation[] | undefined,
+  redactString: (input: string) => string,
+): ChatMessage {
+  const pending = staged.get(id);
+  if (pending === undefined) {
+    return sqlAttachGroundedAnswer(db, id, answer, previewCitations, redactString);
+  }
+  const draft: NewChatMessage = { ...pending.draft, groundedAnswer: answer };
+  const message = stagedMessage(id, draft);
+  staged.set(id, {
+    ...pending,
+    message,
+    draft,
+    ...(previewCitations === undefined ? {} : { previewCitations }),
+  });
+  return message;
+}
+
 function createMessageBatch(
   db: DatabaseSync,
   options: ResolvedFactoryOptions,
@@ -182,6 +532,7 @@ function createMessageBatch(
 // branching/logic to extract; splitting the literal would only obscure the 1:1 method→helper mapping.
 // eslint-disable-next-line max-lines-per-function
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
+  const stagedTurnAssistants: StagedTurnAssistants = new Map();
   return {
     listProjects: () => sqlListProjects(db),
     createProject: (path: string, name?: string): Project =>
@@ -220,10 +571,51 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     },
     createMessages: (messages: readonly NewChatMessage[]): readonly ChatMessage[] =>
       createMessageBatch(db, options, messages),
+    createTurnAssistant: (userMessageId: string, assistantMessage: NewChatMessage): ChatMessage =>
+      createTurnAssistantRecord(db, options, stagedTurnAssistants, userMessageId, assistantMessage),
+    inspectChatTurn: (
+      chatId: string,
+      clientTurnId: string,
+      userContent: string,
+    ): ChatTurnInspection => inspectChatTurnRecord(db, chatId, clientTurnId, userContent),
+    admitChatTurn: (
+      clientTurnId: string,
+      userMessage: NewChatMessage,
+      admissionOptions?: { readonly identityContent: string },
+    ): ChatTurnAdmission =>
+      admitChatTurnRecord(db, options, clientTurnId, userMessage, admissionOptions),
+    completeChatTurn: (
+      chatId: string,
+      clientTurnId: string,
+      userContent: string,
+      assistantMessageId: string,
+    ): ChatTurnCompletion =>
+      completeChatTurnRecord(
+        db,
+        options,
+        stagedTurnAssistants,
+        chatId,
+        clientTurnId,
+        userContent,
+        assistantMessageId,
+      ),
+    failChatTurn: (chatId: string, clientTurnId: string): void => {
+      const storedTurnId = failChatTurnRecord(db, chatId, clientTurnId);
+      for (const [id, pending] of stagedTurnAssistants) {
+        if (pending.clientTurnId === storedTurnId) stagedTurnAssistants.delete(id);
+      }
+    },
     updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
       sqlUpdateMessage(db, id, patch, options.redactString),
     attachGroundedAnswer: (id: string, answer, previewCitations): ChatMessage =>
-      sqlAttachGroundedAnswer(db, id, answer, previewCitations, options.redactString),
+      attachGroundedAnswerRecord(
+        db,
+        stagedTurnAssistants,
+        id,
+        answer,
+        previewCitations,
+        options.redactString,
+      ),
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
     replaceAssistantMessageContent: (id: string, content: string, timestamp: number): ChatMessage =>
       sqlReplaceAssistantMessageContent(db, id, content, timestamp),
@@ -316,6 +708,7 @@ export function openNodeUiDatabase(dbPath: string): DatabaseSync {
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
     runMigrations(db);
+    sqlRecoverInterruptedClientTurns(db);
   } catch (error) {
     db.close();
     if (!isSqliteCorruptionError(error)) {
@@ -326,6 +719,7 @@ export function openNodeUiDatabase(dbPath: string): DatabaseSync {
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
     runMigrations(db);
+    sqlRecoverInterruptedClientTurns(db);
   }
   chmodIfPresent(dbPath, FILE_MODE);
   chmodIfPresent(`${dbPath}-wal`, FILE_MODE);

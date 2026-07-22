@@ -45,6 +45,7 @@ import {
   clearGroundedTurnsForWorkspace,
 } from "./grounded-turn-registry.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
+import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 // Issue #184 — workspace-relative path gate. isValidScopePath is the canonical validator from
 // @oscharko-dev/keiko-contracts/connected-context (issue #178). Reusing it here keeps the BFF
 // boundary aligned with the rest of the connected-repo surface and avoids regex drift.
@@ -924,37 +925,59 @@ export async function handleUpdateChat(
     const id = requireQuery(ctx, "id");
     const body = await readJsonObject(ctx.req);
     const patch = buildChatPatch(deps, body);
-    const scopesToCheck = scopesRequiringAccessValidation(patch);
-    let safePatch = patch;
-    if (scopesToCheck.length > 0) {
-      const existing = findChatById(deps, id);
-      if (existing === undefined) return notFoundResult("Chat not found.");
-      safePatch = canonicalizeConnectedScopePatch(deps, existing, patch);
-    }
-    const limits = currentGroundingLimits(deps);
-    const chat = deps.store.updateChat(id, safePatch, {
-      maxConnectedSources: limits.maxConnectedSources,
-      maxLocalKnowledgeSources: limits.maxLocalKnowledgeSources,
-    });
-    if (patchTouchesGroundingScope(safePatch) || safePatch.status === "closed") {
-      clearGroundedContextIndexesForConversation(id);
-      clearGroundedTurnsForConversation(id);
-    }
-    return { status: 200, body: { chat } };
+    const apply = (): RouteResult => applyChatUpdate(deps, id, patch);
+    if (!patchTouchesGroundingScope(patch) && patch.status === undefined) return apply();
+    const result = await runSerializedChatTurn(deps, id, new AbortController().signal, apply);
+    return result === CHAT_TURN_WAIT_CANCELLED
+      ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+      : result;
   });
+}
+
+function applyChatUpdate(deps: UiHandlerDeps, id: string, patch: UpdateChatPatch): RouteResult {
+  const scopesToCheck = scopesRequiringAccessValidation(patch);
+  let safePatch = patch;
+  if (scopesToCheck.length > 0) {
+    const existing = findChatById(deps, id);
+    if (existing === undefined) return notFoundResult("Chat not found.");
+    safePatch = canonicalizeConnectedScopePatch(deps, existing, patch);
+  }
+  const limits = currentGroundingLimits(deps);
+  const chat = deps.store.updateChat(id, safePatch, {
+    maxConnectedSources: limits.maxConnectedSources,
+    maxLocalKnowledgeSources: limits.maxLocalKnowledgeSources,
+  });
+  if (patchTouchesGroundingScope(safePatch) || safePatch.status !== undefined) {
+    clearGroundedContextIndexesForConversation(id);
+    clearGroundedTurnsForConversation(id);
+  }
+  return { status: 200, body: { chat } };
 }
 
 // ──────────────────────────────────────────────────────────────────────────
 // Route 20 — DELETE /api/chats?id=...
 // ──────────────────────────────────────────────────────────────────────────
 
-export function handleDeleteChat(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  return runHandlerSync(() => {
+export async function handleDeleteChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
     const id = requireQuery(ctx, "id");
-    deps.store.deleteChat(id);
-    clearGroundedContextIndexesForConversation(id);
-    clearGroundedTurnsForConversation(id);
-    return { status: 204, body: null };
+    const result = await runSerializedChatTurn(
+      deps,
+      id,
+      new AbortController().signal,
+      (): RouteResult => {
+        deps.store.deleteChat(id);
+        clearGroundedContextIndexesForConversation(id);
+        clearGroundedTurnsForConversation(id);
+        return { status: 204, body: null };
+      },
+    );
+    return result === CHAT_TURN_WAIT_CANCELLED
+      ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+      : result;
   });
 }
 
@@ -1026,7 +1049,7 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
       return notFoundResult("Chat not found.");
     }
     const messages = deps.store
-      .listMessagesPrefix(chatId, limit)
+      .listMessages(chatId, limit)
       .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
     return {
       status: 200,

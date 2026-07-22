@@ -7,6 +7,7 @@ import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import {
   buildGatewayAssembly,
   type GatewayConversationMessage,
+  type GatewayTurnSnapshot,
   type SendDesktopChatRequest,
 } from "./chat-handlers.js";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
@@ -128,6 +129,13 @@ function seedHistory(chatId: string, store: UiStore, turns: readonly string[]): 
   });
 }
 
+function gatewayTurnSnapshot(store: UiStore, chatId: string): GatewayTurnSnapshot {
+  const history = store.listMessages(chatId);
+  const currentUser = history.at(-1);
+  if (currentUser?.role !== "user") throw new Error("expected current user fixture");
+  return { history, currentUserMessageId: currentUser.id };
+}
+
 function makeDocument(
   id: string,
   displayName: string,
@@ -231,7 +239,13 @@ describe("buildGatewayAssembly", () => {
       ],
     });
 
-    const outcome = buildGatewayAssembly(deps, request, memory, CHAT_MODEL);
+    const outcome = buildGatewayAssembly(
+      deps,
+      request,
+      memory,
+      CHAT_MODEL,
+      gatewayTurnSnapshot(store, chatId),
+    );
     const totalTokens = estimateTokensForSegments(assemblyMessages(outcome));
     const latestUserTurn = outcome.messages.at(-1)?.content ?? "";
 
@@ -274,7 +288,13 @@ describe("buildGatewayAssembly", () => {
     const deps = createDeps(store, profile);
     const request = makeRequest(chatId, "Keep the current request exact.");
 
-    const outcome = buildGatewayAssembly(deps, request, makeMemoryResult([]), CHAT_MODEL);
+    const outcome = buildGatewayAssembly(
+      deps,
+      request,
+      makeMemoryResult([]),
+      CHAT_MODEL,
+      gatewayTurnSnapshot(store, chatId),
+    );
     const totalTokens = estimateTokensForSegments(assemblyMessages(outcome));
     const historyLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "history-summary");
     const promptLaneTokens = outcome.diagnostics.lanes
@@ -316,7 +336,13 @@ describe("buildGatewayAssembly", () => {
     const deps = createDeps(store, profile);
     const request = makeRequest(chatId, "Keep the current request exact.");
 
-    const outcome = buildGatewayAssembly(deps, request, makeMemoryResult([]), CHAT_MODEL);
+    const outcome = buildGatewayAssembly(
+      deps,
+      request,
+      makeMemoryResult([]),
+      CHAT_MODEL,
+      gatewayTurnSnapshot(store, chatId),
+    );
     const tokenAccounting = outcome.diagnostics.profile.tokenAccounting;
     const systemLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "system-contract");
     const historyLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "history-summary");
@@ -348,7 +374,13 @@ describe("buildGatewayAssembly", () => {
     const memory = makeMemoryResult([]);
     const request = makeRequest(chatId, "Simple prompt");
 
-    const outcome = buildGatewayAssembly(deps, request, memory, CHAT_MODEL);
+    const outcome = buildGatewayAssembly(
+      deps,
+      request,
+      memory,
+      CHAT_MODEL,
+      gatewayTurnSnapshot(store, chatId),
+    );
 
     expect(outcome.messages.at(-1)?.content).toBe("Simple prompt");
     expect(outcome.diagnostics.lanes.map((lane) => lane.laneId)).toEqual([
@@ -389,7 +421,13 @@ describe("buildGatewayAssembly", () => {
       documentContext: [makeDocument("doc-1", "doc.txt", "document accounting fixture")],
     });
 
-    const outcome = buildGatewayAssembly(deps, request, memory, CHAT_MODEL);
+    const outcome = buildGatewayAssembly(
+      deps,
+      request,
+      memory,
+      CHAT_MODEL,
+      gatewayTurnSnapshot(store, chatId),
+    );
     const messages = assemblyMessages(outcome);
     const calibratedTotal = countContextTokensForSegments(messages, profile.tokenAccounting);
     const fallbackTotal = estimateTokensForSegments(messages);
@@ -423,7 +461,13 @@ describe("buildGatewayAssembly", () => {
       documentContext: [firstDoc, secondDoc],
     });
 
-    const outcome = buildGatewayAssembly(deps, request, memory, CHAT_MODEL);
+    const outcome = buildGatewayAssembly(
+      deps,
+      request,
+      memory,
+      CHAT_MODEL,
+      gatewayTurnSnapshot(store, chatId),
+    );
     const latestUserTurn = outcome.messages.at(-1)?.content ?? "";
     const repoLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "repo-evidence");
 
@@ -453,7 +497,13 @@ describe("buildGatewayAssembly", () => {
     const memory = makeMemoryResult([]);
     const request = makeRequest(chatId, requestText, { documentContext: [doc] });
 
-    const outcome = buildGatewayAssembly(deps, request, memory, CHAT_MODEL);
+    const outcome = buildGatewayAssembly(
+      deps,
+      request,
+      memory,
+      CHAT_MODEL,
+      gatewayTurnSnapshot(store, chatId),
+    );
     const latestUserTurn = outcome.messages.at(-1)?.content ?? "";
     const totalTokens = estimateTokensForSegments(assemblyMessages(outcome));
     const repoLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "repo-evidence");
@@ -579,7 +629,13 @@ describe("buildGatewayAssembly", () => {
       documentContext: [makeDocument("doc-1", "src/secret-context.txt", "repo evidence")],
     });
 
-    const outcome = buildGatewayAssembly(deps, request, memory, CHAT_MODEL);
+    const outcome = buildGatewayAssembly(
+      deps,
+      request,
+      memory,
+      CHAT_MODEL,
+      gatewayTurnSnapshot(store, chatId),
+    );
     const serialized = JSON.stringify(outcome.diagnostics);
 
     expect(outcome.diagnostics.lanes.map((lane) => lane.laneId)).toEqual(

@@ -10,14 +10,14 @@ Keiko's UI and reusable editor use one host-provided React runtime. The reviewed
 
 | Surface                      | Dependency                 | Selected version | Contract                        |
 | ---------------------------- | -------------------------- | ---------------: | ------------------------------- |
-| `@oscharko-dev/keiko-ui`     | `react`, `react-dom`       |         `19.2.7` | Exact runtime versions          |
+| `@oscharko-dev/keiko-ui`     | `react`, `react-dom`       |         `19.2.8` | Exact runtime versions          |
 | `@oscharko-dev/keiko-ui`     | `@types/react`             |        `19.2.17` | Exact development version       |
 | `@oscharko-dev/keiko-ui`     | `@types/react-dom`         |         `19.2.3` | Exact development version       |
-| `@oscharko-dev/keiko-editor` | `react`, `react-dom`       |        `^19.2.7` | Host-provided peer dependencies |
+| `@oscharko-dev/keiko-editor` | `react`, `react-dom`       |        `^19.2.8` | Host-provided peer dependencies |
 | `@oscharko-dev/keiko-editor` | React declaration packages |       Same as UI | Exact test/build versions       |
 
 The editor does not bundle a second React runtime. `npm ls` must resolve the editor peers to the UI
-host's React 19.2.7 installation without invalid or extraneous nodes. React canary features and the
+host's React 19.2.8 installation without invalid or extraneous nodes. React canary features and the
 React Compiler remain out of scope.
 
 ## Compatibility work

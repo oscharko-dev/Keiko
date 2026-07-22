@@ -890,6 +890,7 @@ describe("CSRF guard — PATCH/DELETE methods (M1)", () => {
 // id or the diagnostic) flips these red — this is the regression gate for RB-6.
 describe("top-level route-error catch (GEN-TEST-MISSING-008, RB-6)", () => {
   const SECRET_MARKER = "boom-secret-DO-NOT-LEAK";
+  const QUERY_MARKER = "query-customer-content-DO-NOT-LOG";
 
   // Builds deps whose GET /api/projects read seam (handleListProjects → store.listProjects)
   // throws a plain, non-UiStoreError Error. That throw escapes the desktop error mapping,
@@ -966,14 +967,13 @@ describe("top-level route-error catch (GEN-TEST-MISSING-008, RB-6)", () => {
     expect(res.headers["content-length"]).toBeDefined();
   });
 
-  it("routes the redacted cause to the operator diagnostic sink, keyed by the correlation id", async () => {
-    // RB-6 (GEN-OBS-DIAGNOSTICS-901): the cause is no longer discarded. Capture the sink and prove
-    // the record carries the correlation id, the error class, and the cause message — server-side
-    // only (the assertion in the previous test proves it never reaches the browser).
+  it("routes body-free failure metadata to the operator sink, keyed by correlation id", async () => {
+    // RB-6 (GEN-OBS-DIAGNOSTICS-901): capture the sink and prove the record retains correlation and
+    // class metadata while neither the thrown message nor request query crosses the log boundary.
     const records: ServerDiagnosticRecord[] = [];
     await startWithThrowingDeps({ record: (r) => records.push(r) });
 
-    const res = await rawRequest("/api/projects");
+    const res = await rawRequest(`/api/projects?note=${QUERY_MARKER}`);
     const parsed = JSON.parse(res.body.toString("utf8")) as {
       error: { correlationId?: string };
     };
@@ -982,11 +982,11 @@ describe("top-level route-error catch (GEN-TEST-MISSING-008, RB-6)", () => {
     const [record] = records;
     expect(record?.correlationId).toBe(parsed.error.correlationId);
     expect(record?.source).toBe("server.top-level-catch");
-    expect(record?.operation).toBe("GET /api/projects");
+    expect(record?.operation).toBe("server.request");
     expect(record?.errorClass).toBe("Error");
-    // The cause IS captured for the operator (redactor here knows no secrets, so it passes through);
-    // this is the whole point of RB-6 — the previously-dropped cause is now diagnosable.
-    expect(record?.message).toContain(SECRET_MARKER);
+    expect(record?.message).toBe("server-operation-failed");
+    expect(JSON.stringify(record)).not.toContain(SECRET_MARKER);
+    expect(JSON.stringify(record)).not.toContain(QUERY_MARKER);
     expect(typeof record?.timestamp).toBe("string");
   });
 

@@ -8,6 +8,13 @@ lives in [`packages/keiko-contracts/src/voice-action-intent.ts`](../../packages/
 the server governance lives in [`packages/keiko-server/src/voice-action-governance.ts`](../../packages/keiko-server/src/voice-action-governance.ts);
 the UI binding lives in [`packages/keiko-ui/src/app/components/desktop/hooks/voice-action-intent.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-action-intent.ts).
 
+> **Current integration note (ADR-0154):** Twin Voice does not feed the dedicated
+> `voice-action-intent.ts` UI binding and does not automatically attach `voiceOrigin` to a run. A
+> settled spoken final is untrusted ordinary chat input and grants no execution authority. The
+> contract and server guard remain applicable only when an explicitly governed workflow handoff
+> supplies `voiceOrigin`; the existing Authority Envelope, confirmation, approval-token, scope, and
+> write gates still decide the action.
+
 ## 0. Core security principle: Voice is UNTRUSTED
 
 > A committed spoken transcript may **propose** an action, but it can never **execute** one or bypass

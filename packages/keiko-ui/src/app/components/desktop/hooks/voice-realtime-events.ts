@@ -5,6 +5,14 @@
 // signals leave this module; raw audio, SDP, credentials, and provider URLs are
 // not represented here.
 
+export const REALTIME_PROVIDER_ERROR_MESSAGE = "Real-time voice connection failed.";
+export const REALTIME_TRANSCRIPTION_ERROR_MESSAGE = "Speech transcription failed.";
+export const REALTIME_TRANSCRIPT_LIMIT_MESSAGE =
+  "The spoken transcript is too long to send as one chat message.";
+const MAX_REALTIME_EVENT_IDENTIFIER_CHARS = 256;
+export const MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES = 256_000;
+const TRANSCRIPT_ENCODER = new TextEncoder();
+
 export type ParsedRealtimeVoiceEvent =
   | { readonly kind: "session-created" }
   | { readonly kind: "session-updated" }
@@ -23,52 +31,10 @@ export type ParsedRealtimeVoiceEvent =
   | {
       readonly kind: "user-transcript-failed";
       readonly message: string;
+      readonly reason: "provider" | "limit-exceeded";
+      readonly reviewText?: string | undefined;
       readonly itemId?: string | undefined;
     }
-  | {
-      readonly kind: "assistant-transcript-delta";
-      readonly delta: string;
-      readonly responseId?: string | undefined;
-      readonly itemId?: string | undefined;
-    }
-  | {
-      readonly kind: "assistant-transcript-committed";
-      readonly text: string;
-      readonly responseId?: string | undefined;
-      readonly itemId?: string | undefined;
-    }
-  | {
-      readonly kind: "assistant-output-start";
-      readonly responseId?: string | undefined;
-      readonly itemId?: string | undefined;
-    }
-  | {
-      readonly kind: "assistant-output-stop";
-      readonly responseId?: string | undefined;
-      readonly itemId?: string | undefined;
-    }
-  | {
-      readonly kind: "function-call-arguments-delta";
-      readonly callId: string;
-      readonly name?: string | undefined;
-      readonly delta: string;
-      readonly responseId?: string | undefined;
-      readonly itemId?: string | undefined;
-    }
-  | {
-      readonly kind: "function-call-committed";
-      readonly callId: string;
-      readonly name: string;
-      readonly argumentsText: string;
-      readonly responseId?: string | undefined;
-      readonly itemId?: string | undefined;
-    }
-  | {
-      readonly kind: "response-done";
-      readonly responseId?: string | undefined;
-      readonly status?: "completed" | "cancelled" | "failed" | "incomplete" | undefined;
-    }
-  | { readonly kind: "response-cancelled"; readonly responseId?: string | undefined }
   | { readonly kind: "error"; readonly message: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -80,140 +46,60 @@ function stringField(record: Record<string, unknown>, key: string): string | und
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function responseId(record: Record<string, unknown>): string | undefined {
-  const direct = stringField(record, "response_id");
-  if (direct !== undefined) return direct;
-  const response = record.response;
-  return isRecord(response) ? stringField(response, "id") : undefined;
+function identifierField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = stringField(record, key);
+  return value !== undefined && value.length <= MAX_REALTIME_EVENT_IDENTIFIER_CHARS
+    ? value
+    : undefined;
 }
 
 function itemId(record: Record<string, unknown>): string | undefined {
-  const direct = stringField(record, "item_id");
+  const direct = identifierField(record, "item_id");
   if (direct !== undefined) return direct;
   const item = record.item;
-  return isRecord(item) ? stringField(item, "id") : undefined;
+  return isRecord(item) ? identifierField(item, "id") : undefined;
 }
 
-function callId(record: Record<string, unknown>): string | undefined {
-  const direct = stringField(record, "call_id");
-  if (direct !== undefined) return direct;
-  const item = record.item;
-  if (isRecord(item)) {
-    const fromItem = stringField(item, "call_id");
-    if (fromItem !== undefined) return fromItem;
-  }
-  return itemId(record);
+export function realtimeTranscriptByteLength(text: string): number {
+  return TRANSCRIPT_ENCODER.encode(text).byteLength;
 }
 
-function responseStatus(
-  record: Record<string, unknown>,
-): "completed" | "cancelled" | "failed" | "incomplete" | undefined {
-  const response = record.response;
-  const raw = isRecord(response) ? stringField(response, "status") : stringField(record, "status");
-  if (raw === "completed" || raw === "cancelled" || raw === "failed" || raw === "incomplete") {
-    return raw;
-  }
-  return undefined;
-}
-
-function errorMessage(record: Record<string, unknown>): string {
-  const error = record.error;
-  if (isRecord(error)) {
-    const message = stringField(error, "message");
-    if (message !== undefined) return message;
-    const code = stringField(error, "code");
-    if (code !== undefined) return `Realtime error: ${code}`;
-  }
-  return stringField(record, "message") ?? "Realtime voice provider reported an error.";
-}
-
-function transcriptFromOutputItem(record: Record<string, unknown>): string | undefined {
-  const item = record.item;
-  if (!isRecord(item) || item.role !== "assistant" || !Array.isArray(item.content)) {
-    return undefined;
-  }
-  const parts: string[] = [];
-  for (const part of item.content) {
-    if (isRecord(part)) {
-      const transcript = stringField(part, "transcript");
-      if (transcript !== undefined) parts.push(transcript);
+export function boundedRealtimeTranscriptText(text: string): string {
+  if (realtimeTranscriptByteLength(text) <= MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES) return text;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const midpoint = Math.ceil((low + high) / 2);
+    if (
+      realtimeTranscriptByteLength(text.slice(0, midpoint)) <=
+      MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES
+    ) {
+      low = midpoint;
+    } else {
+      high = midpoint - 1;
     }
   }
-  const joined = parts.join("").trim();
-  return joined.length > 0 ? joined : undefined;
-}
-
-function argumentsText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === undefined || value === null) return "";
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "";
-  }
-}
-
-function functionCallFromItem(
-  item: unknown,
-  fallback: Record<string, unknown>,
-):
-  | {
-      readonly callId: string;
-      readonly name: string;
-      readonly argumentsText: string;
-      readonly itemId?: string | undefined;
-    }
-  | undefined {
-  if (!isRecord(item) || item.type !== "function_call") {
-    return undefined;
-  }
-  const id = stringField(item, "call_id") ?? callId(fallback);
-  const name = stringField(item, "name");
-  if (id === undefined || name === undefined) {
-    return undefined;
-  }
-  return {
-    callId: id,
-    name,
-    argumentsText: argumentsText(item.arguments),
-    itemId: stringField(item, "id") ?? itemId(fallback),
-  };
-}
-
-function functionCallFromOutputItem(record: Record<string, unknown>):
-  | {
-      readonly callId: string;
-      readonly name: string;
-      readonly argumentsText: string;
-      readonly itemId?: string | undefined;
-    }
-  | undefined {
-  return functionCallFromItem(record.item, record);
-}
-
-function functionCallFromResponseDone(record: Record<string, unknown>):
-  | {
-      readonly callId: string;
-      readonly name: string;
-      readonly argumentsText: string;
-      readonly itemId?: string | undefined;
-    }
-  | undefined {
-  const response = record.response;
-  if (!isRecord(response) || !Array.isArray(response.output)) {
-    return undefined;
-  }
-  for (const item of response.output) {
-    const call = functionCallFromItem(item, record);
-    if (call !== undefined) return call;
-  }
-  return undefined;
+  const boundary = low > 0 && /[\uD800-\uDBFF]/u.test(text.charAt(low - 1)) ? low - 1 : low;
+  return text.slice(0, boundary);
 }
 
 function parseUserTranscriptCommitted(
   raw: Record<string, unknown>,
 ): ParsedRealtimeVoiceEvent | undefined {
-  const text = stringField(raw, "transcript")?.trim();
+  const rawText = stringField(raw, "transcript");
+  if (
+    rawText !== undefined &&
+    realtimeTranscriptByteLength(rawText) > MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES
+  ) {
+    return {
+      kind: "user-transcript-failed",
+      reason: "limit-exceeded",
+      message: REALTIME_TRANSCRIPT_LIMIT_MESSAGE,
+      reviewText: boundedRealtimeTranscriptText(rawText),
+      itemId: itemId(raw),
+    };
+  }
+  const text = rawText?.trim();
   return text === undefined || text.length === 0
     ? undefined
     : { kind: "user-transcript-committed", text, itemId: itemId(raw) };
@@ -223,92 +109,21 @@ function parseUserTranscriptDelta(
   raw: Record<string, unknown>,
 ): ParsedRealtimeVoiceEvent | undefined {
   const delta = stringField(raw, "delta");
+  if (
+    delta !== undefined &&
+    realtimeTranscriptByteLength(delta) > MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES
+  ) {
+    return {
+      kind: "user-transcript-failed",
+      reason: "limit-exceeded",
+      message: REALTIME_TRANSCRIPT_LIMIT_MESSAGE,
+      reviewText: boundedRealtimeTranscriptText(delta),
+      itemId: itemId(raw),
+    };
+  }
   return delta === undefined
     ? undefined
     : { kind: "user-transcript-delta", delta, itemId: itemId(raw) };
-}
-
-function parseAssistantTranscriptDelta(
-  raw: Record<string, unknown>,
-): ParsedRealtimeVoiceEvent | undefined {
-  const delta = stringField(raw, "delta");
-  return delta === undefined
-    ? undefined
-    : {
-        kind: "assistant-transcript-delta",
-        delta,
-        responseId: responseId(raw),
-        itemId: itemId(raw),
-      };
-}
-
-function parseAssistantTranscriptDone(
-  raw: Record<string, unknown>,
-): ParsedRealtimeVoiceEvent | undefined {
-  const text = stringField(raw, "transcript")?.trim();
-  return text === undefined || text.length === 0
-    ? undefined
-    : {
-        kind: "assistant-transcript-committed",
-        text,
-        responseId: responseId(raw),
-        itemId: itemId(raw),
-      };
-}
-
-function parseFunctionCallArgumentsDelta(
-  raw: Record<string, unknown>,
-): ParsedRealtimeVoiceEvent | undefined {
-  const id = callId(raw);
-  const delta = stringField(raw, "delta");
-  return id === undefined || delta === undefined
-    ? undefined
-    : {
-        kind: "function-call-arguments-delta",
-        callId: id,
-        name: stringField(raw, "name"),
-        delta,
-        responseId: responseId(raw),
-        itemId: itemId(raw),
-      };
-}
-
-function parseOutputItemDone(raw: Record<string, unknown>): ParsedRealtimeVoiceEvent | undefined {
-  const call = functionCallFromOutputItem(raw);
-  if (call !== undefined) {
-    return {
-      kind: "function-call-committed",
-      callId: call.callId,
-      name: call.name,
-      argumentsText: call.argumentsText,
-      responseId: responseId(raw),
-      itemId: call.itemId,
-    };
-  }
-  const text = transcriptFromOutputItem(raw);
-  return text === undefined
-    ? undefined
-    : {
-        kind: "assistant-transcript-committed",
-        text,
-        responseId: responseId(raw),
-        itemId: itemId(raw),
-      };
-}
-
-function parseResponseDone(raw: Record<string, unknown>): ParsedRealtimeVoiceEvent | undefined {
-  const call = functionCallFromResponseDone(raw);
-  if (call !== undefined) {
-    return {
-      kind: "function-call-committed",
-      callId: call.callId,
-      name: call.name,
-      argumentsText: call.argumentsText,
-      responseId: responseId(raw),
-      itemId: call.itemId,
-    };
-  }
-  return { kind: "response-done", responseId: responseId(raw), status: responseStatus(raw) };
 }
 
 export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent | undefined {
@@ -330,29 +145,14 @@ export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent 
     case "conversation.item.input_audio_transcription.delta":
       return parseUserTranscriptDelta(raw);
     case "conversation.item.input_audio_transcription.failed":
-      return { kind: "user-transcript-failed", message: errorMessage(raw), itemId: itemId(raw) };
-    case "response.audio_transcript.delta":
-    case "response.output_audio_transcript.delta":
-      return parseAssistantTranscriptDelta(raw);
-    case "response.audio_transcript.done":
-    case "response.output_audio_transcript.done":
-      return parseAssistantTranscriptDone(raw);
-    case "response.function_call_arguments.delta":
-      return parseFunctionCallArgumentsDelta(raw);
-    case "response.output_item.done":
-      return parseOutputItemDone(raw);
-    case "response.audio.delta":
-    case "response.output_audio.delta":
-    case "output_audio_buffer.started":
-      return { kind: "assistant-output-start", responseId: responseId(raw), itemId: itemId(raw) };
-    case "output_audio_buffer.stopped":
-      return { kind: "assistant-output-stop", responseId: responseId(raw), itemId: itemId(raw) };
-    case "response.cancelled":
-      return { kind: "response-cancelled", responseId: responseId(raw) };
-    case "response.done":
-      return parseResponseDone(raw);
+      return {
+        kind: "user-transcript-failed",
+        reason: "provider",
+        message: REALTIME_TRANSCRIPTION_ERROR_MESSAGE,
+        itemId: itemId(raw),
+      };
     case "error":
-      return { kind: "error", message: errorMessage(raw) };
+      return { kind: "error", message: REALTIME_PROVIDER_ERROR_MESSAGE };
     default:
       return undefined;
   }

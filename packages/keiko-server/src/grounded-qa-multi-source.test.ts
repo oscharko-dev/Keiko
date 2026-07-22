@@ -31,15 +31,18 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import {
+  buildAnswerCitations,
   handleGroundedAsk,
   promptByteLength,
   type GroundedRunner,
   type MultiSourceSeam,
 } from "./grounded-qa.js";
 import {
+  buildLabeledAnswerCitations,
   buildConnectedScopes,
   buildMultiSourceGatewayMessages,
   mergeContextPackSummaries,
+  runMultiSourceAsk,
   sourceLabels,
   splitExplorationBudget,
   splitExplorationBudgets,
@@ -61,6 +64,14 @@ const CHAT_MODEL = "example-chat-model";
 
 let store: UiStore;
 let tmp: string;
+
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 interface PutCall {
   readonly runId: string;
@@ -396,6 +407,22 @@ describe("sourceLabels", () => {
     expect(labels[1]).toMatch(/^api~[0-9a-f]{6}$/);
     expect(labels[0]).not.toBe(labels[1]);
   });
+
+  it("redacts a selected source label at the citation projection boundary", () => {
+    const secret = "tenantcredentialvalue987";
+    const redact = (value: unknown): unknown =>
+      typeof value === "string" ? value.replaceAll(secret, "[REDACTED]") : value;
+
+    const citations = buildLabeledAnswerCitations(
+      scopePack("src/a.ts", 0.8, "a"),
+      "Grounded [src/a.ts].",
+      secret,
+      redact,
+    );
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0]?.source).toBe("[REDACTED]");
+  });
 });
 
 describe("buildConnectedScopes", () => {
@@ -440,6 +467,7 @@ describe("buildMultiSourceGatewayMessages", () => {
     expect(promptByteLength(messages)).toBeLessThanOrEqual(maxUtf8BytesForTokenBudget(512 + 512));
     expect(messages[1]?.content).toContain("Source 1: api");
     expect(messages[1]?.content).toContain("Source 2: web");
+    expect(messages[1]?.content).toContain("[source:1|src/file.ts:10-20]");
   });
 
   it("throws ContextOverflowError when a 0-byte combined prompt budget cannot fit framing overhead", () => {
@@ -602,7 +630,113 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
-  it("maps typed workspace errors to safe 400 responses before answering or persisting", async () => {
+  it("keeps answer-only memory context out of every source retrieval query", async () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "directory",
+        relativePaths: ["src/a.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("api"),
+      },
+      {
+        kind: "directory",
+        relativePaths: ["src/b.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("web"),
+      },
+    ];
+    const chatId = makeChat(scopes);
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new Error("chat fixture missing");
+    const retrievalQueries: string[] = [];
+    let answerQuestion = "";
+    const packs = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", scopePack("src/a.ts", 0.8, "a")],
+      ["src/b.ts", scopePack("src/b.ts", 0.7, "b")],
+    ]);
+
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "Where is the handler?",
+      answerContent:
+        "User question:\nWhere is the handler?\n\nIncluded memory context:\nPrefer concise answers.",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      retriever: (input) => {
+        retrievalQueries.push(input.query.text);
+        return packPerScope(packs)(input);
+      },
+      answerer: (question) => {
+        answerQuestion = question;
+        return Promise.resolve("The handler is defined here [src/a.ts:1-5].");
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(result.status).toBe(200);
+    expect(retrievalQueries).toEqual(["Where is the handler?", "Where is the handler?"]);
+    expect(retrievalQueries.join("\n")).not.toContain("Prefer concise answers");
+    expect(answerQuestion).toContain("Prefer concise answers");
+  });
+
+  it("keeps a memory-only answer ungrounded when every source has no evidence", async () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "directory",
+        relativePaths: ["src/a.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("memory-empty-a"),
+      },
+      {
+        kind: "directory",
+        relativePaths: ["src/b.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("memory-empty-b"),
+      },
+    ];
+    const chatId = makeChat(scopes);
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new Error("chat fixture missing");
+    const empty = (path: string): ConnectedContextPack => ({
+      ...scopePack(path, 0.5, path),
+      files: [],
+    });
+    const packs = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", empty("src/a.ts")],
+      ["src/b.ts", empty("src/b.ts")],
+    ]);
+    let answererCalls = 0;
+
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "What package manager do I prefer?",
+      answerContent:
+        "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
+      answerOnlyContextAvailable: true,
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      retriever: packPerScope(packs),
+      answerer: () => {
+        answererCalls += 1;
+        return Promise.resolve("You prefer pnpm.");
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answererCalls).toBe(1);
+    expect(answer.content).toBe("You prefer pnpm.");
+    expect(answer.citations).toEqual([]);
+    expect(answer.evidenceRunId).toBeUndefined();
+    expect(answer.evidenceRunIds).toEqual([]);
+  });
+
+  it("maps typed workspace errors safely while retaining the admitted user turn", async () => {
     const scopes: ChatConnectedScope[] = [
       {
         kind: "directory",
@@ -639,7 +773,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(body.error.code).toBe("BAD_REQUEST");
     expect(body.error.message).toBe("Connected source is not readable.");
     expect(answererCalled).toBe(false);
-    expect(store.listMessages(chatId)).toEqual([]);
+    expect(store.listMessages(chatId)).toMatchObject([{ role: "user", content: "explain both" }]);
   });
 
   it("emits merged contextSummary from the active model profile resolver when the singleton profile is absent", async () => {
@@ -679,9 +813,17 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     );
 
     expect(result.status).toBe(200);
-    expect(
-      asConnectedAnswer(result.body as GroundedAnswer).contextPack.contextSummary,
-    ).toBeDefined();
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.contextPack.contextSummary).toBeDefined();
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "unsupported-citation",
+          claim: expect.stringContaining("without a supported inline citation") as unknown,
+        }),
+      ]),
+    );
   });
 
   it("fail-soft: one inaccessible folder is skipped, healthy sources still answer (GRD-006)", async () => {
@@ -786,6 +928,123 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.uncertainty).toHaveLength(2);
   });
 
+  it("fails closed when an unqualified path exists in more than one source", async () => {
+    const scopeA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["source-a"],
+      connectedAtMs: NOW,
+      root: tempRoot("api"),
+    };
+    const scopeB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["source-b"],
+      connectedAtMs: NOW,
+      root: tempRoot("web"),
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: makeChat([scopeA, scopeB]), content: "explain shared" })),
+      recordingDeps([]),
+      undefined,
+      seam(
+        packPerScope(
+          new Map([
+            ["source-a", scopePack("src/shared.ts", 0.8, "shared-a")],
+            ["source-b", scopePack("src/shared.ts", 0.7, "shared-b")],
+          ]),
+        ),
+        constAnswerer("Ambiguous claim [src/shared.ts:1-5].", { count: 0 }),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(true);
+  });
+
+  it("attributes an identical path only to its explicitly cited source ordinal", async () => {
+    const scopeA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["source-a"],
+      connectedAtMs: NOW,
+      root: tempRoot("api"),
+    };
+    const scopeB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["source-b"],
+      connectedAtMs: NOW,
+      root: tempRoot("web"),
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: makeChat([scopeA, scopeB]), content: "explain shared" })),
+      recordingDeps([]),
+      undefined,
+      seam(
+        packPerScope(
+          new Map([
+            ["source-a", scopePack("src/shared.ts", 0.8, "shared-a")],
+            ["source-b", scopePack("src/shared.ts", 0.7, "shared-b")],
+          ]),
+        ),
+        constAnswerer("Second source [source:2|src/shared.ts:1-5].", { count: 0 }),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.content).toBe("Second source [source:2|src/shared.ts:1-5].");
+    expect(answer.citations).toMatchObject([
+      { source: "web", stableId: "shared-b", lineRange: { startLine: 1, endLine: 5 } },
+    ]);
+    expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(false);
+  });
+
+  it("matches citations after redaction and never exposes an unredacted source label", async () => {
+    const secret = "tenantcredentialvalue987";
+    const secretPath = `src/${secret}.ts`;
+    const source: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: [secretPath],
+      connectedAtMs: NOW,
+      root: tempRoot("source-root"),
+    };
+    const safePath = "src/safe.ts";
+    const safeSource: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: [safePath],
+      connectedAtMs: NOW,
+      root: tempRoot("safe-root"),
+    };
+    const chatId = makeChat([source, safeSource]);
+    const env = { KEIKO_DEFAULT_API_KEY: secret };
+    const secretPack = scopePack(secretPath, 0.8, "secret-path");
+    const redactor = buildRedactor(env);
+    expect(buildAnswerCitations(secretPack, `Grounded [${secretPath}].`, redactor)).toHaveLength(1);
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain" })),
+      recordingDeps([], { env, redactor }),
+      undefined,
+      seam(
+        packPerScope(
+          new Map([
+            [secretPath, secretPack],
+            [safePath, scopePack(safePath, 0.4, "safe-path")],
+          ]),
+        ),
+        constAnswerer(`Grounded [${secretPath}].`, { count: 0 }),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.content).toBe("Grounded [src/[REDACTED].ts].");
+    expect(answer.evidenceRunIds).toHaveLength(2);
+    expect(answer.citations).toHaveLength(1);
+    expect(JSON.stringify(answer.citations)).not.toContain(secret);
+    expect(answer.citations[0]?.scopePath).toContain("[REDACTED]");
+    expect(answer.citations[0]?.source).toBe("source-root");
+  });
+
   it("passes relevance-weighted budgets to per-source retrievers", async () => {
     const scopePayments: ChatConnectedScope = {
       kind: "directory",
@@ -884,7 +1143,59 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       }),
     );
     expect(result.status).toBe(499);
-    expect(store.listMessages(chatId)).toEqual([]);
+    expect(store.listMessages(chatId)).toMatchObject([{ role: "user", content: "explain both" }]);
+  });
+
+  it("does not answer after a disconnected multi-source retriever resolves late", async () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "directory",
+        relativePaths: ["src/a.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("late-retriever-a"),
+      },
+      {
+        kind: "directory",
+        relativePaths: ["src/b.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("late-retriever-b"),
+      },
+    ];
+    const chatId = makeChat(scopes);
+    const retrieval = deferred<Awaited<ReturnType<GroundedRetriever>>>();
+    const retrievalStarted = deferred<undefined>();
+    let retrievalCalls = 0;
+    let answerCalls = 0;
+    const res = fakeRes();
+    const outcome = handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "late retrieval" }), res),
+      recordingDeps([]),
+      undefined,
+      seam(
+        () => {
+          retrievalCalls += 1;
+          if (retrievalCalls === scopes.length) retrievalStarted.resolve(undefined);
+          return retrieval.promise;
+        },
+        () => {
+          answerCalls += 1;
+          return Promise.resolve("must not answer");
+        },
+      ),
+    );
+    await retrievalStarted.promise;
+
+    res.emit("close");
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    retrieval.resolve({
+      pack: { ...scopePack("src/a.ts", 0.5, "late"), files: [] },
+      elapsedMs: 1,
+      plan: { state: "ready" } as never,
+    });
+    await Promise.resolve();
+    expect(answerCalls).toBe(0);
+    expect(store.listMessages(chatId)).toMatchObject([{ role: "user", content: "late retrieval" }]);
   });
 
   it("persists one evidence run per source root and reports all run ids", async () => {

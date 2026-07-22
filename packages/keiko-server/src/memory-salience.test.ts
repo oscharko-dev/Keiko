@@ -287,6 +287,38 @@ describe("captureSalientFromTurn", () => {
     expect(countMemories(vault, ctx)).toBe(3);
   });
 
+  it("keeps a failed model response body out of operator diagnostics", async () => {
+    const bodyMarker = "fixture-salience-provider-body-marker";
+    const vault = makeVault();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () =>
+        fakeModel(() => {
+          throw new Error(`provider response body: ${bodyMarker}`);
+        }),
+      diagnostics,
+    });
+
+    await expect(
+      captureSalientFromTurn(
+        deps,
+        { content: USER_TEXT, memory: { enabled: true } },
+        context(),
+        "gpt-test",
+        "ok",
+      ),
+    ).resolves.toEqual([]);
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorClass: "Error",
+        message: "server-operation-failed",
+        source: "memory-salience.captureSalientFromTurn",
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(bodyMarker);
+  });
+
   it("persists German salience bodies without forcing them through English", async () => {
     const vault = makeVault();
     const deps = makeDeps({

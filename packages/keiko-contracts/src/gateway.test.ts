@@ -9,6 +9,7 @@ import {
   describeVoiceProviderAvailability,
   explainConversationIneligibility,
   INFILLING_ALIGNMENTS,
+  isCompleteRealtimeVoiceCapability,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
   isConfiguredVoiceProvider,
@@ -19,6 +20,9 @@ import {
   modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
+  selectRealtimeVoiceCapability,
+  selectSpeechInputCapability,
+  selectSpeechOutputCapability,
   VOICE_PERSONAS,
   VOICE_PROVIDER_LOCALITIES,
 } from "./gateway.js";
@@ -27,6 +31,7 @@ import type {
   InfillingAlignment,
   LatencyClass,
   ModelCapability,
+  VoiceCapabilityResolution,
   VoicePersona,
 } from "./gateway.js";
 
@@ -196,6 +201,59 @@ describe("voice capability predicates", () => {
     expect(modelSupportsRealtimeVoice(cap({ kind: "chat", supportsRealtimeVoice: true }))).toBe(
       false,
     );
+  });
+});
+
+describe("canonical voice role election", () => {
+  it("selects the cheapest eligible capability for every voice role", () => {
+    const capabilities = [
+      voiceCap({ id: "all-high", costClass: "high", supportsSpeechInput: true }),
+      voiceCap({ id: "stt-low", costClass: "low", supportsSpeechInput: true }),
+      voiceCap({ id: "tts-high", costClass: "high", supportsSpeechOutput: true }),
+      voiceCap({ id: "tts-low", costClass: "low", supportsSpeechOutput: true }),
+      voiceCap({
+        id: "realtime-high",
+        costClass: "high",
+        supportsRealtimeVoice: true,
+        realtimeTranscriptionModel: "transcription-high",
+      }),
+      voiceCap({
+        id: "realtime-low",
+        costClass: "low",
+        supportsRealtimeVoice: true,
+        realtimeTranscriptionModel: "transcription-low",
+      }),
+    ];
+
+    expect(selectSpeechInputCapability(capabilities)?.id).toBe("stt-low");
+    expect(selectSpeechOutputCapability(capabilities)?.id).toBe("tts-low");
+    expect(selectRealtimeVoiceCapability(capabilities)?.id).toBe("realtime-low");
+  });
+
+  it("does not elect an incomplete Realtime capability", () => {
+    const incomplete = voiceCap({ supportsRealtimeVoice: true });
+
+    expect(isCompleteRealtimeVoiceCapability(incomplete)).toBe(false);
+    expect(selectRealtimeVoiceCapability([incomplete])).toBeUndefined();
+  });
+});
+
+describe("voice capability compatibility", () => {
+  it("retains the optional realtimeToolCalling field without granting canonical Chat authority", () => {
+    const resolution: VoiceCapabilityResolution = {
+      available: true,
+      profile: "full-realtime",
+      capabilities: {
+        speechToText: true,
+        speechOutput: false,
+        realtimeVoice: true,
+        realtimeToolCalling: false,
+      },
+      transport: { websocketControl: true, webrtcMedia: true },
+      availableVoicePersonas: [],
+    };
+
+    expect(resolution.capabilities.realtimeToolCalling).toBe(false);
   });
 });
 

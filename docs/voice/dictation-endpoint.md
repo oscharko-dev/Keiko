@@ -73,7 +73,7 @@ On success (`200`):
 }
 ```
 
-The response carries **only** the transcript and content-free provider metadata. The provider base
+The response carries **only** the reviewable transcript and content-free provider metadata. The provider base
 URL, credential, and model id never appear in any response (AC4); the payload is passed through the
 live audit redactor defensively (AC5).
 

@@ -310,7 +310,7 @@ export function createUiServer(deps: UiServerDeps): Server {
         handlerDeps.diagnostics,
         serverDiagnosticFromError({
           correlationId,
-          operation: `${req.method ?? "GET"} ${req.url ?? "/"}`,
+          operation: "server.request",
           source: "server.top-level-catch",
           error,
           redact: (message) => String(handlerDeps.redactor(message)),

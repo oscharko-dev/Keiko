@@ -22,6 +22,19 @@ describe("directDefinitionSymbol", () => {
     ).toBe(identifier.term);
   });
 
+  it("recognizes present-tense definition questions", () => {
+    expect(
+      directDefinitionSymbol(query("Where do we define reconcile_order?"), [
+        { ...identifier, term: "reconcile_order" },
+      ]),
+    ).toBe("reconcile_order");
+    expect(
+      directDefinitionSymbol(query("Wo definieren wir reconcile_order?"), [
+        { ...identifier, term: "reconcile_order" },
+      ]),
+    ).toBe("reconcile_order");
+  });
+
   it("keeps relationship and history questions on the structural path", () => {
     expect(
       directDefinitionSymbol(
@@ -41,6 +54,11 @@ describe("directDefinitionSymbol", () => {
       "Änderungen",
       "called",
       "referenced",
+      "dependencies",
+      "imported",
+      "invoked",
+      "use",
+      "introduced",
       "HISTORY",
     ]) {
       expect(

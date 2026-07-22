@@ -17,7 +17,13 @@ import type { IncomingMessage } from "node:http";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { parseGatewayConfig, resolveVoiceCapability } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayConfig,
+  ModelCapability,
+  ModelProviderConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import {
   handleGatewaySetup,
   MAX_DISCOVERED_MODELS,
@@ -45,6 +51,22 @@ const MOCK_FETCH_EGRESS_ENV: Readonly<Record<string, string>> = {
   ...VAULT_ENV,
   KEIKO_ALLOW_PRIVATE_EGRESS: "1",
 };
+const VOICE_STRING_SETUP_FIELDS = [
+  "voiceBaseUrl",
+  "voiceApiKey",
+  "voiceApiKeyHeaderName",
+  "voiceModelId",
+  "voiceSpeechToTextModelId",
+  "voiceRealtimeModelId",
+  "voiceRealtimeTranscriptionModelId",
+  "voiceSpeechOutputModelId",
+  "voiceOutputVoiceId",
+  "voiceProviderLocality",
+] as const;
+const INVALID_VOICE_STRING_VALUES: readonly unknown[] = [null, 42, {}, []];
+const INVALID_VOICE_STRING_CASES = VOICE_STRING_SETUP_FIELDS.flatMap((field) =>
+  INVALID_VOICE_STRING_VALUES.map((value) => ({ field, value })),
+);
 
 afterEach(() => {
   for (const dir of tmpDirs.splice(0)) {
@@ -78,6 +100,205 @@ function fetchInputUrl(url: Parameters<typeof fetch>[0]): string {
 // optional-chain access does not inflate the calling test's cyclomatic complexity.
 function firstProviderApiKey(deps: Parameters<typeof currentGatewayConfig>[0]): string | undefined {
   return currentGatewayConfig(deps)?.providers[0]?.apiKey;
+}
+
+function requiredGatewayConfig(deps: Parameters<typeof currentGatewayConfig>[0]): GatewayConfig {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) throw new Error("expected saved gateway config");
+  return config;
+}
+
+function requiredCapability(config: GatewayConfig, modelId: string): ModelCapability {
+  const capability = config.capabilities?.find((candidate) => candidate.id === modelId);
+  if (capability === undefined) throw new Error(`expected capability for ${modelId}`);
+  return capability;
+}
+
+function requiredProvider(config: GatewayConfig, modelId: string): ModelProviderConfig {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  if (provider === undefined) throw new Error(`expected provider for ${modelId}`);
+  return provider;
+}
+
+function seedSemanticRealtimeGateway(deps: Parameters<typeof currentGatewayConfig>[0]): void {
+  const gatewayConfig = deps.gatewayConfig;
+  if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+  gatewayConfig.set(
+    parseGatewayConfig({
+      providers: [
+        {
+          modelId: "example-chat-model",
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "chat-token",
+        },
+        {
+          modelId: "realtime-model",
+          baseUrl: "https://audio.example.com/v1",
+          apiKey: "audio-token",
+          capability: {
+            kind: "voice",
+            supportsRealtimeVoice: true,
+            supportsSemanticTurnDetection: true,
+            realtimeTranscriptionModel: "realtime-transcription",
+            voiceProviderLocality: "azure-foundry",
+          },
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    }),
+    true,
+  );
+}
+
+function seedSeparatedVoiceGateway(deps: Parameters<typeof currentGatewayConfig>[0]): void {
+  const gatewayConfig = deps.gatewayConfig;
+  if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+  gatewayConfig.set(
+    parseGatewayConfig({
+      providers: [
+        {
+          modelId: "example-chat-model",
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "chat-token",
+        },
+        ...voiceElectionProviders().filter((provider) =>
+          ["stt-low", "tts-low", "realtime-low"].includes(String(provider.modelId)),
+        ),
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    }),
+    true,
+  );
+}
+
+function seedSpeechInputVoiceGateway(deps: Parameters<typeof currentGatewayConfig>[0]): void {
+  const gatewayConfig = deps.gatewayConfig;
+  if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+  gatewayConfig.set(
+    parseGatewayConfig({
+      providers: [
+        {
+          modelId: "example-chat-model",
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "chat-token",
+        },
+        ...voiceElectionProviders().filter((provider) => provider.modelId === "stt-low"),
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    }),
+    true,
+  );
+}
+
+type SharedVoiceConnectionMode = "shared" | "different-credentials" | "different-headers";
+
+function sharedVoiceConnection(
+  provider: Readonly<Record<string, unknown>>,
+  mode: SharedVoiceConnectionMode,
+): Readonly<Record<string, unknown>> {
+  const modelId = String(provider.modelId);
+  return {
+    ...provider,
+    baseUrl: "https://shared-audio.example.com/v1",
+    apiKey: mode === "different-credentials" ? `${modelId}-token` : "shared-audio-token",
+    apiKeyHeaderName:
+      mode === "different-headers" && modelId === "tts-low" ? "api-key" : "authorization",
+  };
+}
+
+function seedSharedEndpointVoiceGateway(
+  deps: Parameters<typeof currentGatewayConfig>[0],
+  mode: SharedVoiceConnectionMode = "shared",
+): void {
+  const gatewayConfig = deps.gatewayConfig;
+  if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+  const voiceProviders = voiceElectionProviders()
+    .filter((provider) => ["stt-low", "tts-low", "realtime-low"].includes(String(provider.modelId)))
+    .map((provider) => sharedVoiceConnection(provider, mode));
+  gatewayConfig.set(
+    parseGatewayConfig({
+      providers: [
+        {
+          modelId: "example-chat-model",
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "chat-token",
+        },
+        ...voiceProviders,
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    }),
+    true,
+  );
+}
+
+function seedMultiRoleVoiceGateway(deps: Parameters<typeof currentGatewayConfig>[0]): void {
+  const gatewayConfig = deps.gatewayConfig;
+  if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+  gatewayConfig.set(
+    parseGatewayConfig({
+      providers: [
+        {
+          modelId: "example-chat-model",
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "chat-token",
+        },
+        {
+          modelId: "multi-role",
+          baseUrl: "https://multi-role.example.com/v1",
+          apiKey: "multi-role-token",
+          capability: {
+            kind: "voice",
+            supportsSpeechInput: true,
+            supportsSpeechOutput: true,
+            supportsRealtimeVoice: true,
+            supportsSemanticTurnDetection: true,
+            realtimeTranscriptionModel: "multi-role-transcription",
+            voiceProviderLocality: "customer-hosted",
+          },
+          voiceProfiles: [{ persona: "neutral", voiceId: "multi-role-voice" }],
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    }),
+    true,
+  );
+}
+
+function voiceElectionProviders(): readonly Record<string, unknown>[] {
+  const provider = (
+    modelId: string,
+    costClass: "low" | "high",
+    capability: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    modelId,
+    baseUrl: `https://${modelId}.example.com/v1`,
+    apiKey: `${modelId}-token`,
+    timeoutMs: 10_000,
+    capability: {
+      kind: "voice",
+      costClass,
+      voiceProviderLocality: "customer-hosted",
+      ...capability,
+    },
+    ...(capability.supportsSpeechOutput === true
+      ? { voiceProfiles: [{ persona: "neutral", voiceId: `${modelId}-voice` }] }
+      : {}),
+  });
+  return [
+    provider("stt-high", "high", { supportsSpeechInput: true }),
+    provider("stt-low", "low", { supportsSpeechInput: true }),
+    provider("tts-high", "high", { supportsSpeechOutput: true }),
+    provider("tts-low", "low", { supportsSpeechOutput: true }),
+    provider("realtime-high", "high", {
+      supportsRealtimeVoice: true,
+      realtimeTranscriptionModel: "realtime-high-transcription",
+    }),
+    provider("realtime-low", "low", {
+      supportsRealtimeVoice: true,
+      supportsSemanticTurnDetection: true,
+      realtimeTranscriptionModel: "realtime-low-transcription",
+    }),
+  ];
 }
 
 describe("handleGatewaySetup", () => {
@@ -284,6 +505,218 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("rejects new voice credentials without an explicit deployment role", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-no-role-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-no-role-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const result = await handleGatewaySetup(
+      ctx(
+        {
+          preserveExisting: true,
+          voiceBaseUrl: "https://audio.example.com/v1",
+          voiceApiKey: "audio-token",
+        },
+        "corr-explicit-voice-role",
+      ),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "At least one explicit voice deployment is required.",
+          correlationId: "corr-explicit-voice-role",
+        },
+      },
+    });
+    expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual([
+      "example-chat-model",
+    ]);
+    deps.store.close();
+  });
+
+  it("rejects Semantic VAD when no Realtime deployment is configured", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-semantic-no-realtime-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-semantic-no-realtime-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "transcribe-model",
+        voiceSupportsSemanticTurnDetection: true,
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({
+      error: {
+        code: "BAD_REQUEST",
+        message: "Semantic turn detection requires a Realtime voice deployment.",
+      },
+    });
+    deps.store.close();
+  });
+
+  it.each([
+    ["speech input", { voiceSpeechToTextModelId: "example-chat-model" }],
+    [
+      "speech output",
+      {
+        voiceSpeechOutputModelId: "example-chat-model",
+        voiceOutputVoiceId: "configured-neutral",
+      },
+    ],
+    [
+      "Realtime",
+      {
+        voiceRealtimeModelId: "example-chat-model",
+        voiceRealtimeTranscriptionModelId: "realtime-transcription",
+      },
+    ],
+  ])("rejects a %s deployment ID that collides with chat", async (_role, voiceRole) => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-id-collision-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-id-collision-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        ...voiceRole,
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    expect(JSON.stringify(result.body)).toContain("distinct");
+    expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual([
+      "example-chat-model",
+    ]);
+    deps.store.close();
+  });
+
+  it("rejects an explicitly submitted chat/audio deployment ID collision before discovery", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-new-voice-id-collision-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-new-voice-id-collision-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["shared-deployment"],
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "shared-deployment",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("distinct");
+    expect(currentGatewayConfig(deps)).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("rejects explicit chat deployments that collide with every preserved audio role", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-inverse-voice-id-collision-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-inverse-voice-id-collision-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+      deps,
+    );
+    const configured = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "dedicated-stt",
+        voiceSpeechOutputModelId: "dedicated-tts",
+        voiceOutputVoiceId: "configured-neutral",
+        voiceRealtimeModelId: "dedicated-realtime",
+        voiceRealtimeTranscriptionModelId: "dedicated-transcription",
+      }),
+      deps,
+    );
+    expect(configured.status).toBe(200);
+    const before = requiredGatewayConfig(deps).providers.map((provider) => provider.modelId);
+
+    for (const modelId of ["dedicated-stt", "dedicated-tts", "dedicated-realtime"]) {
+      const result = await handleGatewaySetup(
+        ctx({ preserveExisting: true, deploymentNames: [modelId] }),
+        deps,
+      );
+      expect(result.status).toBe(400);
+      expect(JSON.stringify(result.body)).toContain("distinct");
+      expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual(
+        before,
+      );
+    }
+    deps.store.close();
+  });
+
   it("configures distinct Dictate, Digital Voice, and read-aloud models from one audio connection", async () => {
     const uiDir = await tempDir("keiko-gw-ui-full-voice-");
     const evidenceDir = await tempDir("keiko-gw-ev-full-voice-");
@@ -349,6 +782,617 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("replaces only the Realtime role while preserving the other audio deployments", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-replace-realtime-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-replace-realtime-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            preserveExisting: true,
+            voiceBaseUrl: "https://audio.example.com/v1",
+            voiceApiKey: "audio-token",
+            voiceSpeechToTextModelId: "transcribe-model",
+            voiceRealtimeModelId: "old-realtime-model",
+            voiceRealtimeTranscriptionModelId: "old-realtime-transcription",
+            voiceSupportsSemanticTurnDetection: true,
+            voiceSpeechOutputModelId: "speech-model",
+            voiceOutputVoiceId: "configured-neutral",
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const unrelated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceTimeoutMs: 45_000 }),
+      deps,
+    );
+    expect(unrelated.status).toBe(200);
+    const preserved = requiredGatewayConfig(deps);
+    expect(preserved.providers.map((provider) => provider.modelId)).toEqual([
+      "example-chat-model",
+      "transcribe-model",
+      "speech-model",
+      "old-realtime-model",
+    ]);
+    expect(requiredCapability(preserved, "old-realtime-model")).toMatchObject({
+      realtimeTranscriptionModel: "old-realtime-transcription",
+      supportsSemanticTurnDetection: true,
+    });
+
+    const missingReplacementTranscription = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceRealtimeModelId: "replacement-realtime-model",
+      }),
+      deps,
+    );
+    expect(missingReplacementTranscription).toMatchObject({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST" } },
+    });
+    expect(JSON.stringify(missingReplacementTranscription.body)).toContain(
+      "voiceRealtimeTranscriptionModelId is required",
+    );
+    expect(requiredCapability(requiredGatewayConfig(deps), "old-realtime-model")).toMatchObject({
+      realtimeTranscriptionModel: "old-realtime-transcription",
+      supportsSemanticTurnDetection: true,
+    });
+
+    const replaced = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceRealtimeModelId: "replacement-realtime-model",
+        voiceRealtimeTranscriptionModelId: "replacement-realtime-transcription",
+      }),
+      deps,
+    );
+
+    expect(replaced.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    expect(config.providers.map((provider) => provider.modelId)).toEqual([
+      "example-chat-model",
+      "transcribe-model",
+      "speech-model",
+      "replacement-realtime-model",
+    ]);
+    const replacement = requiredCapability(config, "replacement-realtime-model");
+    expect(replacement).toMatchObject({
+      supportsRealtimeVoice: true,
+      realtimeTranscriptionModel: "replacement-realtime-transcription",
+    });
+    expect(replacement.supportsSemanticTurnDetection).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("rejects an ambiguous endpoint-only replacement without mutating the stored provider", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-endpoint-only-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-endpoint-only-"), "keiko-ui.db"),
+    });
+    seedSemanticRealtimeGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx(
+        {
+          preserveExisting: true,
+          voiceBaseUrl: "https://unrelated-audio.example.com/v1",
+        },
+        "corr-endpoint-only",
+      ),
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", correlationId: "corr-endpoint-only" } },
+    });
+    expect(requiredGatewayConfig(deps)).toEqual(before);
+    expect(JSON.stringify(result.body)).not.toContain("unrelated-audio.example.com");
+    expect(JSON.stringify(result.body)).not.toContain("audio-token");
+    deps.store.close();
+  });
+
+  it.each(INVALID_VOICE_STRING_CASES)(
+    "rejects malformed $field input without mutating the stored provider",
+    async ({ field, value }) => {
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir("keiko-gw-ev-malformed-voice-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(await tempDir("keiko-gw-ui-malformed-voice-"), "keiko-ui.db"),
+      });
+      seedSemanticRealtimeGateway(deps);
+      const before = requiredGatewayConfig(deps);
+
+      const result = await handleGatewaySetup(
+        ctx({ preserveExisting: true, [field]: value }, "corr-malformed-voice"),
+        deps,
+      );
+
+      expect(result).toMatchObject({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            correlationId: "corr-malformed-voice",
+            message: `${field} must be a string.`,
+          },
+        },
+      });
+      expect(requiredGatewayConfig(deps)).toEqual(before);
+      deps.store.close();
+    },
+  );
+
+  it("rejects conflicting speech-input deployment aliases atomically", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-conflicting-stt-alias-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-conflicting-stt-alias-"), "keiko-ui.db"),
+    });
+    seedSpeechInputVoiceGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceModelId: "stt-low",
+        voiceSpeechToTextModelId: "different-stt",
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(JSON.stringify(result.body)).toContain("must identify the same deployment");
+    expect(requiredGatewayConfig(deps)).toEqual(before);
+    deps.store.close();
+  });
+
+  it("accepts matching legacy and explicit speech-input deployment aliases", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-matching-stt-alias-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-matching-stt-alias-"), "keiko-ui.db"),
+    });
+    seedSpeechInputVoiceGateway(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceModelId: "stt-low",
+        voiceSpeechToTextModelId: "stt-low",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "stt-low")).toMatchObject({
+      supportsSpeechInput: true,
+    });
+    deps.store.close();
+  });
+
+  it("rejects an output voice ID when no speech-output role is configured", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-orphan-output-voice-new-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-orphan-output-voice-new-"), "keiko-ui.db"),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "stt-model",
+        voiceOutputVoiceId: "orphan-voice",
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(JSON.stringify(result.body)).toContain("requires a speech-output deployment");
+    expect(currentGatewayConfig(deps)).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("rejects an output voice ID against a preserved STT-only configuration", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-orphan-output-voice-existing-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-orphan-output-voice-existing-"), "keiko-ui.db"),
+    });
+    seedSpeechInputVoiceGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceOutputVoiceId: "orphan-voice" }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(requiredGatewayConfig(deps)).toEqual(before);
+    deps.store.close();
+  });
+
+  it("updates the voice profile when a speech-output role already exists", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-output-voice-update-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-output-voice-update-"), "keiko-ui.db"),
+    });
+    seedMultiRoleVoiceGateway(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceOutputVoiceId: "replacement-voice" }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    expect(requiredProvider(config, "multi-role").voiceProfiles).toEqual([
+      { persona: "neutral", voiceId: "replacement-voice" },
+    ]);
+    expect(requiredCapability(config, "multi-role")).toMatchObject({
+      supportsSpeechInput: true,
+      supportsSpeechOutput: true,
+      supportsRealtimeVoice: true,
+      realtimeTranscriptionModel: "multi-role-transcription",
+    });
+    deps.store.close();
+  });
+
+  it("requires a fresh credential for an explicit endpoint migration", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-endpoint-credential-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-endpoint-credential-"), "keiko-ui.db"),
+    });
+    seedSemanticRealtimeGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://replacement-audio.example.com/v1",
+        voiceRealtimeModelId: "replacement-realtime",
+        voiceRealtimeTranscriptionModelId: "replacement-transcription",
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(requiredGatewayConfig(deps)).toEqual(before);
+    deps.store.close();
+  });
+
+  it("preserves Realtime capability metadata for a canonically equivalent endpoint", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-canonical-endpoint-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-canonical-endpoint-"), "keiko-ui.db"),
+    });
+    seedSemanticRealtimeGateway(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://AUDIO.example.com:443/audio/../v1/",
+        voiceRealtimeModelId: "realtime-model",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "realtime-model")).toMatchObject({
+      realtimeTranscriptionModel: "realtime-transcription",
+      supportsSemanticTurnDetection: true,
+    });
+    deps.store.close();
+  });
+
+  it.each(["https://audio.example.com:444/v1", "https://audio.example.com/v2"])(
+    "treats a distinct audio endpoint as a migration: %s",
+    async (voiceBaseUrl) => {
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir("keiko-gw-ev-distinct-endpoint-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(await tempDir("keiko-gw-ui-distinct-endpoint-"), "keiko-ui.db"),
+      });
+      seedSemanticRealtimeGateway(deps);
+      const before = requiredGatewayConfig(deps);
+
+      const result = await handleGatewaySetup(ctx({ preserveExisting: true, voiceBaseUrl }), deps);
+
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(requiredGatewayConfig(deps)).toEqual(before);
+      expect(JSON.stringify(result.body)).not.toContain(voiceBaseUrl);
+      deps.store.close();
+    },
+  );
+
+  it("requires a fresh transcription alias when the same Realtime model moves endpoints", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-realtime-alias-migration-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-realtime-alias-migration-"), "keiko-ui.db"),
+    });
+    seedSemanticRealtimeGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://replacement-audio.example.com/v1",
+        voiceApiKey: "replacement-audio-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceRealtimeModelId: "realtime-model",
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(JSON.stringify(result.body)).toContain("voiceRealtimeTranscriptionModelId is required");
+    expect(requiredGatewayConfig(deps)).toEqual(before);
+    deps.store.close();
+  });
+
+  it("moves only explicitly resubmitted roles to a replacement audio endpoint", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-scoped-endpoint-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-scoped-endpoint-"), "keiko-ui.db"),
+    });
+    seedSeparatedVoiceGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://replacement-audio.example.com/v1",
+        voiceApiKey: "replacement-audio-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceRealtimeModelId: "realtime-replacement",
+        voiceRealtimeTranscriptionModelId: "replacement-transcription",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const after = requiredGatewayConfig(deps);
+    expect(requiredProvider(after, "stt-low")).toEqual(requiredProvider(before, "stt-low"));
+    expect(requiredProvider(after, "tts-low")).toEqual(requiredProvider(before, "tts-low"));
+    expect(requiredProvider(after, "realtime-replacement")).toMatchObject({
+      baseUrl: "https://replacement-audio.example.com/v1",
+      apiKey: "replacement-audio-token",
+    });
+    expect(requiredCapability(after, "realtime-replacement")).toMatchObject({
+      supportsRealtimeVoice: true,
+      realtimeTranscriptionModel: "replacement-transcription",
+    });
+    expect(
+      requiredCapability(after, "realtime-replacement").supportsSemanticTurnDetection,
+    ).toBeUndefined();
+    expect(after.providers.some((provider) => provider.modelId === "realtime-low")).toBe(false);
+    deps.store.close();
+  });
+
+  it("rejects an unscoped credential rotation across heterogeneous audio endpoints", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-credential-scope-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-credential-scope-"), "keiko-ui.db"),
+    });
+    seedSeparatedVoiceGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceApiKey: "rotated-audio-token" }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(requiredGatewayConfig(deps)).toEqual(before);
+    expect(JSON.stringify(result.body)).not.toContain("rotated-audio-token");
+    deps.store.close();
+  });
+
+  it.each(["different-credentials", "different-headers"] as const)(
+    "rejects an unscoped credential rotation across same-endpoint %s",
+    async (mode) => {
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir("keiko-gw-ev-connection-identity-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(await tempDir("keiko-gw-ui-connection-identity-"), "keiko-ui.db"),
+      });
+      seedSharedEndpointVoiceGateway(deps, mode);
+      const before = requiredGatewayConfig(deps);
+
+      const result = await handleGatewaySetup(
+        ctx({ preserveExisting: true, voiceApiKey: "rotated-audio-token" }),
+        deps,
+      );
+
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(requiredGatewayConfig(deps)).toEqual(before);
+      deps.store.close();
+    },
+  );
+
+  it("scopes an explicit credential rotation to the selected audio role", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-explicit-credential-scope-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-explicit-credential-scope-"), "keiko-ui.db"),
+    });
+    seedSeparatedVoiceGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceApiKey: "rotated-realtime-token",
+        voiceRealtimeModelId: "realtime-low",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const after = requiredGatewayConfig(deps);
+    expect(requiredProvider(after, "stt-low")).toEqual(requiredProvider(before, "stt-low"));
+    expect(requiredProvider(after, "tts-low")).toEqual(requiredProvider(before, "tts-low"));
+    expect(requiredProvider(after, "realtime-low").apiKey).toBe("rotated-realtime-token");
+    expect(requiredCapability(after, "realtime-low").realtimeTranscriptionModel).toBe(
+      "realtime-low-transcription",
+    );
+    deps.store.close();
+  });
+
+  it("rotates a shared credential across deployments on the same audio endpoint", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-shared-credential-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-shared-credential-"), "keiko-ui.db"),
+    });
+    seedSharedEndpointVoiceGateway(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceApiKey: "rotated-shared-token" }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    expect(
+      ["stt-low", "tts-low", "realtime-low"].map(
+        (modelId) => requiredProvider(config, modelId).apiKey,
+      ),
+    ).toEqual(["rotated-shared-token", "rotated-shared-token", "rotated-shared-token"]);
+    deps.store.close();
+  });
+
+  it("requires every carried role to be explicit when a multi-role endpoint changes", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-multi-endpoint-partial-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-multi-endpoint-partial-"), "keiko-ui.db"),
+    });
+    seedMultiRoleVoiceGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://replacement-audio.example.com/v1",
+        voiceApiKey: "replacement-audio-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceRealtimeModelId: "multi-role",
+        voiceRealtimeTranscriptionModelId: "replacement-transcription",
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(requiredGatewayConfig(deps)).toEqual(before);
+    deps.store.close();
+  });
+
+  it("accepts a fully explicit multi-role endpoint migration without inherited capabilities", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-multi-endpoint-full-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-multi-endpoint-full-"), "keiko-ui.db"),
+    });
+    seedMultiRoleVoiceGateway(deps);
+
+    const missingVoice = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://replacement-audio.example.com/v1",
+        voiceApiKey: "replacement-audio-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceSpeechToTextModelId: "multi-role",
+        voiceSpeechOutputModelId: "multi-role",
+        voiceRealtimeModelId: "multi-role",
+        voiceRealtimeTranscriptionModelId: "replacement-transcription",
+      }),
+      deps,
+    );
+    expect(missingVoice).toMatchObject({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST" } },
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://replacement-audio.example.com/v1",
+        voiceApiKey: "replacement-audio-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceSpeechToTextModelId: "multi-role",
+        voiceSpeechOutputModelId: "multi-role",
+        voiceOutputVoiceId: "replacement-voice",
+        voiceRealtimeModelId: "multi-role",
+        voiceRealtimeTranscriptionModelId: "replacement-transcription",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    expect(requiredProvider(config, "multi-role")).toMatchObject({
+      baseUrl: "https://replacement-audio.example.com/v1",
+      apiKey: "replacement-audio-token",
+      voiceProfiles: [{ persona: "neutral", voiceId: "replacement-voice" }],
+    });
+    const capability = requiredCapability(config, "multi-role");
+    expect(capability).toMatchObject({
+      supportsSpeechInput: true,
+      supportsSpeechOutput: true,
+      supportsRealtimeVoice: true,
+      realtimeTranscriptionModel: "replacement-transcription",
+    });
+    expect(capability.supportsSemanticTurnDetection).toBeUndefined();
+    deps.store.close();
+  });
+
   it("does not advertise semantic turn detection unless setup explicitly enables it", async () => {
     const uiDir = await tempDir("keiko-gw-ui-voice-semantic-");
     const deps = buildUiHandlerDeps({
@@ -374,6 +1418,7 @@ describe("handleGatewaySetup", () => {
         voiceBaseUrl: "https://audio.example.com/v1",
         voiceApiKey: "audio-token",
         voiceRealtimeModelId: "realtime-model",
+        voiceRealtimeTranscriptionModelId: "realtime-transcription-model",
         voiceSupportsSemanticTurnDetection: false,
       }),
       deps,
@@ -386,6 +1431,318 @@ describe("handleGatewaySetup", () => {
       config.capabilities?.find((capability) => capability.id === "realtime-model")
         ?.supportsSemanticTurnDetection,
     ).toBeUndefined();
+    deps.store.close();
+  });
+
+  it.each([
+    {
+      label: "credential-only rotation",
+      update: { voiceApiKey: "rotated-audio-token" },
+      expectedModelId: "realtime-model",
+      expectedSupport: true,
+    },
+    {
+      label: "equivalent normalized endpoint",
+      update: { voiceBaseUrl: " https://audio.example.com/v1/// " },
+      expectedModelId: "realtime-model",
+      expectedSupport: true,
+    },
+    {
+      label: "same provider identity",
+      update: {
+        voiceRealtimeModelId: "realtime-model",
+        voiceRealtimeTranscriptionModelId: "realtime-transcription",
+      },
+      expectedModelId: "realtime-model",
+      expectedSupport: true,
+    },
+    {
+      label: "changed provider identity",
+      update: {
+        voiceRealtimeModelId: "replacement-realtime",
+        voiceRealtimeTranscriptionModelId: "replacement-transcription",
+      },
+      expectedModelId: "replacement-realtime",
+      expectedSupport: false,
+    },
+    {
+      label: "explicit capability resubmission for a changed endpoint",
+      update: {
+        voiceBaseUrl: "https://replacement-audio.example.com/v1",
+        voiceApiKey: "replacement-audio-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceRealtimeModelId: "realtime-model",
+        voiceRealtimeTranscriptionModelId: "realtime-transcription",
+        voiceSupportsSemanticTurnDetection: true,
+      },
+      expectedModelId: "realtime-model",
+      expectedSupport: true,
+    },
+  ])(
+    "resolves Semantic VAD against the Realtime deployment identity: $label",
+    async ({ update, expectedModelId, expectedSupport }) => {
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir("keiko-gw-ev-semantic-identity-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(await tempDir("keiko-gw-ui-semantic-identity-"), "keiko-ui.db"),
+      });
+      seedSemanticRealtimeGateway(deps);
+
+      const result = await handleGatewaySetup(ctx({ preserveExisting: true, ...update }), deps);
+
+      expect(result.status).toBe(200);
+      const capability = requiredCapability(requiredGatewayConfig(deps), expectedModelId);
+      expect(capability.supportsSemanticTurnDetection === true).toBe(expectedSupport);
+      deps.store.close();
+    },
+  );
+
+  it("does not transfer Semantic VAD from a non-selected Realtime provider", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-semantic-provider-binding-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-semantic-provider-binding-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "selected-realtime",
+            baseUrl: "https://audio.example.com/v1",
+            apiKey: "selected-token",
+            capability: {
+              kind: "voice",
+              supportsRealtimeVoice: true,
+              realtimeTranscriptionModel: "selected-transcription",
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+          {
+            modelId: "other-semantic-realtime",
+            baseUrl: "https://other-audio.example.com/v1",
+            apiKey: "other-token",
+            capability: {
+              kind: "voice",
+              supportsRealtimeVoice: true,
+              supportsSemanticTurnDetection: true,
+              realtimeTranscriptionModel: "other-transcription",
+              voiceProviderLocality: "customer-hosted",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceTimeoutMs: 45_000 }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(
+      requiredCapability(requiredGatewayConfig(deps), "selected-realtime")
+        .supportsSemanticTurnDetection,
+    ).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("preserves every voice provider and updates the runtime-elected provider for each role", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-runtime-voice-election-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-runtime-voice-election-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          ...voiceElectionProviders(),
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+    const before = requiredGatewayConfig(deps);
+    const highCostProviders = ["stt-high", "tts-high", "realtime-high"].map((modelId) =>
+      requiredProvider(before, modelId),
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceTimeoutMs: 45_000 }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const after = requiredGatewayConfig(deps);
+    expect(after.providers.map((provider) => provider.modelId).sort()).toEqual(
+      before.providers.map((provider) => provider.modelId).sort(),
+    );
+    expect(
+      ["stt-low", "tts-low", "realtime-low"].map(
+        (modelId) => requiredProvider(after, modelId).timeoutMs,
+      ),
+    ).toEqual([45_000, 45_000, 45_000]);
+    expect(
+      ["stt-high", "tts-high", "realtime-high"].map((modelId) => requiredProvider(after, modelId)),
+    ).toEqual(highCostProviders);
+    expect(requiredCapability(after, "realtime-low").supportsSemanticTurnDetection).toBe(true);
+
+    const replacementResult = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceRealtimeModelId: "realtime-replacement",
+        voiceRealtimeTranscriptionModelId: "replacement-transcription",
+      }),
+      deps,
+    );
+
+    expect(replacementResult.status).toBe(200);
+    const replaced = requiredGatewayConfig(deps);
+    expect(replaced.providers.map((provider) => provider.modelId).sort()).toEqual([
+      "example-chat-model",
+      "realtime-replacement",
+      "stt-high",
+      "stt-low",
+      "tts-high",
+      "tts-low",
+    ]);
+    expect(requiredProvider(replaced, "realtime-replacement")).toMatchObject({
+      baseUrl: "https://realtime-low.example.com/v1",
+      apiKey: "realtime-low-token",
+      timeoutMs: 45_000,
+    });
+    expect(
+      requiredCapability(replaced, "realtime-replacement").supportsSemanticTurnDetection,
+    ).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("inherits replacement connection metadata from the runtime-elected voice provider", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-runtime-voice-replacement-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-runtime-voice-replacement-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          ...voiceElectionProviders(),
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceRealtimeModelId: "realtime-replacement",
+        voiceRealtimeTranscriptionModelId: "replacement-transcription",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(requiredProvider(requiredGatewayConfig(deps), "realtime-replacement")).toMatchObject({
+      baseUrl: "https://realtime-low.example.com/v1",
+      apiKey: "realtime-low-token",
+      timeoutMs: 10_000,
+    });
+    deps.store.close();
+  });
+
+  it("retains non-elected roles carried by a provider elected for another voice role", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-multi-role-provider-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-multi-role-provider-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "multi-role",
+            baseUrl: "https://multi-role.example.com/v1",
+            apiKey: "multi-role-token",
+            capability: {
+              kind: "voice",
+              costClass: "medium",
+              supportsSpeechInput: true,
+              supportsSpeechOutput: true,
+              supportsRealtimeVoice: true,
+              supportsSemanticTurnDetection: true,
+              realtimeTranscriptionModel: "multi-role-transcription",
+              voiceProviderLocality: "customer-hosted",
+            },
+            voiceProfiles: [{ persona: "neutral", voiceId: "multi-role-voice" }],
+          },
+          ...voiceElectionProviders().filter((provider) =>
+            ["stt-high", "tts-low", "realtime-low"].includes(String(provider.modelId)),
+          ),
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceTimeoutMs: 45_000 }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    expect(requiredCapability(config, "multi-role")).toMatchObject({
+      supportsSpeechInput: true,
+      supportsSpeechOutput: true,
+      supportsRealtimeVoice: true,
+      supportsSemanticTurnDetection: true,
+      realtimeTranscriptionModel: "multi-role-transcription",
+    });
+    expect(requiredProvider(config, "multi-role").voiceProfiles).toEqual([
+      { persona: "neutral", voiceId: "multi-role-voice" },
+    ]);
+
+    const beforeEndpointChange = requiredGatewayConfig(deps);
+    const changedEndpoint = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://replacement-audio.example.com/v1",
+      }),
+      deps,
+    );
+
+    expect(changedEndpoint).toMatchObject({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST" } },
+    });
+    expect(requiredGatewayConfig(deps)).toEqual(beforeEndpointChange);
     deps.store.close();
   });
 
@@ -405,6 +1762,7 @@ describe("handleGatewaySetup", () => {
         voiceBaseUrl: "https://audio.example.com/v1",
         voiceApiKey: "audio-token",
         voiceRealtimeModelId: "realtime-model",
+        voiceRealtimeTranscriptionModelId: "realtime-transcription-model",
         voiceSupportsSemanticTurnDetection: "true",
       }),
       deps,
@@ -419,6 +1777,223 @@ describe("handleGatewaySetup", () => {
         },
       },
     });
+    deps.store.close();
+  });
+
+  it("keeps existing voice locality and persona mappings on a semantic-VAD-only update", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-preserve-voice-metadata-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-preserve-voice-metadata-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "customer-realtime",
+            baseUrl: "https://audio.example.com/v1",
+            apiKey: "audio-token",
+            capability: {
+              kind: "voice",
+              supportsSpeechOutput: true,
+              supportsRealtimeVoice: true,
+              supportsSemanticTurnDetection: true,
+              realtimeTranscriptionModel: "customer-transcription",
+              voiceProviderLocality: "customer-hosted",
+            },
+            voiceProfiles: [
+              { persona: "male", voiceId: "customer-male" },
+              { persona: "neutral", voiceId: "customer-neutral" },
+            ],
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceSupportsSemanticTurnDetection: false }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    const capability = requiredCapability(config, "customer-realtime");
+    expect(capability.voiceProviderLocality).toBe("customer-hosted");
+    expect(capability.supportsSemanticTurnDetection).toBeUndefined();
+    expect(
+      config.providers.find((provider) => provider.modelId === "customer-realtime")?.voiceProfiles,
+    ).toEqual([
+      { persona: "male", voiceId: "customer-male" },
+      { persona: "neutral", voiceId: "customer-neutral" },
+    ]);
+    deps.store.close();
+  });
+
+  it("preserves heterogeneous voice providers and replaces only the targeted Realtime role", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-heterogeneous-voice-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-heterogeneous-voice-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "dedicated-stt",
+            baseUrl: "https://stt.example.com/v1",
+            apiKey: "stt-token",
+            apiKeyHeaderName: "x-api-key",
+            timeoutMs: 11_000,
+            maxRetries: 3,
+            retryBaseDelayMs: 111,
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "local-only",
+            },
+          },
+          {
+            modelId: "dedicated-tts",
+            baseUrl: "https://tts.example.com/v1",
+            apiKey: "tts-token",
+            apiKeyHeaderName: "Authorization",
+            timeoutMs: 22_000,
+            maxRetries: 4,
+            retryBaseDelayMs: 222,
+            capability: {
+              kind: "voice",
+              supportsSpeechOutput: true,
+              supportsSpeechSynthesisInstructions: true,
+              voiceProviderLocality: "customer-hosted",
+            },
+            voiceProfiles: [{ persona: "male", voiceId: "tts-male" }],
+          },
+          {
+            modelId: "dedicated-realtime",
+            baseUrl: "https://realtime.example.com/v1",
+            apiKey: "realtime-token",
+            apiKeyHeaderName: "api-key",
+            timeoutMs: 33_000,
+            maxRetries: 5,
+            retryBaseDelayMs: 333,
+            realtimeAuthMode: "ephemeral-session",
+            capability: {
+              kind: "voice",
+              supportsRealtimeVoice: true,
+              supportsSemanticTurnDetection: true,
+              realtimeTranscriptionModel: "realtime-transcription",
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+    const original = requiredGatewayConfig(deps);
+    const originalStt = requiredProvider(original, "dedicated-stt");
+    const originalTts = requiredProvider(original, "dedicated-tts");
+    const originalRealtime = requiredProvider(original, "dedicated-realtime");
+
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({ preserveExisting: true, voiceSupportsSemanticTurnDetection: false }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+    const afterCapabilityUpdate = requiredGatewayConfig(deps);
+    expect(requiredProvider(afterCapabilityUpdate, "dedicated-stt")).toEqual(originalStt);
+    expect(requiredProvider(afterCapabilityUpdate, "dedicated-tts")).toEqual(originalTts);
+    expect(requiredProvider(afterCapabilityUpdate, "dedicated-realtime")).toEqual(originalRealtime);
+    expect(
+      requiredCapability(afterCapabilityUpdate, "dedicated-tts")
+        .supportsSpeechSynthesisInstructions,
+    ).toBe(true);
+
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            preserveExisting: true,
+            voiceRealtimeModelId: "replacement-realtime",
+            voiceRealtimeTranscriptionModelId: "replacement-transcription",
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+    const afterReplacement = requiredGatewayConfig(deps);
+    expect(requiredProvider(afterReplacement, "dedicated-stt")).toEqual(originalStt);
+    expect(requiredProvider(afterReplacement, "dedicated-tts")).toEqual(originalTts);
+    expect(
+      afterReplacement.providers.some((provider) => provider.modelId === "dedicated-realtime"),
+    ).toBe(false);
+    expect(requiredProvider(afterReplacement, "replacement-realtime")).toMatchObject({
+      baseUrl: originalRealtime.baseUrl,
+      apiKey: originalRealtime.apiKey,
+      apiKeyHeaderName: originalRealtime.apiKeyHeaderName,
+      timeoutMs: originalRealtime.timeoutMs,
+      maxRetries: originalRealtime.maxRetries,
+      retryBaseDelayMs: originalRealtime.retryBaseDelayMs,
+      realtimeAuthMode: originalRealtime.realtimeAuthMode,
+    });
+    const replacement = requiredCapability(afterReplacement, "replacement-realtime");
+    expect(replacement.supportsSemanticTurnDetection).toBeUndefined();
+    expect(replacement.realtimeTranscriptionModel).toBe("replacement-transcription");
+    expect(
+      requiredProvider(afterReplacement, "replacement-realtime").voiceProfiles,
+    ).toBeUndefined();
+
+    const missingReplacementVoice = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceSpeechOutputModelId: "replacement-tts",
+      }),
+      deps,
+    );
+    expect(missingReplacementVoice).toMatchObject({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST" } },
+    });
+    expect(JSON.stringify(missingReplacementVoice.body)).toContain(
+      "voiceOutputVoiceId is required",
+    );
+
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            preserveExisting: true,
+            voiceSpeechOutputModelId: "replacement-tts",
+            voiceOutputVoiceId: "replacement-neutral",
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+    const afterTtsReplacement = requiredGatewayConfig(deps);
+    expect(requiredProvider(afterTtsReplacement, "replacement-tts").voiceProfiles).toEqual([
+      { persona: "neutral", voiceId: "replacement-neutral" },
+    ]);
+    expect(
+      requiredProvider(afterTtsReplacement, "replacement-realtime").voiceProfiles,
+    ).toBeUndefined();
     deps.store.close();
   });
 
@@ -442,7 +2017,11 @@ describe("handleGatewaySetup", () => {
     ).toBe(200);
 
     const result = await handleGatewaySetup(
-      ctx({ preserveExisting: true, voiceRealtimeModelId: "realtime-model" }),
+      ctx({
+        preserveExisting: true,
+        voiceRealtimeModelId: "realtime-model",
+        voiceRealtimeTranscriptionModelId: "realtime-transcription-model",
+      }),
       deps,
     );
 
@@ -484,6 +2063,42 @@ describe("handleGatewaySetup", () => {
         code: "BAD_REQUEST",
         correlationId: "corr-voice-transcription-role",
         message: "voiceRealtimeTranscriptionModelId requires voiceRealtimeModelId.",
+      },
+    });
+    deps.store.close();
+  });
+
+  it("requires an explicit compatible transcription deployment for a new Realtime role", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-realtime-transcription-required-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-realtime-transcription-required-"), "keiko-ui.db"),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        {
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "chat-token",
+          voiceBaseUrl: "https://audio.example.com/v1",
+          voiceApiKey: "audio-token",
+          voiceRealtimeModelId: "realtime-model",
+        },
+        "corr-realtime-transcription-required",
+      ),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          correlationId: "corr-realtime-transcription-required",
+          message:
+            "voiceRealtimeTranscriptionModelId is required when voiceRealtimeModelId is configured or replaced.",
+        },
       },
     });
     deps.store.close();
@@ -933,6 +2548,52 @@ describe("handleGatewaySetup", () => {
     expect(existsSync(deps.gatewayConfig?.storagePath ?? "")).toBe(false);
     expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
     expect(JSON.stringify(result.body)).not.toContain("https://llm-gateway.example.com");
+    deps.store.close();
+  });
+
+  it("never reflects provider response bodies from a failed setup probe", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-body-free-failure-");
+    const evidenceDir = await tempDir("keiko-gw-ev-body-free-failure-");
+    const providerBody = "customer prompt and upstream response body must stay private";
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: () =>
+        Promise.reject(new Error(`upstream returned 500 with body: ${providerBody}`)),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" },
+        "corr-body-free-setup",
+      ),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(result.body).toMatchObject({
+      error: { correlationId: "corr-body-free-setup" },
+    });
+    expect(diagnostics.length).toBeGreaterThan(0);
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          correlationId: "corr-body-free-setup",
+          operation: "POST /api/gateway/setup",
+          source: "gateway.setup.provider-verify",
+          message: "Provider verification failed without exposing upstream response details.",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(result.body)).not.toContain(providerBody);
+    expect(JSON.stringify(result.body)).not.toContain("upstream returned 500 with body");
+    expect(JSON.stringify(diagnostics)).not.toContain(providerBody);
+    expect(JSON.stringify(diagnostics)).not.toContain("upstream returned 500 with body");
     deps.store.close();
   });
 

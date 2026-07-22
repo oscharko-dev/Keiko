@@ -1,9 +1,14 @@
-# Voice dialogue mode — production evaluation (Issue #1563)
+# Voice dialogue mode — historical production evaluation (Issue #1563)
 
-This document specifies the production evaluation for the colleague-like **voice dialogue mode** (Epic
+This document records the production evaluation originally used for the colleague-like **voice dialogue mode** (Epic
 [#1556](https://github.com/oscharko-dev/Keiko/issues/1556)). It is the deliverable of Issue
 [#1563](https://github.com/oscharko-dev/Keiko/issues/1563) and proves that dialogue mode is responsive,
-understandable, interruptible, accessible, and stable enough for real use with headphones.
+understandable, interruptible, accessible, and stable enough for the Issue #1563 closure.
+
+> **Current authority:** this specification preserves the superseded STT+TTS dialogue design. ADR-0154
+> now requires input-only Realtime transcription, canonical chat, and independent TTS. In particular,
+> STT+TTS without WebRTC no longer offers the dialogue switch. The historical headphone walkthrough is not
+> the renewed Oliver live-microphone acceptance test; that current test remains deferred.
 
 The evaluation is **verification, not new product behavior**. It adds no runtime dependency, deploys no
 model, and changes no production code path. It reuses the shipped dialogue runtime (#1557–#1562) and the
@@ -47,12 +52,16 @@ No ADR is added: the evaluation introduces no new architecture boundary and reus
 | `tests/e2e/voice-dialogue.smoke.spec.ts`                 | Browser evidence: dialogue lifecycle, voice selection, listening status, and every capability profile's control gating.                                      |
 | `docs/voice/dialogue-evaluation-report.md`               | The final verification report (closure evidence).                                                                                                            |
 
-## Capability profiles (AC1)
+## Historical capability profiles (AC1)
 
 The evaluation enumerates the five configured deployment profiles and asserts the dialogue controls are
 offered only when the deployment can both capture user speech and speak the answer (the full STT+TTS
 conjunction, ADR-0096 D2). The oracle is compared against the **real** production gate; a regressed gate
 that offered dialogue for a partial or no-voice deployment is caught and flips the verdict to `NO-GO`.
+
+This was the Issue #1563 oracle. Under ADR-0154, the `stt-tts` row below resolves no productive dialogue
+transport and its current expected answer is **no**; Realtime WebRTC plus independent TTS and a persona is
+required.
 
 | Profile                      | `available` / `profile`   | WebRTC media | Dialogue offered? |
 | ---------------------------- | ------------------------- | ------------ | ----------------- |
@@ -84,11 +93,10 @@ production budgets:
 | `time-to-first-audio` (answer settled → playback begins)     | 4000 ms | speech provider        |
 
 The client-controlled legs (arming capture, stopping playback on barge-in) are proven deterministically.
-The provider-dependent legs (STT transcribe, TTS synthesis) are budgeted; their wall-clock value depends
-on the deployed speech provider and is closed in production by the headphone walkthrough recorded in the
-verification report — consistent with the Voice Digital Twin harness, which keeps numeric wall-clock
-latency out of the deterministic boundary (#505, `evaluation-harness.md` §6). The deterministic suite
-proves the measurement-and-recording path and that an over-budget reading is caught.
+The provider-dependent legs (STT transcribe, TTS synthesis) were budgeted; their wall-clock value depended
+on the deployed speech provider and the historical headphone walkthrough recorded in the verification
+report. That walkthrough does not close the current ADR-0154 live-microphone acceptance. The deterministic
+suite proves only the measurement-and-recording path and that an over-budget fixture is caught.
 
 ## Long-session cleanup (AC3)
 
@@ -100,7 +108,8 @@ resource class:
 - every audio element is torn down (paused and `src` cleared);
 - every synthesized object URL is revoked (create count == revoke count);
 - no timer remains pending (the dictation auto-stop timer is drained);
-- no realtime (WebRTC) connection was ever opened — the dialogue path is STT+TTS (ADR-0096 D7).
+- in the historical design no Realtime connection was opened because the dialogue path was STT+TTS
+  (ADR-0096 D7, superseded by ADR-0154).
 
 Each counter also equals the turn count, so a silently skipped turn is caught. The ledger is the leak
 detector: any regressed release path diverges the counts and fails the dimension.

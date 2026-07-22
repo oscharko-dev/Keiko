@@ -46,7 +46,7 @@ import {
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
-import { emitServerDiagnostic } from "./diagnostics-log.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import {
   buildMemoryCaptureDecisionAuditEvent,
   type MemoryCaptureDecisionOutcome,
@@ -233,9 +233,22 @@ function logSalienceDiagnostic(
   );
 }
 
-function redactedErrorMessage(error: unknown, deps: UiHandlerDeps): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return redact(message, currentRedactionSecrets(deps));
+function emitSalienceFailureDiagnostic(
+  deps: UiHandlerDeps,
+  operation: string,
+  source: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation,
+      source,
+      error,
+      redact: (summary): string => String(deps.redactor(summary)),
+    }),
+  );
 }
 
 // Salience capture never tracks per-record access stats at capture time, so the governance planner
@@ -431,11 +444,11 @@ function logSalienceCaptureFailure(
   error: unknown,
   deps: UiHandlerDeps,
 ): void {
-  emitSalienceDiagnostic(
+  emitSalienceFailureDiagnostic(
     deps,
+    `memory.salience.capture.${surface}`,
     "memory-salience.scheduleMemorySalienceCapture",
-    "SalienceCaptureFailure",
-    `${surface} salience capture failed: ${redactedErrorMessage(error, deps)}`,
+    error,
   );
 }
 
@@ -654,11 +667,11 @@ export async function captureSalientFromTurn(
     return actions;
   } catch (error) {
     // Boundary: salience must never break the chat path. Log and continue.
-    emitSalienceDiagnostic(
+    emitSalienceFailureDiagnostic(
       deps,
+      "memory.salience.capture",
       "memory-salience.captureSalientFromTurn",
-      "SalienceCaptureFailure",
-      `salience capture failed: ${redactedErrorMessage(error, deps)}`,
+      error,
     );
     return [];
   }

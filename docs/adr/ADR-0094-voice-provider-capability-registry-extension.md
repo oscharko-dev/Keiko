@@ -2,7 +2,13 @@
 
 ## Status
 
-Proposed (Issue #1557, Epic #1556, 2026-06-26)
+Partially superseded by
+[ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) (Accepted, 2026-07-22): a Realtime-only provider
+no longer contributes an assistant persona or provider voice id. Persona mapping now requires an
+explicit speech-output provider. The credential-tier mapping and content-free projection boundary
+remain applicable.
+
+Originally proposed for Issue #1557, Epic #1556 (2026-06-26).
 
 ## Version
 
@@ -212,9 +218,10 @@ For symmetry with `selectSpeechToTextModel` / `selectRealtimeVoiceModel`, we add
   server-side** — it is never a BFF response body shape.
 
 The five deployment classes named in AC2 (`keiko-stt`, `keiko-tts`, `keiko-audio-output`, `keiko-realtime`,
-`keiko-realtime-stt`) are **representable by `modelId` + capability flags + `voiceProfiles`** with **no
-hard-coded deployment names** anywhere — confirmed: those names appear only in doc comments today, and
-`CAPABILITY_DATA` ships empty. A config test must represent all five by id.
+`keiko-realtime-stt`) are representable by `modelId` plus capability flags with no hard-coded deployment
+names. As amended by ADR-0154, `voiceProfiles` applies only to the speech-output deployments; Realtime-only
+and transcription-only records omit it. `CAPABILITY_DATA` ships empty, and config tests represent each
+role by id.
 
 ### D7 — Invariants carried forward from Epic #491
 

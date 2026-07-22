@@ -8,8 +8,8 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket as WsSocket } from "ws";
 import {
-  DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
   DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
+  findConfiguredCapability,
   requestRealtimeNegotiation,
   resolveVoiceCapability,
   selectRealtimeVoiceModel,
@@ -54,7 +54,6 @@ type LiveSessionCreateMessage = VoiceSessionCreateMessage & {
 interface LiveDictationSessionState {
   readonly sessionId: string;
   readonly providerLocality: VoiceCapabilityResolution["providerLocality"];
-  readonly realtimeToolCalling: boolean | undefined;
   readonly transcriptionLanguage: string | undefined;
   hostSeq: number;
   lastClientSeq: number;
@@ -133,16 +132,26 @@ function rawDataByteLength(data: RawData): number {
   return Buffer.from(data).byteLength;
 }
 
-function resolveRealtimeProvider(config: GatewayConfig): ModelProviderConfig | undefined {
+interface LiveDictationProvider {
+  readonly provider: ModelProviderConfig;
+  readonly transcriptionModel: string;
+}
+
+function resolveRealtimeProvider(config: GatewayConfig): LiveDictationProvider | undefined {
   const modelId = selectRealtimeVoiceModel(config);
-  if (modelId === undefined) {
-    return undefined;
-  }
-  return config.providers.find((provider) => provider.modelId === modelId);
+  if (modelId === undefined) return undefined;
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  const transcriptionModel = findConfiguredCapability(
+    config,
+    modelId,
+  )?.realtimeTranscriptionModel?.trim();
+  if (provider === undefined || !transcriptionModel) return undefined;
+  return { provider, transcriptionModel };
 }
 
 function buildLiveDictationNegotiationRequest(
   provider: ModelProviderConfig,
+  transcriptionModel: string,
   offerSdp: string,
   deps: UiHandlerDeps,
   signal: AbortSignal,
@@ -161,7 +170,7 @@ function buildLiveDictationNegotiationRequest(
       : {}),
     modelId: provider.modelId,
     sessionType: "transcription",
-    transcriptionModel: DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+    transcriptionModel,
     transcriptionDelay,
     ...(transcriptionLanguage !== undefined ? { transcriptionLanguage } : {}),
     offerSdp,
@@ -278,7 +287,6 @@ class VoiceLiveDictationConnection {
         speechToText: true,
         speechOutput: false,
         realtimeVoice: true,
-        ...(this.session.realtimeToolCalling === true ? { realtimeToolCalling: true } : {}),
       },
     });
   }
@@ -473,13 +481,20 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
       if (config === undefined) {
         return { ok: false, kind: "unsupported-model" };
       }
-      const provider = resolveRealtimeProvider(config);
-      if (provider === undefined) {
+      const resolved = resolveRealtimeProvider(config);
+      if (resolved === undefined) {
         return { ok: false, kind: "unsupported-model" };
       }
       const negotiate = deps.voiceRealtimeNegotiationRequest ?? requestRealtimeNegotiation;
       return negotiate(
-        buildLiveDictationNegotiationRequest(provider, offerSdp, deps, signal, language),
+        buildLiveDictationNegotiationRequest(
+          resolved.provider,
+          resolved.transcriptionModel,
+          offerSdp,
+          deps,
+          signal,
+          language,
+        ),
       );
     };
   }
@@ -520,7 +535,6 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     return {
       sessionId,
       providerLocality: voice.providerLocality,
-      realtimeToolCalling: voice.capabilities.realtimeToolCalling,
       transcriptionLanguage: language,
       hostSeq: 0,
       lastClientSeq: 0,

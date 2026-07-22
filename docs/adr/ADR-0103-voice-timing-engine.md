@@ -6,6 +6,13 @@
 
 Accepted (Issue #498, Epic #491, 2026-06-24)
 
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) as to productive integration. The
+pure timing engine remains in the tree and its `VoiceClock` seam is reused by active Voice reducers,
+but `createVoiceTimebaseEngine` is not called by the current Twin transport. Current settlement,
+continuation, deduplication, reconnect, and Chat-owned queue bounds are implemented in the ADR-0154
+session path and must be tested there; this engine's unit suite is not evidence that those live
+invariants hold.
+
 ## Version
 
 0.2.0

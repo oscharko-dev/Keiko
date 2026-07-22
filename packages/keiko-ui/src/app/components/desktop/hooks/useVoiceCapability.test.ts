@@ -2,8 +2,8 @@
 // shares a single module-cached fetch across mounts (so the 3 composer slots never triple-probe),
 // and fails safe to "no voice affordance" on a transport error.
 
-import { renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearVoiceCapabilityCacheForTests,
   supportsDictation,
@@ -13,10 +13,12 @@ import {
 import * as api from "@/lib/api";
 import type { VoiceCapabilityResolution } from "@/lib/types";
 
-vi.mock("@/lib/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, fetchVoiceCapability: vi.fn() };
-});
+function jsonResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 const STT: VoiceCapabilityResolution = {
   available: true,
@@ -38,12 +40,15 @@ const NONE: VoiceCapabilityResolution = {
 
 beforeEach(() => {
   clearVoiceCapabilityCacheForTests();
-  vi.mocked(api.fetchVoiceCapability).mockReset();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("useVoiceCapability", () => {
   it("starts undefined and resolves to the capability (non-blocking probe)", async () => {
-    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ voice: STT })));
     const { result } = renderHook(() => useVoiceCapability());
     // Composer renders immediately: the hook returns undefined before the probe resolves.
     expect(result.current).toBeUndefined();
@@ -52,7 +57,8 @@ describe("useVoiceCapability", () => {
   });
 
   it("shares one fetch across multiple mounts (module-cached single flight)", async () => {
-    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ voice: STT }));
+    vi.stubGlobal("fetch", fetchMock);
     const a = renderHook(() => useVoiceCapability());
     const b = renderHook(() => useVoiceCapability());
     const c = renderHook(() => useVoiceCapability());
@@ -61,17 +67,44 @@ describe("useVoiceCapability", () => {
       expect(b.result.current).toEqual(STT);
       expect(c.result.current).toEqual(STT);
     });
-    expect(api.fetchVoiceCapability).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("fails safe to undefined when the probe rejects (no broken affordance)", async () => {
-    vi.mocked(api.fetchVoiceCapability).mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
     const { result } = renderHook(() => useVoiceCapability());
     // Give the rejected promise a chance to settle; the hook must stay undefined.
     await Promise.resolve();
     await Promise.resolve();
     expect(result.current).toBeUndefined();
     expect(supportsDictation(result.current)).toBe(false);
+  });
+
+  it("refreshes a mounted capability probe after gateway setup changes voice roles", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ voice: STT }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ok: true,
+          testedModelId: "chat",
+          testedModelIds: ["chat"],
+          providerCount: 1,
+          models: [],
+          config: { schemaVersion: "1", providers: [] },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ voice: FULL_REALTIME }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useVoiceCapability());
+    await waitFor(() => expect(result.current).toEqual(STT));
+
+    await act(async () => {
+      await api.setupGateway({ deploymentNames: ["chat"] });
+    });
+
+    await waitFor(() => expect(result.current).toEqual(FULL_REALTIME));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -117,6 +150,11 @@ const FULL_REALTIME: VoiceCapabilityResolution = {
   providerLocality: "azure-foundry",
 };
 
+const REALTIME_WITHOUT_TTS: VoiceCapabilityResolution = {
+  ...FULL_REALTIME,
+  capabilities: { speechToText: true, speechOutput: false, realtimeVoice: true },
+};
+
 describe("supportsSpeechOutput", () => {
   it("is true for the speech-output profile advertising speech output", () => {
     expect(supportsSpeechOutput(SPEECH_OUTPUT)).toBe(true);
@@ -124,6 +162,10 @@ describe("supportsSpeechOutput", () => {
 
   it("is true for full-realtime (which also speaks)", () => {
     expect(supportsSpeechOutput(FULL_REALTIME)).toBe(true);
+  });
+
+  it("is false for Realtime without an explicit speech-output provider", () => {
+    expect(supportsSpeechOutput(REALTIME_WITHOUT_TTS)).toBe(false);
   });
 
   it("is false for STT-only — dictation does not imply the assistant can speak (AC1)", () => {
