@@ -1646,6 +1646,32 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     [commitAssistantTranscript],
   );
 
+  const beginUserUtterance = useCallback((): void => {
+    holdPendingCanonicalUserTurn();
+    if (!userSpeechActiveRef.current) {
+      userSpeechActiveRef.current = true;
+      onUserSpeechStartRef.current?.();
+    }
+    abortGroundedToolCalls();
+    commitBufferedAssistantTranscript(undefined);
+    flushVoiceTurn({ allowAssistantFallback: true });
+    beginVoiceTurn();
+    applyTurnSignal({ kind: "user-speech-start" });
+  }, [
+    abortGroundedToolCalls,
+    applyTurnSignal,
+    beginVoiceTurn,
+    commitBufferedAssistantTranscript,
+    flushVoiceTurn,
+    holdPendingCanonicalUserTurn,
+  ]);
+
+  const endUserUtterance = useCallback((): void => {
+    userSpeechActiveRef.current = false;
+    armPendingCanonicalUserTurn();
+    applyTurnSignal({ kind: "user-end-of-turn" });
+  }, [applyTurnSignal, armPendingCanonicalUserTurn]);
+
   const handleRealtimeEvent = useCallback(
     (raw: unknown): void => {
       const event = parseRealtimeVoiceEvent(raw);
@@ -1665,22 +1691,11 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           return;
         case "user-speech-start":
           latencyRef.current?.mark("user_speech_start");
-          holdPendingCanonicalUserTurn();
-          if (!userSpeechActiveRef.current) {
-            userSpeechActiveRef.current = true;
-            onUserSpeechStartRef.current?.();
-          }
-          abortGroundedToolCalls();
-          commitBufferedAssistantTranscript(undefined);
-          flushVoiceTurn({ allowAssistantFallback: true });
-          beginVoiceTurn();
-          applyTurnSignal({ kind: "user-speech-start" });
+          beginUserUtterance();
           return;
         case "user-speech-stop":
           latencyRef.current?.mark("vad_stop");
-          userSpeechActiveRef.current = false;
-          armPendingCanonicalUserTurn();
-          applyTurnSignal({ kind: "user-end-of-turn" });
+          endUserUtterance();
           return;
         case "user-transcript-committed":
           commitUserTranscript(event);
@@ -1766,18 +1781,16 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       appendFunctionCallArguments,
       appendUserTranscriptDelta,
       applyTurnSignal,
-      abortGroundedToolCalls,
-      beginVoiceTurn,
+      beginUserUtterance,
       commitAssistantTranscript,
       commitBufferedAssistantTranscript,
       commitUserTranscript,
+      endUserUtterance,
       executeClientGroundedTurn,
       executeGroundedFunctionCall,
       flushVoiceTurn,
-      holdPendingCanonicalUserTurn,
       maybeDispatchConnected,
       promoteUserTranscriptFallback,
-      armPendingCanonicalUserTurn,
       scheduleCanonicalUserTurn,
     ],
   );
@@ -1918,21 +1931,10 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         session.onLocalVoiceActivity?.((activity) => {
           if (!mountedRef.current) return;
           if (activity === "speech-onset") {
-            holdPendingCanonicalUserTurn();
-            if (!userSpeechActiveRef.current) {
-              userSpeechActiveRef.current = true;
-              onUserSpeechStartRef.current?.();
-            }
-            abortGroundedToolCalls();
-            commitBufferedAssistantTranscript(undefined);
-            flushVoiceTurn({ allowAssistantFallback: true });
-            beginVoiceTurn();
-            applyTurnSignal({ kind: "user-speech-start" });
+            beginUserUtterance();
             return;
           }
-          userSpeechActiveRef.current = false;
-          armPendingCanonicalUserTurn();
-          applyTurnSignal({ kind: "user-end-of-turn" });
+          endUserUtterance();
         });
         session.onDataChannelEvent?.((event) => {
           if (!mountedRef.current) return;
@@ -2040,12 +2042,8 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     sendSessionUpdate,
     maybeDispatchConnected,
     applyTurnSignal,
-    abortGroundedToolCalls,
-    beginVoiceTurn,
-    holdPendingCanonicalUserTurn,
-    armPendingCanonicalUserTurn,
-    commitBufferedAssistantTranscript,
-    flushVoiceTurn,
+    beginUserUtterance,
+    endUserUtterance,
   ]);
 
   useEffect(() => {

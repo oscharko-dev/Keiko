@@ -88,7 +88,7 @@ function atomRangeKey(atom: EvidenceAtom): string {
   return range === undefined ? "*" : `${String(range.startLine)}-${String(range.endLine)}`;
 }
 
-function tracePriority(atom: EvidenceAtom): number {
+export function tracePriority(atom: EvidenceAtom): number {
   if (atom.provenance.tool === "discovered-symbol-definition") return 2;
   if (atom.provenance.tool === "structural-edge-target") return 1;
   return 0;

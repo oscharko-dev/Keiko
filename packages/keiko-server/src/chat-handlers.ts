@@ -1646,6 +1646,8 @@ export async function buildVoiceTurnMemoryResult(
   if (memoryContext === undefined) {
     return emptyMemoryResult(false);
   }
+  // Grounded Q&A supplies only the user's question here so the assistant's newly generated answer
+  // cannot bias memory recall for the same turn. Other voice callers retain the paired-turn fallback.
   const content = options.retrievalContent ?? voiceTurnCombinedText(request.messages);
   const memory = await buildMemoryResult(
     voiceTurnAsSendRequest(request, content),

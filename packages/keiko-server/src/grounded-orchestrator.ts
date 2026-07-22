@@ -105,6 +105,7 @@ import {
 import {
   selectGroundedCandidateFiles,
   selectGroundedEvidenceAtoms,
+  tracePriority,
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
@@ -2388,12 +2389,6 @@ function windowContainsAtom(window: LineWindow, atom: EvidenceAtom): boolean {
 interface ExcerptWindowStrength {
   readonly tracePriority: number;
   readonly score: number;
-}
-
-function tracePriority(atom: EvidenceAtom): number {
-  if (atom.provenance.tool === "discovered-symbol-definition") return 2;
-  if (atom.provenance.tool === "structural-edge-target") return 1;
-  return 0;
 }
 
 function windowsOverlap(a: LineWindow, b: LineWindow): boolean {
