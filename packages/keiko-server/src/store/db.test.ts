@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
+import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   createInMemoryUiStore,
   createNodeUiStore,
@@ -22,6 +23,7 @@ import {
   SCHEMA_VERSION,
   UI_DB_BUSY_TIMEOUT_MS,
   type GroundedAnswer,
+  type NewChatMessage,
 } from "./index.js";
 
 // Narrows an array-index access (T | undefined) to T without a non-null assertion.
@@ -54,6 +56,45 @@ describe("createInMemoryUiStore", () => {
   it("returns an empty project list initially", () => {
     const store = createInMemoryUiStore();
     expect(store.listProjects()).toEqual([]);
+    store.close();
+  });
+
+  it("validates canonical client turn identifiers without normalizing opaque identity", (): void => {
+    const projectDir = mkdtempSync(join(tmpDir, "client-turn-id-project-"));
+    const store = createInMemoryUiStore();
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Voice", "example-chat-model");
+    const message = (content: string, timestamp: number): NewChatMessage => ({
+      chatId: chat.id,
+      role: "user" as const,
+      content,
+      timestamp,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    expect(() => store.admitChatTurn("", message("empty", 1))).toThrow("Invalid clientTurnId.");
+    expect(() => store.admitChatTurn(" \t\r\n", message("blank", 2))).toThrow(
+      "Invalid clientTurnId.",
+    );
+    expect(() => store.admitChatTurn("\u00a0\ufeff\u3000", message("unicode-blank", 3))).toThrow(
+      "Invalid clientTurnId.",
+    );
+
+    const paddedOpaqueId = "  opaque-id  ";
+    const paddedAdmission = store.admitChatTurn(paddedOpaqueId, message("padded", 4));
+    expect(paddedAdmission.kind).toBe("admitted");
+    expect(store.inspectChatTurn(chat.id, paddedOpaqueId, "padded").kind).toBe("in-progress");
+    expect(store.inspectChatTurn(chat.id, paddedOpaqueId.trim(), "padded").kind).toBe("missing");
+
+    const maximumLengthId = "x".repeat(MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS);
+    expect(store.admitChatTurn(maximumLengthId, message("maximum", 5)).kind).toBe("admitted");
+    expect(() => store.admitChatTurn(`${maximumLengthId}x`, message("overlong", 6))).toThrow(
+      "Invalid clientTurnId.",
+    );
     store.close();
   });
 

@@ -557,14 +557,16 @@ function parseDocumentContext(value: unknown): readonly ConversationDocumentCont
 
 export function parseClientTurnId(value: unknown): string | RouteResult | undefined {
   if (value === undefined) return undefined;
+  // The value is an opaque idempotency key: inspect a trimmed copy only to reject blanks, while
+  // preserving every accepted byte so retries cannot be normalized onto a different identity.
   if (
     typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS
+    value.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS ||
+    value.trim().length === 0
   ) {
     return {
       status: 400,
-      body: errorBody("BAD_REQUEST", "clientTurnId must be a bounded non-empty string."),
+      body: errorBody("BAD_REQUEST", "clientTurnId must be a bounded non-blank string."),
     };
   }
   return value;

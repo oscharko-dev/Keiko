@@ -235,7 +235,12 @@ function deleteProjectRecord(db: DatabaseSync, path: string): void {
 }
 
 function validateClientTurnId(clientTurnId: string): void {
-  if (clientTurnId.length === 0 || clientTurnId.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS) {
+  // Keep the opaque retry identity byte-exact; trimming is validation-only and never changes the
+  // persisted hash input or aliases two caller-provided identifiers.
+  if (
+    clientTurnId.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS ||
+    clientTurnId.trim().length === 0
+  ) {
     throw invalidRequest("Invalid clientTurnId.");
   }
 }
