@@ -59,11 +59,11 @@ Qodo installation — or any replacement reviewer — without dashboard access.
 Qodo is a hosted third-party service on a free tier; its plan, quotas, or availability can change
 without notice. The posture if it does:
 
-- **Merges never deadlock on Qodo.** Qodo is comment-only and emits no required check. `Keiko for
-Quality` (which bridges Qodo findings) is advisory and non-required until the ADR-0135 live
-  probes pass, and its evaluator treats absent review evidence as fail-closed _within the
-  advisory aggregate only_ — the direct required checks and branch protection gate integration
-  natively and are Qodo-independent.
+- **Qodo remains comment-only; its bridge is required.** Qodo emits no check-run, while the
+  app-bound `Keiko for Quality` bridge is required after the ADR-0142 live probes. Missing or stale
+  review evidence remains pending and unresolved findings fail. Availability incidents follow the
+  [liveness runbook](../troubleshooting/keiko-for-quality-liveness.md); they are not converted into
+  product failures or bypassed by weakening the gate.
 - **Static analysis does not regress.** SonarCloud (OSS tier) and the direct required checks
   carry the deterministic quality bar with or without Qodo.
 - **The review standard survives the vendor.** `best_practices.md` and `.pr_agent.toml` are the
@@ -82,6 +82,9 @@ Quality` (which bridges Qodo findings) is advisory and non-required until the AD
 - Substantive compliance rules are platform-managed for the repository scope; the repository files
   remain the durable, reviewable source and reference `AGENTS.md`, `CONTRIBUTING.md`,
   `docs/qa/keiko-for-quality.md`, and the applicable ADRs.
+- The release-impact rule distinguishes feature/fix preparation from release cut: feature PRs
+  record normalized metadata without speculative catalog entries, while the release-cut PR appends
+  the catalog only after its target version and release-owner approval reference exist.
 - `npm run check:qodo-config` validates that both files exist, reference the canonical governance,
   carry the core review instructions, stay under the length ceiling, and never enable auto-approval.
 - The required CI job executes that validator; run `npm run check:qodo-config` directly when
