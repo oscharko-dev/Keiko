@@ -18,9 +18,11 @@ import {
   isValidScopePath,
   type RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { openString, sealString } from "@oscharko-dev/keiko-security";
 import type { WorkspaceFs, WorkspaceStat } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
+import { cachedContentScores } from "./repoSearchCachedLexical.js";
 import {
   orderCandidatesForSearch,
   type SearchDiagnostics,
@@ -108,6 +110,8 @@ export interface WorkspaceIndexStore {
 
 export interface FileWorkspaceIndexStoreOptions {
   readonly runtimeDir: string;
+  /** Dedicated 32-byte at-rest key; the server resolves it outside this package. */
+  readonly encryptionKey: Uint8Array;
   readonly workspaceRoot?: string | undefined;
   readonly allowWorkspaceLocalRuntimeDir?: boolean | undefined;
   readonly maxSnapshotBytes?: number | undefined;
@@ -536,6 +540,8 @@ export function buildWorkspaceIndexScopeKey(
 
 interface FileWorkspaceIndexStoreConfig {
   readonly runtimeDir: string;
+  readonly encryptionKey: Buffer;
+  readonly encryptionKeyId: string;
   readonly runtimeDirIdentity: RuntimeDirIdentity | undefined;
   readonly workspaceRoot: string | undefined;
   readonly allowWorkspaceLocalRuntimeDir: boolean;
@@ -767,8 +773,13 @@ function fileWorkspaceIndexStoreConfig(
   );
   const workspaceRoot =
     options.workspaceRoot === undefined ? undefined : resolve(options.workspaceRoot);
+  if (options.encryptionKey.byteLength !== 32) {
+    throw new Error("workspace index encryption key must contain exactly 32 bytes");
+  }
   return {
     runtimeDir,
+    encryptionKey: Buffer.from(options.encryptionKey),
+    encryptionKeyId: createHash("sha256").update(options.encryptionKey).digest("hex"),
     runtimeDirIdentity: resolvedRuntimeDirIdentity(
       runtimeDir,
       workspaceRoot,
@@ -914,10 +925,11 @@ async function readSnapshotHandleWithinLimit(
 
 function parseStoredSnapshot(
   raw: string,
+  encryptionKey: Buffer,
   maxSnapshotEntries: number,
 ): WorkspaceIndexSnapshot | undefined {
   try {
-    const parsed = JSON.parse(raw) as WorkspaceIndexSnapshot;
+    const parsed = JSON.parse(openString(encryptionKey, raw)) as WorkspaceIndexSnapshot;
     const normalized = normalizeSnapshot(parsed);
     if (normalized === undefined || !snapshotFitsStoreBounds(normalized, maxSnapshotEntries)) {
       return undefined;
@@ -934,12 +946,13 @@ function parseStoredSnapshot(
 // memoize the parsed + normalized snapshot per resolved snapshot-file path, keyed by the
 // file's mtime+size fingerprint. Any write to the snapshot changes mtime (atomic rename
 // with fresh content) so the fingerprint diverges and the cache re-parses — conservative,
-// correctness-first invalidation. The cache holds already-parsed public snapshot objects
-// only (no secrets); it is bounded by an LRU over file paths.
+// correctness-first invalidation. The cache holds already-parsed snapshots in process memory only;
+// disk remains AES-256-GCM sealed. It is bounded by an LRU over file paths.
 const MAX_PARSED_SNAPSHOT_CACHE_ENTRIES = 32;
 
 interface ParsedSnapshotCacheEntry {
   readonly fingerprint: SnapshotFileFingerprint;
+  readonly encryptionKeyId: string;
   readonly maxSnapshotEntries: number;
   readonly snapshot: WorkspaceIndexSnapshot | undefined;
 }
@@ -953,11 +966,13 @@ function sameSnapshotFingerprint(a: SnapshotFileFingerprint, b: SnapshotFileFing
 function readParsedSnapshotCache(
   path: string,
   fingerprint: SnapshotFileFingerprint,
+  encryptionKeyId: string,
   maxSnapshotEntries: number,
 ): ParsedSnapshotCacheEntry | undefined {
   const entry = PARSED_SNAPSHOT_CACHE.get(path);
   if (
-    entry?.maxSnapshotEntries !== maxSnapshotEntries ||
+    entry?.encryptionKeyId !== encryptionKeyId ||
+    entry.maxSnapshotEntries !== maxSnapshotEntries ||
     !sameSnapshotFingerprint(entry.fingerprint, fingerprint)
   ) {
     return undefined;
@@ -1079,7 +1094,12 @@ async function loadFileWorkspaceIndexSnapshot(
   // mirrors the O_NOFOLLOW guard on the real read below.
   const fingerprint = await statSnapshotFingerprint(path, config.maxSnapshotBytes);
   if (fingerprint !== undefined) {
-    const cached = readParsedSnapshotCache(path, fingerprint, config.maxSnapshotEntries);
+    const cached = readParsedSnapshotCache(
+      path,
+      fingerprint,
+      config.encryptionKeyId,
+      config.maxSnapshotEntries,
+    );
     if (cached !== undefined) {
       return cached.snapshot;
     }
@@ -1088,9 +1108,10 @@ async function loadFileWorkspaceIndexSnapshot(
   if (read === undefined) {
     return undefined;
   }
-  const snapshot = parseStoredSnapshot(read.raw, config.maxSnapshotEntries);
+  const snapshot = parseStoredSnapshot(read.raw, config.encryptionKey, config.maxSnapshotEntries);
   writeParsedSnapshotCache(path, {
     fingerprint: read.fingerprint,
+    encryptionKeyId: config.encryptionKeyId,
     maxSnapshotEntries: config.maxSnapshotEntries,
     snapshot,
   });
@@ -1107,7 +1128,7 @@ async function saveFileWorkspaceIndexSnapshot(
   if (normalized === undefined || !snapshotFitsStoreBounds(normalized, config.maxSnapshotEntries)) {
     return;
   }
-  const raw = JSON.stringify(normalized);
+  const raw = sealString(config.encryptionKey, JSON.stringify(normalized));
   if (Buffer.byteLength(raw, "utf8") > config.maxSnapshotBytes) {
     return;
   }
@@ -1941,6 +1962,7 @@ export function workspaceIndexCandidateSet(
     relativePath: file.scopePath,
     sizeBytes: file.sizeBytes,
   }));
+  const contentScores = cachedContentScores(prepared.entries, query, policy);
   const ordered = orderCandidatesForSearch(
     files,
     query,
@@ -1948,6 +1970,8 @@ export function workspaceIndexCandidateSet(
     prepared.discovery.ignoredByDiscovery,
     prepared.discovery.deniedByDiscovery,
     prepared.discovery.depthPrunedByDiscovery,
+    0,
+    contentScores,
   );
   return {
     files: ordered.files,

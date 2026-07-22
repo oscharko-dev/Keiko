@@ -959,6 +959,21 @@ describe("GroundedAnswer", () => {
     expect(screen.queryByText(/src\/weak\.ts/)).not.toBeInTheDocument();
   });
 
+  it("preserves distinct cited ranges for one evidence atom", () => {
+    const citations = [
+      citation({ stableId: "shared", lineRange: { startLine: 1, endLine: 4 }, score: 0.9 }),
+      citation({ stableId: "shared", lineRange: { startLine: 10, endLine: 12 }, score: 0.8 }),
+      citation({ stableId: "shared", lineRange: { startLine: 1, endLine: 4 }, score: 0.1 }),
+    ];
+
+    const { container } = render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
+
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(2);
+    expect(screen.getByText("src/foo.ts:1-4")).toBeInTheDocument();
+    expect(screen.getByText("src/foo.ts:10-12")).toBeInTheDocument();
+    expect(screen.getByText(/2 citations.*5 \/ 32 files read/)).toBeInTheDocument();
+  });
+
   it("renders no disclosure button when the citation list is within the cap", () => {
     const citations = Array.from({ length: 8 }, (_, i) =>
       citation({ stableId: `atom-${String(i)}`, scopePath: `src/f-${String(i)}.ts` }),

@@ -23,22 +23,24 @@ It does not restate the configuration contract; read these first and treat them 
 ## 1. What "dialogue mode" requires
 
 The colleague-like dialogue switch (and its per-turn Speak / Interrupt controls) is offered only when
-the resolved voice capability is the **STT + TTS conjunction** _and_ at least one product voice persona
-is offered. The single predicate is `voiceDialogueModeForResolution`
+the resolved voice capability advertises **Realtime WebRTC media** _and_ at least one product voice
+persona is offered. The single predicate is `voiceDialogueModeForResolution`
 (`packages/keiko-ui/src/app/components/desktop/hooks/voice-dialogue-session.ts`), which gates both the
 switch and the session, fail-closed (ADR-0096 D3). In capability terms:
 
-| Configured providers                                   | Effective profile | Dialogue offered?                                    |
-| ------------------------------------------------------ | ----------------- | ---------------------------------------------------- |
-| None                                                   | `none`            | No (and no voice UI at all)                          |
-| Speech-to-text only (e.g. `keiko-stt`)                 | `speech-to-text`  | No — dictation only (composer mic)                   |
-| Speech-output only (e.g. `keiko-tts`)                  | `speech-output`   | No — assistant playback only                         |
-| STT **and** speech output, **or** realtime, + personas | `full-realtime`   | **Yes** — full spoken dialogue (male/female/neutral) |
+| Configured providers                                     | Effective profile | Dialogue offered?                                    |
+| -------------------------------------------------------- | ----------------- | ---------------------------------------------------- |
+| None                                                     | `none`            | No (and no voice UI at all)                          |
+| Speech-to-text only (e.g. `keiko-stt`)                   | `speech-to-text`  | No — dictation only (composer mic)                   |
+| Speech-output only (e.g. `keiko-tts`)                    | `speech-output`   | No — assistant playback only                         |
+| STT and speech output, but no Realtime WebRTC + personas | `full-realtime`   | No — push-to-talk helpers only                       |
+| Realtime WebRTC + personas                               | `full-realtime`   | **Yes** — full spoken dialogue (male/female/neutral) |
 
 The practical consequence for bring-up: a deployment that has registered **only** `keiko-stt` (the
 default development convenience) gets composer dictation, **not** spoken dialogue. To get the colleague
-experience you must additionally register a speech-output (or realtime) provider that declares
-`voiceProfiles` for the personas. This is by design — see [§3](#3-bringing-up-full-dialogue-mode).
+experience you must register a Realtime provider with WebRTC media and `voiceProfiles` for the
+personas. STT+TTS without Realtime remains a push-to-talk composition and does not expose the
+dialogue switch. This is by design — see [§3](#3-bringing-up-full-dialogue-mode).
 
 ## 2. The `oscharko-dev` development profile credentials
 
@@ -70,8 +72,9 @@ The Azure Foundry voice resource uses the `api-key` header form (not `Bearer`), 
 
 ## 3. Bringing up full dialogue mode
 
-To exercise the colleague-like dialogue end-to-end you must register **both** halves of the turn loop
-plus the personas. Using the Foundry development deployments:
+To exercise the colleague-like dialogue end-to-end, register the four product roles: optional batch
+dictation, Realtime media/VAD, live Realtime transcription, and exact-answer speech output. Using the Foundry
+development deployment aliases:
 
 ```jsonc
 {
@@ -86,6 +89,21 @@ plus the personas. Using the Foundry development deployments:
         "supportsSpeechInput": true,
         "voiceProviderLocality": "azure-foundry",
       },
+    },
+    {
+      "modelId": "keiko-realtime",
+      "baseUrl": "https://<your-foundry-host>/openai/v1",
+      "apiKeyHeaderName": "api-key",
+      "apiKeySecretRef": "voice/keiko-realtime",
+      "capability": {
+        "kind": "voice",
+        "supportsSpeechInput": true,
+        "supportsSpeechOutput": true,
+        "supportsRealtimeVoice": true,
+        "realtimeTranscriptionModel": "keiko-realtime-stt",
+        "voiceProviderLocality": "azure-foundry",
+      },
+      "voiceProfiles": [{ "persona": "neutral", "voiceId": "alloy" }],
     },
     {
       "modelId": "keiko-tts",
@@ -108,12 +126,9 @@ plus the personas. Using the Foundry development deployments:
 }
 ```
 
-With both providers reachable, the resolver reports STT and speech-output helper capability: dictation
-and read-aloud are available, but **Voice dialogue mode is not offered** unless the deployment also
-advertises a realtime provider (`supportsRealtimeVoice: true`, `transport.webrtcMedia: true`) and at
-least one `voiceProfiles` persona. Voice Dialogue is the Realtime WebRTC product path; STT+TTS is not a
-fluid-dialogue fallback unless an operator explicitly enables a degraded compatibility mode outside the
-default UI.
+Voice Dialogue is offered only when the deployment advertises Realtime WebRTC and at least one persona.
+`realtimeTranscriptionModel` must be the exact provider deployment alias accepted inside the Realtime
+session; it is not a second standalone provider record. STT+TTS alone is not a fluid-dialogue fallback.
 
 ## 4. Validating provider reachability without exposing secrets
 
@@ -158,13 +173,14 @@ Then walk the colleague-like conversation. Each step maps to an Epic #1556 accep
 
 1. **Ask** — open a chat, toggle **Voice dialogue mode** on, and speak. The switch starts the Realtime
    WebRTC session directly; there is no separate **Start realtime voice** or per-turn **Start speaking**
-   button. The provider data channel commits the user transcript into the existing chat history (AC1).
-2. **Listen** — the assistant answer arrives through the same Realtime session. Committed assistant
-   transcript text is appended to the existing chat history through `/api/desktop/chat/voice-turn`; raw
-   audio remains transient and is not stored (AC2).
-3. **Ground in files / context** — attach a file (or reference earlier chat) and ask about it; committed
-   Realtime turns are persisted in the same chat, so subsequent text and voice turns share the same
-   visible conversation history (AC2).
+   button. Low-eagerness semantic VAD and Keiko's continuation window treat short thinking pauses as part of
+   the same utterance before the settled transcript enters the existing chat history (AC1).
+2. **Listen** — the final user transcript is sent through the normal chat request. The visible canonical
+   assistant answer is synthesized through the configured speech-output role; the Realtime provider creates
+   no competing answer. Raw audio remains transient and is not stored (AC2).
+3. **Ground in files / context** — attach a file or Knowledge Pod and ask about it. Verify the spoken user
+   message, grounded answer, and sources appear in the same chat, and that MemoriaViva processes the turn
+   exactly as it does for typed input (AC2).
 4. **Switch voices** — open the **Voice profile** selector and choose **Male**, **Female**, then
    **Neutral**. The visible active-voice label updates; the next spoken turn uses the chosen persona.
    The selection persists across reload (stored content-free as the persona enum in `localStorage` key
@@ -213,7 +229,24 @@ The browser smoke regenerates the acceptance screenshots under `docs/voice/evide
 (`1560-dialogue-session.png`, `1562-dialogue-mic-lifecycle.png`, `1563-dialogue-evaluation.png`,
 `1564-persona-*.png`). They contain no audio and no secrets.
 
-## 7. References
+## 7. Release impact
+
+Twin voice parity is a user-visible bug fix with `high` release-note priority. Spoken final
+transcripts now enter the canonical governed chat pipeline, so the visible turn, Memoria Viva,
+Knowledge Pod and repository grounding, citations, and the synthesized canonical answer match typed
+chat. Existing conversation, memory-proposal, and repository-index stores are affected without a
+schema migration, reindex, restart, or user remediation requirement.
+
+The release-note bullet for the next release is: “Align Digital Twin voice with governed chat and
+upgrade repository grounding to precise multi-hop retrieval.” The supported-from version is the first
+development build containing this change; remediation is `no-action-required`.
+
+`release-impact.catalog.json` is intentionally not edited on this feature branch without a target
+release version and release-owner approval reference. The normalized metadata above and in the pull
+request is the reviewable preparation record; the release owner adds the catalog entry at release cut,
+as required by the [release-impact runbook](../release/release-impact-runbook.md).
+
+## 8. References
 
 - **Safety validation & incident response:** [operator-runbook.md](operator-runbook.md) §4–§5.
 - **Configuration contract:** [capability-configuration.md](capability-configuration.md).

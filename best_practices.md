@@ -61,6 +61,8 @@ Canonical governance — treat as binding, and an ADR overrides `AGENTS.md`:
   `globals.css` surface. Measured surfaces regenerate Linux-authoritative release
   evidence.
 - Architectural behaviour changes update an existing ADR or add the next indexed
-  ADR (never renumber); release-impacting changes update the release-impact
-  catalog. Coverage evidence represents real changed executable source with
-  reserve above the enforced threshold.
+  ADR (never renumber). Release-impacting feature and fix PRs record normalized
+  impact metadata in the PR or linked issue; the release-cut PR appends it to the
+  release-impact catalog only after the target version and release-owner approval
+  reference exist. Coverage evidence represents real changed executable source
+  with reserve above the enforced threshold.

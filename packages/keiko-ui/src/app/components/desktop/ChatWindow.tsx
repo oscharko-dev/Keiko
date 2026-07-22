@@ -33,10 +33,7 @@ import {
   type SetStateAction,
   type SyntheticEvent,
 } from "react";
-import type {
-  VoiceSessionChatContext,
-  VoiceSessionGroundingContext,
-} from "@oscharko-dev/keiko-contracts";
+import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import {
   useChatSessionCatalog,
   useChatSessionComposer,
@@ -86,7 +83,6 @@ import {
   supportsDictation,
   supportsRealtimeVoice,
   supportsSpeechOutput,
-  supportsRealtimeToolCalling,
   useVoiceCapability,
 } from "./hooks/useVoiceCapability";
 import { useDictation, type DictationController } from "./hooks/useDictation";
@@ -182,6 +178,21 @@ const CHAT_TURN_WINDOW_OVERSCAN = 8;
 // settle before a screen reader announces, so it hears the meaningful state, not every flicker.
 const DIALOG_ANNOUNCE_DEBOUNCE_MS = 400;
 const CHAT_TURN_ESTIMATED_BLOCK_SIZE_PX = 132;
+
+function latestAssistantMessage(messages: readonly ChatMessage[]): ChatMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant") {
+      return message;
+    }
+  }
+  return undefined;
+}
+
+interface PendingVoiceAnswer {
+  readonly anchorId: string;
+  readonly replyMessageId?: string;
+}
 // GEN-PERF-CHAT-015 — below the windowing threshold every turn is fully rendered; with
 // code-block/citation-heavy answers that is ~150-200 DOM nodes per turn, all paying
 // layout/paint even when scrolled out of the window's viewport. content-visibility lets
@@ -2233,20 +2244,14 @@ async function collectFirstAttachmentRejection(
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the realtime voice session's chat context
-// payload: undefined with no active chat, otherwise the chat id, memory settings, and (if the
-// chat has grounding enabled) the grounding context. Same conditional shape as the original.
+// payload: undefined with no active chat, otherwise only the chat id needed to bind lifecycle and
+// diagnostics. Retrieval, memory, and history belong to the canonical chat request and are deliberately
+// not duplicated into the transcription-only Realtime session.
 function composerRealtimeVoiceChatContext(
   activeChat: Chat | undefined,
-  memoryEnabled: boolean,
-  memoryBudgetTokens: number,
-  grounding: VoiceSessionGroundingContext | undefined,
 ): VoiceSessionChatContext | undefined {
   if (activeChat === undefined) return undefined;
-  return {
-    chatId: activeChat.id,
-    memory: { enabled: memoryEnabled, budgetTokens: memoryBudgetTokens },
-    ...(grounding === undefined ? {} : { grounding }),
-  };
+  return { chatId: activeChat.id };
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — when the active voice composer layer
@@ -2473,26 +2478,6 @@ function composerDictationVisibility(
   return { voiceDictationVisible, liveDictationEnabled };
 }
 
-interface ComposerVoiceToolAvailability {
-  readonly voiceGroundingToolAvailable: boolean;
-  readonly voiceMemoryToolAvailable: boolean;
-}
-
-// Extracted from ComposerCoreImpl (SonarCloud S3776) — whether the realtime voice session may
-// call the grounded-retrieval / memory tools, gated on the relevant feature being active plus the
-// deployment's realtime tool-calling support.
-function composerVoiceToolAvailability(
-  voiceGroundingActive: boolean,
-  memoryEnabled: boolean,
-  voiceCapability: VoiceCapabilityResolution | undefined,
-): ComposerVoiceToolAvailability {
-  return {
-    voiceGroundingToolAvailable:
-      voiceGroundingActive && supportsRealtimeToolCalling(voiceCapability),
-    voiceMemoryToolAvailable: memoryEnabled && supportsRealtimeToolCalling(voiceCapability),
-  };
-}
-
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the composer's post-textarea status row:
 // the send-lifecycle announcement (hidden during Voice Dialogue) and the dictation transcript
 // preview (hidden during Voice Dialogue or when dictation isn't available).
@@ -2531,6 +2516,7 @@ function ComposerVoiceOverlay({
   voiceDialogAvailable,
   voiceLayerRef,
   voiceDialogActive,
+  partialUserTranscript,
   realtimeVoiceMuted,
   onToggleVoiceMute,
   playbackButtonRef,
@@ -2543,6 +2529,7 @@ function ComposerVoiceOverlay({
   readonly voiceDialogAvailable: boolean;
   readonly voiceLayerRef: Ref<HTMLDivElement>;
   readonly voiceDialogActive: boolean;
+  readonly partialUserTranscript: string | undefined;
   readonly realtimeVoiceMuted: boolean;
   readonly onToggleVoiceMute: () => void;
   readonly playbackButtonRef: Ref<HTMLButtonElement>;
@@ -2564,15 +2551,22 @@ function ComposerVoiceOverlay({
           data-composer-layer="voice"
           aria-hidden={voiceDialogActive ? undefined : true}
         >
-          <VoiceDialogComposerControls
-            voiceMuted={realtimeVoiceMuted}
-            onToggleVoiceMute={onToggleVoiceMute}
-            playbackButtonRef={playbackButtonRef}
-            voiceDialogActive={voiceDialogActive}
-            onToggleVoiceDialog={onToggleVoiceDialog}
-            voiceDialogButtonRef={voiceDialogButtonRef}
-            compact={compact}
-          />
+          <div className={styles["cmp-voice-content"]}>
+            {voiceDialogActive && partialUserTranscript !== undefined ? (
+              <p className={styles["cmp-partial-transcript"]} aria-live="off">
+                {partialUserTranscript}
+              </p>
+            ) : null}
+            <VoiceDialogComposerControls
+              voiceMuted={realtimeVoiceMuted}
+              onToggleVoiceMute={onToggleVoiceMute}
+              playbackButtonRef={playbackButtonRef}
+              voiceDialogActive={voiceDialogActive}
+              onToggleVoiceDialog={onToggleVoiceDialog}
+              voiceDialogButtonRef={voiceDialogButtonRef}
+              compact={compact}
+            />
+          </div>
         </div>
       ) : null}
     </>
@@ -2601,6 +2595,7 @@ function ComposerCoreImpl({
     sendStatus,
     setDraft,
     sendMessage,
+    cancelSend,
     models,
     selectedModel,
     pendingAttachments,
@@ -2676,36 +2671,55 @@ function ComposerCoreImpl({
   // Issue #1559/#1560 — dialog-mode availability + persona selection. Voice Dialogue is true
   // WebRTC realtime speech-to-speech; STT dictation remains a separate "speech to draft" feature.
   const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
+  const latestAssistant = useMemo(() => latestAssistantMessage(messages), [messages]);
+  // A spoken turn snapshots the previous assistant id, then consumes exactly the first later assistant
+  // message. Freezing that reply id keeps unrelated typed/system answers silent while preserving the
+  // canonical visible message as the only synthesis input.
+  const [pendingVoiceAnswer, setPendingVoiceAnswer] = useState<PendingVoiceAnswer | null>(null);
+  useEffect(() => {
+    if (
+      pendingVoiceAnswer === null ||
+      pendingVoiceAnswer.replyMessageId !== undefined ||
+      latestAssistant === undefined ||
+      latestAssistant.id === pendingVoiceAnswer.anchorId
+    ) {
+      return;
+    }
+    setPendingVoiceAnswer({
+      anchorId: pendingVoiceAnswer.anchorId,
+      replyMessageId: latestAssistant.id,
+    });
+  }, [latestAssistant, pendingVoiceAnswer]);
+  const voiceAnswer =
+    pendingVoiceAnswer?.replyMessageId === undefined
+      ? undefined
+      : messages.find((message) => message.id === pendingVoiceAnswer.replyMessageId);
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
-    // Voice output is owned by the explicit Voice Dialogue loop. A reload or normal text chat must not
-    // auto-speak the latest settled assistant answer just because speech output is available.
-    enabled: false,
-    text: undefined,
-    messageId: undefined,
+    // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and
+    // pre-existing history remain silent, while synthesized speech is byte-for-byte the visible answer.
+    enabled: voiceDialog.active && voiceAnswer !== undefined,
+    text: voiceAnswer?.content,
+    messageId: voiceAnswer?.id,
+    persona: voiceDialog.persona,
   });
-  const voiceGrounding = voiceSessionGroundingContext(activeChat);
-  const voiceGroundingActive = voiceGrounding?.enabled === true;
-  const { voiceGroundingToolAvailable, voiceMemoryToolAvailable } = composerVoiceToolAvailability(
-    voiceGroundingActive,
-    session.memoryEnabled,
-    voiceCapability,
+  const commitCanonicalVoiceTurn = useCallback(
+    ({ text }: { readonly turnId: string; readonly text: string }): Promise<void> => {
+      setPendingVoiceAnswer({ anchorId: latestAssistant?.id ?? "" });
+      return sendMessage({ text });
+    },
+    [latestAssistant?.id, sendMessage],
   );
+  const interruptCanonicalVoiceTurn = useCallback((): void => {
+    playback.interrupt();
+    cancelSend();
+    setPendingVoiceAnswer(null);
+  }, [cancelSend, playback]);
   const realtimeVoice = useRealtimeVoice({
     persona: voiceDialog.persona,
-    chatContext: composerRealtimeVoiceChatContext(
-      activeChat,
-      session.memoryEnabled,
-      session.memoryBudgetTokens,
-      voiceGrounding,
-    ),
-    groundingActive: voiceGroundingActive,
-    groundingToolActive: voiceGroundingToolAvailable,
-    memoryToolActive: voiceMemoryToolAvailable,
-    memoryContextText: session.latestMemory?.context.text,
-    onGroundedToolCall: session.runRealtimeGroundedTool,
-    onMemoryToolCall: session.runRealtimeMemoryTool,
-    onVoiceTurnCommitted: (messages) => session.appendVoiceTurn?.(messages),
+    chatContext: composerRealtimeVoiceChatContext(activeChat),
+    onCanonicalUserTurn: commitCanonicalVoiceTurn,
+    onUserSpeechStart: interruptCanonicalVoiceTurn,
   });
   const voiceDialogAvailable = voiceDialog.available && activeChat !== undefined;
   const voiceDialogState = deriveVoiceDialogState({
@@ -2747,13 +2761,16 @@ function ComposerCoreImpl({
     if (!voiceDialogAvailable) {
       return;
     }
+    setPendingVoiceAnswer(null);
     voiceDialog.enter();
     realtimeVoice.start();
   }, [voiceDialog, voiceDialogAvailable, realtimeVoice]);
   const leaveVoiceDialog = useCallback(() => {
     realtimeVoice.stop();
+    playback.stop();
+    setPendingVoiceAnswer(null);
     voiceDialog.leave();
-  }, [realtimeVoice, voiceDialog]);
+  }, [playback, realtimeVoice, voiceDialog]);
   // The normal and dialogue layers use distinct controls so each state can cross-fade without
   // moving layout. Flag a user-driven toggle and hand focus to the newly active layer (WCAG 2.4.3).
   // Programmatic auto-leave never sets the flag, so it never steals focus from the user.
@@ -3090,6 +3107,7 @@ function ComposerCoreImpl({
         voiceDialogAvailable={voiceDialogAvailable}
         voiceLayerRef={voiceLayerRef}
         voiceDialogActive={voiceDialog.active}
+        partialUserTranscript={realtimeVoice.partialUserTranscript}
         realtimeVoiceMuted={realtimeVoice.muted}
         onToggleVoiceMute={realtimeVoice.toggleMute}
         playbackButtonRef={playbackButtonRef}
@@ -3208,35 +3226,6 @@ function hasConnectorGroundingScope(chat: Chat | undefined): boolean {
 
 function hasGroundingScope(chat: Chat | undefined): boolean {
   return hasFolderGroundingScope(chat) || hasConnectorGroundingScope(chat);
-}
-
-function voiceSessionGroundingContext(
-  chat: Chat | undefined,
-): VoiceSessionGroundingContext | undefined {
-  if (chat === undefined) return undefined;
-  const folderCount =
-    chat.connectedScopes !== undefined
-      ? chat.connectedScopes.length
-      : chat.connectedScope !== undefined
-        ? 1
-        : 0;
-  const connectorCount =
-    chat.localKnowledgeScopes !== undefined
-      ? chat.localKnowledgeScopes.length
-      : chat.localKnowledgeScope !== undefined
-        ? 1
-        : 0;
-  const sourceCount = folderCount + connectorCount;
-  if (sourceCount === 0) return undefined;
-  const kind: VoiceSessionGroundingContext["kind"] =
-    folderCount > 0 && connectorCount > 0
-      ? "hybrid"
-      : sourceCount > 1
-        ? "multi"
-        : folderCount > 0
-          ? "files"
-          : "knowledge";
-  return { enabled: true, sourceCount, kind };
 }
 
 function formatScopeUpdateError(error: unknown, t: I18nTranslate): string {

@@ -58,12 +58,13 @@ async function tempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-function ctx(body: unknown): RouteContext {
+function ctx(body: unknown, correlationId?: string): RouteContext {
   return {
     req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
     res: {} as RouteContext["res"],
     params: {},
     url: new URL("http://127.0.0.1/api/gateway/setup"),
+    ...(correlationId === undefined ? {} : { correlationId }),
   };
 }
 
@@ -80,6 +81,30 @@ function firstProviderApiKey(deps: Parameters<typeof currentGatewayConfig>[0]): 
 }
 
 describe("handleGatewaySetup", () => {
+  it("includes the request correlation id when the setup body is not an object", async () => {
+    const uiDir = await tempDir("keiko-gw-invalid-ui-");
+    const evidenceDir = await tempDir("keiko-gw-invalid-ev-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+
+    const result = await handleGatewaySetup(ctx(null, "corr-invalid-setup-body"), deps);
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Request body must be a JSON object.",
+          correlationId: "corr-invalid-setup-body",
+        },
+      },
+    });
+  });
+
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
     const uiDir = await tempDir("keiko-gw-ui-");
     const evidenceDir = await tempDir("keiko-gw-ev-");
@@ -286,6 +311,8 @@ describe("handleGatewaySetup", () => {
         voiceApiKey: "audio-token",
         voiceSpeechToTextModelId: "transcribe-model",
         voiceRealtimeModelId: "realtime-model",
+        voiceRealtimeTranscriptionModelId: "realtime-transcribe-model",
+        voiceSupportsSemanticTurnDetection: true,
         voiceSpeechOutputModelId: "speech-model",
         voiceOutputVoiceId: "alloy",
         voiceProviderLocality: "customer-hosted",
@@ -309,10 +336,89 @@ describe("handleGatewaySetup", () => {
       availableVoicePersonas: ["neutral"],
       providerLocality: "customer-hosted",
     });
+    expect(
+      config.capabilities?.find((capability) => capability.id === "realtime-model"),
+    ).toMatchObject({
+      realtimeTranscriptionModel: "realtime-transcribe-model",
+      supportsSemanticTurnDetection: true,
+    });
     const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
     expect(saved).not.toContain("audio-token");
     expect(saved).toContain('"voiceId": "alloy"');
     expect(JSON.stringify(updated.body)).not.toContain("alloy");
+    deps.store.close();
+  });
+
+  it("does not advertise semantic turn detection unless setup explicitly enables it", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-semantic-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-semantic-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const updated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceRealtimeModelId: "realtime-model",
+        voiceSupportsSemanticTurnDetection: false,
+      }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    if (config === undefined) throw new Error("expected saved Realtime gateway config");
+    expect(
+      config.capabilities?.find((capability) => capability.id === "realtime-model")
+        ?.supportsSemanticTurnDetection,
+    ).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("rejects a non-boolean semantic turn detection capability", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-semantic-type-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-semantic-type-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceRealtimeModelId: "realtime-model",
+        voiceSupportsSemanticTurnDetection: "true",
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "voiceSupportsSemanticTurnDetection must be a boolean.",
+        },
+      },
+    });
     deps.store.close();
   });
 
@@ -344,6 +450,42 @@ describe("handleGatewaySetup", () => {
     expect(JSON.stringify(result.body)).toContain(
       "Audio endpoint URL and credential are required when an audio model is selected.",
     );
+    deps.store.close();
+  });
+
+  it("rejects a live transcription deployment without a Realtime role", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-transcription-role-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-transcription-role-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        {
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "chat-token",
+          voiceBaseUrl: "https://audio.example.com/v1",
+          voiceApiKey: "audio-token",
+          voiceRealtimeTranscriptionModelId: "realtime-transcribe-model",
+        },
+        "corr-voice-transcription-role",
+      ),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({
+      error: {
+        code: "BAD_REQUEST",
+        correlationId: "corr-voice-transcription-role",
+        message: "voiceRealtimeTranscriptionModelId requires voiceRealtimeModelId.",
+      },
+    });
     deps.store.close();
   });
 

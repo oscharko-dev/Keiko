@@ -308,14 +308,28 @@ function CitationReference({
 const CITATION_DISPLAY_CAP = 8;
 const ACTIVITY_POD_DISPLAY_CAP = 8;
 
-function uniqueByStableId<T extends { readonly stableId: string }>(
+interface CitationIdentityInput {
+  readonly stableId: string;
+  readonly lineRange?: { readonly startLine: number; readonly endLine: number } | undefined;
+}
+
+function citationIdentity(citation: CitationIdentityInput): string {
+  return JSON.stringify([
+    citation.stableId,
+    citation.lineRange?.startLine ?? null,
+    citation.lineRange?.endLine ?? null,
+  ]);
+}
+
+function uniqueByCitationIdentity<T extends CitationIdentityInput>(
   items: readonly T[],
 ): readonly T[] {
   const seen = new Set<string>();
   const unique: T[] = [];
   for (const item of items) {
-    if (seen.has(item.stableId)) continue;
-    seen.add(item.stableId);
+    const identity = citationIdentity(item);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     unique.push(item);
   }
   return unique;
@@ -378,7 +392,7 @@ function CitationList({
   if (citations.length === 0) return null;
   // Defensive re-sort: the wire delivers folder citations score-sorted already, but the cap
   // must never hide a stronger citation behind a weaker one.
-  const sorted = uniqueByStableId([...citations].sort((a, b) => b.score - a.score));
+  const sorted = uniqueByCitationIdentity([...citations].sort((a, b) => b.score - a.score));
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   // Copilot PR #258 finding: the prior "Evidence" label was a direct child of role="list"
   // which is invalid (only listitem children allowed). Lift the label OUT of the list and
@@ -388,7 +402,7 @@ function CitationList({
       <span className="grounded-citations-label">Evidence</span>
       <ul className="grounded-citations" aria-label="Evidence citations">
         {visible.map((citation) => (
-          <li key={citation.stableId} className="grounded-citations-item">
+          <li key={citationIdentity(citation)} className="grounded-citations-item">
             <CitationReference
               citation={citation}
               repositoryRoots={repositoryRoots}
@@ -408,8 +422,8 @@ function CitationList({
   );
 }
 
-function uniqueCitationCount<T extends { readonly stableId: string }>(items: readonly T[]): number {
-  return uniqueByStableId(items).length;
+function uniqueCitationCount<T extends CitationIdentityInput>(items: readonly T[]): number {
+  return uniqueByCitationIdentity(items).length;
 }
 
 function connectedEvidenceSummary(answer: ConnectedGroundedAnswer): string {
@@ -593,7 +607,7 @@ function LocalKnowledgeCitationList({
       : `${citation.marker} ${citation.source} · ${citation.label}`;
   }
   // uiux-fix F012 C091 — same cap + disclosure as CitationList above.
-  const sorted = uniqueByStableId([...citations].sort((a, b) => b.score - a.score));
+  const sorted = uniqueByCitationIdentity([...citations].sort((a, b) => b.score - a.score));
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   return (
     <div className="grounded-citations-wrap">
@@ -601,7 +615,7 @@ function LocalKnowledgeCitationList({
       <ul className="grounded-citations" aria-label="Knowledge citations">
         {visible.map((citation) => (
           <li
-            key={citation.stableId}
+            key={citationIdentity(citation)}
             className={`grounded-citations-item ${activityBadgeStyles.citationListItem}`}
           >
             <KnowledgeCitationChip

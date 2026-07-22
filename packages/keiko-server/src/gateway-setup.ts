@@ -310,6 +310,16 @@ interface SetupVoiceCapabilities {
   readonly speechInput: boolean;
   readonly speechOutput: boolean;
   readonly realtime: boolean;
+  readonly supportsSemanticTurnDetection?: boolean | undefined;
+  readonly realtimeTranscriptionModel?: string | undefined;
+}
+
+function semanticTurnDetectionCapability(
+  capabilities: SetupVoiceCapabilities,
+): Pick<ModelCapability, "supportsSemanticTurnDetection"> {
+  return capabilities.realtime && capabilities.supportsSemanticTurnDetection === true
+    ? { supportsSemanticTurnDetection: true }
+    : {};
 }
 
 function createDefaultVoiceCapabilityForSetup(
@@ -336,6 +346,10 @@ function createDefaultVoiceCapabilityForSetup(
     ...(capabilities.speechInput ? { supportsSpeechInput: true } : {}),
     ...(capabilities.speechOutput ? { supportsSpeechOutput: true } : {}),
     ...(capabilities.realtime ? { supportsRealtimeVoice: true } : {}),
+    ...semanticTurnDetectionCapability(capabilities),
+    ...(capabilities.realtime && capabilities.realtimeTranscriptionModel !== undefined
+      ? { realtimeTranscriptionModel: capabilities.realtimeTranscriptionModel }
+      : {}),
     voiceProviderLocality: providerLocality,
     costClass: "low",
     latencyClass: "fast",
@@ -586,6 +600,12 @@ function setupVoiceProvidersFromCurrent(
           speechInput: modelSupportsSpeechInput(capability),
           speechOutput: modelSupportsSpeechOutput(capability),
           realtime: modelSupportsRealtimeVoice(capability),
+          ...(capability.supportsSemanticTurnDetection === true
+            ? { supportsSemanticTurnDetection: true }
+            : {}),
+          ...(capability.realtimeTranscriptionModel === undefined
+            ? {}
+            : { realtimeTranscriptionModel: capability.realtimeTranscriptionModel }),
         },
         ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
       },
@@ -1164,6 +1184,16 @@ function optionalSetupPositiveInt(value: unknown, path: string): number | RouteR
   return value;
 }
 
+function optionalSetupBoolean(value: unknown, path: string): boolean | RouteResult | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    return { status: 400, body: errorBody("BAD_REQUEST", `${path} must be a boolean.`) };
+  }
+  return value;
+}
+
 function parseVoiceProviderLocality(
   value: unknown,
   fallback: VoiceProviderLocality,
@@ -1196,18 +1226,24 @@ function hasNonEmptyListField(raw: Record<string, unknown>, key: string): boolea
   return Array.isArray(value) && value.some((item) => typeof item === "string" && item.trim());
 }
 
+const VOICE_PROVIDER_STRING_FIELDS = [
+  "voiceBaseUrl",
+  "voiceApiKey",
+  "voiceApiKeyHeaderName",
+  "voiceModelId",
+  "voiceSpeechToTextModelId",
+  "voiceRealtimeModelId",
+  "voiceRealtimeTranscriptionModelId",
+  "voiceSpeechOutputModelId",
+  "voiceOutputVoiceId",
+  "voiceProviderLocality",
+] as const;
+
 function hasVoiceProviderInput(raw: Record<string, unknown>): boolean {
   return (
-    hasNonBlankStringField(raw, "voiceBaseUrl") ||
-    hasNonBlankStringField(raw, "voiceApiKey") ||
-    hasNonBlankStringField(raw, "voiceApiKeyHeaderName") ||
-    hasNonBlankStringField(raw, "voiceModelId") ||
-    hasNonBlankStringField(raw, "voiceSpeechToTextModelId") ||
-    hasNonBlankStringField(raw, "voiceRealtimeModelId") ||
-    hasNonBlankStringField(raw, "voiceSpeechOutputModelId") ||
-    hasNonBlankStringField(raw, "voiceOutputVoiceId") ||
-    hasNonBlankStringField(raw, "voiceProviderLocality") ||
-    raw.voiceTimeoutMs !== undefined
+    VOICE_PROVIDER_STRING_FIELDS.some((key) => hasNonBlankStringField(raw, key)) ||
+    raw.voiceTimeoutMs !== undefined ||
+    raw.voiceSupportsSemanticTurnDetection !== undefined
   );
 }
 
@@ -1418,6 +1454,7 @@ interface VoiceRoleModelIds {
   readonly speechInput?: string | undefined;
   readonly speechOutput?: string | undefined;
   readonly realtime?: string | undefined;
+  readonly realtimeTranscription?: string | undefined;
 }
 
 function existingVoiceRoleModelIds(providers: readonly SetupVoiceProvider[]): VoiceRoleModelIds {
@@ -1425,6 +1462,8 @@ function existingVoiceRoleModelIds(providers: readonly SetupVoiceProvider[]): Vo
     speechInput: providers.find((provider) => provider.capabilities.speechInput)?.modelId,
     speechOutput: providers.find((provider) => provider.capabilities.speechOutput)?.modelId,
     realtime: providers.find((provider) => provider.capabilities.realtime)?.modelId,
+    realtimeTranscription: providers.find((provider) => provider.capabilities.realtime)
+      ?.capabilities.realtimeTranscriptionModel,
   };
 }
 
@@ -1444,6 +1483,7 @@ function voiceRoleModelIds(
   raw: Record<string, unknown>,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
+  correlationId: string | undefined,
 ): VoiceRoleModelIds | RouteResult {
   const hasNewRole = [
     "voiceSpeechToTextModelId",
@@ -1463,14 +1503,31 @@ function voiceRoleModelIds(
     fallbacks.speechOutput,
   );
   const realtime = submittedVoiceModelId(raw, "voiceRealtimeModelId", fallbacks.realtime);
-  const routeError = firstRouteResult([speechInput, speechOutput, realtime]);
-  return (
-    routeError ?? {
-      speechInput: speechInput as string | undefined,
-      speechOutput: speechOutput as string | undefined,
-      realtime: realtime as string | undefined,
-    }
+  const realtimeTranscription = submittedVoiceModelId(
+    raw,
+    "voiceRealtimeTranscriptionModelId",
+    fallbacks.realtimeTranscription,
   );
+  const routeError = firstRouteResult([speechInput, speechOutput, realtime, realtimeTranscription]);
+  if (routeError !== undefined) {
+    return routeError;
+  }
+  if (realtimeTranscription !== undefined && realtime === undefined) {
+    return {
+      status: 400,
+      body: errorBody(
+        "BAD_REQUEST",
+        "voiceRealtimeTranscriptionModelId requires voiceRealtimeModelId.",
+        correlationId,
+      ),
+    };
+  }
+  return {
+    speechInput: speechInput as string | undefined,
+    speechOutput: speechOutput as string | undefined,
+    realtime: realtime as string | undefined,
+    realtimeTranscription: realtimeTranscription as string | undefined,
+  };
 }
 
 function setupVoiceProfiles(raw: Record<string, unknown>): readonly VoicePersonaVoice[] {
@@ -1483,6 +1540,7 @@ function providersForVoiceRoles(
   roleIds: VoiceRoleModelIds,
   shared: Omit<SetupVoiceProvider, "modelId" | "capabilities" | "voiceProfiles">,
   raw: Record<string, unknown>,
+  supportsSemanticTurnDetection: boolean,
 ): readonly SetupVoiceProvider[] {
   const ids = new Map<string, SetupVoiceCapabilities>();
   const roles: readonly (readonly [keyof SetupVoiceCapabilities, string | undefined])[] = [
@@ -1499,14 +1557,50 @@ function providersForVoiceRoles(
     };
     ids.set(modelId, { ...current, [role]: true });
   }
+  if (roleIds.realtime !== undefined && roleIds.realtimeTranscription !== undefined) {
+    const current = ids.get(roleIds.realtime);
+    if (current !== undefined) {
+      ids.set(roleIds.realtime, {
+        ...current,
+        realtimeTranscriptionModel: roleIds.realtimeTranscription,
+      });
+    }
+  }
   return [...ids.entries()].map(([modelId, capabilities]) => ({
     ...shared,
     modelId,
-    capabilities,
+    capabilities: {
+      ...capabilities,
+      ...(capabilities.realtime && supportsSemanticTurnDetection
+        ? { supportsSemanticTurnDetection: true }
+        : {}),
+    },
     ...(capabilities.speechOutput || capabilities.realtime
       ? { voiceProfiles: setupVoiceProfiles(raw) }
       : {}),
   }));
+}
+
+function inheritedSemanticTurnDetection(current: GatewayConfig | undefined): boolean {
+  return setupVoiceProvidersFromCurrent(current).some(
+    (provider) =>
+      provider.capabilities.realtime &&
+      provider.capabilities.supportsSemanticTurnDetection === true,
+  );
+}
+
+function setupSemanticTurnDetection(
+  raw: Record<string, unknown>,
+  current: GatewayConfig | undefined,
+  preserveExisting: boolean,
+): boolean | RouteResult {
+  const submitted = optionalSetupBoolean(
+    raw.voiceSupportsSemanticTurnDetection,
+    "voiceSupportsSemanticTurnDetection",
+  );
+  if (submitted !== undefined) return submitted;
+  const replacesRealtime = hasNonBlankStringField(raw, "voiceRealtimeModelId");
+  return preserveExisting && !replacesRealtime ? inheritedSemanticTurnDetection(current) : false;
 }
 
 function validateVoiceProviders(
@@ -1525,6 +1619,7 @@ function readSetupVoiceProviders(
   env: EnvSource,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
+  correlationId: string | undefined,
 ): readonly SetupVoiceProvider[] | RouteResult {
   if (!hasVoiceProviderInput(raw)) {
     return [];
@@ -1533,17 +1628,19 @@ function readSetupVoiceProviders(
     ? (currentSpeechInputProvider(current) ?? firstCurrentVoiceProvider(current))
     : undefined;
   const existingCapability = currentSpeechInputCapability(current, existing?.modelId);
-  const roleIds = voiceRoleModelIds(raw, current, preserveExisting);
+  const roleIds = voiceRoleModelIds(raw, current, preserveExisting, correlationId);
   const connection = setupVoiceConnection(raw, existing, preserveExisting);
   const apiKeyHeaderName = setupVoiceApiKeyHeaderName(raw, existing, preserveExisting);
   const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
   const providerLocality = setupVoiceProviderLocality(raw, existingCapability);
+  const supportsSemanticTurnDetection = setupSemanticTurnDetection(raw, current, preserveExisting);
   const routeError = firstRouteResult([
     roleIds,
     connection,
     apiKeyHeaderName,
     timeoutMs,
     providerLocality,
+    supportsSemanticTurnDetection,
   ]);
   if (routeError !== undefined) {
     return routeError;
@@ -1557,7 +1654,12 @@ function readSetupVoiceProviders(
     timeoutMs: resolvedTimeoutMs ?? existing?.timeoutMs,
     providerLocality: providerLocality as VoiceProviderLocality,
   };
-  const providers = providersForVoiceRoles(roleIds as VoiceRoleModelIds, shared, raw);
+  const providers = providersForVoiceRoles(
+    roleIds as VoiceRoleModelIds,
+    shared,
+    raw,
+    supportsSemanticTurnDetection as boolean,
+  );
   return validateVoiceProviders(providers, env) ?? providers;
 }
 
@@ -1593,13 +1695,21 @@ function setupRequiresGatewayVerification(
   );
 }
 
+function setupObjectBodyRequiredResult(correlationId: string | undefined): RouteResult {
+  return {
+    status: 400,
+    body: errorBody("BAD_REQUEST", "Request body must be a JSON object.", correlationId),
+  };
+}
+
 function readSetupRequest(
   raw: unknown,
   env: EnvSource,
   current: GatewayConfig | undefined,
+  correlationId: string | undefined,
 ): SetupRequest | RouteResult {
   if (!isRecord(raw)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
+    return setupObjectBodyRequiredResult(correlationId);
   }
   const preserveExisting = shouldPreserveExisting(raw, current);
   const credentials = readSetupGatewayCredentials(raw, env, current, preserveExisting);
@@ -1618,7 +1728,13 @@ function readSetupRequest(
   if (isRouteResult(figmaAccessToken)) {
     return figmaAccessToken;
   }
-  const voiceProviders = readSetupVoiceProviders(raw, env, current, preserveExisting);
+  const voiceProviders = readSetupVoiceProviders(
+    raw,
+    env,
+    current,
+    preserveExisting,
+    correlationId,
+  );
   if (isRouteResult(voiceProviders)) {
     return voiceProviders;
   }
@@ -2149,7 +2265,7 @@ export async function handleGatewaySetup(
   if ("status" in bodyResult) {
     return bodyResult;
   }
-  const request = readSetupRequest(bodyResult.parsed, deps.env, current);
+  const request = readSetupRequest(bodyResult.parsed, deps.env, current, ctx.correlationId);
   if ("status" in request) {
     return request;
   }

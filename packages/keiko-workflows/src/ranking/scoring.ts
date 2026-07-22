@@ -23,6 +23,7 @@ export interface ScoringWeights {
   // skips an absent weight). Non-zero only for the intents weightsForIntent boosts.
   readonly canonicalMetadata?: number;
   readonly structuralEdge?: number;
+  readonly symbolDefinition?: number;
   readonly gitRecency?: number;
   readonly gitChurn?: number;
 }
@@ -70,9 +71,17 @@ export function weightsForIntent(intent: string | undefined): ScoringWeights {
   const codeSearchIntent = isCodeSearchIntent(intent);
   const canonicalMetadata = metadataIntent ? 0.25 : 0.1;
   const structuralEdge = codeSearchIntent ? 0.2 : 0.1;
+  const symbolDefinition = codeSearchIntent ? 0.3 : 0.05;
   const gitRecency = codeSearchIntent ? 0.12 : 0.06;
   const gitChurn = codeSearchIntent ? 0.08 : 0.04;
-  return { ...DEFAULT_SCORING_WEIGHTS, canonicalMetadata, structuralEdge, gitRecency, gitChurn };
+  return {
+    ...DEFAULT_SCORING_WEIGHTS,
+    canonicalMetadata,
+    structuralEdge,
+    symbolDefinition,
+    gitRecency,
+    gitChurn,
+  };
 }
 
 const SIGNAL_WEIGHT_KEYS: Readonly<Record<string, keyof ScoringWeights>> = {
@@ -87,6 +96,7 @@ const SIGNAL_WEIGHT_KEYS: Readonly<Record<string, keyof ScoringWeights>> = {
   "generated-penalty": "generatedPenalty",
   "canonical-metadata": "canonicalMetadata",
   "structural-edge": "structuralEdge",
+  "symbol-definition": "symbolDefinition",
   "git-recency": "gitRecency",
   "git-churn": "gitChurn",
 };

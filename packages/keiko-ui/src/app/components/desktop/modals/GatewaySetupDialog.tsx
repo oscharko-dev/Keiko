@@ -74,6 +74,12 @@ function storedVoiceModels(models: readonly ModelCapability[]): readonly string[
   return models.filter((model) => model.kind === "voice").map((model) => model.id);
 }
 
+function storedSemanticTurnDetection(models: readonly ModelCapability[]): boolean {
+  return models.some(
+    (model) => model.kind === "voice" && model.supportsSemanticTurnDetection === true,
+  );
+}
+
 const VOICE_PROVIDER_LOCALITIES: readonly VoiceProviderLocality[] = [
   "azure-foundry",
   "customer-hosted",
@@ -150,8 +156,10 @@ interface VoiceCredentialInputFields {
   readonly voiceApiKeyHeaderName: string;
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
+  readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceTimeoutMs: string;
+  readonly voiceSemanticTurnDetectionConfigured: boolean;
 }
 
 function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
@@ -161,8 +169,10 @@ function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
     fields.voiceApiKeyHeaderName.trim() !== "" ||
     fields.voiceModelId.trim() !== "" ||
     fields.voiceRealtimeModelId.trim() !== "" ||
+    fields.voiceRealtimeTranscriptionModelId.trim() !== "" ||
     fields.voiceSpeechOutputModelId.trim() !== "" ||
-    fields.voiceTimeoutMs.trim() !== ""
+    fields.voiceTimeoutMs.trim() !== "" ||
+    fields.voiceSemanticTurnDetectionConfigured
   );
 }
 
@@ -290,6 +300,9 @@ interface VoiceCredentialPayloadInput {
   readonly voiceApiKeyHeaderName: string;
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
+  readonly voiceRealtimeTranscriptionModelId: string;
+  readonly voiceSupportsSemanticTurnDetection: boolean;
+  readonly voiceSemanticTurnDetectionConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceProviderLocality: VoiceProviderLocality;
@@ -305,19 +318,37 @@ function buildVoiceCredentialFields(
   | "voiceApiKeyHeaderName"
   | "voiceSpeechToTextModelId"
   | "voiceRealtimeModelId"
+  | "voiceRealtimeTranscriptionModelId"
+  | "voiceSupportsSemanticTurnDetection"
   | "voiceSpeechOutputModelId"
   | "voiceOutputVoiceId"
   | "voiceProviderLocality"
   | "voiceTimeoutMs"
 > {
+  const voiceBaseUrl = trimOrUndefined(input.voiceBaseUrl);
+  const voiceApiKey = trimOrUndefined(input.voiceApiKey);
+  const voiceApiKeyHeaderName = trimOrUndefined(input.voiceApiKeyHeaderName);
+  const voiceSpeechToTextModelId = trimOrUndefined(input.voiceModelId);
+  const voiceRealtimeModelId = trimOrUndefined(input.voiceRealtimeModelId);
+  const voiceRealtimeTranscriptionModelId = trimOrUndefined(
+    input.voiceRealtimeTranscriptionModelId,
+  );
+  const voiceSpeechOutputModelId = trimOrUndefined(input.voiceSpeechOutputModelId);
+  const voiceOutputVoiceId = trimOrUndefined(input.voiceOutputVoiceId);
   return {
-    voiceBaseUrl: trimOrUndefined(input.voiceBaseUrl),
-    voiceApiKey: trimOrUndefined(input.voiceApiKey),
-    voiceApiKeyHeaderName: trimOrUndefined(input.voiceApiKeyHeaderName),
-    voiceSpeechToTextModelId: trimOrUndefined(input.voiceModelId),
-    voiceRealtimeModelId: trimOrUndefined(input.voiceRealtimeModelId),
-    voiceSpeechOutputModelId: trimOrUndefined(input.voiceSpeechOutputModelId),
-    voiceOutputVoiceId: trimOrUndefined(input.voiceOutputVoiceId),
+    ...(voiceBaseUrl === undefined ? {} : { voiceBaseUrl }),
+    ...(voiceApiKey === undefined ? {} : { voiceApiKey }),
+    ...(voiceApiKeyHeaderName === undefined ? {} : { voiceApiKeyHeaderName }),
+    ...(voiceSpeechToTextModelId === undefined ? {} : { voiceSpeechToTextModelId }),
+    ...(voiceRealtimeModelId === undefined ? {} : { voiceRealtimeModelId }),
+    ...(voiceRealtimeTranscriptionModelId === undefined
+      ? {}
+      : { voiceRealtimeTranscriptionModelId }),
+    ...(input.voiceSemanticTurnDetectionConfigured
+      ? { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }
+      : {}),
+    ...(voiceSpeechOutputModelId === undefined ? {} : { voiceSpeechOutputModelId }),
+    ...(voiceOutputVoiceId === undefined ? {} : { voiceOutputVoiceId }),
     voiceProviderLocality: input.voiceProviderLocality,
     ...(input.voiceTimeoutMs === undefined ? {} : { voiceTimeoutMs: input.voiceTimeoutMs }),
   };
@@ -335,6 +366,9 @@ interface GatewayFormFields {
   readonly voiceApiKeyHeaderName: string;
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
+  readonly voiceRealtimeTranscriptionModelId: string;
+  readonly voiceSupportsSemanticTurnDetection: boolean;
+  readonly voiceSemanticTurnDetectionConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceProviderLocality: VoiceProviderLocality;
@@ -379,6 +413,9 @@ function voiceCredentialFieldsForMode(
     voiceApiKeyHeaderName: fields.voiceApiKeyHeaderName,
     voiceModelId: fields.voiceModelId,
     voiceRealtimeModelId: fields.voiceRealtimeModelId,
+    voiceRealtimeTranscriptionModelId: fields.voiceRealtimeTranscriptionModelId,
+    voiceSupportsSemanticTurnDetection: fields.voiceSupportsSemanticTurnDetection,
+    voiceSemanticTurnDetectionConfigured: fields.voiceSemanticTurnDetectionConfigured,
     voiceSpeechOutputModelId: fields.voiceSpeechOutputModelId,
     voiceOutputVoiceId: fields.voiceOutputVoiceId,
     voiceProviderLocality: fields.voiceProviderLocality,
@@ -952,6 +989,30 @@ function VoiceRealtimeDeploymentField({
   );
 }
 
+function VoiceRealtimeTranscriptionDeploymentField({
+  t,
+  value,
+  disabled,
+  onChange,
+}: VoiceRealtimeDeploymentFieldProps): ReactNode {
+  return (
+    <label className="gw-field">
+      <span>
+        {t("gatewaySetup.voice.realtimeTranscriptionDeployment")}{" "}
+        <span className="dlg-opt">{t("common.optional")}</span>
+      </span>
+      <input
+        className="gw-input mono"
+        value={value}
+        placeholder={t("gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder")}
+        autoComplete="off"
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
 interface VoiceSpeechOutputDeploymentFieldProps {
   readonly t: I18nTranslate;
   readonly value: string;
@@ -1195,6 +1256,10 @@ interface VoiceDeploymentFieldsProps {
   readonly setVoiceModelId: Dispatch<SetStateAction<string>>;
   readonly voiceRealtimeModelId: string;
   readonly setVoiceRealtimeModelId: Dispatch<SetStateAction<string>>;
+  readonly voiceRealtimeTranscriptionModelId: string;
+  readonly setVoiceRealtimeTranscriptionModelId: Dispatch<SetStateAction<string>>;
+  readonly voiceSupportsSemanticTurnDetection: boolean;
+  readonly setVoiceSupportsSemanticTurnDetection: (enabled: boolean) => void;
   readonly voiceSpeechOutputModelId: string;
   readonly setVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>>;
   readonly voiceOutputVoiceId: string;
@@ -1203,6 +1268,38 @@ interface VoiceDeploymentFieldsProps {
   readonly voiceProviderLocality: VoiceProviderLocality;
   readonly setVoiceProviderLocality: Dispatch<SetStateAction<VoiceProviderLocality>>;
   readonly disabled: boolean;
+}
+
+interface VoiceSemanticTurnDetectionFieldProps {
+  readonly t: I18nTranslate;
+  readonly checked: boolean;
+  readonly disabled: boolean;
+  readonly onChange: (enabled: boolean) => void;
+}
+
+function VoiceSemanticTurnDetectionField({
+  t,
+  checked,
+  disabled,
+  onChange,
+}: VoiceSemanticTurnDetectionFieldProps): ReactNode {
+  return (
+    <label className="gw-field gw-span-2">
+      <span>
+        {t("gatewaySetup.voice.semanticTurnDetection")}{" "}
+        <span className="dlg-opt">{t("common.advanced")}</span>
+      </span>
+      <span className="gw-note">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.checked)}
+        />{" "}
+        {t("gatewaySetup.voice.semanticTurnDetectionHint")}
+      </span>
+    </label>
+  );
 }
 
 function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
@@ -1225,6 +1322,18 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         value={props.voiceRealtimeModelId}
         disabled={props.disabled}
         onChange={props.setVoiceRealtimeModelId}
+      />
+      <VoiceRealtimeTranscriptionDeploymentField
+        t={props.t}
+        value={props.voiceRealtimeTranscriptionModelId}
+        disabled={props.disabled}
+        onChange={props.setVoiceRealtimeTranscriptionModelId}
+      />
+      <VoiceSemanticTurnDetectionField
+        t={props.t}
+        checked={props.voiceSupportsSemanticTurnDetection}
+        disabled={props.disabled}
+        onChange={props.setVoiceSupportsSemanticTurnDetection}
       />
       <VoiceSpeechOutputDeploymentField
         t={props.t}
@@ -1306,6 +1415,10 @@ interface VoiceFieldsSectionProps {
   readonly setVoiceModelId: Dispatch<SetStateAction<string>>;
   readonly voiceRealtimeModelId: string;
   readonly setVoiceRealtimeModelId: Dispatch<SetStateAction<string>>;
+  readonly voiceRealtimeTranscriptionModelId: string;
+  readonly setVoiceRealtimeTranscriptionModelId: Dispatch<SetStateAction<string>>;
+  readonly voiceSupportsSemanticTurnDetection: boolean;
+  readonly setVoiceSupportsSemanticTurnDetection: (enabled: boolean) => void;
   readonly voiceSpeechOutputModelId: string;
   readonly setVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>>;
   readonly voiceOutputVoiceId: string;
@@ -1333,6 +1446,10 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
         setVoiceModelId={props.setVoiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
         setVoiceRealtimeModelId={props.setVoiceRealtimeModelId}
+        voiceRealtimeTranscriptionModelId={props.voiceRealtimeTranscriptionModelId}
+        setVoiceRealtimeTranscriptionModelId={props.setVoiceRealtimeTranscriptionModelId}
+        voiceSupportsSemanticTurnDetection={props.voiceSupportsSemanticTurnDetection}
+        setVoiceSupportsSemanticTurnDetection={props.setVoiceSupportsSemanticTurnDetection}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
         setVoiceSpeechOutputModelId={props.setVoiceSpeechOutputModelId}
         voiceOutputVoiceId={props.voiceOutputVoiceId}
@@ -1578,6 +1695,12 @@ export function GatewaySetupDialog({
   const [voiceApiKeyHeaderName, setVoiceApiKeyHeaderName] = useState("");
   const [voiceModelId, setVoiceModelId] = useState("");
   const [voiceRealtimeModelId, setVoiceRealtimeModelId] = useState("");
+  const [voiceRealtimeTranscriptionModelId, setVoiceRealtimeTranscriptionModelId] = useState("");
+  const [voiceSupportsSemanticTurnDetection, setVoiceSupportsSemanticTurnDetection] = useState(() =>
+    storedSemanticTurnDetection(storedModels),
+  );
+  const [voiceSemanticTurnDetectionConfigured, setVoiceSemanticTurnDetectionConfigured] =
+    useState(false);
   const [voiceSpeechOutputModelId, setVoiceSpeechOutputModelId] = useState("");
   const [voiceOutputVoiceId, setVoiceOutputVoiceId] = useState("alloy");
   const [voiceProviderLocality, setVoiceProviderLocality] =
@@ -1588,6 +1711,11 @@ export function GatewaySetupDialog({
   const [error, setError] = useState<string | undefined>();
   const [errorCode, setErrorCode] = useState<string | undefined>();
   const [success, setSuccess] = useState<string | undefined>();
+
+  const updateVoiceSemanticTurnDetection = (enabled: boolean): void => {
+    setVoiceSupportsSemanticTurnDetection(enabled);
+    setVoiceSemanticTurnDetectionConfigured(true);
+  };
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1675,6 +1803,9 @@ export function GatewaySetupDialog({
           voiceApiKeyHeaderName,
           voiceModelId,
           voiceRealtimeModelId,
+          voiceRealtimeTranscriptionModelId,
+          voiceSupportsSemanticTurnDetection,
+          voiceSemanticTurnDetectionConfigured,
           voiceSpeechOutputModelId,
           voiceOutputVoiceId,
           voiceProviderLocality,
@@ -1718,8 +1849,10 @@ export function GatewaySetupDialog({
     voiceApiKeyHeaderName,
     voiceModelId,
     voiceRealtimeModelId,
+    voiceRealtimeTranscriptionModelId,
     voiceSpeechOutputModelId,
     voiceTimeoutMs,
+    voiceSemanticTurnDetectionConfigured,
   });
   const requiresGatewayCredentials = !preserveExisting;
   const hasGatewayCredentialInput = hasAnyGatewayCredentialInput({
@@ -1777,6 +1910,10 @@ export function GatewaySetupDialog({
       setVoiceModelId={setVoiceModelId}
       voiceRealtimeModelId={voiceRealtimeModelId}
       setVoiceRealtimeModelId={setVoiceRealtimeModelId}
+      voiceRealtimeTranscriptionModelId={voiceRealtimeTranscriptionModelId}
+      setVoiceRealtimeTranscriptionModelId={setVoiceRealtimeTranscriptionModelId}
+      voiceSupportsSemanticTurnDetection={voiceSupportsSemanticTurnDetection}
+      setVoiceSupportsSemanticTurnDetection={updateVoiceSemanticTurnDetection}
       voiceSpeechOutputModelId={voiceSpeechOutputModelId}
       setVoiceSpeechOutputModelId={setVoiceSpeechOutputModelId}
       voiceOutputVoiceId={voiceOutputVoiceId}

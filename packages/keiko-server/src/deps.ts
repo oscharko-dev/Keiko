@@ -674,6 +674,7 @@ export interface BuildHandlerDepsOptions {
   // Evidence directory (`keiko ui --evidence-dir`); resolved via the audit precedence rules.
   readonly evidenceDir: string | undefined;
   readonly env: EnvSource;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   // Optional deployment replacement for the default memory category denylist. Production leaves
   // this unset unless an operator supplies a reviewed, ReDoS-safe policy at composition time.
   readonly memoryDeniedCategoryMatchers?:
@@ -2996,6 +2997,7 @@ type BaseUiHandlerDeps = ReturnType<typeof gatewayConfigFields> &
     | "env"
     | "egress"
     | "redactor"
+    | "diagnostics"
     | "store"
     | "uiDbPath"
     | "preferredProjectPath"
@@ -3009,6 +3011,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     env: args.options.env,
     egress: args.egress,
     redactor: args.liveRedactor,
+    diagnostics: args.options.diagnostics,
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,
     preferredProjectPath: args.bundle.preferredProjectPath,
@@ -3093,6 +3096,7 @@ function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): Integra
     workspaceIndexForRoot: createServerWorkspaceIndexProvider({
       runtimeStateDir: dirname(args.resolvedUiDbPath),
       env: args.options.env,
+      diagnostics: args.options.diagnostics,
     }),
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
   };

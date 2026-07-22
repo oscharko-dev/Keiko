@@ -59,6 +59,10 @@ import {
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
+import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -480,6 +484,29 @@ function seedScopedRepo(projectPath: string): void {
     "export function MyClass() {\n  return 'foo';\n}\n",
     "utf8",
   );
+}
+
+function insertGroundedTestMemory(vault: MemoryVaultStore, id: string, body: string): void {
+  const now = NOW;
+  vault.insertMemory({
+    id: id as MemoryId,
+    schemaVersion: "1",
+    scope: { kind: "user", userId: "local-operator" as MemoryUserId },
+    type: "preference",
+    body,
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: now,
+      confidence: 1,
+      sensitivity: "public",
+    },
+    validity: { validFrom: now },
+    status: "accepted",
+    pinned: false,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+  });
 }
 
 async function runHandler(
@@ -1255,14 +1282,15 @@ describe("handleGroundedAsk", () => {
 
   it("happy path: persists user + assistant messages and returns sorted citations", async () => {
     const { chatId } = await setupChatWithScope();
+    const assistantContent = "Inspected 2 file(s) [src/bar.ts] and [src/foo.ts:10-20].";
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "How does MyClass work?" })),
       deps(),
-      runner(packWithCitations(), "Inspected 2 file(s) ..."),
+      runner(packWithCitations(), assistantContent),
     );
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    expect(answer.content).toBe("Inspected 2 file(s) ...");
+    expect(answer.content).toBe(assistantContent);
     expect(answer.elapsedMs).toBe(42);
     // Citations sorted by score desc — atom-high before atom-low.
     expect(answer.citations.map((c) => c.stableId)).toEqual(["atom-high", "atom-low"]);
@@ -1278,7 +1306,213 @@ describe("handleGroundedAsk", () => {
     expect(userMsg?.role).toBe("user");
     expect(userMsg?.content).toBe("How does MyClass work?");
     expect(assistMsg?.role).toBe("assistant");
-    expect(assistMsg?.content).toBe("Inspected 2 file(s) ...");
+    expect(assistMsg?.content).toBe(assistantContent);
+  });
+
+  it("preserves the disabled MemoriaViva branch for a grounded turn", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "Remember that I work as a software developer.",
+          memory: {
+            enabled: false,
+            budgetTokens: 1200,
+            mode: "governed-assist",
+            context: {
+              userId: "local-operator",
+              workspaceId: projectPath,
+              projectId: projectPath,
+              conversationId: chatId,
+            },
+          },
+        }),
+      ),
+      deps(),
+      runner(emptyPack(), "Acknowledged."),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer & {
+      readonly memory?: { readonly context: { readonly enabled: boolean } };
+    };
+    expect(answer.memory?.context.enabled).toBe(false);
+  });
+
+  it("retrieves grounded memory from the user question without assistant-answer bias", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const memoryDir = join(tmp, "grounded-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    try {
+      insertGroundedTestMemory(
+        memoryVault,
+        "mem-package-manager",
+        "Use pnpm for package installs.",
+      );
+      insertGroundedTestMemory(
+        memoryVault,
+        "mem-production-database",
+        "The production database uses PostgreSQL.",
+      );
+
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "Which package manager should I use for installs?",
+            memory: {
+              enabled: true,
+              budgetTokens: 1200,
+              mode: "governed-assist",
+              context: {
+                userId: "local-operator",
+                workspaceId: projectPath,
+                projectId: projectPath,
+                conversationId: chatId,
+              },
+            },
+          }),
+        ),
+        deps(undefined, {}, { memoryVault }),
+        runner(emptyPack(), "The production database uses PostgreSQL."),
+      );
+
+      expect(result.status).toBe(200);
+      const answer = result.body as GroundedAnswer & {
+        readonly memory?: {
+          readonly context: { readonly memories: readonly { readonly bodyExcerpt: string }[] };
+        };
+      };
+      const recalled = answer.memory?.context.memories.map((memory) => memory.bodyExcerpt) ?? [];
+      expect(recalled).toContain("Use pnpm for package installs.");
+      expect(recalled).not.toContain("The production database uses PostgreSQL.");
+    } finally {
+      memoryVault.close();
+    }
+  });
+
+  it("keeps a successful grounded answer when optional memory enrichment fails", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const memoryDir = join(tmp, "failing-grounded-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertGroundedTestMemory(memoryVault, "mem-package-manager", "Use pnpm for package installs.");
+    const failingMemoryVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        if (property === "listMemoriesByScope") {
+          return (): never => {
+            throw new Error("sensitive-memory-backend-detail");
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+
+    try {
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "Which package manager should I use?",
+            memory: {
+              enabled: true,
+              budgetTokens: 1200,
+              mode: "governed-assist",
+              context: {
+                userId: "local-operator",
+                workspaceId: projectPath,
+                projectId: projectPath,
+                conversationId: chatId,
+              },
+            },
+          }),
+        ),
+        deps(
+          undefined,
+          {},
+          {
+            memoryVault: failingMemoryVault,
+            diagnostics: { record: (record) => diagnostics.push(record) },
+          },
+        ),
+        runner(emptyPack(), "Use the package manager configured by the repository."),
+      );
+
+      expect(result.status).toBe(200);
+      expect((result.body as GroundedAnswer).content).toContain("package manager");
+      expect(
+        (result.body as GroundedAnswer & { readonly memory?: unknown }).memory,
+      ).toBeUndefined();
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        operation: "grounded.memory",
+        source: "grounded-qa.attach-memory",
+        message: "grounded-memory-enrichment-failed",
+      });
+      expect(JSON.stringify(diagnostics)).not.toContain("sensitive-memory-backend-detail");
+    } finally {
+      memoryVault.close();
+    }
+  });
+
+  it("keeps a successful grounded answer when its memory context becomes unavailable", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    let contextUnavailable = false;
+    const contextUnavailableStore: UiStore = {
+      ...store,
+      attachGroundedAnswer: (messageId, answer) => {
+        const stored = store.attachGroundedAnswer(messageId, answer);
+        contextUnavailable = true;
+        return stored;
+      },
+      findChatById: (id) => (contextUnavailable ? undefined : store.findChatById(id)),
+      listChats: (path) => (contextUnavailable ? [] : store.listChats(path)),
+    };
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "Which package manager should I use?",
+          memory: {
+            enabled: true,
+            budgetTokens: 1200,
+            mode: "governed-assist",
+            context: {
+              userId: "local-operator",
+              workspaceId: projectPath,
+              projectId: projectPath,
+              conversationId: chatId,
+            },
+          },
+        }),
+      ),
+      deps(
+        undefined,
+        {},
+        {
+          store: contextUnavailableStore,
+          diagnostics: { record: (record) => diagnostics.push(record) },
+        },
+      ),
+      runner(emptyPack(), "Use the package manager configured by the repository."),
+    );
+
+    expect(result.status).toBe(200);
+    expect((result.body as GroundedAnswer).content).toContain("package manager");
+    expect((result.body as GroundedAnswer & { readonly memory?: unknown }).memory).toBeUndefined();
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      operation: "grounded.memory",
+      source: "grounded-qa.attach-memory",
+      errorClass: "GroundedMemoryContextUnavailable",
+      message: "grounded-memory-enrichment-failed",
+    });
   });
 
   it("returns empty citations + uncertainty when the pack carries none", async () => {
@@ -1718,7 +1952,7 @@ describe("handleGroundedAsk", () => {
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "How does the whole system work?" })),
       deps(),
-      runner(packWithCitations(), "overview"),
+      runner(packWithCitations(), "overview [src/bar.ts] [src/foo.ts:10-20]"),
     );
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);

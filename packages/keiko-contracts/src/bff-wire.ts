@@ -705,6 +705,9 @@ export interface GroundedAskRequest {
   // The browser sends the selected registry model id so grounded Q&A preserves the Conversation
   // Center model-selection guardrails instead of silently falling back to the chat's stored model.
   readonly modelId?: string | undefined;
+  // Grounded repository/Knowledge-Pod turns use the same MemoriaViva request contract as ordinary
+  // chat turns. Optional preserves byte-identical behavior for callers that do not enable memory.
+  readonly memory?: ConversationMemoryRequestWire | undefined;
 }
 
 // Bounded-extraction document formats surfaced to the browser citation layer (Issue #1285).
@@ -1083,8 +1086,11 @@ export interface HybridGroundedAnswer {
   readonly retrievalActivity?: KnowledgePodRetrievalActivity | undefined;
 }
 
-export type GroundedAnswer =
-  ConnectedContextGroundedAnswer | LocalKnowledgeGroundedAnswer | HybridGroundedAnswer;
+export type GroundedAnswer = (
+  ConnectedContextGroundedAnswer | LocalKnowledgeGroundedAnswer | HybridGroundedAnswer
+) & {
+  readonly memory?: ConversationMemoryResultWire | undefined;
+};
 
 // ─── BFF error envelope ───────────────────────────────────────────────────────────
 

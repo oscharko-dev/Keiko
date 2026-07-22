@@ -4,11 +4,42 @@
 
 ## Status
 
-Accepted (Issue #504, Epic #491, 2026-06-25)
+Accepted (Issue #504, Epic #491, 2026-06-25); amended 2026-07-21
 
 ## Version
 
-0.2.0
+0.3.1
+
+## 2026-07-21 amendment — per-turn capture is canonical; recap is aggregation only
+
+The original decision assumed that a full-realtime user turn might never enter the normal chat request
+because speech travelled on the WebRTC media plane. That assumption is superseded. In Digital Voice, the
+Realtime provider now owns media transport, VAD, and transcription only. Every final transcript is submitted
+as a normal user message through the same chat-session send path as typed input.
+
+This amendment is authoritative wherever the historical text below conflicts with it:
+
+1. The final spoken transcript appears immediately in the existing chat and runs the normal retrieval,
+   grounding, context, approval, and `collectMemoryActions` pipeline. MemoriaViva capture therefore happens
+   per committed user turn under the same memory settings and governance as typed chat.
+2. The Realtime session has automatic response creation disabled and advertises no Keiko retrieval or memory
+   tools. It cannot persist or speak a competing provider-native assistant answer.
+3. The sole assistant answer is the canonical chat answer. Speech output synthesizes that exact visible text;
+   source metadata, code, tables, and other rich rendering remain visual.
+4. Interim transcription is ephemeral UI state. It is replaced by the final user chat message and is never
+   persisted as a transcript or memory input. Raw audio remains transient.
+5. Session recap remains useful as an explicit aggregation and review action across several committed turns.
+   It is no longer the primary or only way for full-realtime speech to reach MemoriaViva.
+6. Endpointing is deliberately patient. A capable provider uses semantic VAD with low eagerness, and the
+   browser keeps a final transcript provisional for 1.6 seconds. New speech in that continuation window
+   joins the same user turn; repeated boundary words are deduplicated. Only the settled turn enters chat.
+7. Grounded asks carry and return the same governed memory request/result as ungrounded chat. Repository or
+   Knowledge Pod retrieval therefore cannot bypass MemoriaViva merely because it owns answer generation.
+
+The recap contracts, content-free audit, review queue, and explicit user-trigger semantics remain accepted.
+The old statements that full-realtime `request.content` is absent, that recap fills the only per-turn memory
+gap, or that live voice-to-chat wiring is deferred are retained below as historical rationale and are
+superseded by this amendment.
 
 ## Context
 
@@ -24,10 +55,10 @@ adding gates, removing none.
 The existing per-turn memory capture path (`collectMemoryActions` in `keiko-server/src/chat-handlers.ts`)
 runs `extractCandidatesFromUserText` on `request.content` (the user's typed or dictation-derived text
 message) per turn, gated by `memory.enabled`. This works well for STT dictation where the transcript IS
-`request.content`. For full-realtime voice sessions, `request.content` may be empty or absent because
-the user's speech is carried over the WebRTC audio plane, not as a text body in the chat request. As a
-result, full-realtime voice turns produce no per-turn memory candidates from user speech — a gap this
-issue fills.
+`request.content`. Historically, full-realtime voice sessions did not submit their committed transcript as
+`request.content`, so they produced no per-turn memory candidates. The 2026-07-21 amendment closes that gap
+at the owning layer: the final transcript is now normal chat request content. Recap remains an additional
+aggregation surface.
 
 Issue #504 delivers a voice session recap: a user-triggered summary of committed voice-session output
 that derives memory candidates exclusively from the committed transcript projection. The recap must be:

@@ -12,7 +12,12 @@ import {
   isGeneratedArtifactPath,
 } from "./ecosystems.js";
 import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
-import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
+import {
+  lineLooksLikeSymbolDefinition,
+  naturalLanguageContentTermGroups,
+  naturalLanguageContentTerms,
+} from "./repoSearchMatchers.js";
+import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
 import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSearchSemantic.js";
 import { isDenied } from "./ignore.js";
@@ -129,6 +134,7 @@ const LOW_VALUE_SEGMENTS = new Set([
   "generated",
   "out",
   "storybook-static",
+  "storybookstatic",
   "tmp",
 ]);
 
@@ -142,6 +148,8 @@ const LOW_VALUE_IGNORE_LINES: readonly string[] = Object.freeze([
   "generated/",
   "out/",
   "storybook-static/",
+  "StorybookStatic/",
+  "storybookstatic/",
   "tmp/",
   "bun.lock",
   "bun.lockb",
@@ -346,14 +354,22 @@ const SHORT_CODE_TERMS: ReadonlySet<string> = new Set([
   "ui",
   "io",
 ]);
+const ROUTE_QUERY_PATH_RE = /\/[A-Za-z0-9:_?&=./-]*[A-Za-z0-9_}/-]/u;
+const ROUTE_QUERY_METHOD_RE = /\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
+const ROUTE_DECLARATION_WINDOW_LINES = 4;
+const ROUTE_DECLARATION_BONUS = 160;
 
-function contentQueryTerms(query: RetrievalQuery): readonly string[] {
-  return normalizedQueryTerms(query).filter((term) => {
-    const lower = term.toLowerCase();
-    return (
-      !CONTENT_SCORE_STOP_TERMS.has(lower) && (term.length >= 3 || SHORT_CODE_TERMS.has(lower))
-    );
-  });
+function keepContentTerm(term: string): boolean {
+  const lower = term.toLowerCase();
+  return !CONTENT_SCORE_STOP_TERMS.has(lower) && (term.length >= 3 || SHORT_CODE_TERMS.has(lower));
+}
+
+export function contentTermGroupsForSearch(query: RetrievalQuery): readonly (readonly string[])[] {
+  const groups =
+    query.kind === "natural-language"
+      ? naturalLanguageContentTermGroups(query.text, query.caseSensitive)
+      : [expandedQueryTerms(query.text, query.caseSensitive)];
+  return groups.map((group) => group.filter(keepContentTerm)).filter((group) => group.length > 0);
 }
 
 function contentTokenSet(text: string, caseSensitive: boolean): ReadonlySet<string> {
@@ -370,9 +386,10 @@ function contentTokenSet(text: string, caseSensitive: boolean): ReadonlySet<stri
   return tokens;
 }
 
-interface ContentTermHits {
+export interface ContentSearchHitCounts {
   readonly exactHits: number;
   readonly substringHits: number;
+  readonly structuredHits: number;
 }
 
 function exactSymbolContentBonus(query: RetrievalQuery, haystack: string): number {
@@ -383,27 +400,42 @@ function exactSymbolContentBonus(query: RetrievalQuery, haystack: string): numbe
   return haystack.includes(needle) ? 45 : 0;
 }
 
+function exactSymbolDefinitionContentBonus(query: RetrievalQuery, text: string): number {
+  if (query.kind !== "exact-symbol") return 0;
+  return text
+    .split(/\r?\n/u)
+    .some((line) => lineLooksLikeSymbolDefinition(line, query.text, query.caseSensitive))
+    ? 120
+    : 0;
+}
+
 function countContentTermHits(
-  terms: readonly string[],
+  groups: readonly (readonly string[])[],
   haystack: string,
   tokens: ReadonlySet<string>,
   caseSensitive: boolean,
-): ContentTermHits {
+): ContentSearchHitCounts {
   let exactHits = 0;
   let substringHits = 0;
-  for (const term of terms) {
-    const normalized = caseSensitive ? term : term.toLowerCase();
-    if (tokens.has(normalized)) {
+  let structuredHits = 0;
+  for (const group of groups) {
+    const normalized = group.map((term) => (caseSensitive ? term : term.toLowerCase()));
+    if (normalized.some((term) => tokens.has(term))) {
       exactHits += 1;
-    } else if (normalized.length >= 4 && haystack.includes(normalized)) {
+    } else if (normalized.some((term) => term.length >= 4 && haystack.includes(term))) {
       substringHits += 1;
     }
+    if (
+      normalized.some((term) => term.includes("/") && term.length >= 4 && haystack.includes(term))
+    ) {
+      structuredHits += 1;
+    }
   }
-  return { exactHits, substringHits };
+  return { exactHits, substringHits, structuredHits };
 }
 
 function contentTermScore(
-  hits: ContentTermHits,
+  hits: ContentSearchHitCounts,
   termCount: number,
   exactSymbolBonus: number,
   intent: SearchIntent,
@@ -414,8 +446,78 @@ function contentTermScore(
   const coverage = (hits.exactHits + hits.substringHits * 0.5) / Math.max(termCount, 1);
   const intentMultiplier =
     intent === "targeted-code-search" || intent === "diagnostic-search" ? 1.15 : 1;
-  const rawScore = hits.exactHits * 14 + hits.substringHits * 6 + coverage * 45 + exactSymbolBonus;
+  const rawScore =
+    hits.exactHits * 14 +
+    hits.substringHits * 6 +
+    hits.structuredHits * 45 +
+    coverage * 45 +
+    exactSymbolBonus;
   return Math.min(140, Math.round(rawScore * intentMultiplier));
+}
+
+function routeDeclarationShape(window: string, method: string): boolean {
+  const configured =
+    window.includes("handler:") &&
+    (window.includes("pattern:") || window.includes("path:") || window.includes("method:"));
+  return (
+    configured ||
+    window.includes(`router.${method}(`) ||
+    window.includes(`app.${method}(`) ||
+    window.includes(`server.${method}(`) ||
+    window.includes(`@${method}(`) ||
+    window.includes(`@${method}mapping`) ||
+    window.includes("handlefunc(")
+  );
+}
+
+export interface RouteQueryTerms {
+  readonly path: string;
+  readonly method: string;
+}
+
+export function routeQueryTermsForSearch(query: RetrievalQuery): RouteQueryTerms | undefined {
+  const path = ROUTE_QUERY_PATH_RE.exec(query.text)?.[0]?.toLowerCase();
+  const method = ROUTE_QUERY_METHOD_RE.exec(query.text)?.[1]?.toLowerCase();
+  return path === undefined || method === undefined ? undefined : { path, method };
+}
+
+function routeDeclarationContentBonus(query: RetrievalQuery, text: string): number {
+  const route = routeQueryTermsForSearch(query);
+  if (route === undefined) return 0;
+  const lines = text.toLowerCase().split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    const window = lines.slice(index, index + ROUTE_DECLARATION_WINDOW_LINES).join(" ");
+    if (
+      window.includes(route.path) &&
+      window.includes(route.method) &&
+      routeDeclarationShape(window, route.method)
+    ) {
+      return ROUTE_DECLARATION_BONUS;
+    }
+  }
+  return 0;
+}
+
+export function scoreContentHitsForSearch(
+  query: RetrievalQuery,
+  policy: SearchPolicy,
+  hits: ContentSearchHitCounts,
+  exactSymbolMatched: boolean,
+  routeDeclarationMatched: boolean,
+  exactSymbolDefinitionMatched = false,
+): number {
+  const lexicalScore = contentTermScore(
+    hits,
+    contentTermGroupsForSearch(query).length,
+    exactSymbolMatched ? 45 : 0,
+    policy.intent,
+  );
+  return Math.min(
+    300,
+    lexicalScore +
+      (routeDeclarationMatched ? ROUTE_DECLARATION_BONUS : 0) +
+      (exactSymbolDefinitionMatched ? 120 : 0),
+  );
 }
 
 export function scoreContentForSearch(
@@ -429,17 +531,19 @@ export function scoreContentForSearch(
   if (text.length === 0) {
     return 0;
   }
-  const terms = contentQueryTerms(query);
-  if (terms.length === 0) {
+  const groups = contentTermGroupsForSearch(query);
+  if (groups.length === 0) {
     return 0;
   }
   const haystack = query.caseSensitive ? text : text.toLowerCase();
   const tokens = contentTokenSet(text, query.caseSensitive);
-  return contentTermScore(
-    countContentTermHits(terms, haystack, tokens, query.caseSensitive),
-    terms.length,
-    exactSymbolContentBonus(query, haystack),
-    policy.intent,
+  return scoreContentHitsForSearch(
+    query,
+    policy,
+    countContentTermHits(groups, haystack, tokens, query.caseSensitive),
+    exactSymbolContentBonus(query, haystack) > 0,
+    routeDeclarationContentBonus(query, text) > 0,
+    exactSymbolDefinitionContentBonus(query, text) > 0,
   );
 }
 

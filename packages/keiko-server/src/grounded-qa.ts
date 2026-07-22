@@ -44,7 +44,6 @@ import {
 import {
   buildGroundedAnswerContextPackSummary,
   type GroundedAnswer,
-  type GroundedCitationDocumentFormat,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -99,6 +98,18 @@ import {
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
+import {
+  buildVoiceTurnMemoryResult,
+  parseMemoryRequest,
+  type ParsedConversationMemoryRequest,
+} from "./chat-handlers.js";
+import { resolveConversationMemoryContext } from "./memory-conversation-context.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
+import {
+  buildAnswerCitations as projectAnswerCitations,
+  buildPackCitations,
+  documentFormatForAtom,
+} from "./grounded-citation-projection.js";
 
 // ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
 
@@ -203,6 +214,7 @@ export interface AskInput {
   readonly chatId: string;
   readonly content: string;
   readonly modelId: string | undefined;
+  readonly memory?: ParsedConversationMemoryRequest | undefined;
 }
 
 type ParseResult<T> =
@@ -222,22 +234,25 @@ function parseJsonObject(raw: string): ParseResult<Record<string, unknown>> {
   return { kind: "ok", value: parsed as Record<string, unknown> };
 }
 
+function parseOptionalModelId(obj: Record<string, unknown>): ParseResult<string | undefined> {
+  if (!("modelId" in obj)) return { kind: "ok", value: undefined };
+  if (typeof obj.modelId !== "string" || obj.modelId.trim().length === 0) {
+    return {
+      kind: "err",
+      result: badRequest('Field "modelId" must be a non-empty string when provided.'),
+    };
+  }
+  return { kind: "ok", value: obj.modelId.trim() };
+}
+
 function parseBody(raw: string): ParseResult<AskInput> {
   const objResult = parseJsonObject(raw);
   if (objResult.kind === "err") return objResult;
   const obj = objResult.value;
   const chatId = typeof obj.chatId === "string" ? obj.chatId : "";
   const content = typeof obj.content === "string" ? obj.content.trim() : "";
-  let modelId: string | undefined;
-  if ("modelId" in obj) {
-    if (typeof obj.modelId !== "string" || obj.modelId.trim().length === 0) {
-      return {
-        kind: "err",
-        result: badRequest('Field "modelId" must be a non-empty string when provided.'),
-      };
-    }
-    modelId = obj.modelId.trim();
-  }
+  const modelIdResult = parseOptionalModelId(obj);
+  if (modelIdResult.kind === "err") return modelIdResult;
   if (chatId.length === 0) {
     return { kind: "err", result: badRequest('Field "chatId" is required.') };
   }
@@ -249,7 +264,17 @@ function parseBody(raw: string): ParseResult<AskInput> {
       ),
     };
   }
-  return { kind: "ok", value: { chatId, content, modelId } };
+  const memory = parseMemoryRequest(obj.memory);
+  if (isRouteResult(memory)) return { kind: "err", result: memory };
+  return {
+    kind: "ok",
+    value: {
+      chatId,
+      content,
+      modelId: modelIdResult.value,
+      ...(memory === undefined ? {} : { memory }),
+    },
+  };
 }
 
 // ─── Scope / query construction ───────────────────────────────────────────────
@@ -700,27 +725,6 @@ export function packBudgetSummary(pack: ConnectedContextPack): string {
   ].join("; ");
 }
 
-// Bounded document extraction (Issue #1285): a citation derived from a `document-extract` atom
-// refers to a connected DOCX/XLSX/PDF rather than a code/text file. The format token is derived
-// from the (already-redacted) scopePath suffix so prompt framing and browser citations can label
-// document evidence distinctly without re-deriving it in the UI.
-function documentFormatForAtom(atom: EvidenceAtom): GroundedCitationDocumentFormat | undefined {
-  if (atom.provenance.kind !== "document-extract") {
-    return undefined;
-  }
-  const path = atom.scopePath.toLowerCase();
-  if (path.endsWith(".docx")) {
-    return "docx";
-  }
-  if (path.endsWith(".xlsx")) {
-    return "xlsx";
-  }
-  if (path.endsWith(".pdf")) {
-    return "pdf";
-  }
-  return undefined;
-}
-
 export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): readonly string[] {
   const lines: string[] = [];
   for (const file of pack.files) {
@@ -911,21 +915,15 @@ export function buildCitations(
   pack: ConnectedContextPack,
   redactor: Redactor,
 ): readonly GroundedEvidenceCitation[] {
-  const citations: GroundedEvidenceCitation[] = [];
-  for (const file of pack.files) {
-    for (const excerpt of file.excerpts) {
-      const documentFormat = documentFormatForAtom(excerpt.atom);
-      citations.push({
-        scopePath: redactString(redactor, excerpt.atom.scopePath),
-        lineRange: excerpt.atom.lineRange,
-        score: excerpt.atom.score,
-        stableId: redactString(redactor, excerpt.atom.stableId),
-        ...(documentFormat === undefined ? {} : { documentFormat }),
-      });
-    }
-  }
-  citations.sort((a, b) => b.score - a.score);
-  return citations;
+  return buildPackCitations(pack, (value) => redactString(redactor, value));
+}
+
+export function buildAnswerCitations(
+  pack: ConnectedContextPack,
+  answerContent: string,
+  redactor: Redactor,
+): readonly GroundedEvidenceCitation[] {
+  return projectAnswerCitations(pack, answerContent, (value) => redactString(redactor, value));
 }
 
 export function buildUncertainty(
@@ -1128,7 +1126,9 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
   // was never called. Suppress citations and do NOT persist grounded evidence or a grounded memory
   // turn — there is nothing to ground, so no grounded-evidence manifest may be written.
   const abstained = output.noEvidence === true;
-  const citations = abstained ? [] : buildCitations(output.pack, deps.redactor);
+  const citations = abstained
+    ? []
+    : buildAnswerCitations(output.pack, assistantContent, deps.redactor);
   const evidenceRunId = abstained
     ? undefined
     : persistGroundedAuditEvidence(workerCtx, output, citations.length);
@@ -1516,6 +1516,75 @@ export async function runGroundedAskInput(
   );
 }
 
+function groundedAnswerBody(value: unknown): value is GroundedAnswer {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "groundingKind" in value &&
+    "userMessageId" in value &&
+    "assistantMessageId" in value &&
+    "content" in value
+  );
+}
+
+function recordGroundedMemoryFailure(
+  deps: UiHandlerDeps,
+  assistantMessageId: string,
+  errorClass: string,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: assistantMessageId,
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: "grounded.memory",
+    source: "grounded-qa.attach-memory",
+    errorClass,
+    message: "grounded-memory-enrichment-failed",
+  });
+}
+
+async function attachGroundedMemory(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  result: RouteResult,
+): Promise<RouteResult> {
+  const memoryRequest = prepared.input.memory;
+  if (memoryRequest === undefined || result.status !== 200 || !groundedAnswerBody(result.body)) {
+    return result;
+  }
+  const chat = deps.store.findChatById(prepared.chat.id) ?? prepared.chat;
+  const runtime = resolveConversationMemoryContext(deps, chat.projectPath, chat.id);
+  if (isRouteResult(runtime)) {
+    recordGroundedMemoryFailure(
+      deps,
+      result.body.assistantMessageId,
+      "GroundedMemoryContextUnavailable",
+    );
+    return result;
+  }
+  try {
+    const memory = await buildVoiceTurnMemoryResult(
+      deps,
+      {
+        chatId: chat.id,
+        projectPath: chat.projectPath,
+        messages: [
+          { role: "user", content: prepared.input.content },
+          { role: "assistant", content: result.body.content },
+        ],
+        modelId: prepared.input.modelId,
+        memory: memoryRequest,
+      },
+      chat,
+      runtime,
+      { retrievalContent: prepared.input.content },
+    );
+    return memory === undefined ? result : { ...result, body: { ...result.body, memory } };
+  } catch (error) {
+    recordGroundedMemoryFailure(deps, result.body.assistantMessageId, contentFreeErrorClass(error));
+    return result;
+  }
+}
+
 export async function handleGroundedAsk(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1525,5 +1594,6 @@ export async function handleGroundedAsk(
 ): Promise<RouteResult> {
   const prepared = await prepareGroundedAsk(ctx, deps);
   if ("status" in prepared) return prepared;
-  return dispatchPreparedGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+  const result = await dispatchPreparedGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+  return attachGroundedMemory(prepared, deps, result);
 }

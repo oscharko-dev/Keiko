@@ -4,10 +4,13 @@ import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-con
 import {
   legacyDiscoveryPolicy,
   orderCandidatesForSearch,
+  policyOmissionReason,
   resolveSearchPolicy,
+  scoreContentForSearch,
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
 import type { DiscoveredFile } from "./types.js";
+import { selectContentPrescoreFiles } from "./repoSearchScan.js";
 
 const file = (relativePath: string): DiscoveredFile => ({ relativePath, sizeBytes: 10 });
 
@@ -153,6 +156,72 @@ describe("orderCandidatesForSearch", () => {
     expect(diagnostics.ignoredByDiscovery).toBe(7);
     expect(diagnostics.deniedByDiscovery).toBe(3);
     expect(diagnostics.filesAfterPolicy).toBe(1);
+  });
+
+  it("omits case-normalized Storybook build output from workspace-root search", () => {
+    expect(
+      policyOmissionReason("only-for-internal-use/StorybookStatic/assets/iframe.js", policy),
+    ).toBe("generated");
+  });
+
+  it("does not let expanded aliases drown out an exact API route declaration", () => {
+    const routeQuery = query(
+      "Verfolge POST /api/chats/messages/grounded: vom Route-Register zum Handler und zu den Tests.",
+    );
+    const routeDeclaration =
+      '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },';
+    const genericTestProse =
+      "Tests cover grounded handler orchestration files, messages, routes, and POST behavior.";
+
+    const declarationScore = scoreContentForSearch(routeQuery, routeDeclaration, policy);
+    expect(declarationScore).toBeGreaterThan(
+      scoreContentForSearch(routeQuery, genericTestProse, policy),
+    );
+    expect(declarationScore).toBeGreaterThan(140);
+  });
+
+  it("ranks an exact-symbol definition above call sites without changing match semantics", () => {
+    const exactQuery: RetrievalQuery = {
+      kind: "exact-symbol",
+      text: "dispatchWorkUnit",
+      caseSensitive: false,
+      maxResults: 100,
+      emittedAtMs: 0,
+    };
+
+    expect(
+      scoreContentForSearch(
+        exactQuery,
+        "export async function dispatchWorkUnit(): Promise<void> {}",
+        policy,
+      ),
+    ).toBeGreaterThan(scoreContentForSearch(exactQuery, "await dispatchWorkUnit();", policy));
+  });
+
+  it("path-prioritizes files before applying the bounded content-prescore cap", () => {
+    const files = [file("src/noise-a.ts"), file("src/noise-b.ts"), file("src/zz-routes.ts")];
+    const selected = selectContentPrescoreFiles(
+      files,
+      query("Trace POST /api/chats/messages/grounded from route to handler"),
+      policy,
+      2,
+    );
+
+    expect(selected.map((entry) => entry.relativePath)).toContain("src/zz-routes.ts");
+  });
+
+  it("reserves a route-registration candidate when the question names only method and path", () => {
+    const files = [file("src/a.ts"), file("src/b.ts"), file("src/routes.ts")];
+    const selected = selectContentPrescoreFiles(
+      files,
+      query(
+        "Welche Produktionsdatei registriert POST /api/chats/messages/grounded und welches Handler-Symbol steht dort?",
+      ),
+      policy,
+      2,
+    );
+
+    expect(selected.map((entry) => entry.relativePath)).toContain("src/routes.ts");
   });
 });
 

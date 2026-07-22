@@ -176,7 +176,36 @@ describe("createExplorationPlan", () => {
     expect(p.state).toBe("ready");
     expect(p.retrievalIntent).toBe("targeted-code-search");
     expect(p.anchors.some((anchor) => anchor.term === "windowframe")).toBe(true);
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
     expect(p.clarification).toBeUndefined();
+  });
+
+  it.each([
+    {
+      description: "retains structural retrieval when a symbol question asks for usages",
+      text: "Where is WindowFrame defined and used?",
+      expectedRings: ["lexical", "structural", "git-history"],
+    },
+    {
+      description: "keeps route relationship questions on the structural path",
+      text: "Where is POST /api/payments/:id/refund defined and used?",
+      expectedRings: ["lexical", "structural", "git-history"],
+    },
+    {
+      description: "keeps ordinary identifiers ending in lowercase test on the direct path",
+      text: "Where is ApplicationContest defined?",
+      expectedRings: ["lexical"],
+    },
+  ])("$description", ({ text, expectedRings }): void => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({ text });
+    const p = plan({ scope, query: q });
+
+    expect(p.rings.map((ring) => ring.kind)).toEqual(expectedRings);
   });
 
   it("explicitConnection: workspace-root allows API route lookups", () => {
@@ -194,7 +223,36 @@ describe("createExplorationPlan", () => {
       weight: 0.95,
       kind: "path",
     });
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
     expect(p.clarification).toBeUndefined();
+  });
+
+  it("retains structural and git rings when an API route question asks for history", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({
+      text: "Show the recent git history of POST /api/payments/:id/refund",
+    });
+    const p = plan({ scope, query: q });
+
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
+  });
+
+  it("retains structural tracing from a route declaration to its handler", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({
+      text: "Trace POST /api/payments/:id/refund from route to handler",
+    });
+    const p = plan({ scope, query: q });
+
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
   });
 
   it("explicitConnection still requires at least one anchor (no-anchors holds)", () => {

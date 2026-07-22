@@ -432,7 +432,7 @@ export type ChatSessionApi = UseChatSessionResult;
 // exact context equivalence with the typed path.
 interface SendMessageOptions {
   // When present, this text is sent instead of the current draft. Trimmed and empty-guarded identically
-  // to the draft path. The draft is still cleared on a successful send so the composer returns to rest.
+  // to the draft path. The user's independent typed draft is preserved across a spoken turn.
   readonly text?: string;
 }
 
@@ -1882,7 +1882,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const sendGrounded = useCallback(
     async (
       chat: Chat,
-      _project: ProjectWithAvailability,
+      project: ProjectWithAvailability,
       content: string,
       optimisticId: string,
       modelId: string,
@@ -1893,13 +1893,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLatestGrounded(undefined);
       try {
         updateSendStatus("contacting");
-        const result = await askGrounded({ chatId: chat.id, content, modelId }, signal);
+        const result = await askGrounded(
+          { chatId: chat.id, content, modelId, memory: buildMemoryRequest(chat, project) },
+          signal,
+        );
         if (!isStillActiveChat(chat.id)) {
           return "completed";
         }
         if (signal.aborted) return "cancelled";
         setLatestGrounded(result);
-        setLatestMemory(undefined);
+        setLatestMemory(result.memory);
         // Refresh BOTH messages AND chats so the sidebar reflects the new updated_at and
         // re-sorts the active chat to the top after the assistant reply lands.
         const [messagePayload, chatsPayload] = await Promise.all([
@@ -1930,7 +1933,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return "failed";
       }
     },
-    [updateSendStatus],
+    [buildMemoryRequest, updateSendStatus],
   );
 
   // Issue #152 — unified cancel that aborts any in-flight send (grounded OR
@@ -1998,7 +2001,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // Synchronously commit to "queued" so a re-entrant call in the same tick
       // hits the isInFlight guard above (AC#2).
       updateSendStatus("queued");
-      setDraft("");
+      if (options?.text === undefined) {
+        setDraft("");
+      }
       setError(undefined);
       setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
       // Issue #152 — fresh controller per send. The previous controller (if

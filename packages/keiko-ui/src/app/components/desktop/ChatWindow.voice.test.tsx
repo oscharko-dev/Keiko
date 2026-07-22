@@ -4,7 +4,7 @@
 // gating, and that a denied permission surfaces a non-blocking error while the composer stays usable
 // (AC4). The deep capture/transcribe flow is covered at the hook level (useDictation.test.ts).
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
@@ -21,6 +21,7 @@ const realtimeVoiceMock = vi.hoisted(() => ({
   retry: vi.fn(),
   interrupt: vi.fn(),
   toggleMute: vi.fn(),
+  partialUserTranscript: undefined as string | undefined,
 }));
 
 vi.mock("./hooks/useRealtimeVoice", () => ({
@@ -44,6 +45,7 @@ vi.mock("./hooks/useRealtimeVoice", () => ({
     speaking: false,
     canInterrupt: false,
     muted: false,
+    partialUserTranscript: realtimeVoiceMock.partialUserTranscript,
     error: undefined,
     start: realtimeVoiceMock.start,
     stop: realtimeVoiceMock.stop,
@@ -224,6 +226,7 @@ beforeEach(() => {
   realtimeVoiceMock.retry.mockReset();
   realtimeVoiceMock.interrupt.mockReset();
   realtimeVoiceMock.toggleMute.mockReset();
+  realtimeVoiceMock.partialUserTranscript = undefined;
   vi.mocked(useRealtimeVoice).mockClear();
 });
 
@@ -587,7 +590,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     );
   });
 
-  it("shows Voice Dialogue in a grounded chat even when the optional tool-calling hint is absent", async () => {
+  it("keeps grounded chat context out of the transcription-only Realtime session", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession({ activeChat: makeGroundedKnowledgeChat() }));
@@ -599,18 +602,16 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(
       vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
         return (
-          args.groundingActive === true &&
-          args.groundingToolActive === false &&
           args.chatContext?.chatId === "chat-1" &&
-          args.chatContext.grounding?.enabled === true &&
-          args.chatContext.grounding.kind === "knowledge" &&
-          args.chatContext.grounding.sourceCount === 1
+          args.chatContext.grounding === undefined &&
+          args.chatContext.memory === undefined &&
+          args.onCanonicalUserTurn !== undefined
         );
       }),
     ).toBe(true);
   });
 
-  it("shows Voice Dialogue in a grounded chat when realtime tool calling is available", async () => {
+  it("does not activate a second Realtime tool path when the provider supports tools", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
       voice: FULL_REALTIME_WITH_TOOL_CALLING,
     });
@@ -624,12 +625,11 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(
       vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
         return (
-          args.groundingActive === true &&
-          args.groundingToolActive === true &&
           args.chatContext?.chatId === "chat-1" &&
-          args.chatContext.grounding?.enabled === true &&
-          args.chatContext.grounding.kind === "knowledge" &&
-          args.chatContext.grounding.sourceCount === 1
+          args.groundingToolActive === undefined &&
+          args.memoryToolActive === undefined &&
+          args.onGroundedToolCall === undefined &&
+          args.onMemoryToolCall === undefined
         );
       }),
     ).toBe(true);
@@ -812,6 +812,161 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       within(box).getByRole("button", { name: "Mute voice dialogue microphone" }),
     ).toBeInTheDocument();
     expect(within(box).queryByRole("button", { name: "Send message" })).toBeNull();
+  });
+
+  it("shows the ephemeral spoken transcript while the utterance is still in progress", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    realtimeVoiceMock.partialUserTranscript = "Search the connected repository";
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession());
+
+    await enterDialogue();
+
+    expect(screen.getByText("Search the connected repository")).toBeInTheDocument();
+  });
+
+  it("routes a final spoken transcript through the canonical chat send", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    renderWindow(makeSession({ sendMessage }));
+
+    await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    expect(options?.onCanonicalUserTurn).toBeDefined();
+
+    await act(async () => {
+      await options?.onCanonicalUserTurn?.({
+        turnId: "voice-user-1",
+        text: "Search the connected repository.",
+      });
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith({ text: "Search the connected repository." });
+    expect(options?.onVoiceTurnCommitted).toBeUndefined();
+  });
+
+  it("cancels canonical generation when the user barges in", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const cancelSend = vi.fn();
+    renderWindow(makeSession({ cancelSend }));
+
+    await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    expect(options?.onUserSpeechStart).toBeDefined();
+
+    act(() => options?.onUserSpeechStart?.());
+
+    expect(cancelSend).toHaveBeenCalledOnce();
+  });
+
+  it("speaks the settled canonical answer without replaying older chat history", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <ChatSessionProvider value={makeSessionWithAssistantMessage({ sendMessage })}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    await enterDialogue();
+    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalled();
+
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    await act(async () => {
+      await options?.onCanonicalUserTurn?.({
+        turnId: "voice-user-2",
+        text: "What is the release status?",
+      });
+    });
+    rerender(
+      <ChatSessionProvider
+        value={makeSession({
+          sendMessage,
+          messages: [
+            ...makeSessionWithAssistantMessage().messages,
+            {
+              id: "msg-2",
+              chatId: "chat-1",
+              role: "assistant",
+              content: "The release is green.",
+              timestamp: Date.now(),
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+          ],
+          sending: false,
+          sendStatus: "completed",
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    await waitFor(() =>
+      expect(api.synthesizeAssistantSpeech).toHaveBeenCalledWith(
+        { persona: "male", text: "The release is green." },
+        expect.any(AbortSignal),
+      ),
+    );
+
+    rerender(
+      <ChatSessionProvider
+        value={makeSession({
+          sendMessage,
+          messages: [
+            ...makeSessionWithAssistantMessage().messages,
+            {
+              id: "msg-2",
+              chatId: "chat-1",
+              role: "assistant",
+              content: "The release is green.",
+              timestamp: Date.now(),
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+            {
+              id: "msg-3",
+              chatId: "chat-1",
+              role: "assistant",
+              content: "This later text-only update must stay silent.",
+              timestamp: Date.now() + 1,
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+          ],
+          sending: false,
+          sendStatus: "completed",
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(api.synthesizeAssistantSpeech).toHaveBeenCalledTimes(1);
+    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
+      { persona: "male", text: "This later text-only update must stay silent." },
+      expect.any(AbortSignal),
+    );
   });
 
   it("uses the same dialogue switch to leave dialogue mode and run cleanup", async () => {

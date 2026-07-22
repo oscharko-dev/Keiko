@@ -79,19 +79,6 @@ export function supportsRealtimeVoice(resolution: VoiceCapabilityResolution | un
   );
 }
 
-// True only when deployments explicitly advertise Realtime function calling. Grounded Voice uses this
-// as the UI-side branch guard: without it the session still opens and every spoken turn is recorded,
-// but the provider is not asked to call Keiko's grounded retrieval tool.
-export function supportsRealtimeToolCalling(
-  resolution: VoiceCapabilityResolution | undefined,
-): boolean {
-  return (
-    resolution !== undefined &&
-    supportsRealtimeVoice(resolution) &&
-    resolution.capabilities.realtimeToolCalling === true
-  );
-}
-
 // True only when the resolved capability advertises optional assistant speech output — the providers
 // that may speak the assistant's reply (text-to-speech or realtime speech output). This is the Issue
 // #501 gate: it is satisfied by the `speech-output` profile and by `full-realtime` (which also speaks),

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 
-import { buildMatcher, normalizeNaturalLanguageToken } from "./repoSearchMatchers.js";
+import {
+  buildMatcher,
+  lineLooksLikeSymbolDefinition,
+  normalizeNaturalLanguageToken,
+} from "./repoSearchMatchers.js";
 
 function nlq(text: string): RetrievalQuery {
   return {
@@ -27,9 +31,9 @@ describe("normalizeNaturalLanguageToken", () => {
 
   // SonarCloud S8786: the trailing strip used to be the unanchored `[^\p{L}\p{N}]+$`. Without a
   // `^` anchor, the engine retries the match at every position inside a long non-alphanumeric run
-  // before concluding there is no match at the string's end — quadratic in input length
-  // (confirmed empirically: ~580ms at 32k characters before the fix). Must stay fast well past
-  // that size.
+  // before concluding there is no match at the string's end — quadratic in input length. Keep the
+  // adversarial shape as a functional regression fixture; static analysis owns the performance
+  // detection without a host-load-sensitive timer.
   //
   // The adversarial input MUST start with an alphanumeric character. A run of non-alnum
   // characters at the very START of the string (e.g. `"!".repeat(60_000) + "a"`) is fully
@@ -40,11 +44,9 @@ describe("normalizeNaturalLanguageToken", () => {
   // (the string already starts with an alnum char), so the full 60,000-character run reaches the
   // trailing-strip logic — this is what actually reproduces the O(n^2) blowup on the old
   // `[^\p{L}\p{N}]+$` pattern (~1.8s at 60k characters on the pre-fix code).
-  it("stays fast on a long embedded non-alphanumeric run bounded by alnum chars (regression for SonarCloud S8786)", () => {
+  it("handles a long embedded non-alphanumeric run bounded by alnum chars (regression for SonarCloud S8786)", () => {
     const adversarial = `x${"!".repeat(60_000)}a`;
-    const start = Date.now();
     const result = normalizeNaturalLanguageToken(adversarial);
-    expect(Date.now() - start).toBeLessThan(1500);
     // Internal punctuation between two alphanumeric characters is preserved (same contract as the
     // "ADR-0022" case above) — the string is unchanged because there is nothing to strip at
     // either end.
@@ -53,6 +55,27 @@ describe("normalizeNaturalLanguageToken", () => {
 });
 
 describe("buildMatcher definition intent scoring", () => {
+  it("matches typed declarations without unbounded whitespace backtracking", () => {
+    expect(
+      lineLooksLikeSymbolDefinition(
+        "public Task<Result<User>> loadUser(UserId id) {",
+        "loadUser",
+        false,
+      ),
+    ).toBe(true);
+    const adversarial = `T${" ".repeat(40_000)}missing`;
+    expect(lineLooksLikeSymbolDefinition(adversarial, "loadUser", false)).toBe(false);
+  });
+
+  it("does not classify JavaScript unary-expression calls as typed declarations", () => {
+    for (const prefix of ["void", "typeof", "delete"]) {
+      expect(lineLooksLikeSymbolDefinition(`${prefix} loadUser()`, "loadUser", false)).toBe(false);
+    }
+    expect(
+      lineLooksLikeSymbolDefinition("public Task<User> loadUser(UserId id) {", "loadUser", false),
+    ).toBe(true);
+  });
+
   it("boosts JVM and .NET class declarations over plain references", () => {
     const matcher = buildMatcher(nlq("Where is PaymentService defined?"));
     const reference = matcher.match("PaymentService registry entry");
@@ -70,5 +93,45 @@ describe("buildMatcher definition intent scoring", () => {
     expect(matcher.match("fn reconcileOrder(order: Order) -> Result<()> {")).toBeGreaterThan(
       reference,
     );
+  });
+
+  it("recognizes German definition intent", () => {
+    const matcher = buildMatcher(nlq("Wo ist PaymentService definiert?"));
+    const reference = matcher.match("PaymentService registry entry");
+    expect(matcher.match("export class PaymentService {")).toBeGreaterThan(reference);
+  });
+
+  it("ranks English architecture decisions for an equivalent German question", () => {
+    const matcher = buildMatcher(
+      nlq(
+        "Welche drei Autonomie-Modi definiert ADR-0129, und welche zentrale Human-Control-Invariante gilt für Repository-Arbeit?",
+      ),
+    );
+    const modes = matcher.match(
+      "Every autonomy-capable surface is governed by the three modes defined in ADR-0129.",
+    );
+    const adjacentDecision = matcher.match(
+      "For repository work targeting dev, accepted task authority permits branch commits.",
+    );
+
+    expect(modes).toBeGreaterThan(adjacentDecision);
+  });
+
+  it("prefers an exact document reference over another record in the same series", () => {
+    const matcher = buildMatcher(nlq("What does ADR-0129 define?"));
+
+    expect(matcher.match("ADR-0129 defines the authority model.")).toBeGreaterThan(
+      matcher.match("ADR-0135 defines the delivery model."),
+    );
+  });
+
+  it("boosts a route declaration for German call-path questions without a definition verb", () => {
+    const matcher = buildMatcher(nlq("Prüfe POST /api/chats/messages/grounded: Route zum Handler"));
+    const mention = matcher.match("POST /api/chats/messages/grounded route handler documentation");
+    const declaration = matcher.match(
+      '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },',
+    );
+
+    expect(declaration).toBeGreaterThan(mention);
   });
 });

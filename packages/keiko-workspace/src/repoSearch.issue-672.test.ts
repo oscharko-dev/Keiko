@@ -92,4 +92,27 @@ describe("repoSearch issue #672 regressions", () => {
       best.get("src/grounded-orchestrator.test.ts") ?? 0,
     );
   });
+
+  it("reserves evidence breadth for a highly ranked handler file before the match cap", async () => {
+    const exactRoute =
+      '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n';
+    const { scope, fs } = memScope({
+      "src/grounded-qa.ts":
+        "export async function handleGroundedAsk(): Promise<void> { return; }\n",
+      "src/routes.ts": exactRoute.repeat(3),
+      "tests/route-noise.test.ts": exactRoute.repeat(3),
+    });
+    const result = await searchText(
+      scope,
+      nlq("Trace the real POST /api/chats/messages/grounded call path from route to handler."),
+      { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 4 },
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "targeted-code-search" },
+      },
+    );
+
+    expect(result.atoms.some((atom) => atom.scopePath === "src/grounded-qa.ts")).toBe(true);
+  });
 });

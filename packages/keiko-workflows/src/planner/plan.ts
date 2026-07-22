@@ -181,16 +181,70 @@ function buildRing(
   };
 }
 
+const DIRECT_ROUTE_METHOD_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
+const DIRECT_ROUTE_PATH_RE = /\/[A-Za-z0-9:_?&=./-]*[A-Za-z0-9_}/-]/u;
+const HISTORY_QUERY_RE =
+  /(?:^|[^\p{L}\p{N}_])(?:git|history|historie|recent|recency|zuletzt|changed|änderung|änderungen)(?=$|[^\p{L}\p{N}_])/iu;
+const DEFINITION_LOOKUP_RE =
+  /\b(?:defined|definition|declared|declaration|implemented|implementation|definiert|deklariert|implementiert)\b/iu;
+const SYMBOL_RELATION_RE =
+  /\b(?:callers?|calls?|called|references?|referenced|referenziert|used|uses|verwendet|aufgerufen|aufrufe?)\b/iu;
+const ROUTE_TRAVERSAL_RE = /\b(?:handlers?|trace|traces|tracing|call[- ]?paths?|aufrufpfade?)\b/iu;
+const IDENTIFIER_TOKEN_RE = /[A-Za-z_$][A-Za-z0-9_$]*/gu;
+const TEST_IDENTIFIER_SUFFIX_RE = /(?:Test|Tests|Spec|Specs)$/u;
+const DELIMITED_TEST_IDENTIFIER_SUFFIX_RE = /(?:^|[_$])(?:tests?|specs?)$/u;
+
+function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
+  const sourceToken = [...text.matchAll(IDENTIFIER_TOKEN_RE)]
+    .map((match) => match[0])
+    .find((token) => token.toLowerCase() === normalizedSymbol.toLowerCase());
+  return (
+    sourceToken !== undefined &&
+    (TEST_IDENTIFIER_SUFFIX_RE.test(sourceToken) ||
+      DELIMITED_TEST_IDENTIFIER_SUFFIX_RE.test(sourceToken))
+  );
+}
+
+function isDirectRouteLookup(query: RetrievalQuery): boolean {
+  return (
+    DIRECT_ROUTE_METHOD_RE.test(query.text) &&
+    DIRECT_ROUTE_PATH_RE.test(query.text) &&
+    !HISTORY_QUERY_RE.test(query.text) &&
+    !SYMBOL_RELATION_RE.test(query.text) &&
+    !ROUTE_TRAVERSAL_RE.test(query.text)
+  );
+}
+
+function isDirectSymbolDefinitionLookup(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+): boolean {
+  if (
+    !DEFINITION_LOOKUP_RE.test(query.text) ||
+    HISTORY_QUERY_RE.test(query.text) ||
+    SYMBOL_RELATION_RE.test(query.text)
+  ) {
+    return false;
+  }
+  const identifiers = anchors.filter(
+    (anchor) => anchor.kind === "identifier" && anchor.weight >= 0.85,
+  );
+  const symbol = identifiers[0]?.term;
+  return identifiers.length === 1 && symbol !== undefined && !isTestIdentifier(query.text, symbol);
+}
+
 function composeRings(
   anchors: readonly SearchAnchor[],
   scope: SelectedScope,
+  query: RetrievalQuery,
   budget: ExplorationBudget,
 ): readonly RetrievalRing[] {
   const rings: RetrievalRing[] = [buildRing("lexical", anchors, budget)];
-  if (hasKind(anchors, "identifier") || hasKind(anchors, "path")) {
+  const directLookup = isDirectRouteLookup(query) || isDirectSymbolDefinitionLookup(query, anchors);
+  if (!directLookup && (hasKind(anchors, "identifier") || hasKind(anchors, "path"))) {
     rings.push(buildRing("structural", anchors, budget));
   }
-  if (scope.relativePaths.length === 0) {
+  if (!directLookup && scope.relativePaths.length === 0) {
     rings.push(buildRing("git-history", anchors, budget));
   }
   return rings;
@@ -356,7 +410,7 @@ export function createExplorationPlan(
   const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
   const rings =
     decision.state === "ready"
-      ? composeRings(extraction.anchors, input.scope, resolved.budget)
+      ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget)
       : [];
   const seed: PlanSeed = {
     scopeId: input.scope.scopeId,

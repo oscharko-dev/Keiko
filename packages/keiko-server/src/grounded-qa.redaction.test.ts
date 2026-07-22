@@ -23,6 +23,7 @@ import {
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import {
+  buildCitations,
   buildGroundedGatewayMessages,
   handleGroundedAsk,
   redactString,
@@ -269,16 +270,10 @@ describe("grounded-qa redaction guard (Issue #187 / ADR-0022 D4)", () => {
     assertNoSecretShape(answer.content, "answer.content");
   });
 
-  it("citations carry scopePath only — never excerpt content, never query text", async () => {
-    const chatId = await setupChat();
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "explain" })),
-      deps(),
-      runner(attackerPack(), "ok"),
-    );
-    const answer = result.body as GroundedAnswer;
-    expect(answer.citations).toHaveLength(1);
-    const citation = answer.citations[0];
+  it("citations carry scopePath only — never excerpt content, never query text", () => {
+    const citations = buildCitations(attackerPack(), deps().redactor);
+    expect(citations).toHaveLength(1);
+    const citation = citations[0];
     expect(citation).toBeDefined();
     // Wire shape pins this: citation has scopePath + lineRange + score + stableId — there is
     // no `content` field by construction. The keys check guards against a future drift.

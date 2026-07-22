@@ -64,6 +64,13 @@ export const EN_MESSAGES = {
     "Selected capabilities: Dictate {dictate} · Digital Voice {digitalVoice} · Read aloud {readAloud}.",
   "gatewaySetup.voice.dictateDeployment": "Dictate · speech-to-text deployment",
   "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeployment":
+    "Digital Voice · live transcription deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
+    "your-realtime-transcription-deployment",
+  "gatewaySetup.voice.semanticTurnDetection": "Semantic turn detection",
+  "gatewaySetup.voice.semanticTurnDetectionHint":
+    "Enable only when the Realtime deployment explicitly supports semantic VAD.",
   "gatewaySetup.voice.speechOutputDeployment": "Read aloud · speech-output deployment",
   "gatewaySetup.voice.outputVoice": "Output voice",
   "gatewaySetup.voice.outputVoiceHint": "optional; default alloy",

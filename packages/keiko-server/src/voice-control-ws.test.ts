@@ -522,6 +522,7 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
       realtimeAuthMode: "ephemeral-session",
       offerSdp: OFFER_SDP,
       transcriptionModel: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+      disableAutomaticResponse: true,
       timeoutMs: 12_000,
     });
     socket.close();
@@ -566,14 +567,14 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
       transcriptionModel: "domain-realtime-transcribe",
       turnDetection: {
         type: "semantic_vad",
-        eagerness: "auto",
+        eagerness: "low",
         interrupt_response: true,
       },
     });
     socket.close();
   });
 
-  it("forces the realtime grounding tool when grounding sources are active", async () => {
+  it("keeps the realtime media session tool-free when grounding sources are active", async () => {
     let seenRequest: RealtimeNegotiationRequest | undefined;
     const { deps, chat } = depsWithChat({
       config: voiceConfig(
@@ -620,13 +621,9 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     await next(); // media.track.state negotiating
     await next(); // signal.sdp.answer
 
-    expect(seenRequest?.tools).toEqual([
-      expect.objectContaining({ type: "function", name: "search_keiko_grounding" }),
-    ]);
-    expect(seenRequest?.toolChoice).toEqual({
-      type: "function",
-      function: { name: "search_keiko_grounding" },
-    });
+    expect(seenRequest?.tools).toBeUndefined();
+    expect(seenRequest?.toolChoice).toBeUndefined();
+    expect(seenRequest?.disableAutomaticResponse).toBe(true);
     socket.close();
   });
 

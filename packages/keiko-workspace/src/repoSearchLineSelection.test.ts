@@ -1,6 +1,34 @@
 import { describe, expect, it } from "vitest";
 
-import { looksLikeBlockHeader, looksLikeSignatureStart } from "./repoSearchLineSelection.js";
+import {
+  collectBestLines,
+  looksLikeBlockHeader,
+  looksLikeSignatureStart,
+} from "./repoSearchLineSelection.js";
+
+describe("collectBestLines", () => {
+  it("never returns a closed preceding brace range for a later matching line", () => {
+    const text = [
+      "const routes = [",
+      '  { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },',
+      "  // Grounded repository-aware Q&A.",
+      '  { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },',
+      "];",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("/grounded") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 4, startLine: 4, endLine: 4, score: 1 }]);
+  });
+});
 
 describe("looksLikeBlockHeader", () => {
   it("recognises common signature shapes across languages", () => {

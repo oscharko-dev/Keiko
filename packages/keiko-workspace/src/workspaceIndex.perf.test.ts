@@ -37,11 +37,23 @@ vi.mock("node:fs/promises", async () => {
 
 import {
   buildWorkspaceIndexSnapshot,
-  createFileWorkspaceIndexStore,
+  createFileWorkspaceIndexStore as createEncryptedFileWorkspaceIndexStore,
+  type FileWorkspaceIndexStoreOptions,
+  type WorkspaceIndexStore,
   type WorkspaceIndexSnapshot,
 } from "./workspaceIndex.js";
 
 const runtimeDirs: string[] = [];
+const FILE_INDEX_TEST_KEY = Buffer.alloc(32, 29);
+
+function createFileWorkspaceIndexStore(
+  options: Omit<FileWorkspaceIndexStoreOptions, "encryptionKey">,
+): WorkspaceIndexStore {
+  return createEncryptedFileWorkspaceIndexStore({
+    ...options,
+    encryptionKey: FILE_INDEX_TEST_KEY,
+  });
+}
 
 afterEach(() => {
   vi.restoreAllMocks();

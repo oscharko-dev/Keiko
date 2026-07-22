@@ -721,12 +721,12 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       ctx(JSON.stringify({ chatId, content: "explain all" })),
       recordingDeps([]),
       undefined,
-      seam(retriever, constAnswerer("partial answer", answered)),
+      seam(retriever, constAnswerer("partial answer [src/a.ts] [src/c.ts]", answered)),
     );
     // One bad source must NOT abort the whole ask — the two healthy folders still answer.
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    expect(answer.content).toBe("partial answer");
+    expect(answer.content).toBe("partial answer [src/a.ts] [src/c.ts]");
     expect(answered.count).toBe(2); // answerer receives exactly the 2 healthy source packs
     const labels = answer.citations.map((c) => c.source);
     expect(labels).toContain("api");
@@ -764,11 +764,11 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       ctx(JSON.stringify({ chatId, content: "explain both" })),
       recordingDeps(puts),
       undefined,
-      seam(packPerScope(byPath), constAnswerer("merged answer", answered)),
+      seam(packPerScope(byPath), constAnswerer("merged answer [src/a.ts] [src/b.ts]", answered)),
     );
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    expect(answer.content).toBe("merged answer");
+    expect(answer.content).toBe("merged answer [src/a.ts] [src/b.ts]");
     expect(answered.count).toBe(2);
     const labels = answer.citations.map((c) => c.source);
     expect(labels).toContain("api");
@@ -986,7 +986,12 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       ctx(JSON.stringify({ chatId, content: "scan all" })),
       recordingDeps(puts),
       undefined,
-      seam(packPerScope(byPath), constAnswerer("done", { count: 0 })),
+      seam(
+        packPerScope(byPath),
+        constAnswerer(scopes.map((scope) => `[${scope.relativePaths[0] ?? ""}]`).join(" "), {
+          count: 0,
+        }),
+      ),
     );
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
@@ -1106,12 +1111,12 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       ctx(JSON.stringify({ chatId, content: "explain all" })),
       recordingDeps([]),
       undefined,
-      seam(packPerScope(byPath), constAnswerer("partial answer", answered)),
+      seam(packPerScope(byPath), constAnswerer("partial answer [src/a.ts] [src/c.ts]", answered)),
     );
     // Must succeed (200), not fail (500)
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    expect(answer.content).toBe("partial answer");
+    expect(answer.content).toBe("partial answer [src/a.ts] [src/c.ts]");
     // Answerer receives only the 2 healthy packs
     expect(answered.count).toBe(2);
     // Citations only from healthy sources

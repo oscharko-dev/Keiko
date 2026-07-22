@@ -273,6 +273,12 @@ function braceRange(lines: readonly string[], index: number): { start: number; e
     return { start: index + 1, end: index + 1 };
   }
   const end = findBraceEnd(lines, balanceStart, index);
+  // A backward scan can encounter a complete one-line object before the matching line. That
+  // closed brace pair is not an enclosing range; returning it would attach the match score to
+  // unrelated preceding content and hide the actual evidence line from the context pack.
+  if (start > index || end < index) {
+    return { start: index + 1, end: index + 1 };
+  }
   return { start: start + 1, end: end + 1 };
 }
 

@@ -48,6 +48,12 @@ described in D3.1. That cache stores assembled `ConnectedContextPack` objects, i
 excerpt content, so its retention contract is explicit: bounded TTL, bounded size, no
 disk persistence, and deterministic cleanup hooks on chat/project lifecycle changes.
 
+Repository search may separately persist its bounded acceleration index. That store is not a
+`ConnectedContextPack`: it contains discovery metadata, fingerprints, and lexical hashes rather than
+queries or excerpts, and its complete snapshot is AES-256-GCM sealed before the atomic owner-only
+write. The key uses an independent `KEIKO_WORKSPACE_INDEX_KEY` → OS keychain → hardened keyfile
+namespace. Missing, legacy-plaintext, tampered, or wrong-key snapshots fail closed to a live rescan.
+
 Why: the pack carries the full excerpt content (with the raw scope-relative paths and
 file bytes). Persisting it to disk would create a second redaction surface co-equal
 with the evidence ledger, with no offsetting benefit. The evidence ledger records the

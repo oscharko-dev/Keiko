@@ -5,8 +5,8 @@
 //      composer stays fully text-capable (AC4).
 //   2. Full-realtime WITH browser WebRTC media: fake getUserMedia + RTCPeerConnection + WebSocket are
 //      injected (no hardware, no provider; privacy contract preserved). The dialogue switch starts the
-//      Realtime session directly; provider data-channel transcript events append committed user and
-//      assistant turns through /api/desktop/chat/voice-turn, without raw audio or a second chat send.
+//      Realtime session directly; the committed user transcript enters the canonical desktop-chat
+//      route, so persistence, retrieval, memory, and the visible assistant answer match typed chat.
 //   3. Full-realtime WITHOUT browser WebRTC media: no fluid dialogue switch is offered. Dictation and
 //      read-aloud remain separate helper surfaces.
 //
@@ -16,6 +16,13 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { evidenceScreenshotPath } from "./support/evidence.js";
+
+declare global {
+  interface Window {
+    readonly __micStats?: Readonly<Record<string, number>>;
+    readonly __providerNativeOutputEvents?: number;
+  }
+}
 
 const FULL_REALTIME_WEBRTC_CAPABILITY = {
   voice: {
@@ -80,6 +87,7 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
   const options = window.__keikoVoiceFakeOptions || {};
   const emitTranscript = options.emitTranscript === true;
   const instrumentMic = options.instrumentMic === true;
+  window.__providerNativeOutputEvents = 0;
   const OFFER = "v=0\\r\\no=- 1 1 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
   const ANSWER = "v=0\\r\\no=- 2 2 IN IP4 0.0.0.0\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
   if (instrumentMic) window.__micStats = { getUserMedia: 0, stopped: 0 };
@@ -128,12 +136,15 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
       item_id: "user-item",
       transcript: "what is the deploy status",
     });
+    window.__providerNativeOutputEvents++;
     channel.emit({ type: "response.output_audio.delta", response_id: "resp-1", delta: "stub" });
+    window.__providerNativeOutputEvents++;
     channel.emit({
       type: "response.output_audio_transcript.done",
       response_id: "resp-1",
       transcript: "The deploy is green.",
     });
+    window.__providerNativeOutputEvents++;
     channel.emit({ type: "response.done", response: { id: "resp-1", status: "completed" } });
   }
   class FakeRTCPeerConnection {
@@ -249,63 +260,49 @@ async function expectActiveComposerSettled(page: Page): Promise<void> {
   expect(Math.abs(centreOffset?.y ?? Number.POSITIVE_INFINITY)).toBeLessThan(1);
 }
 
-interface CapturedVoiceTurnBody {
-  readonly chatId?: string;
-  readonly projectPath?: string;
-  readonly messages?: readonly { readonly role?: string; readonly content?: string }[];
+function captureVoiceChatSends(page: Page): {
+  readonly canonicalContents: () => readonly string[];
+  readonly legacyCount: () => number;
+} {
+  const contents: string[] = [];
+  let legacyCount = 0;
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === "/api/desktop/chat/voice-turn") {
+      legacyCount += 1;
+      return;
+    }
+    if (pathname !== "/api/desktop/chat/stream") return;
+    const payload: unknown = request.postDataJSON();
+    const content = voiceChatPayloadContent(payload);
+    if (content !== undefined) contents.push(content);
+  });
+  return {
+    canonicalContents: () => contents,
+    legacyCount: () => legacyCount,
+  };
 }
 
-function stubVoiceTurnAppend(page: Page): {
-  turns: () => readonly { readonly role: string; readonly content: string }[];
-} {
-  const captured: { turns: { role: string; content: string }[] } = { turns: [] };
-  void page.route("**/api/desktop/chat/voice-turn", (route) => {
-    const body = (route.request().postDataJSON() ?? {}) as CapturedVoiceTurnBody;
-    const messages =
-      body.messages
-        ?.filter(
-          (message): message is { role: string; content: string } =>
-            typeof message.role === "string" &&
-            typeof message.content === "string" &&
-            message.content.length > 0,
-        )
-        .map((message) => ({ role: message.role, content: message.content })) ?? [];
-    captured.turns.push(...messages);
-    const chatId = body.chatId ?? "chat";
-    return route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        chat: {
-          id: chatId,
-          projectPath: body.projectPath ?? "/repo",
-          title: "New chat",
-          selectedModel: "model",
-          status: "open",
-          connectedScopes: [],
-          localKnowledgeScopes: [],
-          createdAt: 1,
-          updatedAt: 2,
-        },
-        messages: messages.map((message, index) => ({
-          id: `voice-${String(captured.turns.length)}-${String(index)}`,
-          chatId,
-          role: message.role,
-          content: message.content,
-          timestamp: 2,
-        })),
-      }),
-    });
-  });
-  return { turns: () => captured.turns };
+function voiceChatPayloadContent(payload: unknown): string | undefined {
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    !("content" in payload)
+  ) {
+    return undefined;
+  }
+  return typeof payload.content === "string" ? payload.content : undefined;
 }
 
 // Reads a counter from the browser-side window.__micStats instrument (see fakeRealtimeInit), so
 // the lifecycle assertions are on observable call counts rather than on timing.
 async function micStat(page: Page, field: "getUserMedia" | "stopped"): Promise<number | undefined> {
-  return page.evaluate(
-    (key) => (window as unknown as { __micStats?: Record<string, number> }).__micStats?.[key],
-    field,
-  );
+  return page.evaluate((key) => window.__micStats?.[key], field);
+}
+
+async function providerNativeOutputEvents(page: Page): Promise<number | undefined> {
+  return page.evaluate(() => window.__providerNativeOutputEvents);
 }
 
 async function noVoiceFlow(page: Page): Promise<void> {
@@ -320,7 +317,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
 async function dialogueTurnFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit({ emitTranscript: true }));
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  const voiceTurns = stubVoiceTurnAppend(page);
+  const chatSends = captureVoiceChatSends(page);
   await openComposer(page);
 
   await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
@@ -345,13 +342,11 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   const composer = page.locator(".cmp-input");
   await expect(composer).toHaveCount(1);
   await expect(page.getByRole("textbox", { name: "Chat message" })).toHaveCount(0);
-  await expect.poll(() => voiceTurns.turns().length).toBeGreaterThanOrEqual(2);
-  expect(voiceTurns.turns()).toEqual(
-    expect.arrayContaining([
-      { role: "user", content: "what is the deploy status" },
-      { role: "assistant", content: "The deploy is green." },
-    ]),
-  );
+  const conversation = page.getByRole("log", { name: "Conversation" });
+  await expect(conversation.getByText("what is the deploy status", { exact: true })).toBeVisible();
+  await expect(conversation.getByText(/KEIKO_E2E_STREAM_OK/u)).toBeVisible();
+  await expect.poll(() => providerNativeOutputEvents(page)).toBe(3);
+  await expect(conversation.getByText("The deploy is green.", { exact: true })).toHaveCount(0);
   await expect(composer).toHaveValue("");
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
@@ -360,7 +355,16 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
+  expect(chatSends.canonicalContents()).toEqual(["what is the deploy status"]);
+  expect(chatSends.legacyCount()).toBe(0);
 }
+
+test("voice dialogue @smoke — canonical payload parsing rejects non-object boundaries", () => {
+  for (const payload of [null, undefined, "spoken", 7, [], { content: 7 }]) {
+    expect(voiceChatPayloadContent(payload)).toBeUndefined();
+  }
+  expect(voiceChatPayloadContent({ content: "spoken turn" })).toBe("spoken turn");
+});
 
 test("voice dialogue @smoke — no-voice deployment offers no dialogue switch (AC4)", async ({
   page,
@@ -368,7 +372,7 @@ test("voice dialogue @smoke — no-voice deployment offers no dialogue switch (A
   await noVoiceFlow(page);
 });
 
-test("voice dialogue @smoke — Realtime WebRTC appends committed transcript turns (AC1/AC2/AC3)", async ({
+test("voice dialogue @smoke — Realtime WebRTC uses canonical chat turns (AC1/AC2/AC3)", async ({
   page,
 }) => {
   await dialogueTurnFlow(page);
