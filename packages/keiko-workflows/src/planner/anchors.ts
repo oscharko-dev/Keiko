@@ -225,6 +225,22 @@ interface MutableAnchor {
   kind: SearchAnchorKind;
 }
 
+const SENTENCE_PATH_SUFFIX = new Set([":", ";", ",", ".", "-"]);
+
+function trimTrailingCharacters(value: string, characters: ReadonlySet<string>): string {
+  let end = value.length;
+  while (end > 0 && characters.has(value[end - 1] ?? "")) end -= 1;
+  return value.slice(0, end);
+}
+
+function trimEdgeDots(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === ".") start += 1;
+  while (end > start && value[end - 1] === ".") end -= 1;
+  return value.slice(start, end);
+}
+
 function pushAnchor(
   out: MutableAnchor[],
   raw: string,
@@ -233,7 +249,9 @@ function pushAnchor(
 ): void {
   const trimmed = raw.trim();
   const withoutSentencePunctuation =
-    kind === "path" && trimmed.startsWith("/") ? trimmed.replace(/[:;,.-]+$/u, "") : trimmed;
+    kind === "path" && trimmed.startsWith("/")
+      ? trimTrailingCharacters(trimmed, SENTENCE_PATH_SUFFIX)
+      : trimmed;
   const term = withoutSentencePunctuation.toLowerCase();
   if (term.length > 0) {
     out.push({ term, weight, kind });
@@ -288,7 +306,7 @@ function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
 function tokenizeRemaining(remaining: string, out: MutableAnchor[]): number {
   let considered = 0;
   for (const raw of remaining.split(TOKEN_SPLIT_RE)) {
-    const normalizedRaw = raw.replace(/^\.+|\.+$/gu, "");
+    const normalizedRaw = trimEdgeDots(raw);
     if (normalizedRaw.length === 0) {
       continue;
     }

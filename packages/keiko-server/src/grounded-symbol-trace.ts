@@ -51,10 +51,10 @@ const MAX_DISCOVERY_EXCERPT_BYTES = 4096;
 const DISCOVERED_DEFINITION_CONTEXT_LINES = 24;
 const CONFIGURED_HANDLER_RE = /\bhandler\s*:\s*([A-Za-z_$][A-Za-z0-9_$]{1,127})\b/gu;
 const ROUTER_HANDLER_RE =
-  /\b(?:router|app|server)\s*\.\s*(?:get|post|put|patch|delete|head|options)\s*\([^,\n]+,\s*([A-Za-z_$][A-Za-z0-9_$]{1,127})\b/giu;
+  /\b(?:router|app|server)\s*\.\s*(?:get|post|put|patch|delete|head|options)\s*\([^,\n]+,\s*([a-z_$][a-z0-9_$]{1,127})\b/giu;
 const CALLED_SYMBOL_RE = /\b([A-Za-z_$][A-Za-z0-9_$]{2,127})\s*\(/gu;
 const ROUTE_TRACE_QUERY_RE =
-  /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b[^\n]*\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+/iu;
+  /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b[^\n]*\/[a-z0-9._~!$&'()*+,;=:@%/-]+/iu;
 const TEST_DIRECTORY_PATH_RE = /(?:^|\/)(?:tests?|__tests__)(?:\/|$)/iu;
 const TEST_FILE_PATH_RE = /\.(?:test|spec)\.[^/]+$/iu;
 const IGNORED_CALLED_SYMBOLS = new Set([
@@ -166,18 +166,18 @@ function discoveryAtoms(atoms: readonly EvidenceAtom[]): readonly EvidenceAtom[]
     .slice(0, MAX_DISCOVERY_ATOMS);
 }
 
+function compareRouteDiscoveryAtoms(a: EvidenceAtom, b: EvidenceAtom): number {
+  const routeDelta =
+    Number(ROUTE_REGISTRATION_PATH_RE.test(b.scopePath)) -
+    Number(ROUTE_REGISTRATION_PATH_RE.test(a.scopePath));
+  if (routeDelta !== 0) return routeDelta;
+  if (b.score !== a.score) return b.score - a.score;
+  return a.scopePath.localeCompare(b.scopePath);
+}
+
 function routeDiscoveryAtoms(atoms: readonly EvidenceAtom[]): readonly EvidenceAtom[] {
   return [...eligibleDiscoveryAtoms(atoms)]
-    .sort((a, b) => {
-      const routeDelta =
-        Number(ROUTE_REGISTRATION_PATH_RE.test(b.scopePath)) -
-        Number(ROUTE_REGISTRATION_PATH_RE.test(a.scopePath));
-      return routeDelta !== 0
-        ? routeDelta
-        : b.score !== a.score
-          ? b.score - a.score
-          : a.scopePath.localeCompare(b.scopePath);
-    })
+    .sort(compareRouteDiscoveryAtoms)
     .slice(0, MAX_DISCOVERY_ATOMS);
 }
 

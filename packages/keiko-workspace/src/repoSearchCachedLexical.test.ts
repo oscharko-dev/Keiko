@@ -129,8 +129,8 @@ describe("repoSearchCachedLexical", () => {
         policy,
       ),
     ).toEqual(new Map([["src/fresh.ts", expect.any(Number)]]));
-    expect(cachedContentScores([entry("src/other.ts", "unrelated")], retrieval, policy)).toBe(
-      undefined,
-    );
+    expect(
+      cachedContentScores([entry("src/other.ts", "unrelated")], retrieval, policy),
+    ).toBeUndefined();
   });
 });

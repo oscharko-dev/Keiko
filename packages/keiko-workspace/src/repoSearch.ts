@@ -921,11 +921,20 @@ function initialWorkspaceIndexSessionState(
   const hasUnindexedFiles =
     prepared?.entries.some((entry) => entry.stale || entry.record === undefined) ?? true;
   const useLiveContentPrescore = needsContentPrescore && hasUnindexedFiles;
-  const candidateSet = useLiveContentPrescore
-    ? gatherCandidates(scope, query, limits, runner.fs, runner.policy)
-    : prepared === undefined
-      ? gatherCandidatesWithoutContentPrescore(scope, query, limits, runner.fs, runner.policy)
-      : workspaceIndexCandidateSet(prepared, query, runner.policy);
+  let candidateSet: CandidateSet;
+  if (useLiveContentPrescore) {
+    candidateSet = gatherCandidates(scope, query, limits, runner.fs, runner.policy);
+  } else if (prepared === undefined) {
+    candidateSet = gatherCandidatesWithoutContentPrescore(
+      scope,
+      query,
+      limits,
+      runner.fs,
+      runner.policy,
+    );
+  } else {
+    candidateSet = workspaceIndexCandidateSet(prepared, query, runner.policy);
+  }
   return {
     candidateSet,
     ...seedWorkspaceIndexCaches(prepared, candidateSet),

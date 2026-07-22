@@ -402,21 +402,20 @@ export function lineLooksLikeSymbolDefinition(
 ): boolean {
   const escaped = escapeRegExp(symbolToken);
   const flags = caseSensitive ? "u" : "iu";
-  const modifiers =
-    "(?:(?:export|public|private|protected|internal|static|abstract|final|sealed|partial|data|open|override|virtual|readonly|async)\\s+)*";
-  const typedDeclarationToken = "[A-Za-z_$][\\w$<>,?.[\\]]*";
+  const modifiers = String.raw`(?:(?:export|public|private|protected|internal|static|abstract|final|sealed|partial|data|open|override|virtual|readonly|async)\s+)*`;
+  const typedDeclarationToken = String.raw`[A-Za-z_$][\w$<>,?.[\]]*`;
   const patterns = [
-    new RegExp(`\\b${modifiers}function\\s+${escaped}\\b`, flags),
-    new RegExp(`\\b${modifiers}(?:const|let|var)\\s+${escaped}\\b`, flags),
+    new RegExp(String.raw`\b${modifiers}function\s+${escaped}\b`, flags),
+    new RegExp(String.raw`\b${modifiers}(?:const|let|var)\s+${escaped}\b`, flags),
     new RegExp(
-      `\\b${modifiers}(?:class|interface|type|enum|record|struct|trait|object)\\s+${escaped}\\b`,
+      String.raw`\b${modifiers}(?:class|interface|type|enum|record|struct|trait|object)\s+${escaped}\b`,
       flags,
     ),
-    new RegExp(`\\b${escaped}\\s*[:=]\\s*(?:async\\s*)?\\(`, flags),
-    new RegExp(`\\b${modifiers}(?:def|func|fn|fun)\\s+${escaped}\\s*\\(`, flags),
-    new RegExp(`\\btype\\s+${escaped}\\s+(?:struct|interface)\\b`, flags),
+    new RegExp(String.raw`\b${escaped}\s*[:=]\s*(?:async\s*)?\(`, flags),
+    new RegExp(String.raw`\b${modifiers}(?:def|func|fn|fun)\s+${escaped}\s*\(`, flags),
+    new RegExp(String.raw`\btype\s+${escaped}\s+(?:struct|interface)\b`, flags),
     new RegExp(
-      `\\b${modifiers}(?!(?:await|return|throw|yield|new)\\b)${typedDeclarationToken}(?:\\s+${typedDeclarationToken})*\\s+${escaped}\\s*\\(`,
+      String.raw`\b${modifiers}(?!(?:await|return|throw|yield|new)\b)${typedDeclarationToken}(?:\s+${typedDeclarationToken})*\s+${escaped}\s*\(`,
       flags,
     ),
   ];

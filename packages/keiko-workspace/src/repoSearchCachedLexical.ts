@@ -215,12 +215,12 @@ export function bestCachedLexicalLines(
           },
         ];
   });
-  return scored
-    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.startLine - b.startLine))
-    .slice(0, 3)
-    .sort((a, b) =>
-      a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
-    );
+  scored.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.startLine - b.startLine));
+  const topLines = scored.slice(0, 3);
+  topLines.sort((a, b) =>
+    a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
+  );
+  return topLines;
 }
 
 export function cachedContentScores(
