@@ -129,11 +129,14 @@ function routeShapeMatches(hashes: ReadonlySet<string>, route: CachedRouteQuery)
 
 function routeWindowHashes(
   lines: readonly WorkspaceIndexLexicalLine[],
-  startLine: number,
+  startIndex: number,
 ): ReadonlySet<string> {
   const hashes = new Set<string>();
-  for (const line of lines) {
-    if (line.startLine < startLine || line.startLine >= startLine + ROUTE_WINDOW_LINES) continue;
+  const startLine = lines[startIndex]?.startLine;
+  if (startLine === undefined) return hashes;
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === undefined || line.startLine >= startLine + ROUTE_WINDOW_LINES) break;
     for (const hash of line.termHashes) hashes.add(hash);
   }
   return hashes;
@@ -144,8 +147,8 @@ function cachedRouteDeclarationMatches(
   route: CachedRouteQuery | undefined,
 ): boolean {
   if (route === undefined) return false;
-  for (const line of record.lines) {
-    const hashes = routeWindowHashes(record.lines, line.startLine);
+  for (let index = 0; index < record.lines.length; index += 1) {
+    const hashes = routeWindowHashes(record.lines, index);
     if (
       hashes.has(route.methodHash) &&
       intersects(hashes, route.pathHashes) &&

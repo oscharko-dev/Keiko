@@ -80,6 +80,7 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
   const options = window.__keikoVoiceFakeOptions || {};
   const emitTranscript = options.emitTranscript === true;
   const instrumentMic = options.instrumentMic === true;
+  window.__providerNativeOutputEvents = 0;
   const OFFER = "v=0\\r\\no=- 1 1 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
   const ANSWER = "v=0\\r\\no=- 2 2 IN IP4 0.0.0.0\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
   if (instrumentMic) window.__micStats = { getUserMedia: 0, stopped: 0 };
@@ -128,12 +129,15 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
       item_id: "user-item",
       transcript: "what is the deploy status",
     });
+    window.__providerNativeOutputEvents++;
     channel.emit({ type: "response.output_audio.delta", response_id: "resp-1", delta: "stub" });
+    window.__providerNativeOutputEvents++;
     channel.emit({
       type: "response.output_audio_transcript.done",
       response_id: "resp-1",
       transcript: "The deploy is green.",
     });
+    window.__providerNativeOutputEvents++;
     channel.emit({ type: "response.done", response: { id: "resp-1", status: "completed" } });
   }
   class FakeRTCPeerConnection {
@@ -293,6 +297,13 @@ async function micStat(page: Page, field: "getUserMedia" | "stopped"): Promise<n
   );
 }
 
+async function providerNativeOutputEvents(page: Page): Promise<number | undefined> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __providerNativeOutputEvents?: number }).__providerNativeOutputEvents,
+  );
+}
+
 async function noVoiceFlow(page: Page): Promise<void> {
   await stubCapability(page, NO_VOICE_CAPABILITY);
   await openComposer(page);
@@ -330,11 +341,11 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   const composer = page.locator(".cmp-input");
   await expect(composer).toHaveCount(1);
   await expect(page.getByRole("textbox", { name: "Chat message" })).toHaveCount(0);
-  await expect.poll(() => chatSends.canonicalContents()).toContain("what is the deploy status");
   const conversation = page.getByRole("log", { name: "Conversation" });
   await expect(conversation.getByText("what is the deploy status", { exact: true })).toBeVisible();
   await expect(conversation.getByText(/KEIKO_E2E_STREAM_OK/u)).toBeVisible();
-  expect(chatSends.legacyCount()).toBe(0);
+  await expect.poll(() => providerNativeOutputEvents(page)).toBe(3);
+  await expect(conversation.getByText("The deploy is green.", { exact: true })).toHaveCount(0);
   await expect(composer).toHaveValue("");
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
@@ -343,6 +354,8 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
+  expect(chatSends.canonicalContents()).toEqual(["what is the deploy status"]);
+  expect(chatSends.legacyCount()).toBe(0);
 }
 
 test("voice dialogue @smoke — canonical payload parsing rejects non-object boundaries", () => {

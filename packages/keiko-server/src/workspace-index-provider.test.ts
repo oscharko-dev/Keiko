@@ -79,7 +79,10 @@ describe("workspace index provider", () => {
     const workspaceRoot = tempDir("keiko-index-workspace-");
     const runtimeStateDir = tempDir("keiko-index-state-");
     try {
-      const provider = createServerWorkspaceIndexProvider({ runtimeStateDir });
+      const provider = createServerWorkspaceIndexProvider({
+        runtimeStateDir,
+        env: { KEIKO_WORKSPACE_INDEX_KEY: Buffer.alloc(32, 19).toString("base64") },
+      });
 
       expect(provider(workspaceRoot)).toBe(provider(workspaceRoot));
     } finally {

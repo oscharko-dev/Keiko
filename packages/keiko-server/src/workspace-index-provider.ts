@@ -6,19 +6,28 @@ import {
   createWorkspaceIndex,
   type WorkspaceIndex,
 } from "@oscharko-dev/keiko-workspace";
+import {
+  resolveLocalVaultKey,
+  type LocalVaultKeychainAccess,
+} from "@oscharko-dev/keiko-security/secret-vault";
 
-interface WorkspaceIndexEnv {
+interface WorkspaceIndexEnv extends Readonly<Record<string, string | undefined>> {
   readonly KEIKO_WORKSPACE_INDEX_DIR?: string | undefined;
+  readonly KEIKO_WORKSPACE_INDEX_KEY?: string | undefined;
 }
 
 export interface ServerWorkspaceIndexProviderOptions {
   readonly runtimeStateDir: string;
   readonly env?: WorkspaceIndexEnv | undefined;
+  readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
 }
 
 export type WorkspaceIndexProvider = (workspaceRoot: string) => WorkspaceIndex | undefined;
 
 const WORKSPACE_INDEX_RUNTIME_DIRNAME = "workspace-index";
+const WORKSPACE_INDEX_KEY_ENV = "KEIKO_WORKSPACE_INDEX_KEY";
+const WORKSPACE_INDEX_KEYCHAIN_SERVICE = "keiko-workspace-index-vault";
+const WORKSPACE_INDEX_KEYFILE = "workspace-index-vault.key";
 
 function resolvedRealPath(path: string): string {
   try {
@@ -89,8 +98,16 @@ export function createServerWorkspaceIndexProvider(
       return existing;
     }
     try {
+      const { key } = resolveLocalVaultKey({
+        env: options.env ?? process.env,
+        vaultDir: runtimeDir,
+        envVarName: WORKSPACE_INDEX_KEY_ENV,
+        keychainService: WORKSPACE_INDEX_KEYCHAIN_SERVICE,
+        keyfileName: WORKSPACE_INDEX_KEYFILE,
+        ...(options.keychainAccess === undefined ? {} : { keychainAccess: options.keychainAccess }),
+      });
       const index = createWorkspaceIndex(
-        createFileWorkspaceIndexStore({ runtimeDir, workspaceRoot }),
+        createFileWorkspaceIndexStore({ runtimeDir, workspaceRoot, encryptionKey: key }),
       );
       indexes.set(cacheKey, index);
       return index;

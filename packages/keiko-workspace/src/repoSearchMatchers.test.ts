@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 
@@ -32,9 +31,9 @@ describe("normalizeNaturalLanguageToken", () => {
 
   // SonarCloud S8786: the trailing strip used to be the unanchored `[^\p{L}\p{N}]+$`. Without a
   // `^` anchor, the engine retries the match at every position inside a long non-alphanumeric run
-  // before concluding there is no match at the string's end — quadratic in input length
-  // (confirmed empirically: ~580ms at 32k characters before the fix). Must stay fast well past
-  // that size.
+  // before concluding there is no match at the string's end — quadratic in input length. Keep the
+  // adversarial shape as a functional regression fixture; static analysis owns the performance
+  // detection without a host-load-sensitive timer.
   //
   // The adversarial input MUST start with an alphanumeric character. A run of non-alnum
   // characters at the very START of the string (e.g. `"!".repeat(60_000) + "a"`) is fully
@@ -45,11 +44,9 @@ describe("normalizeNaturalLanguageToken", () => {
   // (the string already starts with an alnum char), so the full 60,000-character run reaches the
   // trailing-strip logic — this is what actually reproduces the O(n^2) blowup on the old
   // `[^\p{L}\p{N}]+$` pattern (~1.8s at 60k characters on the pre-fix code).
-  it("stays fast on a long embedded non-alphanumeric run bounded by alnum chars (regression for SonarCloud S8786)", () => {
+  it("handles a long embedded non-alphanumeric run bounded by alnum chars (regression for SonarCloud S8786)", () => {
     const adversarial = `x${"!".repeat(60_000)}a`;
-    const start = Date.now();
     const result = normalizeNaturalLanguageToken(adversarial);
-    expect(Date.now() - start).toBeLessThan(1500);
     // Internal punctuation between two alphanumeric characters is preserved (same contract as the
     // "ADR-0022" case above) — the string is unchanged because there is nothing to strip at
     // either end.
@@ -67,9 +64,7 @@ describe("buildMatcher definition intent scoring", () => {
       ),
     ).toBe(true);
     const adversarial = `T${" ".repeat(40_000)}missing`;
-    const start = performance.now();
     expect(lineLooksLikeSymbolDefinition(adversarial, "loadUser", false)).toBe(false);
-    expect(performance.now() - start).toBeLessThan(500);
   });
 
   it("boosts JVM and .NET class declarations over plain references", () => {

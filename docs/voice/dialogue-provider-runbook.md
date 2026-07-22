@@ -23,22 +23,24 @@ It does not restate the configuration contract; read these first and treat them 
 ## 1. What "dialogue mode" requires
 
 The colleague-like dialogue switch (and its per-turn Speak / Interrupt controls) is offered only when
-the resolved voice capability is the **STT + TTS conjunction** _and_ at least one product voice persona
-is offered. The single predicate is `voiceDialogueModeForResolution`
+the resolved voice capability advertises **Realtime WebRTC media** _and_ at least one product voice
+persona is offered. The single predicate is `voiceDialogueModeForResolution`
 (`packages/keiko-ui/src/app/components/desktop/hooks/voice-dialogue-session.ts`), which gates both the
 switch and the session, fail-closed (ADR-0096 D3). In capability terms:
 
-| Configured providers                                   | Effective profile | Dialogue offered?                                    |
-| ------------------------------------------------------ | ----------------- | ---------------------------------------------------- |
-| None                                                   | `none`            | No (and no voice UI at all)                          |
-| Speech-to-text only (e.g. `keiko-stt`)                 | `speech-to-text`  | No — dictation only (composer mic)                   |
-| Speech-output only (e.g. `keiko-tts`)                  | `speech-output`   | No — assistant playback only                         |
-| STT **and** speech output, **or** realtime, + personas | `full-realtime`   | **Yes** — full spoken dialogue (male/female/neutral) |
+| Configured providers                                     | Effective profile | Dialogue offered?                                    |
+| -------------------------------------------------------- | ----------------- | ---------------------------------------------------- |
+| None                                                     | `none`            | No (and no voice UI at all)                          |
+| Speech-to-text only (e.g. `keiko-stt`)                   | `speech-to-text`  | No — dictation only (composer mic)                   |
+| Speech-output only (e.g. `keiko-tts`)                    | `speech-output`   | No — assistant playback only                         |
+| STT and speech output, but no Realtime WebRTC + personas | `full-realtime`   | No — push-to-talk helpers only                       |
+| Realtime WebRTC + personas                               | `full-realtime`   | **Yes** — full spoken dialogue (male/female/neutral) |
 
 The practical consequence for bring-up: a deployment that has registered **only** `keiko-stt` (the
 default development convenience) gets composer dictation, **not** spoken dialogue. To get the colleague
-experience you must additionally register a speech-output (or realtime) provider that declares
-`voiceProfiles` for the personas. This is by design — see [§3](#3-bringing-up-full-dialogue-mode).
+experience you must register a Realtime provider with WebRTC media and `voiceProfiles` for the
+personas. STT+TTS without Realtime remains a push-to-talk composition and does not expose the
+dialogue switch. This is by design — see [§3](#3-bringing-up-full-dialogue-mode).
 
 ## 2. The `oscharko-dev` development profile credentials
 

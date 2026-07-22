@@ -1412,46 +1412,51 @@ describe("handleGroundedAsk", () => {
     });
     const diagnostics: ServerDiagnosticRecord[] = [];
 
-    const result = await handleGroundedAsk(
-      ctx(
-        JSON.stringify({
-          chatId,
-          content: "Which package manager should I use?",
-          memory: {
-            enabled: true,
-            budgetTokens: 1200,
-            mode: "governed-assist",
-            context: {
-              userId: "local-operator",
-              workspaceId: projectPath,
-              projectId: projectPath,
-              conversationId: chatId,
+    try {
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "Which package manager should I use?",
+            memory: {
+              enabled: true,
+              budgetTokens: 1200,
+              mode: "governed-assist",
+              context: {
+                userId: "local-operator",
+                workspaceId: projectPath,
+                projectId: projectPath,
+                conversationId: chatId,
+              },
             },
+          }),
+        ),
+        deps(
+          undefined,
+          {},
+          {
+            memoryVault: failingMemoryVault,
+            diagnostics: { record: (record) => diagnostics.push(record) },
           },
-        }),
-      ),
-      deps(
-        undefined,
-        {},
-        {
-          memoryVault: failingMemoryVault,
-          diagnostics: { record: (record) => diagnostics.push(record) },
-        },
-      ),
-      runner(emptyPack(), "Use the package manager configured by the repository."),
-    );
+        ),
+        runner(emptyPack(), "Use the package manager configured by the repository."),
+      );
 
-    expect(result.status).toBe(200);
-    expect((result.body as GroundedAnswer).content).toContain("package manager");
-    expect((result.body as GroundedAnswer & { readonly memory?: unknown }).memory).toBeUndefined();
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]).toMatchObject({
-      operation: "grounded.memory",
-      source: "grounded-qa.attach-memory",
-      message: "grounded-memory-enrichment-failed",
-    });
-    expect(JSON.stringify(diagnostics)).not.toContain("sensitive-memory-backend-detail");
-    memoryVault.close();
+      expect(result.status).toBe(200);
+      expect((result.body as GroundedAnswer).content).toContain("package manager");
+      expect(
+        (result.body as GroundedAnswer & { readonly memory?: unknown }).memory,
+      ).toBeUndefined();
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        operation: "grounded.memory",
+        source: "grounded-qa.attach-memory",
+        message: "grounded-memory-enrichment-failed",
+      });
+      expect(JSON.stringify(diagnostics)).not.toContain("sensitive-memory-backend-detail");
+    } finally {
+      memoryVault.close();
+    }
   });
 
   it("returns empty citations + uncertainty when the pack carries none", async () => {

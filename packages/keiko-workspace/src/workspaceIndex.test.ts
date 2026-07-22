@@ -27,7 +27,7 @@ import {
   buildWorkspaceIndexSnapshot,
   buildWorkspaceIndexScopeKey,
   buildWorkspaceIndexLexicalRecord,
-  createFileWorkspaceIndexStore,
+  createFileWorkspaceIndexStore as createEncryptedFileWorkspaceIndexStore,
   createInMemoryWorkspaceIndexStore,
   createWorkspaceIndex,
   inspectWorkspaceIndexDirectories,
@@ -36,6 +36,7 @@ import {
   prepareCachedWorkspaceIndexSnapshot,
   stripTrailingNonWordChars,
   type WorkspaceIndex,
+  type FileWorkspaceIndexStoreOptions,
   type WorkspaceIndexStore,
   type WorkspaceIndexSnapshot,
   workspaceIndexCandidateSet,
@@ -43,6 +44,16 @@ import {
 
 const MEM_ROOT = "/ws";
 const FIXED_NOW: () => number = () => 1_700_000_000_000;
+const FILE_INDEX_TEST_KEY = Buffer.alloc(32, 23);
+
+function createFileWorkspaceIndexStore(
+  options: Omit<FileWorkspaceIndexStoreOptions, "encryptionKey">,
+): WorkspaceIndexStore {
+  return createEncryptedFileWorkspaceIndexStore({
+    ...options,
+    encryptionKey: FILE_INDEX_TEST_KEY,
+  });
+}
 
 interface MutableTrackedFs {
   readonly counters: {
@@ -1440,7 +1451,7 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("writes file-backed snapshots with hashed filenames and source-free path-free JSON", async () => {
+  it("seals file-backed snapshots so paths, source, and lexical hashes are not recoverable", async () => {
     const runtimeDir = tempRuntimeDir();
     const secret = ["sk-", "abcdef0123456789ABCDEF"].join("");
     const unsupportedSecret = "hf_abcdefghijklmnopqrstuvwxyz123456";
@@ -1462,13 +1473,16 @@ describe("workspaceIndex", () => {
         throw new Error("expected persisted snapshot file");
       }
       const raw = readFileSync(join(runtimeDir, fileName), "utf8");
+      const tokenHash = createHash("sha256").update("token").digest("hex");
 
       expect(fileName).toMatch(/^workspace-index-[0-9a-f]{64}\.json$/u);
       expect(fileName).not.toContain(MEM_ROOT);
+      expect(raw).toMatch(/^kv1\./u);
       expect(raw).not.toContain(MEM_ROOT);
       expect(raw).not.toContain(secret);
       expect(raw).not.toContain(unsupportedSecret);
       expect(raw).not.toContain("export const");
+      expect(raw).not.toContain(tokenHash);
     } finally {
       removeRuntimeDir(runtimeDir);
     }
@@ -1749,6 +1763,23 @@ describe("workspaceIndex", () => {
       writeFileSync(join(runtimeDir, fileName), "{broken", "utf8");
 
       await expect(store.loadSnapshot("corrupt-key")).resolves.toBeUndefined();
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
+  it("fails closed when a file-backed snapshot key changes", async () => {
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const writer = createFileWorkspaceIndexStore({ runtimeDir });
+      await writer.saveSnapshot("key-rotation", sampleSnapshot("needle"));
+      await expect(writer.loadSnapshot("key-rotation")).resolves.toBeDefined();
+      const wrongKeyReader = createEncryptedFileWorkspaceIndexStore({
+        runtimeDir,
+        encryptionKey: Buffer.alloc(32, 31),
+      });
+
+      await expect(wrongKeyReader.loadSnapshot("key-rotation")).resolves.toBeUndefined();
     } finally {
       removeRuntimeDir(runtimeDir);
     }

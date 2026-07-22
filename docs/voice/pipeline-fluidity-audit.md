@@ -48,6 +48,12 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
 
 ### Earlier July 9 changes
 
+> **Historical, superseded architecture:** the first three bullets below describe the July 9
+> provider-owned dialogue design. The canonical-chat parity correction above replaced it: current
+> Realtime sessions carry media, VAD, and transcription only, with no provider retrieval tools,
+> MemoriaViva priming, assistant instructions, or native response generation. They remain here solely
+> as an audit trail and must not be used as current configuration guidance.
+
 - **Atomic server-owned Realtime session:** standard-key WebRTC negotiation now sends GA multipart
   `sdp` + complete `session` configuration in one call. Ephemeral-session negotiation applies the same
   configuration while minting the token. Keiko's persona, recent chat, MemoriaViva priming, grounding
