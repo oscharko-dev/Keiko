@@ -329,7 +329,35 @@ describe("AC #3 — pending attachment removal", () => {
     });
     vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [bootChat] });
     vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
-    vi.spyOn(api, "sendDesktopChat").mockResolvedValue({ chat: bootChat, messages: [] });
+    vi.spyOn(api, "sendDesktopChat").mockResolvedValue({
+      chat: bootChat,
+      messages: [
+        {
+          id: "att-user",
+          chatId: bootChat.id,
+          role: "user",
+          content: "here is my file",
+          timestamp: 1,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+        {
+          id: "att-assistant",
+          chatId: bootChat.id,
+          role: "assistant",
+          content: "I received the file.",
+          timestamp: 2,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+      ],
+    });
 
     const view = renderHook(() => useChatSession());
     await waitFor(() => {

@@ -19,6 +19,10 @@ import {
 import { resolveSearchPolicy } from "./repoSearchPolicy.js";
 import { buildMatcher, fingerprintFor } from "./repoSearchMatchers.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
+import {
+  buildWorkspaceIndexLexicalRecord,
+  type PreparedWorkspaceIndexEntry,
+} from "./workspaceIndex.js";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -239,6 +243,46 @@ describe("scanFile – binaryOmission re-throws non-IO errors", () => {
     await expect(
       scanFile(runner, discoveredFile("src/a.ts", 7), state, atoms, candidates),
     ).rejects.toBeInstanceOf(TypeError);
+  });
+});
+
+describe("scanFile – cached metadata validation", () => {
+  it("does not silently downgrade a programmer error from cached-entry stat", async () => {
+    const content = "needle\n";
+    const base = memFs(MEM_ROOT, { "src/a.ts": content });
+    let statCalls = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (absolutePath) => {
+        statCalls += 1;
+        if (statCalls === 1) throw new TypeError("unexpected cached stat shape");
+        return base.stat(absolutePath);
+      },
+    };
+    const entry: PreparedWorkspaceIndexEntry = {
+      scopePath: "src/a.ts",
+      absolutePath: `${MEM_ROOT}/src/a.ts`,
+      file: discoveredFile("src/a.ts", content.length),
+      record: {
+        scopePath: "src/a.ts",
+        sizeBytes: content.length,
+        kind: "text",
+        lexical: buildWorkspaceIndexLexicalRecord(content),
+      },
+      stale: false,
+    };
+    const runner: SearchTextRunner = {
+      ...buildRunner(fs),
+      workspaceIndex: {
+        entries: new Map([[entry.scopePath, entry]]),
+        onRecord: () => undefined,
+        onStale: () => undefined,
+      },
+    };
+
+    await expect(
+      scanFile(runner, discoveredFile("src/a.ts", content.length), freshState(), [], []),
+    ).rejects.toThrow("unexpected cached stat shape");
   });
 });
 

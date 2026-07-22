@@ -6,7 +6,9 @@
 
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { useDictation } from "./useDictation";
+import { REALTIME_TRANSCRIPT_LIMIT_MESSAGE } from "./voice-realtime-events";
 import {
   DictationRecorderError,
   type DictationCapture,
@@ -137,7 +139,6 @@ function makeRealtimeDictationFakes(
   const session: VoiceRtcSession = {
     offerSdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
     applyAnswer,
-    onRemoteTrack: vi.fn(),
     onConnectionStateChange: vi.fn(),
     onLocalVoiceActivity: vi.fn(),
     onDataChannelStateChange: vi.fn(),
@@ -833,6 +834,41 @@ describe("useDictation — realtime live dictation (P3)", () => {
     expect(result.current.finalizationNote).toBe(
       "No final transcript arrived; review the live text before inserting.",
     );
+  });
+
+  it("fails closed when cumulative live deltas exceed the canonical chat input limit", async () => {
+    const fakes = makeRealtimeDictationFakes();
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: () => fakes.transport,
+          createControlClient: () => fakes.control,
+        },
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    act(() => {
+      fakes.emitDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        delta: "a".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS / 2 + 1),
+      });
+      fakes.emitDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        delta: "b".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS / 2),
+      });
+    });
+
+    expect(result.current.liveTranscript).toBe("");
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.error).toEqual({
+      reason: "transcribe-failed",
+      message: REALTIME_TRANSCRIPT_LIMIT_MESSAGE,
+    });
   });
 
   it("cancel closes the realtime control client, peer connection, data channel, and mic tracks", async () => {

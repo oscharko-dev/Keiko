@@ -147,6 +147,26 @@ describe("buildEditorOptions", () => {
     ).toEqual({ enabled: "on" });
   });
 
+  it("enables every governed assistance surface only through explicit provider flags", () => {
+    const governed = buildEditorOptions({
+      readOnly: false,
+      ariaPath: "a.ts",
+      inlineCompletionEnabled: true,
+      hoverEnabled: true,
+      codeActionsEnabled: true,
+      signatureHelpEnabled: true,
+      inlayHintsEnabled: true,
+    });
+
+    expect(governed.hover).toEqual({ enabled: true, above: false });
+    expect(governed.inlineSuggest).toMatchObject({ enabled: true, showToolbar: "never" });
+    expect(governed.lightbulb).toEqual({ enabled: "on" });
+    expect(governed.parameterHints).toEqual({ enabled: true });
+    expect(governed.inlayHints).toEqual({ enabled: "on" });
+    expect(governed.links).toBe(false);
+    expect(governed.codeLens).toBe(false);
+  });
+
   it("keeps every other markdown-capable helper surface off even when hover is enabled (#1201)", () => {
     const withHover = buildEditorOptions({
       readOnly: false,

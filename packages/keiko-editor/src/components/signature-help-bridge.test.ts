@@ -14,7 +14,7 @@ import {
 } from "./signature-help-bridge.js";
 import type { MonacoCancellationToken } from "./completion-bridge.js";
 import type { MonacoUriLike } from "./definition-bridge.js";
-import type { EditorSignatureHelpResolver } from "../types.js";
+import type { EditorSignatureHelpResolver, EditorSignatureInformation } from "../types.js";
 
 const URI: MonacoUriLike = { toString: () => "keiko-editor://current" };
 
@@ -52,6 +52,23 @@ describe("signature-help pure mappers", () => {
     ).toEqual({
       label: "fn(value: string): void",
       documentation: "call fn",
+      parameters: [{ label: "value" }],
+    });
+  });
+
+  it("drops runtime Markdown objects instead of exposing them to Monaco", () => {
+    const hostileSignature: EditorSignatureInformation = {
+      label: "fn(value: string): void",
+      documentation: "plain text",
+      parameters: [{ label: "value" }],
+    };
+    // Simulate a hostile JavaScript host crossing the typed resolver boundary at runtime.
+    Object.defineProperty(hostileSignature, "documentation", {
+      value: { value: "<img src=x onerror=alert(1)>", isTrusted: true },
+    });
+
+    expect(signatureToMonaco(hostileSignature)).toEqual({
+      label: "fn(value: string): void",
       parameters: [{ label: "value" }],
     });
   });

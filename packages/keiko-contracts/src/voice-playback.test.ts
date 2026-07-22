@@ -5,6 +5,7 @@ import { VOICE_MEDIA_PLANE, VOICE_PLAYBACK_STATES } from "./voice-protocol.js";
 import {
   VOICE_PLAYBACK_ACTIVE_PHASES,
   VOICE_PLAYBACK_AUDIO_PLANE,
+  VOICE_CANONICAL_PLAYBACK_AUDIO_PLANE,
   VOICE_PLAYBACK_EFFECTS,
   VOICE_PLAYBACK_FAILURE_KINDS,
   VOICE_PLAYBACK_PHASE_REDACTION,
@@ -128,11 +129,18 @@ describe("classification tables", () => {
     }
   });
 
-  it("audio plane is the never-persisted, raw-media, media-plane descriptor (AC4)", () => {
+  it("preserves the v1 playback plane and names canonical TTS output additively (AC4)", () => {
     expect(VOICE_PLAYBACK_AUDIO_PLANE).toBe(VOICE_MEDIA_PLANE);
     expect(VOICE_PLAYBACK_AUDIO_PLANE.plane).toBe("media");
     expect(VOICE_PLAYBACK_AUDIO_PLANE.replay).toBe("never-persisted");
     expect(VOICE_PLAYBACK_AUDIO_PLANE.redaction).toBe("raw-media");
+    expect(VOICE_CANONICAL_PLAYBACK_AUDIO_PLANE).toMatchObject({
+      plane: "media",
+      transport: "gateway-batch",
+      direction: "output",
+      replay: "never-persisted",
+      redaction: "raw-media",
+    });
   });
 });
 

@@ -13,7 +13,7 @@ import {
 } from "./ecosystems.js";
 import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
 import {
-  lineLooksLikeSymbolDefinition,
+  structuralLineLooksLikeSymbolDefinition,
   naturalLanguageContentTermGroups,
   naturalLanguageContentTerms,
 } from "./repoSearchMatchers.js";
@@ -21,6 +21,14 @@ import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
 import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSearchSemantic.js";
 import { isDenied } from "./ignore.js";
+import { stripTestIdentifierSuffix } from "./repoSearchIdentifier.js";
+import {
+  REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES,
+  repositoryRouteDeclarationMarker,
+  repositoryRouteDeclarationMarkers,
+  repositoryRouteQuery,
+} from "./repoSearchRoutes.js";
+import { repositorySourceLines } from "./repoSearchSourceClassification.js";
 import type { DiscoveredFile } from "./types.js";
 
 export type SearchIntent =
@@ -354,9 +362,6 @@ const SHORT_CODE_TERMS: ReadonlySet<string> = new Set([
   "ui",
   "io",
 ]);
-const ROUTE_QUERY_PATH_RE = /\/[A-Za-z0-9:_?&=./-]*[A-Za-z0-9_}/-]/u;
-const ROUTE_QUERY_METHOD_RE = /\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
-const ROUTE_DECLARATION_WINDOW_LINES = 4;
 const ROUTE_DECLARATION_BONUS = 160;
 
 function keepContentTerm(term: string): boolean {
@@ -400,11 +405,14 @@ function exactSymbolContentBonus(query: RetrievalQuery, haystack: string): numbe
   return haystack.includes(needle) ? 45 : 0;
 }
 
-function exactSymbolDefinitionContentBonus(query: RetrievalQuery, text: string): number {
+function exactSymbolDefinitionContentBonus(
+  query: RetrievalQuery,
+  sourceLines: ReturnType<typeof repositorySourceLines>,
+): number {
   if (query.kind !== "exact-symbol") return 0;
-  return text
-    .split(/\r?\n/u)
-    .some((line) => lineLooksLikeSymbolDefinition(line, query.text, query.caseSensitive))
+  return sourceLines.some((line) =>
+    structuralLineLooksLikeSymbolDefinition(line.structural, query.text, query.caseSensitive),
+  )
     ? 120
     : 0;
 }
@@ -455,43 +463,27 @@ function contentTermScore(
   return Math.min(140, Math.round(rawScore * intentMultiplier));
 }
 
-function routeDeclarationShape(window: string, method: string): boolean {
-  const configured =
-    window.includes("handler:") &&
-    (window.includes("pattern:") || window.includes("path:") || window.includes("method:"));
-  return (
-    configured ||
-    window.includes(`router.${method}(`) ||
-    window.includes(`app.${method}(`) ||
-    window.includes(`server.${method}(`) ||
-    window.includes(`@${method}(`) ||
-    window.includes(`@${method}mapping`) ||
-    window.includes("handlefunc(")
-  );
-}
-
 export interface RouteQueryTerms {
   readonly path: string;
   readonly method: string;
 }
 
 export function routeQueryTermsForSearch(query: RetrievalQuery): RouteQueryTerms | undefined {
-  const path = ROUTE_QUERY_PATH_RE.exec(query.text)?.[0]?.toLowerCase();
-  const method = ROUTE_QUERY_METHOD_RE.exec(query.text)?.[1]?.toLowerCase();
-  return path === undefined || method === undefined ? undefined : { path, method };
+  return repositoryRouteQuery(query.text);
 }
 
-function routeDeclarationContentBonus(query: RetrievalQuery, text: string): number {
+function routeDeclarationContentBonus(
+  query: RetrievalQuery,
+  sourceLines: ReturnType<typeof repositorySourceLines>,
+): number {
   const route = routeQueryTermsForSearch(query);
   if (route === undefined) return 0;
-  const lines = text.toLowerCase().split(/\r?\n/u);
-  for (let index = 0; index < lines.length; index += 1) {
-    const window = lines.slice(index, index + ROUTE_DECLARATION_WINDOW_LINES).join(" ");
-    if (
-      window.includes(route.path) &&
-      window.includes(route.method) &&
-      routeDeclarationShape(window, route.method)
-    ) {
+  const expectedMarker = repositoryRouteDeclarationMarker(route.method, route.path);
+  for (let index = 0; index < sourceLines.length; index += 1) {
+    const window = sourceLines.slice(index, index + REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES);
+    const code = window.map((line) => line.code).join("\n");
+    const structural = window.map((line) => line.structural).join("\n");
+    if (repositoryRouteDeclarationMarkers(code, structural).includes(expectedMarker)) {
       return ROUTE_DECLARATION_BONUS;
     }
   }
@@ -499,8 +491,8 @@ function routeDeclarationContentBonus(query: RetrievalQuery, text: string): numb
 }
 
 export function scoreContentHitsForSearch(
-  query: RetrievalQuery,
   policy: SearchPolicy,
+  termCount: number,
   hits: ContentSearchHitCounts,
   exactSymbolMatched: boolean,
   routeDeclarationMatched: boolean,
@@ -508,7 +500,7 @@ export function scoreContentHitsForSearch(
 ): number {
   const lexicalScore = contentTermScore(
     hits,
-    contentTermGroupsForSearch(query).length,
+    termCount,
     exactSymbolMatched ? 45 : 0,
     policy.intent,
   );
@@ -524,6 +516,7 @@ export function scoreContentForSearch(
   query: RetrievalQuery,
   text: string,
   policy: SearchPolicy,
+  scopePath?: string,
 ): number {
   if (query.kind !== "natural-language" && query.kind !== "exact-symbol") {
     return 0;
@@ -537,13 +530,14 @@ export function scoreContentForSearch(
   }
   const haystack = query.caseSensitive ? text : text.toLowerCase();
   const tokens = contentTokenSet(text, query.caseSensitive);
+  const sourceLines = repositorySourceLines(text, scopePath);
   return scoreContentHitsForSearch(
-    query,
     policy,
+    groups.length,
     countContentTermHits(groups, haystack, tokens, query.caseSensitive),
     exactSymbolContentBonus(query, haystack) > 0,
-    routeDeclarationContentBonus(query, text) > 0,
-    exactSymbolDefinitionContentBonus(query, text) > 0,
+    routeDeclarationContentBonus(query, sourceLines) > 0,
+    exactSymbolDefinitionContentBonus(query, sourceLines) > 0,
   );
 }
 
@@ -553,6 +547,18 @@ const bucketByPath: (scopePath: string) => CandidateBucket = memoizeByStringKey(
   PATH_MEMO_MAX_ENTRIES,
   bucketByPathUncached,
 );
+
+function isOverviewPath(path: string, name: string): boolean {
+  return OVERVIEW_FILENAMES.has(path) || OVERVIEW_FILENAMES.has(name);
+}
+
+function isTestPath(path: string, scopePath: string): boolean {
+  if (TEST_FILE_RE.test(path)) return true;
+  const originalName = basename(scopePath.replaceAll("\\", "/"));
+  const extensionStart = originalName.lastIndexOf(".");
+  const identifier = extensionStart < 0 ? originalName : originalName.slice(0, extensionStart);
+  return stripTestIdentifierSuffix(identifier) !== undefined;
+}
 
 function bucketByPathUncached(scopePath: string): CandidateBucket {
   const path = normalizedPath(scopePath);
@@ -564,7 +570,7 @@ function bucketByPathUncached(scopePath: string): CandidateBucket {
   if (isCanonicalMetadataFile(path)) {
     return "canonical-metadata";
   }
-  if (OVERVIEW_FILENAMES.has(path) || OVERVIEW_FILENAMES.has(name)) {
+  if (isOverviewPath(path, name)) {
     return "overview-doc";
   }
   if (isLockfile(path)) {
@@ -580,7 +586,7 @@ function bucketByPathUncached(scopePath: string): CandidateBucket {
   if (isConfigPath(path)) {
     return "config";
   }
-  if (TEST_FILE_RE.test(path)) {
+  if (isTestPath(path, scopePath)) {
     return "test";
   }
   if (isSourceExtension(ext, path)) {

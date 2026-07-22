@@ -15,11 +15,15 @@ import {
   INFILLING_ALIGNMENTS,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
+  isCompleteRealtimeVoiceCapability,
   listCapabilities,
   modelSupportsInfilling,
   resolveCostClass,
   selectCheapest,
   selectCompletionModelFromCapabilities,
+  selectRealtimeVoiceCapability,
+  selectSpeechInputCapability,
+  selectSpeechOutputCapability,
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
   loadConfigFromFile,
@@ -107,11 +111,15 @@ describe("keiko-model-gateway package surface", () => {
     expect(Array.from(INFILLING_ALIGNMENTS)).toEqual(["base", "instruct", "edit-tuned"]);
     expect(typeof isAlignedInfillingModel).toBe("function");
     expect(typeof isAsYouTypeCompletionModel).toBe("function");
+    expect(typeof isCompleteRealtimeVoiceCapability).toBe("function");
     expect(typeof listCapabilities).toBe("function");
     expect(typeof modelSupportsInfilling).toBe("function");
     expect(typeof resolveCostClass).toBe("function");
     expect(typeof selectCheapest).toBe("function");
     expect(typeof selectCompletionModelFromCapabilities).toBe("function");
+    expect(typeof selectRealtimeVoiceCapability).toBe("function");
+    expect(typeof selectSpeechInputCapability).toBe("function");
+    expect(typeof selectSpeechOutputCapability).toBe("function");
   });
 
   it("exposes the config helpers as callable functions", () => {

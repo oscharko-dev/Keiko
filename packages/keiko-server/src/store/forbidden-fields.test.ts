@@ -66,6 +66,10 @@ const ALLOWED_CHAT_MESSAGES_COLUMNS = new Set([
   "task_type",
   "grounded_answer_json",
   "grounded_preview_citations_json",
+  // V12 stores only the scoped digest and lifecycle state of an opaque client turn identity.
+  "client_turn_id",
+  "client_turn_state",
+  "client_turn_content_digest",
 ]);
 
 const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([

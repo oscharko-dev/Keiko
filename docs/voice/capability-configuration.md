@@ -7,9 +7,10 @@ and D7** of [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architectur
 
 Voice is **optional and capability-gated**. Keiko starts and remains fully usable when no voice model is
 configured, is unreachable, or is disabled by policy. Capability detection is **metadata-only**: it never
-calls an external endpoint during ordinary startup, and the resolved capability is **content-free** (only
-enum literals and booleans) — no provider base URL, credential, model id, audio, or transcript ever reaches
-the browser or any log.
+calls an external endpoint during ordinary startup. `VoiceCapabilityResolution` is a safe projection of
+enum literals and booleans and contains no provider base URL, credential, model id, audio, or transcript.
+Other established browser APIs may expose safe model identifiers or bounded voice payloads for their own
+functions; this capability endpoint does not widen those contracts.
 
 ## 1. The voice capability model
 
@@ -26,12 +27,12 @@ The voice modality is refined by additive optional flags:
 | `supportsSpeechInput`                 | Speech-to-text / transcription (audio in → text); composer dictation.         |
 | `supportsSpeechOutput`                | Speech output / synthesis (text → audio playback).                            |
 | `supportsSpeechSynthesisInstructions` | Synthesis accepts tone, pacing, and intonation instructions.                  |
-| `supportsRealtimeVoice`               | Realtime, full-duplex speech (interruptible, colleague-like).                 |
+| `supportsRealtimeVoice`               | Realtime microphone media, VAD, and final transcription.                      |
 | `supportsSemanticTurnDetection`       | Realtime endpoint accepts patient semantic VAD with low eagerness.            |
 | `realtimeTranscriptionModel`          | Input transcription model for the realtime dialogue session.                  |
 | `voiceProviderLocality`               | Where the provider runs: `azure-foundry`, `customer-hosted`, or `local-only`. |
 
-Two invariants are enforced by the config parser (`packages/keiko-model-gateway/src/config.ts`), identically
+Three invariants are enforced by the config parser (`packages/keiko-model-gateway/src/config.ts`), identically
 for the strict top-level `capabilities` array and the inline per-provider `capability`:
 
 1. **Voice fields require `kind: "voice"`.** A `chat`/`embedding`/`ocr-vision` capability that declares any
@@ -51,21 +52,34 @@ Adding the `voice` kind is a structural change, so `CONVERSATION_CAPABILITY_CONT
 
 ### First-run setup for operators
 
-The credential dialog groups audio configuration by user-visible outcome and uses one shared audio
-connection. Digital Voice has two explicit deployment roles because Azure and similar providers resolve the
-Realtime session model and its live transcription model independently:
+The credential dialog groups audio configuration by user-visible outcome. A newly submitted role group may
+share one audio connection, but Keiko does not assume that already configured roles on different provider
+records share an endpoint, credential, authentication header, or locality. Digital Voice has two explicit
+deployment roles because Azure and similar providers resolve the Realtime session model and its live
+transcription model independently:
 
 - **Dictate** needs the exact speech-to-text deployment name.
 - **Digital Voice · Realtime** needs the exact Realtime media/VAD deployment name.
 - **Digital Voice · live transcription** needs the exact deployment name accepted by that Realtime session
   for `input_audio_transcription`. On Azure this is a deployment name, not the underlying model family name.
-- **Read aloud** optionally needs a text-to-speech deployment name.
+- **Read aloud** needs a text-to-speech deployment name and an explicit provider voice id.
 
-Enter the audio endpoint URL and credential once, then fill only the deployment roles the installation
-supports. Keiko stores each role as explicit capability metadata and shows the corresponding controls only
-when that capability is configured. Output-capable roles receive the neutral `alloy` persona by default so a
-valid Realtime installation exposes Digital Voice immediately; an operator can replace the provider voice id
-in the same dialog. Advanced auth-header, locality, and timeout fields normally keep their defaults.
+For a new connection, enter the endpoint URL and credential once, then fill only the deployment roles the
+installation supports. Replacing a stored endpoint is stricter: the operator must resubmit a fresh
+credential, provider locality, and every role that should move. Unsubmitted roles remain on their existing
+connection. A provider record that carries several roles must be migrated atomically because one model id
+cannot point at two endpoints. Credential, auth-header, or locality updates without explicit roles are
+accepted only when the runtime-elected providers have the same complete connection identity; otherwise
+setup rejects the ambiguous update without changing configuration. Canonically equivalent HTTPS URLs
+(host case, default port, dot segments, and trailing slash) retain the same identity, while a different path
+or non-default port is a replacement.
+
+Keiko stores each role as explicit capability metadata and shows the corresponding controls only when that
+capability is configured. It does not assume a portable voice name: the operator must map at least one
+product persona to an id explicitly supported by the selected speech-output provider. An output voice id
+without a speech-output role is rejected rather than ignored. Realtime never receives or contributes an
+output voice. Every present setup field is type-checked before fallback resolution, so malformed values
+cannot silently inherit an old setting. Advanced auth-header and timeout fields normally keep their defaults.
 
 The dialog validates configuration structure before saving, but it does not upload synthetic customer audio.
 Provider availability is therefore verified on first use, and failures remain content-free and credential-free.
@@ -98,8 +112,8 @@ three. Declare it as a Model Gateway provider with an inline voice capability:
 
 A customer-hosted controlled-network deployment uses the identical shape with
 `"voiceProviderLocality": "customer-hosted"` and the customer endpoint (which may be a private/RFC-1918
-host). A full-realtime provider additionally sets `"supportsRealtimeVoice": true` (and/or both
-`supportsSpeechInput` and `supportsSpeechOutput`).
+host). A Realtime capture provider additionally sets `"supportsRealtimeVoice": true`; independent
+speech output is declared only by the provider that performs text-to-speech synthesis.
 
 For a current provider that supports semantic endpointing and the low-latency transcription model, the
 realtime capability adds:
@@ -114,13 +128,14 @@ realtime capability adds:
 }
 ```
 
-Omit semantic VAD when the configured endpoint does not support it. For provider endpoints that require
-deployment aliases, configure `realtimeTranscriptionModel` explicitly; otherwise a model-family default may
-not resolve and final user speech will never reach the chat. When advertised, Keiko selects low-eagerness
-semantic VAD on the server and preserves it in the browser; a 1.6-second client continuation window merges
-any provider-split phrase before chat submission. The setup wizard exposes semantic VAD as an explicit,
-off-by-default capability so a deployment never advertises unverified provider support. The browser never
-receives the transcription deployment name.
+Omit semantic VAD when the configured endpoint does not support it. Every Realtime provider must configure
+`realtimeTranscriptionModel` as the exact compatible deployment alias; setup rejects a new or replaced
+Realtime deployment without it, and the runtime keeps the Realtime control plane closed for incomplete
+manual or legacy configuration. Keiko never substitutes a provider-specific model-family default. When
+advertised, Keiko selects low-eagerness semantic VAD on the server and preserves it in the browser; a
+1.6-second client continuation window merges any provider-split phrase before chat submission. The setup
+wizard exposes semantic VAD as an explicit, off-by-default capability so a deployment never advertises
+unverified provider support. The browser never receives the transcription deployment name.
 
 ### Credentials
 
@@ -142,7 +157,8 @@ provider-specific voice id by configuration (Issue [#1557](https://github.com/os
 **product-level** concept, deliberately distinct from the `VoiceProfile` capability degradation ladder
 (`none` / `speech-to-text` / `speech-output` / `full-realtime`): the ladder describes _how much voice the
 deployment can do_; a persona describes _what the assistant sounds like_. Personas are **output** voices, so
-they are declared only on a voice provider that advertises speech output or realtime.
+they are declared only on a voice provider that advertises speech output. Realtime input capability alone
+never contributes a persona or provider voice id.
 
 The persona → provider-voice-id mapping is **provider-sensitive** and lives on the credential tier, beside
 `apiKey`: a provider's optional `voiceProfiles` array. It is **never serialized to the browser** — the safe
@@ -178,28 +194,26 @@ can choose _which persona_ without the browser ever learning _which provider voi
 }
 ```
 
-A `keiko-realtime` provider (`"supportsRealtimeVoice": true`) declares `voiceProfiles` identically. The config
+A Realtime-only provider must not declare `voiceProfiles`. Realtime owns microphone media, VAD, and
+final transcription, while persona mappings belong exclusively to speech-output providers. The config
 parser enforces three invariants:
 
-1. `voiceProfiles` is valid **only** on a `kind: "voice"` capability that advertises `supportsSpeechOutput` or
-   `supportsRealtimeVoice`; an STT-only or non-voice provider that declares it is rejected.
+1. `voiceProfiles` is valid **only** on a `kind: "voice"` capability that advertises
+   `supportsSpeechOutput`; an STT-only, Realtime-only, or non-voice provider that declares it is
+   rejected.
 2. Each entry's `persona` is one of `male` / `female` / `neutral`, `voiceId` is a non-empty string, and a
    persona may not be declared twice.
 3. `supportedVoicePersonas` (the content-free derived view) is **not** an accepted input key — it is derived
    from `voiceProfiles` (against the effective merged capability) and re-derived on every reload, so it is
    never persisted and cannot be smuggled past the strict parser.
 
-Server-side, `selectVoicePersonaVoice(config, persona)` resolves the cheapest configured output/realtime
+Server-side, `selectVoicePersonaVoice(config, persona)` resolves the cheapest configured speech-output
 provider that maps the requested persona to its `voiceId`; the resolver result carries the `voiceId` and
 therefore stays server-side. It is the seam the assistant speech-output feature (Issue #1558) consumes.
 
-> **Realtime voice ids are a narrower set than text-to-speech voice ids.** The realtime models accept
-> `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, and `verse`; some text-to-speech-only voices
-> (for example `nova` and `onyx`) are **rejected** by the realtime model and would break realtime session
-> creation. For this reason a `keiko-realtime` provider's `voiceProfiles` must map each persona to a
-> realtime-valid voice id. The realtime negotiation applies `resolveRealtimeVoice` as a defense-in-depth
-> guard: a configured voice id outside the realtime set falls back to `alloy` rather than failing the
-> session. A `keiko-tts` provider keeps the broader text-to-speech voice set.
+> **Provider voice ids are explicit and provider-specific.** The setup UI requires one when a
+> speech-output deployment is configured or replaced. Synthesis fails closed before network egress
+> when no exact mapping exists; no universal voice name is inherited from Realtime or an adapter.
 
 ## 3. Reading the capability: the BFF endpoint
 
@@ -216,12 +230,13 @@ GET /api/voice/capability  →  { "voice": VoiceCapabilityResolution }
   "available": true,
   "profile": "speech-to-text", // "none" | "speech-to-text" | "speech-output" | "full-realtime"
   "capabilities": { "speechToText": true, "speechOutput": false, "realtimeVoice": false },
-  "transport": { "websocketControl": true, "webrtcMedia": false },
+  "transport": { "websocketControl": false, "webrtcMedia": false },
   "availableVoicePersonas": [], // Issue #1557: content-free product personas; [] for no-voice / STT-only
   "providerLocality": "azure-foundry", // omitted when none or mixed
-  "reason": "no-voice-provider", // present only when available is false
 }
 ```
+
+`reason` is omitted for an available resolution and is present only when `available` is `false`.
 
 The UI client helper is `fetchVoiceCapability()` in `packages/keiko-ui/src/lib/api.ts`. When `available` is
 `false` (profile `none`), the UI renders **no voice affordance at all** — not a disabled or error-raising
@@ -232,19 +247,20 @@ control.
 The resolver (`resolveVoiceCapability` in `packages/keiko-model-gateway/src/model-selection.ts`) maps the
 configured, reachable voice providers to an effective profile:
 
-| Configured voice capability                        | Effective profile | `available` | `reason`               |
-| -------------------------------------------------- | ----------------- | ----------- | ---------------------- |
-| None (or non-voice providers only)                 | `none`            | `false`     | `no-voice-provider`    |
-| Speech input only                                  | `speech-to-text`  | `true`      | —                      |
-| Speech output only                                 | `speech-output`   | `true`      | —                      |
-| Realtime, **or** both speech input + speech output | `full-realtime`   | `true`      | —                      |
-| Voice disabled by policy                           | `none`            | `false`     | `policy-disabled`      |
-| Voice provider(s) configured but unreachable       | `none`            | `false`     | `provider-unreachable` |
+| Configured voice capability                                   | Effective profile | WebRTC | Twin offered  |
+| ------------------------------------------------------------- | ----------------- | ------ | ------------- |
+| None (or non-voice providers only)                            | `none`            | No     | No            |
+| Speech input only                                             | `speech-to-text`  | No     | No            |
+| Speech output only                                            | `speech-output`   | No     | No            |
+| Batch speech input + output, without complete Realtime        | `full-realtime`¹  | No     | No            |
+| Realtime with explicit live-transcription deployment          | `full-realtime`   | Yes    | Only with TTS |
+| `supportsRealtimeVoice` without live-transcription deployment | Lower profile     | No     | No            |
 
-Full realtime conversation requires the provider to advertise realtime speech **or** both speech input and
-speech output (ADR-0100 D2 / Issue #493 AC3). STT-only is never reported as full conversation. Only
-**configured** providers are eligible: a voice capability that names no configured provider can never be
-elected (the same fail-closed rule as model selection).
+¹ The legacy aggregate profile represents simultaneous input/output capabilities, but it does not grant a
+WebRTC transport. ADR-0154 Twin requires a complete Realtime deployment plus independent TTS. Selection skips
+an incomplete cheaper Realtime provider in favor of a complete configured provider; batch STT is not a
+Realtime prerequisite. Only configured providers are eligible: a capability that names no provider can never
+be elected.
 
 ## 5. Disabling voice
 

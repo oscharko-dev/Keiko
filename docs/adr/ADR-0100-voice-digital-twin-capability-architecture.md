@@ -6,6 +6,14 @@
 
 Accepted (Issue #492, Epic #491, 2026-06-24)
 
+Amended by [ADR-0102](ADR-0102-realtime-voice-transport.md), which implemented the single
+capability-gated loopback WebSocket and proxied-SDP browser WebRTC transport, and by
+[ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md), which narrowed Realtime to microphone media,
+VAD, and final user transcription. The context and original decision text below are retained as the
+Epic #491 architecture baseline; where they describe HTTP/SSE-only control, provider-native assistant
+speech, browser credentials, or configured STUN/TURN as current behavior, the two amendments are
+normative.
+
 ## Version
 
 0.2.0
@@ -22,8 +30,8 @@ This decision is the architecture baseline that the remaining child issues (#493
 **design and governance only**: it adds no runtime code, deploys no models, and adds no dependencies. Issue
 #492 produces this ADR plus the detailed contracts under [`docs/voice/`](../voice/README.md).
 
-A full read-only mapping of the current repository establishes the starting point — the entire voice surface
-is **greenfield**:
+The following read-only mapping records the repository at the time of the original decision — the entire
+voice surface was then **greenfield**:
 
 - **No voice implementation code exists.** There is no `getUserMedia`, `MediaRecorder`, `AudioContext`,
   `RTCPeerConnection`, `SpeechRecognition`, or `navigator.mediaDevices` usage anywhere in `packages/*/src`,
@@ -92,6 +100,11 @@ existing fail-closed posture: a capability that names no configured provider can
 
 ### D2 — Four provider profiles; STT-only dictation is distinct from full realtime conversation (AC2)
 
+> **Current amendment:** the profile ladder remains, but `full-realtime` no longer grants a provider
+> assistant-response path. ADR-0154 requires Realtime WebRTC input plus an independent explicit TTS
+> provider; the settled transcript enters canonical chat and only that canonical answer may be spoken.
+> The original speech-to-speech description below is historical rationale.
+
 The architecture defines four mutually ordered provider profiles, gated by advertised capability:
 
 1. **`none`** — no voice capability advertised; no voice UI; the default and the regulated baseline.
@@ -110,21 +123,24 @@ disabling full conversation. STT-only must never present itself as full voice co
 
 ### D3 — WebSocket is the authoritative control/signaling plane; WebRTC is the preferred media plane (AC3)
 
-**WebSocket is the authoritative local control and signaling plane** for session lifecycle, capability
-gating, SDP/ICE signaling, policy state, audit events, interruption state, and replay metadata — a _role_ that
-is realized today on the existing loopback HTTP + Server-Sent Events seam (see the paragraph below), because
-the BFF does not currently accept WebSocket upgrades. **WebRTC is the preferred media and optional data plane**
-for real-time audio, used only when supported by browser, policy, provider, and runtime capability metadata.
-Raw audio over the control plane is not the default real-time transport. When WebRTC is unavailable, the system gracefully degrades to dictation-only or disabled voice;
-it never silently downgrades to streaming raw audio over the control plane.
+> **Current amendment:** ADR-0102 implemented `/api/voice/control` as the productive
+> `loopback-websocket` realization. Every other upgrade remains hard-rejected. HTTP/SSE-only language
+> below describes the pre-#497 baseline, not the current transport.
 
-Because the current BFF binds loopback-only and hard-rejects WebSocket upgrades
-([`server.ts`](../../packages/keiko-server/src/server.ts) lines 210–213), the **local control plane is
-realized on the existing loopback HTTP + Server-Sent Events seam** (request/response over `POST /api/*`,
-server→client push over the existing `EventSource` channel). "WebSocket is authoritative" describes the
-control/signaling _role_ — local control rides the existing HTTP+SSE seam, and any future re-introduction of
-a bidirectional WebSocket upgrade is an explicit, ADR-gated change to be raised by the transport child issue
-(#496/#497), never smuggled in. The browser-side media path uses **native browser WebRTC APIs**
+**WebSocket is the authoritative local control and signaling plane** for session lifecycle, capability
+gating, SDP/ICE signaling, policy state, audit events, interruption state, and replay metadata. The
+productive realization is the single capability-gated loopback `/api/voice/control` WebSocket.
+**WebRTC is the preferred media and optional data plane** for real-time audio, used only when supported
+by browser, policy, provider, and runtime capability metadata. Raw audio over the control plane is not
+the default real-time transport. When WebRTC is unavailable, the system gracefully degrades to
+dictation-only or disabled voice; it never silently downgrades to streaming raw audio over the control
+plane.
+
+**Historical pre-#497 baseline:** the BFF bound loopback-only and hard-rejected every WebSocket upgrade,
+so the local control role was temporarily realized over existing loopback HTTP + Server-Sent Events
+(request/response over `POST /api/*`, server→client push over `EventSource`). ADR-0102 subsequently
+reopened only `/api/voice/control`; every other upgrade remains rejected. The browser-side media path
+uses **native browser WebRTC APIs**
 (`RTCPeerConnection`, `getUserMedia`, `RTCDataChannel`) which are platform capabilities requiring zero npm
 dependencies. See [`docs/voice/architecture.md`](../voice/architecture.md).
 
@@ -134,10 +150,15 @@ the replay / reconnect / redaction semantics — is specified in
 [ADR-0101](ADR-0101-voice-control-media-capability-replay-protocol.md) and
 [`docs/voice/protocol.md`](../voice/protocol.md), with the typed contract in
 [`packages/keiko-contracts/src/voice-protocol.ts`](../../packages/keiko-contracts/src/voice-protocol.ts).
-The protocol keeps the v1 control transport on loopback HTTP + SSE; re-opening the WebSocket upgrade
-remains the explicit, ADR-gated decision owned by the transport child issue (#497).
+The immutable v1 baseline retains loopback HTTP + SSE as a decodable contract value; ADR-0102 added the
+productive `loopback-websocket` realization for the single approved route.
 
 ### D4 — Local-first data boundary: no external destinations except explicitly configured model endpoints (AC4)
+
+> **Current amendment:** provider HTTP signaling, STT, and TTS calls remain behind `gatewayFetch`.
+> Realtime microphone media is an encrypted browser↔provider WebRTC plane negotiated from provider SDP
+> and does not traverse `gatewayFetch`. The shipped browser configuration supplies no caller STUN/TURN
+> or custom relay host; unsupported network paths fail closed.
 
 Audio buffers, transcripts, voice session state, memory candidates, recap artifacts, policy decisions, and
 audit metadata **remain local to the Keiko host** unless the active voice capability explicitly invokes a
@@ -199,11 +220,18 @@ effective profile. See [`docs/voice/capability-configuration.md`](../voice/capab
 
 ### D6 — Security review requirements for the voice surface (AC6)
 
+> **Current amendment:** the productive proxied-SDP client holds no provider credential. Standard-key
+> authentication stays host-side; only a provider configured for `ephemeral-session` causes the host to
+> mint a short-lived secret, which also remains host-side. `direct-ephemeral` is an unwired protocol
+> value. The shipped `RTCPeerConnection` has an empty `iceServers` list, so the configurable STUN/TURN
+> language below is a future design obligation rather than current behavior.
+
 Any voice implementation child issue that touches the realtime media path, signaling, or provider
 credentials must satisfy a security review covering, at minimum:
 
-- **Ephemeral tokens.** Browser realtime sessions use short-lived, scoped ephemeral session credentials
-  minted server-side, with refresh/re-mint handling; the long-lived provider key never reaches the browser.
+- **Original ephemeral-token requirement (historical).** Browser realtime sessions were designed to use
+  short-lived, scoped ephemeral session credentials minted server-side, with refresh/re-mint handling; the
+  long-lived provider key never reaches the browser.
   Prefer the **proxied-SDP** pattern where the backend performs SDP negotiation so the browser never holds
   even the ephemeral token.
 - **Provider credentials.** Persist only as sealed vault material referenced by `apiKeySecretRef`
@@ -212,9 +240,9 @@ credentials must satisfy a security review covering, at minimum:
 - **ICE candidate privacy.** Rely on browser mDNS `.local` host-candidate obfuscation (UUID hostnames scoped
   to origin and page lifetime) so local/private IPs are not exposed to page JavaScript; never log or
   exfiltrate raw candidates; expect mDNS hostnames or `0.0.0.0`/`::` in stats.
-- **Allowlisted endpoints.** Provider signaling/media hosts and STUN/TURN servers are configurable and
-  validated; SDP signaling stays under Keiko's own loopback origin so auth, rate limiting, audit logging, and
-  host allowlisting are controlled locally.
+- **Original endpoint requirement (historical).** Provider signaling/media hosts and STUN/TURN servers were
+  intended to be configurable and validated; SDP signaling stays under Keiko's own loopback origin so
+  authentication, rate limiting, audit logging, and host checks are controlled locally.
 - **Audit redaction.** Voice evidence is redacted-by-construction then deep-redacted at persist, identifiers
   are hashed, and raw audio and provider secrets are never persisted, reusing the existing redaction and
   hashing seams.

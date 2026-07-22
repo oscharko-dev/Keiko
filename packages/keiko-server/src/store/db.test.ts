@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
+import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   createInMemoryUiStore,
   createNodeUiStore,
@@ -22,6 +23,7 @@ import {
   SCHEMA_VERSION,
   UI_DB_BUSY_TIMEOUT_MS,
   type GroundedAnswer,
+  type NewChatMessage,
 } from "./index.js";
 
 // Narrows an array-index access (T | undefined) to T without a non-null assertion.
@@ -54,6 +56,179 @@ describe("createInMemoryUiStore", () => {
   it("returns an empty project list initially", () => {
     const store = createInMemoryUiStore();
     expect(store.listProjects()).toEqual([]);
+    store.close();
+  });
+
+  it("validates canonical client turn identifiers without normalizing opaque identity", (): void => {
+    const projectDir = mkdtempSync(join(tmpDir, "client-turn-id-project-"));
+    const store = createInMemoryUiStore();
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Voice", "example-chat-model");
+    const message = (content: string, timestamp: number): NewChatMessage => ({
+      chatId: chat.id,
+      role: "user" as const,
+      content,
+      timestamp,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    expect(() => store.admitChatTurn("", message("empty", 1))).toThrow("Invalid clientTurnId.");
+    expect(() => store.admitChatTurn(" \t\r\n", message("blank", 2))).toThrow(
+      "Invalid clientTurnId.",
+    );
+    expect(() => store.admitChatTurn("\u00a0\ufeff\u3000", message("unicode-blank", 3))).toThrow(
+      "Invalid clientTurnId.",
+    );
+
+    const paddedOpaqueId = "  opaque-id  ";
+    const paddedAdmission = store.admitChatTurn(paddedOpaqueId, message("padded", 4));
+    expect(paddedAdmission.kind).toBe("admitted");
+    expect(store.inspectChatTurn(chat.id, paddedOpaqueId, "padded").kind).toBe("in-progress");
+    expect(store.inspectChatTurn(chat.id, paddedOpaqueId.trim(), "padded").kind).toBe("missing");
+
+    const maximumLengthId = "x".repeat(MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS);
+    expect(store.admitChatTurn(maximumLengthId, message("maximum", 5)).kind).toBe("admitted");
+    expect(() => store.admitChatTurn(`${maximumLengthId}x`, message("overlong", 6))).toThrow(
+      "Invalid clientTurnId.",
+    );
+    store.close();
+  });
+
+  it("refuses a late assistant for a failed canonical user while preserving the legacy path", () => {
+    const projectDir = mkdtempSync(join(tmpDir, "assistant-owner-project-"));
+    const store = createInMemoryUiStore();
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Voice", "example-chat-model");
+    const canonical = store.admitChatTurn("failed-canonical-turn", {
+      chatId: chat.id,
+      role: "user",
+      content: "Canonical user",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (canonical.kind !== "admitted") throw new Error("expected canonical admission");
+    store.failChatTurn(chat.id, "failed-canonical-turn");
+    expect(() =>
+      store.createTurnAssistant(canonical.userMessage.id, {
+        chatId: chat.id,
+        role: "assistant",
+        content: "Late answer",
+        timestamp: 2,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      }),
+    ).toThrow("Canonical assistant does not match the admitted chat turn.");
+    expect(store.listMessages(chat.id)).toHaveLength(1);
+
+    const legacyUser = store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "Legacy user",
+      timestamp: 3,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    store.createTurnAssistant(legacyUser.id, {
+      chatId: chat.id,
+      role: "assistant",
+      content: "Legacy answer",
+      timestamp: 4,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(store.listMessages(chat.id).map((message) => message.role)).toEqual([
+      "user",
+      "user",
+      "assistant",
+    ]);
+    store.close();
+  });
+
+  it("keeps a failed turn retryable only while it remains the latest chat message", () => {
+    const projectDir = mkdtempSync(join(tmpDir, "failed-retry-order-project-"));
+    const store = createInMemoryUiStore();
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Voice", "example-chat-model");
+    const failed = store.admitChatTurn("failed-old-turn", {
+      chatId: chat.id,
+      role: "user",
+      content: "Old question",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(failed.kind).toBe("admitted");
+    store.failChatTurn(chat.id, "failed-old-turn");
+    expect(store.inspectChatTurn(chat.id, "failed-old-turn", "Old question").kind).toBe(
+      "retryable",
+    );
+    const newer = store.admitChatTurn("completed-new-turn", {
+      chatId: chat.id,
+      role: "user",
+      content: "New question",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (newer.kind !== "admitted") throw new Error("expected newer turn admission");
+    const assistant = store.createTurnAssistant(newer.userMessage.id, {
+      chatId: chat.id,
+      role: "assistant",
+      content: "New answer",
+      timestamp: 3,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(
+      store.completeChatTurn(chat.id, "completed-new-turn", "New question", assistant.id).kind,
+    ).toBe("completed");
+
+    expect(store.inspectChatTurn(chat.id, "failed-old-turn", "Old question").kind).toBe("conflict");
+    expect(
+      store.admitChatTurn("failed-old-turn", {
+        chatId: chat.id,
+        role: "user",
+        content: "Old question",
+        timestamp: 4,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      }).kind,
+    ).toBe("conflict");
+    expect(store.inspectChatTurn(chat.id, "failed-old-turn", "Old question").kind).toBe("conflict");
+    expect(store.listMessages(chat.id).map((message) => message.content)).toEqual([
+      "Old question",
+      "New question",
+      "New answer",
+    ]);
     store.close();
   });
 });
@@ -95,6 +270,186 @@ describe("createNodeUiStore — on-disk file", () => {
     expect(list).toHaveLength(1);
     expect(list[0]?.path).toBe(projDir);
     s2.close();
+  });
+
+  it("recovers an interrupted canonical turn without persisting an orphan assistant", () => {
+    const dbPath = join(tmpDir, "canonical-turn.db");
+    const projectDir = mkdtempSync(join(tmpDir, "canonical-project-"));
+    const opaqueTurnId = "provider\u0000item\nÜ".padEnd(256, "x");
+    const content = "Remember this spoken fact exactly once.";
+    const firstStore = createNodeUiStore(dbPath);
+    firstStore.createProject(projectDir);
+    const chat = firstStore.createChat(projectDir, "Voice", "example-chat-model");
+    const firstAdmission = firstStore.admitChatTurn(opaqueTurnId, {
+      chatId: chat.id,
+      role: "user",
+      content,
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(firstAdmission.kind).toBe("admitted");
+    if (firstAdmission.kind !== "admitted") throw new Error("expected canonical admission");
+    const interruptedAssistant = firstStore.createTurnAssistant(firstAdmission.userMessage.id, {
+      chatId: chat.id,
+      role: "assistant",
+      content: "This staged answer must not survive a crash.",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(firstStore.listMessages(chat.id).map((message) => message.id)).toEqual([
+      firstAdmission.userMessage.id,
+    ]);
+    firstStore.close();
+
+    const inspector = new DatabaseSync(dbPath, { readOnly: true });
+    const stored = inspector
+      .prepare(
+        "SELECT client_turn_id, client_turn_state, client_turn_content_digest" +
+          " FROM chat_messages WHERE id = ?",
+      )
+      .get(firstAdmission.userMessage.id) as {
+      client_turn_id: string;
+      client_turn_state: string;
+      client_turn_content_digest: string;
+    };
+    inspector.close();
+    expect(stored.client_turn_id).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored.client_turn_id).not.toBe(opaqueTurnId);
+    expect(stored.client_turn_state).toBe("pending");
+    expect(stored.client_turn_content_digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored.client_turn_content_digest).not.toContain(content);
+
+    const recoveredStore = createNodeUiStore(dbPath);
+    const recoveredAdmission = recoveredStore.admitChatTurn(opaqueTurnId, {
+      chatId: chat.id,
+      role: "user",
+      content,
+      timestamp: 3,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(recoveredAdmission.kind).toBe("admitted");
+    if (recoveredAdmission.kind !== "admitted") throw new Error("expected recovered admission");
+    expect(recoveredAdmission.userMessage.id).toBe(firstAdmission.userMessage.id);
+    expect(recoveredStore.findMessageById(interruptedAssistant.id)).toBeUndefined();
+    const recoveredAssistant = recoveredStore.createTurnAssistant(
+      recoveredAdmission.userMessage.id,
+      {
+        chatId: chat.id,
+        role: "assistant",
+        content: "Recovered answer.",
+        timestamp: 4,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+    );
+    const completion = recoveredStore.completeChatTurn(
+      chat.id,
+      opaqueTurnId,
+      content,
+      recoveredAssistant.id,
+    );
+    expect(completion.kind).toBe("completed");
+    recoveredStore.close();
+
+    const replayStore = createNodeUiStore(dbPath);
+    const replay = replayStore.admitChatTurn(opaqueTurnId, {
+      chatId: chat.id,
+      role: "user",
+      content,
+      timestamp: 5,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(replay.kind).toBe("replay");
+    if (replay.kind !== "replay") throw new Error("expected canonical replay");
+    expect(replay.userMessage.id).toBe(firstAdmission.userMessage.id);
+    expect(replay.assistantMessage.id).toBe(recoveredAssistant.id);
+    expect(replayStore.listMessages(chat.id)).toHaveLength(2);
+    expect(() =>
+      replayStore.admitChatTurn(`${opaqueTurnId}x`, {
+        chatId: chat.id,
+        role: "user",
+        content,
+        timestamp: 6,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      }),
+    ).toThrow("Invalid clientTurnId.");
+    expect(replayStore.listMessages(chat.id)).toHaveLength(2);
+    replayStore.close();
+  });
+
+  it("replays the same raw canonical content after visible redaction policy rotates", () => {
+    const store = createInMemoryUiStore();
+    const projectDir = mkdtempSync(join(tmpDir, "redaction-rotation-project-"));
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Voice", "example-chat-model");
+    const clientTurnId = "redaction-rotation-turn";
+    const rawContent = "The deployment marker is customer-secret-a.";
+    const admission = store.admitChatTurn(
+      clientTurnId,
+      {
+        chatId: chat.id,
+        role: "user",
+        content: "The deployment marker is [REDACTED-A].",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      { identityContent: rawContent },
+    );
+    expect(admission.kind).toBe("admitted");
+    if (admission.kind !== "admitted") throw new Error("expected admission");
+    const assistant = store.createTurnAssistant(admission.userMessage.id, {
+      chatId: chat.id,
+      role: "assistant",
+      content: "Stored answer.",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(store.completeChatTurn(chat.id, clientTurnId, rawContent, assistant.id).kind).toBe(
+      "completed",
+    );
+
+    expect(store.inspectChatTurn(chat.id, clientTurnId, rawContent).kind).toBe("replay");
+    const replay = store.admitChatTurn(
+      clientTurnId,
+      { ...admission.userMessage, content: "The deployment marker is [REDACTED-B]." },
+      { identityContent: rawContent },
+    );
+    expect(replay.kind).toBe("replay");
+    expect(store.inspectChatTurn(chat.id, clientTurnId, `${rawContent} changed`).kind).toBe(
+      "conflict",
+    );
+    store.close();
   });
 
   it("does not place the DB inside the current working directory by default in tests", () => {

@@ -7,6 +7,7 @@ import {
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
   isVoiceCapability,
+  MODEL_COST_RANK,
   modelSupportsInfilling,
   modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
@@ -64,6 +65,10 @@ export {
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
   modelSupportsRealtimeVoice,
+  isCompleteRealtimeVoiceCapability,
+  selectRealtimeVoiceCapability,
+  selectSpeechInputCapability,
+  selectSpeechOutputCapability,
   isConfiguredVoiceProvider,
   describeVoiceProviderAvailability,
   listVoicePersonas,
@@ -82,7 +87,7 @@ export type {
 
 export const CAPABILITY_REGISTRY: readonly ModelCapability[] = CAPABILITY_DATA;
 
-export const COST_RANK: Readonly<Record<CostClass, number>> = { low: 0, medium: 1, high: 2 };
+export const COST_RANK: Readonly<Record<CostClass, number>> = MODEL_COST_RANK;
 
 export interface CapabilityQuery {
   readonly kind?: ModelKind | undefined;
@@ -314,13 +319,13 @@ function unavailableVoice(reason: VoiceUnavailableReason): VoiceCapabilityResolu
   };
 }
 
-// Aggregate union of the product voice personas across the reachable providers that advertise
-// speech output or realtime voice (Issue #1557, ADR-0094 D2 / HAZARD-2). Personas are OUTPUT voices,
-// so an STT-only provider contributes none. Sorted canonical (VOICE_PERSONAS) order, content-free.
+// Aggregate union of the product voice personas across reachable synthesis providers. Realtime owns
+// media transport, VAD, and transcription only, so it can never contribute an assistant output voice.
+// Sorted canonical (VOICE_PERSONAS) order, content-free.
 function availablePersonasFor(capabilities: readonly ModelCapability[]): readonly VoicePersona[] {
   const present = new Set<VoicePersona>();
   for (const capability of capabilities) {
-    if (!modelSupportsSpeechOutput(capability) && !modelSupportsRealtimeVoice(capability)) {
+    if (!modelSupportsSpeechOutput(capability)) {
       continue;
     }
     for (const persona of capability.supportedVoicePersonas ?? []) {
@@ -386,9 +391,6 @@ export function resolveVoiceCapabilityFromCapabilities(
   const speechToText = reachable.some(modelSupportsSpeechInput);
   const speechOutput = reachable.some(modelSupportsSpeechOutput);
   const realtimeVoice = reachable.some(modelSupportsRealtimeVoice);
-  const realtimeToolCalling = reachable.some(
-    (capability) => modelSupportsRealtimeVoice(capability) && capability.toolCalling,
-  );
   const profile = voiceProfileFor(speechToText, speechOutput, realtimeVoice);
   if (profile === "none") {
     // Defensive: a voice capability advertises ≥1 sub-capability by config invariant, so this is
@@ -403,9 +405,11 @@ export function resolveVoiceCapabilityFromCapabilities(
       speechToText,
       speechOutput,
       realtimeVoice,
-      ...(realtimeToolCalling ? { realtimeToolCalling: true } : {}),
     },
-    transport: { websocketControl: true, webrtcMedia: profile === "full-realtime" },
+    // Batch STT + TTS may still project the legacy aggregate full profile, but only a complete
+    // Realtime deployment may open the Voice WebSocket or WebRTC media. The configured binder masks
+    // incomplete Realtime flags before this pure resolver sees them.
+    transport: { websocketControl: realtimeVoice, webrtcMedia: realtimeVoice },
     availableVoicePersonas: availablePersonasFor(reachable),
     ...(locality !== undefined ? { providerLocality: locality } : {}),
   };

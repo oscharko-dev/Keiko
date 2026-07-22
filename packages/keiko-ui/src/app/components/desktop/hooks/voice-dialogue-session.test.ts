@@ -53,6 +53,16 @@ const FULL_REALTIME_NO_PERSONAS: VoiceCapabilityResolution = {
   availableVoicePersonas: [],
 };
 
+const REALTIME_WITHOUT_TTS: VoiceCapabilityResolution = {
+  ...FULL_REALTIME_WEBRTC,
+  capabilities: { speechToText: true, speechOutput: false, realtimeVoice: true },
+};
+
+const STALE_INCOMPLETE_REALTIME: VoiceCapabilityResolution = {
+  ...FULL_REALTIME_WEBRTC,
+  capabilities: { speechToText: true, speechOutput: true, realtimeVoice: false },
+};
+
 // ─── Fallback matrix (D2) ──────────────────────────────────────────────────────────
 describe("voiceDialogueModeForResolution — fallback matrix (D2/D3, AC4)", () => {
   it("is dormant + fail-closed for an undefined (unresolved / failed) resolution", () => {
@@ -100,6 +110,19 @@ describe("voiceDialogueModeForResolution — fallback matrix (D2/D3, AC4)", () =
 
   it("is NOT offered when full-realtime advertises zero personas", () => {
     expect(voiceDialogueModeForResolution(FULL_REALTIME_NO_PERSONAS, true).offered).toBe(false);
+  });
+
+  it("is NOT offered when Realtime has no independent TTS even if stale personas are present", () => {
+    expect(voiceDialogueModeForResolution(REALTIME_WITHOUT_TTS, true)).toEqual({
+      offered: false,
+      capture: "none",
+      speaks: false,
+      canInterrupt: false,
+    });
+  });
+
+  it("is NOT offered for a stale full profile whose Realtime capability is incomplete", () => {
+    expect(voiceDialogueModeForResolution(STALE_INCOMPLETE_REALTIME, true).offered).toBe(false);
   });
 
   it("is NOT offered when the browser cannot open realtime media, even for full-realtime", () => {

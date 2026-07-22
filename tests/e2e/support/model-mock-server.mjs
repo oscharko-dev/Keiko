@@ -24,6 +24,12 @@ const HOST = "127.0.0.1";
 // changes what the browser shows and reddens the smoke.
 const REPLY_MARKER = "KEIKO_E2E_STREAM_OK";
 const JOURNAL_CAPTURE_MARKER = "KEIKO_E2E_JOURNAL_CAPTURE";
+const SALIENCE_PROMPT_MARKER = "You extract durable memories from a chat turn";
+const GROUNDED_PROMPT_MARKER =
+  "You are Keiko answering a repository question from a connected Files scope";
+const GROUNDING_PARITY_EVIDENCE_MARKER = "KEIKO_E2E_GROUNDING_PARITY";
+const GROUNDING_PARITY_REPLY =
+  "repositoryParityStatus is defined in the repository fixture [src/repository-parity.ts:2].";
 const REPLY_TOKENS = [REPLY_MARKER, " deterministic", " provider", " pong", " 4242."];
 const REPLY_TEXT = REPLY_TOKENS.join("");
 
@@ -83,7 +89,18 @@ function streamCompletion(res) {
 }
 
 function bufferedContent(rawRequest) {
-  if (!rawRequest.includes(JOURNAL_CAPTURE_MARKER)) return REPLY_TEXT;
+  if (
+    rawRequest.includes(GROUNDED_PROMPT_MARKER) &&
+    rawRequest.includes(GROUNDING_PARITY_EVIDENCE_MARKER)
+  ) {
+    return GROUNDING_PARITY_REPLY;
+  }
+  if (
+    !rawRequest.includes(JOURNAL_CAPTURE_MARKER) ||
+    !rawRequest.includes(SALIENCE_PROMPT_MARKER)
+  ) {
+    return REPLY_TEXT;
+  }
   return JSON.stringify([
     {
       source: "user",

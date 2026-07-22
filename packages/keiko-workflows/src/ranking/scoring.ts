@@ -1,6 +1,6 @@
 // Weighted scoring composition for ranked candidates (Epic #177, Issue #182).
-// Pure function: signal vector × weight vector → clamped unit score. The default positive
-// weights sum to 0.95 and the generated penalty weight is 0.30; the filter layer's
+// Pure function: signal vector × weight vector → clamped unit score. The generated penalty
+// weight is 0.30; the filter layer's
 // `omitGenerated` default keeps generated files OUT of the kept set regardless of score,
 // so the scoring penalty is a secondary defence (a fully-positive generated file scores
 // 0.65). Callers may override weights to tune ring-specific behaviour; never uses
@@ -105,11 +105,45 @@ function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function nonDefinitionPositiveWeightTotal(weights: ScoringWeights): number {
+  const positiveWeights = [
+    weights.provenanceBestScore,
+    weights.lexicalScore,
+    weights.semanticScore,
+    weights.provenanceCount,
+    weights.anchorOverlap,
+    weights.pathDepthAffinity,
+    weights.testPairBonus,
+    weights.stacktracePositionBonus,
+    weights.canonicalMetadata,
+    weights.structuralEdge,
+    weights.gitRecency,
+    weights.gitChurn,
+  ];
+  let total = 0;
+  for (const weight of positiveWeights) {
+    total += Math.max(0, weight ?? 0);
+  }
+  return total;
+}
+
+function normalizeNonDefinitionScore(raw: number, weights: ScoringWeights): number {
+  const definitionWeight = Math.max(0, weights.symbolDefinition ?? 0);
+  if (definitionWeight === 0) return raw;
+  const headroom = Math.max(0, 1 - Math.min(1, definitionWeight));
+  if (headroom === 0) return 0;
+  const positiveWeightTotal = nonDefinitionPositiveWeightTotal(weights);
+  if (positiveWeightTotal <= headroom) return raw;
+  return (raw * headroom) / positiveWeightTotal;
+}
+
 export function computeScore(
   signals: ExtractedSignals,
   weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS,
 ): number {
-  let raw = 0;
+  let nonDefinitionRaw = 0;
+  let definitionContribution = 0;
+  let generatedPenalty = 0;
   for (const signal of signals.signals) {
     const key = SIGNAL_WEIGHT_KEYS[signal.name];
     if (key === undefined) {
@@ -119,7 +153,21 @@ export function computeScore(
     if (weight === undefined) {
       continue;
     }
-    raw += signal.value * weight;
+    const contribution = signal.value * weight;
+    if (signal.name === "generated-penalty") {
+      generatedPenalty += contribution;
+    } else if (signal.name === "symbol-definition") {
+      definitionContribution += contribution;
+    } else {
+      nonDefinitionRaw += contribution;
+    }
   }
-  return clampUnit(raw);
+  // A boosted definition keeps its configured share. The remaining positive vector is normalized
+  // only into the headroom left by that share, preventing saturation from erasing the definition
+  // distinction. Weights without a positive definition retain the historical scoring path.
+  return clampUnit(
+    normalizeNonDefinitionScore(nonDefinitionRaw, weights) +
+      definitionContribution +
+      generatedPenalty,
+  );
 }

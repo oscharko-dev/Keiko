@@ -5,7 +5,7 @@
 // model and WITHOUT making speech a precondition for using Keiko. It is pure data + pure functions only:
 // nothing performs IO, crypto, clock reads, randomness, or audio processing, and no provider base URL,
 // credential, or raw audio buffer is ever a field on these types. The playback STATE is content-free by
-// construction — raw assistant audio is media-plane only (`VOICE_MEDIA_PLANE`, `never-persisted`,
+// construction — raw assistant audio is output-only `gateway-batch` media (`never-persisted`,
 // `raw-media`) and is never a field here (AC3/AC4).
 //
 // It is layered ABOVE the #496 wire protocol (voice-protocol.ts): the wire carries five coarse playback
@@ -135,8 +135,8 @@ export const VOICE_PLAYBACK_PHASE_REPLAY: Record<VoicePlaybackPhase, VoiceReplay
 
 // Redaction: EVERY playback phase is `content-free`. A playback phase is an enum literal describing
 // control state; it never carries reviewable text, secret-bearing signaling, or raw audio. Raw assistant
-// audio is media-plane only (`VOICE_MEDIA_PLANE`: `never-persisted`, `raw-media`) and is never a field on
-// any type in this module. This table is the AC3/AC4 invariant expressed as data: no playback phase is
+// audio is output-only batch media (`never-persisted`, `raw-media`) and is never a field on any type in
+// this module. This table is the AC3/AC4 invariant expressed as data: no playback phase is
 // ever anything but `content-free`, so a playback record can never become a channel for audio or
 // credentials.
 export const VOICE_PLAYBACK_PHASE_REDACTION: Record<VoicePlaybackPhase, VoiceRedactionClass> = {
@@ -150,11 +150,19 @@ export const VOICE_PLAYBACK_PHASE_REDACTION: Record<VoicePlaybackPhase, VoiceRed
   complete: "content-free",
 } as const;
 
-// The media-plane descriptor that governs the raw assistant audio this lifecycle controls. Re-exported
-// from the #496 protocol so the playback contract and the wire agree that audio is never-persisted,
-// raw-media, media-plane only — the typed expression of AC4 ("raw assistant audio is not stored by
-// default"). It is intentionally the SAME object the protocol pins; this module adds no new audio path.
+// Immutable v1 value retained for public compatibility. Current canonical assistant output uses the
+// separately named batch descriptor below and never reactivates WebRTC provider output.
 export const VOICE_PLAYBACK_AUDIO_PLANE = VOICE_MEDIA_PLANE;
+
+// Productive speech output is fetched once from the canonical assistant answer through the existing
+// Model Gateway batch/BFF seam and played locally (ADR-0154).
+export const VOICE_CANONICAL_PLAYBACK_AUDIO_PLANE = {
+  plane: "media",
+  transport: "gateway-batch",
+  direction: "output",
+  replay: "never-persisted",
+  redaction: "raw-media",
+} as const;
 
 // ─── Legal transition table (Deliverable: reducer / state-machine rules) ────────
 // The set of phases reachable from a given phase by a state-CHANGING transition. Mute is intentionally

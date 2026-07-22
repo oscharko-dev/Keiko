@@ -45,6 +45,16 @@ describe("classifyRetrievalIntent", () => {
     );
   });
 
+  it.each(["Где определён ОбработчикПлатежей?", "支払い処理はどこで定義されていますか？"])(
+    "keeps non-Latin repository questions searchable: %s",
+    (text) => {
+      const result = classifyRetrievalIntent(text);
+
+      expect(result.intent).toBe("targeted-code-search");
+      expect(result.normalizedTerms).not.toHaveLength(0);
+    },
+  );
+
   it("keeps pure stop-word prompts in clarification-needed", () => {
     expect(classifyRetrievalIntent("the and for of").intent).toBe("clarification-needed");
   });

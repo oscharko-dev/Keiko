@@ -10,27 +10,27 @@ playback **state machine** (Issue #501); this document describes the **synthesis
 
 ```
 visible assistant message text
-  → useAssistantSpeech (browser)            # binds the spoken layer to the rendered message (AC2)
-  → POST /api/voice/speak (BFF)             # capability-gated, JSON + CSRF envelope
-  → toSpeakableText                         # keeps prose/link labels; removes URL/citation syntax
-  → requestTextToSpeech (Model Gateway)     # one POST through the gatewayFetch egress seam
-  → {endpoint}/audio/speech (provider)      # OpenAI-compatible text-to-speech contract
-  ← streamed PCM → AudioWorklet             # first-chunk playback, drain-aware, instant flush
-  ↳ buffered audio fallback                 # base64 + HTMLAudioElement when WebAudio is unavailable
+  → useAssistantSpeech (browser)                 # binds speech to the rendered message
+  → POST /api/voice/speak/stream (preferred)     # JSON + CSRF; raw PCM response
+  ↳ POST /api/voice/speak (buffered fallback)    # JSON + CSRF; base64 Opus response
+  → toSpeakableText (BFF)                        # removes URL/citation syntax
+  → requestTextToSpeech (Model Gateway)          # gatewayFetch egress seam
+  → {endpoint}/audio/speech (provider)           # OpenAI-compatible TTS contract
+  ← PCM → AudioWorklet, or Ogg/Opus → HTMLAudioElement
 ```
 
-The audio is held only in memory: for the duration of the BFF response, and for one browser playback
-turn (a single object URL, revoked on stop / mute / session switch / unmount). No raw generated audio is
-written to the evidence store, a side file, a log, or any on-disk location.
+The audio is held only in memory: streamed PCM is consumed by the AudioWorklet, while the buffered
+fallback creates one object URL that is revoked on stop, mute, session switch, or unmount. No raw generated
+audio is written to the evidence store, a side file, a log, or any on-disk location.
 
 ## Provider contract
 
-### Selected: the OpenAI-compatible `audio/speech` contract (`keiko-tts`)
+### Selected contract: OpenAI-compatible `audio/speech`
 
 The adapter speaks the OpenAI-compatible **`POST {endpoint}/audio/speech`** contract — the same surface
-the gateway already speaks for chat, embeddings, and transcription, and the surface the configured Azure
-Foundry voice endpoint exposes. The `keiko-tts` deployment class (a hosted text-to-speech model behind
-that contract) is selected as the final implementation target because:
+the gateway already speaks for chat, embeddings, and transcription, and the surface supported by the
+configured Azure Foundry voice endpoint. `keiko-tts` is one configured development deployment alias, not a
+hard-coded universal model name. This provider-neutral contract is selected because:
 
 - It reuses the single `gatewayFetch` egress seam (ADR-0038), so synthesis inherits the corporate-proxy,
   custom-CA, timeout, byte-cap, and content-free error behavior of every other productive model call —
@@ -44,14 +44,14 @@ that contract) is selected as the final implementation target because:
 
 **Request** (JSON):
 
-| Field             | Source                                                                                   |
-| ----------------- | ---------------------------------------------------------------------------------------- |
-| `model`           | The configured speech-output provider model id (`selectSpeechOutputModel`).              |
-| `input`           | Speech-safe prose derived from the bounded visible answer (≤ 4096 raw characters).       |
-| `voice`           | The server-resolved provider voice id (see persona mapping), or the adapter default.     |
-| `response_format` | `mp3` by default (broadest browser playback); `opus`/`aac`/`flac`/`wav`/`pcm` supported. |
-| `speed`           | Optional playback-speed multiplier when the caller pins one.                             |
-| `instructions`    | Capability-gated delivery guidance for language, emotion, pacing, and intonation.        |
+| Field             | Source                                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------------------------ |
+| `model`           | The configured speech-output provider model id (`selectSpeechOutputModel`).                            |
+| `input`           | Speech-safe prose derived from the bounded visible answer (≤ 4096 raw characters).                     |
+| `voice`           | Required server-resolved provider voice id from the explicit persona mapping.                          |
+| `response_format` | `pcm` for streaming; `opus` for the buffered product fallback; other adapter formats remain supported. |
+| `speed`           | Optional playback-speed multiplier when the caller pins one.                                           |
+| `instructions`    | Capability-gated delivery guidance for language, emotion, pacing, and intonation.                      |
 
 **Response**: binary audio bytes with an `audio/*` content type. The adapter reads them with the bounded
 `readBytesCapped` reader (default cap 6 MB) and labels the result from the response content type, falling
@@ -77,23 +77,23 @@ The product exposes three content-free voice personas (`male` / `female` / `neut
 sensitive persona → provider-voice-id mapping lives on the credential-tier `ModelProviderConfig.voiceProfiles`
 and is resolved **server-side** by `selectVoicePersonaVoice`. The BFF synthesis route:
 
-1. honors a requested persona when the provider maps it;
-2. otherwise uses the first persona-mapped provider in canonical order;
-3. otherwise uses the cheapest speech-output model with the adapter's default voice.
+1. honors a requested persona only when a speech-output provider maps it exactly;
+2. without a requested persona, uses the first explicitly mapped speech-output voice in canonical
+   persona order; and
+3. fails closed before provider egress when no explicit mapping exists.
 
 The resolved voice id is forwarded to the provider but **never** returned to the browser — only the
-synthesized audio and a canonicalized MIME type cross the BFF boundary.
+synthesized audio and a canonicalized MIME type cross the BFF boundary. There is deliberately no
+universal `alloy` or other provider-default voice at the adapter boundary.
 
 ## Speech-safe rendering
 
 The written answer remains the review surface and keeps its Markdown links and citations. Before
 synthesis, the BFF retains prose, headings, list text, link labels, and short inline identifiers, while
 removing URL destinations, citation markers, source/reference appendices, images, HTML, and fenced code.
-Realtime grounded-tool HTTP results carry both `answer` (the full local result) and `spokenAnswer` (the
-same speech-safe projection), so buffered TTS and full-realtime dialogue follow one rule. Only
-`spokenAnswer`, its delivery instruction, status, and no-evidence flag are returned to the realtime
-provider; URLs, citation metadata, and persistence ids stay local. A result containing no speakable
-content is not sent to a provider.
+Only the exact persisted assistant message selected by the canonical chat send outcome can arm this
+projection. The Realtime provider receives neither that answer nor a `spokenAnswer`; it owns no
+assistant response path. A result containing no speakable content is not sent to the TTS provider.
 
 ## Failure behavior (degrade to text)
 
@@ -106,6 +106,7 @@ conversation. Coded adapter failures map to fixed, secret-free BFF envelopes:
 | `timeout`                           | 504 `VOICE_TIMEOUT`        | `timeout`             |
 | `payload-too-large`                 | 413 `PAYLOAD_TOO_LARGE`    | `provider-error`      |
 | `unsupported-model`                 | 503 `VOICE_UNAVAILABLE`    | `unavailable`         |
+| `missing-voice`                     | 503 `VOICE_UNAVAILABLE`    | `unavailable`         |
 | `transport` / `empty-audio` / other | 502 `VOICE_PROVIDER_ERROR` | `provider-error`      |
 
 A blocked browser autoplay or a decode error surfaces as an `internal` playback failure. In every case
@@ -118,13 +119,15 @@ the written answer stays visible in the transcript.
 - **One bounded stream per turn**: the preferred path streams 24 kHz PCM into an AudioWorklet with a
   small jitter prime. Node backpressure waits for `drain`; stop, mute, or barge-in aborts the provider
   stream and flushes the worklet. The buffered clip remains the compatibility fallback.
-- **No raw generated audio persistence** and **no dialogue-mode toggle UI** beyond the reusable playback
-  plumbing — both are out of scope for this issue.
+- **No raw generated audio persistence.** Dialogue-mode availability is governed separately by the
+  Realtime-plus-TTS capability predicate; this synthesis path does not create another mode or answer path.
 
 ## Configuration
 
 A deployment enables assistant speech output by configuring a `kind: "voice"` provider that advertises
-`supportsSpeechOutput: true` (and, optionally, `voiceProfiles` mapping personas to provider voice ids).
+`supportsSpeechOutput: true` and maps at least one `voiceProfiles` persona to an explicit provider voice id.
+The parser may represent speech-output capability without a mapping, but synthesis then fails closed before
+provider egress and the deployment is not usable for spoken output.
 Set `supportsSpeechSynthesisInstructions: true` only when the selected synthesis model accepts delivery
 instructions; otherwise Keiko omits that field for compatibility.
 See [`capability-configuration.md`](./capability-configuration.md) for the full provider configuration

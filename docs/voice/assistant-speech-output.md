@@ -11,18 +11,25 @@ the accessible UI in
 and the contract in
 [`packages/keiko-contracts/src/voice-playback.ts`](../../packages/keiko-contracts/src/voice-playback.ts).
 
+> **Current authority note:** ADR-0154 supersedes every Realtime-output assumption in this historical
+> lifecycle specification. Productive assistant speech is generated only from the exact visible
+> canonical assistant message through the explicit TTS path documented in
+> [assistant-speech-synthesis.md](assistant-speech-synthesis.md). Realtime owns input/VAD/transcription
+> and cannot supply audio output.
+
 ## 0. Speech output is OPTIONAL and ENVIRONMENT-DEPENDENT
 
 > **Text is the universal response path.** Keiko answers in text by default and remains fully usable with
-> no spoken output. Assistant speech output — whether batch **text-to-speech (TTS)** or **realtime speech
-> output** — is an **optional** capability that appears **only when the active, explicitly configured
-> provider advertises it** (`speechOutput`, or the `full-realtime` profile) and deployment policy permits
+> no spoken output. Assistant speech output is optional **text-to-speech (TTS)** and appears only when
+> an active, explicitly configured provider advertises `supportsSpeechOutput`, maps the selected persona, and
+> deployment policy permits
 > it. It is therefore **environment-dependent**: a deployment may have it, and a deployment may not.
 >
-> **This issue deploys no new TTS model and adds no dependency.** The currently deployed voice capability
-> is STT-only, so this layer is designed to be future-ready and optional rather than to assume speech
-> output exists. In a deployment without speech-output capability, no playback control is rendered and no
-> broken playback UI appears. Raw assistant audio is **never persisted by default**.
+> **Historical Issue #501 scope:** that issue deployed no TTS model and added no dependency; its development
+> environment was STT-only. Productive deployments now use the explicit TTS path documented in
+> [assistant-speech-synthesis.md](assistant-speech-synthesis.md). In any deployment without a reachable
+> speech-output provider and explicit persona mapping, no playback control is rendered. Raw assistant audio
+> is never persisted.
 
 ## 1. Scope and versioning
 
@@ -30,11 +37,10 @@ and the contract in
   `VoicePlaybackState`s; the legal phase-transition table; per-phase replay and redaction classification;
   the capability-gating predicates; the effect vocabulary and the turn-manager interruption boundary; the
   AC1 dormancy guarantee; the content-free observer and turn-summary rules; the accessible UI contract.
-- **Out of scope:** deploying or requiring a new TTS model; making speech output mandatory; adding a
-  third-party audio playback package; using browser `SpeechSynthesis` as a silent default; persisting
-  generated audio. Driving the lifecycle from a live provider (real `prepare`/`play-started`/`complete`
-  events) lands with the issue that deploys a speech-output provider; the integration seams are shipped
-  and tested here.
+- **Original Issue #501 out of scope:** deploying or requiring a new TTS model; making speech output
+  mandatory; adding a third-party audio playback package; using browser `SpeechSynthesis` as a silent
+  default; persisting generated audio. The later synthesis implementation now drives the same lifecycle;
+  the state machine and integration seams remain the reusable boundary defined here.
 - **Versioning:** `VOICE_PLAYBACK_SCHEMA_VERSION = "1"`. A breaking change introduces a new literal rather
   than mutating `"1"`. It is independent of the wire `VOICE_PROTOCOL_VERSION` and of
   `CONVERSATION_CAPABILITY_CONTRACT_VERSION`.
@@ -57,9 +63,11 @@ and the contract in
 distinguishes "never available" from "available but idle" (`snapshot.available`).
 
 **Every phase is `content-free`.** A playback phase is a control-state enum; it never carries text,
-secret-bearing signaling, or raw audio. Raw assistant audio is media-plane only — `VOICE_PLAYBACK_AUDIO_PLANE`
-re-pins the protocol's `VOICE_MEDIA_PLANE` (`never-persisted`, `raw-media`). This is the typed expression
-of "raw assistant audio is not stored by default".
+secret-bearing signaling, or raw audio. `VOICE_PLAYBACK_AUDIO_PLANE` preserves the immutable v1
+WebRTC-media baseline; `VOICE_CANONICAL_PLAYBACK_AUDIO_PLANE` describes the productive output-only
+`gateway-batch` TTS/BFF seam as `never-persisted` and `raw-media`. It is deliberately distinct from
+Realtime microphone input. This is the typed expression of "raw assistant audio is not stored by
+default".
 
 ## 3. Transitions
 
@@ -84,12 +92,12 @@ without speech output, so a no-capability deployment is pinned in `unavailable` 
 `voiceMessageAllowedForProfile("playback.state" | "control.interrupt", profile)` — the single source of
 truth. By the [protocol](protocol.md) profile table:
 
-| Profile          | Playback / interrupt allowed | Controller resting phase |
-| ---------------- | ---------------------------- | ------------------------ |
-| `none`           | No                           | `unavailable` (dormant)  |
-| `speech-to-text` | No (dictation only — AC1)    | `unavailable` (dormant)  |
-| `speech-output`  | Yes                          | `unavailable` → armable  |
-| `full-realtime`  | Yes (also speaks)            | `unavailable` → armable  |
+| Profile          | Playback / interrupt allowed  | Controller resting phase |
+| ---------------- | ----------------------------- | ------------------------ |
+| `none`           | No                            | `unavailable` (dormant)  |
+| `speech-to-text` | No (dictation only — AC1)     | `unavailable` (dormant)  |
+| `speech-output`  | Yes                           | `unavailable` → armable  |
+| `full-realtime`  | Yes only with independent TTS | `unavailable` → armable  |
 
 The UI applies the same rule before mounting any control via `supportsSpeechOutput`, so an STT-only or
 no-voice deployment renders no playback affordance and the assistant answers in text (AC1).
@@ -107,12 +115,14 @@ grants workflow authority, triggers a model call, or writes to any store.
 
 ## 6. Local seams only — no new destination, no stored audio (AC3 / AC4)
 
-The optional spoken audio, when a provider supports it, rides the existing seams: the Model Gateway
-egress (`gateway-batch`) for batch TTS, and the WebRTC media plane (`audio-out`) for realtime speech
-output. The playback controller only ever _names_ these through content-free effects; it holds no audio,
+The optional spoken audio rides the Model Gateway TTS egress (`gateway-batch`) and returns through the
+same-origin BFF route. Realtime WebRTC has no `audio-out` track. The playback controller only ever
+_names_ lifecycle effects; it holds no audio,
 credential, SDP, or URL. Provider credentials and audio payloads therefore flow exclusively through the
-approved local seams already governed by the [privacy contract](privacy-contract.md). No new server route
-and no new external destination are introduced.
+approved local seams already governed by the [privacy contract](privacy-contract.md). Issue #501 itself
+introduced no server route or external destination. The current implementation uses the capability-gated
+`/api/voice/speak/stream` route with `/api/voice/speak` as its buffered fallback; both delegate provider
+egress to the Model Gateway.
 
 ## 7. Accessible UI contract (assistant speaking state)
 

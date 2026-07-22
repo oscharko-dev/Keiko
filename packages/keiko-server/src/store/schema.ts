@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 13;
 
 interface Migration {
   readonly version: number;
@@ -349,6 +349,25 @@ CREATE TABLE memory_autonomy_policy (
 ) STRICT;
 `;
 
+// V12 — durable, content-bounded identity for canonical chat-turn retries. Only a SHA-256 digest
+// scoped to the chat is stored; the opaque provider/client identity never reaches SQLite. The same
+// turn may own at most one user row and one assistant row, and divergent text fails closed. NULL
+// preserves all historical and ordinary typed Composer messages.
+const V12_SQL = `
+ALTER TABLE chat_messages ADD COLUMN client_turn_id TEXT;
+ALTER TABLE chat_messages ADD COLUMN client_turn_state TEXT;
+CREATE UNIQUE INDEX uniq_chat_messages_client_turn_role
+  ON chat_messages(chat_id, client_turn_id, role)
+  WHERE client_turn_id IS NOT NULL;
+`;
+
+// V13 — immutable content identity for canonical retries. Visible user text remains governed by the
+// caller's redaction policy, while idempotency compares only this scope-bound digest of the original
+// chat/turn/content tuple. No raw provider id or message body is added to the identity column.
+const V13_SQL = `
+ALTER TABLE chat_messages ADD COLUMN client_turn_content_digest TEXT;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -361,6 +380,8 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 9, sql: V9_SQL },
   { version: 10, sql: V10_SQL },
   { version: 11, sql: V11_SQL },
+  { version: 12, sql: V12_SQL },
+  { version: 13, sql: V13_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

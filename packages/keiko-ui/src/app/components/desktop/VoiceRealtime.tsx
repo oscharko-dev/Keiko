@@ -296,6 +296,7 @@ export function VoiceRealtimeStatus({
     return (
       <div className="cmp-voice-preview cmp-voice-error" role="alert" aria-atomic="true">
         <p className="cmp-voice-error-text">{realtimeErrorHeadline(error.reason, t)}</p>
+        <p className="cmp-voice-error-text">{error.message}</p>
         <div className="cmp-voice-actions">
           <button type="button" ref={retryRef} className="cmp-voice-btn" onClick={onRetry}>
             {t("common.tryAgain")}

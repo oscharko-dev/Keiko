@@ -427,7 +427,7 @@ describe("useAssistantSpeech — Issue #1559 persona routing", () => {
     );
   });
 
-  it("omits the persona field entirely when no persona is selected (provider-default voice)", async () => {
+  it("omits persona so the server can choose its first explicit voice mapping", async () => {
     renderHook(() => useAssistantSpeech(realPathOptions({ persona: undefined })));
     await flush();
     expect(mockedSynthesize).toHaveBeenCalledTimes(1);

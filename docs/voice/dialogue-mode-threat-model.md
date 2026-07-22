@@ -7,6 +7,13 @@ AC → evidence matrix in [§5](#5-acceptance-criteria--evidence-validation-matr
 security review that satisfies that issue's AC4 ("security review is complete before final closure of the
 epic").
 
+> **Historical review boundary:** this document is fixed to the former Epic #1556 STT+TTS dialogue
+> controller. ADR-0154 supersedes that transport and authority model. Current Twin Voice uses send-only
+> Realtime WebRTC for microphone media/VAD/final transcription, hands the settled final exactly once to
+> canonical chat, and speaks only the exact canonical answer through independent TTS. The current security
+> review must include the WebSocket, SDP, provider data-channel parser, canonical per-chat serializer, and
+> Realtime teardown covered by ADR-0102/0154; the file/line evidence below remains historical.
+
 It **extends, and does not restate**, the epic-#491 privacy contract: the local-first data boundary, the
 external-call rule, the never-persist-raw-audio invariant, and the at-rest confidentiality stack are specified
 in [privacy-contract.md](privacy-contract.md) and the closure gate in [production-readiness.md](production-readiness.md).
@@ -14,16 +21,17 @@ This document is the dialogue-mode-specific surface: the exact runtime data path
 adds, the threats it introduces, and the code that mitigates each. Every claim cites a verifiable
 `file:line`.
 
-The authoritative decision records for the surface under review are
+The authoritative decision records for the historical surface under review were
 [ADR-0096](../adr/ADR-0096-voice-dialogue-session-orchestration.md) (dialogue orchestration),
 [ADR-0095](../adr/ADR-0095-voice-assistant-speech-synthesis.md) (assistant speech synthesis), and
 [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) (capability-gated architecture).
+ADR-0154 is authoritative for the current surface.
 
 ## 1. Scope and the complete dialogue-mode data path
 
-### 1.1 Transport: STT + TTS, not WebRTC realtime
+### 1.1 Historical transport: STT + TTS, not WebRTC realtime
 
-The colleague dialogue mode runs as a **half-duplex speech-to-text + text-to-speech turn loop**, not a
+At the Issue #1562 review head, colleague dialogue ran as a **half-duplex speech-to-text + text-to-speech turn loop**, not a
 WebRTC realtime media session. The orchestrator hardcodes the realtime phase to `idle` and never starts a
 realtime media connection:
 
@@ -129,8 +137,10 @@ The dialogue surface persists **nothing else**. Specifically:
 - **No generated audio.** The synthesized blob lives only behind a per-turn object URL that is revoked on
   teardown (`useAssistantSpeech.ts:15`, `useAssistantSpeech.ts:171`–`174`); the BFF holds the synthesized
   buffer only for the request and never persists it (`voice-handlers.ts:401`–`405`, `voice-handlers.ts:586`).
-- **No transcript.** The committed transcript flows into a normal chat message and is never written by the
-  dialogue controller to a side store.
+- **No historical side-store transcript.** The committed transcript flowed into a normal chat message and
+  was not written by the dialogue controller to a parallel store. Under current ADR-0154 semantics, the
+  settled final is intentionally persisted by canonical chat; raw audio and partial transcripts remain
+  unpersisted.
 - **No provider secret.** The provider key stays host-side sealed vault material and never reaches the browser
   or a response ([privacy-contract.md](privacy-contract.md) §2; `voice-handlers.ts:13`–`14`).
 
@@ -192,17 +202,18 @@ Mirroring the honesty of [privacy-contract.md](privacy-contract.md) §5 and
    renderer that respects the BFF CSP and `Permissions-Policy`. A compromised renderer (e.g. via an XSS that
    defeats CSP) is outside this surface's threat boundary; the persona `localStorage` value is the only
    at-rest browser state, and it is content-free.
-4. **Half-duplex by construction.** The deployed loop is listen-then-speak; literal full-duplex overlap
-   awaits a realtime transcript provider behind the same controller seam
-   ([dialogue-session.md](dialogue-session.md) §"Optional and capability-gated"). This is a behavioral, not a
-   security, limitation, recorded for completeness.
+4. **Historical half-duplex design.** The reviewed loop was listen-then-speak. ADR-0154 replaced it with
+   input-only Realtime capture plus independent canonical TTS; the old deferred-Realtime statement is no
+   longer a current limitation.
 5. **Provider-side handling of forwarded content is out of scope.** Once audio / text reaches a configured
    provider it is governed by that provider's data-handling terms, which the operator selects per deployment
    ([deployment-profile-matrix.md](deployment-profile-matrix.md) §2) and validates with the D4 runbook.
 
 ## 7. Security review disposition
 
-The security review of the **voice dialogue-mode surface** introduced by Epic #1556 is **complete**.
+The security review of the **historical voice dialogue-mode surface** introduced by Epic #1556 was complete
+for its recorded head. It does not substitute for the current ADR-0154 exact-head audit or the deferred
+renewed live-microphone acceptance test.
 
 - The dialogue path is STT + TTS only; no WebRTC realtime / SDP / ICE / ephemeral-token surface is added
   ([§1.1](#11-transport-stt--tts-not-webrtc-realtime)).

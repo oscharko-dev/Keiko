@@ -88,8 +88,8 @@ export const VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS: readonly VoiceTranscriptProv
 
 // ─── Segment provenance ─────────────────────────────────────────────────────────
 // Which capability produced the segment. `dictation` is STT-only composer dictation (gateway-batch);
-// `realtime` is full-duplex voice. The lifecycle is identical for both — the "same model" the issue
-// requires — and provenance is recorded only for content-free observability.
+// `realtime` is live WebRTC input transcription. The lifecycle is identical for both — the "same
+// model" the issue requires — and provenance is recorded only for content-free observability.
 export type VoiceTranscriptSource = "dictation" | "realtime";
 
 export const VOICE_TRANSCRIPT_SOURCES: readonly VoiceTranscriptSource[] = [

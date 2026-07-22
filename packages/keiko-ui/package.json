@@ -20,6 +20,7 @@
   ],
   "dependencies": {
     "@monaco-editor/react": "4.7.0",
+    "@noble/hashes": "2.2.0",
     "@oscharko-dev/keiko-contracts": "0.2.15",
     "@oscharko-dev/keiko-editor": "0.2.15",
     "diff": "9.0.0",
@@ -40,7 +41,7 @@
     "@vitejs/plugin-react": "6.0.3",
     "autoprefixer": "10.5.2",
     "axe-core": "4.12.1",
-    "eslint": "10.7.0",
+    "eslint": "9.39.5",
     "eslint-config-next": "16.2.10",
     "jest-axe": "10.0.0",
     "jsdom": "29.1.1",

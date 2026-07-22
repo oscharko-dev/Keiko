@@ -2,7 +2,16 @@
 
 ## Status
 
-Proposed (Issue #1560, Epic #1556, 2026-06-26)
+Partially superseded by
+[ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) (Accepted, 2026-07-22). D2, D3, D7, and D8's
+batch STT+TTS dialogue fallback and deferred-Realtime-transcript posture are historical. D10's
+content-free turn-manager rule remains applicable, but its statement that no transcript is persisted is
+superseded: a settled final transcript is intentionally persisted as the canonical user chat message.
+Twin Voice now requires Realtime WebRTC for media/VAD/final transcription, routes the final exactly once
+through canonical chat, and speaks that canonical answer through a separate explicit TTS provider. The
+turn-manager reuse, barge-in, and deterministic cleanup decisions remain applicable.
+
+Originally proposed for Issue #1560, Epic #1556 (2026-06-26).
 
 ## Version
 
@@ -214,6 +223,11 @@ rather than re-implementing resource release.
 
 ### D10 — Content-free and committed-only privacy invariants are preserved end to end
 
+> **Current amendment:** ADR-0154 preserves the content-free turn-manager boundary and the rule that
+> partial transcripts never enter chat. It supersedes the final no-transcript-persistence sentence below:
+> the settled final is persisted through the ordinary canonical user-message path, while raw audio and
+> partial transcript state remain unpersisted.
+
 Two invariants carry forward unchanged. **Content-free turn manager:** transcript text and audio never
 enter a turn-manager signal or observer — only enums, integers, and ms deltas (ADR-0104 D8). **Committed-
 only chat send:** only the reviewed, committed dictation transcript reaches chat, via the existing
@@ -221,7 +235,8 @@ lifecycle — `session.setDraft(text)` then `await session.sendMessage()` — an
 is non-empty; a partial or empty transcript is never sent. The committed transcript is sent as a normal
 chat **message** (a question); no spoken action auto-executes. Any proposed action still flows through the
 #503 spoken-action governance and the existing `WorkflowHandoff` chain, which this controller has no path
-to reach (ADR-0104 D7 / AC5). No raw audio, transcript, or secret is persisted.
+to reach (ADR-0104 D7 / AC5). No raw audio, partial transcript, or secret is persisted; the settled
+final is persisted only through the canonical user-message path.
 
 ### D11 — Deterministic-first, Model-Gateway-only, and Orchestrator-authority invariants are unchanged
 

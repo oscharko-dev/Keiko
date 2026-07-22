@@ -34,8 +34,9 @@ import {
 } from "./repoSearchCachedLexical.js";
 import { collectBestLines, type ScoredLine } from "./repoSearchLineSelection.js";
 import { evidenceAtomStableId } from "./stableId.js";
-import { lineLooksLikeSymbolDefinition, type LineMatcher } from "./repoSearchMatchers.js";
+import { structuralLineLooksLikeSymbolDefinition, type LineMatcher } from "./repoSearchMatchers.js";
 import { collectSemanticSearchDocument, type SemanticSearchSession } from "./repoSearchSemantic.js";
+import { repositorySourceLines } from "./repoSearchSourceClassification.js";
 import {
   extraIgnoreLinesForSearch,
   legacyDiscoveryPolicy,
@@ -305,7 +306,7 @@ function contentScoresForOrdering(
     if (preview === undefined) {
       continue;
     }
-    const score = scoreContentForSearch(inputs.query, preview, inputs.policy);
+    const score = scoreContentForSearch(inputs.query, preview, inputs.policy, file.relativePath);
     if (score > 0) {
       scores.set(file.relativePath, score);
     }
@@ -592,8 +593,11 @@ function safeStat(
 ): ReturnType<WorkspaceFs["stat"]> | undefined {
   try {
     return runner.fs.stat(absolutePath);
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (isIoError(error)) {
+      return undefined;
+    }
+    throw error;
   }
 }
 
@@ -669,7 +673,7 @@ function persistWorkspaceIndexRecord(
       ...metadata,
       kind: "text",
       fingerprint: workspaceIndexContentFingerprint(record.content),
-      lexical: buildWorkspaceIndexLexicalRecord(record.content),
+      lexical: buildWorkspaceIndexLexicalRecord(record.content, record.scopePath),
     });
     return;
   }
@@ -914,8 +918,13 @@ function maxLineScore(best: readonly ScoredLine[]): number {
   return best.reduce((max, line) => Math.max(max, line.score), 0);
 }
 
-function scanLines(runner: SearchTextRunner, text: string, state: RunState): readonly ScoredLine[] {
-  return collectBestLines(runner, text, state);
+function scanLines(
+  runner: SearchTextRunner,
+  text: string,
+  state: RunState,
+  scopePath: string,
+): readonly ScoredLine[] {
+  return collectBestLines(runner, text, state, scopePath);
 }
 
 function abortScanFile(runner: SearchTextRunner, state: RunState): boolean {
@@ -1141,7 +1150,7 @@ function textFileMatches(
   if (!shouldScoreContent(runner.query, text, runner.policy)) {
     return undefined;
   }
-  const best = scanLines(runner, text, state);
+  const best = scanLines(runner, text, state, file.relativePath);
   if (best.length === 0) {
     return undefined;
   }
@@ -1152,11 +1161,13 @@ function textFileMatches(
     maxScore: maxLineScore(best),
     definitionMatch:
       runner.query.kind === "exact-symbol" &&
-      text
-        .split(/\r?\n/u)
-        .some((line) =>
-          lineLooksLikeSymbolDefinition(line, runner.query.text, runner.query.caseSensitive),
+      repositorySourceLines(text, file.relativePath).some((line) =>
+        structuralLineLooksLikeSymbolDefinition(
+          line.structural,
+          runner.query.text,
+          runner.query.caseSensitive,
         ),
+      ),
   };
 }
 

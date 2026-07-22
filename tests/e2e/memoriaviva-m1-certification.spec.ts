@@ -7,6 +7,7 @@ import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 
 const CHAT_MODEL_ID = "e2e-chat-model";
 const REPLY_MARKER = "KEIKO_M1_CERT_STREAM_OK";
+const REPLY_TEXT = `${REPLY_MARKER} deterministic response.`;
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const BASELINE_PATH = join(process.cwd(), "docs", "qa", "memoriaviva-m1-baseline.md");
 const temporaryProjects: string[] = [];
@@ -282,30 +283,39 @@ async function certifyVoicePath(
   recalledMemoryId: string,
   metrics: MetricCounters,
 ): Promise<void> {
-  const response = await context.request.post("/api/desktop/chat/voice-turn", {
+  const captureMarkers = [
+    "M1_GOVERNED_CAPTURE",
+    "M1_SUPERVISED_CAPTURE",
+    "M1_AUTONOMOUS_CAPTURE",
+    "M1_VOICE_CAPTURE",
+  ] as const;
+  const before = (await recent(context.request, context.since)).captures;
+  const countMarker = (captures: readonly RecentCapture[], marker: string): number =>
+    captures.filter((capture) => capture.bodyExcerpt?.includes(marker) === true).length;
+  // A settled Voice transcript uses the ordinary desktop-chat request. There is deliberately no
+  // Voice-specific append route and no provider-supplied assistant message.
+  const response = await context.request.post("/api/desktop/chat", {
     headers: MUTATION_HEADERS,
     data: {
       chatId: context.chat.id,
       projectPath: context.chat.projectPath,
-      messages: [
-        {
-          role: "user",
-          content: "Recall the certified-supervised detail, then note M1_VOICE_CAPTURE.",
-        },
-        {
-          role: "assistant",
-          content: "The prior memory was recalled and the voice turn committed.",
-        },
-      ],
+      content: "Recall the certified-supervised detail, then note M1_VOICE_CAPTURE.",
       memory: { enabled: true, mode: "autonomous-delivery", budgetTokens: 1_200, context: {} },
     },
   });
   expect(response.ok(), await response.text().catch(() => "")).toBe(true);
   const body = (await response.json()) as {
+    readonly messages: readonly { readonly role: string; readonly content: string }[];
     readonly memory?: { readonly context: { readonly memories: readonly { memoryId: string }[] } };
   };
   expect(body.memory?.context.memories.map(({ memoryId }) => memoryId)).toContain(recalledMemoryId);
+  expect(body.messages.find(({ role }) => role === "assistant")?.content).toBe(REPLY_TEXT);
   await waitForCapture(context, "M1_VOICE_CAPTURE", "autonomous-delivery", "auto-accepted");
+  const after = (await recent(context.request, context.since)).captures;
+  for (const marker of captureMarkers.slice(0, -1)) {
+    expect(countMarker(after, marker)).toBe(countMarker(before, marker));
+  }
+  expect(countMarker(after, "M1_VOICE_CAPTURE") - countMarker(before, "M1_VOICE_CAPTURE")).toBe(1);
   recordCorrectCapture(metrics);
 }
 

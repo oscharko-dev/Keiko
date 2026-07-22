@@ -53,8 +53,9 @@ export interface TextToSpeechRequest {
   readonly modelId: string;
   // The assistant answer text to synthesize. Validated/bounded by the caller; never persisted here.
   readonly input: string;
-  // The provider voice id (operator/provider config). Defaults to "alloy" — the OpenAI-compatible
-  // default voice — when the caller does not pin one.
+  // Optional for source compatibility with the published request surface. Productive calls still
+  // require an explicit provider voice id: absent/blank fails closed before egress, because provider
+  // names are not portable and the gateway never invents a universal default (ADR-0154).
   readonly voice?: string;
   // Requested audio container. Defaults to mp3 (audio/mpeg) for the broadest browser playback.
   readonly responseFormat?: SpeechResponseFormat;
@@ -168,13 +169,15 @@ interface BuiltRequest {
   readonly maxAudioBytes: number;
 }
 
-function buildRequest(request: TextToSpeechRequest): BuiltRequest {
+type TextToSpeechRequestWithVoice = TextToSpeechRequest & { readonly voice: string };
+
+function buildRequest(request: TextToSpeechRequestWithVoice): BuiltRequest {
   const name = headerName(request.apiKeyHeaderName);
   const responseFormat = request.responseFormat ?? "mp3";
   const payload: Record<string, unknown> = {
     model: request.modelId,
     input: request.input,
-    voice: request.voice ?? "alloy",
+    voice: request.voice,
     response_format: responseFormat,
     ...(request.speed !== undefined ? { speed: request.speed } : {}),
     ...(request.instructions !== undefined ? { instructions: request.instructions } : {}),
@@ -198,6 +201,10 @@ function buildRequest(request: TextToSpeechRequest): BuiltRequest {
     responseFormat,
     maxAudioBytes: request.maxAudioBytes ?? MAX_SPEECH_AUDIO_BYTES,
   };
+}
+
+function hasExplicitVoice(request: TextToSpeechRequest): request is TextToSpeechRequestWithVoice {
+  return typeof request.voice === "string" && request.voice.trim().length > 0;
 }
 
 async function discardBody(response: Response): Promise<void> {
@@ -268,6 +275,9 @@ async function decodeSuccess(
 export async function requestTextToSpeech(
   request: TextToSpeechRequest,
 ): Promise<TextToSpeechOutcome> {
+  if (!hasExplicitVoice(request)) {
+    return { ok: false, kind: "unsupported-model" };
+  }
   const built = buildRequest(request);
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
@@ -333,6 +343,9 @@ function boundBodyStream(
 export async function requestTextToSpeechStream(
   request: TextToSpeechRequest,
 ): Promise<TextToSpeechStreamOutcome> {
+  if (!hasExplicitVoice(request)) {
+    return { ok: false, kind: "unsupported-model" };
+  }
   const built = buildRequest(request);
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {

@@ -4,14 +4,12 @@ import type {
   OmittedContextEntry,
   SelectedScope,
 } from "@oscharko-dev/keiko-contracts";
-import { evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
 
 const MAX_WORKSPACE_CANDIDATE_FILES = 12;
 const MIN_RELATIVE_CANDIDATE_SCORE = 0.55;
 const MAX_EVIDENCE_ATOMS_PER_FILE = 12;
 const TRACE_RANGE_SLOTS_PER_FILE = 4;
 const CONTEXT_RANGE_SLOTS_PER_FILE = 2;
-const SINGLE_LINE_CONTEXT_LINES = 3;
 
 export interface GroundedCandidateSelectionInput {
   readonly kept: readonly CandidateFile[];
@@ -128,39 +126,7 @@ function compareByTracePriority(a: EvidenceAtom, b: EvidenceAtom): number {
   return tracePriority(b) - tracePriority(a) || compareByScore(a, b);
 }
 
-function contextualizeSingleLineAtom(atom: EvidenceAtom, scopeId: string): EvidenceAtom {
-  const range = atom.lineRange;
-  if (
-    range === undefined ||
-    range.startLine !== range.endLine ||
-    atom.provenance.kind === "semantic-search" ||
-    atom.provenance.kind === "model-rerank"
-  ) {
-    return atom;
-  }
-  const lineRange = {
-    startLine: Math.max(1, range.startLine - SINGLE_LINE_CONTEXT_LINES),
-    endLine: range.endLine + SINGLE_LINE_CONTEXT_LINES,
-  };
-  return {
-    ...atom,
-    stableId: evidenceAtomStableId({
-      scopeId,
-      scopePath: atom.scopePath,
-      lineRange,
-      edge: atom.edge,
-      provenanceKind: atom.provenance.kind,
-      provenanceTool: atom.provenance.tool,
-      queryFingerprint: atom.provenance.queryFingerprint,
-    }),
-    lineRange,
-  };
-}
-
-function selectAtomsForPath(
-  atoms: readonly EvidenceAtom[],
-  scopeId: string,
-): readonly EvidenceAtom[] {
+function selectAtomsForPath(atoms: readonly EvidenceAtom[]): readonly EvidenceAtom[] {
   const unique = deduplicateRanges(atoms);
   const selected = new Map<string, EvidenceAtom>();
   for (const atom of [...unique]
@@ -179,11 +145,7 @@ function selectAtomsForPath(
     if (selected.size >= MAX_EVIDENCE_ATOMS_PER_FILE) break;
     selected.set(atom.stableId, atom);
   }
-  return [
-    ...deduplicateRanges(
-      [...selected.values()].map((atom) => contextualizeSingleLineAtom(atom, scopeId)),
-    ),
-  ].sort(compareByScore);
+  return [...deduplicateRanges([...selected.values()])].sort(compareByScore);
 }
 
 function atomsByPath(atoms: readonly EvidenceAtom[]): ReadonlyMap<string, readonly EvidenceAtom[]> {
@@ -199,12 +161,12 @@ function atomsByPath(atoms: readonly EvidenceAtom[]): ReadonlyMap<string, readon
 export function selectGroundedEvidenceAtoms(
   atoms: readonly EvidenceAtom[],
   selectedPaths: ReadonlySet<string>,
-  scopeId: string,
+  _scopeId: string,
 ): readonly EvidenceAtom[] {
   const grouped = atomsByPath(atoms);
   const selected: EvidenceAtom[] = [];
   for (const scopePath of selectedPaths) {
-    selected.push(...selectAtomsForPath(grouped.get(scopePath) ?? [], scopeId));
+    selected.push(...selectAtomsForPath(grouped.get(scopePath) ?? []));
   }
   return selected;
 }

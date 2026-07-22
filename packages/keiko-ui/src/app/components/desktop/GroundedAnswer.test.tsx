@@ -1327,6 +1327,27 @@ describe("GroundedAnswer", () => {
     expect(container.querySelectorAll("script")).toHaveLength(0);
   });
 
+  it("renders hostile repository and Knowledge citation labels only as escaped text", () => {
+    const hostile = '<img src=x onerror="globalThis.pwned=true"><script>alert(1)</script>';
+    const { container } = render(
+      <>
+        <GroundedAnswer
+          answer={answer({ citations: [citation({ scopePath: hostile })] })}
+          busy={false}
+        />
+        <GroundedAnswer
+          answer={localKnowledgeAnswer([
+            knowledgeCitation({ label: hostile, source: `<svg onload="pwned()">${hostile}</svg>` }),
+          ])}
+          busy={false}
+        />
+      </>,
+    );
+
+    expect(container.textContent).toContain(hostile);
+    expect(container.querySelector("img, script, svg, [onerror], [onload]")).toBeNull();
+  });
+
   it("RB-4 (GEN-AI-GROUNDING-007): surfaces a summary-level warning on empty evidence, not hidden in the disclosure", () => {
     const a = answer({
       uncertainty: [{ kind: "no-evidence", claim: "No repository evidence matched." }],
@@ -1336,6 +1357,19 @@ describe("GroundedAnswer", () => {
     expect(warning).not.toBeNull();
     expect(warning?.textContent).toContain("Needs review");
     expect(warning?.textContent?.toLowerCase()).toContain("not grounded");
+  });
+
+  it("labels a memory-only local answer as ungrounded without inventing source citations", () => {
+    const memoryOnly = {
+      ...localKnowledgeAnswer([]),
+      content: "You prefer pnpm.",
+      noEvidence: true,
+      noEvidenceReason: "answer-only-memory",
+    };
+    const { container } = render(<GroundedAnswer answer={memoryOnly} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent?.toLowerCase()).toContain("not grounded");
+    expect(container.querySelectorAll(".grounded-citation")).toHaveLength(0);
   });
 
   it("RB-4 (GEN-AI-GROUNDING-007): flags unsupported (fabricated) citations at the summary level", () => {

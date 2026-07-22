@@ -22,25 +22,25 @@ It does not restate the configuration contract; read these first and treat them 
 
 ## 1. What "dialogue mode" requires
 
-The colleague-like dialogue switch (and its per-turn Speak / Interrupt controls) is offered only when
-the resolved voice capability advertises **Realtime WebRTC media** _and_ at least one product voice
-persona is offered. The single predicate is `voiceDialogueModeForResolution`
+The colleague-like dialogue switch is offered only when the resolved capability advertises
+**Realtime WebRTC input media**, an independent speech-output deployment, and at least one explicitly
+mapped product voice persona. The single predicate is `voiceDialogueModeForResolution`
 (`packages/keiko-ui/src/app/components/desktop/hooks/voice-dialogue-session.ts`), which gates both the
-switch and the session, fail-closed (ADR-0096 D3). In capability terms:
+switch and the session, fail-closed (ADR-0154 D3). In capability terms:
 
-| Configured providers                                     | Effective profile | Dialogue offered?                                    |
-| -------------------------------------------------------- | ----------------- | ---------------------------------------------------- |
-| None                                                     | `none`            | No (and no voice UI at all)                          |
-| Speech-to-text only (e.g. `keiko-stt`)                   | `speech-to-text`  | No — dictation only (composer mic)                   |
-| Speech-output only (e.g. `keiko-tts`)                    | `speech-output`   | No — assistant playback only                         |
-| STT and speech output, but no Realtime WebRTC + personas | `full-realtime`   | No — push-to-talk helpers only                       |
-| Realtime WebRTC + personas                               | `full-realtime`   | **Yes** — full spoken dialogue (male/female/neutral) |
+| Configured providers                                     | Effective profile | Dialogue offered?                   |
+| -------------------------------------------------------- | ----------------- | ----------------------------------- |
+| None                                                     | `none`            | No (and no voice UI at all)         |
+| Speech-to-text only (e.g. `keiko-stt`)                   | `speech-to-text`  | No — dictation only (composer mic)  |
+| Speech-output only (e.g. `keiko-tts`)                    | `speech-output`   | No — assistant playback only        |
+| STT and speech output, but no Realtime WebRTC + personas | `full-realtime`   | No — push-to-talk helpers only      |
+| Realtime WebRTC + TTS with mapped personas               | `full-realtime`   | **Yes** — canonical spoken dialogue |
 
 The practical consequence for bring-up: a deployment that has registered **only** `keiko-stt` (the
 default development convenience) gets composer dictation, **not** spoken dialogue. To get the colleague
-experience you must register a Realtime provider with WebRTC media and `voiceProfiles` for the
-personas. STT+TTS without Realtime remains a push-to-talk composition and does not expose the
-dialogue switch. This is by design — see [§3](#3-bringing-up-full-dialogue-mode).
+experience you must register a Realtime input provider plus a separate speech-output provider whose
+`voiceProfiles` explicitly map the offered personas. A Realtime-only provider contributes no persona.
+STT+TTS without Realtime remains a push-to-talk composition and does not expose the dialogue switch.
 
 ## 2. The `oscharko-dev` development profile credentials
 
@@ -50,8 +50,9 @@ from committed source — `keiko-server` resolves every provider credential thro
 per-model path, not through `KEIKO_AZURE_FOUNDRY_VOICE_*` names. The staged values are pasted by the
 operator into the Gateway Setup wizard
 (`packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx` →
-`packages/keiko-server/src/gateway-setup.ts`), which writes them into the Model Gateway provider record
-in `keiko.config.json`.
+`packages/keiko-server/src/gateway-setup.ts`). The server validates the submitted connection, seals the
+credential in the local vault, and writes only the credential-free provider configuration and secret
+reference to `keiko.config.json`.
 
 | `.env` staging variable (developer convenience)  | Where it lands in the running deployment                                |
 | ------------------------------------------------ | ----------------------------------------------------------------------- |
@@ -97,13 +98,10 @@ development deployment aliases:
       "apiKeySecretRef": "voice/keiko-realtime",
       "capability": {
         "kind": "voice",
-        "supportsSpeechInput": true,
-        "supportsSpeechOutput": true,
         "supportsRealtimeVoice": true,
         "realtimeTranscriptionModel": "keiko-realtime-stt",
         "voiceProviderLocality": "azure-foundry",
       },
-      "voiceProfiles": [{ "persona": "neutral", "voiceId": "alloy" }],
     },
     {
       "modelId": "keiko-tts",
@@ -126,40 +124,28 @@ development deployment aliases:
 }
 ```
 
-Voice Dialogue is offered only when the deployment advertises Realtime WebRTC and at least one persona.
-`realtimeTranscriptionModel` must be the exact provider deployment alias accepted inside the Realtime
-session; it is not a second standalone provider record. STT+TTS alone is not a fluid-dialogue fallback.
+Voice Dialogue starts only when Realtime WebRTC and independent speech output are both reachable, the
+TTS provider has at least one explicit persona mapping, and Realtime declares
+`realtimeTranscriptionModel` as the exact provider deployment alias accepted inside its session. Keiko
+infers neither that alias nor a provider voice id. The transcription alias is not a second standalone
+provider record. STT+TTS alone is not a fluid-dialogue fallback.
 
-## 4. Validating provider reachability without exposing secrets
+## 4. Validating provider readiness without exposing secrets
 
-Before driving the UI, confirm the configured endpoint and key are valid. The Azure Foundry voice
-resource exposes an **OpenAI-compatible v1 surface** (`<host>/openai/v1`), so a list-models call is the
-cheapest authenticated probe. The procedure below prints **only** the HTTP status and non-secret model
-identifiers — never the key, the full host, or any audio.
+Use Keiko's Gateway Setup save/verification flow for endpoint and credential validation. Enter the
+provider base URL, the provider's declared authentication-header posture, the credential, and each
+explicit deployment role in the UI. The BFF performs the bounded provider checks through the Model
+Gateway egress seam, seals the credential, and returns only coded success/failure information plus safe
+model identifiers. It never returns the submitted key or raw provider error body to the browser.
 
-```bash
-# Values are read from .env into shell variables and never echoed.
-ENVFILE=/path/to/Keiko/.env
-BASE=$(grep -E '^KEIKO_AZURE_FOUNDRY_VOICE_OPENAI_BASE_URL=' "$ENVFILE" | cut -d= -f2- | tr -d '"'\''')
-KEY=$(grep  -E '^KEIKO_AZURE_FOUNDRY_VOICE_API_KEY='        "$ENVFILE" | cut -d= -f2- | tr -d '"'\''')
+Do not copy a key from `.env` into a shell variable or pass it to `curl -H`: command arguments are visible
+to other local processes and shell tooling even when the command does not print the key. Do not use a raw
+provider call as release evidence. A successful Gateway Setup verification is the credential/readiness
+check; `GET /api/voice/capability` only confirms the resulting metadata and performs no provider probe.
 
-# Authenticated list-models: 200 proves endpoint reachable AND key authenticates.
-curl -s -o /dev/null -w "real key  -> HTTP %{http_code}\n" --max-time 25 \
-  -H "Authorization: Bearer $KEY" "${BASE%/}/models"
-
-# Control with a deliberately wrong key: expect 401, proving auth is actually enforced.
-curl -s -o /dev/null -w "wrong key -> HTTP %{http_code}\n" --max-time 25 \
-  -H "Authorization: Bearer wrong-key" "${BASE%/}/models"
-```
-
-**Expected:** `real key -> HTTP 200` and `wrong key -> HTTP 401`. A `200`/`401` split confirms
-reachability and that the staged key authenticates. The Azure Foundry resource also accepts the
-`api-key: $KEY` header form (the form Keiko's gateway uses). A `404` on a `/openai/deployments/...`
-data-plane path is expected for this Foundry endpoint shape and is **not** an auth failure — the
-OpenAI-compatible base already includes `/openai/v1`, so per-deployment audio routes hang off that base.
-
-> This is a connectivity/auth check only. It deliberately sends **no audio** and persists nothing.
-> Functional STT/TTS correctness is proven by driving the product (the next sections), not by raw curl.
+Functional STT, Realtime transcription, and TTS behavior is then verified through the product-owned paths
+in the next section. Those calls must use non-sensitive test content and the configured development
+subscription; no new deployment or paid resource is required.
 
 ## 5. Functional dialogue walkthrough (headset-style acceptance)
 

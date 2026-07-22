@@ -11,6 +11,10 @@ import {
   type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
+import {
+  selectRealtimeVoiceCapability,
+  selectSpeechOutputCapability,
+} from "@oscharko-dev/keiko-contracts";
 import { ApiError, setupGateway, type GatewaySetupInput } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
@@ -74,9 +78,100 @@ function storedVoiceModels(models: readonly ModelCapability[]): readonly string[
   return models.filter((model) => model.kind === "voice").map((model) => model.id);
 }
 
+function storedRealtimeModelId(models: readonly ModelCapability[]): string | undefined {
+  return selectRealtimeVoiceCapability(models)?.id;
+}
+
+function storedSpeechOutputModelId(models: readonly ModelCapability[]): string | undefined {
+  return selectSpeechOutputCapability(models)?.id;
+}
+
+function storedSemanticRealtimeModelId(models: readonly ModelCapability[]): string | undefined {
+  const electedRealtime = selectRealtimeVoiceCapability(models);
+  return electedRealtime?.supportsSemanticTurnDetection === true ? electedRealtime.id : undefined;
+}
+
 function storedSemanticTurnDetection(models: readonly ModelCapability[]): boolean {
-  return models.some(
-    (model) => model.kind === "voice" && model.supportsSemanticTurnDetection === true,
+  return storedSemanticRealtimeModelId(models) !== undefined;
+}
+
+function semanticTurnDetectionForIdentity(
+  preserveExisting: boolean,
+  storedModels: readonly ModelCapability[],
+  replacementRealtimeModelId: string,
+  replacementBaseUrl = "",
+): boolean {
+  const storedModelId = storedSemanticRealtimeModelId(storedModels);
+  if (!preserveExisting || storedModelId === undefined) {
+    return false;
+  }
+  const submittedModelId = replacementRealtimeModelId.trim();
+  if (submittedModelId === "") return replacementBaseUrl.trim() === "";
+  return submittedModelId === storedModelId && replacementBaseUrl.trim() === "";
+}
+
+const STORED_VOICE_ENDPOINT_IDENTITY = Symbol("stored-voice-endpoint");
+type ProviderIdentity = string | typeof STORED_VOICE_ENDPOINT_IDENTITY;
+interface ProviderIdentityReference {
+  current: ProviderIdentity | undefined;
+}
+
+function modelIdentity(
+  value: string,
+  storedModelId: string | undefined,
+): ProviderIdentity | undefined {
+  return value.trim() || storedModelId;
+}
+
+function endpointIdentity(
+  value: string,
+  preserveExisting: boolean,
+  hasStoredVoiceProvider: boolean,
+): ProviderIdentity | undefined {
+  const submitted = value.trim();
+  if (submitted !== "") return submitted;
+  return preserveExisting && hasStoredVoiceProvider ? STORED_VOICE_ENDPOINT_IDENTITY : undefined;
+}
+
+function transitionProviderIdentity(
+  reference: ProviderIdentityReference,
+  next: ProviderIdentity | undefined,
+  resetDependencies: () => void,
+  commit: boolean,
+): void {
+  if (reference.current !== undefined && reference.current !== next) {
+    resetDependencies();
+  }
+  if (commit) reference.current = next;
+}
+
+type SelectableVoiceCapability =
+  "supportsSpeechInput" | "supportsRealtimeVoice" | "supportsSpeechOutput";
+
+function voiceCapabilitySelected(
+  replacementModelId: string,
+  preserveExisting: boolean,
+  storedModels: readonly ModelCapability[],
+  capability: SelectableVoiceCapability,
+): boolean {
+  if (replacementModelId.trim() !== "") return true;
+  return (
+    preserveExisting &&
+    storedModels.some((model) => model.kind === "voice" && model[capability] === true)
+  );
+}
+
+function voiceCapabilityStatus(
+  t: I18nTranslate,
+  replacementModelId: string,
+  preserveExisting: boolean,
+  storedModels: readonly ModelCapability[],
+  capability: SelectableVoiceCapability,
+): string {
+  return t(
+    voiceCapabilitySelected(replacementModelId, preserveExisting, storedModels, capability)
+      ? "common.on"
+      : "common.off",
   );
 }
 
@@ -160,6 +255,8 @@ interface VoiceCredentialInputFields {
   readonly voiceSpeechOutputModelId: string;
   readonly voiceTimeoutMs: string;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceOutputVoiceIdConfigured: boolean;
+  readonly voiceProviderLocalityConfigured: boolean;
 }
 
 function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
@@ -172,7 +269,17 @@ function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
     fields.voiceRealtimeTranscriptionModelId.trim() !== "" ||
     fields.voiceSpeechOutputModelId.trim() !== "" ||
     fields.voiceTimeoutMs.trim() !== "" ||
-    fields.voiceSemanticTurnDetectionConfigured
+    fields.voiceSemanticTurnDetectionConfigured ||
+    fields.voiceOutputVoiceIdConfigured ||
+    fields.voiceProviderLocalityConfigured
+  );
+}
+
+function hasExplicitVoiceDeployment(fields: VoiceCredentialInputFields): boolean {
+  return (
+    fields.voiceModelId.trim() !== "" ||
+    fields.voiceRealtimeModelId.trim() !== "" ||
+    fields.voiceSpeechOutputModelId.trim() !== ""
   );
 }
 
@@ -305,8 +412,11 @@ interface VoiceCredentialPayloadInput {
   readonly voiceSemanticTurnDetectionConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
+  readonly voiceOutputVoiceIdConfigured: boolean;
   readonly voiceProviderLocality: VoiceProviderLocality;
+  readonly voiceProviderLocalityConfigured: boolean;
   readonly voiceTimeoutMs: number | undefined;
+  readonly preserveExisting: boolean;
 }
 
 function buildVoiceCredentialFields(
@@ -348,8 +458,12 @@ function buildVoiceCredentialFields(
       ? { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }
       : {}),
     ...(voiceSpeechOutputModelId === undefined ? {} : { voiceSpeechOutputModelId }),
-    ...(voiceOutputVoiceId === undefined ? {} : { voiceOutputVoiceId }),
-    voiceProviderLocality: input.voiceProviderLocality,
+    ...(voiceOutputVoiceId === undefined || !input.voiceOutputVoiceIdConfigured
+      ? {}
+      : { voiceOutputVoiceId }),
+    ...(!input.preserveExisting || input.voiceProviderLocalityConfigured
+      ? { voiceProviderLocality: input.voiceProviderLocality }
+      : {}),
     ...(input.voiceTimeoutMs === undefined ? {} : { voiceTimeoutMs: input.voiceTimeoutMs }),
   };
 }
@@ -371,10 +485,38 @@ interface GatewayFormFields {
   readonly voiceSemanticTurnDetectionConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
+  readonly voiceOutputVoiceIdConfigured: boolean;
   readonly voiceProviderLocality: VoiceProviderLocality;
+  readonly voiceProviderLocalityConfigured: boolean;
   readonly voiceTimeoutMs: string;
   readonly figmaAccessToken: string;
   readonly preserveExisting: boolean;
+  readonly hasStoredVoiceProvider: boolean;
+  readonly storedRealtimeModelId: string | undefined;
+}
+
+function endpointMigrationValidationError(
+  fields: GatewayFormFields,
+  t: I18nTranslate,
+): string | undefined {
+  if (!fields.preserveExisting || !fields.hasStoredVoiceProvider) return undefined;
+  if (fields.voiceBaseUrl.trim() === "") return undefined;
+  if (
+    fields.voiceApiKey.trim() !== "" &&
+    fields.voiceProviderLocalityConfigured &&
+    hasExplicitVoiceDeployment(fields)
+  ) {
+    return undefined;
+  }
+  return t("gatewaySetup.voice.endpointMigrationRequired");
+}
+
+function realtimeTranscriptionRequired(fields: GatewayFormFields): boolean {
+  const submittedRealtime = fields.voiceRealtimeModelId.trim();
+  if (submittedRealtime === "") return false;
+  if (!fields.preserveExisting) return true;
+  if (fields.voiceBaseUrl.trim() !== "") return true;
+  return submittedRealtime !== fields.storedRealtimeModelId;
 }
 
 function buildSetupGatewayPayload(
@@ -418,8 +560,11 @@ function voiceCredentialFieldsForMode(
     voiceSemanticTurnDetectionConfigured: fields.voiceSemanticTurnDetectionConfigured,
     voiceSpeechOutputModelId: fields.voiceSpeechOutputModelId,
     voiceOutputVoiceId: fields.voiceOutputVoiceId,
+    voiceOutputVoiceIdConfigured: fields.voiceOutputVoiceIdConfigured,
     voiceProviderLocality: fields.voiceProviderLocality,
+    voiceProviderLocalityConfigured: fields.voiceProviderLocalityConfigured,
     voiceTimeoutMs: derived.parsedVoiceTimeoutMs,
+    preserveExisting: fields.preserveExisting,
   });
 }
 
@@ -521,6 +666,47 @@ async function performGatewaySubmission(
   const foundryError = validateFoundryDeploymentNames(fields.baseUrl, parsedDeploymentNames);
   if (foundryError !== undefined) {
     return { kind: "validation-error", message: foundryError };
+  }
+  const endpointMigrationError = endpointMigrationValidationError(fields, t);
+  if (endpointMigrationError !== undefined) {
+    return { kind: "validation-error", message: endpointMigrationError };
+  }
+  if (
+    fields.voiceRealtimeTranscriptionModelId.trim() !== "" &&
+    fields.voiceRealtimeModelId.trim() === ""
+  ) {
+    return {
+      kind: "validation-error",
+      message: t("gatewaySetup.voice.realtimeRequired"),
+    };
+  }
+  if (
+    !fields.preserveExisting &&
+    hasVoiceCredentialInput(fields) &&
+    !hasExplicitVoiceDeployment(fields)
+  ) {
+    return {
+      kind: "validation-error",
+      message: t("gatewaySetup.voice.deploymentRequired"),
+    };
+  }
+  if (
+    realtimeTranscriptionRequired(fields) &&
+    fields.voiceRealtimeTranscriptionModelId.trim() === ""
+  ) {
+    return {
+      kind: "validation-error",
+      message: t("gatewaySetup.voice.realtimeTranscriptionRequired"),
+    };
+  }
+  if (
+    fields.voiceSpeechOutputModelId.trim() !== "" &&
+    (!fields.voiceOutputVoiceIdConfigured || fields.voiceOutputVoiceId.trim() === "")
+  ) {
+    return {
+      kind: "validation-error",
+      message: t("gatewaySetup.voice.outputVoiceRequired"),
+    };
   }
   const timeoutsResult = parseSubmitTimeouts(fields.timeoutMs, fields.voiceTimeoutMs);
   if (!timeoutsResult.ok) {
@@ -903,6 +1089,8 @@ function GatewayModelSection({
 
 interface VoiceGuidanceNoteProps {
   readonly t: I18nTranslate;
+  readonly preserveExisting: boolean;
+  readonly storedModels: readonly ModelCapability[];
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
   readonly voiceSpeechOutputModelId: string;
@@ -910,6 +1098,8 @@ interface VoiceGuidanceNoteProps {
 
 function VoiceGuidanceNote({
   t,
+  preserveExisting,
+  storedModels,
   voiceModelId,
   voiceRealtimeModelId,
   voiceSpeechOutputModelId,
@@ -919,9 +1109,27 @@ function VoiceGuidanceNote({
       {t("gatewaySetup.voice.guidance")}
       <br />
       {t("gatewaySetup.voice.selectedCapabilities", {
-        dictate: t(voiceModelId.trim() === "" ? "common.off" : "common.on"),
-        digitalVoice: t(voiceRealtimeModelId.trim() === "" ? "common.off" : "common.on"),
-        readAloud: t(voiceSpeechOutputModelId.trim() === "" ? "common.off" : "common.on"),
+        dictate: voiceCapabilityStatus(
+          t,
+          voiceModelId,
+          preserveExisting,
+          storedModels,
+          "supportsSpeechInput",
+        ),
+        digitalVoice: voiceCapabilityStatus(
+          t,
+          voiceRealtimeModelId,
+          preserveExisting,
+          storedModels,
+          "supportsRealtimeVoice",
+        ),
+        readAloud: voiceCapabilityStatus(
+          t,
+          voiceSpeechOutputModelId,
+          preserveExisting,
+          storedModels,
+          "supportsSpeechOutput",
+        ),
       })}
     </div>
   );
@@ -963,6 +1171,7 @@ interface VoiceRealtimeDeploymentFieldProps {
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
+  readonly onBlur?: (() => void) | undefined;
 }
 
 function VoiceRealtimeDeploymentField({
@@ -970,6 +1179,7 @@ function VoiceRealtimeDeploymentField({
   value,
   disabled,
   onChange,
+  onBlur,
 }: VoiceRealtimeDeploymentFieldProps): ReactNode {
   return (
     <label className="gw-field">
@@ -984,6 +1194,7 @@ function VoiceRealtimeDeploymentField({
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
       />
     </label>
   );
@@ -993,13 +1204,18 @@ function VoiceRealtimeTranscriptionDeploymentField({
   t,
   value,
   disabled,
+  requiredForRealtime,
   onChange,
-}: VoiceRealtimeDeploymentFieldProps): ReactNode {
+}: VoiceRealtimeDeploymentFieldProps & { readonly requiredForRealtime: boolean }): ReactNode {
   return (
     <label className="gw-field">
       <span>
         {t("gatewaySetup.voice.realtimeTranscriptionDeployment")}{" "}
-        <span className="dlg-opt">{t("common.optional")}</span>
+        <span className="dlg-opt">
+          {requiredForRealtime
+            ? t("gatewaySetup.voice.realtimeTranscriptionRequiredLabel")
+            : t("common.optional")}
+        </span>
       </span>
       <input
         className="gw-input mono"
@@ -1007,6 +1223,7 @@ function VoiceRealtimeTranscriptionDeploymentField({
         placeholder={t("gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder")}
         autoComplete="off"
         disabled={disabled}
+        aria-required={requiredForRealtime}
         onChange={(event) => onChange(event.target.value)}
       />
     </label>
@@ -1018,6 +1235,7 @@ interface VoiceSpeechOutputDeploymentFieldProps {
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
+  readonly onBlur: () => void;
 }
 
 function VoiceSpeechOutputDeploymentField({
@@ -1025,6 +1243,7 @@ function VoiceSpeechOutputDeploymentField({
   value,
   disabled,
   onChange,
+  onBlur,
 }: VoiceSpeechOutputDeploymentFieldProps): ReactNode {
   return (
     <label className="gw-field">
@@ -1039,6 +1258,7 @@ function VoiceSpeechOutputDeploymentField({
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
       />
     </label>
   );
@@ -1066,7 +1286,7 @@ function VoiceOutputVoiceField({
       <input
         className="gw-input mono"
         value={value}
-        placeholder="alloy"
+        placeholder="provider-voice-id"
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -1116,6 +1336,7 @@ interface VoiceEndpointUrlFieldProps {
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
+  readonly onBlur: () => void;
 }
 
 function VoiceEndpointUrlField({
@@ -1124,12 +1345,15 @@ function VoiceEndpointUrlField({
   value,
   disabled,
   onChange,
+  onBlur,
 }: VoiceEndpointUrlFieldProps): ReactNode {
   return (
     <label className="gw-field gw-span-2">
       <span>
         {t("gatewaySetup.voice.endpointUrl")}{" "}
-        {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+        {preserveExisting ? (
+          <span className="dlg-opt">{t("gatewaySetup.voice.preserveExistingHint")}</span>
+        ) : null}
       </span>
       <input
         className="gw-input mono"
@@ -1142,6 +1366,7 @@ function VoiceEndpointUrlField({
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
       />
     </label>
   );
@@ -1166,7 +1391,9 @@ function VoiceCredentialField({
     <label className="gw-field">
       <span>
         {t("gatewaySetup.voice.credential")}{" "}
-        {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+        {preserveExisting ? (
+          <span className="dlg-opt">{t("gatewaySetup.voice.preserveExistingHint")}</span>
+        ) : null}
       </span>
       <input
         className="gw-input mono"
@@ -1208,7 +1435,9 @@ function VoiceAuthHeaderField({
       <input
         className="gw-input mono"
         value={value}
-        placeholder={preserveExisting ? "Leave blank to keep stored header" : "api-key"}
+        placeholder={
+          preserveExisting ? t("gatewaySetup.voice.authHeaderPreservePlaceholder") : "api-key"
+        }
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -1241,7 +1470,9 @@ function VoiceTimeoutField({
         className="gw-input mono"
         inputMode="numeric"
         value={value}
-        placeholder={preserveExisting ? "Leave blank to keep stored timeout" : "30000"}
+        placeholder={
+          preserveExisting ? t("gatewaySetup.voice.timeoutPreservePlaceholder") : "30000"
+        }
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -1252,16 +1483,20 @@ function VoiceTimeoutField({
 
 interface VoiceDeploymentFieldsProps {
   readonly t: I18nTranslate;
+  readonly preserveExisting: boolean;
+  readonly storedModels: readonly ModelCapability[];
   readonly voiceModelId: string;
   readonly setVoiceModelId: Dispatch<SetStateAction<string>>;
   readonly voiceRealtimeModelId: string;
   readonly setVoiceRealtimeModelId: Dispatch<SetStateAction<string>>;
+  readonly commitVoiceRealtimeModelId: () => void;
   readonly voiceRealtimeTranscriptionModelId: string;
   readonly setVoiceRealtimeTranscriptionModelId: Dispatch<SetStateAction<string>>;
   readonly voiceSupportsSemanticTurnDetection: boolean;
   readonly setVoiceSupportsSemanticTurnDetection: (enabled: boolean) => void;
   readonly voiceSpeechOutputModelId: string;
   readonly setVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>>;
+  readonly commitVoiceSpeechOutputModelId: () => void;
   readonly voiceOutputVoiceId: string;
   readonly setVoiceOutputVoiceId: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocalityLabelId: string;
@@ -1307,6 +1542,8 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
     <>
       <VoiceGuidanceNote
         t={props.t}
+        preserveExisting={props.preserveExisting}
+        storedModels={props.storedModels}
         voiceModelId={props.voiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
@@ -1322,11 +1559,13 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         value={props.voiceRealtimeModelId}
         disabled={props.disabled}
         onChange={props.setVoiceRealtimeModelId}
+        onBlur={props.commitVoiceRealtimeModelId}
       />
       <VoiceRealtimeTranscriptionDeploymentField
         t={props.t}
         value={props.voiceRealtimeTranscriptionModelId}
         disabled={props.disabled}
+        requiredForRealtime={props.voiceRealtimeModelId.trim() !== ""}
         onChange={props.setVoiceRealtimeTranscriptionModelId}
       />
       <VoiceSemanticTurnDetectionField
@@ -1340,6 +1579,7 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         value={props.voiceSpeechOutputModelId}
         disabled={props.disabled}
         onChange={props.setVoiceSpeechOutputModelId}
+        onBlur={props.commitVoiceSpeechOutputModelId}
       />
       <VoiceOutputVoiceField
         t={props.t}
@@ -1362,6 +1602,7 @@ interface VoiceConnectionFieldsProps {
   readonly preserveExisting: boolean;
   readonly voiceBaseUrl: string;
   readonly setVoiceBaseUrl: Dispatch<SetStateAction<string>>;
+  readonly commitVoiceBaseUrl: () => void;
   readonly voiceApiKey: string;
   readonly setVoiceApiKey: Dispatch<SetStateAction<string>>;
   readonly voiceApiKeyHeaderName: string;
@@ -1380,6 +1621,7 @@ function VoiceConnectionFields(props: VoiceConnectionFieldsProps): ReactNode {
         value={props.voiceBaseUrl}
         disabled={props.disabled}
         onChange={props.setVoiceBaseUrl}
+        onBlur={props.commitVoiceBaseUrl}
       />
       <VoiceCredentialField
         t={props.t}
@@ -1411,16 +1653,19 @@ interface VoiceFieldsSectionProps {
   readonly busy: boolean;
   readonly success: string | undefined;
   readonly preserveExisting: boolean;
+  readonly storedModels: readonly ModelCapability[];
   readonly voiceModelId: string;
   readonly setVoiceModelId: Dispatch<SetStateAction<string>>;
   readonly voiceRealtimeModelId: string;
   readonly setVoiceRealtimeModelId: Dispatch<SetStateAction<string>>;
+  readonly commitVoiceRealtimeModelId: () => void;
   readonly voiceRealtimeTranscriptionModelId: string;
   readonly setVoiceRealtimeTranscriptionModelId: Dispatch<SetStateAction<string>>;
   readonly voiceSupportsSemanticTurnDetection: boolean;
   readonly setVoiceSupportsSemanticTurnDetection: (enabled: boolean) => void;
   readonly voiceSpeechOutputModelId: string;
   readonly setVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>>;
+  readonly commitVoiceSpeechOutputModelId: () => void;
   readonly voiceOutputVoiceId: string;
   readonly setVoiceOutputVoiceId: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocalityLabelId: string;
@@ -1428,6 +1673,7 @@ interface VoiceFieldsSectionProps {
   readonly setVoiceProviderLocality: Dispatch<SetStateAction<VoiceProviderLocality>>;
   readonly voiceBaseUrl: string;
   readonly setVoiceBaseUrl: Dispatch<SetStateAction<string>>;
+  readonly commitVoiceBaseUrl: () => void;
   readonly voiceApiKey: string;
   readonly setVoiceApiKey: Dispatch<SetStateAction<string>>;
   readonly voiceApiKeyHeaderName: string;
@@ -1442,16 +1688,20 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
     <div className="gw-grid">
       <VoiceDeploymentFields
         t={props.t}
+        preserveExisting={props.preserveExisting}
+        storedModels={props.storedModels}
         voiceModelId={props.voiceModelId}
         setVoiceModelId={props.setVoiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
         setVoiceRealtimeModelId={props.setVoiceRealtimeModelId}
+        commitVoiceRealtimeModelId={props.commitVoiceRealtimeModelId}
         voiceRealtimeTranscriptionModelId={props.voiceRealtimeTranscriptionModelId}
         setVoiceRealtimeTranscriptionModelId={props.setVoiceRealtimeTranscriptionModelId}
         voiceSupportsSemanticTurnDetection={props.voiceSupportsSemanticTurnDetection}
         setVoiceSupportsSemanticTurnDetection={props.setVoiceSupportsSemanticTurnDetection}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
         setVoiceSpeechOutputModelId={props.setVoiceSpeechOutputModelId}
+        commitVoiceSpeechOutputModelId={props.commitVoiceSpeechOutputModelId}
         voiceOutputVoiceId={props.voiceOutputVoiceId}
         setVoiceOutputVoiceId={props.setVoiceOutputVoiceId}
         voiceProviderLocalityLabelId={props.voiceProviderLocalityLabelId}
@@ -1464,6 +1714,7 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
         preserveExisting={props.preserveExisting}
         voiceBaseUrl={props.voiceBaseUrl}
         setVoiceBaseUrl={props.setVoiceBaseUrl}
+        commitVoiceBaseUrl={props.commitVoiceBaseUrl}
         voiceApiKey={props.voiceApiKey}
         setVoiceApiKey={props.setVoiceApiKey}
         voiceApiKeyHeaderName={props.voiceApiKeyHeaderName}
@@ -1696,25 +1947,157 @@ export function GatewaySetupDialog({
   const [voiceModelId, setVoiceModelId] = useState("");
   const [voiceRealtimeModelId, setVoiceRealtimeModelId] = useState("");
   const [voiceRealtimeTranscriptionModelId, setVoiceRealtimeTranscriptionModelId] = useState("");
-  const [voiceSupportsSemanticTurnDetection, setVoiceSupportsSemanticTurnDetection] = useState(() =>
-    storedSemanticTurnDetection(storedModels),
+  const [voiceSupportsSemanticTurnDetection, setVoiceSupportsSemanticTurnDetection] = useState(
+    () => (preserveExisting ? storedSemanticTurnDetection(storedModels) : false),
   );
   const [voiceSemanticTurnDetectionConfigured, setVoiceSemanticTurnDetectionConfigured] =
     useState(false);
   const [voiceSpeechOutputModelId, setVoiceSpeechOutputModelId] = useState("");
-  const [voiceOutputVoiceId, setVoiceOutputVoiceId] = useState("alloy");
+  const [voiceOutputVoiceId, setVoiceOutputVoiceId] = useState("");
+  const [voiceOutputVoiceIdConfigured, setVoiceOutputVoiceIdConfigured] = useState(false);
   const [voiceProviderLocality, setVoiceProviderLocality] =
     useState<VoiceProviderLocality>("azure-foundry");
+  const [voiceProviderLocalityConfigured, setVoiceProviderLocalityConfigured] = useState(false);
   const [voiceTimeoutMs, setVoiceTimeoutMs] = useState("");
   const [figmaAccessToken, setFigmaAccessToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [errorCode, setErrorCode] = useState<string | undefined>();
   const [success, setSuccess] = useState<string | undefined>();
+  const storedVoiceProviderExists = storedVoiceModels(storedModels).length > 0;
+  const realtimeIdentityRef = useRef<ProviderIdentity | undefined>(
+    preserveExisting ? storedRealtimeModelId(storedModels) : undefined,
+  );
+  const speechOutputIdentityRef = useRef<ProviderIdentity | undefined>(
+    preserveExisting ? storedSpeechOutputModelId(storedModels) : undefined,
+  );
+  const endpointIdentityRef = useRef<ProviderIdentity | undefined>(
+    preserveExisting && storedVoiceProviderExists ? STORED_VOICE_ENDPOINT_IDENTITY : undefined,
+  );
 
   const updateVoiceSemanticTurnDetection = (enabled: boolean): void => {
     setVoiceSupportsSemanticTurnDetection(enabled);
     setVoiceSemanticTurnDetectionConfigured(true);
+  };
+
+  const resetRealtimeDependencies = (nextModelId: string, nextBaseUrl: string): void => {
+    setVoiceRealtimeTranscriptionModelId("");
+    setVoiceSupportsSemanticTurnDetection(
+      semanticTurnDetectionForIdentity(preserveExisting, storedModels, nextModelId, nextBaseUrl),
+    );
+    setVoiceSemanticTurnDetectionConfigured(false);
+  };
+
+  const resetSpeechOutputDependencies = (): void => {
+    setVoiceOutputVoiceId("");
+    setVoiceOutputVoiceIdConfigured(false);
+  };
+
+  const resetEndpointDependencies = (
+    nextBaseUrl: string,
+    nextIdentity: ProviderIdentity | undefined,
+  ): void => {
+    const restoresStoredEndpoint = nextIdentity === STORED_VOICE_ENDPOINT_IDENTITY;
+    setVoiceModelId("");
+    setVoiceRealtimeModelId("");
+    setVoiceSpeechOutputModelId("");
+    resetRealtimeDependencies("", nextBaseUrl);
+    resetSpeechOutputDependencies();
+    realtimeIdentityRef.current = restoresStoredEndpoint
+      ? storedRealtimeModelId(storedModels)
+      : undefined;
+    speechOutputIdentityRef.current = restoresStoredEndpoint
+      ? storedSpeechOutputModelId(storedModels)
+      : undefined;
+  };
+
+  const updateVoiceRealtimeModelId: Dispatch<SetStateAction<string>> = (value): void => {
+    const next = typeof value === "function" ? value(voiceRealtimeModelId) : value;
+    setVoiceRealtimeModelId(next);
+    transitionProviderIdentity(
+      realtimeIdentityRef,
+      modelIdentity(next, preserveExisting ? storedRealtimeModelId(storedModels) : undefined),
+      () => resetRealtimeDependencies(next, voiceBaseUrl),
+      false,
+    );
+    if (!voiceSemanticTurnDetectionConfigured) {
+      setVoiceSupportsSemanticTurnDetection(
+        semanticTurnDetectionForIdentity(preserveExisting, storedModels, next, voiceBaseUrl),
+      );
+    }
+  };
+
+  const commitVoiceRealtimeModelId = (): void => {
+    transitionProviderIdentity(
+      realtimeIdentityRef,
+      modelIdentity(
+        voiceRealtimeModelId,
+        preserveExisting ? storedRealtimeModelId(storedModels) : undefined,
+      ),
+      () => resetRealtimeDependencies(voiceRealtimeModelId, voiceBaseUrl),
+      true,
+    );
+  };
+
+  const updateVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>> = (value): void => {
+    const next = typeof value === "function" ? value(voiceSpeechOutputModelId) : value;
+    setVoiceSpeechOutputModelId(next);
+    transitionProviderIdentity(
+      speechOutputIdentityRef,
+      modelIdentity(next, preserveExisting ? storedSpeechOutputModelId(storedModels) : undefined),
+      resetSpeechOutputDependencies,
+      false,
+    );
+  };
+
+  const commitVoiceSpeechOutputModelId = (): void => {
+    transitionProviderIdentity(
+      speechOutputIdentityRef,
+      modelIdentity(
+        voiceSpeechOutputModelId,
+        preserveExisting ? storedSpeechOutputModelId(storedModels) : undefined,
+      ),
+      resetSpeechOutputDependencies,
+      true,
+    );
+  };
+
+  const updateVoiceBaseUrl: Dispatch<SetStateAction<string>> = (value): void => {
+    const next = typeof value === "function" ? value(voiceBaseUrl) : value;
+    setVoiceBaseUrl(next);
+    const nextIdentity = endpointIdentity(next, preserveExisting, storedVoiceProviderExists);
+    transitionProviderIdentity(
+      endpointIdentityRef,
+      nextIdentity,
+      () => resetEndpointDependencies(next, nextIdentity),
+      false,
+    );
+  };
+
+  const commitVoiceBaseUrl = (): void => {
+    const nextIdentity = endpointIdentity(
+      voiceBaseUrl,
+      preserveExisting,
+      storedVoiceProviderExists,
+    );
+    transitionProviderIdentity(
+      endpointIdentityRef,
+      nextIdentity,
+      () => resetEndpointDependencies(voiceBaseUrl, nextIdentity),
+      true,
+    );
+  };
+
+  const updateVoiceOutputVoiceId: Dispatch<SetStateAction<string>> = (value): void => {
+    setVoiceOutputVoiceId(value);
+    setVoiceOutputVoiceIdConfigured(true);
+  };
+
+  const updateVoiceProviderLocality: Dispatch<SetStateAction<VoiceProviderLocality>> = (
+    value,
+  ): void => {
+    setVoiceProviderLocality(value);
+    setVoiceProviderLocalityConfigured(true);
   };
 
   useEffect(() => {
@@ -1808,10 +2191,14 @@ export function GatewaySetupDialog({
           voiceSemanticTurnDetectionConfigured,
           voiceSpeechOutputModelId,
           voiceOutputVoiceId,
+          voiceOutputVoiceIdConfigured,
           voiceProviderLocality,
+          voiceProviderLocalityConfigured,
           voiceTimeoutMs,
           figmaAccessToken,
           preserveExisting,
+          hasStoredVoiceProvider: storedVoiceModels(storedModels).length > 0,
+          storedRealtimeModelId: storedRealtimeModelId(storedModels),
         },
         t,
       );
@@ -1853,6 +2240,8 @@ export function GatewaySetupDialog({
     voiceSpeechOutputModelId,
     voiceTimeoutMs,
     voiceSemanticTurnDetectionConfigured,
+    voiceOutputVoiceIdConfigured,
+    voiceProviderLocalityConfigured,
   });
   const requiresGatewayCredentials = !preserveExisting;
   const hasGatewayCredentialInput = hasAnyGatewayCredentialInput({
@@ -1906,23 +2295,27 @@ export function GatewaySetupDialog({
       busy={busy}
       success={success}
       preserveExisting={preserveExisting}
+      storedModels={storedModels}
       voiceModelId={voiceModelId}
       setVoiceModelId={setVoiceModelId}
       voiceRealtimeModelId={voiceRealtimeModelId}
-      setVoiceRealtimeModelId={setVoiceRealtimeModelId}
+      setVoiceRealtimeModelId={updateVoiceRealtimeModelId}
+      commitVoiceRealtimeModelId={commitVoiceRealtimeModelId}
       voiceRealtimeTranscriptionModelId={voiceRealtimeTranscriptionModelId}
       setVoiceRealtimeTranscriptionModelId={setVoiceRealtimeTranscriptionModelId}
       voiceSupportsSemanticTurnDetection={voiceSupportsSemanticTurnDetection}
       setVoiceSupportsSemanticTurnDetection={updateVoiceSemanticTurnDetection}
       voiceSpeechOutputModelId={voiceSpeechOutputModelId}
-      setVoiceSpeechOutputModelId={setVoiceSpeechOutputModelId}
+      setVoiceSpeechOutputModelId={updateVoiceSpeechOutputModelId}
+      commitVoiceSpeechOutputModelId={commitVoiceSpeechOutputModelId}
       voiceOutputVoiceId={voiceOutputVoiceId}
-      setVoiceOutputVoiceId={setVoiceOutputVoiceId}
+      setVoiceOutputVoiceId={updateVoiceOutputVoiceId}
       voiceProviderLocalityLabelId={voiceProviderLocalityLabelId}
       voiceProviderLocality={voiceProviderLocality}
-      setVoiceProviderLocality={setVoiceProviderLocality}
+      setVoiceProviderLocality={updateVoiceProviderLocality}
       voiceBaseUrl={voiceBaseUrl}
-      setVoiceBaseUrl={setVoiceBaseUrl}
+      setVoiceBaseUrl={updateVoiceBaseUrl}
+      commitVoiceBaseUrl={commitVoiceBaseUrl}
       voiceApiKey={voiceApiKey}
       setVoiceApiKey={setVoiceApiKey}
       voiceApiKeyHeaderName={voiceApiKeyHeaderName}

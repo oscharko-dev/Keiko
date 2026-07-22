@@ -12,6 +12,20 @@ describe("expandedQueryTerms", () => {
     expect(terms).toContain("service");
   });
 
+  it("does not derive test stems from identifiers that merely end in lowercase test letters", () => {
+    const terms = expandedQueryTerms("Contest Latest ApplicationContest", false);
+
+    expect(terms).not.toContain("con");
+    expect(terms).not.toContain("la");
+    expect(terms).not.toContain("applicationcon");
+  });
+
+  it("derives source identifiers from separator-delimited test suffixes", () => {
+    const terms = expandedQueryTerms("payment_service_test", false);
+
+    expect(terms).toContain("payment_service");
+  });
+
   it("derives path and symbol terms from stack-frame locations", () => {
     const terms = expandedQueryTerms(
       "TypeError at src/payments/AuthService.ts:42:13 in validateToken",

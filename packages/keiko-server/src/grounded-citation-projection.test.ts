@@ -146,6 +146,16 @@ describe("buildAnswerCitations", () => {
     ]);
   });
 
+  it("does not project a partially overlapping evidence range as support", () => {
+    const citations = buildAnswerCitations(
+      pack(),
+      "The claimed range extends beyond the evidence [scripts/dev-runner.mjs:40-60].",
+      (value) => value,
+    );
+
+    expect(citations).toEqual([]);
+  });
+
   it("does not surface retrieved decoys or fabricated paths as used citations", () => {
     const citations = buildAnswerCitations(
       pack(),
@@ -156,32 +166,49 @@ describe("buildAnswerCitations", () => {
     expect(citations.map((citation) => citation.scopePath)).toEqual(["scripts/dev-runner.mjs"]);
   });
 
-  it("keeps a path-level citation when the answer names a line inside its full-file evidence", () => {
+  it("rejects an exact line range when only path-level evidence is available", () => {
     const citations = buildAnswerCitations(
       packWithPathLevelEvidence(),
       "The invariant is documented here [AGENTS.md:11-18].",
       (value) => value,
     );
 
-    expect(citations).toMatchObject([
-      {
-        stableId: "path-level",
-        scopePath: "AGENTS.md",
-        lineRange: { startLine: 11, endLine: 18 },
-      },
-    ]);
+    expect(citations).toEqual([]);
   });
 
-  it("keeps distinct cited ranges from the same path-level evidence", () => {
+  it("deduplicates repeated bare citations to path-level evidence", () => {
     const citations = buildAnswerCitations(
       packWithPathLevelEvidence(),
-      "Invariant [AGENTS.md:11-18] and modes [AGENTS.md:40-47].",
+      "Invariant [AGENTS.md] and modes [AGENTS.md].",
       (value) => value,
     );
 
-    expect(citations.map((citation) => citation.lineRange)).toEqual([
-      { startLine: 11, endLine: 18 },
-      { startLine: 40, endLine: 47 },
-    ]);
+    expect(citations).toMatchObject([{ stableId: "path-level", lineRange: undefined }]);
+  });
+
+  it("matches before redaction so bracketed replacement tokens cannot drop valid citations", () => {
+    const secret = "tenantcredentialvalue987";
+    const base = pack();
+    const file = base.files[0];
+    const first = file?.excerpts[0];
+    if (file === undefined || first === undefined) throw new Error("expected fixture evidence");
+    const scopePath = `src/${secret}.ts`;
+    const secretPack: ConnectedContextPack = {
+      ...base,
+      files: [
+        {
+          ...file,
+          scopePath,
+          excerpts: [{ ...first, atom: { ...first.atom, scopePath } }],
+        },
+      ],
+    };
+
+    const citations = buildAnswerCitations(secretPack, `Grounded [${scopePath}].`, (value) =>
+      value.replaceAll(secret, "[REDACTED]"),
+    );
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0]?.scopePath).toBe("src/[REDACTED].ts");
   });
 });

@@ -23,7 +23,7 @@ export type {
   RetrievalRing,
   RetrievalRingKind,
 } from "./plan.js";
-export { createExplorationPlan } from "./plan.js";
+export { createExplorationPlan, directDefinitionSymbol } from "./plan.js";
 
 export type { GovernorState, GovernorStatus } from "./governor.js";
 export { advanceRing, applyUsage, canContinue, complete, createGovernor } from "./governor.js";

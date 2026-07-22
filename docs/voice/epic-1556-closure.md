@@ -5,6 +5,12 @@ reviewing the end-to-end delivery and independent closure verification of
 [Epic #1556](https://github.com/oscharko-dev/Keiko/issues/1556) ("Complete Colleague-Like Voice
 Dialogue Mode").
 
+> **Historical evidence:** this record is fixed to the Epic #1556 closure head and preserves the former
+> STT+TTS dialogue design. ADR-0154 supersedes that design: productive Twin Voice now requires input-only
+> Realtime transcription, canonical chat, and independent TTS. Counts and pass statements below are not
+> current-head evidence. The renewed Oliver live-microphone acceptance test has not been performed and
+> remains deferred to the agreed office appointment.
+
 Epic #1556 extends the completed Voice Digital Twin foundation (Epic #491,
 [epic-491-closure.md](epic-491-closure.md)) into a finished, production-ready bidirectional dialogue
 experience: a user can toggle dialog mode in the Keiko chat, choose a male, female, or neutral
@@ -36,6 +42,10 @@ requires an output/realtime provider with personas — by design, see
 
 ## Epic Acceptance Ledger
 
+The ledger below records the original closure decision. Its STT+TTS fallback, latest-message speech
+selection, and provider-readiness assumptions are historical and must not be used as current normative
+behavior; ADR-0154 and the exact-head audit are authoritative.
+
 | Acceptance Criterion / Target Outcome                                                                         | Status      | Independent Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Delivered By        |
 | ------------------------------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
 | **AC1 — Converse in dialog mode via configured voice providers** (TO1/TO3/TO5)                                | ✅ Verified | `useVoiceDialogueSession.ts` drives the mic→dictation→user-end-of-turn→chat-send turn loop; `useVoiceDialogMode.ts:92,132-142` and `voice-dialogue-session.ts` (`voiceDialogueModeForResolution`) gate the switch+session on the STT+TTS+persona conjunction, fail-closed. Browser smoke drives the real composer headless: switch appears, two spoken turns commit, leave releases the mic and keeps text chat usable.                                                                                                                                    | #1559, #1560, #1561 |
@@ -44,7 +54,7 @@ requires an output/realtime provider with personas — by design, see
 | **AC4 — All child issues closed, required checks passed, closure evidence recorded** (TO7)                    | ✅ Verified | #1557–#1564 all `CLOSED`/`COMPLETED` with per-issue closure comments and merged into HEAD `c75af49d`; this record + the Issue #1564 closure comment capture the closure evidence; required `ci` green on the #1564 PR head.                                                                                                                                                                                                                                                                                                                                | #1562, #1563, #1564 |
 | **TO2 — Choose voice before or during dialog mode**                                                           | ✅ Verified | Persona selector renders all offered personas with a visible active-voice label and is operable before entering and mid-session (`VoiceDialogMode.tsx:30-38,111-151`; e2e voice-selection test).                                                                                                                                                                                                                                                                                                                                                           | #1559               |
 | **TO6 — Fail-closed across permission denial, device/network loss, unsupported browser, missing creds**       | ✅ Verified | Single capability predicate gates everything fail-closed (undefined/none/partial → no switch); kill-switch `KEIKO_VOICE_DISABLED` and Permissions-Policy `microphone=()`/`(self)` enforced; mic acquired only on explicit gesture and released on every exit path (`useDictation.ts` `startingRef`/`cancelledRef`; e2e mic-lifecycle asserts `getUserMedia==0` on enter, `==1` on gesture, `track.stop>=1` on leave).                                                                                                                                      | #1560, #1562        |
-| **DoD — No raw/generated audio, provider secret, provider body, or token-bearing artifact persisted/exposed** | ✅ Verified | Voice hooks and the server speak/transcribe handlers emit no audio/transcript/secret to evidence, logs, or memory; synthesized audio lives only for one turn (object URL revoked in teardown); responses carry only `audio`+`mimeType`. Verified by the #1562 threat model §5 matrix and `voice-handlers.dialogue-safety.test.ts`.                                                                                                                                                                                                                         | #1562               |
+| **DoD — No raw/generated audio, provider secret, provider body, or token-bearing artifact persisted/exposed** | ✅ Verified | The closure checks covered ephemeral audio and secret confinement. Under current ADR-0154 semantics, raw audio and partial transcripts remain unpersisted, while the settled final transcript is intentionally persisted through canonical chat.                                                                                                                                                                                                                                                                                                           | #1562               |
 
 ## Child Delivery Rollup
 
@@ -73,21 +83,13 @@ Performed by the coordinator at closure through PR #1596 on HEAD `c75af49d`:
   - `npm run arch:check` — PASS (ADR-0019 import-policy); `npm run arch:check:negative` — PASS
     (forbidden edges still rejected).
 - **Executable voice evidence (local):**
-  - keiko-ui voice/dialogue-related suites: **45 files / 776 tests passed** (dialogue session, hook,
-    persona selection/persistence, assistant speech, dictation lifecycle, evaluation profiles/latency/
-    cleanup/accessibility).
-  - keiko-server voice suites: **7 files / 152 tests passed** (capability gating, speak/persona
-    resolution, dialogue-safety/non-persistence).
-  - e2e voice-dialogue browser smoke: **7 / 7 passed** in headless Chromium against the real app path
-    (no-voice gating, STT+TTS fallback turn loop, mic lifecycle, partial-profile gating, voice
-    selection + live status), regenerating the evidence screenshots under `docs/voice/evidence/`.
-- **Credential mapping validation (`oscharko-dev` dev profile, no secrets):** an authenticated,
-  secret-free reachability probe against the Azure Foundry voice resource
-  (`<host>.services.ai.azure.com/openai/v1`, Sweden Central) returned **HTTP 200** with the staged key
-  and **HTTP 401** with a deliberately wrong key — confirming the endpoint is reachable and the staged
-  credential authenticates. The probe printed only HTTP status codes and non-secret model identifiers;
-  it sent no audio and persisted nothing. Procedure recorded in
-  [dialogue-provider-runbook.md](dialogue-provider-runbook.md) §4.
+  - The named keiko-ui and keiko-server voice/dialogue suites passed at the recorded closure head.
+  - The historical headless browser smoke passed against the then-current STT+TTS flow. Test discovery
+    and counts belong to the archived run and are not copied forward.
+- **Credential mapping validation (`oscharko-dev` historical dev profile):** the closure coordinator
+  recorded a provider authentication check. The current runbook deliberately does not reproduce a raw
+  shell probe because credentials must not appear in process arguments; use Keiko's Gateway Setup
+  save/verification flow instead.
 - **Adversarial regression review:** a three/five-lens skeptic review (spoken==visible divergence,
   persona persistence + server-side voice-id confinement, microphone/audio teardown, privacy
   non-persistence, capability gating) attempted to refute every high-risk claim and **confirmed zero
@@ -103,22 +105,19 @@ Performed by the coordinator at closure through PR #1596 on HEAD `c75af49d`:
 
 ## Known Limitation and Follow-Ups
 
-**Named limitation (documented, non-blocking):**
+**Historical named limitation:**
 
-The `oscharko-dev` development profile, when only `keiko-stt` is registered (the default convenience),
-resolves to the `speech-to-text` profile — composer dictation, not full spoken dialogue. Full dialogue
-mode requires additionally registering a speech-output or realtime provider with `voiceProfiles`
-(personas), exactly as documented in [dialogue-provider-runbook.md](dialogue-provider-runbook.md) §1/§3.
-This is by-design capability gating, not a defect; the dialogue switch correctly fails closed when the
-output half is absent.
+The closure record correctly noted that `keiko-stt` alone provides composer dictation, not spoken
+dialogue. Its former statement that speech output or Realtime plus `voiceProfiles` was sufficient is
+superseded. ADR-0154 now requires Realtime WebRTC input with an explicit transcription deployment plus a
+separate speech-output provider carrying the persona mapping.
 
 **Recommended, non-blocking follow-ups (deferred):**
 
 - Carry forward the Epic #491 follow-ups that remain open (positive egress allowlist; transitive
   lockfile scan for denied media packages) — they are unchanged by this epic.
-- Optional realtime WebRTC media transport for controlled networks that can supply TURN relays (an
-  additional dependency + architecture decision, out of scope for this epic, which ships the
-  production-default STT+TTS turn loop).
+- Realtime WebRTC subsequently shipped under ADR-0102, without caller-configured TURN relays. Custom relay
+  support remains a separate future architecture, credential, and egress decision.
 
 ## Sign-Off
 

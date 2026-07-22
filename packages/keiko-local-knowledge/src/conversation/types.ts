@@ -41,13 +41,20 @@ export interface ConversationGroundedQuery {
   readonly capsuleId?: RetrievalQuery["capsuleId"];
   readonly capsuleSetId?: RetrievalQuery["capsuleSetId"];
   readonly text: string;
+  // Optional generation-only question assembled by the BFF. Retrieval and reranking remain bound
+  // to `text`, preventing governed personal context from changing evidence selection.
+  readonly answerQuestion?: string | undefined;
+  // Explicit BFF admission: governed personal context is available for generation even when
+  // source retrieval returns no references. It never participates in retrieval or reranking.
+  readonly answerOnlyContextAvailable?: boolean | undefined;
   readonly topK?: number;
   readonly minScore?: number;
   readonly strategy?: RetrievalQuery["strategy"];
 }
 
-// `noEvidence: true` ⇒ `answer` is the empty string AND `references` is empty AND the
-// model gateway was NOT called. The UI phrases the user-visible message from `reason`.
+// `noEvidence: true` normally means `answer` and `references` are empty and the model was not
+// called. The sole exception is `answerOnlyContextUsed: true`: governed personal context produced
+// the answer while source references remain empty, so the UI must still label it ungrounded.
 // `noEvidence: false` ⇒ `answer` is non-empty AND `references` has at least one entry
 // (matched by `attachCitationsToAnswer` against inline `[n]` markers).
 export interface ConversationGroundedAnswer {
@@ -56,6 +63,7 @@ export interface ConversationGroundedAnswer {
   readonly citations: readonly ConversationCitationReference[];
   readonly pack: LocalKnowledgeGroundedContextPack;
   readonly noEvidence: boolean;
+  readonly answerOnlyContextUsed?: true | undefined;
   readonly reason?: RetrievalNoEvidenceReason;
   readonly reranker?: GroundedRerankerDiagnostics | undefined;
   readonly retrievalDiagnostics?: RetrievalDiagnostics | undefined;

@@ -6,14 +6,30 @@
 
 Accepted (Issue #496, Epic #491, 2026-06-24)
 
+Amended by [ADR-0102](ADR-0102-realtime-voice-transport.md), which selected the loopback WebSocket
+realization, and by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md), which narrowed Realtime to
+input media, VAD, and user transcription. The productive v1 transport constant is therefore
+`loopback-websocket`; the media plane has an `audio-in` track only, and the optional data channel
+mirrors only the generic user-transcript control subset. The shipped provider data-channel parser also
+admits bounded session lifecycle, user-speech, transcription-failure, and redacted-error events; outbound
+operations remain limited to response-disabled VAD updates and transcript commit. Playback and
+interruption remain generic local control vocabulary for canonical TTS, not provider-assistant authority.
+
+The generic v1 catalog retains `transcript.partial` and `transcript.committed` for other control
+realizations. The productive Twin loopback WebSocket does not accept either kind from the browser and
+does not retain reviewable text in its server replay buffer. Provider finals arrive over the RTC data
+channel, are held only for the short browser continuation window, and then transfer synchronously to
+the Chat-owned canonical queue under ADR-0154. This surface-specific narrowing does not change the v1
+envelope or the catalog's generic classification.
+
 ## Version
 
-0.2.0
+0.2.1
 
 ## Context
 
 [ADR-0100](ADR-0100-voice-digital-twin-capability-architecture.md) established the capability-gated,
-local-first, provider-neutral Voice Digital Twin architecture and deferred two transport questions to
+local-first, provider-neutral Voice Digital Twin architecture and originally deferred two transport questions to
 the protocol/transport child issues: whether to re-open a bidirectional WebSocket upgrade on the BFF
 (currently hard-rejected), and the precise wire contract for control, signaling, media, and replay
 (ADR-0100 D3, Consequences). Issue #496 answers the **protocol** half of that pair: it **defines** the
@@ -23,8 +39,9 @@ versioned control/media protocol contract that Issue #497 then **implements** as
 **not** add transport code, re-open the WebSocket upgrade, add runtime dependencies, or change any
 trust boundary.
 
-The protocol is defined against the seams ADR-0100 already mapped, all confirmed by a fresh read-only
-survey of the merged voice surface (#492–#495):
+The protocol was defined against the seams ADR-0100 had mapped, as confirmed by the original #496
+read-only survey of the then-merged voice surface (#492–#495). The bullets in this Context section are
+historical repository state; the Status amendments above describe the current realization:
 
 - **Capability is already resolved, content-free, and serialisable.** `VoiceProfile`
   (`none | speech-to-text | speech-output | full-realtime`), `VoiceTransportPosture`
@@ -53,9 +70,13 @@ This ADR records the load-bearing decisions.
 
 ## Decision
 
-We adopt a **two-plane, capability-gated, versioned** voice protocol. It is content-free by
-construction (only enum literals, booleans, opaque identifiers, and opaque SDP/ICE/transcript
-strings) and adds no authority.
+The original decision adopted a **two-plane, capability-gated, versioned** voice protocol and described
+it as content-free because reviewable and secret-bearing bodies were treated as opaque strings. It added
+no authority.
+
+> **Current terminology amendment:** the protocol is not wholly content-free. Each message kind is
+> explicitly classified as `content-free`, `reviewable-text`, `secret-bearing`, or `raw-media`.
+> Transcript and SDP/ICE remain bounded and governed, but they must not be described as content-free.
 
 ### D1 — A dedicated, independently versioned protocol contract
 
@@ -77,22 +98,31 @@ The protocol explicitly separates a **control / signaling plane** from a **media
 - The **media plane** carries **only** real-time audio over native browser WebRTC (DTLS-SRTP),
   optionally with a low-latency `RTCDataChannel` that mirrors a subset of control events.
 
-**No control message kind carries raw audio.** Raw audio is modelled by a single
-`VOICE_MEDIA_PLANE` descriptor (`plane: "media"`, `transport: "webrtc"`, `redaction: "raw-media"`,
-`replay: "never-persisted"`) and never as a message in the control catalog. This separation is the
-typed, test-pinned expression of AC1: the `raw-media` redaction class is exclusive to the media
-plane, so a control message can never be raw audio.
+**No control message kind carries raw audio.** The immutable v1 `VOICE_MEDIA_PLANE` descriptor
+remains decodable; current Realtime sessions use the additive, input-only
+`VOICE_REALTIME_INPUT_MEDIA_PLANE` descriptor. Both keep WebRTC audio `never-persisted` and
+`raw-media`-classified, never as a message in the control catalog. This separation is the typed,
+test-pinned expression of AC1: the `raw-media` redaction class is exclusive to media-plane
+descriptors, so a control message can never be raw audio.
 
-### D3 — Control-plane realization: loopback HTTP + SSE now; WebSocket upgrade is deferred to #497
+### D3 — Productive loopback WebSocket; HTTP/SSE baseline retained
 
-"WebSocket is the authoritative control plane" describes a **role**, not a mandatory transport. The
-protocol's control transport is captured by `VoiceControlTransport`
-(`loopback-http-sse | loopback-websocket`), and the realization in effect for v1 is
-`VOICE_CONTROL_TRANSPORT_V1 = "loopback-http-sse"` — request/response over `POST /api/voice/*` plus
-server→client push over the existing `EventSource` channel. Re-opening a bidirectional WebSocket
-upgrade on the BFF (today hard-rejected) remains an **explicit, ADR-gated transport decision owned by
-Issue #497**, never an additive change smuggled in here. The protocol is defined so that a future
-switch to `loopback-websocket` is a transport realization detail, not a contract break.
+> **Current amendment:** ADR-0102 completed that deferred decision. Productive v1 control is the
+> capability-gated `loopback-websocket` route; the HTTP/SSE language below is the original #496
+> sequencing record.
+>
+> **Historical baseline, superseded by ADR-0102 and ADR-0154.** Issue #497 selected the loopback
+> WebSocket realization. The immutable v1 baseline remains
+> `VOICE_CONTROL_TRANSPORT_V1 = "loopback-http-sse"`; productive sessions advertise the additive
+> `VOICE_REALTIME_CONTROL_TRANSPORT = "loopback-websocket"` realization.
+
+**Historical #496 sequencing record:** "WebSocket is the authoritative control plane" described a
+**role**, not a mandatory transport. The protocol captured both realizations in
+`VoiceControlTransport` (`loopback-http-sse | loopback-websocket`), while the then-current realization
+was `VOICE_CONTROL_TRANSPORT_V1 = "loopback-http-sse"` — request/response over
+`POST /api/voice/*` plus server→client push over `EventSource`. Reopening a bidirectional WebSocket
+upgrade was the explicit, ADR-gated transport decision owned by Issue #497. ADR-0102 made that decision
+for the single productive `/api/voice/control` route without breaking the immutable v1 baseline.
 
 ### D4 — Capability-gating and a deterministic fallback state table (AC2, AC3)
 
@@ -116,21 +146,32 @@ plane.
 
 ### D5 — Replay, reconnect, and idempotency semantics (AC5)
 
+> **Current amendment:** productive v1 has no client-ack field. On a recoverable reconnect the host
+> replays its complete bounded replayable buffer, and the browser deduplicates already-seen sequences.
+> References below to replay through an acknowledged sequence are historical protocol intent, not the
+> implemented wire shape. On the productive Twin loopback surface that buffer contains content-free
+> host control only; client-originated partial or committed transcript frames are rejected and never
+> become replay state.
+
 Every control message shares an envelope `{ protocolVersion, sessionId, seq, direction, kind }`. The
 per-direction monotonically increasing `seq` is the reconnect and idempotency anchor; a
 `session.create` additionally carries an `idempotencyKey` so a re-sent create after a reconnect
 resolves to the same session, never a second one. Each kind is classified by
 `VOICE_CONTROL_MESSAGE_REPLAY`:
 
-- **`replayable`** — durable control and **committed** transcript events; a reconnect re-delivers them
-  up to the last acknowledged `seq`. This is the local system of record.
+- **`replayable`** — durable control and **committed** transcript events. The original #496 design
+  described redelivery through a last acknowledged `seq`; productive v1 instead replays the complete
+  bounded buffer and relies on browser sequence deduplication, as amended above.
 - **`ephemeral`** — SDP, ICE candidates, and **partial** transcripts: valid only for the live
   negotiation, never replayed or persisted.
 - **`never-persisted`** — raw media frames (media plane only): excluded from replay and persistence by
   default.
 
-Thus **replay includes control and committed-transcript events but excludes raw audio by default**
-(AC5). No control kind is ever `never-persisted`; that class is exclusive to raw media.
+Thus the generic protocol classification includes control and committed-transcript events while
+excluding raw audio by default (AC5). The productive Twin transport deliberately narrows that generic
+surface: its server replay includes content-free control only, while final transcript continuity is
+owned by the browser's canonical Chat queue. No control kind is ever `never-persisted`; that class is
+exclusive to raw media.
 
 ### D6 — Redaction semantics reuse the existing local-first stack
 
@@ -145,18 +186,19 @@ The protocol invents no new crypto, storage, or redaction mechanism.
 
 ### D7 — Browser↔provider negotiation options and the security surface (AC6)
 
+> **Current amendment:** the shipped client uses `proxied-sdp`, holds no provider credential, and passes
+> no caller-configured `iceServers`. `direct-ephemeral` remains an unwired contract value; custom
+> STUN/TURN or relay support requires a separate allowlist, credential, and egress decision.
+
 Real-time media negotiation is one of three modes (`VoiceNegotiationMode`): **`proxied-sdp`**
 (preferred — the Keiko host performs SDP negotiation, so the browser holds no token),
 **`direct-ephemeral`** (opt-in — the browser uses a short-lived ephemeral credential), or
-**`disabled`** (no browser-direct media). The protocol is content-free, so a security review can
-reason about **every external endpoint** (provider STT/TTS/realtime endpoints reached only through
-`gatewayFetch`; configurable, validated STUN/TURN hosts) and **every browser-exposed credential** (a
-short-lived ephemeral token under `direct-ephemeral`, or none under the preferred `proxied-sdp`)
-directly from the typed contract and [`protocol.md` §10](../voice/protocol.md) — satisfying AC6. SDP
-and ICE payloads are opaque `secret-bearing` strings the contract never parses, stores, or logs; ICE
-candidate privacy relies on browser mDNS `.local` obfuscation (privacy-contract §4). The signaling
-plane stays under Keiko's loopback origin so auth, rate limiting, audit logging, and host allowlisting
-are controlled locally.
+**`disabled`** (no browser-direct media). The original #496 design described the protocol as
+content-free and anticipated configurable, validated STUN/TURN hosts plus a browser credential under
+`direct-ephemeral`. The amendment above is normative: transcript and SDP have explicit non-content-free
+redaction classes, productive `proxied-sdp` exposes no browser credential, and the shipped client supplies
+no custom STUN/TURN configuration. The signaling plane stays under Keiko's loopback origin so
+authentication, rate limiting, audit logging, and host checks remain local.
 
 ### D8 — No new runtime media packages (AC4)
 
@@ -164,22 +206,27 @@ The protocol requires **only** the existing `ws` package and browser-native WebR
 message that needs `socket.io`, `simple-peer`, `peerjs`, `mediasoup`, `livekit`, a server-side WebRTC
 stack, or any other runtime media package. Media transport is modelled with native mechanisms only
 (`gateway-batch` over `gatewayFetch`, or `webrtc` over the browser platform). The
-[supply-chain policy](../voice/supply-chain-policy.md) and a live regression test (a denylist asserted
+[supply-chain policy](../voice/supply-chain-policy.md) and a repository regression test (a denylist asserted
 against every workspace manifest) keep this enforced.
 
 ## Consequences
 
+> **Current amendment:** the first implementation-sequencing consequences below are retained as the
+> original #496 record. ADR-0102 implemented the transport, this ADR is Accepted, and ADR-0154 narrowed
+> its assistant authority without changing the versioned envelope or redaction table.
+
 - Issue #497 has a stable, typed, versioned contract to implement transport against, with the
   capability-gating, replay, reconnect, idempotency, and redaction semantics fixed in advance.
-- The contract is additive and content-free: it adds no authority, no dependency, no transport, and no
-  trust-boundary change, and it does not bump `CONVERSATION_CAPABILITY_CONTRACT_VERSION`. It does not
-  reach the published root `@oscharko-dev/keiko` surface (it is consumed directly from
+- The contract is additive, with messages explicitly classified and redacted by kind: it adds no
+  authority, dependency, transport, or trust-boundary change, and it does not bump
+  `CONVERSATION_CAPABILITY_CONTRACT_VERSION`. It does not reach the published root
+  `@oscharko-dev/keiko` surface (it is consumed directly from
   `@oscharko-dev/keiko-contracts` by the transport packages), so `check:package-surface` is unchanged.
-- Re-opening the BFF WebSocket upgrade and any CSP / `Permissions-Policy` relaxation for browser-direct
-  media remain **future, explicitly-gated** decisions for #497 (ADR-0100 D3/D6), not part of this
-  issue.
-- This ADR is **Proposed**; it is design-and-contract only and ships no transport code. It is promoted
-  as the transport child issue (#497) lands.
+- At the original #496 boundary, re-opening the BFF WebSocket upgrade and any CSP /
+  `Permissions-Policy` relaxation for browser-direct media remained future, explicitly gated decisions
+  for #497. ADR-0102 subsequently re-opened only the single loopback route.
+- At authorship this ADR was **Proposed**, design-and-contract only. It is now **Accepted** and its
+  transport realization is recorded by ADR-0102.
 
 ## References
 

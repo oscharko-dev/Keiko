@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted (MemoriaViva conversational-memory milestone)
+Superseded by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) (2026-07-22). Realtime no longer
+receives memory instructions or invokes a memory tool; final transcripts enter canonical chat, whose
+existing MemoriaViva path owns retrieval and capture. This record is retained as implementation
+history only.
 
 ## Version
 
@@ -25,21 +28,22 @@ message (`latestRealtimeMemoryQuery`). Two gaps followed:
    surfaced nothing Keiko already knows about the user. The chat title was deliberately never used as
    a query substitute (it would be a misleading lexical signal), leaving priming unaddressed.
 
-The grounded voice tool (`search_keiko_grounding`, `voice-realtime-grounded-tool.ts`) already
-establishes the pattern for a provider-invoked, BFF-resolved realtime function tool. This ADR mirrors
-that pattern for long-term memory.
+The then-existing grounded voice tool (`search_keiko_grounding`, historically implemented in
+`voice-realtime-grounded-tool.ts` and removed by ADR-0154) established the pattern for a
+provider-invoked, BFF-resolved realtime function tool. This ADR mirrored that pattern for long-term
+memory.
 
 ## Decision
 
-### D1 — A mid-session `recall_keiko_memory` realtime function tool
+### D1 — Historical mid-session `recall_keiko_memory` realtime function tool
 
-A second realtime function tool, `recall_keiko_memory`, is advertised to the provider whenever the
-session has MemoriaViva enabled AND the negotiated provider supports tool calling
+The original implementation advertised a second realtime function tool, `recall_keiko_memory`, when
+the session had MemoriaViva enabled and the negotiated provider supported tool calling
 (`shouldIncludeRealtimeMemory(deps, chatContext) && realtimeProviderSupportsTools(...)`). The provider
-calls it with a short retrieval CUE describing what to remember; the browser forwards the call to a
-new additive BFF route `POST /api/voice/realtime/memory-tool`
-([`voice-realtime-memory-tool.ts`](../../packages/keiko-server/src/voice-realtime-memory-tool.ts)),
-which retrieves and returns a content-safe spoken instruction plus the recalled block.
+called it with a short retrieval cue describing what to remember; the browser forwarded the call to
+the then-additive BFF route `POST /api/voice/realtime/memory-tool`. ADR-0154 removed that route and its
+`voice-realtime-memory-tool.ts` implementation, so it remains unregistered. While it existed, the route
+retrieved and returned a content-safe spoken instruction plus the recalled block.
 
 Unlike the grounded tool, memory recall **persists nothing to the chat**: a recall is an internal
 remembering act, not a visible question/answer turn. Its only side effects are the vault access

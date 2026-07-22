@@ -588,13 +588,12 @@ describe("enrichReviewItemsWithAdvisory — call failure handling", () => {
 
     // Never reaches the client-visible result — this is the trust boundary that matters.
     expect(outcome.enrichedItems[0]?.suggestedResolution).toBeUndefined();
-    // The diagnostic sink is server-side only (never forwarded to the browser per
-    // diagnostics-log.ts), so it legitimately carries the redacted-for-known-secrets error
-    // detail an operator needs — unlike the client-visible job envelope, which never would.
+    // The operator record retains correlation/class metadata, never foreign provider text.
     expect(diagnosticsSink).toHaveLength(1);
     expect(diagnosticsSink[0]?.source).toBe("memory-conflict-advisory");
     expect(diagnosticsSink[0]?.errorClass).toBe("Error");
-    expect(diagnosticsSink[0]?.message).toContain("upstream unavailable");
+    expect(diagnosticsSink[0]?.message).toBe("server-operation-failed");
+    expect(JSON.stringify(diagnosticsSink)).not.toContain("upstream unavailable");
   });
 
   it("degrades to no suggestion when the model call times out", async () => {

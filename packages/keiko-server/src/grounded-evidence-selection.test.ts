@@ -46,6 +46,29 @@ function pathLevelAtom(scopePath: string, score: number): EvidenceAtom {
 }
 
 describe("selectGroundedCandidateFiles", () => {
+  it("returns an empty selection for empty input and for a zero file budget", () => {
+    const empty = selectGroundedCandidateFiles({
+      kept: [],
+      omitted: [],
+      scopeKind: "workspace-root",
+      filesReadMax: 32,
+      nowMs: NOW,
+    });
+    const exhausted = selectGroundedCandidateFiles({
+      kept: [candidate("src/target.ts", 1)],
+      omitted: [],
+      scopeKind: "workspace-root",
+      filesReadMax: 0,
+      nowMs: NOW,
+    });
+
+    expect(empty).toEqual({ kept: [], omitted: [] });
+    expect(exhausted).toEqual({
+      kept: [],
+      omitted: [{ scopePath: "src/target.ts", reason: "budget-exhausted", omittedAtMs: NOW }],
+    });
+  });
+
   it("keeps the strong implementation and test pair for an exact-symbol-shaped ranking", () => {
     const result = selectGroundedCandidateFiles({
       kept: [
@@ -120,7 +143,7 @@ describe("selectGroundedEvidenceAtoms", () => {
 
     expect(selected).toHaveLength(12);
     expect(selected.some((entry) => entry.lineRange?.startLine === 1)).toBe(true);
-    expect(selected.filter((entry) => entry.lineRange?.startLine === 37)).toHaveLength(1);
+    expect(selected.filter((entry) => entry.lineRange?.startLine === 40)).toHaveLength(1);
     expect(selected.some((entry) => entry.lineRange === undefined)).toBe(false);
     expect(selected.some((entry) => entry.scopePath === "src/decoy.ts")).toBe(false);
   });
@@ -183,6 +206,14 @@ describe("selectGroundedEvidenceAtoms", () => {
     };
 
     const selected = selectGroundedEvidenceAtoms([semantic], new Set(["src/target.ts"]), "scope");
+
+    expect(selected[0]?.lineRange).toEqual({ startLine: 42, endLine: 42 });
+  });
+
+  it("preserves the exact source line for lexical evidence instead of citing context lines", () => {
+    const lexical = atom("src/target.ts", 0.9, 42, 42, "lexical");
+
+    const selected = selectGroundedEvidenceAtoms([lexical], new Set(["src/target.ts"]), "scope");
 
     expect(selected[0]?.lineRange).toEqual({ startLine: 42, endLine: 42 });
   });

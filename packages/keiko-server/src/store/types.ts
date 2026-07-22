@@ -45,6 +45,35 @@ export type {
   StoredPdfCitationPreviewCitation,
 };
 
+export type ChatTurnAdmission =
+  | { readonly kind: "admitted"; readonly userMessage: ChatMessage }
+  | {
+      readonly kind: "replay";
+      readonly userMessage: ChatMessage;
+      readonly assistantMessage: ChatMessage;
+    }
+  | { readonly kind: "in-progress"; readonly userMessage: ChatMessage }
+  | { readonly kind: "conflict" };
+
+export type ChatTurnInspection =
+  | { readonly kind: "missing" }
+  | { readonly kind: "retryable"; readonly userMessage: ChatMessage }
+  | {
+      readonly kind: "replay";
+      readonly userMessage: ChatMessage;
+      readonly assistantMessage: ChatMessage;
+    }
+  | { readonly kind: "in-progress"; readonly userMessage: ChatMessage }
+  | { readonly kind: "conflict" };
+
+export type ChatTurnCompletion =
+  | {
+      readonly kind: "completed";
+      readonly userMessage: ChatMessage;
+      readonly assistantMessage: ChatMessage;
+    }
+  | { readonly kind: "conflict" };
+
 export interface UiStore {
   readonly listProjects: () => readonly Project[];
   readonly createProject: (path: string, name?: string) => Project;
@@ -68,6 +97,27 @@ export interface UiStore {
   readonly findMessageById: (id: string) => ChatMessage | undefined;
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
+  readonly createTurnAssistant: (
+    userMessageId: string,
+    assistantMessage: NewChatMessage,
+  ) => ChatMessage;
+  readonly inspectChatTurn: (
+    chatId: string,
+    clientTurnId: string,
+    userContent: string,
+  ) => ChatTurnInspection;
+  readonly admitChatTurn: (
+    clientTurnId: string,
+    userMessage: NewChatMessage,
+    options?: { readonly identityContent: string },
+  ) => ChatTurnAdmission;
+  readonly completeChatTurn: (
+    chatId: string,
+    clientTurnId: string,
+    userContent: string,
+    assistantMessageId: string,
+  ) => ChatTurnCompletion;
+  readonly failChatTurn: (chatId: string, clientTurnId: string) => void;
   readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;
   readonly attachGroundedAnswer: (
     id: string,

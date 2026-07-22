@@ -1,24 +1,30 @@
 # Voice Session Recap — user-triggered memory capture from committed transcript with governed review
 
-**Audience:** engineers implementing issue #504, operators configuring voice deployments, security reviewers.
+**Audience:** maintainers of the historical #504 recap contract, operators, and security reviewers.
+
+> **Current amendment (ADR-0154):** the original #504 memory-gap premise is superseded. Productive
+> Twin Voice now persists every settled final transcript as the ordinary canonical user message, so
+> the normal per-turn MemoriaViva capture path processes spoken facts exactly as it processes typed
+> facts. Raw audio and partial transcripts remain ephemeral. The recap contract and
+> `POST /api/voice/recap/build` server route still exist, but the current UI has no recap component or
+> hook and does not feed the legacy segment store into that route. The historical design below applies
+> only to an explicit recap-route request; its "transcript is never persisted" statements must not be
+> read as claims about canonical Twin chat.
 
 Specification for Epic #491, the deliverable of Issue
 [#504](https://github.com/oscharko-dev/Keiko/issues/504) and the authoritative companion to
 [ADR-0109](../adr/ADR-0109-voice-session-recap.md). It **defines** the recap feature, the data-retention contract, the memory capture integration, the capability gating, and the content-free audit model. The contract lives in
 [`packages/keiko-contracts/src/voice-session-recap.ts`](../../packages/keiko-contracts/src/voice-session-recap.ts);
-the server handler lives in
-[`packages/keiko-server/src/voice-recap.ts`](../../packages/keiko-server/src/voice-recap.ts);
-the UI hook and component live in
-[`packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts)
-and [`packages/keiko-ui/src/app/components/desktop/VoiceRecap.tsx`](../../packages/keiko-ui/src/app/components/desktop/VoiceRecap.tsx).
+the still-registered server handler lives in
+[`packages/keiko-server/src/voice-recap.ts`](../../packages/keiko-server/src/voice-recap.ts). The UI
+hook and component described by the original issue are not present in the current tree.
 
-## 0. Purpose: Capture voice session content as reviewable memory
+## 0. Historical purpose: Capture a separate voice session as reviewable memory
 
-> Full-realtime voice conversations carry user speech over the WebRTC audio plane, not as text in the
-> HTTP request body. The existing per-turn memory capture path (`collectMemoryActions` in
-> `keiko-server/src/chat-handlers.ts`) processes `request.content` — the user's typed message or STT
-> dictation-derived text — per turn. For full-realtime turns, `request.content` is empty, and no
-> memory candidates are generated from the voice content.
+> At the #504 implementation point, full-realtime voice conversations carried user speech over the
+> WebRTC audio plane without a canonical text-chat request. The existing per-turn memory capture path
+> therefore received no `request.content` for those turns. ADR-0154 removed that architecture: a settled
+> final is now the canonical user message and no separate memory gap remains.
 >
 > **Session recap fills this gap.** It is a user-triggered feature that derives memory candidates
 > exclusively from the committed voice transcript projection for the entire session, using the
@@ -44,7 +50,10 @@ and [`packages/keiko-ui/src/app/components/desktop/VoiceRecap.tsx`](../../packag
 literal rather than mutating `"1"`. It is independent of `VOICE_TRANSCRIPT_SCHEMA_VERSION`,
 `VOICE_ACTION_INTENT_SCHEMA_VERSION`, and `CONVERSATION_CAPABILITY_CONTRACT_VERSION`.
 
-## 2. Data-retention contract: what is retained, what is never stored
+## 2. Legacy recap-route data-retention contract
+
+The guarantees in this section apply to an explicit recap-route request. Canonical Twin chat separately
+persists the settled final user message and its governed chat metadata under ADR-0154.
 
 ### Retained locally (with explicit user control)
 
@@ -77,16 +86,18 @@ After a user triggers recap and **approves candidates in the review queue:**
   the user approves them. A user who triggers recap but then closes the tab without reviewing
   candidates leaves them in a proposed state, never auto-promoting them to accepted.
 
-### Dormancy when voice is unavailable
+### Historical UI dormancy design when voice is unavailable
 
-When the voice profile is `"none"` or `"speech-output"` (no speech input capability):
+The original #504 UI design required the following behavior when the voice profile was `"none"` or
+`"speech-output"` (no speech input capability):
 
-- The recap UI control does not appear.
-- No network call to build recap candidates is made.
-- No local state is read or stored.
-- No observer fires.
+- The recap UI control would not appear.
+- No network call to build recap candidates would be made.
+- No local state would be read or stored.
+- No observer would fire.
 
-This is an **AC1 dormancy guarantee** by construction (see §3).
+This was the historical **AC1 dormancy guarantee** by construction (see §3). The current tree has no
+recap UI caller in any profile; the server route independently retains its capability gate.
 
 ## 3. Capability gating and dormancy
 
@@ -100,9 +111,10 @@ This is an **AC1 dormancy guarantee** by construction (see §3).
 | `speech-output`  | **no**              | No speech input; only assistant playback |
 | `full-realtime`  | **yes**             | Full WebRTC conversation produces text   |
 
-**AC1 enforcement (dormancy):** The UI hook short-circuits at the predicate before reading any
-stored state or making network calls. The "Review session" button does not render unless
-`voiceRecapAllowed(profile) === true` AND `committedSegmentCount > 0`.
+**Historical #504 AC1 UI design (not currently wired):** the planned hook would short-circuit at the
+predicate before reading stored state or making network calls. The planned "Review session" button
+would render only when `voiceRecapAllowed(profile) === true` AND `committedSegmentCount > 0`. No such
+hook or button exists in the current UI.
 
 ## 4. How recap derives memory candidates: reused governed capture
 
@@ -126,16 +138,21 @@ discarded, redacted, and provider-error segments are structurally excluded by co
 For STT dictation, the committed text may overlap with the dictated text submitted in `request.content`
 for per-turn capture. This overlap is handled by vault deduplication (see §5).
 
-### Extraction timing and flow
+### Historical #504 UI-to-route flow
 
-1. User presses "Review session" button in the recap control.
-2. UI hook sends `POST /api/voice/recap/build` with the committed text and transcript counts.
-3. Server receives the request and invokes `extractCandidatesFromUserText` once per committed span.
-4. For each `CaptureOutcome` of kind `"candidate"` that passes the `isPersistableMemoryCandidate` filter
-   (public, no required approval): insert into vault with `initialStatus: "proposed"`.
-5. Count rejections (sensitive, approval-gated, and other non-persistable outcomes) and return the proposal
-   count and vault ids to the client.
-6. Candidates automatically appear in the existing memory review queue.
+The original planned product flow was:
+
+1. The user would press the "Review session" button in the recap control.
+2. The UI hook would send `POST /api/voice/recap/build` with the committed text and transcript counts.
+3. The server would invoke `extractCandidatesFromUserText` once per committed span.
+4. For each `CaptureOutcome` of kind `"candidate"` that passed the
+   `isPersistableMemoryCandidate` filter (public, no required approval), the server would insert a vault
+   proposal with `initialStatus: "proposed"`.
+5. The server would count non-persistable outcomes and return the proposal count and vault ids.
+6. The candidates would appear in the existing memory review queue.
+
+The route still implements the bounded server portion of this flow for an explicit caller, but there
+is no current product UI caller or legacy transcript-segment feed.
 
 ### Content redaction before candidate storage
 
@@ -183,35 +200,37 @@ For STT dictation sessions, the same text can produce candidates twice:
 in the primary use case. For STT dictation, vault dedup and review-queue visibility provide the path
 to user control.
 
-## 6. UI control and user agency
+## 6. Historical #504 UI control and user agency
 
-### The "Review session" button
+### Planned "Review session" button
 
-When `voiceRecapAllowed(profile) === true` and the committed transcript contains at least one
-segment:
+The original design specified that, when `voiceRecapAllowed(profile) === true` and the committed
+transcript contained at least one segment:
 
-- A "Review session" button appears in the ChatWindow voice controls (alongside dictation and
-  realtime indicators).
-- On click, the button triggers the recap build endpoint and navigates to the memory review queue,
+- A "Review session" button would appear in the ChatWindow voice controls alongside dictation and
+  realtime indicators.
+- On click, the button would trigger the recap build endpoint and navigate to the memory review queue,
   filtered to show recap candidates.
-- No modal, no multi-step confirmation flow, no additional "confirm capture" prompt.
+- No modal, multi-step confirmation flow, or additional "confirm capture" prompt was planned.
+
+That component and hook are absent from the current tree.
 
 ### Post-trigger state
 
-After recap completes:
+In the historical UI design, after recap completed:
 
-- The client receives `{ candidatesProposed: number; candidatesRejected: number }` (counts only, no
+- The client would receive `{ candidatesProposed: number; candidatesRejected: number }` (counts only, no
   text).
-- The UI navigates to the review queue with a filter or highlight showing the newly proposed
+- The UI would navigate to the review queue with a filter or highlight showing the newly proposed
   candidates.
-- The user can accept, reject, or edit candidates using the existing review UI.
-- Closing the review queue without action leaves candidates in `status: "proposed"` until the user
+- The user could accept, reject, or edit candidates using the existing review UI.
+- Closing the review queue without action would leave candidates in `status: "proposed"` until the user
   acts on them.
 
 ### Design-system tokens
 
-The recap button reuses existing design-system tokens; no new CSS classes are introduced.
-`design-system/globals.css` is untouched.
+The planned recap button was specified to reuse existing design-system tokens without introducing new
+CSS classes. There is no current recap component or recap-specific styling.
 
 ## 7. Content-free invariants
 
@@ -243,10 +262,11 @@ assistant's response is context for salience scoring, not a fact to be stored ab
 but carries no assistant response text, making it safe to store in audit records without risk of
 storing assistant claims as user facts.
 
-## 9. Trigger is user-driven, not automatic
+## 9. Historical trigger decision; the route remains explicit
 
-Recap is **triggered explicitly by the user**, not automatically when a voice session ends. This
-decision is load-bearing:
+The original UI design made recap **explicitly user-triggered**, never automatic when a voice session
+ended. The current server route likewise has no automatic caller, but no product UI invokes it. The
+historical decision was load-bearing for three reasons:
 
 1. **Ambiguous session boundaries:** Keiko has no single "session close" event. STT dictation is
    per-message; full-realtime WebSocket disconnects on idle, navigation, or explicit close. An
@@ -254,9 +274,9 @@ decision is load-bearing:
    producing unwanted proposals.
 2. **User agency over retention:** The "no unreviewed transcript claims as durable truth" guarantee
    requires active user control. Passive automatic extraction violates this principle.
-3. **Synchronous with intent:** A user-triggered action at the moment of button press captures the
-   committed state authoritative to the user's intent. An automatic trigger on disconnect would race
-   against corrections still in flight.
+3. **Synchronous with intent:** The planned button press would capture the committed state authoritative
+   to the user's intent. An automatic trigger on disconnect would race against corrections still in
+   flight.
 
 ## 10. Deferred: visible session transcript summary
 
@@ -264,14 +284,15 @@ The render path that displays the committed transcript text to the user before t
 recap is **deferred**. This mirrors the deferral posture of ADR-0103 D10, ADR-0104 D10, ADR-0107 D10,
 and ADR-0108 D9.
 
-The `VoiceRecap.tsx` component and the hook seam provide sufficient structure for this future
-addition:
+The original #504 `VoiceRecap.tsx` component and hook seam were intended to provide structure for
+this future addition, but neither is present in the current tree:
 
 - `binding.committedSegmentCount` exposes a count (not text) for a summary like "you have N committed
   voice turns to review."
 - A future issue can add a disclosure panel showing the committed text before the user presses
   "Review session."
-- No hook or contract changes are required; the seam is already prepared.
+- A future product surface would require new, current integration and acceptance work; the server
+  contract alone does not imply a UI seam.
 
 ## 11. No external destinations
 
@@ -347,24 +368,23 @@ No transcript text in request or response. Counts only.
 
 ## 13. Current integration status
 
-**Live composer wiring:** The recap UI hook (`useVoiceSessionRecap`) accepts committed voice transcript segments
-via its `segments` prop; however, the live realtime/dictation composer does not yet feed the committed transcript
-segments from the #500 `voice-transcript-segments` store into `ChatWindow`. As a result, the recap button appears
-(when capability allows) but remains inert (`committedSegmentCount === 0`) until that upstream wiring is
-completed. The recap mechanism itself (contract, server route, hook, review delegation, and evaluation suite) is
-complete and tested against injected segments. The `segments` prop is the documented seam for integrating the live
-store when it becomes available.
+The contract and `POST /api/voice/recap/build` handler remain registered and tested as a bounded,
+capability-gated server surface. There is no current `useVoiceSessionRecap` hook, `VoiceRecap` component,
+or product caller in `keiko-ui`, and the standalone transcript-segment store is not wired into Twin chat.
+Operators must not treat the route as the product's normal memory path or infer that a recap button exists.
+Canonical per-turn MemoriaViva capture is instead owned by the ordinary chat pipeline after the final Voice
+transcript handoff (ADR-0154 D1/D5).
 
-## 14. Acceptance criteria summary
+## 14. Historical #504 acceptance criteria and current route evidence
 
-| AC  | Acceptance Criterion                                    | Satisfied by                                                                                        | Evidence                                                              |
-| --- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| AC1 | Recap is dormant when voice is unavailable              | `voiceRecapAllowed(profile)` false for `none`/`speech-output`; empty spans → no-op                  | Hook short-circuits before observer / network; button not rendered    |
-| AC2 | Input is committed transcript only                      | `selectCommittedVoiceTranscript()` is sole source; partial/stable/redacted excluded by construction | Projection structure in voice-transcript.ts                           |
-| AC3 | Candidates enter existing review queue as proposed      | `extractCandidatesFromUserText` → `vault.insertMemory(initialStatus:"proposed")`                    | Review queue integration; existing memory endpoints unchanged         |
-| AC4 | No raw audio / transcript text stored beyond extraction | Transient committedSpans; server never persists them; audit record is content-free                  | Module forbidden-substring scan; server handler tests                 |
-| AC5 | Text-chat path untouched                                | Recap is additive route only; per-turn `collectMemoryActions` unchanged                             | Existing chat-handler tests pass; diff shows no mutations             |
-| AC6 | Secrets rejected before vault insert                    | `extractCandidatesFromUserText` runs `scanForSecrets` internally                                    | Eval fixture with credential string; rejected candidates not proposed |
+| AC  | Acceptance Criterion                                    | Satisfied by                                                                                                                     | Evidence                                                                    |
+| --- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| AC1 | Recap is dormant when voice is unavailable              | `voiceRecapAllowed(profile)` false for `none`/`speech-output`; empty spans → no-op                                               | Contract predicate and server-handler tests; there is no current UI caller  |
+| AC2 | Route input is bounded committed spans                  | Server parser accepts only the closed, bounded recap request shape; callers remain responsible for the committed-only projection | Contract, parser, and handler tests                                         |
+| AC3 | Candidates enter existing review queue as proposed      | `extractCandidatesFromUserText` → `vault.insertMemory(initialStatus:"proposed")`                                                 | Review queue integration; existing memory endpoints unchanged               |
+| AC4 | No raw audio / transcript text stored beyond extraction | Transient committedSpans; server never persists them; audit record is content-free                                               | Module forbidden-substring scan; server handler tests                       |
+| AC5 | Canonical text-chat authority remains unchanged         | Recap remains an additive review route and does not create an assistant-answer or message-persistence path                       | Canonical chat and route-boundary tests; exact PR-head run is authoritative |
+| AC6 | Secrets rejected before vault insert                    | `extractCandidatesFromUserText` runs `scanForSecrets` internally                                                                 | Eval fixture with credential string; rejected candidates not proposed       |
 
 ## Related
 
@@ -387,10 +407,8 @@ store when it becomes available.
   contract types and capability predicates.
 - [`packages/keiko-server/src/voice-recap.ts`](../../packages/keiko-server/src/voice-recap.ts) —
   server handler implementation.
-- [`packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts) —
-  UI hook.
-- [`packages/keiko-ui/src/app/components/desktop/VoiceRecap.tsx`](../../packages/keiko-ui/src/app/components/desktop/VoiceRecap.tsx) —
-  UI component.
+- The original #504 UI hook and component are not present in the current tree; the server route has no
+  product UI caller.
 - [`packages/keiko-memory-capture/src/index.ts`](../../packages/keiko-memory-capture/src/index.ts) —
   `extractCandidatesFromUserText`; the governed capture entry point.
 - [`packages/keiko-server/src/memory-handlers.ts`](../../packages/keiko-server/src/memory-handlers.ts) —

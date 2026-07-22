@@ -24,6 +24,11 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
 | STT `keiko-stt`                          | ~1.2s round-trip; rejects audio without a recognized file extension                                 |
 | Realtime `keiko-realtime` session create | HTTP 200 ~0.3s; **default session ran the provider demo persona**; voice `nova` rejected (HTTP 400) |
 
+> **Verification boundary:** these July 9 measurements were direct provider API probes. They do
+> not constitute the renewed human live-microphone acceptance test for the canonical chat parity
+> correction. That test is explicitly deferred to the next agreed office appointment and remains
+> pending; deterministic browser tests with synthetic media must not be reported as a substitute.
+
 ## Current hardening pass (2026-07-09)
 
 ### Canonical chat parity correction (2026-07-21)
@@ -34,12 +39,13 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
   rendering, context, approvals, and MemoriaViva behave exactly like typed chat.
 - **Visible committed speech:** interim text is shown only as ephemeral Voice UI. The final user transcript
   becomes the normal user chat message; raw audio and partial text remain unpersisted.
-- **Pause-safe turn settlement:** capable providers use low-eagerness semantic VAD. Keiko then holds each
+- **Pause-safe turn settlement:** only providers that explicitly advertise semantic-turn support receive
+  low-eagerness semantic VAD; other Realtime providers retain conservative server VAD. Keiko then holds each
   final segment for a 1.6-second continuation window, pauses that timer when speech resumes, and merges
   overlapping boundary words. A breath or thinking pause therefore does not start an answer over the user.
 - **One assistant answer:** the canonical visible chat answer is the sole persisted answer and the sole TTS
-  input. Barge-in cancels local playback and the in-flight canonical generation without persisting a partial
-  assistant response.
+  input. TTS is armed only after that canonical answer completes. Barge-in aborts local synthesis/playback
+  and returns the floor to microphone capture; it does not cancel or start a provider assistant response.
 - **Grounded memory parity:** repository and Knowledge Pod asks carry the ordinary governed memory request
   and return its result after the grounded messages persist. Grounding no longer skips MemoriaViva capture.
 - **Azure deployment-name binding:** setup exposes a separate Digital Voice live-transcription role and
@@ -65,15 +71,17 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
 - **Single-copy memory priming:** initial MemoriaViva context is sent in server instructions only. Later
   memory changes can still be injected mid-session; a priming failure emits a redacted operator diagnostic
   instead of silently disappearing.
-- **Recognition and endpointing:** dialogue transcription defaults to `gpt-realtime-whisper`. Providers can
-  explicitly advertise `supportsSemanticTurnDetection` and a `realtimeTranscriptionModel`; supported
-  endpoints use low-eagerness semantic VAD, while unsupported endpoints retain conservative server VAD.
+- **Recognition and endpointing (current):** every Realtime deployment must explicitly name its
+  compatible `realtimeTranscriptionModel`; there is no universal transcription default. Providers can
+  explicitly advertise `supportsSemanticTurnDetection`; supported endpoints may use low-eagerness
+  semantic VAD, while unsupported endpoints retain conservative server VAD. Both VAD forms have
+  automatic response creation and provider interruption disabled.
 - **No cut-off PCM on backpressure:** `ServerResponse.write() === false` now waits for `drain` instead of
   aborting and destroying the stream. Only a real client close cancels synthesis. Mid-stream failures are
   correlation-keyed in redacted diagnostics.
-- **Speech-safe grounded answers:** visible Markdown keeps clickable links and citations, while synthesis
-  and Realtime response instructions receive a deterministic `spokenAnswer` without URLs, Markdown,
-  citation markers, source appendices, or fenced code.
+- **Speech-safe grounded answers:** visible canonical Markdown keeps clickable links and citations,
+  while only the independent TTS request receives a deterministic speech-safe projection without URLs,
+  Markdown, citation markers, source appendices, or fenced code. Realtime receives no assistant answer.
 - **Natural delivery where supported:** `supportsSpeechSynthesisInstructions` enables language-preserving,
   warm colleague-like delivery guidance with natural pacing, subtle emotion, varied intonation, and clear
   pronunciation. Older endpoints receive no speculative field.
@@ -88,24 +96,27 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
 > final transcription only; it receives no assistant instructions or grounding tools and generates
 > no native assistant response.
 
-- **Silent assistant (critical):** the negotiated remote audio track was never attached to an output
-  sink (`useRealtimeVoice` wired `onConnectionStateChange` but never `onRemoteTrack`). The remote
-  stream is now attached to an autoplaying audio sink.
+- **Silent assistant (historical finding):** the former provider-owned design negotiated a remote audio
+  track without a reliable output sink. The corrected architecture removes the remote-track contract
+  entirely: the browser offers audio as `sendonly`, rejects a permissive answer, and speaks only the
+  visible canonical answer through the independent TTS path.
 - **Ungrounded persona (critical):** the realtime session was created with no `instructions`, so it
   ran the provider default demo persona ("helpful, witty, friendly AI … talk quickly … knowledge
   cutoff 2023-10"). The historical implementation then used the text-chat persona via the GA nested
   `audio.{input,output}` session schema (verified against the live endpoint; the older top-level
   shape returns HTTP 500).
-- **Voice + transcription:** the historical provider-owned path configured a realtime-valid output
-  voice, `input_audio_transcription`, and `server_vad` turn detection.
-- **Invalid-voice guard:** `resolveRealtimeVoice` maps a TTS-only voice id (e.g. `nova`, rejected by
-  the realtime model with HTTP 400) to a safe default so a misconfigured persona mapping cannot break
-  session creation.
+- **Voice + transcription:** the historical provider-owned path configured an output voice alongside
+  input transcription. Current Realtime negotiation configures input transcription and response-disabled
+  VAD only; it has no output voice.
+- **Invalid-voice guard (removed):** Realtime no longer accepts or resolves a persona voice id. Explicit
+  provider voice mappings belong only to speech-output deployments, and missing mappings fail closed
+  before synthesis egress.
 - **Transient ICE `disconnected`** no longer tears the session down immediately; a bounded grace
   window allows recovery.
-- **Full-duplex capture:** `getUserMedia` now requests echo cancellation / noise suppression / AGC /
-  mono, preventing the assistant echoing into the microphone.
-- **Negotiation timeout** clamped to 8s (was the generic 30s provider timeout).
+- **Concurrent input capture:** while independent local TTS may play, `getUserMedia` requests echo
+  cancellation / noise suppression / AGC / mono to reduce assistant audio returning through the microphone.
+  Realtime WebRTC itself remains input-only.
+- **Negotiation timeout** clamped to 12s (was the generic 30s provider timeout).
 
 ### Turn-based speech latency (Wave B) — `perf(voice): request opus for interactive assistant speech`
 

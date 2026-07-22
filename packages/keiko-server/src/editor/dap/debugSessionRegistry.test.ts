@@ -256,7 +256,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     const handle = await activate(registry);
     await registry.stop("session_a");
     expect(handle.terminateScope).toHaveBeenCalledTimes(1);
-    expect(handle.cleanup).toHaveBeenCalledTimes(1);
+    expect(handle.cleanup.mock.calls).toHaveLength(1);
     expect(
       records.slice(-2).map(({ evidence }) => [evidence.eventKind, evidence.state]),
     ).toStrictEqual([
@@ -301,7 +301,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     const stopping = registry.stop("session_a");
     await vi.waitFor(() => {
       expect(registry.health()).toBe("terminationPending");
-      expect(handle.cleanup).not.toHaveBeenCalled();
+      expect(handle.cleanup.mock.calls).toHaveLength(0);
     });
     await expect(registry.reserve(identity("session_b", "partition_b"))).rejects.toMatchObject({
       code: "TERMINATION_PENDING",
@@ -310,7 +310,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     await registry.reconcile();
     await stopping;
     expect(handle.terminateScope).toHaveBeenCalledTimes(2);
-    expect(handle.cleanup).toHaveBeenCalledTimes(1);
+    expect(handle.cleanup.mock.calls).toHaveLength(1);
   });
 
   it("retries cleanup without repeating confirmed whole-scope termination", async () => {
@@ -323,13 +323,13 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     const stopping = registry.stop("session_a");
     await vi.waitFor(() => {
       expect(registry.health()).toBe("terminationPending");
-      expect(handle.cleanup).toHaveBeenCalledTimes(1);
+      expect(handle.cleanup.mock.calls).toHaveLength(1);
     });
     failCleanup = false;
     await registry.reconcile();
     await stopping;
     expect(handle.terminateScope).toHaveBeenCalledTimes(1);
-    expect(handle.cleanup).toHaveBeenCalledTimes(2);
+    expect(handle.cleanup.mock.calls).toHaveLength(2);
   });
 
   it("retains capacity while private endpoint cleanup is pending", async () => {
@@ -852,7 +852,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
       }),
     ).resolves.toBe(false);
     expect(late.terminateScope).toHaveBeenCalledTimes(1);
-    expect(late.cleanup).toHaveBeenCalledTimes(1);
+    expect(late.cleanup.mock.calls).toHaveLength(1);
   });
 
   it.each([
@@ -866,7 +866,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     await expect(
       registry.attachCapsule("session_a", attempt.attemptId, handle, qualification),
     ).resolves.toBe(false);
-    expect(handle.cleanup).toHaveBeenCalledTimes(1);
+    expect(handle.cleanup.mock.calls).toHaveLength(1);
     expect(records.at(-2)?.evidence.reason).toBe("startupFailed");
   });
 
@@ -1215,7 +1215,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
       expect(acceptance.limitReached).toBe(true);
       expect(stateSeenBySink).toBe("stopping");
       expect(current.terminateScope).toHaveBeenCalledTimes(1);
-      expect(current.cleanup).toHaveBeenCalledTimes(1);
+      expect(current.cleanup.mock.calls).toHaveLength(1);
       expect(records.slice(-2)).toMatchObject([
         { reason: "outputOverflow", eventKind: "failure" },
         { reason: "outputOverflow", eventKind: "teardown" },
@@ -1239,7 +1239,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     });
     await expect(registry.completeLaunchFailure("session_a", first.attemptId)).resolves.toBe(true);
     expect(handle.terminateScope).toHaveBeenCalledTimes(1);
-    expect(handle.cleanup).toHaveBeenCalledTimes(1);
+    expect(handle.cleanup.mock.calls).toHaveLength(1);
     expect(registry.session("session_a")?.state).toBe("starting");
     const stale = capsule();
     await expect(
@@ -1472,7 +1472,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     await expect(attached).resolves.toBe(false);
     await stopping;
     expect(late.terminateScope).toHaveBeenCalledTimes(1);
-    expect(late.cleanup).toHaveBeenCalledTimes(1);
+    expect(late.cleanup.mock.calls).toHaveLength(1);
   });
 
   it("freshly loads every fixed lifecycle limit and the UTF-8 truncation marker", async () => {
@@ -1666,7 +1666,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     await vi.waitFor(() => {
       expect(registry.session("session_a")).toBeUndefined();
     });
-    expect(handle.cleanup).toHaveBeenCalledTimes(1);
+    expect(handle.cleanup.mock.calls).toHaveLength(1);
     expect(events.slice(-2)).toMatchObject([
       { eventKind: "failure", reason: "startupFailed" },
       { eventKind: "teardown", reason: "startupFailed" },

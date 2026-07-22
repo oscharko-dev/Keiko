@@ -4,6 +4,11 @@ Sequencing notes for Epic #491 child issues, expanding
 [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) decision D9. This gives later issues
 a stable dependency order and write-ownership boundaries so no two parallel issues own overlapping file scope.
 
+> **Historical planning record:** this file describes the pre-implementation #491 sequence and is not
+> a current architecture or readiness source. The WebSocket decision was completed by ADR-0102, and
+> ADR-0154 later replaced provider-owned Voice answers and separate recap-based memory with canonical
+> chat persistence, retrieval, MemoriaViva, citations, and independent TTS.
+
 ## 1. Required order (from Epic #491)
 
 1. **#492** — define the architecture, privacy contract, deployment matrix, and supply-chain policy. _(this
@@ -71,12 +76,13 @@ To honor the Stop Condition "two parallel agents must not edit the same file sco
 
 - Whether voice capability is advertised via additive optional flags or a new `ModelKind` literal — **#493**
   (ADR-0100 D5).
-- Whether to re-open a bidirectional WebSocket upgrade on the BFF (currently hard-rejected) — **#496/#497**
-  (ADR-0100 D3).
+- Whether to re-open a bidirectional WebSocket upgrade on the BFF — **resolved by #497 / ADR-0102** as
+  the single capability-gated `/api/voice/control` upgrade; every other upgrade remains rejected.
 - Whether to add an opt-in outbound destination host allowlist at the `gatewayFetch` boundary — a later
   hardening issue (ADR-0100 D4; [privacy-contract.md](privacy-contract.md) §1).
-- Lifting the ADR-0048 D3 deferral of encryption-at-rest for customer-reconstructive artifacts, as it applies
-  to voice reconstructive artifacts — **#504/#506**.
+- Lifting the ADR-0048 D3 deferral of encryption-at-rest for customer-reconstructive artifacts, as it
+  applies to voice reconstructive artifacts — the original **#504/#506** planning item. Current Twin
+  does not persist raw audio or partial transcripts; settled finals use the existing governed chat store.
 
 ## 6. References
 

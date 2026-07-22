@@ -243,12 +243,49 @@ function tryItalic(
   return closeIdx + 1;
 }
 
+interface LinkDelimiterIndex {
+  readonly bracketCloses: readonly number[];
+  readonly parenCloses: readonly number[];
+  bracketCursor: number;
+  parenCursor: number;
+}
+
+function buildLinkDelimiterIndex(raw: string): LinkDelimiterIndex {
+  const bracketCloses: number[] = [];
+  const parenCloses: number[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === "]") bracketCloses.push(i);
+    if (raw[i] === ")") parenCloses.push(i);
+  }
+  return { bracketCloses, parenCloses, bracketCursor: 0, parenCursor: 0 };
+}
+
+function nextDelimiter(
+  positions: readonly number[],
+  cursor: number,
+  minimum: number,
+): { readonly position: number; readonly cursor: number } {
+  let nextCursor = cursor;
+  while ((positions[nextCursor] ?? -1) < minimum && nextCursor < positions.length) nextCursor++;
+  return { position: positions[nextCursor] ?? -1, cursor: nextCursor };
+}
+
 /** Try to parse [text](href) link starting at pos. Returns new pos or -1. */
-function tryLink(nodes: SafeMarkdownNode[], raw: string, pos: number, textStart: number): number {
+function tryLink(
+  nodes: SafeMarkdownNode[],
+  raw: string,
+  pos: number,
+  textStart: number,
+  delimiters: LinkDelimiterIndex,
+): number {
   if (raw[pos] !== "[") return -1;
-  const bracketClose = raw.indexOf("]", pos + 1);
+  const bracket = nextDelimiter(delimiters.bracketCloses, delimiters.bracketCursor, pos + 1);
+  delimiters.bracketCursor = bracket.cursor;
+  const bracketClose = bracket.position;
   if (bracketClose === -1 || raw[bracketClose + 1] !== "(") return -1;
-  const parenClose = raw.indexOf(")", bracketClose + 2);
+  const paren = nextDelimiter(delimiters.parenCloses, delimiters.parenCursor, bracketClose + 2);
+  delimiters.parenCursor = paren.cursor;
+  const parenClose = paren.position;
   if (parenClose === -1) return -1;
   const linkText = raw.slice(pos + 1, bracketClose);
   const href = raw.slice(bracketClose + 2, parenClose);
@@ -303,6 +340,7 @@ function parseInline(raw: string, depth = 0): readonly SafeMarkdownNode[] {
     return raw.length > 0 ? [{ kind: "text", text: raw }] : [];
   }
   const nodes: SafeMarkdownNode[] = [];
+  const linkDelimiters = buildLinkDelimiterIndex(raw);
   let pos = 0;
   let textStart = 0;
 
@@ -328,7 +366,7 @@ function parseInline(raw: string, depth = 0): readonly SafeMarkdownNode[] {
       continue;
     }
 
-    newPos = tryLink(nodes, raw, pos, textStart);
+    newPos = tryLink(nodes, raw, pos, textStart, linkDelimiters);
     if (newPos !== -1) {
       textStart = newPos;
       pos = newPos;

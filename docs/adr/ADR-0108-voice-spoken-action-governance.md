@@ -6,6 +6,12 @@
 
 Accepted (Issue #503, Epic #491, 2026-06-25)
 
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) for productive Twin integration. A
+settled Voice final is ordinary untrusted chat input and does not automatically create or execute an
+action proposal. The deterministic contract and server checks remain accepted when an explicitly
+governed workflow handoff supplies `voiceOrigin`; all Authority Envelope, confirmation,
+approval-token, scope, and write gates remain independently binding.
+
 ## Version
 
 0.2.0

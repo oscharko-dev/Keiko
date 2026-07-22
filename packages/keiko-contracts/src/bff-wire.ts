@@ -185,6 +185,10 @@ export interface Chat {
   // When both are present, `localKnowledgeScope` equals `localKnowledgeScopes[0]`.
   readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[];
   readonly localKnowledgeScope: ChatLocalKnowledgeScope | undefined;
+  // Path-free server-issued concurrency token for the canonical retrieval-semantic grounding
+  // scope. Voice queues echo it back so a final captured under one source set cannot later
+  // retrieve under another; lifecycle metadata does not alter the token.
+  readonly groundingScopeIdentity?: string | undefined;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -584,6 +588,20 @@ export function classifyAttachmentMime(mimeType: string): "image" | "document" |
 // callers that omit `documentContext` or `attachments` keep working — both fields are optional
 // and additive. `attachments` was already parsed and validated by the server (PR #367 review);
 // this field exposes it on the typed wire so the UI compiles against the same surface.
+// One canonical user turn is bounded by UTF-8 bytes, not transport fragments. Realtime Voice may
+// produce a long provider-final transcript, and splitting that final into independent chat turns
+// would create multiple assistant answers. The matching code-unit ceiling is a cheap first guard;
+// the BFF enforces the byte ceiling authoritatively before admission.
+export const MAX_DESKTOP_CHAT_INPUT_BYTES = 256_000;
+// Keep the independent code-unit and UTF-8 byte ceilings explicit: callers must enforce both.
+export const MAX_DESKTOP_CHAT_INPUT_CHARS = 256_000;
+export const MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS = 256;
+export const GROUNDING_SCOPE_IDENTITY_PATTERN = /^gsi-v1:[0-9a-f]{64}$/u;
+
+export function isGroundingScopeIdentity(value: unknown): value is string {
+  return typeof value === "string" && GROUNDING_SCOPE_IDENTITY_PATTERN.test(value);
+}
+
 export interface DesktopChatSendRequestWire {
   readonly chatId: string;
   readonly projectPath: string;
@@ -593,6 +611,12 @@ export interface DesktopChatSendRequestWire {
   readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
   readonly attachments?: readonly ConversationAttachmentDescriptorWire[] | undefined;
   readonly discussionMode?: DiscussionMode | undefined;
+  // Optional stable client identity for safe retry of one canonical chat turn. The server scopes it
+  // to `chatId` and the normalized semantic turn (effective model, grounding/memory context, and
+  // turn-local prompt inputs); buffered and streaming transports share that identity. Typed
+  // Composer sends may omit it.
+  readonly clientTurnId?: string | undefined;
+  readonly expectedGroundingScopeIdentity?: string | undefined;
 }
 
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────
@@ -702,6 +726,10 @@ export interface AgentBugInvestigationInput {
 export interface GroundedAskRequest {
   readonly chatId: string;
   readonly content: string;
+  // Same semantic-turn idempotency contract as DesktopChatSendRequestWire. Reusing an id with a
+  // different effective model, grounding scope, or memory request fails closed.
+  readonly clientTurnId?: string | undefined;
+  readonly expectedGroundingScopeIdentity?: string | undefined;
   // The browser sends the selected registry model id so grounded Q&A preserves the Conversation
   // Center model-selection guardrails instead of silently falling back to the chat's stored model.
   readonly modelId?: string | undefined;

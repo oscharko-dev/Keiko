@@ -6,6 +6,13 @@
 
 Accepted (Issue #500, Epic #491, 2026-06-24)
 
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) for productive integration. The
+segment contract and reducer remain reusable, but current Twin does not use the standalone reducer as
+its exactly-once or persistence boundary. `useRealtimeVoice` settles provider finals and transfers one
+immutable turn to canonical chat, whose normal message, retrieval, and MemoriaViva paths own durable
+state. `replayable` in this ADR means eligible for the bounded in-session control replay buffer, not
+durable transcript storage.
+
 ## Version
 
 0.2.0

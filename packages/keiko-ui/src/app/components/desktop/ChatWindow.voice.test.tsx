@@ -11,7 +11,7 @@ import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { useRealtimeVoice } from "./hooks/useRealtimeVoice";
 import { clearVoiceCapabilityCacheForTests } from "./hooks/useVoiceCapability";
-import type { ChatSessionApi } from "./hooks/useChatSession";
+import type { ChatSessionApi, SendMessageOutcome } from "./hooks/useChatSession";
 import * as api from "@/lib/api";
 import type { Chat, ModelCapability, VoiceCapabilityResolution } from "@/lib/types";
 
@@ -21,12 +21,15 @@ const realtimeVoiceMock = vi.hoisted(() => ({
   retry: vi.fn(),
   interrupt: vi.fn(),
   toggleMute: vi.fn(),
+  phase: "idle" as "idle" | "requesting" | "negotiating" | "connected" | "error",
+  error: undefined as
+    { readonly reason: "connection-failed"; readonly message: string } | undefined,
   partialUserTranscript: undefined as string | undefined,
 }));
 
 vi.mock("./hooks/useRealtimeVoice", () => ({
   useRealtimeVoice: vi.fn(() => ({
-    phase: "idle",
+    phase: realtimeVoiceMock.phase,
     busy: false,
     turnSnapshot: {
       profile: "full-realtime",
@@ -46,7 +49,7 @@ vi.mock("./hooks/useRealtimeVoice", () => ({
     canInterrupt: false,
     muted: false,
     partialUserTranscript: realtimeVoiceMock.partialUserTranscript,
-    error: undefined,
+    error: realtimeVoiceMock.error,
     start: realtimeVoiceMock.start,
     stop: realtimeVoiceMock.stop,
     retry: realtimeVoiceMock.retry,
@@ -193,6 +196,17 @@ function renderWindow(session: ChatSessionApi): void {
   );
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 function getComposerBox(): HTMLElement {
   const box = document.querySelector(".cmp-box");
   expect(box).toBeInstanceOf(HTMLElement);
@@ -226,6 +240,8 @@ beforeEach(() => {
   realtimeVoiceMock.retry.mockReset();
   realtimeVoiceMock.interrupt.mockReset();
   realtimeVoiceMock.toggleMute.mockReset();
+  realtimeVoiceMock.phase = "idle";
+  realtimeVoiceMock.error = undefined;
   realtimeVoiceMock.partialUserTranscript = undefined;
   vi.mocked(useRealtimeVoice).mockClear();
 });
@@ -284,6 +300,33 @@ describe("ChatWindow dictation integration", () => {
   });
 });
 
+describe("ChatWindow canonical spoken-turn recovery", () => {
+  it("renders a visible retry action and blocks a later typed send until recovery", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: NONE });
+    const retryPendingCanonicalVoiceTurn = vi.fn();
+    renderWindow(
+      makeSession({
+        draft: "typed later",
+        canonicalVoiceTurnRequiresRetry: true,
+        retryPendingCanonicalVoiceTurn,
+      }),
+    );
+    await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/spoken turn is still waiting for a confirmed answer/iu);
+    const retry = within(alert).getByRole("button", { name: "Retry spoken turn" });
+    expect(retry).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    await userEvent.click(retry);
+    expect(retryPendingCanonicalVoiceTurn).toHaveBeenCalledOnce();
+  });
+});
+
 const FULL_REALTIME: VoiceCapabilityResolution = {
   available: true,
   profile: "full-realtime",
@@ -295,7 +338,9 @@ const FULL_REALTIME: VoiceCapabilityResolution = {
 
 // Minimal RTCPeerConnection stub for browser-shape coverage. Voice Dialogue is offered only when the
 // browser can open native WebRTC media.
-class StubRTCPeerConnection {}
+class StubRTCPeerConnection {
+  addTransceiver(): void {}
+}
 
 function stubRealtimeBrowser(getUserMedia: () => Promise<MediaStream>): void {
   Object.defineProperty(navigator, "mediaDevices", {
@@ -495,7 +540,6 @@ const FULL_REALTIME_WITH_TOOL_CALLING: VoiceCapabilityResolution = {
     speechToText: true,
     speechOutput: true,
     realtimeVoice: true,
-    realtimeToolCalling: true,
   },
 };
 
@@ -603,8 +647,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
       vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
         return (
           args.chatContext?.chatId === "chat-1" &&
-          args.chatContext.grounding === undefined &&
-          args.chatContext.memory === undefined &&
+          Object.keys(args.chatContext).length === 1 &&
           args.onCanonicalUserTurn !== undefined
         );
       }),
@@ -624,12 +667,13 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
     expect(
       vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
+        const optionNames = Object.keys(args);
         return (
           args.chatContext?.chatId === "chat-1" &&
-          args.groundingToolActive === undefined &&
-          args.memoryToolActive === undefined &&
-          args.onGroundedToolCall === undefined &&
-          args.onMemoryToolCall === undefined
+          !optionNames.includes("groundingToolActive") &&
+          !optionNames.includes("memoryToolActive") &&
+          !optionNames.includes("onGroundedToolCall") &&
+          !optionNames.includes("onMemoryToolCall")
         );
       }),
     ).toBe(true);
@@ -814,6 +858,31 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     expect(within(box).queryByRole("button", { name: "Send message" })).toBeNull();
   });
 
+  it("surfaces a retained hard-admission final with a focused realtime retry action", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    realtimeVoiceMock.phase = "error";
+    realtimeVoiceMock.error = {
+      reason: "connection-failed",
+      message: "The final spoken turn could not enter the canonical chat outbox.",
+    };
+    realtimeVoiceMock.partialUserTranscript = "retained final transcript";
+    renderWindow(makeSession());
+
+    await enterDialogue();
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/final spoken turn could not enter/iu);
+    expect(screen.getByText("retained final transcript")).toBeInTheDocument();
+    const retry = within(alert).getByRole("button", { name: "Try again" });
+    await waitFor(() => expect(retry).toHaveFocus());
+
+    await userEvent.click(retry);
+    expect(realtimeVoiceMock.retry).toHaveBeenCalledOnce();
+  });
+
   it("shows the ephemeral spoken transcript while the utterance is still in progress", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
       voice: FULL_REALTIME_WITH_PERSONAS,
@@ -832,7 +901,10 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       voice: FULL_REALTIME_WITH_PERSONAS,
     });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({
+      status: "completed",
+      assistantMessageId: "assistant-canonical",
+    });
     renderWindow(makeSession({ sendMessage }));
 
     await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
@@ -846,8 +918,144 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       });
     });
 
-    expect(sendMessage).toHaveBeenCalledWith({ text: "Search the connected repository." });
-    expect(options?.onVoiceTurnCommitted).toBeUndefined();
+    expect(sendMessage).toHaveBeenCalledWith({
+      text: "Search the connected repository.",
+      clientTurnId: "voice-user-1",
+      reportOutcome: true,
+    });
+  });
+
+  it("admits the same canonical voice turn id only once", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const sendMessage = vi.fn().mockResolvedValue({
+      status: "completed",
+      assistantMessageId: "assistant-replayed",
+    });
+    renderWindow(makeSession({ sendMessage }));
+
+    await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    const turn = { turnId: "voice-user-replayed", text: "Persist me exactly once." };
+
+    await act(async () => {
+      await options?.onCanonicalUserTurn?.(turn);
+      await options?.onCanonicalUserTurn?.(turn);
+    });
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it("hands a response-lost final to the Chat queue once and returns synchronously", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const enqueueCanonicalVoiceTurn = vi.fn().mockResolvedValue({ status: "in-progress" });
+    const sendMessage = vi.fn();
+    renderWindow(makeSession({ enqueueCanonicalVoiceTurn, sendMessage }));
+
+    await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    let firstOutcome: unknown;
+    let replayOutcome: unknown;
+    await act(async () => {
+      firstOutcome = await options?.onCanonicalUserTurn?.({
+        turnId: "provider-item-opaque",
+        text: "Recover this response-lost turn.",
+      });
+      replayOutcome = await options?.onCanonicalUserTurn?.({
+        turnId: "provider-item-opaque",
+        text: "Recover this response-lost turn.",
+      });
+    });
+
+    expect(firstOutcome).toBe(true);
+    expect(replayOutcome).toBe(true);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(enqueueCanonicalVoiceTurn).toHaveBeenCalledOnce();
+    expect(enqueueCanonicalVoiceTurn).toHaveBeenCalledWith({
+      text: "Recover this response-lost turn.",
+      clientTurnId: "provider-item-opaque",
+      allowReservedCapacity: true,
+      target: {
+        chat: expect.objectContaining({ id: "chat-1", projectPath: "/proj" }),
+        modelId: "example-chat-model",
+      },
+    });
+  });
+
+  it("prevents Realtime capture from starting while the canonical queue is at its boundary", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    let captureMustPause = true;
+    renderWindow(
+      makeSession({
+        canonicalVoiceCaptureMustPause: () => captureMustPause,
+      }),
+    );
+
+    await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    expect(options?.canStartCapture?.()).toBe(false);
+
+    captureMustPause = false;
+    expect(options?.canStartCapture?.()).toBe(true);
+  });
+
+  it("rejects Realtime ownership when the canonical queue cannot retain the final", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const enqueueCanonicalVoiceTurn = vi.fn(() => undefined);
+    const sendMessage = vi.fn();
+    renderWindow(makeSession({ enqueueCanonicalVoiceTurn, sendMessage }));
+
+    await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    const accepted = options?.onCanonicalUserTurn?.({
+      turnId: "queue-backpressure",
+      text: "Retain this final in Realtime until capacity is available.",
+    });
+
+    expect(accepted).toBe(false);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(enqueueCanonicalVoiceTurn).toHaveBeenCalledOnce();
+  });
+
+  it("never restarts an explicitly cancelled canonical turn whose user row persisted", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const sendMessage = vi.fn().mockResolvedValue({
+      status: "cancelled",
+      userPersisted: true,
+    });
+    renderWindow(makeSession({ sendMessage }));
+
+    await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await options?.onCanonicalUserTurn?.({
+        turnId: "cancelled-provider-item",
+        text: "Keep the transcript but cancel its answer.",
+      });
+    });
+
+    expect(outcome).toBe(true);
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledWith({
+      text: "Keep the transcript but cancel its answer.",
+      clientTurnId: "cancelled-provider-item",
+      reportOutcome: true,
+    });
   });
 
   it("cancels canonical generation when the user barges in", async () => {
@@ -872,7 +1080,10 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       voice: FULL_REALTIME_WITH_PERSONAS,
     });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({
+      status: "completed",
+      assistantMessageId: "msg-2",
+    });
     const { rerender } = render(
       <ChatSessionProvider value={makeSessionWithAssistantMessage({ sendMessage })}>
         <ChatWindow />
@@ -969,6 +1180,276 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     );
   });
 
+  it("speaks only the assistant message identified by the canonical send outcome", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const sendMessage = vi.fn().mockResolvedValue({
+      status: "completed",
+      assistantMessageId: "voice-answer",
+    });
+    const { rerender } = render(
+      <ChatSessionProvider value={makeSession({ sendMessage })}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    await enterDialogue();
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    await act(async () => {
+      await options?.onCanonicalUserTurn?.({
+        turnId: "voice-user-correlated",
+        text: "Give me the correlated answer.",
+      });
+    });
+    rerender(
+      <ChatSessionProvider
+        value={makeSession({
+          sendMessage,
+          messages: [
+            {
+              id: "voice-answer",
+              chatId: "chat-1",
+              role: "assistant",
+              content: "This answer belongs to the spoken turn.",
+              timestamp: 100,
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+            {
+              id: "unrelated-newer-answer",
+              chatId: "chat-1",
+              role: "assistant",
+              content: "This newer answer belongs to another send.",
+              timestamp: 101,
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+          ],
+          sendStatus: "completed",
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    await waitFor(() =>
+      expect(api.synthesizeAssistantSpeech).toHaveBeenCalledWith(
+        { persona: "male", text: "This answer belongs to the spoken turn." },
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
+      { persona: "male", text: "This newer answer belongs to another send." },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("does not arm speech for a blocked canonical send or a later unrelated answer", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const sendMessage = vi.fn().mockResolvedValue({ status: "not-sent" });
+    const initial = makeSessionWithAssistantMessage({ sendMessage });
+    const { rerender } = render(
+      <ChatSessionProvider value={initial}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    await enterDialogue();
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    let handoffAccepted: unknown;
+    await act(async () => {
+      handoffAccepted = options?.onCanonicalUserTurn?.({
+        turnId: "voice-user-blocked",
+        text: "This send is blocked.",
+      });
+      await Promise.resolve();
+    });
+    expect(handoffAccepted).toBe(true);
+    expect(sendMessage).toHaveBeenCalledWith({
+      text: "This send is blocked.",
+      clientTurnId: "voice-user-blocked",
+      reportOutcome: true,
+    });
+
+    rerender(
+      <ChatSessionProvider
+        value={makeSession({
+          sendMessage,
+          messages: [
+            ...initial.messages,
+            {
+              id: "unrelated-assistant",
+              chatId: "chat-1",
+              role: "assistant",
+              content: "This unrelated answer must stay silent.",
+              timestamp: Date.now(),
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+          ],
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
+      { persona: "male", text: "This unrelated answer must stay silent." },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("never speaks a late pre-leave answer after re-entry and speaks the new exact answer", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const first = deferred<SendMessageOutcome>();
+    const enqueueCanonicalVoiceTurn = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ status: "completed", assistantMessageId: "answer-b" });
+    const session = makeSession({ enqueueCanonicalVoiceTurn });
+    const rendered = render(
+      <ChatSessionProvider value={session}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    await enterDialogue();
+    const firstOptions = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    act(() => {
+      firstOptions?.onCanonicalUserTurn?.({ turnId: "turn-a", text: "Question A" });
+    });
+    await userEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
+    await userEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
+    const secondOptions = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    await act(async () => {
+      secondOptions?.onCanonicalUserTurn?.({ turnId: "turn-b", text: "Question B" });
+      await Promise.resolve();
+    });
+    const answerB = {
+      id: "answer-b",
+      chatId: "chat-1",
+      role: "assistant" as const,
+      content: "Answer B",
+      timestamp: 200,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    };
+    rendered.rerender(
+      <ChatSessionProvider value={makeSession({ enqueueCanonicalVoiceTurn, messages: [answerB] })}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    await waitFor(() =>
+      expect(api.synthesizeAssistantSpeech).toHaveBeenCalledWith(
+        { persona: "male", text: "Answer B" },
+        expect.any(AbortSignal),
+      ),
+    );
+
+    await act(async () => {
+      first.resolve({ status: "completed", assistantMessageId: "answer-a" });
+      await first.promise;
+    });
+    rendered.rerender(
+      <ChatSessionProvider
+        value={makeSession({
+          enqueueCanonicalVoiceTurn,
+          messages: [
+            answerB,
+            { ...answerB, id: "answer-a", content: "Late answer A", timestamp: 201 },
+          ],
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
+      { persona: "male", text: "Late answer A" },
+      expect.any(AbortSignal),
+    );
+    expect(realtimeVoiceMock.stop).toHaveBeenCalledOnce();
+  });
+
+  it("leaves once on chat switch and never routes the old chat answer into the new chat", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const delivery = deferred<SendMessageOutcome>();
+    const enqueueCanonicalVoiceTurn = vi.fn().mockReturnValue(delivery.promise);
+    const chatA = makeChat();
+    const chatB = { ...makeChat(), id: "chat-b", title: "Chat B" };
+    const rendered = render(
+      <ChatSessionProvider value={makeSession({ activeChat: chatA, enqueueCanonicalVoiceTurn })}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    await enterDialogue();
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    act(() => {
+      options?.onCanonicalUserTurn?.({ turnId: "turn-chat-a", text: "Question for A" });
+    });
+
+    rendered.rerender(
+      <ChatSessionProvider
+        value={makeSession({ activeChat: chatB, enqueueCanonicalVoiceTurn, messages: [] })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    await waitFor(() => expect(realtimeVoiceMock.stop).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
+    await act(async () => {
+      delivery.resolve({ status: "completed", assistantMessageId: "answer-a" });
+      await delivery.promise;
+    });
+    rendered.rerender(
+      <ChatSessionProvider
+        value={makeSession({
+          activeChat: chatB,
+          enqueueCanonicalVoiceTurn,
+          messages: [
+            {
+              id: "answer-a",
+              chatId: "chat-b",
+              role: "assistant",
+              content: "Must not speak in B",
+              timestamp: 300,
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+          ],
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
+      { persona: "male", text: "Must not speak in B" },
+      expect.any(AbortSignal),
+    );
+  });
+
   it("uses the same dialogue switch to leave dialogue mode and run cleanup", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
       voice: FULL_REALTIME_WITH_PERSONAS,
@@ -980,7 +1461,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
 
     await userEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
 
-    expect(realtimeVoiceMock.stop).toHaveBeenCalled();
+    expect(realtimeVoiceMock.stop).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
     // The switch is back to off and the composer remains usable.

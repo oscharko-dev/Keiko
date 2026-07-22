@@ -25,6 +25,12 @@ export type ModelKind = "chat" | "embedding" | "ocr-vision" | "voice";
 
 export type CostClass = "low" | "medium" | "high";
 
+export const MODEL_COST_RANK: Readonly<Record<CostClass, number>> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
+
 export type LatencyClass = "fast" | "standard" | "slow";
 
 export type ModelTokenAccountingSource = "calibrated";
@@ -150,9 +156,9 @@ export interface ModelCapability {
    */
   readonly supportsSpeechSynthesisInstructions?: boolean | undefined;
   /**
-   * Whether the voice provider advertises realtime, full-duplex speech (interruptible,
-   * colleague-like conversation / speech-in-speech-out). Only meaningful for `kind: "voice"`.
-   * Realtime is the gate for the full-conversation profile (Issue #493 AC3, ADR-0100 D2).
+   * Whether the voice provider advertises Realtime WebRTC input, VAD, and live transcription.
+   * Only meaningful for `kind: "voice"`. It grants no provider assistant response or output-audio
+   * authority (ADR-0154).
    */
   readonly supportsRealtimeVoice?: boolean | undefined;
   /** Whether the realtime provider supports semantic end-of-turn detection. */
@@ -170,7 +176,7 @@ export interface ModelCapability {
    * voice-id mapping lives on the credential-tier `ModelProviderConfig.voiceProfiles`. This field is
    * DERIVED at config parse time from that mapping (sorted canonical `VOICE_PERSONAS` order); it is
    * never an operator input key and is never persisted. Only meaningful for a `kind: "voice"`
-   * provider that advertises speech output or realtime voice.
+   * provider that advertises speech output.
    */
   readonly supportedVoicePersonas?: readonly VoicePersona[] | undefined;
 }
@@ -264,9 +270,51 @@ export function modelSupportsSpeechOutput(capability: ModelCapability): boolean 
   return capability.kind === "voice" && capability.supportsSpeechOutput === true;
 }
 
-// Whether the voice provider advertises realtime full-duplex speech.
+// Whether the voice provider advertises Realtime WebRTC input/VAD/transcription.
 export function modelSupportsRealtimeVoice(capability: ModelCapability): boolean {
   return capability.kind === "voice" && capability.supportsRealtimeVoice === true;
+}
+
+export function isCompleteRealtimeVoiceCapability(capability: ModelCapability): boolean {
+  return (
+    modelSupportsRealtimeVoice(capability) &&
+    (capability.realtimeTranscriptionModel?.trim().length ?? 0) > 0
+  );
+}
+
+function selectCheapestVoiceCapability(
+  capabilities: readonly ModelCapability[],
+  supportsRole: (capability: ModelCapability) => boolean,
+): ModelCapability | undefined {
+  let selected: ModelCapability | undefined;
+  for (const capability of capabilities) {
+    if (!supportsRole(capability)) continue;
+    if (
+      selected === undefined ||
+      MODEL_COST_RANK[capability.costClass] < MODEL_COST_RANK[selected.costClass]
+    ) {
+      selected = capability;
+    }
+  }
+  return selected;
+}
+
+export function selectSpeechInputCapability(
+  capabilities: readonly ModelCapability[],
+): ModelCapability | undefined {
+  return selectCheapestVoiceCapability(capabilities, modelSupportsSpeechInput);
+}
+
+export function selectSpeechOutputCapability(
+  capabilities: readonly ModelCapability[],
+): ModelCapability | undefined {
+  return selectCheapestVoiceCapability(capabilities, modelSupportsSpeechOutput);
+}
+
+export function selectRealtimeVoiceCapability(
+  capabilities: readonly ModelCapability[],
+): ModelCapability | undefined {
+  return selectCheapestVoiceCapability(capabilities, isCompleteRealtimeVoiceCapability);
 }
 
 // ─── Voice capability resolution result (content-free, serialisable) ───────────
@@ -286,10 +334,9 @@ export type VoiceProfile = "none" | "speech-to-text" | "speech-output" | "full-r
 export type VoiceUnavailableReason =
   "no-voice-provider" | "policy-disabled" | "provider-unreachable";
 
-// Transport posture for the resolved profile (ADR-0100 D3). The control/signaling plane
-// ("WebSocket is authoritative") is realized today on the loopback HTTP + SSE seam, so
-// `websocketControl` reflects the control-plane role being active for any non-`none` profile.
-// `webrtcMedia` (the preferred media plane) is indicated only for the full-realtime profile.
+// Transport posture for the resolved profile (ADR-0100 D3, ADR-0154). Both fields describe the
+// productive Realtime input path and are true only when a complete Realtime deployment is available.
+// Batch dictation and TTS use same-origin HTTP through the Model Gateway and advertise neither.
 export interface VoiceTransportPosture {
   readonly websocketControl: boolean;
   readonly webrtcMedia: boolean;
@@ -304,14 +351,13 @@ export interface VoiceCapabilityResolution {
     readonly speechToText: boolean;
     readonly speechOutput: boolean;
     readonly realtimeVoice: boolean;
-    // True only when the elected realtime voice provider can drive custom tool calls. Grounded
-    // Voice Dialogue requires this so Keiko never disguises STT/TTS or ungrounded realtime as
-    // repository/knowledge-aware speech.
+    // Compatibility-only capability bit retained for existing consumers. Canonical Twin Voice does
+    // not use provider tool calling; retrieval and memory remain owned by canonical Chat (ADR-0154).
     readonly realtimeToolCalling?: boolean | undefined;
   };
   readonly transport: VoiceTransportPosture;
-  // Aggregate union of the product voice personas offered across reachable speech-output / realtime
-  // voice providers, sorted in canonical `VOICE_PERSONAS` order (Issue #1557, ADR-0094 D2/D7).
+  // Aggregate union of the product voice personas offered across reachable speech-output providers,
+  // sorted in canonical `VOICE_PERSONAS` order (Issue #1557, ADR-0094 D2/D7).
   // CONTENT-FREE (persona enums only, never a voice id). REQUIRED: the empty array is the honest
   // "no personas available" value, so an STT-only or no-voice deployment reports `[]` rather than an
   // ambiguous absent field.

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -152,5 +153,28 @@ describe("package-surface npm pack capture", () => {
       `npm pack --dry-run failed (signal SIGTERM; stdout bytes: ${sensitiveOutput.length}; stderr bytes: ${sensitiveOutput.length})`,
     );
     expect(signalError.message).not.toContain(sensitiveOutput);
+  });
+});
+
+describe("assembled package-surface command", () => {
+  it("assembles and prunes the artifact before the fail-closed checker", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+    const script = packageJson.scripts["check:package-surface:assembled"];
+    const orderedCommands = [
+      "npm run build",
+      "npm run prepare:bin",
+      "npm run build:ui",
+      "npm run prune:package-build-artifacts",
+      "npm run prune:package-native-optionals",
+      "npm run check:package-surface",
+    ];
+
+    expect(typeof script).toBe("string");
+    let previous = -1;
+    for (const command of orderedCommands) {
+      const position = script.indexOf(command);
+      expect(position).toBeGreaterThan(previous);
+      previous = position;
+    }
   });
 });

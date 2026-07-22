@@ -79,11 +79,16 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { normalizeGroundedAnswerPayload, type GroundedAnswerPayload } from "./grounded-answer.js";
+import {
+  normalizeGroundedAnswerPayload,
+  type GroundedAnswerPayload,
+  type GroundedAnswerResult,
+} from "./grounded-answer.js";
 import {
   GROUNDED_NO_EVIDENCE_ANSWER,
   buildPackCitationIndex,
   incompleteAnswerMarker,
+  missingCitationMarker,
   packHasUsableEvidence,
   reconcileInlineCitations,
   unsupportedCitationMarker,
@@ -121,6 +126,11 @@ export interface GroundedAnswerer {
 export interface OrchestratorInput {
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
+  // The original query remains authoritative for every retrieval ring. Callers may supply a
+  // separately assembled answer question (for example with governed memory context) so personal
+  // context can inform generation without changing repository retrieval decisions.
+  readonly answerQuestion?: string | undefined;
+  readonly answerOnlyContextAvailable?: boolean | undefined;
   readonly workspaceRoot: string;
   readonly budget?: ExplorationBudget;
 }
@@ -712,6 +722,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
     fs: inputs.fs,
     nowMs: inputs.nowMs,
     searchHints: { retrievalIntent: inputs.retrievalIntent },
+    ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
     ...(definitionSymbol === undefined && inputs.repoSemanticSearchProvider !== undefined
       ? { semanticSearchProvider: inputs.repoSemanticSearchProvider }
@@ -959,7 +970,8 @@ interface LineWindow {
 }
 
 const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
-const EXCERPT_CONTEXT_LINES = 0;
+const SINGLE_LINE_EXCERPT_CONTEXT_LINES = 3;
+const DISCOVERED_DEFINITION_CONTEXT_AFTER = 24;
 const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
 const PROJECT_METADATA_QUERY_TERMS = [
   "abhängigkeit",
@@ -2354,9 +2366,24 @@ function lineWindowForAtom(atom: EvidenceAtom): LineWindow {
   if (range === undefined) {
     return DEFAULT_EXCERPT_WINDOW;
   }
+  const isDiscoveredDefinition = atom.provenance.tool === "discovered-symbol-definition";
+  const addSingleLineContext =
+    range.startLine === range.endLine &&
+    atom.provenance.kind !== "semantic-search" &&
+    atom.provenance.kind !== "model-rerank";
+  let contextBefore: number;
+  let contextAfter: number;
+  if (isDiscoveredDefinition) {
+    contextBefore = 0;
+    contextAfter = DISCOVERED_DEFINITION_CONTEXT_AFTER;
+  } else {
+    const surroundingContext = addSingleLineContext ? SINGLE_LINE_EXCERPT_CONTEXT_LINES : 0;
+    contextBefore = surroundingContext;
+    contextAfter = surroundingContext;
+  }
   return {
-    startLine: Math.max(1, range.startLine - EXCERPT_CONTEXT_LINES),
-    endLine: range.endLine + EXCERPT_CONTEXT_LINES,
+    startLine: Math.max(1, range.startLine - contextBefore),
+    endLine: range.endLine + contextAfter,
   };
 }
 
@@ -2507,13 +2534,16 @@ async function readPathExcerptWindows(
     const result = await readExcerpt(
       inputs.searchScope,
       { scopePath, startLine: window.startLine, endLine: window.endLine, maxBytes },
-      { fs: inputs.fs },
+      { fs: inputs.fs, ...(inputs.signal === undefined ? {} : { signal: inputs.signal }) },
     );
     throwIfCancelled(inputs.signal);
     if (result.truncated) {
       truncatedWindowCount += 1;
     }
-    windows.push({ ...window, content: result.content });
+    const actualRange = result.atom.lineRange;
+    if (actualRange !== undefined) {
+      windows.push({ ...actualRange, content: result.content });
+    }
     bytesConsumed += utf8ByteLength(result.content);
   }
   return {
@@ -3139,6 +3169,76 @@ async function entailmentMarkersFor(
   return (await deps.entailmentStage?.evaluate(answerContent, [pack], nowMs)) ?? [];
 }
 
+function citationCoverageMarkerFor(
+  answerContent: string,
+  pack: ConnectedContextPack,
+  nowMs: number,
+): UncertaintyMarker | undefined {
+  const reconciliation = reconcileInlineCitations(answerContent, buildPackCitationIndex([pack]));
+  const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
+  if (unsupported !== undefined || reconciliation.citedScopePaths.size > 0) return unsupported;
+  return missingCitationMarker(nowMs);
+}
+
+function exhaustedAnswerBudgetDimensions(
+  answer: GroundedAnswerResult,
+  pack: ConnectedContextPack,
+  elapsedMs: number,
+): readonly string[] {
+  return [
+    ...(answer.usage.promptTokens > pack.budget.modelInputTokensMax ? ["modelInputTokens"] : []),
+    ...(answer.usage.completionTokens > pack.budget.modelOutputTokensMax
+      ? ["modelOutputTokens"]
+      : []),
+    ...(elapsedMs > pack.budget.elapsedMsMax ? ["elapsedMs"] : []),
+  ];
+}
+
+async function answerWithAvailableContext(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  pack: ConnectedContextPack,
+  plan: OrchestratorOutput["plan"],
+  sourceEvidenceAvailable: boolean,
+  start: number,
+  nowMs: () => number,
+): Promise<OrchestratorOutput> {
+  const answer = normalizeGroundedAnswerPayload(
+    await deps.answerer.answer(input.answerQuestion ?? input.query.text, pack),
+  );
+  const elapsedMs = Math.max(0, nowMs() - start);
+  const exhausted = exhaustedAnswerBudgetDimensions(answer, pack, elapsedMs);
+  const unsupportedMarker = sourceEvidenceAvailable
+    ? citationCoverageMarkerFor(answer.content, pack, nowMs())
+    : undefined;
+  const entailmentMarkers = sourceEvidenceAvailable
+    ? await entailmentMarkersFor(deps, answer.content, pack, nowMs())
+    : [];
+  const groundedPack: ConnectedContextPack = {
+    ...pack,
+    usage: {
+      ...pack.usage,
+      modelInputTokens: Math.min(answer.usage.promptTokens, pack.budget.modelInputTokensMax),
+      modelOutputTokens: Math.min(answer.usage.completionTokens, pack.budget.modelOutputTokensMax),
+      elapsedMs: Math.min(Math.max(pack.usage.elapsedMs, elapsedMs), pack.budget.elapsedMsMax),
+    },
+    uncertainty: [
+      ...pack.uncertainty,
+      ...(exhausted.length === 0 ? [] : [answerBudgetClipped(exhausted, nowMs())]),
+      ...(unsupportedMarker === undefined ? [] : [unsupportedMarker]),
+      ...(answer.finishReason === "length" ? [incompleteAnswerMarker(nowMs())] : []),
+      ...entailmentMarkers,
+    ],
+  };
+  return {
+    pack: groundedPack,
+    assistantContent: answer.content,
+    elapsedMs,
+    ...(plan === undefined ? {} : { plan }),
+    ...(!sourceEvidenceAvailable ? { noEvidence: true } : {}),
+  };
+}
+
 export async function runGroundedExploration(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -3154,7 +3254,8 @@ export async function runGroundedExploration(
   // path must too, so the model is never asked to answer confidently over zero evidence and no
   // hallucinated answer is persisted as grounded. The `no-evidence` uncertainty marker is already on
   // the pack (assemblePackFromReads adds it when excerpts are empty).
-  if (!packHasUsableEvidence(pack)) {
+  const sourceEvidenceAvailable = packHasUsableEvidence(pack);
+  if (!sourceEvidenceAvailable && input.answerOnlyContextAvailable !== true) {
     const elapsedMs = Math.max(0, nowMs() - start);
     return {
       pack,
@@ -3164,45 +3265,7 @@ export async function runGroundedExploration(
       noEvidence: true,
     };
   }
-  const answer = normalizeGroundedAnswerPayload(await deps.answerer.answer(input.query.text, pack));
-  const elapsedMs = Math.max(0, nowMs() - start);
-  const exhaustedAnswerDimensions = [
-    ...(answer.usage.promptTokens > pack.budget.modelInputTokensMax ? ["modelInputTokens"] : []),
-    ...(answer.usage.completionTokens > pack.budget.modelOutputTokensMax
-      ? ["modelOutputTokens"]
-      : []),
-    ...(elapsedMs > pack.budget.elapsedMsMax ? ["elapsedMs"] : []),
-  ];
-  // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the model's inline `[path:line]` citations against
-  // the evidence pack that was actually sent to it. References to files the model never received are
-  // surfaced as an unsupported-citation marker instead of being displayed as grounded claims.
-  const reconciliation = reconcileInlineCitations(answer.content, buildPackCitationIndex([pack]));
-  const unsupportedMarker = unsupportedCitationMarker(reconciliation.unsupported, nowMs());
-  // GEN-AI-GATEWAY-001 (RB-4): a truncated completion is surfaced, not consumed as complete.
-  const truncated = answer.finishReason === "length";
-  // Knowledge M1.2 (#2563): judge whether the cited excerpts SUPPORT the answer's claims (not just
-  // that they were in the pack). Inert (empty) unless an entailment stage was injected AND a judge
-  // model is configured, so the legacy path stays byte-identical.
-  const entailmentMarkers = await entailmentMarkersFor(deps, answer.content, pack, nowMs());
-  const groundedPack: ConnectedContextPack = {
-    ...pack,
-    usage: {
-      ...pack.usage,
-      modelInputTokens: Math.min(answer.usage.promptTokens, pack.budget.modelInputTokensMax),
-      modelOutputTokens: Math.min(answer.usage.completionTokens, pack.budget.modelOutputTokensMax),
-      elapsedMs: Math.min(Math.max(pack.usage.elapsedMs, elapsedMs), pack.budget.elapsedMsMax),
-    },
-    uncertainty: [
-      ...pack.uncertainty,
-      ...(exhaustedAnswerDimensions.length === 0
-        ? []
-        : [answerBudgetClipped(exhaustedAnswerDimensions, nowMs())]),
-      ...(unsupportedMarker === undefined ? [] : [unsupportedMarker]),
-      ...(truncated ? [incompleteAnswerMarker(nowMs())] : []),
-      ...entailmentMarkers,
-    ],
-  };
-  return { pack: groundedPack, assistantContent: answer.content, elapsedMs, plan };
+  return answerWithAvailableContext(input, deps, pack, plan, sourceEvidenceAvailable, start, nowMs);
 }
 
 // Re-export DEFAULT_SEARCH_LIMITS for parity with #179 callers that import limits via the

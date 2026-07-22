@@ -1,4 +1,6 @@
+import type { ContextCoverageTruncationReason } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { LineMatcher } from "./repoSearchMatchers.js";
+import { repositorySourceLines } from "./repoSearchSourceClassification.js";
 
 // Per-file cap on emitted lexical matches (Epic #177 retrieval fix). A connected-scope question
 // carries several content tokens, so a prose-heavy file can match many low-signal lines. Keeping
@@ -13,10 +15,12 @@ export interface LineSelectionRunner {
   readonly matcher: LineMatcher;
   readonly nowMs: () => number;
   readonly startMs: number;
+  readonly signal?: AbortSignal | undefined;
 }
 
 export interface LineSelectionState {
   truncated: boolean;
+  readonly truncationReasons?: Set<ContextCoverageTruncationReason> | undefined;
 }
 
 export interface ScoredLine {
@@ -213,11 +217,11 @@ function pythonRange(lines: readonly string[], index: number): { start: number; 
 
 function locateBraceStart(
   lines: readonly string[],
+  braceScans: readonly BraceLineScan[],
   index: number,
 ): { start: number; balanceStart: number } {
   for (let i = index; i >= Math.max(0, index - MAX_ENCLOSING_RANGE_LINES); i -= 1) {
-    const line = lines[i] ?? "";
-    if (!line.includes("{")) {
+    if (braceScans[i]?.sawOpen !== true) {
       continue;
     }
     const candidate = braceStartLine(lines, i);
@@ -229,22 +233,278 @@ function locateBraceStart(
   return { start: index, balanceStart: index };
 }
 
-function countBraceDelta(line: string): { delta: number; sawOpen: boolean } {
+interface BraceScanState {
+  blockComment: boolean;
+  readonly controlParenStack: boolean[];
+  escaped: boolean;
+  quote: '"' | "'" | "`" | undefined;
+  regexAfterControlParen: boolean;
+  regexCharacterClass: boolean;
+  regexLiteral: boolean;
+}
+
+interface BraceLineScan {
+  readonly delta: number;
+  readonly sawOpen: boolean;
+}
+
+interface BraceScanCache {
+  readonly lines: readonly string[];
+  readonly scans: BraceLineScan[];
+  readonly state: BraceScanState;
+}
+
+interface BraceCharacterResult {
+  readonly advance: boolean;
+  readonly delta: number;
+  readonly sawOpen: boolean;
+  readonly stop: boolean;
+}
+
+const IGNORED_BRACE_CHARACTER: BraceCharacterResult = {
+  advance: false,
+  delta: 0,
+  sawOpen: false,
+  stop: false,
+};
+const REGEX_PREFIX_KEYWORDS = new Set([
+  "await",
+  "case",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "extends",
+  "in",
+  "instanceof",
+  "new",
+  "of",
+  "return",
+  "throw",
+  "typeof",
+  "void",
+  "yield",
+]);
+const REGEX_BODY_CONTROL_KEYWORDS = new Set(["for", "if", "while", "with"]);
+
+function initialBraceScanState(): BraceScanState {
+  return {
+    blockComment: false,
+    controlParenStack: [],
+    escaped: false,
+    quote: undefined,
+    regexAfterControlParen: false,
+    regexCharacterClass: false,
+    regexLiteral: false,
+  };
+}
+
+function commentStart(char: string, next: string): "block" | "line" | undefined {
+  if (char !== "/") return undefined;
+  if (next === "/") return "line";
+  if (next === "*") return "block";
+  return undefined;
+}
+
+function scanQuotedBraceCharacter(
+  char: string,
+  next: string,
+  state: BraceScanState,
+): BraceCharacterResult {
+  const quote = state.quote;
+  if (state.escaped) {
+    state.escaped = false;
+    return IGNORED_BRACE_CHARACTER;
+  }
+  if (char === "\\") {
+    state.escaped = true;
+    return IGNORED_BRACE_CHARACTER;
+  }
+  if (char !== quote) return IGNORED_BRACE_CHARACTER;
+  if (next === quote && quote !== "`") {
+    return { ...IGNORED_BRACE_CHARACTER, advance: true };
+  }
+  state.quote = undefined;
+  return IGNORED_BRACE_CHARACTER;
+}
+
+function isAsciiLetter(char: string): boolean {
+  return (char >= "a" && char <= "z") || (char >= "A" && char <= "Z");
+}
+
+function isIdentifierContinuation(char: string): boolean {
+  return char.length > 0 && (char === "$" || /[\p{ID_Continue}\u200C\u200D]/u.test(char));
+}
+
+function isJsxTagNameCharacter(char: string): boolean {
+  return isIdentifierContinuation(char) || char === "." || char === ":" || char === "-";
+}
+
+function isJsxClosingTagSlash(line: string, slashIndex: number): boolean {
+  if (line.charAt(slashIndex - 1) !== "<") return false;
+  let index = slashIndex + 1;
+  if (line.charAt(index) === ">") return true;
+  if (!isIdentStartChar(line.charAt(index))) return false;
+  index += 1;
+  while (isJsxTagNameCharacter(line.charAt(index))) index += 1;
+  while (/\s/u.test(line.charAt(index))) index += 1;
+  return line.charAt(index) === ">";
+}
+
+function hasRegexPrefixKeyword(line: string, endIndex: number): boolean {
+  if (!isAsciiLetter(line.charAt(endIndex))) return false;
+  let index = endIndex;
+  while (index >= 0 && isAsciiLetter(line.charAt(index))) index -= 1;
+  if (isIdentifierContinuation(line.charAt(index)) || ".#".includes(line.charAt(index))) {
+    return false;
+  }
+  return REGEX_PREFIX_KEYWORDS.has(line.slice(index + 1, endIndex + 1));
+}
+
+function regexLiteralCanStart(line: string, slashIndex: number): boolean {
+  if (isJsxClosingTagSlash(line, slashIndex)) return false;
+  let index = slashIndex - 1;
+  while (index >= 0 && /\s/u.test(line.charAt(index))) index -= 1;
+  if (index < 0) return true;
+  const previous = line.charAt(index);
+  if ("=([{,:;!&|?<>".includes(previous)) return true;
+  return hasRegexPrefixKeyword(line, index);
+}
+
+function controlHeaderBeforeOpenParen(line: string, openParenIndex: number): boolean {
+  let index = openParenIndex - 1;
+  while (index >= 0 && /\s/u.test(line.charAt(index))) index -= 1;
+  const wordEnd = index + 1;
+  while (index >= 0 && isAsciiLetter(line.charAt(index))) index -= 1;
+  if (wordEnd === index + 1 || line.charAt(index) === ".") return false;
+  return REGEX_BODY_CONTROL_KEYWORDS.has(line.slice(index + 1, wordEnd));
+}
+
+function scanRegexBraceCharacter(char: string, state: BraceScanState): BraceCharacterResult {
+  if (state.escaped) {
+    state.escaped = false;
+    return IGNORED_BRACE_CHARACTER;
+  }
+  if (char === "\\") {
+    state.escaped = true;
+    return IGNORED_BRACE_CHARACTER;
+  }
+  if (char === "[") state.regexCharacterClass = true;
+  if (char === "]") state.regexCharacterClass = false;
+  if (char === "/" && !state.regexCharacterClass) state.regexLiteral = false;
+  return IGNORED_BRACE_CHARACTER;
+}
+
+function scanExpressionBoundaryCharacter(
+  line: string,
+  index: number,
+  char: string,
+  state: BraceScanState,
+): BraceCharacterResult | undefined {
+  if (char === '"' || char === "'" || char === "`") {
+    state.regexAfterControlParen = false;
+    state.quote = char;
+    return IGNORED_BRACE_CHARACTER;
+  }
+  if (char === "(") {
+    state.controlParenStack.push(controlHeaderBeforeOpenParen(line, index));
+    state.regexAfterControlParen = false;
+    return IGNORED_BRACE_CHARACTER;
+  }
+  if (char === ")") {
+    state.regexAfterControlParen = state.controlParenStack.pop() === true;
+    return IGNORED_BRACE_CHARACTER;
+  }
+  return /\s/u.test(char) ? IGNORED_BRACE_CHARACTER : undefined;
+}
+
+function scanUnquotedBraceCharacter(
+  line: string,
+  index: number,
+  char: string,
+  next: string,
+  regexStart: boolean,
+  state: BraceScanState,
+): BraceCharacterResult {
+  const comment = commentStart(char, next);
+  if (comment === "line") return { ...IGNORED_BRACE_CHARACTER, stop: true };
+  if (comment === "block") {
+    state.blockComment = true;
+    return { ...IGNORED_BRACE_CHARACTER, advance: true };
+  }
+  if (regexStart) {
+    state.regexAfterControlParen = false;
+    state.regexLiteral = true;
+    state.regexCharacterClass = false;
+    return IGNORED_BRACE_CHARACTER;
+  }
+  const expressionBoundary = scanExpressionBoundaryCharacter(line, index, char, state);
+  if (expressionBoundary !== undefined) return expressionBoundary;
+  state.regexAfterControlParen = false;
+  if (char === "{") return { ...IGNORED_BRACE_CHARACTER, delta: 1, sawOpen: true };
+  if (char === "}") return { ...IGNORED_BRACE_CHARACTER, delta: -1 };
+  return IGNORED_BRACE_CHARACTER;
+}
+
+function scanBraceCharacter(
+  line: string,
+  index: number,
+  state: BraceScanState,
+): BraceCharacterResult {
+  const char = line.charAt(index);
+  const next = line.charAt(index + 1);
+  if (state.blockComment) {
+    if (char === "*" && next === "/") {
+      state.blockComment = false;
+      return { ...IGNORED_BRACE_CHARACTER, advance: true };
+    }
+    return IGNORED_BRACE_CHARACTER;
+  }
+  if (state.regexLiteral) return scanRegexBraceCharacter(char, state);
+  return state.quote === undefined
+    ? scanUnquotedBraceCharacter(
+        line,
+        index,
+        char,
+        next,
+        char === "/" && (state.regexAfterControlParen || regexLiteralCanStart(line, index)),
+        state,
+      )
+    : scanQuotedBraceCharacter(char, next, state);
+}
+
+function scanBraceLine(line: string, state: BraceScanState): BraceLineScan {
   let delta = 0;
   let sawOpen = false;
-  for (const char of line) {
-    if (char === "{") {
-      delta += 1;
-      sawOpen = true;
-    } else if (char === "}") {
-      delta -= 1;
-    }
+  for (let index = 0; index < line.length; index += 1) {
+    const scanned = scanBraceCharacter(line, index, state);
+    delta += scanned.delta;
+    sawOpen = sawOpen || scanned.sawOpen;
+    if (scanned.stop) break;
+    if (scanned.advance) index += 1;
   }
+  if (state.quote !== "`") {
+    state.escaped = false;
+  }
+  state.regexCharacterClass = false;
+  state.regexLiteral = false;
   return { delta, sawOpen };
 }
 
+function createBraceScanCache(lines: readonly string[]): BraceScanCache {
+  return { lines, scans: [], state: initialBraceScanState() };
+}
+
+function scanBraceLinesThrough(cache: BraceScanCache, endExclusive: number): void {
+  const target = Math.min(cache.lines.length, endExclusive);
+  while (cache.scans.length < target) {
+    const index = cache.scans.length;
+    cache.scans.push(scanBraceLine(cache.lines[index] ?? "", cache.state));
+  }
+}
+
 function findBraceEnd(
-  lines: readonly string[],
+  braceScans: readonly BraceLineScan[],
   balanceStart: number,
   fallbackIndex: number,
 ): number {
@@ -253,10 +513,10 @@ function findBraceEnd(
   let end = fallbackIndex;
   for (
     let i = balanceStart;
-    i < Math.min(lines.length, balanceStart + MAX_ENCLOSING_RANGE_LINES);
+    i < Math.min(braceScans.length, balanceStart + MAX_ENCLOSING_RANGE_LINES);
     i += 1
   ) {
-    const { delta, sawOpen } = countBraceDelta(lines[i] ?? "");
+    const { delta, sawOpen } = braceScans[i] ?? { delta: 0, sawOpen: false };
     balance += delta;
     seenOpen = seenOpen || sawOpen;
     end = i;
@@ -267,12 +527,16 @@ function findBraceEnd(
   return end;
 }
 
-function braceRange(lines: readonly string[], index: number): { start: number; end: number } {
-  const { start, balanceStart } = locateBraceStart(lines, index);
+function braceRange(
+  lines: readonly string[],
+  braceScans: readonly BraceLineScan[],
+  index: number,
+): { start: number; end: number } {
+  const { start, balanceStart } = locateBraceStart(lines, braceScans, index);
   if (start === index && !looksLikeBlockHeader(lines[index] ?? "")) {
     return { start: index + 1, end: index + 1 };
   }
-  const end = findBraceEnd(lines, balanceStart, index);
+  const end = findBraceEnd(braceScans, balanceStart, index);
   // A backward scan can encounter a complete one-line object before the matching line. That
   // closed brace pair is not an enclosing range; returning it would attach the match score to
   // unrelated preceding content and hide the actual evidence line from the context pack.
@@ -282,7 +546,15 @@ function braceRange(lines: readonly string[], index: number): { start: number; e
   return { start: start + 1, end: end + 1 };
 }
 
-function enclosingRange(lines: readonly string[], index: number): { start: number; end: number } {
+function enclosingRange(
+  lines: readonly string[],
+  braceScans: readonly BraceLineScan[],
+  index: number,
+): { start: number; end: number } {
+  const brace = braceRange(lines, braceScans, index);
+  if (brace.start < brace.end) {
+    return brace;
+  }
   const line = lines[index] ?? "";
   if (/^\s*(?:async\s+def|def|class)\s+\w+/u.test(line) || lineIndent(line) > 0) {
     const range = pythonRange(lines, index);
@@ -290,26 +562,42 @@ function enclosingRange(lines: readonly string[], index: number): { start: numbe
       return range;
     }
   }
-  return braceRange(lines, index);
+  return brace;
 }
 
 function elapsed(runner: LineSelectionRunner): number {
   return runner.nowMs() - runner.startMs;
 }
 
-function timedOut(
+function markStopped(state: LineSelectionState, reason: ContextCoverageTruncationReason): true {
+  state.truncated = true;
+  state.truncationReasons?.add(reason);
+  return true;
+}
+
+function lineSelectionStopped(
   runner: LineSelectionRunner,
   state: LineSelectionState,
   lineIndex: number,
 ): boolean {
+  if (runner.signal?.aborted === true) {
+    return markStopped(state, "aborted");
+  }
   if (
     lineIndex % LINE_TIMEOUT_CHECK_INTERVAL !== 0 ||
     elapsed(runner) <= runner.limits.elapsedMsMax
   ) {
     return false;
   }
-  state.truncated = true;
-  return true;
+  return markStopped(state, "timeout");
+}
+
+function physicalLines(text: string): string[] {
+  const lines = text.split(/\r?\n/u);
+  if (text.endsWith("\n")) {
+    lines.pop();
+  }
+  return lines;
 }
 
 function insertBestLine(best: ScoredLine[], candidate: ScoredLine): void {
@@ -342,16 +630,20 @@ export function collectBestLines(
   runner: LineSelectionRunner,
   text: string,
   state: LineSelectionState,
+  scopePath?: string,
 ): readonly ScoredLine[] {
   const best: ScoredLine[] = [];
-  const lines = text.split(/\r?\n/u);
+  const lines = physicalLines(text);
+  const sourceLines = repositorySourceLines(text, scopePath);
+  const braceScanCache = createBraceScanCache(lines);
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    if (timedOut(runner, state, lineIndex)) {
+    if (lineSelectionStopped(runner, state, lineIndex)) {
       break;
     }
-    const score = runner.matcher.match(lines[lineIndex] ?? "");
+    const score = runner.matcher.match(lines[lineIndex] ?? "", sourceLines[lineIndex]);
     if (score > 0) {
-      const range = enclosingRange(lines, lineIndex);
+      scanBraceLinesThrough(braceScanCache, lineIndex + MAX_ENCLOSING_RANGE_LINES);
+      const range = enclosingRange(lines, braceScanCache.scans, lineIndex);
       insertBestLine(best, {
         line: lineIndex + 1,
         startLine: range.start,

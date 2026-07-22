@@ -8,12 +8,9 @@ import type {
   BffError,
   ChatConnectedScope,
   ChatLocalKnowledgeScope,
-  Chat,
-  ChatMessage,
   ChatResponse,
   ChatsResponse,
   ConversationMemoryRequestWire,
-  ConversationMemoryResultWire,
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
@@ -447,8 +444,47 @@ export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
 // credential, or model id — so it is safe to read and display (AC4/AC5). When voice is unavailable
 // the resolution reports `available: false` with a `profile` of "none", and the UI renders no
 // voice affordance at all (AC1).
+let voiceCapabilityRequest: Promise<{ voice: VoiceCapabilityResolution }> | undefined;
+const voiceCapabilityInvalidationListeners = new Set<() => void>();
+const VOICE_CAPABILITY_INVALIDATION_ERROR = "Voice capability invalidation listener failed.";
+
+export function clearVoiceCapabilityCacheForTests(): void {
+  voiceCapabilityRequest = undefined;
+}
+
+export function subscribeVoiceCapabilityInvalidation(listener: () => void): () => void {
+  voiceCapabilityInvalidationListeners.add(listener);
+  return (): void => {
+    voiceCapabilityInvalidationListeners.delete(listener);
+  };
+}
+
+function invalidateVoiceCapability(): void {
+  voiceCapabilityRequest = undefined;
+  let listenerFailed = false;
+  const listeners = [...voiceCapabilityInvalidationListeners];
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch {
+      listenerFailed = true;
+    }
+  }
+  if (listenerFailed) window.reportError(new Error(VOICE_CAPABILITY_INVALIDATION_ERROR));
+}
+
 export async function fetchVoiceCapability(): Promise<{ voice: VoiceCapabilityResolution }> {
-  return fetchJson<{ voice: VoiceCapabilityResolution }>("/api/voice/capability");
+  if (voiceCapabilityRequest === undefined) {
+    const pending = fetchJson<{ voice: VoiceCapabilityResolution }>("/api/voice/capability");
+    const cached = pending.catch((error: unknown) => {
+      if (voiceCapabilityRequest === cached) {
+        voiceCapabilityRequest = undefined;
+      }
+      throw error;
+    });
+    voiceCapabilityRequest = cached;
+  }
+  return voiceCapabilityRequest;
 }
 
 // Issue #495, Epic #491 — controlled composer dictation. Posts one short audio clip to the local
@@ -501,7 +537,8 @@ export interface VoiceSpeechRequest {
   readonly text: string;
   // Issue #1559 — the selected product voice persona ("male" | "female" | "neutral"). Content-free: the
   // server resolves the actual voice id from this enum and the configured provider; the browser never
-  // sees or sends a voice id. Optional so existing callers keep their provider-default voice.
+  // sees or sends a voice id. Optional lets the server choose the first explicit persona mapping;
+  // synthesis fails closed when the speech-output provider maps no voice.
   readonly persona?: VoicePersona;
 }
 
@@ -596,6 +633,7 @@ export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetu
   });
   clearConfigCacheForTests();
   clearModelCacheForTests();
+  invalidateVoiceCapability();
   return response;
 }
 
@@ -931,11 +969,15 @@ export async function deleteChat(id: string): Promise<void> {
 export async function fetchChatMessages(
   chatId: string,
   projectPath: string,
+  signal?: AbortSignal,
 ): Promise<MessagesResponse> {
   const params = new URLSearchParams();
   params.set("chatId", chatId);
   params.set("projectPath", projectPath);
-  return fetchJson(`/api/chats/messages?${params.toString()}`);
+  return fetchJson(
+    `/api/chats/messages?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+  );
 }
 
 export interface CreateMessageInput {
@@ -1022,112 +1064,6 @@ export async function createDesktopChat(
 }
 
 export type SendDesktopChatInput = DesktopChatSendRequestWire;
-
-export interface AppendDesktopChatVoiceTurnMessage {
-  readonly role: "user" | "assistant";
-  readonly content: string;
-  readonly timestamp?: number | undefined;
-}
-
-export interface AppendDesktopChatVoiceTurnInput {
-  readonly chatId: string;
-  readonly projectPath: string;
-  readonly messages: readonly AppendDesktopChatVoiceTurnMessage[];
-  readonly modelId?: string | undefined;
-  readonly memory?: ConversationMemoryRequestWire;
-  readonly idempotencyKey?: string | undefined;
-}
-
-export interface AppendDesktopChatVoiceTurnResponse {
-  readonly chat: Chat;
-  readonly messages: readonly ChatMessage[];
-  readonly memory?: ConversationMemoryResultWire;
-}
-
-export async function appendDesktopChatVoiceTurn(
-  input: AppendDesktopChatVoiceTurnInput,
-): Promise<AppendDesktopChatVoiceTurnResponse> {
-  return fetchJson<AppendDesktopChatVoiceTurnResponse>("/api/desktop/chat/voice-turn", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export interface RealtimeGroundedToolInput {
-  readonly chatId: string;
-  readonly projectPath: string;
-  readonly callId: string;
-  readonly query: string;
-  readonly userTranscript?: string | undefined;
-  readonly modelId?: string | undefined;
-  readonly memory?: ConversationMemoryRequestWire | undefined;
-}
-
-export interface RealtimeGroundedToolOutput {
-  readonly status: "ok";
-  readonly answer: string;
-  readonly groundingKind: GroundedAnswer["groundingKind"];
-  readonly elapsedMs: number;
-  readonly citations: readonly {
-    readonly marker: string;
-    readonly label: string;
-    readonly source?: string | undefined;
-  }[];
-  readonly evidenceRunId?: string | undefined;
-  readonly persisted: {
-    readonly userMessageId: string;
-    readonly assistantMessageId: string;
-  };
-  readonly instruction: string;
-}
-
-export interface RealtimeGroundedToolResponse {
-  readonly chat: Chat;
-  readonly messages: readonly ChatMessage[];
-  readonly groundedAnswer: GroundedAnswer;
-  readonly toolOutput: RealtimeGroundedToolOutput;
-  readonly memory?: ConversationMemoryResultWire | undefined;
-}
-
-export async function runRealtimeGroundedTool(
-  input: RealtimeGroundedToolInput,
-  signal?: AbortSignal,
-): Promise<RealtimeGroundedToolResponse> {
-  return fetchJson<RealtimeGroundedToolResponse>("/api/voice/realtime/grounded-tool", {
-    method: "POST",
-    body: JSON.stringify(input),
-    signal: signal ?? null,
-  });
-}
-
-export interface RealtimeMemoryToolInput {
-  readonly chatId: string;
-  readonly projectPath: string;
-  readonly callId: string;
-  readonly query: string;
-  readonly budgetTokens?: number | undefined;
-}
-
-export interface RealtimeMemoryToolOutput {
-  readonly status: "ok";
-  readonly memoryCount: number;
-  readonly memoryContext: string;
-  readonly instruction: string;
-}
-
-// Mid-session MemoriaViva recall for the realtime `recall_keiko_memory` tool. Unlike the grounded
-// tool this persists nothing to the chat — the response is handed back to the realtime provider as
-// the function-call output and exists only for the current spoken turn.
-export async function runRealtimeMemoryTool(
-  input: RealtimeMemoryToolInput,
-  signal?: AbortSignal,
-): Promise<RealtimeMemoryToolOutput> {
-  return fetchJson<RealtimeMemoryToolOutput>("/api/voice/realtime/memory-tool", {
-    method: "POST",
-    body: JSON.stringify(input),
-    signal: signal ?? null,
-  });
-}
 
 // Issue #152 — accepts an optional AbortSignal so the Conversation Center can
 // cancel an in-flight ungrounded send. RequestInit.signal is `AbortSignal |

@@ -15,6 +15,8 @@ import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 export const CONVERSATION_USER_BLOCK_HEADER = "User message:";
 export const CONVERSATION_CONTEXT_BLOCK_HEADER = "Attached document context:";
 export const CONVERSATION_MEMORY_BLOCK_HEADER = "Included memory context:";
+export const CONVERSATION_MEMORY_FENCE_START = "===UNTRUSTED_MEMORY_CONTEXT_START===";
+export const CONVERSATION_MEMORY_FENCE_END = "===UNTRUSTED_MEMORY_CONTEXT_END===";
 export const CONVERSATION_DOCUMENT_SEPARATOR = "---";
 export const CONVERSATION_SYSTEM_PROMPT =
   "You are Keiko, an enterprise developer-assist AI. Be concise, practical, and explicit about uncertainty. " +
@@ -33,6 +35,21 @@ export function renderConversationDocumentContextBlock(
   return `${header}\n${doc.text}${marker}\n${CONVERSATION_DOCUMENT_SEPARATOR}`;
 }
 
+function escapeConversationMemoryFenceMarkers(value: string): string {
+  return value
+    .replaceAll(CONVERSATION_MEMORY_FENCE_START, "[escaped memory-context start marker]")
+    .replaceAll(CONVERSATION_MEMORY_FENCE_END, "[escaped memory-context end marker]");
+}
+
+export function renderConversationMemoryContextBlock(memoryContextText: string): string {
+  return [
+    CONVERSATION_MEMORY_BLOCK_HEADER,
+    CONVERSATION_MEMORY_FENCE_START,
+    escapeConversationMemoryFenceMarkers(memoryContextText),
+    CONVERSATION_MEMORY_FENCE_END,
+  ].join("\n");
+}
+
 // Composes the user-message body: the labeled user block followed by the optional memory and
 // document-context blocks, in their fixed order. Returns the bare draft when neither memory nor
 // document context is present (the legacy single-string form).
@@ -49,7 +66,7 @@ function composeUserMessageBody(
   }
   const blocks = [`${CONVERSATION_USER_BLOCK_HEADER}\n${draft}`];
   if (memoryContextText !== undefined && memoryContextText.length > 0) {
-    blocks.push(`${CONVERSATION_MEMORY_BLOCK_HEADER}\n${memoryContextText}`);
+    blocks.push(renderConversationMemoryContextBlock(memoryContextText));
   }
   if (documentContext.length > 0) {
     const contextBlocks = documentContext.map(renderConversationDocumentContextBlock).join("\n");

@@ -73,8 +73,8 @@ describe("createVoiceLatencyObserver", () => {
     const onLeg = vi.fn<(leg: VoiceLatencyLeg) => void>();
     const observer = createVoiceLatencyObserver({ now: clock.now, sink: { onLeg } });
 
-    // 'to' without its 'from' → no leg (interrupt_ack requires a prior interrupt_sent).
-    observer.mark("interrupt_ack");
+    // `upload_end` without `upload_start` cannot fabricate an upload leg.
+    observer.mark("upload_end");
     expect(onLeg).not.toHaveBeenCalled();
   });
 
@@ -82,15 +82,15 @@ describe("createVoiceLatencyObserver", () => {
     const clock = fakeClock();
     const observer = createVoiceLatencyObserver({ now: clock.now });
 
-    observer.mark("interrupt_sent");
+    observer.mark("stop_pressed");
     clock.advance(200);
-    observer.mark("interrupt_ack"); // first barge-in: 200ms
+    observer.mark("stt_final");
     clock.advance(500);
-    observer.mark("interrupt_sent");
+    observer.mark("stop_pressed");
     clock.advance(140);
-    observer.mark("interrupt_ack"); // second barge-in: 140ms
+    observer.mark("stt_final");
 
-    expect(observer.legMs("interrupt_sent", "interrupt_ack")).toBe(140);
+    expect(observer.legMs("stop_pressed", "stt_final")).toBe(140);
   });
 
   it("reset clears marks and the timing origin", () => {

@@ -216,7 +216,9 @@ class StubMediaRecorder {
   stop(): void {}
 }
 
-class StubRTCPeerConnection {}
+class StubRTCPeerConnection {
+  addTransceiver(): void {}
+}
 
 function stubCaptureBrowser(): void {
   Object.defineProperty(navigator, "mediaDevices", {

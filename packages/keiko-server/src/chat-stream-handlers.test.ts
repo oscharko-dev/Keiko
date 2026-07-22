@@ -1,6 +1,6 @@
 // Behavioural tests for the desktop chat SSE streaming handler (#152). The regression these guard:
 // the streamed prompt previously built the gateway messages BEFORE persisting the current user turn,
-// so buildGatewayMessages (which reads store.listMessages) omitted it — a fresh chat sent `[system]`
+// so prompt assembly omitted it — a fresh chat sent `[system]`
 // only (the model hallucinated) and a history chat ended on an `assistant` turn (some providers
 // reject it 400). The fix mirrors the buffered persistModelChatTurn ordering: persist the user turn
 // BEFORE building the prompt. These tests are mutation-robust — each fails on the pre-fix code.
@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -22,6 +22,13 @@ import {
   MAX_ACTIVE_CHAT_STREAMS_ENV,
   _resetActiveChatStreamsForTests,
 } from "./chat-stream-handlers.js";
+import { handleRegenerateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import {
+  canonicalChatTurnGroundingScopeIdentity,
+  canonicalChatTurnIdentityContent,
+  canonicalChatTurnMemorySemantics,
+} from "./chat-turn-identity.js";
+import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
@@ -32,16 +39,22 @@ import type {
   GatewayRequest,
   GatewayStreamChunk,
   NormalizedResponse,
+  OpenAIEmbeddingOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type {
+  Chat,
+  ConversationMemoryRequestWire,
   MemoryId,
   MemoryRecord,
   MemoryScope,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import type { ConversationId, ProjectId, WorkspaceId } from "@oscharko-dev/keiko-contracts/memory";
+import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 const CHAT_MODEL = "example-chat-model";
+const ALTERNATE_CHAT_MODEL = "alternate-chat-model";
 
 let tmp: string;
 let projectDir: string;
@@ -82,6 +95,12 @@ function captureRes(): CapturedRes {
       return res as unknown as ServerResponse;
     },
     on(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    once(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    off(): ServerResponse {
       return res as unknown as ServerResponse;
     },
   };
@@ -138,6 +157,14 @@ function captureResWithEvents(): CapturedResWithEvents {
       emitter.on(event, listener);
       return res as unknown as ServerResponse;
     },
+    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.once(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.off(event, listener);
+      return res as unknown as ServerResponse;
+    },
     emit(event: string): boolean {
       return emitter.emit(event);
     },
@@ -179,9 +206,9 @@ function parseSse(writes: readonly string[]): SseRecord[] {
   return records;
 }
 
-function normalizedResponse(content: string): NormalizedResponse {
+function normalizedResponse(content: string, modelId = CHAT_MODEL): NormalizedResponse {
   return {
-    modelId: CHAT_MODEL,
+    modelId,
     content,
     finishReason: "stop",
     toolCalls: [],
@@ -196,9 +223,67 @@ function normalizedResponse(content: string): NormalizedResponse {
   };
 }
 
+function twoChatModelConfig(): GatewayConfig {
+  const base = customModelConfig(CHAT_MODEL);
+  const provider = base.providers[0];
+  const capability = base.capabilities?.[0];
+  if (provider === undefined || capability === undefined) throw new Error("missing model fixture");
+  return {
+    ...base,
+    providers: [provider, { ...provider, modelId: ALTERNATE_CHAT_MODEL }],
+    capabilities: [capability, { ...capability, id: ALTERNATE_CHAT_MODEL }],
+  };
+}
+
+function chatAndEmbeddingConfig(): GatewayConfig {
+  const base = customModelConfig(CHAT_MODEL);
+  const chatCapability = base.capabilities?.[0];
+  if (chatCapability === undefined) throw new Error("missing chat capability fixture");
+  return {
+    ...base,
+    providers: [
+      ...base.providers,
+      {
+        modelId: "text-embedding-3-small",
+        baseUrl: "https://provider.example/v1",
+        apiKey: "test-config-secret-value-1234567890",
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 500,
+      },
+    ],
+    capabilities: [
+      chatCapability,
+      {
+        ...chatCapability,
+        id: "text-embedding-3-small",
+        kind: "embedding",
+        contextWindow: 8_192,
+        maxOutputTokens: 0,
+        toolCalling: false,
+        structuredOutput: false,
+        streaming: false,
+        workflowEligible: false,
+      },
+    ],
+  };
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 interface StreamingModel {
   readonly model: ModelPort;
   readonly recorded: { request: GatewayRequest | undefined };
+  readonly calls: { count: number };
 }
 
 // A streaming ModelPort that records the prompt it is asked to stream, then yields one delta and one
@@ -206,11 +291,13 @@ interface StreamingModel {
 // so the test can abort the controller deterministically before the done chunk arrives.
 function streamingModel(content: string, onFirstDelta?: () => void): StreamingModel {
   const recorded: { request: GatewayRequest | undefined } = { request: undefined };
+  const calls = { count: 0 };
   const model: ModelPort = {
     call(): Promise<NormalizedResponse> {
       return Promise.resolve(normalizedResponse(content));
     },
     async *callStream(request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+      calls.count += 1;
       recorded.request = request;
       yield { type: "delta", token: "hi" };
       if (onFirstDelta !== undefined) onFirstDelta();
@@ -220,7 +307,7 @@ function streamingModel(content: string, onFirstDelta?: () => void): StreamingMo
       yield { type: "done", response: normalizedResponse(content) };
     },
   };
-  return { model, recorded };
+  return { model, recorded, calls };
 }
 
 function deps(model: ModelPort, overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
@@ -313,6 +400,49 @@ function seedChat(): string {
   return chat.id;
 }
 
+interface PlainTurnIdentityOptions {
+  readonly modelId?: string;
+  readonly expectedGroundingScopeIdentity?: string;
+  readonly memory?: Pick<ConversationMemoryRequestWire, "enabled" | "budgetTokens" | "mode">;
+}
+
+function requiredChat(chatId: string): Chat {
+  const chat = store.findChatById(chatId);
+  if (chat === undefined) throw new Error("expected persisted chat");
+  return chat;
+}
+
+function testMemoryContext(chatId: string): ConversationMemoryRuntimeContext {
+  return {
+    userId: makeMemoryUserId("local-operator"),
+    workspaceId: projectDir as WorkspaceId,
+    projectId: projectDir as ProjectId,
+    conversationId: chatId as ConversationId,
+  };
+}
+
+function canonicalPlainTurnIdentity(
+  chatId: string,
+  content: string,
+  options: PlainTurnIdentityOptions = {},
+): string {
+  const chat = requiredChat(chatId);
+  return canonicalChatTurnIdentityContent({
+    routeKind: "plain",
+    content,
+    modelId: options.modelId ?? chat.selectedModel,
+    groundingScopeIdentity:
+      options.expectedGroundingScopeIdentity ?? canonicalChatTurnGroundingScopeIdentity(chat),
+    memory: canonicalChatTurnMemorySemantics(
+      options.memory,
+      options.memory === undefined ? undefined : testMemoryContext(chatId),
+    ),
+    documentContext: [],
+    attachments: [],
+    discussionMode: null,
+  });
+}
+
 function seedMessage(chatId: string, role: "user" | "assistant", content: string): void {
   store.createMessage({
     chatId,
@@ -349,6 +479,1568 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
+  it("rejects a tokenless plain stream on a grounded chat before admission or SSE", async () => {
+    const chatId = seedChat();
+    store.updateChat(chatId, {
+      connectedScopes: [{ kind: "files", relativePaths: ["src/index.ts"], connectedAtMs: 10 }],
+    });
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("must not run")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        streamCalls += 1;
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const captured = captureRes();
+
+    const result = await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "Do not bypass repository grounding",
+        }),
+        captured.res,
+      ),
+      deps(model),
+    );
+
+    expect(result).toMatchObject({ status: 409 });
+    expect(captured.status).toBeUndefined();
+    expect(captured.writes).toEqual([]);
+    expect(streamCalls).toBe(0);
+    expect(store.listMessages(chatId)).toEqual([]);
+  });
+
+  it("fails a captured canonical stream closed when the grounding scope changes", async () => {
+    const chatId = seedChat();
+    const capturedScopeIdentity = store.findChatById(chatId)?.groundingScopeIdentity;
+    if (capturedScopeIdentity === undefined) throw new Error("expected a projected scope identity");
+    store.updateChat(chatId, {
+      connectedScopes: [{ kind: "files", relativePaths: ["src/index.ts"], connectedAtMs: 10 }],
+    });
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("must not run")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        streamCalls += 1;
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const captured = captureRes();
+
+    const result = await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "Keep the final but do not answer against changed scope",
+          clientTurnId: "stream-scope-drift",
+          expectedGroundingScopeIdentity: capturedScopeIdentity,
+        }),
+        captured.res,
+      ),
+      deps(model),
+    );
+
+    expect(result).toMatchObject({ status: 409 });
+    expect(captured.status).toBeUndefined();
+    expect(captured.writes).toEqual([]);
+    expect(streamCalls).toBe(0);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "Keep the final but do not answer against changed scope" },
+    ]);
+  });
+
+  it("rejects a closed stream before admission and admits the same id after restore", async () => {
+    const chatId = seedChat();
+    store.updateChat(chatId, { status: "closed" });
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("must not run")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        streamCalls += 1;
+        yield { type: "done", response: normalizedResponse("restored stream answer") };
+      },
+    };
+    const sharedDeps = deps(model);
+    const request = {
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "Stream only after restore.",
+      clientTurnId: "closed-stream-turn",
+    };
+    const closedCapture = captureRes();
+    const closed = await handleSendDesktopChatStream(
+      routeContext(makeReq(request), closedCapture.res),
+      sharedDeps,
+    );
+
+    expect(closed).toMatchObject({
+      status: 409,
+      body: { error: { code: "CHAT_CLOSED" } },
+    });
+    expect(closedCapture.status).toBeUndefined();
+    expect(streamCalls).toBe(0);
+    expect(store.listMessages(chatId)).toHaveLength(0);
+
+    store.updateChat(chatId, { status: "open" });
+    const restoredCapture = captureRes();
+    const restored = await handleSendDesktopChatStream(
+      routeContext(makeReq(request), restoredCapture.res),
+      sharedDeps,
+    );
+    expect(restored).toBe(STREAMING);
+    expect(streamCalls).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(2);
+
+    store.updateChat(chatId, { status: "closed" });
+    const replayCapture = captureRes();
+    const replay = await handleSendDesktopChatStream(
+      routeContext(makeReq(request), replayCapture.res),
+      sharedDeps,
+    );
+    expect(replay).toBe(STREAMING);
+    expect(streamCalls).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(2);
+  });
+
+  it("does not duplicate a legacy Composer user when streaming falls back to buffered", async () => {
+    const chatId = seedChat();
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("buffered fallback")),
+    };
+    const sharedDeps = deps(model);
+    const request = {
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "fallback without a client turn id",
+    };
+    const streamRes = captureRes();
+
+    const streamResult = await handleSendDesktopChatStream(
+      routeContext(makeReq(request), streamRes.res),
+      sharedDeps,
+    );
+    expect(streamResult).toMatchObject({ status: 400 });
+    expect(store.listMessages(chatId)).toEqual([]);
+
+    const buffered = await handleSendDesktopChat(
+      routeContext(makeReq(request), captureRes().res),
+      sharedDeps,
+    );
+    expect(buffered.status).toBe(200);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "fallback without a client turn id" },
+      { role: "assistant", content: "buffered fallback" },
+    ]);
+  });
+
+  it("shares one canonical turn identity across SSE fallback and buffered replay", async () => {
+    const chatId = seedChat();
+    let bufferedCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        bufferedCalls += 1;
+        return Promise.resolve(normalizedResponse("canonical buffered answer"));
+      },
+    };
+    const sharedDeps = deps(model);
+    const request = {
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "retry this semantic turn through the buffered transport",
+      clientTurnId: "cross-transport-canonical-turn",
+    };
+
+    const unsupported = await handleSendDesktopChatStream(
+      routeContext(makeReq(request), captureRes().res),
+      sharedDeps,
+    );
+    expect(unsupported).toMatchObject({
+      status: 400,
+      body: { error: { code: "STREAMING_UNSUPPORTED" } },
+    });
+    expect(store.listMessages(chatId)).toMatchObject([{ role: "user", content: request.content }]);
+
+    await expect(
+      handleSendDesktopChat(routeContext(makeReq(request), captureRes().res), sharedDeps),
+    ).resolves.toMatchObject({ status: 200 });
+    const persistedIds = store.listMessages(chatId).map((message) => message.id);
+    expect(bufferedCalls).toBe(1);
+    expect(persistedIds).toHaveLength(2);
+
+    const replayCapture = captureRes();
+    await expect(
+      handleSendDesktopChatStream(routeContext(makeReq(request), replayCapture.res), sharedDeps),
+    ).resolves.toBe(STREAMING);
+    const replay = parseSse(replayCapture.writes).find((record) => record.event === "done")
+      ?.data as { readonly messages: readonly { readonly id: string }[] } | undefined;
+    expect(replay?.messages.map((message) => message.id)).toEqual(persistedIds);
+    expect(bufferedCalls).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(2);
+  });
+
+  it("serializes buffered and streamed turns that target the same chat", async () => {
+    const chatId = seedChat();
+    const firstResponse = deferred<NormalizedResponse>();
+    const firstStarted = deferred<undefined>();
+    let streamCalls = 0;
+    let streamedRequest: GatewayRequest | undefined;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        firstStarted.resolve(undefined);
+        return firstResponse.promise;
+      },
+      async *callStream(request): AsyncGenerator<GatewayStreamChunk> {
+        streamCalls += 1;
+        streamedRequest = request;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("second answer") };
+      },
+    };
+    const sharedDeps = deps(model);
+    const firstRes = captureRes();
+    const first = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "first question",
+          clientTurnId: "first-turn",
+        }),
+        firstRes.res,
+      ),
+      sharedDeps,
+    );
+    await firstStarted.promise;
+
+    const secondRes = captureRes();
+    const second = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "second question",
+          clientTurnId: "second-turn",
+        }),
+        secondRes.res,
+      ),
+      sharedDeps,
+    );
+    // This is an event-loop barrier, not a timing wait: it lets the fully buffered request body and
+    // all resulting promise continuations reach the chat serializer while the first model is gated.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(streamCalls).toBe(0);
+    expect(store.listMessages(chatId).map((entry) => entry.content)).toEqual(["first question"]);
+
+    firstResponse.resolve(normalizedResponse("first answer"));
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    await expect(second).resolves.toBe(STREAMING);
+    expect(streamCalls).toBe(1);
+    expect(streamedRequest?.messages.map((entry) => entry.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(store.listMessages(chatId).map((entry) => entry.content)).toEqual([
+      "first question",
+      "first answer",
+      "second question",
+      "second answer",
+    ]);
+  });
+
+  it("revalidates the chat title and selected model after waiting for the chat turn lock", async () => {
+    const chat = store.createChat(projectDir, "New chat", CHAT_MODEL);
+    const firstResponse = deferred<NormalizedResponse>();
+    const firstStarted = deferred<undefined>();
+    let alternateCalls = 0;
+    let defaultCalls = 0;
+    const alternateModel: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        alternateCalls += 1;
+        if (alternateCalls === 1) {
+          firstStarted.resolve(undefined);
+          return firstResponse.promise;
+        }
+        return Promise.resolve(normalizedResponse("second answer", ALTERNATE_CHAT_MODEL));
+      },
+    };
+    const defaultModel: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        defaultCalls += 1;
+        return Promise.resolve(normalizedResponse("stale-model answer"));
+      },
+    };
+    const sharedDeps = deps(defaultModel, {
+      config: twoChatModelConfig(),
+      modelPortFactory: (modelId) =>
+        modelId === ALTERNATE_CHAT_MODEL ? alternateModel : defaultModel,
+    });
+    const first = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId: chat.id,
+          projectPath: projectDir,
+          modelId: ALTERNATE_CHAT_MODEL,
+          content: "first question",
+          clientTurnId: "fresh-chat-first",
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await firstStarted.promise;
+    const second = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId: chat.id,
+          projectPath: projectDir,
+          content: "second question",
+          clientTurnId: "fresh-chat-second",
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    firstResponse.resolve(normalizedResponse("first answer", ALTERNATE_CHAT_MODEL));
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    await expect(second).resolves.toMatchObject({ status: 200 });
+
+    expect(alternateCalls).toBe(2);
+    expect(defaultCalls).toBe(0);
+    expect(store.findChatById(chat.id)).toMatchObject({
+      title: "first question",
+      selectedModel: ALTERNATE_CHAT_MODEL,
+    });
+  });
+
+  it("waits before validating an SSE turn against a selected model changed by its predecessor", async () => {
+    const chat = store.createChat(projectDir, "Existing chat", "retired-chat-model");
+    const firstResponse = deferred<NormalizedResponse>();
+    const firstStarted = deferred<undefined>();
+    let bufferedCalls = 0;
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        bufferedCalls += 1;
+        firstStarted.resolve(undefined);
+        return firstResponse.promise;
+      },
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        streamCalls += 1;
+        yield { type: "done", response: normalizedResponse("streamed after model refresh") };
+      },
+    };
+    const sharedDeps = deps(model);
+    const first = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId: chat.id,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "select the valid model",
+          clientTurnId: "selected-model-first",
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await firstStarted.promise;
+    const captured = captureRes();
+    const second = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId: chat.id,
+          projectPath: projectDir,
+          content: "use the refreshed selected model",
+          clientTurnId: "selected-model-second",
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(streamCalls).toBe(0);
+
+    firstResponse.resolve(normalizedResponse("selection committed"));
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    await expect(second).resolves.toBe(STREAMING);
+    expect(bufferedCalls).toBe(1);
+    expect(streamCalls).toBe(1);
+    expect(parseSse(captured.writes).map((record) => record.event)).toContain("done");
+  });
+
+  it("does not persist an assistant when a buffered provider resolves after disconnect", async () => {
+    const chatId = seedChat();
+    const response = deferred<NormalizedResponse>();
+    const started = deferred<undefined>();
+    let observedSignal: AbortSignal | undefined;
+    let modelCalls = 0;
+    const model: ModelPort = {
+      call(_request, signal): Promise<NormalizedResponse> {
+        modelCalls += 1;
+        observedSignal = signal;
+        started.resolve(undefined);
+        return response.promise;
+      },
+    };
+    const captured = captureResWithEvents();
+    const outcome = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "keep the transcript only",
+          clientTurnId: "buffered-disconnect",
+        }),
+        captured.res,
+      ),
+      deps(model),
+    );
+    await started.promise;
+
+    captured.emitClose();
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(outcome).resolves.toMatchObject({
+      status: 499,
+      body: { error: { code: "REQUEST_CANCELLED" } },
+    });
+    const successor = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "successor waits for cancelled provider",
+          clientTurnId: "buffered-successor",
+        }),
+        captureRes().res,
+      ),
+      deps(model),
+    );
+    await Promise.resolve();
+    expect(modelCalls).toBe(1);
+    response.resolve(normalizedResponse("successor answer"));
+
+    await expect(successor).resolves.toMatchObject({ status: 200 });
+    expect(modelCalls).toBe(2);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "keep the transcript only" },
+      { role: "user", content: "successor waits for cancelled provider" },
+      { role: "assistant", content: "successor answer" },
+    ]);
+    expect(
+      store.inspectChatTurn(
+        chatId,
+        "buffered-disconnect",
+        canonicalPlainTurnIdentity(chatId, "keep the transcript only"),
+      ).kind,
+    ).toBe("conflict");
+  });
+
+  it("maps a generic buffered provider abort rejection to a canonical cancellation", async () => {
+    const chatId = seedChat();
+    const started = deferred<undefined>();
+    const model: ModelPort = {
+      call(_request, signal): Promise<NormalizedResponse> {
+        started.resolve(undefined);
+        return new Promise<NormalizedResponse>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("provider emitted a generic abort error"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const captured = captureResWithEvents();
+    const outcome = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "generic provider abort",
+          clientTurnId: "generic-provider-abort",
+        }),
+        captured.res,
+      ),
+      deps(model),
+    );
+    await started.promise;
+
+    captured.emitClose();
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "generic provider abort" },
+    ]);
+    expect(
+      store.inspectChatTurn(
+        chatId,
+        "generic-provider-abort",
+        canonicalPlainTurnIdentity(chatId, "generic provider abort"),
+      ).kind,
+    ).toBe("retryable");
+  });
+
+  it.each([
+    { label: "legacy turn", clientTurnId: undefined },
+    { label: "canonical turn", clientTurnId: "buffered-memory-disconnect" },
+  ])(
+    "keeps $label assistant-free when cancellation lands during memory preparation",
+    async (testCase) => {
+      const chatId = seedChat();
+      const memoryDir = join(tmp, `memory-${testCase.label.replace(" ", "-")}`);
+      mkdirSync(memoryDir);
+      const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+      const embedding = deferred<OpenAIEmbeddingOutcome>();
+      const embeddingStarted = deferred<undefined>();
+      let modelFinished = false;
+      let modelCalls = 0;
+      const model: ModelPort = {
+        call(): Promise<NormalizedResponse> {
+          modelCalls += 1;
+          modelFinished = true;
+          return Promise.resolve(normalizedResponse("assistant must remain uncommitted"));
+        },
+      };
+      const sharedDeps = deps(model, {
+        config: chatAndEmbeddingConfig(),
+        memoryVault,
+        localKnowledgeEmbeddingRequest: () => {
+          if (modelFinished) {
+            embeddingStarted.resolve(undefined);
+            return embedding.promise;
+          }
+          return Promise.resolve({
+            ok: true,
+            value: {
+              vector: Float32Array.from([1, 0]),
+              modelId: "text-embedding-3-small",
+            },
+          });
+        },
+      });
+      const captured = captureResWithEvents();
+      const outcome = handleSendDesktopChat(
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: "Remember that deployment waits for green CI.",
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+            ...(testCase.clientTurnId === undefined ? {} : { clientTurnId: testCase.clientTurnId }),
+          }),
+          captured.res,
+        ),
+        sharedDeps,
+      );
+      await embeddingStarted.promise;
+
+      captured.emitClose();
+      await expect(outcome).resolves.toMatchObject({ status: 499 });
+      expect(store.listMessages(chatId)).toMatchObject([
+        { role: "user", content: "Remember that deployment waits for green CI." },
+      ]);
+      const successor = handleSendDesktopChat(
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: `successor after ${testCase.label}`,
+            clientTurnId: `successor-${testCase.label.replace(" ", "-")}`,
+          }),
+          captureRes().res,
+        ),
+        sharedDeps,
+      );
+      await Promise.resolve();
+      expect(modelCalls).toBe(1);
+      embedding.resolve({
+        ok: true,
+        value: {
+          vector: Float32Array.from([1, 0]),
+          modelId: "text-embedding-3-small",
+        },
+      });
+
+      await expect(successor).resolves.toMatchObject({ status: 200 });
+      expect(modelCalls).toBe(2);
+      expect(store.listMessages(chatId)).toMatchObject([
+        { role: "user", content: "Remember that deployment waits for green CI." },
+        { role: "user", content: `successor after ${testCase.label}` },
+        { role: "assistant", content: "assistant must remain uncommitted" },
+      ]);
+      if (testCase.clientTurnId !== undefined) {
+        expect(
+          store.inspectChatTurn(
+            chatId,
+            testCase.clientTurnId,
+            canonicalPlainTurnIdentity(chatId, "Remember that deployment waits for green CI.", {
+              memory: { enabled: true, budgetTokens: 900 },
+            }),
+          ).kind,
+        ).toBe("conflict");
+      }
+      memoryVault.close();
+    },
+  );
+
+  it("keeps a streamed assistant uncommitted when cancellation lands during memory preparation", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "stream-memory-disconnect");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const embedding = deferred<OpenAIEmbeddingOutcome>();
+    const embeddingStarted = deferred<undefined>();
+    let streamFinished = false;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        streamFinished = true;
+        yield { type: "done", response: normalizedResponse("stream must remain uncommitted") };
+      },
+    };
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      memoryVault,
+      localKnowledgeEmbeddingRequest: () => {
+        if (streamFinished) {
+          embeddingStarted.resolve(undefined);
+          return embedding.promise;
+        }
+        return Promise.resolve({
+          ok: true,
+          value: {
+            vector: Float32Array.from([1, 0]),
+            modelId: "text-embedding-3-small",
+          },
+        });
+      },
+    });
+    const captured = captureResWithEvents();
+    const outcome = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "Remember that streamed deployment also waits for green CI.",
+          clientTurnId: "stream-memory-disconnect",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    await embeddingStarted.promise;
+
+    captured.emitClose();
+    embedding.resolve({
+      ok: true,
+      value: {
+        vector: Float32Array.from([1, 0]),
+        modelId: "text-embedding-3-small",
+      },
+    });
+
+    await expect(outcome).resolves.toBe(STREAMING);
+    expect(parseSse(captured.writes).map((record) => record.event)).not.toContain("done");
+    expect(store.listMessages(chatId)).toMatchObject([
+      {
+        role: "user",
+        content: "Remember that streamed deployment also waits for green CI.",
+      },
+    ]);
+    expect(
+      store.inspectChatTurn(
+        chatId,
+        "stream-memory-disconnect",
+        canonicalPlainTurnIdentity(
+          chatId,
+          "Remember that streamed deployment also waits for green CI.",
+          { memory: { enabled: true, budgetTokens: 900 } },
+        ),
+      ).kind,
+    ).toBe("retryable");
+    memoryVault.close();
+  });
+
+  it("does not start a provider stream after cancellation during memory retrieval", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "stream-memory-retrieval-disconnect");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(
+      memoryVault,
+      "retrieve this candidate before streaming",
+    );
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const embedding = deferred<OpenAIEmbeddingOutcome>();
+    const embeddingStarted = deferred<undefined>();
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        streamCalls += 1;
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      memoryVault,
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingStarted.resolve(undefined);
+        return embedding.promise;
+      },
+    });
+    const captured = captureResWithEvents();
+    const outcome = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "retrieve memory before streaming",
+          clientTurnId: "stream-memory-retrieval-disconnect",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    await embeddingStarted.promise;
+
+    captured.emitClose();
+    embedding.resolve({
+      ok: true,
+      value: {
+        vector: Float32Array.from([1, 0]),
+        modelId: "text-embedding-3-small",
+      },
+    });
+
+    await expect(outcome).resolves.toBe(STREAMING);
+    expect(streamCalls).toBe(0);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "retrieve memory before streaming" },
+    ]);
+    expect(
+      store.inspectChatTurn(
+        chatId,
+        "stream-memory-retrieval-disconnect",
+        canonicalPlainTurnIdentity(chatId, "retrieve memory before streaming", {
+          memory: { enabled: true, budgetTokens: 900 },
+        }),
+      ).kind,
+    ).toBe("retryable");
+    memoryVault.close();
+  });
+
+  it("freezes the buffered prompt snapshot before asynchronous memory retrieval", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "buffered-prompt-snapshot");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "snapshot memory candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const embedding = deferred<OpenAIEmbeddingOutcome>();
+    const embeddingStarted = deferred<undefined>();
+    let recorded: GatewayRequest | undefined;
+    const model: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        recorded = request;
+        return Promise.resolve(normalizedResponse("snapshot answer"));
+      },
+    };
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      memoryVault,
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingStarted.resolve(undefined);
+        return embedding.promise;
+      },
+    });
+    const admitted = "ADMITTED_BUFFERED_SNAPSHOT_7F3A";
+    const future = "FUTURE_BUFFERED_RAW_WRITER_91BC";
+    const outcome = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: admitted,
+          clientTurnId: "buffered-prompt-snapshot",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await embeddingStarted.promise;
+    seedMessage(chatId, "user", future);
+    embedding.resolve({
+      ok: true,
+      value: {
+        vector: Float32Array.from([1, 0]),
+        modelId: "text-embedding-3-small",
+      },
+    });
+
+    await expect(outcome).resolves.toMatchObject({ status: 200 });
+    const prompt = recorded?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(prompt.split(admitted)).toHaveLength(2);
+    expect(prompt).not.toContain(future);
+    expect(store.listMessages(chatId).some((message) => message.content === future)).toBe(true);
+    memoryVault.close();
+  });
+
+  it("freezes the streamed prompt snapshot before asynchronous memory retrieval", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "streamed-prompt-snapshot");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "streamed snapshot memory candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const embedding = deferred<OpenAIEmbeddingOutcome>();
+    const embeddingStarted = deferred<undefined>();
+    let recorded: GatewayRequest | undefined;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(request): AsyncGenerator<GatewayStreamChunk> {
+        recorded = request;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("streamed snapshot answer") };
+      },
+    };
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      memoryVault,
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingStarted.resolve(undefined);
+        return embedding.promise;
+      },
+    });
+    const admitted = "ADMITTED_STREAMED_SNAPSHOT_6D2E";
+    const future = "FUTURE_STREAMED_RAW_WRITER_A4C8";
+    const captured = captureRes();
+    const outcome = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: admitted,
+          clientTurnId: "streamed-prompt-snapshot",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    await embeddingStarted.promise;
+    seedMessage(chatId, "user", future);
+    embedding.resolve({
+      ok: true,
+      value: {
+        vector: Float32Array.from([1, 0]),
+        modelId: "text-embedding-3-small",
+      },
+    });
+
+    await expect(outcome).resolves.toBe(STREAMING);
+    const prompt = recorded?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(prompt.split(admitted)).toHaveLength(2);
+    expect(prompt).not.toContain(future);
+    expect(store.listMessages(chatId).some((message) => message.content === future)).toBe(true);
+    expect(parseSse(captured.writes).filter((record) => record.event === "done")).toHaveLength(1);
+    memoryVault.close();
+  });
+
+  it.each(["buffered", "streamed"] as const)(
+    "preserves a concurrent title and model patch after a %s turn",
+    async (transport) => {
+      const chatId = seedChat();
+      const response = deferred<NormalizedResponse>();
+      const started = deferred<undefined>();
+      const model: ModelPort = {
+        call(): Promise<NormalizedResponse> {
+          started.resolve(undefined);
+          return response.promise;
+        },
+        async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+          started.resolve(undefined);
+          const final = await response.promise;
+          yield { type: "done", response: final };
+        },
+      };
+      const sharedDeps = deps(model, { config: twoChatModelConfig() });
+      const request = makeReq({
+        chatId,
+        projectPath: projectDir,
+        content: `${transport} stale chat patch`,
+        modelId: CHAT_MODEL,
+      });
+      const outcome =
+        transport === "buffered"
+          ? handleSendDesktopChat(routeContext(request, captureRes().res), sharedDeps)
+          : handleSendDesktopChatStream(routeContext(request, captureRes().res), sharedDeps);
+      await started.promise;
+
+      store.updateChat(chatId, {
+        title: "User rename",
+        selectedModel: ALTERNATE_CHAT_MODEL,
+      });
+      response.resolve(normalizedResponse("completed after patch"));
+
+      if (transport === "buffered") await expect(outcome).resolves.toMatchObject({ status: 200 });
+      else await expect(outcome).resolves.toBe(STREAMING);
+      expect(store.findChatById(chatId)).toMatchObject({
+        title: "User rename",
+        selectedModel: ALTERNATE_CHAT_MODEL,
+      });
+    },
+  );
+
+  it("captures a buffered disconnect that happens before request body parsing finishes", async () => {
+    const chatId = seedChat();
+    let modelCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        modelCalls += 1;
+        return Promise.resolve(normalizedResponse("must not run"));
+      },
+    };
+    const req = new PassThrough() as unknown as IncomingMessage;
+    const captured = captureResWithEvents();
+    const outcome = handleSendDesktopChat(routeContext(req, captured.res), deps(model));
+
+    (req as unknown as PassThrough).write(Buffer.from(`{"chatId":"${chatId}",`));
+    req.emit("aborted");
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    expect(modelCalls).toBe(0);
+    expect(store.listMessages(chatId)).toEqual([]);
+    expect(req.listenerCount("data")).toBe(0);
+    expect(req.listenerCount("end")).toBe(1);
+    expect(req.listenerCount("error")).toBe(1);
+    expect(req.listenerCount("close")).toBe(1);
+    expect(req.listenerCount("aborted")).toBe(0);
+    const closed = new Promise<void>((resolve) => {
+      req.once("close", resolve);
+    });
+    (req as unknown as PassThrough).destroy();
+    await closed;
+    expect(req.listenerCount("end")).toBe(0);
+    expect(req.listenerCount("error")).toBe(0);
+    expect(req.listenerCount("close")).toBe(0);
+  });
+
+  it("captures an SSE disconnect before body parsing without admission, provider, or headers", async () => {
+    const chatId = seedChat();
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        streamCalls += 1;
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const req = new PassThrough() as unknown as IncomingMessage;
+    const captured = captureResWithEvents();
+    const outcome = handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
+
+    (req as unknown as PassThrough).write(Buffer.from(`{"chatId":"${chatId}",`));
+    captured.emitClose();
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    expect(streamCalls).toBe(0);
+    expect(captured.status).toBeUndefined();
+    expect(captured.writes).toEqual([]);
+    expect(store.listMessages(chatId)).toEqual([]);
+    expect(req.listenerCount("data")).toBe(0);
+    expect(req.listenerCount("end")).toBe(1);
+    expect(req.listenerCount("error")).toBe(1);
+    expect(req.listenerCount("close")).toBe(1);
+    expect(req.listenerCount("aborted")).toBe(0);
+    const closed = new Promise<void>((resolve) => {
+      req.once("close", resolve);
+    });
+    (req as unknown as PassThrough).destroy();
+    await closed;
+    expect(req.listenerCount("end")).toBe(0);
+    expect(req.listenerCount("error")).toBe(0);
+    expect(req.listenerCount("close")).toBe(0);
+  });
+
+  it("does not write an SSE replay after disconnecting before its body finishes", async () => {
+    const chatId = seedChat();
+    const clientTurnId = "completed-replay-before-body";
+    const content = "completed replay question";
+    const identityContent = canonicalPlainTurnIdentity(chatId, content);
+    const admission = store.admitChatTurn(
+      clientTurnId,
+      {
+        chatId,
+        role: "user",
+        content,
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      { identityContent },
+    );
+    if (admission.kind !== "admitted") throw new Error("expected canonical admission");
+    const assistant = store.createTurnAssistant(admission.userMessage.id, {
+      chatId,
+      role: "assistant",
+      content: "completed replay answer",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(store.completeChatTurn(chatId, clientTurnId, identityContent, assistant.id).kind).toBe(
+      "completed",
+    );
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        streamCalls += 1;
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const req = new PassThrough() as unknown as IncomingMessage;
+    const captured = captureResWithEvents();
+    const outcome = handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
+
+    (req as unknown as PassThrough).write(Buffer.from(`{"chatId":"${chatId}",`));
+    captured.emitClose();
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    expect(streamCalls).toBe(0);
+    expect(captured.status).toBeUndefined();
+    expect(captured.writes).toEqual([]);
+    expect(captured.ended).toBe(false);
+    (req as unknown as PassThrough).destroy();
+  });
+
+  it("captures a regeneration disconnect before body parsing without calling the model", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "original question");
+    seedMessage(chatId, "assistant", "original answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    let modelCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        modelCalls += 1;
+        return Promise.resolve(normalizedResponse("must not run"));
+      },
+    };
+    const req = new PassThrough() as unknown as IncomingMessage;
+    const captured = captureResWithEvents();
+    const outcome = handleRegenerateDesktopChat(routeContext(req, captured.res), deps(model));
+
+    (req as unknown as PassThrough).write(Buffer.from(`{"chatId":"${chatId}",`));
+    req.emit("aborted");
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    expect(modelCalls).toBe(0);
+    expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+      "original question",
+      "original answer",
+    ]);
+    expect(req.listenerCount("data")).toBe(0);
+    expect(req.listenerCount("end")).toBe(1);
+    expect(req.listenerCount("error")).toBe(1);
+    expect(req.listenerCount("close")).toBe(1);
+    expect(req.listenerCount("aborted")).toBe(0);
+    const closed = new Promise<void>((resolve) => {
+      req.once("close", resolve);
+    });
+    (req as unknown as PassThrough).destroy();
+    await closed;
+    expect(req.listenerCount("end")).toBe(0);
+    expect(req.listenerCount("error")).toBe(0);
+    expect(req.listenerCount("close")).toBe(0);
+  });
+
+  it("maps a generic regeneration provider abort rejection to cancellation", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "original question");
+    seedMessage(chatId, "assistant", "original answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const started = deferred<undefined>();
+    const model: ModelPort = {
+      call(_request, signal): Promise<NormalizedResponse> {
+        started.resolve(undefined);
+        return new Promise<NormalizedResponse>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("provider emitted a generic abort error"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const captured = captureResWithEvents();
+    const outcome = handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          assistantMessageId: assistant.id,
+        }),
+        captured.res,
+      ),
+      deps(model),
+    );
+    await started.promise;
+
+    captured.emitClose();
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+      "original question",
+      "original answer",
+    ]);
+  });
+
+  it("keeps regeneration serialized until an abort-ignoring provider actually settles", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "original question");
+    seedMessage(chatId, "assistant", "original answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const response = deferred<NormalizedResponse>();
+    const started = deferred<undefined>();
+    let modelCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        modelCalls += 1;
+        started.resolve(undefined);
+        return response.promise;
+      },
+    };
+    const sharedDeps = deps(model);
+    const captured = captureResWithEvents();
+    const regeneration = handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          assistantMessageId: assistant.id,
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    await started.promise;
+    captured.emitClose();
+    await expect(regeneration).resolves.toMatchObject({ status: 499 });
+
+    const successor = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "successor after regeneration",
+          clientTurnId: "regeneration-successor",
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await Promise.resolve();
+    expect(modelCalls).toBe(1);
+    response.resolve(normalizedResponse("successor answer"));
+
+    await expect(successor).resolves.toMatchObject({ status: 200 });
+    expect(modelCalls).toBe(2);
+    expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+      "original question",
+      "original answer",
+      "successor after regeneration",
+      "successor answer",
+    ]);
+  });
+
+  it("rejects regeneration when the target assistant changes during the provider call", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "original question");
+    seedMessage(chatId, "assistant", "original answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const response = deferred<NormalizedResponse>();
+    const started = deferred<undefined>();
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        started.resolve(undefined);
+        return response.promise;
+      },
+    };
+    const outcome = handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          assistantMessageId: assistant.id,
+        }),
+        captureRes().res,
+      ),
+      deps(model),
+    );
+    await started.promise;
+
+    store.replaceAssistantMessageContent(assistant.id, "parallel edit", assistant.timestamp + 1);
+    response.resolve(normalizedResponse("stale regenerated answer"));
+
+    await expect(outcome).resolves.toMatchObject({
+      status: 409,
+      body: { error: { code: "NOT_APPLIABLE" } },
+    });
+    expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+      "original question",
+      "parallel edit",
+    ]);
+  });
+
+  it("rejects regeneration of grounded metadata after the chat scope is detached", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "grounded question");
+    seedMessage(chatId, "assistant", "grounded answer");
+    const [user, assistant] = store.listMessages(chatId);
+    if (user === undefined || assistant === undefined) throw new Error("missing grounded fixture");
+    store.attachGroundedAnswer(assistant.id, {
+      groundingKind: "connected-context",
+      userMessageId: user.id,
+      assistantMessageId: assistant.id,
+      content: assistant.content,
+      citations: [],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 0,
+      contextPack: {},
+    } as unknown as GroundedAnswer);
+    const groundedBeforeDetach = store.findMessageById(assistant.id)?.groundedAnswer;
+    store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
+    let modelCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        modelCalls += 1;
+        return Promise.resolve(normalizedResponse("must not replace grounded answer"));
+      },
+    };
+
+    const outcome = await handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, assistantMessageId: assistant.id }),
+        captureRes().res,
+      ),
+      deps(model),
+    );
+
+    expect(outcome).toMatchObject({
+      status: 409,
+      body: { error: { code: "NOT_APPLIABLE" } },
+    });
+    expect(modelCalls).toBe(0);
+    expect(store.findMessageById(assistant.id)?.content).toBe("grounded answer");
+    expect(store.findMessageById(assistant.id)?.groundedAnswer).toEqual(groundedBeforeDetach);
+  });
+
+  it("preserves a concurrent title and model patch after regeneration", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "original question");
+    seedMessage(chatId, "assistant", "original answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const response = deferred<NormalizedResponse>();
+    const started = deferred<undefined>();
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        started.resolve(undefined);
+        return response.promise;
+      },
+    };
+    const sharedDeps = deps(model, { config: twoChatModelConfig() });
+    const outcome = handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, assistantMessageId: assistant.id }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await started.promise;
+
+    store.updateChat(chatId, { title: "User rename", selectedModel: ALTERNATE_CHAT_MODEL });
+    response.resolve(normalizedResponse("regenerated after patch"));
+
+    await expect(outcome).resolves.toMatchObject({ status: 200 });
+    expect(store.findChatById(chatId)).toMatchObject({
+      title: "User rename",
+      selectedModel: ALTERNATE_CHAT_MODEL,
+    });
+  });
+
+  it("serializes regeneration with a following canonical send and refreshes its model", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "original question");
+    seedMessage(chatId, "assistant", "original answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const regenerated = deferred<NormalizedResponse>();
+    const regenerateStarted = deferred<undefined>();
+    let alternateCalls = 0;
+    let defaultCalls = 0;
+    const alternateModel: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        alternateCalls += 1;
+        if (alternateCalls === 1) {
+          regenerateStarted.resolve(undefined);
+          return regenerated.promise;
+        }
+        return Promise.resolve(normalizedResponse("following answer", ALTERNATE_CHAT_MODEL));
+      },
+    };
+    const defaultModel: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        defaultCalls += 1;
+        return Promise.resolve(normalizedResponse("stale following answer"));
+      },
+    };
+    const sharedDeps = deps(defaultModel, {
+      config: twoChatModelConfig(),
+      modelPortFactory: (modelId) =>
+        modelId === ALTERNATE_CHAT_MODEL ? alternateModel : defaultModel,
+    });
+    const regenerate = handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          assistantMessageId: assistant.id,
+          modelId: ALTERNATE_CHAT_MODEL,
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await regenerateStarted.promise;
+    const following = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "following question",
+          clientTurnId: "following-canonical-turn",
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const defaultCallsBeforeRelease = defaultCalls;
+    const alternateCallsBeforeRelease = alternateCalls;
+
+    regenerated.resolve(normalizedResponse("regenerated answer", ALTERNATE_CHAT_MODEL));
+    await expect(regenerate).resolves.toMatchObject({ status: 200 });
+    await expect(following).resolves.toMatchObject({ status: 200 });
+
+    expect(defaultCallsBeforeRelease).toBe(0);
+    expect(alternateCallsBeforeRelease).toBe(1);
+    expect(defaultCalls).toBe(0);
+    expect(alternateCalls).toBe(2);
+    expect(store.listMessages(chatId).map((entry) => entry.content)).toEqual([
+      "original question",
+      "regenerated answer",
+      "following question",
+      "following answer",
+    ]);
+  });
+
+  it("rejects a queued regeneration when its assistant is no longer the latest turn", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "original question");
+    seedMessage(chatId, "assistant", "original answer");
+    const target = store.listMessages(chatId).at(-1);
+    if (target === undefined) throw new Error("missing assistant fixture");
+    const firstResponse = deferred<NormalizedResponse>();
+    const firstStarted = deferred<undefined>();
+    let modelCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        modelCalls += 1;
+        firstStarted.resolve(undefined);
+        return firstResponse.promise;
+      },
+    };
+    const sharedDeps = deps(model);
+    const newer = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "newer question",
+          clientTurnId: "newer-before-regenerate",
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await firstStarted.promise;
+    const regenerate = handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          assistantMessageId: target.id,
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(modelCalls).toBe(1);
+
+    firstResponse.resolve(normalizedResponse("newer answer"));
+    await expect(newer).resolves.toMatchObject({ status: 200 });
+    await expect(regenerate).resolves.toMatchObject({
+      status: 409,
+      body: { error: { code: "NOT_APPLIABLE" } },
+    });
+    expect(modelCalls).toBe(1);
+    expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+      "original question",
+      "original answer",
+      "newer question",
+      "newer answer",
+    ]);
+  });
+
+  it("rejects a failed canonical retry after a newer turn has completed", async () => {
+    const chatId = seedChat();
+    const failed = store.admitChatTurn(
+      "failed-old-turn",
+      {
+        chatId,
+        role: "user",
+        content: "old question",
+        timestamp: Date.now(),
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        identityContent: canonicalPlainTurnIdentity(chatId, "old question"),
+      },
+    );
+    expect(failed.kind).toBe("admitted");
+    store.failChatTurn(chatId, "failed-old-turn");
+    let modelCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        modelCalls += 1;
+        return Promise.resolve(normalizedResponse("new answer"));
+      },
+    };
+    const sharedDeps = deps(model);
+    await expect(
+      handleSendDesktopChat(
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: "new question",
+            clientTurnId: "newer-turn",
+          }),
+          captureRes().res,
+        ),
+        sharedDeps,
+      ),
+    ).resolves.toMatchObject({ status: 200 });
+
+    const retry = await handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "old question",
+          clientTurnId: "failed-old-turn",
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+
+    expect(retry).toMatchObject({
+      status: 409,
+      body: { error: { code: "CHAT_TURN_IDEMPOTENCY_CONFLICT" } },
+    });
+    expect(modelCalls).toBe(1);
+    expect(store.listMessages(chatId).map((entry) => entry.content)).toEqual([
+      "old question",
+      "new question",
+      "new answer",
+    ]);
+  });
+
   it("includes the current user turn as the LAST prompt message on a fresh chat", async () => {
     const chatId = seedChat();
     const { model, recorded } = streamingModel("answer");
@@ -370,6 +2062,30 @@ describe("desktop chat SSE streaming handler", () => {
     // were `[system]` only — the LAST role would be "system". The fix makes the user turn last.
     expect(lastRecordedRole(recorded)).toBe("user");
     expect(lastRecordedContent(recorded)).toContain("What is the capital of France?");
+  });
+
+  it("pins compaction accounting before admitting the streamed user turn", async () => {
+    const chatId = seedChat();
+    const { model } = streamingModel("answer");
+    const res = captureRes();
+    let countAtAccounting = -1;
+    const observingStore: UiStore = {
+      ...store,
+      countMessages: (id) => {
+        countAtAccounting = store.countMessages(id);
+        return countAtAccounting;
+      },
+    };
+
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "fresh turn" }),
+        res.res,
+      ),
+      deps(model, { store: observingStore }),
+    );
+
+    expect(countAtAccounting).toBe(0);
   });
 
   it("ends the prompt on the NEW user turn (not the prior assistant turn) for a history chat", async () => {
@@ -426,10 +2142,55 @@ describe("desktop chat SSE streaming handler", () => {
       after.filter((message) => message.role === "user" && message.content === "hello"),
     ).toHaveLength(1);
 
-    const done = parseSse(res.writes).find((record) => record.event === "done");
+    const terminal = parseSse(res.writes).filter((record) => record.event !== "token");
+    expect(terminal).toHaveLength(1);
+    const done = terminal.find((record) => record.event === "done");
     expect(done).toBeDefined();
     const payload = done?.data as { messages: { role: string }[] };
     expect(payload.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("replays a completed stream as the same done payload without a second stream", async () => {
+    const chatId = seedChat();
+    const streaming = streamingModel("the replayable answer");
+    const request = {
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "stream exactly once",
+      clientTurnId: "stream-turn-1",
+    };
+    const first = captureRes();
+    await handleSendDesktopChatStream(
+      routeContext(makeReq(request), first.res),
+      deps(streaming.model),
+    );
+    const replay = captureRes();
+    await handleSendDesktopChatStream(
+      routeContext(makeReq(request), replay.res),
+      deps(streaming.model, {
+        config: customModelConfig("retired-model"),
+        modelPortFactory: (): never => {
+          throw new Error("completed stream replay reached provider resolution");
+        },
+      }),
+    );
+
+    const firstTerminal = parseSse(first.writes).filter((record) => record.event !== "token");
+    const replayTerminal = parseSse(replay.writes).filter((record) => record.event !== "token");
+    expect(firstTerminal).toHaveLength(1);
+    expect(replayTerminal).toHaveLength(1);
+    const firstDone = firstTerminal.find((record) => record.event === "done")?.data as {
+      messages: readonly { id: string }[];
+    };
+    const replayDone = replayTerminal.find((record) => record.event === "done")?.data as {
+      messages: readonly { id: string }[];
+    };
+    expect(replayDone.messages.map((message) => message.id)).toEqual(
+      firstDone.messages.map((message) => message.id),
+    );
+    expect(streaming.calls.count).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(2);
   });
 
   it("emits an error and does not persist a fake assistant when done content is empty", async () => {
@@ -447,7 +2208,9 @@ describe("desktop chat SSE streaming handler", () => {
 
     const records = parseSse(res.writes);
     expect(records.some((record) => record.event === "done")).toBe(false);
-    const error = records.find((record) => record.event === "error");
+    const terminal = records.filter((record) => record.event !== "token");
+    expect(terminal).toHaveLength(1);
+    const error = terminal.find((record) => record.event === "error");
     expect(error).toBeDefined();
     expect((error?.data as { code?: string }).code).toBe("GATEWAY_PROVIDER_ERROR");
     const persisted = store.listMessages(chatId);
@@ -455,7 +2218,7 @@ describe("desktop chat SSE streaming handler", () => {
     expect(JSON.stringify(persisted)).not.toContain("The model returned an empty response.");
   });
 
-  it("RB-6: an UNEXPECTED mid-stream throw surfaces INTERNAL (not GATEWAY_ERROR) with a correlation id and a logged cause", async () => {
+  it("RB-6: an unexpected mid-stream throw emits INTERNAL with body-free diagnostics", async () => {
     // GEN-OBS-DIAGNOSTICS-602 + STATUS-403: before RB-6 an unexpected (non-gateway) mid-stream throw
     // was silently relabelled GATEWAY_ERROR — falsely blaming the provider — and the cause was
     // dropped with no server-side trace. Now: honest INTERNAL code, a correlation id on the frame,
@@ -495,12 +2258,13 @@ describe("desktop chat SSE streaming handler", () => {
     expect(data.code).not.toBe("GATEWAY_ERROR");
     expect(data.correlationId).toBe("cid-mid-stream-000001");
 
-    // The cause is captured server-side, keyed by the same id — no longer an untraceable black box.
+    // Body-free metadata is captured server-side, keyed by the same id.
     expect(records).toHaveLength(1);
     const [record] = records;
     expect(record?.correlationId).toBe("cid-mid-stream-000001");
     expect(record?.source).toBe("chat.stream");
-    expect(record?.message).toContain("boom-unexpected-mid-stream");
+    expect(record?.message).toBe("server-operation-failed");
+    expect(JSON.stringify(record)).not.toContain("boom-unexpected-mid-stream");
   });
 
   it("persists the user message but NO assistant message when the stream is cancelled", async () => {
@@ -521,14 +2285,116 @@ describe("desktop chat SSE streaming handler", () => {
       captured.emitClose();
     });
     await handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const events = parseSse(captured.writes).map((record) => record.event);
-    expect(events).toContain("cancelled");
+    expect(events.filter((event) => event === "cancelled")).toHaveLength(1);
+    expect(events.filter((event) => event !== "token")).toEqual(["cancelled"]);
     expect(events).not.toContain("done");
 
     const persisted = store.listMessages(chatId);
     expect(persisted.map((message) => message.role)).toEqual(["user"]);
     expect(persisted.some((message) => message.role === "assistant")).toBe(false);
+  });
+
+  it("closes a successful provider iterator exactly once after its done chunk", async () => {
+    const chatId = seedChat();
+    const release = vi.fn(() =>
+      Promise.resolve({ done: true, value: undefined } as IteratorResult<GatewayStreamChunk>),
+    );
+    const iterator: AsyncIterator<GatewayStreamChunk> = {
+      next: () =>
+        Promise.resolve({
+          done: false,
+          value: { type: "done", response: normalizedResponse("iterator answer") },
+        }),
+      return: release,
+    };
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("buffered")),
+      callStream: () => ({ [Symbol.asyncIterator]: () => iterator }),
+    };
+    const captured = captureRes();
+
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, content: "close normal iterator" }),
+        captured.res,
+      ),
+      deps(model),
+    );
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(parseSse(captured.writes).filter((record) => record.event !== "token")).toEqual([
+      expect.objectContaining({ event: "done" }),
+    ]);
+  });
+
+  it("keeps the chat lock until a provider iterator that ignored cancellation settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const chatId = seedChat();
+      const nextStarted = deferred<undefined>();
+      const pendingNext = deferred<IteratorResult<GatewayStreamChunk>>();
+      const release = vi.fn(() =>
+        Promise.resolve({ done: true, value: undefined } as IteratorResult<GatewayStreamChunk>),
+      );
+      const iterator: AsyncIterator<GatewayStreamChunk> = {
+        next: () => {
+          nextStarted.resolve(undefined);
+          return pendingNext.promise;
+        },
+        return: release,
+      };
+      const model: ModelPort = {
+        call: () => Promise.resolve(normalizedResponse("successor answer")),
+        callStream: () => ({ [Symbol.asyncIterator]: () => iterator }),
+      };
+      const sharedDeps = deps(model);
+      const captured = captureResWithEvents();
+      const first = handleSendDesktopChatStream(
+        routeContext(
+          makeReq({ chatId, projectPath: projectDir, content: "stuck stream" }),
+          captured.res,
+        ),
+        sharedDeps,
+      );
+      await nextStarted.promise;
+      const successor = handleSendDesktopChat(
+        routeContext(
+          makeReq({ chatId, projectPath: projectDir, content: "successor turn" }),
+          captureRes().res,
+        ),
+        sharedDeps,
+      );
+
+      captured.emitClose();
+
+      await expect(first).resolves.toBe(STREAMING);
+      let successorSettled = false;
+      void successor.then(() => {
+        successorSettled = true;
+      });
+      await Promise.resolve();
+      expect(successorSettled).toBe(false);
+      expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+        "stuck stream",
+      ]);
+
+      pendingNext.resolve({ done: true, value: undefined });
+      await expect(successor).resolves.toMatchObject({ status: 200 });
+      expect(release).toHaveBeenCalledOnce();
+      expect(captured.status).toBe(200);
+      const terminal = parseSse(captured.writes).filter((record) => record.event !== "token");
+      expect(terminal).toEqual([expect.objectContaining({ event: "cancelled" })]);
+      const writesAfterSettlement = captured.writes.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(captured.writes).toHaveLength(writesAfterSettlement);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("destroys the socket and aborts the controller when res.write() returns false (backpressure)", async () => {
@@ -609,6 +2475,46 @@ describe("desktop chat SSE streaming handler", () => {
     memoryVault.close();
   });
 
+  it("persists the canonical user before a fallible streamed-memory retrieval", async () => {
+    const memoryDir = join(tmp, "failing-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const failingMemoryVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        if (property === "listMemoriesByScope") {
+          return (): never => {
+            throw new Error("memory retrieval failed");
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const chatId = seedChat();
+    const { model, recorded } = streamingModel("must not answer");
+    const res = captureRes();
+
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "Keep this final transcript",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        res.res,
+      ),
+      deps(model, { memoryVault: failingMemoryVault }),
+    );
+
+    expect(recorded.request).toBeUndefined();
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "Keep this final transcript" },
+    ]);
+    expect(parseSse(res.writes).map((record) => record.event)).toContain("error");
+    memoryVault.close();
+  });
+
   // Issue #502 — the streaming send path threads a selected discussion mode onto the latest user turn,
   // exactly like the non-streaming path. Asserting the turn STARTS WITH the rendered block (not merely
   // contains it) catches template rewording, truncation, or block misplacement.
@@ -669,6 +2575,43 @@ describe("concurrent chat stream bulkhead", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     _resetActiveChatStreamsForTests();
+  });
+
+  it("releases its active slot when a partial request body disconnects", async () => {
+    vi.stubEnv(MAX_ACTIVE_CHAT_STREAMS_ENV, "1");
+    const chatId = seedChat();
+    const { model, calls } = streamingModel("accepted after disconnect");
+    const sharedDeps = deps(model);
+    const partialReq = new PassThrough() as unknown as IncomingMessage;
+    const disconnected = captureResWithEvents();
+    const first = handleSendDesktopChatStream(
+      routeContext(partialReq, disconnected.res),
+      sharedDeps,
+    );
+    (partialReq as unknown as PassThrough).write(Buffer.from(`{"chatId":"${chatId}",`));
+
+    disconnected.emitClose();
+
+    await expect(first).resolves.toMatchObject({ status: 499 });
+    expect(disconnected.status).toBeUndefined();
+    const accepted = captureRes();
+    await expect(
+      handleSendDesktopChatStream(
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "slot must be reusable",
+          }),
+          accepted.res,
+        ),
+        sharedDeps,
+      ),
+    ).resolves.toBe(STREAMING);
+    expect(calls.count).toBe(1);
+    expect(parseSse(accepted.writes).some((record) => record.event === "done")).toBe(true);
+    (partialReq as unknown as PassThrough).destroy();
   });
 
   it("rejects streams above the cap with 429 and frees the slot after settle", async () => {

@@ -1,13 +1,10 @@
 // GEN-PERF-CHAT-003 regression: the file-backed workspace snapshot must be memoized per
-// snapshot-file path, keyed by the file's mtime+size fingerprint, so repeated grounded
-// asks over an UNCHANGED workspace do not re-read + re-JSON.parse + re-normalize the same
-// snapshot on every request.
+// snapshot-file path and complete ciphertext digest, so repeated grounded asks over an
+// UNCHANGED workspace do not re-authenticate + re-JSON.parse + re-normalize the same snapshot.
 //
-// Mechanism proof (not wall-clock): we count node:fs/promises `open` calls — the only call
-// site that performs the full snapshot READ. Two consecutive loads of an unchanged snapshot must
-// open the file at most ONCE (cold read); the warm load is served from the parsed-snapshot
-// cache after a cheap lstat. Writing new content (new mtime) must invalidate the cache and
-// force a fresh read, proving conservative correctness-first invalidation.
+// Mechanism proof (not wall-clock): every load reads and hashes the ciphertext before cache reuse
+// so metadata-preserving replacements cannot return stale data. We count both reads and
+// authenticated decryptions to prove warm loads still skip the expensive parse pipeline.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,11 +15,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // Wrap node:fs/promises so we can count the `open` calls that read a SNAPSHOT file. ESM
 // module namespaces are not configurable, so vi.spyOn cannot patch `open` directly — we
 // mock the module with a factory that delegates to the real implementation and tallies
-// snapshot reads into a shared counter. We match only the hashed snapshot filename
-// (workspace-index-<64 hex>.json) so the per-load runtime-dir MARKER file open
+// snapshot reads into a shared counter. We match only the generation-scoped snapshot filename
+// (workspace-index-v2-<64 hex>-<64 hex>.json) so the per-load runtime-dir MARKER file open
 // (workspace-index-runtime-id) is not miscounted as a snapshot read.
-const SNAPSHOT_FILE_RE = /workspace-index-[0-9a-f]{64}\.json$/u;
+const SNAPSHOT_FILE_RE = /workspace-index-v2-[0-9a-f]{64}-[0-9a-f]{64}\.json$/u;
 const snapshotOpenCalls = { count: 0 };
+const snapshotAuthenticationCalls = { count: 0 };
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   return {
@@ -31,6 +29,20 @@ vi.mock("node:fs/promises", async () => {
       const target = typeof args[0] === "string" ? args[0] : String(args[0]);
       if (SNAPSHOT_FILE_RE.test(target)) snapshotOpenCalls.count += 1;
       return actual.open(...args);
+    },
+  };
+});
+vi.mock("@oscharko-dev/keiko-security", async () => {
+  const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-security")>(
+    "@oscharko-dev/keiko-security",
+  );
+  return {
+    ...actual,
+    openString: (
+      ...args: Parameters<typeof actual.openString>
+    ): ReturnType<typeof actual.openString> => {
+      snapshotAuthenticationCalls.count += 1;
+      return actual.openString(...args);
     },
   };
 });
@@ -92,15 +104,20 @@ function sampleSnapshot(): WorkspaceIndexSnapshot {
   });
 }
 
-// Snapshot reads go through `open(path, O_RDONLY|O_NOFOLLOW)`; the freshness lstat does NOT
-// open. `snapshotOpenCalls.count` (bumped by the module mock) tallies snapshot-file reads.
-function markSnapshotReads(): { readonly opens: () => number } {
-  const base = snapshotOpenCalls.count;
-  return { opens: (): number => snapshotOpenCalls.count - base };
+function markSnapshotWork(): {
+  readonly authentications: () => number;
+  readonly opens: () => number;
+} {
+  const authenticationBase = snapshotAuthenticationCalls.count;
+  const openBase = snapshotOpenCalls.count;
+  return {
+    authentications: (): number => snapshotAuthenticationCalls.count - authenticationBase,
+    opens: (): number => snapshotOpenCalls.count - openBase,
+  };
 }
 
 describe("file workspace index snapshot memoization (GEN-PERF-CHAT-003)", () => {
-  it("reads + parses an unchanged snapshot once across repeated loads", async () => {
+  it("authenticates + parses unchanged ciphertext once across repeated loads", async () => {
     const runtimeDir = tempRuntimeDir();
     const store = createFileWorkspaceIndexStore({ runtimeDir });
     const key = "perf-key";
@@ -110,24 +127,24 @@ describe("file workspace index snapshot memoization (GEN-PERF-CHAT-003)", () => 
     const first = await store.loadSnapshot(key);
     expect(first?.records).toHaveLength(1);
 
-    const { opens } = markSnapshotReads();
+    const { authentications, opens } = markSnapshotWork();
     const second = await store.loadSnapshot(key);
     const third = await store.loadSnapshot(key);
 
     expect(second?.records).toHaveLength(1);
     expect(third?.records).toHaveLength(1);
-    // The warm loads never re-open (read) the file — served from the parsed-snapshot cache.
-    expect(opens()).toBe(0);
+    expect(opens()).toBe(2);
+    expect(authentications()).toBe(0);
   });
 
-  it("re-reads after the snapshot file changes (mtime+size invalidation)", async () => {
+  it("re-authenticates after the snapshot ciphertext changes", async () => {
     const runtimeDir = tempRuntimeDir();
     const store = createFileWorkspaceIndexStore({ runtimeDir });
     const key = "perf-key-inv";
     await store.saveSnapshot(key, sampleSnapshot());
     await store.loadSnapshot(key); // prime cache
 
-    // Rewrite the snapshot (atomic rename → new mtime). Add a second record so the parsed
+    // Rewrite the snapshot atomically. Add a second record so the parsed
     // result also differs, proving the fresh read is actually served (not the stale cache).
     const changed = buildWorkspaceIndexSnapshot({
       scope: { relativePaths: [] },
@@ -157,11 +174,12 @@ describe("file workspace index snapshot memoization (GEN-PERF-CHAT-003)", () => 
     });
     await store.saveSnapshot(key, changed);
 
-    const { opens } = markSnapshotReads();
+    const { authentications, opens } = markSnapshotWork();
     const reloaded = await store.loadSnapshot(key);
 
-    // Fingerprint diverged → cache miss → exactly one fresh read, and the NEW content wins.
+    // Ciphertext digest diverged, so the cache miss re-authenticates and serves the new content.
     expect(opens()).toBe(1);
+    expect(authentications()).toBe(1);
     expect(reloaded?.records).toHaveLength(2);
   });
 });

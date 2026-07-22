@@ -15,6 +15,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 import { checkUiStaticJavaScriptCompatibility } from "./check-ui-static-js-compat.mjs";
+import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import { transpileUiStaticJavaScript } from "./transpile-ui-static-js.mjs";
 import { removeRuntimeJavaScriptSourceMaps } from "./ui-static-cleanup.mjs";
 
@@ -27,13 +28,20 @@ const EXPORT_READY_TIMEOUT_MS = 10_000;
 const EXPORT_READY_POLL_MS = 100;
 
 function run(command, args) {
+  const platform = process.platform;
+  const executable = shellCommandForTrustedExecutable(
+    resolveHostExecutable(command, { platform }),
+    platform,
+  );
   // SECURITY-SHELL-OK: hardcoded npm argv only; Windows .cmd compatibility, no user input.
   // `npm` resolves to `npm.cmd` on Windows, and modern Node refuses to spawn a `.cmd`/`.bat` without
-  // a shell (CVE-2024-27980 hardening) — without `shell: true` the spawn fails immediately with a
-  // null status, which is exactly the Windows-only failure the #284 cross-platform CI surfaced. The
-  // arguments are hardcoded literals (no untrusted input), so the shell carries no injection surface.
-  // POSIX (Linux/macOS) is unaffected: the shell runs the same `npm …` invocation.
-  const result = spawnSync(command, args, { cwd: repoRoot, stdio: "inherit", shell: true });
+  // a shell (CVE-2024-27980 hardening). POSIX starts the resolved executable directly; Windows uses
+  // a shell only for that trusted executable and hardcoded arguments.
+  const result = spawnSync(executable, args, {
+    cwd: repoRoot,
+    stdio: "inherit",
+    shell: platform === "win32",
+  });
   if (result.error) {
     throw new Error(`${command} ${args.join(" ")} failed to spawn: ${result.error.message}`);
   }

@@ -58,7 +58,8 @@ export interface UseAssistantSpeechOptions {
   readonly replayAllowed?: boolean | undefined;
   // Issue #1559 — the selected product voice persona to speak with, when the deployment offers a choice.
   // Content-free: it is forwarded to the BFF synthesis route, which resolves the voice id; the browser
-  // never sees a voice id. Undefined keeps the provider-default voice (existing callers unchanged).
+  // never sees a voice id. Undefined lets the server select the first explicitly configured mapping;
+  // synthesis fails closed when no mapping exists.
   readonly persona?: VoicePersona | undefined;
   // Optional #499 turn manager to receive assistant-speech and interruption signals (AC2).
   readonly turnManager?: VoiceTurnManagerEngine | undefined;
@@ -75,8 +76,8 @@ export interface UseAssistantSpeechOptions {
 }
 
 // Builds the default BFF synthesis seam bound to the current persona. A persona is included in the
-// request only when one is selected (Issue #1559); omitting it preserves the provider-default voice for
-// callers that do not offer a persona choice.
+// request only when one is selected (Issue #1559); omitting it lets the server select the first
+// explicitly configured persona mapping and never a provider-specific implicit default.
 function makeDefaultSynthesize(
   persona: VoicePersona | undefined,
 ): (text: string, signal: AbortSignal) => Promise<VoiceSpeechResult> {

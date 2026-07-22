@@ -4,7 +4,13 @@ import type {
   GroundedEvidenceCitation,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
-import { parseInlineCitations, type ParsedInlineCitation } from "./grounded-faithfulness.js";
+import {
+  buildPackCitationIndex,
+  citationSourceIdForIndex,
+  parseInlineCitations,
+  resolveSupportedCitationSourceId,
+  type ParsedInlineCitation,
+} from "./grounded-faithfulness.js";
 
 type CitationRedactor = (value: string) => string;
 
@@ -39,68 +45,108 @@ export function buildPackCitations(
   return citations.sort((a, b) => b.score - a.score || a.stableId.localeCompare(b.stableId));
 }
 
-function rangesOverlap(a: LineRange, b: LineRange): boolean {
-  return a.startLine <= b.endLine && a.endLine >= b.startLine;
-}
-
-function rangeFit(citation: LineRange | undefined, requested: LineRange | undefined): number {
-  if (requested === undefined) return 1;
-  if (citation === undefined) return 1;
-  if (!rangesOverlap(citation, requested)) return -1;
-  if (citation.startLine === requested.startLine && citation.endLine === requested.endLine)
-    return 5;
-  if (citation.startLine <= requested.startLine && citation.endLine >= requested.endLine) return 4;
-  if (requested.startLine <= citation.startLine && requested.endLine >= citation.endLine) return 3;
-  return 2;
-}
-
 function rangeSpan(range: LineRange | undefined): number {
   return range === undefined ? 0 : range.endLine - range.startLine + 1;
 }
 
-function bestCitationFor(
+function compareBareCitations(a: GroundedEvidenceCitation, b: GroundedEvidenceCitation): number {
+  return (
+    rangeSpan(a.lineRange) - rangeSpan(b.lineRange) ||
+    b.score - a.score ||
+    a.stableId.localeCompare(b.stableId)
+  );
+}
+
+function rangeContains(container: LineRange, requested: LineRange): boolean {
+  return container.startLine <= requested.startLine && container.endLine >= requested.endLine;
+}
+
+function rangeIntersection(left: LineRange, right: LineRange): LineRange | undefined {
+  const startLine = Math.max(left.startLine, right.startLine);
+  const endLine = Math.min(left.endLine, right.endLine);
+  return startLine <= endLine ? { startLine, endLine } : undefined;
+}
+
+function projectSupportedMarker(
   marker: ParsedInlineCitation,
   citations: readonly GroundedEvidenceCitation[],
-): GroundedEvidenceCitation | undefined {
-  return citations
-    .filter(
-      (citation) =>
-        citation.scopePath === marker.scopePath &&
-        rangeFit(citation.lineRange, marker.lineRange) >= 0,
-    )
-    .sort((a, b) => {
-      const fit = rangeFit(b.lineRange, marker.lineRange) - rangeFit(a.lineRange, marker.lineRange);
-      return (
-        fit ||
-        Math.abs(rangeSpan(a.lineRange) - rangeSpan(marker.lineRange)) -
-          Math.abs(rangeSpan(b.lineRange) - rangeSpan(marker.lineRange)) ||
-        b.score - a.score ||
-        a.stableId.localeCompare(b.stableId)
-      );
-    })[0];
-}
-
-function citationAtAnswerRange(
-  citation: GroundedEvidenceCitation,
-  marker: ParsedInlineCitation,
-): GroundedEvidenceCitation {
+): readonly GroundedEvidenceCitation[] {
   const requested = marker.lineRange;
-  const available = citation.lineRange;
-  if (
-    requested === undefined ||
-    (available !== undefined &&
-      (available.startLine > requested.startLine || available.endLine < requested.endLine))
-  ) {
-    return citation;
+  if (requested === undefined) {
+    const best = [...citations].sort(compareBareCitations)[0];
+    return best === undefined ? [] : [best];
   }
-  return { ...citation, lineRange: requested };
+  const containing = citations
+    .filter((citation) =>
+      citation.lineRange === undefined ? false : rangeContains(citation.lineRange, requested),
+    )
+    .sort(compareBareCitations)[0];
+  if (containing !== undefined) return [{ ...containing, lineRange: requested }];
+  return citations.flatMap((citation) => {
+    if (citation.lineRange === undefined) return [];
+    const intersection = rangeIntersection(citation.lineRange, requested);
+    return intersection === undefined ? [] : [{ ...citation, lineRange: intersection }];
+  });
 }
 
-function projectedCitationKey(citation: GroundedEvidenceCitation): string {
+function projectedCitationKey(sourceId: string, citation: GroundedEvidenceCitation): string {
   const range = citation.lineRange;
   return range === undefined
-    ? `${citation.stableId}:*`
-    : `${citation.stableId}:${String(range.startLine)}-${String(range.endLine)}`;
+    ? `${sourceId}:${citation.stableId}:*`
+    : `${sourceId}:${citation.stableId}:${String(range.startLine)}-${String(range.endLine)}`;
+}
+
+function redactCitation(
+  citation: GroundedEvidenceCitation,
+  redact: CitationRedactor,
+): GroundedEvidenceCitation {
+  return {
+    ...citation,
+    scopePath: redact(citation.scopePath),
+    stableId: redact(citation.stableId),
+  };
+}
+
+export interface SourcedGroundedEvidenceCitation {
+  readonly sourceId: string;
+  readonly citation: GroundedEvidenceCitation;
+}
+
+function buildAvailableSourcedCitations(
+  packs: readonly ConnectedContextPack[],
+): readonly SourcedGroundedEvidenceCitation[] {
+  return packs.flatMap((pack, index) => {
+    const sourceId = citationSourceIdForIndex(index);
+    return buildPackCitations(pack, (value) => value).map((citation) => ({ sourceId, citation }));
+  });
+}
+
+/** Project only answer markers supported by one unambiguous source and contained evidence range. */
+export function buildSourcedAnswerCitations(
+  packs: readonly ConnectedContextPack[],
+  answerContent: string,
+  redact: CitationRedactor,
+): readonly SourcedGroundedEvidenceCitation[] {
+  const index = buildPackCitationIndex(packs);
+  const available = buildAvailableSourcedCitations(packs);
+  const selected: SourcedGroundedEvidenceCitation[] = [];
+  const seen = new Set<string>();
+  for (const marker of parseInlineCitations(answerContent)) {
+    const sourceId = resolveSupportedCitationSourceId(marker, index);
+    if (sourceId === undefined) continue;
+    const candidates = available
+      .filter((entry) => entry.sourceId === sourceId)
+      .map((entry) => entry.citation)
+      .filter((citation) => citation.scopePath === marker.scopePath);
+    for (const citation of projectSupportedMarker(marker, candidates)) {
+      const redacted = redactCitation(citation, redact);
+      const key = projectedCitationKey(sourceId, redacted);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      selected.push({ sourceId, citation: redacted });
+    }
+  }
+  return selected;
 }
 
 export function buildAnswerCitations(
@@ -108,17 +154,7 @@ export function buildAnswerCitations(
   answerContent: string,
   redact: CitationRedactor,
 ): readonly GroundedEvidenceCitation[] {
-  const available = buildPackCitations(pack, redact);
-  const selected: GroundedEvidenceCitation[] = [];
-  const seen = new Set<string>();
-  for (const marker of parseInlineCitations(answerContent)) {
-    const citation = bestCitationFor(marker, available);
-    if (citation === undefined) continue;
-    const projected = citationAtAnswerRange(citation, marker);
-    const key = projectedCitationKey(projected);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    selected.push(projected);
-  }
-  return selected;
+  return buildSourcedAnswerCitations([pack], answerContent, redact).map(
+    (selected) => selected.citation,
+  );
 }

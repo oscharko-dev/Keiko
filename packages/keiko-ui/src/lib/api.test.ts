@@ -8,6 +8,7 @@ import {
   cloneRepository,
   clearConfigCacheForTests,
   clearModelCacheForTests,
+  clearVoiceCapabilityCacheForTests,
   clearProjectRequestForTests,
   deleteChat,
   deleteProject,
@@ -1915,6 +1916,7 @@ describe("fetchConfig", () => {
 
 describe("fetchVoiceCapability (Issue #493)", () => {
   afterEach(() => {
+    clearVoiceCapabilityCacheForTests();
     vi.unstubAllGlobals();
   });
 
@@ -1936,6 +1938,23 @@ describe("fetchVoiceCapability (Issue #493)", () => {
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
+  });
+
+  it("shares one in-flight and fulfilled capability probe until configuration changes", async () => {
+    const voice = {
+      available: false,
+      profile: "none",
+      capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
+      transport: { websocketControl: false, webrtcMedia: false },
+      reason: "no-voice-provider",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ voice }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await Promise.all([fetchVoiceCapability(), fetchVoiceCapability(), fetchVoiceCapability()]);
+    await fetchVoiceCapability();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces an unavailable resolution without throwing", async () => {

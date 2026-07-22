@@ -563,8 +563,39 @@ describe("runGroundedExploration", () => {
       detectWorkspace: () => fakeWorkspace(),
     });
     expect(observedQuestion).toBe("Investigate src/foo.ts behaviour of `MyClass`");
-    expect(observedPack).toStrictEqual(out.pack);
+    if (observedPack === undefined)
+      throw new Error("expected answerer to receive the context pack");
+    expect({ ...out.pack, uncertainty: observedPack.uncertainty }).toStrictEqual(observedPack);
+    expect(out.pack.uncertainty).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "unsupported-citation" })]),
+    );
     expect(out.assistantContent).toBe("recorded");
+  });
+
+  it("uses answer-only context for generation while retaining the original retrieval query", async () => {
+    let observedQuestion = "";
+    const original = input();
+    const out = await runGroundedExploration(
+      {
+        ...original,
+        answerQuestion:
+          "User question:\nInvestigate src/foo.ts\n\nIncluded memory context:\nPrefer concise answers.",
+      },
+      {
+        answerer: {
+          answer: (question) => {
+            observedQuestion = question;
+            return Promise.resolve("recorded");
+          },
+        },
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(observedQuestion).toContain("Prefer concise answers");
+    expect(out.pack.query.text).toBe(original.query.text);
+    expect(out.pack.query.text).not.toContain("Prefer concise answers");
   });
 
   it("prefers grounded-qa.ts for exact symbol-definition questions from issue #672", async () => {
@@ -1569,6 +1600,37 @@ describe("runGroundedExploration", () => {
     expect(out.pack.files).toEqual([]);
   });
 
+  it("answers from explicit governed personal context without projecting source evidence", async () => {
+    let receivedQuestion = "";
+    const out = await runGroundedExploration(
+      input({
+        scope: happyScope({ kind: "files", relativePaths: ["src/bar.ts"] }),
+        query: happyQuery({ text: "What package manager do I prefer?" }),
+        answerQuestion:
+          "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
+        answerOnlyContextAvailable: true,
+      }),
+      {
+        answerer: {
+          answer: (question) => {
+            receivedQuestion = question;
+            return Promise.resolve("You prefer pnpm.");
+          },
+        },
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(receivedQuestion).toContain("Use pnpm");
+    expect(out.assistantContent).toBe("You prefer pnpm.");
+    expect(out.noEvidence).toBe(true);
+    expect(out.pack.files).toEqual([]);
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
+      false,
+    );
+  });
+
   it("RB-4 (GEN-AI-GROUNDING-001/-008): flags an inline citation not present in the pack", async () => {
     const fabricatingAnswerer: GroundedAnswerer = {
       answer: (_question, pack) => {
@@ -1602,6 +1664,24 @@ describe("runGroundedExploration", () => {
       detectWorkspace: () => fakeWorkspace(),
     });
     expect(out.pack.uncertainty.some((m) => m.kind === "unsupported-citation")).toBe(false);
+  });
+
+  it("flags a source-backed answer that omits citations entirely", async () => {
+    const out = await runGroundedExploration(input(), {
+      answerer: { answer: () => Promise.resolve("A confident answer without source markers.") },
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+
+    expect(out.pack.files.length).toBeGreaterThan(0);
+    expect(out.pack.uncertainty).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "unsupported-citation",
+          claim: expect.stringContaining("without a supported inline citation") as unknown,
+        }),
+      ]),
+    );
   });
 
   it("RB-4 (GEN-AI-GATEWAY-001): surfaces an incomplete-answer marker for a truncated completion", async () => {
@@ -2084,7 +2164,12 @@ describe("runGroundedExploration", () => {
     });
     expect(microIndex.sets()).toBe(1);
     expect(microIndex.gets()).toBe(3);
-    expect(second.pack).toStrictEqual(first.pack);
+    expect(second.pack.stableId).toBe(first.pack.stableId);
+    expect(second.pack.files).toStrictEqual(first.pack.files);
+    expect(second.pack.usage).toStrictEqual(first.pack.usage);
+    expect(second.pack.uncertainty.map((marker) => marker.kind)).toStrictEqual(
+      first.pack.uncertainty.map((marker) => marker.kind),
+    );
   });
 
   it("hits the micro-index before excerpt assembly when elapsed time changes", async () => {
@@ -2157,6 +2242,33 @@ describe("runGroundedExploration", () => {
       }),
     ).rejects.toBeInstanceOf(CancelledError);
     expect(answererCalls).toBe(0);
+  });
+
+  it("stops the lexical scan after the active file when cancellation arrives during IO", async () => {
+    const controller = new AbortController();
+    const counted = countingNodeFs();
+    let binaryProbeReads = 0;
+    const fs: WorkspaceFs = {
+      ...counted.fs,
+      readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
+        binaryProbeReads += 1;
+        controller.abort();
+        return (
+          counted.fs.readFileBytes?.(absolutePath, maxBytes) ?? Promise.resolve(new Uint8Array())
+        );
+      },
+    };
+
+    await expect(
+      retrieveConnectedContextPack(input(), {
+        answerer: echoAnswerer,
+        signal: controller.signal,
+        fs,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      }),
+    ).rejects.toBeInstanceOf(CancelledError);
+    expect(binaryProbeReads).toBe(1);
   });
 });
 
@@ -2313,7 +2425,12 @@ describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
       nowMs: () => NOW,
       detectWorkspace: () => fakeWorkspace(),
     });
-    expect(retrieved.pack).toStrictEqual(explored.pack);
+    expect({ ...explored.pack, uncertainty: retrieved.pack.uncertainty }).toStrictEqual(
+      retrieved.pack,
+    );
+    expect(explored.pack.uncertainty).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "unsupported-citation" })]),
+    );
     expect(retrieved.plan).toStrictEqual(explored.plan);
     expect(retrieved.elapsedMs).toBeGreaterThanOrEqual(0);
   });

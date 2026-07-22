@@ -12,6 +12,12 @@ import {
 import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
+  MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
+  MAX_DESKTOP_CHAT_INPUT_BYTES,
+  MAX_DESKTOP_CHAT_INPUT_CHARS,
+  isGroundingScopeIdentity,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
   ApiError,
   StreamingUnavailableError,
   askGrounded,
@@ -23,17 +29,11 @@ import {
   fetchRunReport,
   fetchModels,
   fetchProjects,
-  appendDesktopChatVoiceTurn,
   patchChatMessage,
   regenerateDesktopChat,
   sendDesktopChat,
   sendDesktopChatStream,
-  runRealtimeGroundedTool as postRealtimeGroundedTool,
-  runRealtimeMemoryTool as postRealtimeMemoryTool,
   updateChat,
-  type AppendDesktopChatVoiceTurnMessage,
-  type RealtimeGroundedToolOutput,
-  type RealtimeMemoryToolOutput,
 } from "@/lib/api";
 import type { SseDonePayload } from "@/lib/api";
 import {
@@ -43,7 +43,6 @@ import {
   rejectMemoryProposal,
 } from "@/lib/memory-api";
 import { sortProjects } from "@/lib/sidebar-sort";
-import { secureRandomId } from "@/lib/secure-random";
 import {
   classifyRunReport,
   formatRunSummaryFromManifest,
@@ -62,6 +61,7 @@ import type {
 } from "@/lib/types";
 import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
+import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
 import { currentConversationMemoryMode, useConversationMemorySettings } from "./memorySettings";
 
@@ -153,7 +153,57 @@ const CHAT_DELETE_EVENT = "keiko:chat-delete";
 const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
 const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
 const RUN_SUMMARY_SYNC_MAX_INTERVAL_MS = 15_000;
-const VOICE_TURN_APPEND_MAX_ATTEMPTS = 2;
+const CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS = 128;
+const CANONICAL_VOICE_QUEUE_MAX_ITEMS = CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS + 1;
+const CANONICAL_VOICE_QUEUE_MAX_BYTES =
+  CANONICAL_VOICE_QUEUE_MAX_ITEMS * MAX_DESKTOP_CHAT_INPUT_BYTES;
+const CANONICAL_VOICE_IN_PROGRESS_MAX_POLLS = 3;
+const CANONICAL_VOICE_ADMISSION_MAX_ATTEMPTS = 3;
+const CANONICAL_USER_RECONCILIATION_TIMEOUT_MS = 5_000;
+const CANONICAL_VOICE_RECONCILE_INTERVAL_MS = 1_500;
+const CANONICAL_VOICE_QUEUE_ERROR =
+  "The spoken-turn queue is full. Wait for the pending turns to finish, then try again.";
+const CANONICAL_VOICE_PENDING_ERROR =
+  "The spoken turn is still pending. Retry it before sending another message.";
+const CANONICAL_VOICE_INPUT_ERROR =
+  "The final spoken transcript or its turn identity is outside the supported size limit.";
+const CANONICAL_VOICE_IDENTITY_ERROR =
+  "A spoken turn identity was reused with different transcript content.";
+const CANONICAL_VOICE_SCOPE_IDENTITY_ERROR =
+  "The chat grounding scope could not be frozen for this spoken turn. Reload the chat and try again.";
+const CANONICAL_VOICE_HASHING_ERROR =
+  "The spoken transcript could not be added to chat. Restart Voice and try again.";
+
+function raceUiAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abort);
+      action();
+    };
+    const abort = (): void => {
+      finish(() => {
+        reject(new DOMException("Reconciliation cancelled.", "AbortError"));
+      });
+    };
+    void work.then(
+      (value) => {
+        finish(() => {
+          resolve(value);
+        });
+      },
+      (error: unknown) => {
+        finish(() => {
+          reject(error);
+        });
+      },
+    );
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
 
 // Issue #152 — conversation request lifecycle states (memory keiko-issue66).
 // `idle` is the resting state; `queued` is set the moment sendMessage commits
@@ -232,40 +282,6 @@ function errorMessage(error: unknown): string {
   return formatUserError(error, "Something went wrong. Try again.");
 }
 
-function shouldRetryVoiceTurnAppend(error: unknown): boolean {
-  return !(error instanceof ApiError) || error.status >= 500;
-}
-
-function makeVoiceTurnIdempotencyKey(): string {
-  return secureRandomId("voice-turn");
-}
-
-async function appendDesktopChatVoiceTurnWithRetry(
-  input: Parameters<typeof appendDesktopChatVoiceTurn>[0],
-): ReturnType<typeof appendDesktopChatVoiceTurn> {
-  let lastError: unknown;
-  const baseTimestamp = Date.now();
-  const durableInput: Parameters<typeof appendDesktopChatVoiceTurn>[0] = {
-    ...input,
-    idempotencyKey: input.idempotencyKey ?? makeVoiceTurnIdempotencyKey(),
-    messages: input.messages.map((message, index) => ({
-      ...message,
-      timestamp: message.timestamp ?? baseTimestamp + index,
-    })),
-  };
-  for (let attempt = 0; attempt < VOICE_TURN_APPEND_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await appendDesktopChatVoiceTurn(durableInput);
-    } catch (caught) {
-      lastError = caught;
-      if (!shouldRetryVoiceTurnAppend(caught)) {
-        break;
-      }
-    }
-  }
-  throw lastError;
-}
-
 function sortChats(chats: readonly Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -304,6 +320,70 @@ function removeMessagesByIds(
   return messages.filter((message) => !excludedIds.includes(message.id));
 }
 
+function replaceCanonicalTurnMessages(
+  messages: readonly ChatMessage[],
+  localIds: readonly string[],
+  canonical: readonly ChatMessage[],
+): ChatMessage[] {
+  const local = new Set(localIds);
+  const canonicalIds = new Set(canonical.map((message) => message.id));
+  const result: ChatMessage[] = [];
+  let inserted = false;
+  for (const message of messages) {
+    if (local.has(message.id)) {
+      if (!inserted) result.push(...canonical);
+      inserted = true;
+      continue;
+    }
+    if (!canonicalIds.has(message.id)) result.push(message);
+  }
+  if (!inserted) result.push(...canonical);
+  return result;
+}
+
+function mergeCanonicalVoiceProjections(
+  messages: readonly ChatMessage[],
+  chatId: string,
+  projections: ReadonlyMap<string, CanonicalVoiceProjection>,
+  excludedLocalIds: readonly string[] = [],
+): ChatMessage[] {
+  const ids = new Set(messages.map((message) => message.id));
+  const excluded = new Set(excludedLocalIds);
+  const pending = [...projections.values()]
+    .filter(
+      (projection) =>
+        projection.chatId === chatId &&
+        !excluded.has(projection.message.id) &&
+        !ids.has(projection.message.id),
+    )
+    .map((projection) => projection.message);
+  return pending.length === 0 ? Array.from(messages) : [...messages, ...pending];
+}
+
+function canonicalVoiceDeliveryKey(chatId: string, clientTurnId: string): string {
+  return `${chatId}\u0000${clientTurnId}`;
+}
+
+function canonicalVoiceContentDigest(content: string): string {
+  const domainSeparated = `keiko:canonical-voice-turn-content:v1\u0000${content}`;
+  return canonicalVoiceSha256Hex(domainSeparated);
+}
+
+function canonicalVoiceOptimisticMessage(chatId: string, content: string): ChatMessage {
+  return {
+    id: `local-voice-${crypto.randomUUID()}`,
+    chatId,
+    role: "user",
+    content,
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+}
+
 function isChatPayload(value: unknown): value is Chat {
   return (
     typeof value === "object" &&
@@ -333,6 +413,7 @@ const chatMutationSubscribers = new Set<ChatMutationSubscriber>();
 let chatMutationListenersAttached = false;
 
 function emitChatMutation(mutation: ChatMutation): void {
+  if (mutation.type === "delete") purgeCanonicalVoicePageOutboxChat(mutation.chatId);
   for (const subscriber of chatMutationSubscribers) {
     subscriber(mutation);
   }
@@ -434,17 +515,424 @@ interface SendMessageOptions {
   // When present, this text is sent instead of the current draft. Trimmed and empty-guarded identically
   // to the draft path. The user's independent typed draft is preserved across a spoken turn.
   readonly text?: string;
+  // Internal admission/result acknowledgement for the canonical Voice Twin handoff. Ordinary typed
+  // callers retain the historical Promise<void> surface; Voice uses the terminal outcome so a blocked
+  // send cannot silently consume a final transcript or arm speech for an unrelated later answer.
+  readonly reportOutcome?: true;
+  // Stable opaque identity for safe retry of a Voice final. It is body-only and never used as a
+  // header/log identifier; the BFF store scope-hashes it before persistence.
+  readonly clientTurnId?: string;
+  // Queue-owned target captured when Realtime hands off the final transcript. Keeping this target
+  // outside React's active-chat state lets the FIFO survive chat and mode switches without scope drift.
+  readonly canonicalVoiceTarget?: CanonicalVoiceSendTarget;
+  // The FIFO projects this message immediately at handoff time. The send path reuses that exact local
+  // identity and reconciles it to the durable row instead of creating a second optimistic bubble.
+  readonly optimisticMessage?: ChatMessage;
+  // Canonical Voice uses the buffered transport so an inactive target chat never receives streaming
+  // deltas in the currently visible chat. Both transports share the same server admission pipeline.
+  readonly forceBuffered?: true;
 }
 
-interface RealtimeGroundedToolCallInput {
-  readonly callId: string;
-  readonly query: string;
-  readonly userTranscript?: string | undefined;
+interface CanonicalVoiceSendTarget {
+  readonly chat: Chat;
+  readonly project: CanonicalChatProjectTarget;
+  readonly modelId: string;
+  readonly memory: ConversationMemoryRequestWire;
 }
 
-interface RealtimeMemoryToolCallInput {
-  readonly callId: string;
-  readonly query: string;
+interface CanonicalChatProjectTarget {
+  readonly path: string;
+}
+
+interface UngroundedSendRequest {
+  readonly chat: Chat;
+  readonly project: CanonicalChatProjectTarget;
+  readonly content: string;
+  readonly optimisticId: string;
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+  readonly documentContext: readonly ConversationDocumentContextWire[];
+  readonly attachments: readonly ConversationAttachmentDescriptorWire[];
+  readonly memory: ConversationMemoryRequestWire;
+  readonly clientTurnId: string | undefined;
+}
+
+interface SendAttemptRequest {
+  readonly chat: Chat;
+  readonly project: CanonicalChatProjectTarget;
+  readonly content: string;
+  readonly optimisticId: string;
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+  readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
+  readonly forceBuffered: boolean;
+  readonly clientTurnId: string | undefined;
+}
+
+interface SendAttemptExecution {
+  readonly terminal: SendAttemptOutcome;
+  readonly disclosures: readonly SentDocumentDisclosure[];
+}
+
+interface CompletedSendOutcome {
+  readonly status: "completed";
+  readonly assistantMessageId: string;
+}
+
+interface FailedSendOutcome {
+  readonly status: "failed";
+  // A scope-bound 409 from the canonical BFF is authoritative proof that this exact
+  // clientTurnId was already admitted. Keep that proof distinct from an arbitrary transport or
+  // validation failure so reconciliation never has to guess from equal message text.
+  readonly canonicalTurnInProgress?: true;
+  // Deterministic request rejection is terminal only after reconciliation proves that the server
+  // did not admit this identity. Transport failures remain retryable because their commit state is
+  // unknown.
+  readonly permanentFailure?: true;
+  readonly identityConflict?: true;
+  readonly scopeChanged?: true;
+  readonly chatClosed?: true;
+}
+
+type SendAttemptOutcome =
+  CompletedSendOutcome | FailedSendOutcome | { readonly status: "cancelled" };
+
+export type SendMessageOutcome =
+  | CompletedSendOutcome
+  | {
+      readonly status: "failed";
+      readonly retryable?: false;
+      readonly userPersisted?: true;
+      readonly suspend?: true;
+    }
+  | { readonly status: "in-progress" | "not-sent" }
+  | { readonly status: "cancelled"; readonly userPersisted: boolean };
+
+interface CanonicalVoiceTurnInput {
+  readonly text: string;
+  readonly clientTurnId: string;
+  // The production Realtime handoff may consume the single bounded reserve slot. Once regular
+  // capacity is reached, ChatWindow synchronously tells Realtime to stop capture, so no finalized
+  // transcript remains component-local across a mode switch or unmount.
+  readonly allowReservedCapacity?: true;
+  // Frozen by ChatWindow at the first Realtime handoff. A rejected handoff remains owned by the
+  // Realtime session and may be retried after navigation or a scope mutation; deriving this target
+  // from live session state on a later retry could route an A transcript through chat/scope B.
+  readonly target: {
+    readonly chat: Chat;
+    readonly modelId: string;
+  };
+}
+
+type EnqueueCanonicalVoiceTurn = (
+  input: CanonicalVoiceTurnInput,
+) => Promise<SendMessageOutcome> | undefined;
+
+interface CanonicalVoiceQueueItem {
+  readonly key: string;
+  readonly content: string;
+  readonly contentDigest: string;
+  readonly clientTurnId: string;
+  readonly target: CanonicalVoiceSendTarget;
+  readonly optimistic: ChatMessage;
+  readonly byteLength: number;
+  readonly promise: Promise<SendMessageOutcome>;
+  readonly resolve: (outcome: SendMessageOutcome) => void;
+}
+
+interface CanonicalVoiceProjection {
+  readonly chatId: string;
+  readonly content: string;
+  readonly message: ChatMessage;
+  readonly byteLength: number;
+}
+
+interface CanonicalVoiceSettledDelivery {
+  readonly contentDigest: string;
+  readonly outcome: SendMessageOutcome;
+}
+
+interface CanonicalVoicePageOutbox {
+  readonly queueRef: { current: CanonicalVoiceQueueItem[] };
+  readonly queueBytesRef: { current: number };
+  readonly projectionRef: { current: Map<string, CanonicalVoiceProjection> };
+  readonly projectionBytesRef: { current: number };
+  readonly deliveriesRef: {
+    current: Map<
+      string,
+      { readonly contentDigest: string; readonly promise: Promise<SendMessageOutcome> }
+    >;
+  };
+  readonly settledRef: { current: Map<string, CanonicalVoiceSettledDelivery> };
+  drainingOwner: symbol | undefined;
+  activeDelivery: { readonly key: string; readonly abort: () => void } | undefined;
+  readonly wakes: Set<() => void>;
+  readonly suspensionSubscribers: Set<(suspended: boolean) => void>;
+  suspended: boolean;
+}
+
+// Page-lifecycle outbox: accepted provider finals survive ChatSession/Voice component replacement
+// without placing raw transcript text in localStorage or another unencrypted browser store. The
+// stable clientTurnId makes every resumed delivery safe to replay through the server idempotency
+// boundary; the bounded queue/byte ceilings below remain authoritative across all hook instances.
+const canonicalVoicePageOutbox: CanonicalVoicePageOutbox = {
+  queueRef: { current: [] },
+  queueBytesRef: { current: 0 },
+  projectionRef: { current: new Map() },
+  projectionBytesRef: { current: 0 },
+  deliveriesRef: { current: new Map() },
+  settledRef: { current: new Map() },
+  drainingOwner: undefined,
+  activeDelivery: undefined,
+  wakes: new Set(),
+  suspensionSubscribers: new Set(),
+  suspended: false,
+};
+
+function setCanonicalVoicePageOutboxSuspended(suspended: boolean): void {
+  if (canonicalVoicePageOutbox.suspended === suspended) return;
+  canonicalVoicePageOutbox.suspended = suspended;
+  for (const subscriber of canonicalVoicePageOutbox.suspensionSubscribers) subscriber(suspended);
+}
+
+function releaseCanonicalVoiceProjectionByKey(key: string): void {
+  const projection = canonicalVoicePageOutbox.projectionRef.current.get(key);
+  if (projection === undefined) return;
+  canonicalVoicePageOutbox.projectionRef.current.delete(key);
+  canonicalVoicePageOutbox.projectionBytesRef.current = Math.max(
+    0,
+    canonicalVoicePageOutbox.projectionBytesRef.current - projection.byteLength,
+  );
+}
+
+function clearSettledCanonicalVoiceDeliveries(chatId: string): void {
+  const keyPrefix = `${chatId}\u0000`;
+  for (const key of canonicalVoicePageOutbox.settledRef.current.keys()) {
+    if (key.startsWith(keyPrefix)) canonicalVoicePageOutbox.settledRef.current.delete(key);
+  }
+}
+
+function abortRemovedCanonicalVoiceDelivery(removedKeys: ReadonlySet<string>): void {
+  const activeDelivery = canonicalVoicePageOutbox.activeDelivery;
+  if (activeDelivery !== undefined && removedKeys.has(activeDelivery.key)) activeDelivery.abort();
+}
+
+function resolveRemovedCanonicalVoiceItems(items: readonly CanonicalVoiceQueueItem[]): number {
+  let removedBytes = 0;
+  for (const item of items) {
+    releaseCanonicalVoiceProjectionByKey(item.key);
+    canonicalVoicePageOutbox.deliveriesRef.current.delete(item.key);
+    item.resolve({ status: "failed", retryable: false });
+    removedBytes += item.byteLength;
+  }
+  return removedBytes;
+}
+
+function removeCanonicalVoiceQueueItems(
+  queue: CanonicalVoiceQueueItem[],
+  removedKeys: ReadonlySet<string>,
+): void {
+  for (let index = queue.length - 1; index >= 0; index -= 1) {
+    const item = queue[index];
+    if (item !== undefined && removedKeys.has(item.key)) queue.splice(index, 1);
+  }
+}
+
+function purgeCanonicalVoicePageOutboxChat(chatId: string): void {
+  const queue = canonicalVoicePageOutbox.queueRef.current;
+  const headKey = queue[0]?.key;
+  const removed = queue.filter((item) => item.target.chat.id === chatId);
+  clearSettledCanonicalVoiceDeliveries(chatId);
+  if (removed.length === 0) return;
+  const removedKeys = new Set(removed.map((item) => item.key));
+  const removedHead = headKey !== undefined && removedKeys.has(headKey);
+  abortRemovedCanonicalVoiceDelivery(removedKeys);
+  const removedBytes = resolveRemovedCanonicalVoiceItems(removed);
+  canonicalVoicePageOutbox.queueBytesRef.current = Math.max(
+    0,
+    canonicalVoicePageOutbox.queueBytesRef.current - removedBytes,
+  );
+  removeCanonicalVoiceQueueItems(queue, removedKeys);
+  if (removedHead && canonicalVoicePageOutbox.suspended) {
+    setCanonicalVoicePageOutboxSuspended(false);
+  }
+  if (removedHead || !canonicalVoicePageOutbox.suspended) wakeCanonicalVoicePageOutbox();
+}
+
+export function canonicalVoicePageOutboxRetainsPlaintextForTests(content: string): boolean {
+  return (
+    canonicalVoicePageOutbox.queueRef.current.some((item) => item.content === content) ||
+    [...canonicalVoicePageOutbox.projectionRef.current.values()].some(
+      (projection) => projection.content === content || projection.message.content === content,
+    )
+  );
+}
+
+export function clearCanonicalVoicePageOutboxForTests(): void {
+  for (const item of canonicalVoicePageOutbox.queueRef.current) {
+    item.resolve({ status: "cancelled", userPersisted: false });
+  }
+  canonicalVoicePageOutbox.queueRef.current.splice(0);
+  canonicalVoicePageOutbox.queueBytesRef.current = 0;
+  canonicalVoicePageOutbox.projectionRef.current.clear();
+  canonicalVoicePageOutbox.projectionBytesRef.current = 0;
+  canonicalVoicePageOutbox.deliveriesRef.current.clear();
+  canonicalVoicePageOutbox.settledRef.current.clear();
+  canonicalVoicePageOutbox.drainingOwner = undefined;
+  canonicalVoicePageOutbox.activeDelivery?.abort();
+  canonicalVoicePageOutbox.activeDelivery = undefined;
+  canonicalVoicePageOutbox.wakes.clear();
+  setCanonicalVoicePageOutboxSuspended(false);
+  canonicalVoicePageOutbox.suspensionSubscribers.clear();
+}
+
+function wakeCanonicalVoicePageOutbox(): void {
+  for (const wake of canonicalVoicePageOutbox.wakes) wake();
+}
+
+function canonicalVoicePageOutboxHasCapacity(
+  byteLength: number,
+  allowReservedCapacity: boolean,
+): boolean {
+  const usedBytes = canonicalVoicePageOutbox.queueBytesRef.current;
+  const itemLimit = allowReservedCapacity
+    ? CANONICAL_VOICE_QUEUE_MAX_ITEMS
+    : CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS;
+  const byteLimit = allowReservedCapacity
+    ? CANONICAL_VOICE_QUEUE_MAX_BYTES
+    : CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS * MAX_DESKTOP_CHAT_INPUT_BYTES;
+  if (
+    canonicalVoicePageOutbox.queueRef.current.length >= itemLimit ||
+    usedBytes < 0 ||
+    usedBytes > byteLimit
+  ) {
+    return false;
+  }
+  return byteLength <= byteLimit - usedBytes;
+}
+
+function canonicalVoicePageOutboxHasPendingTurn(chatId: string): boolean {
+  return canonicalVoicePageOutbox.queueRef.current.some((item) => item.target.chat.id === chatId);
+}
+
+function completedSendOutcome(messages: readonly ChatMessage[]): SendAttemptOutcome {
+  const assistantMessages = messages.filter((message) => message.role === "assistant");
+  const assistantMessage = assistantMessages.length === 1 ? assistantMessages[0] : undefined;
+  return assistantMessage === undefined
+    ? { status: "failed" }
+    : { status: "completed", assistantMessageId: assistantMessage.id };
+}
+
+interface SendMessage {
+  (options: SendMessageOptions & { readonly reportOutcome: true }): Promise<SendMessageOutcome>;
+  (options?: SendMessageOptions): Promise<void>;
+}
+
+interface CanonicalVoiceDeliveryRuntime {
+  readonly signal: AbortSignal;
+  readonly waitForSendSlot: () => Promise<void>;
+  readonly send: SendMessage;
+  readonly onDeliveryDelayed: () => void;
+  readonly onUserPersisted: () => void;
+}
+
+type CanonicalVoiceQueueDelivery =
+  | { readonly kind: "terminal"; readonly outcome: SendMessageOutcome }
+  | { readonly kind: "suspended" }
+  | { readonly kind: "aborted" };
+
+function canonicalVoiceOutcomeIsPersisted(outcome: SendMessageOutcome): boolean {
+  return (
+    outcome.status === "completed" ||
+    outcome.status === "in-progress" ||
+    (outcome.status === "failed" && outcome.userPersisted === true) ||
+    (outcome.status === "cancelled" && outcome.userPersisted)
+  );
+}
+
+function canonicalVoiceOutcomeIsTerminal(outcome: SendMessageOutcome): boolean {
+  return (
+    outcome.status === "completed" ||
+    (outcome.status === "cancelled" && outcome.userPersisted) ||
+    (outcome.status === "failed" && outcome.retryable === false && outcome.suspend !== true)
+  );
+}
+
+async function requestCanonicalVoiceQueueOutcome(
+  item: CanonicalVoiceQueueItem,
+  runtime: CanonicalVoiceDeliveryRuntime,
+): Promise<SendMessageOutcome | undefined> {
+  try {
+    await runtime.waitForSendSlot();
+    if (runtime.signal.aborted) return undefined;
+    return await runtime.send({
+      text: item.content,
+      reportOutcome: true,
+      clientTurnId: item.clientTurnId,
+      canonicalVoiceTarget: item.target,
+      optimisticMessage: item.optimistic,
+      forceBuffered: true,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+async function waitForCanonicalVoiceRetry(signal: AbortSignal): Promise<boolean> {
+  try {
+    await abortableSleep(CANONICAL_VOICE_RECONCILE_INTERVAL_MS, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface CanonicalVoiceDeliveryProgress {
+  admissionAttempts: number;
+  inProgressPolls: number;
+}
+
+function interpretCanonicalVoiceQueueOutcome(
+  outcome: SendMessageOutcome,
+  runtime: CanonicalVoiceDeliveryRuntime,
+  progress: CanonicalVoiceDeliveryProgress,
+): CanonicalVoiceQueueDelivery | undefined {
+  if (canonicalVoiceOutcomeIsPersisted(outcome)) runtime.onUserPersisted();
+  if (canonicalVoiceOutcomeIsTerminal(outcome)) return { kind: "terminal", outcome };
+  if (outcome.status === "failed" && outcome.suspend === true) {
+    runtime.onDeliveryDelayed();
+    return { kind: "suspended" };
+  }
+  if (outcome.status !== "in-progress") {
+    progress.admissionAttempts += 1;
+    return undefined;
+  }
+  progress.inProgressPolls += 1;
+  if (progress.inProgressPolls < CANONICAL_VOICE_IN_PROGRESS_MAX_POLLS) return undefined;
+  runtime.onDeliveryDelayed();
+  return { kind: "suspended" };
+}
+
+async function deliverCanonicalVoiceQueueItem(
+  item: CanonicalVoiceQueueItem,
+  runtime: CanonicalVoiceDeliveryRuntime,
+): Promise<CanonicalVoiceQueueDelivery> {
+  const progress: CanonicalVoiceDeliveryProgress = { admissionAttempts: 0, inProgressPolls: 0 };
+  while (!runtime.signal.aborted) {
+    const outcome = await requestCanonicalVoiceQueueOutcome(item, runtime);
+    if (outcome !== undefined) {
+      const delivery = interpretCanonicalVoiceQueueOutcome(outcome, runtime, progress);
+      if (delivery !== undefined) return delivery;
+    } else if (!runtime.signal.aborted) {
+      progress.admissionAttempts += 1;
+    }
+    if (progress.admissionAttempts >= CANONICAL_VOICE_ADMISSION_MAX_ATTEMPTS) {
+      runtime.onDeliveryDelayed();
+      return { kind: "suspended" };
+    }
+    if (!(await waitForCanonicalVoiceRetry(runtime.signal))) break;
+  }
+  return { kind: "aborted" };
 }
 
 export interface UseChatSessionResult {
@@ -485,25 +973,17 @@ export interface UseChatSessionResult {
   addProject: (path: string) => Promise<void>;
   // Issue #1561 — `options.text` sends an explicit committed transcript (the spoken-turn handoff) through
   // the same context-bearing path as a typed send; absent, it sends the current draft as before.
-  sendMessage: (options?: SendMessageOptions) => Promise<void>;
+  sendMessage: SendMessage;
+  // Present on the production session. Optional keeps isolated component fixtures source-compatible;
+  // ChatWindow falls back to sendMessage only in such synthetic sessions.
+  enqueueCanonicalVoiceTurn?: EnqueueCanonicalVoiceTurn | undefined;
+  canonicalVoiceCaptureMustPause?: (() => boolean) | undefined;
+  // A finite delivery window has ended without a terminal canonical result for the active chat.
+  // The transcript remains in the page-lifecycle outbox until this explicit action starts one more
+  // bounded window with the same immutable clientTurnId. No background poll is armed.
+  canonicalVoiceTurnRequiresRetry?: boolean | undefined;
+  retryPendingCanonicalVoiceTurn?: (() => void) | undefined;
   regenerateMessage: (assistantMessageId: string) => Promise<void>;
-  // Realtime voice turns are already generated by the Realtime provider. Appending them must persist
-  // the committed transcript into the existing chat history without triggering a second chat model call.
-  appendVoiceTurn?: (messages: readonly AppendDesktopChatVoiceTurnMessage[]) => Promise<void>;
-  // Realtime voice grounding tool bridge. It persists the committed spoken user turn and grounded
-  // assistant answer through the same BFF grounding path as text chat, then returns the compact tool
-  // output that the Realtime provider should speak. It does not call the normal chat model twice.
-  runRealtimeGroundedTool?: (
-    input: RealtimeGroundedToolCallInput,
-    signal?: AbortSignal,
-  ) => Promise<RealtimeGroundedToolOutput>;
-  // Realtime voice memory recall bridge (`recall_keiko_memory`). Retrieves MemoriaViva context for
-  // the provider-supplied cue mid-session and returns the compact tool output the Realtime provider
-  // folds into its spoken reply. Persists nothing to the chat.
-  runRealtimeMemoryTool?: (
-    input: RealtimeMemoryToolCallInput,
-    signal?: AbortSignal,
-  ) => Promise<RealtimeMemoryToolOutput>;
   // Issue #152 — cancel the in-flight send (grounded OR ungrounded). No-op
   // when sendStatus is terminal/idle. Sets sendStatus to "cancelled" and
   // preserves the user message so the user can retry without retyping.
@@ -561,6 +1041,10 @@ const INITIAL_STATE: SessionState = {
   activeChat: undefined,
   selectedModel: undefined,
 };
+
+function canonicalProjectTarget(chat: Chat): CanonicalChatProjectTarget {
+  return { path: chat.projectPath };
+}
 
 const SHARED_BOOTSTRAP_TTL_MS = 2_000;
 
@@ -916,17 +1400,129 @@ function sharedBootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
 // closing over hook state, matching the module-scope helpers above.
 function handleStreamUngroundedTransportFailure(
   caught: unknown,
-  optimisticId: string,
   setError: Dispatch<SetStateAction<string | undefined>>,
-  setState: Dispatch<SetStateAction<SessionState>>,
-  resolve: (status: SendStatus) => void,
+  resolve: (outcome: SendAttemptOutcome) => void,
 ): void {
   setError(errorMessage(caught));
-  setState((previous) => ({
-    ...previous,
-    messages: removeMessagesByIds(previous.messages, [optimisticId]),
-  }));
-  resolve("failed");
+  resolve({ status: "failed" });
+}
+
+function canonicalTurnInProgressFailure(error: unknown): FailedSendOutcome {
+  if (error instanceof ApiError && error.code === "CHAT_TURN_IN_PROGRESS") {
+    return { status: "failed", canonicalTurnInProgress: true };
+  }
+  if (error instanceof ApiError && error.code === "CHAT_TURN_IDEMPOTENCY_CONFLICT") {
+    return { status: "failed", permanentFailure: true, identityConflict: true };
+  }
+  if (error instanceof ApiError && error.code === "GROUNDING_SCOPE_CHANGED") {
+    return { status: "failed", permanentFailure: true, scopeChanged: true };
+  }
+  if (error instanceof ApiError && error.code === "CHAT_CLOSED") {
+    return { status: "failed", permanentFailure: true, chatClosed: true };
+  }
+  return error instanceof ApiError && [400, 404, 413, 422].includes(error.status)
+    ? { status: "failed", permanentFailure: true }
+    : { status: "failed" };
+}
+
+type UserPersistenceProof = "persisted" | "missing" | "unknown";
+
+type SendMessageAdmission =
+  | { readonly kind: "rejected"; readonly error?: string }
+  | {
+      readonly kind: "accepted";
+      readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
+      readonly chat: Chat;
+      readonly project: CanonicalChatProjectTarget;
+      readonly content: string;
+      readonly modelId: string;
+    };
+
+function resolveSendMessageAdmission(input: {
+  readonly options: SendMessageOptions | undefined;
+  readonly draft: string;
+  readonly activeChat: Chat | undefined;
+  readonly selectedModel: string | undefined;
+  readonly models: readonly ModelCapability[];
+  readonly pendingAttachmentCount: number;
+  readonly sendInFlight: boolean;
+}): SendMessageAdmission {
+  const {
+    options,
+    draft,
+    activeChat,
+    selectedModel,
+    models,
+    pendingAttachmentCount,
+    sendInFlight,
+  } = input;
+  const canonicalTarget = options?.canonicalVoiceTarget;
+  const chat = canonicalTarget?.chat ?? activeChat;
+  if (
+    canonicalTarget === undefined &&
+    chat !== undefined &&
+    canonicalVoicePageOutboxHasPendingTurn(chat.id)
+  ) {
+    return { kind: "rejected", error: CANONICAL_VOICE_PENDING_ERROR };
+  }
+  if (sendInFlight) return { kind: "rejected" };
+  const content = (options?.text ?? draft).trim();
+  const project = canonicalTarget?.project ?? (chat && canonicalProjectTarget(chat));
+  const modelId = canonicalTarget?.modelId ?? resolveSelectedModelId(selectedModel, models);
+  if (
+    content.length === 0 ||
+    chat === undefined ||
+    project === undefined ||
+    modelId === undefined
+  ) {
+    return { kind: "rejected" };
+  }
+  if (canonicalTarget === undefined && hasGroundingScope(chat) && pendingAttachmentCount > 0) {
+    return { kind: "rejected", error: GROUNDED_ATTACHMENT_NOTICE };
+  }
+  return { kind: "accepted", canonicalTarget, chat, project, content, modelId };
+}
+
+function settledSendMessageOutcome(input: {
+  readonly settled: SendAttemptOutcome;
+  readonly terminal: SendAttemptOutcome;
+  readonly persistence: UserPersistenceProof;
+  readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
+}): SendMessageOutcome {
+  const { settled, terminal, persistence, canonicalTarget } = input;
+  if (settled.status === "cancelled") {
+    return { status: "cancelled", userPersisted: persistence === "persisted" };
+  }
+  const canonicalFailure =
+    settled.status === "failed" && terminal.status === "failed" && canonicalTarget !== undefined;
+  if (canonicalFailure && terminal.scopeChanged === true) {
+    return { status: "failed", retryable: false, userPersisted: true };
+  }
+  if (canonicalFailure && terminal.chatClosed === true) return { status: "failed", suspend: true };
+  if (canonicalFailure && terminal.permanentFailure === true) {
+    return persistence === "persisted"
+      ? { status: "failed", retryable: false, userPersisted: true }
+      : { status: "failed", retryable: false };
+  }
+  if (settled.status === "failed" && persistence === "persisted") {
+    return { status: "in-progress" };
+  }
+  return settled.status === "completed" ? settled : { status: "failed" };
+}
+
+function hasNewCanonicalUserMessage(
+  messages: readonly ChatMessage[],
+  messageIdsBeforeSend: ReadonlySet<string>,
+  content: string,
+  admissionStartedAt: number,
+): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "user" &&
+      message.content === content &&
+      message.timestamp >= admissionStartedAt &&
+      !messageIdsBeforeSend.has(message.id),
+  );
 }
 
 export interface UseChatSessionOptions {
@@ -938,6 +1534,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const autoCreate = options.autoCreate ?? true;
   const loadMemoryAutonomyModeImpl = options.loadMemoryAutonomyModeImpl ?? loadMemoryAutonomyMode;
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
+  const sessionStateRef = useRef<SessionState>(state);
+  sessionStateRef.current = state;
   const [streamingAssistantMessage, setStreamingAssistantMessage] = useState<
     ChatMessage | undefined
   >();
@@ -956,6 +1554,27 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // cancellation paths (grounded uses the controller as signal; ungrounded
   // adds signal support to sendDesktopChat in this issue).
   const sendControllerRef = useRef<AbortController | null>(null);
+  const sendControllerOwnerRef = useRef<"composer" | "canonical-voice" | null>(null);
+  const sendSlotWaitersRef = useRef<Set<() => void>>(new Set());
+  // Unlike sendControllerRef this remains bound to a cancelled attempt until that attempt settles.
+  // A replacement writes a new signal synchronously, preventing late callbacks from the old attempt
+  // from changing the replacement's status or clearing its controller.
+  const latestSendSignalRef = useRef<AbortSignal | null>(null);
+  const reconciliationControllersRef = useRef(
+    new Map<AbortController, ReturnType<typeof setTimeout>>(),
+  );
+  const sendMessageRef = useRef<SendMessage | null>(null);
+  const canonicalVoiceQueueRef = canonicalVoicePageOutbox.queueRef;
+  const canonicalVoiceQueueOwnerRef = useRef(Symbol("canonical-voice-page-outbox-owner"));
+  const canonicalVoiceQueueControllerRef = useRef(new AbortController());
+  const canonicalVoiceProjectionRef = canonicalVoicePageOutbox.projectionRef;
+  const canonicalVoiceProjectionBytesRef = canonicalVoicePageOutbox.projectionBytesRef;
+  const canonicalVoiceDeliveriesRef = canonicalVoicePageOutbox.deliveriesRef;
+  const canonicalVoiceSettledRef = canonicalVoicePageOutbox.settledRef;
+  const drainCanonicalVoiceQueueRef = useRef<() => void>(() => undefined);
+  const [canonicalVoiceOutboxSuspended, setCanonicalVoiceOutboxSuspended] = useState(
+    canonicalVoicePageOutbox.suspended,
+  );
   const [error, setError] = useState<string | undefined>();
   // Issue #185 — most recent grounded answer for the active chat. Cleared when the active
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
@@ -1209,9 +1828,112 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // Single update site so the ref + state never drift. The ref is the source
   // for concurrent-call gating; the state is the source for renders.
   const updateSendStatus = useCallback((next: SendStatus) => {
+    const wasInFlight = isInFlight(sendStatusRef.current);
     sendStatusRef.current = next;
     setSendStatus(next);
+    if (!wasInFlight || isInFlight(next)) return;
+    for (const release of sendSlotWaitersRef.current) release();
+    sendSlotWaitersRef.current.clear();
   }, []);
+
+  const waitForCanonicalVoiceSendSlot = useCallback((signal: AbortSignal): Promise<void> => {
+    if (signal.aborted) return Promise.reject(new DOMException("cancelled", "AbortError"));
+    if (!isInFlight(sendStatusRef.current)) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = (): void => {
+        sendSlotWaitersRef.current.delete(release);
+        signal.removeEventListener("abort", onAbort);
+      };
+      const release = (): void => {
+        cleanup();
+        resolve();
+      };
+      const onAbort = (): void => {
+        cleanup();
+        reject(new DOMException("cancelled", "AbortError"));
+      };
+      sendSlotWaitersRef.current.add(release);
+      signal.addEventListener("abort", onAbort, { once: true });
+      // Close the check/register race: a terminal update between the first check and registration
+      // already fired its waiter set, so observe the ref once more after registration.
+      if (!isInFlight(sendStatusRef.current)) release();
+    });
+  }, []);
+
+  const updateOwnedSendStatus = useCallback(
+    (signal: AbortSignal, next: SendStatus): void => {
+      if (latestSendSignalRef.current === signal) updateSendStatus(next);
+    },
+    [updateSendStatus],
+  );
+
+  const reconcileCanonicalUserPersistence = useCallback(
+    async (
+      chatId: string,
+      projectPath: string,
+      optimistic: ChatMessage,
+      messageIdsBeforeSend: ReadonlySet<string>,
+      preserveOptimisticOnMissing: boolean,
+      signal: AbortSignal,
+    ): Promise<UserPersistenceProof> => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        controller.abort();
+      }, CANONICAL_USER_RECONCILIATION_TIMEOUT_MS);
+      reconciliationControllersRef.current.set(controller, timer);
+      try {
+        const payload = await raceUiAbort(
+          fetchChatMessages(chatId, projectPath, controller.signal),
+          controller.signal,
+        );
+        const proof = hasNewCanonicalUserMessage(
+          payload.messages,
+          messageIdsBeforeSend,
+          optimistic.content,
+          optimistic.timestamp,
+        )
+          ? "persisted"
+          : "missing";
+        if (
+          mountedRef.current &&
+          activeChatIdRef.current === chatId &&
+          latestSendSignalRef.current === signal
+        ) {
+          setState((previous) => ({
+            ...previous,
+            messages: [
+              ...Array.from(payload.messages),
+              ...(proof === "missing" && preserveOptimisticOnMissing ? [optimistic] : []),
+              ...previous.messages.filter(
+                (message) => message.id.startsWith("local-") && message.id !== optimistic.id,
+              ),
+            ],
+          }));
+        }
+        return proof;
+      } catch {
+        // A failed reconciliation cannot prove that the request was rejected. Keep the reviewed user
+        // text visible and report an uncertain outcome; silently removing it would lose a final voice
+        // transcript that the server may already have persisted.
+        if (
+          mountedRef.current &&
+          activeChatIdRef.current === chatId &&
+          latestSendSignalRef.current === signal
+        ) {
+          setState((previous) =>
+            previous.messages.some((message) => message.id === optimistic.id)
+              ? previous
+              : { ...previous, messages: [...previous.messages, optimistic] },
+          );
+        }
+        return "unknown";
+      } finally {
+        clearTimeout(timer);
+        reconciliationControllersRef.current.delete(controller);
+      }
+    },
+    [],
+  );
 
   const syncRunSummaryMessage = useCallback(
     async (chat: Chat, projectPath: string, message: ChatMessage, syncKey: string) => {
@@ -1269,7 +1991,21 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setError(undefined);
       try {
         const patch = await sharedBootstrapSession(autoCreate);
-        if (!cancelled) setState((previous) => ({ ...previous, ...patch }));
+        if (!cancelled) {
+          setState((previous) => {
+            const next = { ...previous, ...patch };
+            return next.activeChat === undefined
+              ? next
+              : {
+                  ...next,
+                  messages: mergeCanonicalVoiceProjections(
+                    next.messages,
+                    next.activeChat.id,
+                    canonicalVoiceProjectionRef.current,
+                  ),
+                };
+          });
+        }
       } catch (caught) {
         if (!cancelled) setError(errorMessage(caught));
       } finally {
@@ -1280,7 +2016,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     return () => {
       cancelled = true;
     };
-  }, [autoCreate]);
+  }, [autoCreate, canonicalVoiceProjectionRef]);
 
   useEffect(() => {
     return subscribeChatMutations((mutation) => {
@@ -1307,15 +2043,32 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, []);
 
   useEffect(() => {
+    const reconciliationControllers = reconciliationControllersRef.current;
     mountedRef.current = true;
     // GEN-PERF-CHAT-011 — install a fresh controller for this mount so a StrictMode remount (which
     // re-runs this effect after the cleanup aborted the previous one) polls with a live signal.
     if (runSummaryControllerRef.current.signal.aborted) {
       runSummaryControllerRef.current = new AbortController();
     }
+    if (canonicalVoiceQueueControllerRef.current.signal.aborted) {
+      canonicalVoiceQueueControllerRef.current = new AbortController();
+    }
     return () => {
       mountedRef.current = false;
+      sendStatusRef.current = "cancelled";
       sendControllerRef.current?.abort();
+      sendControllerRef.current = null;
+      sendControllerOwnerRef.current = null;
+      latestSendSignalRef.current = null;
+      for (const [controller, timer] of reconciliationControllers) {
+        clearTimeout(timer);
+        controller.abort();
+      }
+      reconciliationControllers.clear();
+      canonicalVoiceQueueControllerRef.current.abort();
+      // Accepted Voice finals and their optimistic projections belong to the page-lifecycle outbox,
+      // not this component instance. The next ChatSession attachment resumes the same identities;
+      // only the in-flight HTTP wait owned by this unmounting hook is cancelled here.
       // GEN-PERF-CHAT-011 — abort the run-summary pollers so their loops stop at the next fetch/
       // sleep edge instead of running out their remaining (up to 120) attempts after unmount.
       runSummaryControllerRef.current.abort();
@@ -1502,7 +2255,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           chats: sorted,
           activeChat: latest,
           selectedModel,
-          messages: Array.from(messagePayload.messages),
+          messages: mergeCanonicalVoiceProjections(
+            messagePayload.messages,
+            latest.id,
+            canonicalVoiceProjectionRef.current,
+          ),
         }));
         setLatestMemory(undefined);
       } catch (caught) {
@@ -1510,7 +2267,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(caught));
       }
     },
-    [openNewChat, state.models],
+    [canonicalVoiceProjectionRef, openNewChat, state.models],
   );
 
   const openChat = useCallback(
@@ -1520,8 +2277,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setStreamingAssistantMessage(undefined);
       // Issue #152 — opening a different chat must abort any in-flight send so
       // a late response from the prior chat never lands here.
-      sendControllerRef.current?.abort();
-      sendControllerRef.current = null;
+      if (sendControllerOwnerRef.current !== "canonical-voice") {
+        sendControllerRef.current?.abort();
+        sendControllerRef.current = null;
+        sendControllerOwnerRef.current = null;
+      }
       activeChatIdRef.current = chat.id;
       // Issue #185 — clear any prior grounded answer so the new chat doesn't render stale
       // citations from a previous conversation's last grounded turn.
@@ -1540,7 +2300,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             activeProject: project,
             activeChat: chat,
             selectedModel,
-            messages: Array.from(messagePayload.messages),
+            messages: mergeCanonicalVoiceProjections(
+              messagePayload.messages,
+              chat.id,
+              canonicalVoiceProjectionRef.current,
+            ),
           };
         });
       } catch (caught) {
@@ -1548,7 +2312,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(caught));
       }
     },
-    [state.activeChat?.id, state.models],
+    [canonicalVoiceProjectionRef, state.activeChat?.id, state.models],
   );
 
   const addProject = useCallback(
@@ -1585,7 +2349,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       tempAssistantId: string,
       optimisticId: string,
       signal: AbortSignal,
-      resolve: (status: SendStatus) => void,
+      resolve: (outcome: SendAttemptOutcome) => void,
     ): import("@/lib/api").StreamHandlers => {
       let statusFlippedToStreaming = false;
       // GEN-PERF-CHAT-007 — coalesce streamed token deltas. Each onToken appends to a buffer and
@@ -1618,7 +2382,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         onToken: (text: string): void => {
           if (isSupersededOrAborted(chatId, signal)) return;
           if (!statusFlippedToStreaming) {
-            updateSendStatus("streaming");
+            updateOwnedSendStatus(signal, "streaming");
             statusFlippedToStreaming = true;
           }
           pendingText += text;
@@ -1635,7 +2399,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             setStreamingAssistantMessage((current) =>
               current?.id === tempAssistantId ? undefined : current,
             );
-            resolve("cancelled");
+            resolve({ status: "cancelled" });
             return;
           }
           setStreamingAssistantMessage((current) =>
@@ -1645,14 +2409,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             ...previous,
             activeChat: payload.chat,
             chats: upsertChatIntoList(previous.chats, payload.chat),
-            messages: [
-              ...removeMessagesByIds(previous.messages, [optimisticId, tempAssistantId]),
-              ...Array.from(payload.messages),
-            ],
+            messages: replaceCanonicalTurnMessages(
+              previous.messages,
+              [optimisticId, tempAssistantId],
+              payload.messages,
+            ),
           }));
           notifyChatUpsert(payload.chat);
           if (payload.memory !== undefined) setLatestMemory(payload.memory);
-          resolve("completed");
+          const outcome = completedSendOutcome(payload.messages);
+          if (outcome.status === "failed") setError(EMPTY_MODEL_RESPONSE_USER_MESSAGE);
+          resolve(outcome);
         },
         onError: ({ code, message }: { code: string; message: string }): void => {
           // GEN-PERF-CHAT-007 — cancel any pending frame; onError/onCancelled remove the temp
@@ -1661,22 +2428,27 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           pendingText = "";
           if (isSupersededOrAborted(chatId, signal)) {
             removeTempMessage(tempAssistantId);
-            resolve("cancelled");
+            resolve({ status: "cancelled" });
+            return;
+          }
+          if (code === "CHAT_TURN_IN_PROGRESS") {
+            removeTempMessage(tempAssistantId);
+            resolve({ status: "failed", canonicalTurnInProgress: true });
             return;
           }
           setError(errorMessage(new ApiError(code, message, 0)));
           removeTempMessage(tempAssistantId);
-          resolve("failed");
+          resolve({ status: "failed" });
         },
         onCancelled: (): void => {
           cancelFlush();
           pendingText = "";
           removeTempMessage(tempAssistantId);
-          resolve("cancelled");
+          resolve({ status: "cancelled" });
         },
       };
     },
-    [removeTempMessage, updateSendStatus],
+    [removeTempMessage, updateOwnedSendStatus],
   );
 
   // Issue #152 Layer 3 — streaming path for canStream models. Inserts a temp
@@ -1684,16 +2456,19 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // canonical messages on done. On cancel/error the temp bubble is removed so
   // no partial content persists (AC#3).
   const streamUngrounded = useCallback(
-    (
-      chat: Chat,
-      project: ProjectWithAvailability,
-      content: string,
-      optimisticId: string,
-      modelId: string,
-      signal: AbortSignal,
-      documentContext: readonly ConversationDocumentContextWire[],
-      attachments: readonly ConversationAttachmentDescriptorWire[],
-    ): Promise<SendStatus> => {
+    (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {
+      const {
+        chat,
+        project,
+        content,
+        optimisticId,
+        modelId,
+        signal,
+        documentContext,
+        attachments,
+        memory,
+        clientTurnId,
+      } = request;
       const tempAssistantId = `stream-${String(Date.now())}`;
       setStreamingAssistantMessage({
         id: tempAssistantId,
@@ -1712,11 +2487,15 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         projectPath: project.path,
         content,
         modelId,
-        memory: buildMemoryRequest(chat, project),
+        memory,
         ...(documentContext.length > 0 ? { documentContext } : {}),
         ...(attachments.length > 0 ? { attachments } : {}),
+        ...(clientTurnId === undefined ? {} : { clientTurnId }),
+        ...(clientTurnId === undefined || chat.groundingScopeIdentity === undefined
+          ? {}
+          : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
       };
-      return new Promise<SendStatus>((resolve, reject) => {
+      return new Promise<SendAttemptOutcome>((resolve, reject) => {
         const handlers = buildStreamHandlers(
           chat.id,
           tempAssistantId,
@@ -1732,135 +2511,28 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             // surfacing a hard failure to the user.
             reject(caught);
           } else if (caught instanceof DOMException && caught.name === "AbortError") {
-            resolve("cancelled");
+            resolve({ status: "cancelled" });
           } else if (isSupersededOrAborted(chat.id, signal)) {
-            resolve("cancelled");
+            resolve({ status: "cancelled" });
           } else {
             // Mid-stream client error (e.g. network drop, reader TypeError). Surface it so the
             // UI does not silently swallow the failure. The server has already persisted the
             // user message at this point; removing it here is UI-only — it reappears on reload,
             // which matches the behaviour of sendUngroundedBuffered and sendGrounded.
-            handleStreamUngroundedTransportFailure(
-              caught,
-              optimisticId,
-              setError,
-              setState,
-              resolve,
-            );
+            handleStreamUngroundedTransportFailure(caught, setError, resolve);
           }
         });
       });
     },
-    [buildMemoryRequest, buildStreamHandlers, removeTempMessage],
+    [buildStreamHandlers, removeTempMessage],
   );
 
   // Issue #152 Layer 3 — non-streaming fallback path (canStream=false or
   // StreamingUnavailableError pre-stream). Kept separate so sendUngrounded
   // stays within the 50-line function limit.
   const sendUngroundedBuffered = useCallback(
-    async (
-      chat: Chat,
-      project: ProjectWithAvailability,
-      content: string,
-      optimisticId: string,
-      modelId: string,
-      signal: AbortSignal,
-      documentContext: readonly ConversationDocumentContextWire[],
-      attachments: readonly ConversationAttachmentDescriptorWire[],
-    ): Promise<SendStatus> => {
-      try {
-        updateSendStatus("contacting");
-        // Issue #148 — byte-bounded document context on the request body.
-        const result = await sendDesktopChat(
-          {
-            chatId: chat.id,
-            projectPath: project.path,
-            content,
-            modelId,
-            memory: buildMemoryRequest(chat, project),
-            ...(documentContext.length > 0 ? { documentContext } : {}),
-            ...(attachments.length > 0 ? { attachments } : {}),
-          },
-          signal,
-        );
-        if (isSupersededOrAborted(chat.id, signal)) return "cancelled";
-        setState((previous) => ({
-          ...previous,
-          activeChat: result.chat,
-          chats: sortChats([
-            result.chat,
-            ...previous.chats.filter((existing) => existing.id !== result.chat.id),
-          ]),
-          messages: [
-            ...previous.messages.filter((message) => message.id !== optimisticId),
-            ...Array.from(result.messages),
-          ],
-        }));
-        notifyChatUpsert(result.chat);
-        setLatestMemory(result.memory);
-        return "completed";
-      } catch (caught) {
-        if (caught instanceof DOMException && caught.name === "AbortError") {
-          return "cancelled";
-        }
-        if (isSupersededOrAborted(chat.id, signal)) return "cancelled";
-        setError(errorMessage(caught));
-        try {
-          const messagePayload = await fetchChatMessages(chat.id, project.path);
-          setState((previous) => ({ ...previous, messages: Array.from(messagePayload.messages) }));
-        } catch {
-          setState((previous) => ({
-            ...previous,
-            messages: previous.messages.filter((message) => message.id !== optimisticId),
-          }));
-        }
-        return "failed";
-      }
-    },
-    [buildMemoryRequest, updateSendStatus],
-  );
-
-  const sendUngrounded = useCallback(
-    async (
-      chat: Chat,
-      project: ProjectWithAvailability,
-      content: string,
-      optimisticId: string,
-      modelId: string,
-      signal: AbortSignal,
-      documentContext: readonly ConversationDocumentContextWire[],
-      attachments: readonly ConversationAttachmentDescriptorWire[],
-    ): Promise<SendStatus> => {
-      const canStream = state.models.find((m) => m.id === modelId)?.streaming === true;
-      if (!canStream) {
-        return sendUngroundedBuffered(
-          chat,
-          project,
-          content,
-          optimisticId,
-          modelId,
-          signal,
-          documentContext,
-          attachments,
-        );
-      }
-      updateSendStatus("contacting");
-      try {
-        return await streamUngrounded(
-          chat,
-          project,
-          content,
-          optimisticId,
-          modelId,
-          signal,
-          documentContext,
-          attachments,
-        );
-      } catch (caught) {
-        // StreamingUnavailableError before SSE headers — fall back to buffered.
-        if (!(caught instanceof StreamingUnavailableError)) throw caught;
-      }
-      return sendUngroundedBuffered(
+    async (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {
+      const {
         chat,
         project,
         content,
@@ -1869,9 +2541,78 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         signal,
         documentContext,
         attachments,
-      );
+        memory,
+        clientTurnId,
+      } = request;
+      try {
+        updateOwnedSendStatus(signal, "contacting");
+        // Issue #148 — byte-bounded document context on the request body.
+        const result = await sendDesktopChat(
+          {
+            chatId: chat.id,
+            projectPath: project.path,
+            content,
+            modelId,
+            memory,
+            ...(documentContext.length > 0 ? { documentContext } : {}),
+            ...(attachments.length > 0 ? { attachments } : {}),
+            ...(clientTurnId === undefined ? {} : { clientTurnId }),
+            ...(clientTurnId === undefined || chat.groundingScopeIdentity === undefined
+              ? {}
+              : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
+          },
+          signal,
+        );
+        if (signal.aborted) return { status: "cancelled" };
+        const outcome = completedSendOutcome(result.messages);
+        if (!isStillActiveChat(chat.id)) return outcome;
+        setState((previous) => ({
+          ...previous,
+          activeChat: result.chat,
+          chats: sortChats([
+            result.chat,
+            ...previous.chats.filter((existing) => existing.id !== result.chat.id),
+          ]),
+          messages: replaceCanonicalTurnMessages(
+            previous.messages,
+            [optimisticId],
+            result.messages,
+          ),
+        }));
+        notifyChatUpsert(result.chat);
+        setLatestMemory(result.memory);
+        if (outcome.status === "failed") setError(EMPTY_MODEL_RESPONSE_USER_MESSAGE);
+        return outcome;
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === "AbortError") {
+          return { status: "cancelled" };
+        }
+        if (isSupersededOrAborted(chat.id, signal)) return { status: "cancelled" };
+        const failure = canonicalTurnInProgressFailure(caught);
+        if (failure.canonicalTurnInProgress !== true) setError(errorMessage(caught));
+        return failure;
+      }
     },
-    [state.models, sendUngroundedBuffered, streamUngrounded, updateSendStatus],
+    [updateOwnedSendStatus],
+  );
+
+  const sendUngrounded = useCallback(
+    async (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {
+      const { modelId, signal } = request;
+      const canStream = state.models.find((m) => m.id === modelId)?.streaming === true;
+      if (!canStream) {
+        return sendUngroundedBuffered(request);
+      }
+      updateOwnedSendStatus(signal, "contacting");
+      try {
+        return await streamUngrounded(request);
+      } catch (caught) {
+        // StreamingUnavailableError before SSE headers — fall back to buffered.
+        if (!(caught instanceof StreamingUnavailableError)) throw caught;
+      }
+      return sendUngroundedBuffered(request);
+    },
+    [state.models, sendUngroundedBuffered, streamUngrounded, updateOwnedSendStatus],
   );
 
   // When the active chat carries either a Files connected scope or a local-knowledge scope,
@@ -1882,25 +2623,35 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const sendGrounded = useCallback(
     async (
       chat: Chat,
-      project: ProjectWithAvailability,
       content: string,
       optimisticId: string,
       modelId: string,
       signal: AbortSignal,
-    ): Promise<SendStatus> => {
+      memory: ConversationMemoryRequestWire,
+      clientTurnId: string | undefined,
+    ): Promise<SendAttemptOutcome> => {
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
       setLatestGrounded(undefined);
       try {
-        updateSendStatus("contacting");
+        updateOwnedSendStatus(signal, "contacting");
         const result = await askGrounded(
-          { chatId: chat.id, content, modelId, memory: buildMemoryRequest(chat, project) },
+          {
+            chatId: chat.id,
+            content,
+            modelId,
+            memory,
+            ...(clientTurnId === undefined ? {} : { clientTurnId }),
+            ...(clientTurnId === undefined || chat.groundingScopeIdentity === undefined
+              ? {}
+              : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
+          },
           signal,
         );
         if (!isStillActiveChat(chat.id)) {
-          return "completed";
+          return { status: "completed", assistantMessageId: result.assistantMessageId };
         }
-        if (signal.aborted) return "cancelled";
+        if (signal.aborted) return { status: "cancelled" };
         setLatestGrounded(result);
         setLatestMemory(result.memory);
         // Refresh BOTH messages AND chats so the sidebar reflects the new updated_at and
@@ -1909,31 +2660,93 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           fetchChatMessages(chat.id, chat.projectPath),
           fetchChats(chat.projectPath),
         ]);
+        if (!isStillActiveChat(chat.id)) {
+          return { status: "completed", assistantMessageId: result.assistantMessageId };
+        }
+        if (signal.aborted) return { status: "cancelled" };
         const refreshedActive = chatsPayload.chats.find((c) => c.id === chat.id);
-        setState((previous) => ({
-          ...previous,
-          messages: Array.from(messagePayload.messages),
-          chats: sortChats(chatsPayload.chats),
-          activeChat: refreshedActive ?? previous.activeChat,
-        }));
+        setState((previous) =>
+          activeChatIdRef.current !== chat.id || previous.activeChat?.id !== chat.id
+            ? previous
+            : {
+                ...previous,
+                messages: mergeCanonicalVoiceProjections(
+                  messagePayload.messages,
+                  chat.id,
+                  canonicalVoiceProjectionRef.current,
+                  [optimisticId],
+                ),
+                chats: sortChats(chatsPayload.chats),
+                activeChat: refreshedActive ?? previous.activeChat,
+              },
+        );
         if (refreshedActive !== undefined) notifyChatUpsert(refreshedActive);
-        return "completed";
+        return { status: "completed", assistantMessageId: result.assistantMessageId };
       } catch (caught) {
         // Issue #152 — abort preserves the user's optimistic message (AC#3:
         // no fake assistant content is persisted; the user's prompt remains
         // visible so they can edit & retry without retyping).
         if (caught instanceof DOMException && caught.name === "AbortError") {
-          return "cancelled";
+          return { status: "cancelled" };
         }
-        setError(errorMessage(caught));
-        setState((previous) => ({
-          ...previous,
-          messages: previous.messages.filter((message) => message.id !== optimisticId),
-        }));
-        return "failed";
+        if (isSupersededOrAborted(chat.id, signal)) return { status: "cancelled" };
+        const failure = canonicalTurnInProgressFailure(caught);
+        if (failure.canonicalTurnInProgress !== true) setError(errorMessage(caught));
+        return failure;
       }
     },
-    [buildMemoryRequest, updateSendStatus],
+    [canonicalVoiceProjectionRef, updateOwnedSendStatus],
+  );
+
+  const executeSendAttempt = useCallback(
+    async (request: SendAttemptRequest): Promise<SendAttemptExecution> => {
+      const { chat, canonicalTarget, signal } = request;
+      const grounded = hasGroundingScope(chat);
+      const skipSupplementalContext = grounded || canonicalTarget !== undefined;
+      const documentBundle = skipSupplementalContext
+        ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
+        : await buildDocumentContext();
+      const attachments: readonly ConversationAttachmentDescriptorWire[] = skipSupplementalContext
+        ? []
+        : buildAttachmentDescriptors();
+      const memory = canonicalTarget?.memory ?? buildMemoryRequest(chat, request.project);
+      if (grounded) {
+        const terminal = await sendGrounded(
+          chat,
+          request.content,
+          request.optimisticId,
+          request.modelId,
+          signal,
+          memory,
+          request.clientTurnId,
+        );
+        return { terminal, disclosures: documentBundle.disclosures };
+      }
+      const ungroundedRequest: UngroundedSendRequest = {
+        chat,
+        project: request.project,
+        content: request.content,
+        optimisticId: request.optimisticId,
+        modelId: request.modelId,
+        signal,
+        documentContext: documentBundle.entries,
+        attachments,
+        memory,
+        clientTurnId: request.clientTurnId,
+      };
+      const terminal = request.forceBuffered
+        ? await sendUngroundedBuffered(ungroundedRequest)
+        : await sendUngrounded(ungroundedRequest);
+      return { terminal, disclosures: documentBundle.disclosures };
+    },
+    [
+      buildAttachmentDescriptors,
+      buildDocumentContext,
+      buildMemoryRequest,
+      sendGrounded,
+      sendUngrounded,
+      sendUngroundedBuffered,
+    ],
   );
 
   // Issue #152 — unified cancel that aborts any in-flight send (grounded OR
@@ -1945,6 +2758,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     if (!isInFlight(sendStatusRef.current)) return;
     sendControllerRef.current?.abort();
     sendControllerRef.current = null;
+    sendControllerOwnerRef.current = null;
     setRegeneratingMessageId(undefined);
     updateSendStatus("cancelled");
   }, [updateSendStatus]);
@@ -1955,49 +2769,25 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const cancelGrounded = cancelSend;
 
   const sendMessage = useCallback(
-    async (options?: SendMessageOptions): Promise<void> => {
-      // Issue #152 / AC#2 — idempotent send. Checking the ref (not the React
-      // state) defends against the same tick double-submit (Enter held, click
-      // burst, etc.). The terminal states are treated as "ready to send again"
-      // — only mid-flight states block.
-      if (isInFlight(sendStatusRef.current)) return;
-      // Issue #1561 — an explicit `options.text` (the committed spoken transcript) is sent instead of the
-      // draft. The voice dialogue session cannot use the draft here: it would have to call setDraft(text)
-      // then sendMessage() in the same tick, but this callback closes over the React `draft` state, so the
-      // just-set value is invisible until the next render and the send would early-return on empty content.
-      // Reading the override directly makes the spoken turn flow through the identical context-bearing path.
-      const content = (options?.text ?? draft).trim();
-      const chat = state.activeChat;
-      const project = state.activeProject;
-      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
-      // AC #1: block submission when no eligible model is configured.
-      if (
-        content.length === 0 ||
-        chat === undefined ||
-        project === undefined ||
-        modelId === undefined
-      )
-        return;
-      // Issue #4 — block grounded sends that would silently discard attachments.
-      // The grounded path derives context from the repo/local-knowledge scope and
-      // ignores pendingAttachments entirely. Surface a notice and abort so the
-      // user can remove the attachment before sending.
-      if (hasGroundingScope(chat) && pendingAttachments.length > 0) {
-        setError(GROUNDED_ATTACHMENT_NOTICE);
-        return;
+    async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
+      const admission = resolveSendMessageAdmission({
+        options,
+        draft,
+        activeChat: state.activeChat,
+        selectedModel: state.selectedModel,
+        models: state.models,
+        pendingAttachmentCount: pendingAttachments.length,
+        sendInFlight: isInFlight(sendStatusRef.current),
+      });
+      if (admission.kind === "rejected") {
+        if (admission.error !== undefined) setError(admission.error);
+        return { status: "not-sent" };
       }
-      const optimistic: ChatMessage = {
-        id: `local-${String(Date.now())}`,
-        chatId: chat.id,
-        role: "user",
-        content,
-        timestamp: Date.now(),
-        runId: undefined,
-        workflowId: undefined,
-        workflowStatus: undefined,
-        shortResult: undefined,
-        taskType: undefined,
-      };
+      const { canonicalTarget, chat, project, content, modelId } = admission;
+      const currentMessages = sessionStateRef.current.messages;
+      const messageIdsBeforeSend = new Set(currentMessages.map((message) => message.id));
+      const optimistic =
+        options?.optimisticMessage ?? canonicalVoiceOptimisticMessage(chat.id, content);
       // Synchronously commit to "queued" so a re-entrant call in the same tick
       // hits the isInFlight guard above (AC#2).
       updateSendStatus("queued");
@@ -2005,76 +2795,374 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setDraft("");
       }
       setError(undefined);
-      setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
+      setState((previous) =>
+        previous.activeChat?.id !== chat.id ||
+        previous.messages.some((message) => message.id === optimistic.id)
+          ? previous
+          : { ...previous, messages: [...previous.messages, optimistic] },
+      );
       // Issue #152 — fresh controller per send. The previous controller (if
       // any) was either already settled or already aborted via cancelSend.
       const controller = new AbortController();
       sendControllerRef.current = controller;
+      sendControllerOwnerRef.current =
+        canonicalTarget === undefined ? "composer" : "canonical-voice";
+      latestSendSignalRef.current = controller.signal;
       setLatestMemory(undefined);
       try {
-        // Merge resolution (PR #355 + Epic #142): route through sendGrounded
-        // when EITHER a Files connected scope OR a local-knowledge scope is
-        // attached. The epic's sendGrounded signature (with modelId + signal +
-        // SendStatus return) is the canonical one; #355 expanded only the
-        // routing predicate, not the underlying send path.
-        const isGrounded = hasGroundingScope(chat);
-        // Issue #148 — extract bounded document text for the ungrounded path only. The grounded
-        // path derives its context from the repo/local-knowledge scope, not from attachments.
-        const { entries: documentContext, disclosures } = isGrounded
-          ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
-          : await buildDocumentContext();
-        const attachmentDescriptors: readonly ConversationAttachmentDescriptorWire[] = isGrounded
-          ? []
-          : buildAttachmentDescriptors();
-        const terminal = isGrounded
-          ? await sendGrounded(chat, project, content, optimistic.id, modelId, controller.signal)
-          : await sendUngrounded(
-              chat,
-              project,
-              content,
-              optimistic.id,
-              modelId,
-              controller.signal,
-              documentContext,
-              attachmentDescriptors,
-            );
-        // If cancelSend already flipped the status to "cancelled", do not
-        // override it with a stale "completed" — cancellation wins.
-        if (sendStatusRef.current === "cancelled") {
-          // The send path may have written the assistant message between abort
-          // and the cancel registering. Remove the optimistic user-row's
-          // assistant counterpart by trusting the path-returned terminal — but
-          // for cancelled we already preserved the user row, and we did NOT
-          // persist assistant content (signal.aborted check + AbortError
-          // branch). Nothing to do here.
-        } else {
-          updateSendStatus(terminal);
+        const { terminal, disclosures } = await executeSendAttempt({
+          chat,
+          project,
+          content,
+          optimisticId: optimistic.id,
+          modelId,
+          signal: controller.signal,
+          canonicalTarget,
+          forceBuffered: options?.forceBuffered === true,
+          clientTurnId: options?.clientTurnId,
+        });
+        const settled: SendAttemptOutcome = controller.signal.aborted
+          ? { status: "cancelled" }
+          : terminal;
+        const exactTurnInProgress =
+          terminal.status === "failed" && terminal.canonicalTurnInProgress === true;
+        let persistence: UserPersistenceProof = "persisted";
+        if (settled.status !== "completed") {
+          const reconciliation = await reconcileCanonicalUserPersistence(
+            chat.id,
+            project.path,
+            optimistic,
+            messageIdsBeforeSend,
+            !exactTurnInProgress &&
+              (settled.status === "cancelled" || options?.clientTurnId !== undefined),
+            controller.signal,
+          );
+          if (!exactTurnInProgress) persistence = reconciliation;
         }
-        if (terminal === "completed") {
+        // Only the latest attempt owns the shared lifecycle. cancelSend leaves this attempt's signal
+        // as owner until settlement; an immediate replacement installs a different signal and cannot
+        // be clobbered by this continuation.
+        updateOwnedSendStatus(controller.signal, settled.status);
+        if (terminal.status === "completed" && canonicalTarget === undefined) {
           // AC #3 (#147): clear pending attachments after a successful send.
           clearPendingAttachments();
           // Issue #148 — record which documents contributed context so the UI can disclose them.
           setLastSentDocuments(disclosures);
         }
+        return settledSendMessageOutcome({ settled, terminal, persistence, canonicalTarget });
       } finally {
-        sendControllerRef.current = null;
+        if (sendControllerRef.current === controller) {
+          sendControllerRef.current = null;
+          sendControllerOwnerRef.current = null;
+        }
+        if (latestSendSignalRef.current === controller.signal) {
+          latestSendSignalRef.current = null;
+        }
       }
     },
     [
       draft,
       state.activeChat,
-      state.activeProject,
       state.selectedModel,
       state.models,
       pendingAttachments,
-      sendGrounded,
-      sendUngrounded,
-      buildDocumentContext,
-      buildAttachmentDescriptors,
       clearPendingAttachments,
+      executeSendAttempt,
+      reconcileCanonicalUserPersistence,
+      updateOwnedSendStatus,
       updateSendStatus,
     ],
+  ) as SendMessage;
+
+  sendMessageRef.current = sendMessage;
+
+  const releaseCanonicalVoiceProjection = useCallback(
+    (item: CanonicalVoiceQueueItem): void => {
+      const projection = canonicalVoiceProjectionRef.current.get(item.key);
+      if (projection?.message.id !== item.optimistic.id) return;
+      canonicalVoiceProjectionRef.current.delete(item.key);
+      canonicalVoiceProjectionBytesRef.current -= projection.byteLength;
+    },
+    [canonicalVoiceProjectionBytesRef, canonicalVoiceProjectionRef],
   );
+
+  const cacheSettledCanonicalVoiceDelivery = useCallback(
+    (item: CanonicalVoiceQueueItem, outcome: SendMessageOutcome): void => {
+      canonicalVoiceSettledRef.current.set(item.key, {
+        contentDigest: item.contentDigest,
+        outcome,
+      });
+      if (canonicalVoiceSettledRef.current.size <= CANONICAL_VOICE_QUEUE_MAX_ITEMS * 2) return;
+      const oldestKey = canonicalVoiceSettledRef.current.keys().next().value as string | undefined;
+      if (oldestKey !== undefined) canonicalVoiceSettledRef.current.delete(oldestKey);
+    },
+    [canonicalVoiceSettledRef],
+  );
+
+  const requestQueuedCanonicalVoiceDelivery = useCallback(
+    async (
+      item: CanonicalVoiceQueueItem,
+      signal: AbortSignal,
+    ): Promise<CanonicalVoiceQueueDelivery | undefined> => {
+      const sender = sendMessageRef.current;
+      if (sender === null) return undefined;
+      const itemController = new AbortController();
+      const abortItem = (): void => itemController.abort();
+      signal.addEventListener("abort", abortItem, { once: true });
+      canonicalVoicePageOutbox.activeDelivery = { key: item.key, abort: abortItem };
+      try {
+        return await deliverCanonicalVoiceQueueItem(item, {
+          signal: itemController.signal,
+          send: sender,
+          waitForSendSlot: () => waitForCanonicalVoiceSendSlot(itemController.signal),
+          onDeliveryDelayed: () => {
+            setError(CANONICAL_VOICE_PENDING_ERROR);
+          },
+          onUserPersisted: () => {
+            releaseCanonicalVoiceProjection(item);
+          },
+        });
+      } finally {
+        signal.removeEventListener("abort", abortItem);
+        if (canonicalVoicePageOutbox.activeDelivery?.key === item.key) {
+          canonicalVoicePageOutbox.activeDelivery = undefined;
+        }
+      }
+    },
+    [releaseCanonicalVoiceProjection, waitForCanonicalVoiceSendSlot],
+  );
+
+  const settleQueuedCanonicalVoiceDelivery = useCallback(
+    (
+      item: CanonicalVoiceQueueItem,
+      delivery: CanonicalVoiceQueueDelivery | undefined,
+      signal: AbortSignal,
+    ): boolean => {
+      if (delivery === undefined) return false;
+      if (delivery.kind === "suspended") {
+        setCanonicalVoicePageOutboxSuspended(true);
+        return false;
+      }
+      if (delivery.kind === "aborted") {
+        return !signal.aborted && canonicalVoiceQueueRef.current[0] !== item;
+      }
+      const { outcome } = delivery;
+      if (signal.aborted && !canonicalVoiceOutcomeIsPersisted(outcome)) return false;
+      if (canonicalVoiceOutcomeIsPersisted(outcome) || canonicalVoiceOutcomeIsTerminal(outcome)) {
+        releaseCanonicalVoiceProjection(item);
+        cacheSettledCanonicalVoiceDelivery(item, outcome);
+      }
+      item.resolve(outcome);
+      canonicalVoiceDeliveriesRef.current.delete(item.key);
+      if (canonicalVoiceQueueRef.current[0] === item) {
+        canonicalVoiceQueueRef.current.shift();
+        canonicalVoicePageOutbox.queueBytesRef.current = Math.max(
+          0,
+          canonicalVoicePageOutbox.queueBytesRef.current - item.byteLength,
+        );
+      }
+      return true;
+    },
+    [
+      cacheSettledCanonicalVoiceDelivery,
+      canonicalVoiceDeliveriesRef,
+      canonicalVoiceQueueRef,
+      releaseCanonicalVoiceProjection,
+    ],
+  );
+
+  const drainCanonicalVoiceQueue = useCallback(async (): Promise<void> => {
+    const owner = canonicalVoiceQueueOwnerRef.current;
+    if (
+      loading ||
+      canonicalVoicePageOutbox.drainingOwner !== undefined ||
+      canonicalVoicePageOutbox.suspended
+    )
+      return;
+    canonicalVoicePageOutbox.drainingOwner = owner;
+    const signal = canonicalVoiceQueueControllerRef.current.signal;
+    try {
+      while (
+        canonicalVoicePageOutbox.drainingOwner === owner &&
+        !signal.aborted &&
+        canonicalVoiceQueueRef.current.length > 0
+      ) {
+        const item = canonicalVoiceQueueRef.current[0];
+        if (item === undefined) break;
+        const delivery = await requestQueuedCanonicalVoiceDelivery(item, signal);
+        if (!settleQueuedCanonicalVoiceDelivery(item, delivery, signal)) break;
+      }
+    } finally {
+      if (canonicalVoicePageOutbox.drainingOwner === owner) {
+        canonicalVoicePageOutbox.drainingOwner = undefined;
+      }
+      if (canonicalVoiceQueueRef.current.length > 0 && !canonicalVoicePageOutbox.suspended) {
+        wakeCanonicalVoicePageOutbox();
+      }
+    }
+  }, [
+    canonicalVoiceQueueRef,
+    loading,
+    requestQueuedCanonicalVoiceDelivery,
+    settleQueuedCanonicalVoiceDelivery,
+  ]);
+
+  drainCanonicalVoiceQueueRef.current = () => {
+    void drainCanonicalVoiceQueue();
+  };
+
+  useEffect(() => {
+    const observeSuspension = (suspended: boolean): void => {
+      setCanonicalVoiceOutboxSuspended(suspended);
+    };
+    canonicalVoicePageOutbox.suspensionSubscribers.add(observeSuspension);
+    observeSuspension(canonicalVoicePageOutbox.suspended);
+    return () => {
+      canonicalVoicePageOutbox.suspensionSubscribers.delete(observeSuspension);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    const wake = (): void => {
+      if (
+        canonicalVoiceQueueControllerRef.current.signal.aborted ||
+        canonicalVoicePageOutbox.suspended
+      )
+        return;
+      drainCanonicalVoiceQueueRef.current();
+    };
+    canonicalVoicePageOutbox.wakes.add(wake);
+    wake();
+    return () => {
+      canonicalVoicePageOutbox.wakes.delete(wake);
+    };
+  }, [loading]);
+
+  const enqueueCanonicalVoiceTurn = useCallback<EnqueueCanonicalVoiceTurn>(
+    (input) => {
+      const content = input.text.trim();
+      const clientTurnId = input.clientTurnId;
+      const chat = input.target.chat;
+      // The chat is the canonical conversation identity. Derive every request and memory scope from
+      // its persisted project path, even while the project list or active-project selection is stale.
+      // The BFF validates that path at the authority boundary; UI metadata must never redirect or
+      // silently discard a final transcript before admission.
+      const project = canonicalProjectTarget(chat);
+      // A deployment can disappear after the Voice session has already produced its final. Keep
+      // the transcript on the canonical request path with the chat's persisted model identity; the
+      // server still validates compatibility and fails closed, while the optimistic user row stays
+      // visible instead of being silently discarded by a client-only no-model guard.
+      const modelId = input.target.modelId;
+      const byteLength = new TextEncoder().encode(content).byteLength;
+      if (
+        content.length === 0 ||
+        content.length > MAX_DESKTOP_CHAT_INPUT_CHARS ||
+        byteLength > MAX_DESKTOP_CHAT_INPUT_BYTES ||
+        clientTurnId.length === 0 ||
+        clientTurnId.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS
+      ) {
+        setError(CANONICAL_VOICE_INPUT_ERROR);
+        return undefined;
+      }
+      if (!isGroundingScopeIdentity(chat.groundingScopeIdentity)) {
+        setError(CANONICAL_VOICE_SCOPE_IDENTITY_ERROR);
+        return undefined;
+      }
+      let contentDigest: string;
+      try {
+        contentDigest = canonicalVoiceContentDigest(content);
+      } catch {
+        setError(CANONICAL_VOICE_HASHING_ERROR);
+        return undefined;
+      }
+      const key = canonicalVoiceDeliveryKey(chat.id, clientTurnId);
+      const active = canonicalVoiceDeliveriesRef.current.get(key);
+      if (active !== undefined) {
+        if (active.contentDigest === contentDigest) return active.promise;
+        setError(CANONICAL_VOICE_IDENTITY_ERROR);
+        return undefined;
+      }
+      const settled = canonicalVoiceSettledRef.current.get(key);
+      if (settled !== undefined) {
+        if (settled.contentDigest === contentDigest) return Promise.resolve(settled.outcome);
+        setError(CANONICAL_VOICE_IDENTITY_ERROR);
+        return undefined;
+      }
+      const existingProjection = canonicalVoiceProjectionRef.current.get(key);
+      if (existingProjection !== undefined && existingProjection.content !== content) {
+        setError(CANONICAL_VOICE_IDENTITY_ERROR);
+        return undefined;
+      }
+      if (
+        existingProjection === undefined &&
+        !canonicalVoicePageOutboxHasCapacity(byteLength, input.allowReservedCapacity === true)
+      ) {
+        setError(CANONICAL_VOICE_QUEUE_ERROR);
+        return undefined;
+      }
+      const optimistic =
+        existingProjection?.message ?? canonicalVoiceOptimisticMessage(chat.id, content);
+      let resolveOutcome: (outcome: SendMessageOutcome) => void = () => undefined;
+      const promise = new Promise<SendMessageOutcome>((resolve) => {
+        resolveOutcome = resolve;
+      });
+      const item: CanonicalVoiceQueueItem = {
+        key,
+        content,
+        contentDigest,
+        clientTurnId,
+        target: { chat, project, modelId, memory: buildMemoryRequest(chat, project) },
+        optimistic,
+        byteLength,
+        promise,
+        resolve: resolveOutcome,
+      };
+      canonicalVoiceDeliveriesRef.current.set(key, { contentDigest, promise });
+      canonicalVoiceQueueRef.current.push(item);
+      canonicalVoicePageOutbox.queueBytesRef.current += byteLength;
+      if (existingProjection === undefined) {
+        canonicalVoiceProjectionRef.current.set(key, {
+          chatId: chat.id,
+          content,
+          message: optimistic,
+          byteLength,
+        });
+        canonicalVoiceProjectionBytesRef.current += byteLength;
+      }
+      setError(undefined);
+      setState((previous) =>
+        previous.activeChat?.id !== chat.id ||
+        previous.messages.some((message) => message.id === optimistic.id)
+          ? previous
+          : { ...previous, messages: [...previous.messages, optimistic] },
+      );
+      if (!canonicalVoicePageOutbox.suspended) void drainCanonicalVoiceQueue();
+      return promise;
+    },
+    [
+      buildMemoryRequest,
+      canonicalVoiceDeliveriesRef,
+      canonicalVoiceProjectionBytesRef,
+      canonicalVoiceProjectionRef,
+      canonicalVoiceQueueRef,
+      canonicalVoiceSettledRef,
+      drainCanonicalVoiceQueue,
+    ],
+  );
+
+  const retryPendingCanonicalVoiceTurn = useCallback((): void => {
+    if (!canonicalVoicePageOutbox.suspended || canonicalVoiceQueueRef.current.length === 0) return;
+    setError(undefined);
+    setCanonicalVoicePageOutboxSuspended(false);
+    void drainCanonicalVoiceQueue();
+  }, [canonicalVoiceQueueRef, drainCanonicalVoiceQueue]);
+
+  const canonicalVoiceCaptureMustPause = useCallback((): boolean => {
+    return canonicalVoiceQueueRef.current.length >= CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS;
+  }, [canonicalVoiceQueueRef]);
+
+  const canonicalVoiceTurnRequiresRetry = canonicalVoiceOutboxSuspended;
 
   const regenerateMessage = useCallback(
     async (assistantMessageId: string): Promise<void> => {
@@ -2090,8 +3178,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLatestMemory(undefined);
       const controller = new AbortController();
       sendControllerRef.current = controller;
+      sendControllerOwnerRef.current = "composer";
+      latestSendSignalRef.current = controller.signal;
       try {
-        updateSendStatus("contacting");
+        updateOwnedSendStatus(controller.signal, "contacting");
         const result = await regenerateDesktopChat(
           {
             chatId: chat.id,
@@ -2103,9 +3193,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           controller.signal,
         );
         if (controller.signal.aborted) {
-          updateSendStatus("cancelled");
+          updateOwnedSendStatus(controller.signal, "cancelled");
           return;
         }
+        if (activeChatIdRef.current !== chat.id) return;
         const replacement = result.messages.find((message) => message.id === assistantMessageId);
         setState((previous) => ({
           ...previous,
@@ -2123,17 +3214,23 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }));
         notifyChatUpsert(result.chat);
         setLatestMemory(result.memory);
-        updateSendStatus("completed");
+        updateOwnedSendStatus(controller.signal, "completed");
       } catch (caught) {
         if (caught instanceof DOMException && caught.name === "AbortError") {
-          updateSendStatus("cancelled");
+          updateOwnedSendStatus(controller.signal, "cancelled");
           return;
         }
-        setError(errorMessage(caught));
-        updateSendStatus("failed");
+        if (latestSendSignalRef.current === controller.signal) setError(errorMessage(caught));
+        updateOwnedSendStatus(controller.signal, "failed");
       } finally {
-        sendControllerRef.current = null;
-        setRegeneratingMessageId(undefined);
+        if (sendControllerRef.current === controller) {
+          sendControllerRef.current = null;
+          sendControllerOwnerRef.current = null;
+        }
+        if (latestSendSignalRef.current === controller.signal) {
+          latestSendSignalRef.current = null;
+          setRegeneratingMessageId(undefined);
+        }
       }
     },
     [
@@ -2142,129 +3239,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.selectedModel,
       state.models,
       buildMemoryRequest,
+      updateOwnedSendStatus,
       updateSendStatus,
     ],
-  );
-
-  const appendVoiceTurn = useCallback(
-    async (messages: readonly AppendDesktopChatVoiceTurnMessage[]): Promise<void> => {
-      const chat = state.activeChat;
-      if (chat === undefined || messages.length === 0) {
-        return;
-      }
-      const projectPath = state.activeProject?.path ?? chat.projectPath;
-      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
-      try {
-        const result = await appendDesktopChatVoiceTurnWithRetry({
-          chatId: chat.id,
-          projectPath,
-          messages,
-          ...(modelId === undefined ? {} : { modelId }),
-          memory: buildMemoryRequest(chat, state.activeProject ?? { path: projectPath }),
-        });
-        if (!mountedRef.current) {
-          return;
-        }
-        notifyChatUpsert(result.chat);
-        if (isStillActiveChat(chat.id) && result.memory !== undefined) {
-          setLatestMemory(result.memory);
-        }
-        setState((previous) => {
-          const isActiveChat = previous.activeChat?.id === chat.id;
-          const existingIds = new Set(previous.messages.map((message) => message.id));
-          const appended = isActiveChat
-            ? result.messages.filter((message) => !existingIds.has(message.id))
-            : [];
-          const chats = sortChats([
-            result.chat,
-            ...previous.chats.filter((existing) => existing.id !== result.chat.id),
-          ]);
-          return {
-            ...previous,
-            activeChat: isActiveChat ? result.chat : previous.activeChat,
-            chats,
-            messages: [...previous.messages, ...appended],
-          };
-        });
-      } catch (caught) {
-        setError(errorMessage(caught));
-      }
-    },
-    [buildMemoryRequest, state.activeChat, state.activeProject, state.models, state.selectedModel],
-  );
-
-  const runRealtimeGroundedTool = useCallback(
-    async (
-      input: RealtimeGroundedToolCallInput,
-      signal?: AbortSignal,
-    ): Promise<RealtimeGroundedToolOutput> => {
-      const chat = state.activeChat;
-      if (chat === undefined) {
-        throw new Error("No active chat is available for grounded voice.");
-      }
-      const project = state.activeProject ?? { path: chat.projectPath };
-      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
-      const result = await postRealtimeGroundedTool(
-        {
-          chatId: chat.id,
-          projectPath: project.path,
-          callId: input.callId,
-          query: input.query,
-          ...(input.userTranscript === undefined ? {} : { userTranscript: input.userTranscript }),
-          ...(modelId === undefined ? {} : { modelId }),
-          memory: buildMemoryRequest(chat, project),
-        },
-        signal,
-      );
-      if (!mountedRef.current || !isStillActiveChat(chat.id)) {
-        return result.toolOutput;
-      }
-      notifyChatUpsert(result.chat);
-      setLatestGrounded(result.groundedAnswer);
-      if (result.memory !== undefined) setLatestMemory(result.memory);
-      setState((previous) => {
-        if (previous.activeChat?.id !== chat.id) {
-          return previous;
-        }
-        const existingIds = new Set(previous.messages.map((message) => message.id));
-        const appended = result.messages.filter((message) => !existingIds.has(message.id));
-        return {
-          ...previous,
-          activeChat: result.chat,
-          chats: sortChats([
-            result.chat,
-            ...previous.chats.filter((existing) => existing.id !== result.chat.id),
-          ]),
-          messages: [...previous.messages, ...appended],
-        };
-      });
-      return result.toolOutput;
-    },
-    [buildMemoryRequest, state.activeChat, state.activeProject, state.models, state.selectedModel],
-  );
-
-  const runRealtimeMemoryTool = useCallback(
-    async (
-      input: RealtimeMemoryToolCallInput,
-      signal?: AbortSignal,
-    ): Promise<RealtimeMemoryToolOutput> => {
-      const chat = state.activeChat;
-      if (chat === undefined) {
-        throw new Error("No active chat is available for memory recall.");
-      }
-      const project = state.activeProject ?? { path: chat.projectPath };
-      return postRealtimeMemoryTool(
-        {
-          chatId: chat.id,
-          projectPath: project.path,
-          callId: input.callId,
-          query: input.query,
-          budgetTokens: memoryBudgetTokens,
-        },
-        signal,
-      );
-    },
-    [memoryBudgetTokens, state.activeChat, state.activeProject],
   );
 
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
@@ -2311,10 +3288,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       openChat,
       addProject,
       sendMessage,
+      enqueueCanonicalVoiceTurn,
+      canonicalVoiceCaptureMustPause,
+      canonicalVoiceTurnRequiresRetry,
+      retryPendingCanonicalVoiceTurn,
       regenerateMessage,
-      appendVoiceTurn,
-      runRealtimeGroundedTool,
-      runRealtimeMemoryTool,
       cancelSend,
       replaceChat,
       latestGrounded,
@@ -2357,10 +3335,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       openChat,
       addProject,
       sendMessage,
+      enqueueCanonicalVoiceTurn,
+      canonicalVoiceCaptureMustPause,
+      canonicalVoiceTurnRequiresRetry,
+      retryPendingCanonicalVoiceTurn,
       regenerateMessage,
-      appendVoiceTurn,
-      runRealtimeGroundedTool,
-      runRealtimeMemoryTool,
       cancelSend,
       replaceChat,
       latestGrounded,

@@ -244,9 +244,25 @@ describe("captureSalientFromTurn", () => {
     const request = { content: USER_TEXT, memory: { enabled: true } };
     try {
       for (let index = 0; index < 32; index += 1) {
-        scheduleMemorySalienceCapture(deps, request, ctx, "gpt-test", "ok", "desktop");
+        scheduleMemorySalienceCapture(
+          deps,
+          request,
+          ctx,
+          "gpt-test",
+          "ok",
+          "desktop",
+          `assistant-${String(index)}`,
+        );
       }
-      scheduleMemorySalienceCapture(deps, request, ctx, "gpt-test", "ok", "voice");
+      scheduleMemorySalienceCapture(
+        deps,
+        request,
+        ctx,
+        "gpt-test",
+        "ok",
+        "voice",
+        "assistant-dropped",
+      );
 
       expect(model.callCount()).toBe(0);
       await vi.waitFor(() => {
@@ -261,7 +277,15 @@ describe("captureSalientFromTurn", () => {
 
       model.resolveAll();
       await yieldToImmediate();
-      scheduleMemorySalienceCapture(deps, request, ctx, "gpt-test", "ok", "voice");
+      scheduleMemorySalienceCapture(
+        deps,
+        request,
+        ctx,
+        "gpt-test",
+        "ok",
+        "voice",
+        "assistant-retry",
+      );
       await vi.waitFor(() => {
         expect(model.callCount()).toBe(33);
       });
@@ -285,6 +309,41 @@ describe("captureSalientFromTurn", () => {
     expect(actions).toHaveLength(3);
     expect(actions.every((a) => a.kind === "candidate")).toBe(true);
     expect(countMemories(vault, ctx)).toBe(3);
+  });
+
+  it("keeps a failed model response body out of operator diagnostics", async () => {
+    const bodyMarker = "fixture-salience-provider-body-marker";
+    const vault = makeVault();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () =>
+        fakeModel(() => {
+          throw new Error(`provider response body: ${bodyMarker}`);
+        }),
+      diagnostics,
+    });
+
+    await expect(
+      captureSalientFromTurn(
+        deps,
+        { content: USER_TEXT, memory: { enabled: true } },
+        context(),
+        "gpt-test",
+        "ok",
+        "desktop",
+        "assistant-failed-turn",
+      ),
+    ).resolves.toEqual([]);
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorClass: "Error",
+        correlationId: "assistant-failed-turn",
+        message: "server-operation-failed",
+        source: "memory-salience.captureSalientFromTurn",
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(bodyMarker);
   });
 
   it("persists German salience bodies without forcing them through English", async () => {

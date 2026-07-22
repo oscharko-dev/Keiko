@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { naturalLanguageContentTermGroups } from "./repoSearchMatchers.js";
+import { repositoryRouteDeclarationMarker } from "./repoSearchRoutes.js";
 import type { ScoredLine } from "./repoSearchLineSelection.js";
 import {
   contentTermGroupsForSearch,
@@ -9,13 +10,7 @@ import {
   type RouteQueryTerms,
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
-import type {
-  PreparedWorkspaceIndexEntry,
-  WorkspaceIndexLexicalLine,
-  WorkspaceIndexLexicalRecord,
-} from "./workspaceIndex.js";
-
-const ROUTE_WINDOW_LINES = 4;
+import type { PreparedWorkspaceIndexEntry, WorkspaceIndexLexicalRecord } from "./workspaceIndex.js";
 
 interface CachedHashGroup {
   readonly hashes: ReadonlySet<string>;
@@ -23,8 +18,7 @@ interface CachedHashGroup {
 }
 
 interface CachedRouteQuery {
-  readonly methodHash: string;
-  readonly pathHashes: ReadonlySet<string>;
+  readonly declarationMarkerHash: string;
 }
 
 export interface CachedLexicalQuery {
@@ -37,29 +31,6 @@ export interface CachedLexicalQuery {
 function hashTerm(term: string): string {
   return createHash("sha256").update(term.toLowerCase()).digest("hex");
 }
-
-const DECLARATION_HASHES = {
-  handler: hashTerm("handler"),
-  configured: [hashTerm("pattern"), hashTerm("path"), hashTerm("method")],
-  routers: [hashTerm("router"), hashTerm("app"), hashTerm("server")],
-  handleFunc: hashTerm("handlefunc"),
-};
-const SYMBOL_DEFINITION_HASHES = [
-  "class",
-  "const",
-  "def",
-  "enum",
-  "fn",
-  "func",
-  "function",
-  "interface",
-  "let",
-  "record",
-  "struct",
-  "trait",
-  "type",
-  "var",
-].map(hashTerm);
 
 function hashGroups(groups: readonly (readonly string[])[]): readonly CachedHashGroup[] {
   return groups.map((group) => ({
@@ -76,10 +47,8 @@ function lineTermGroups(query: RetrievalQuery): readonly (readonly string[])[] {
 
 function cachedRouteQuery(route: RouteQueryTerms | undefined): CachedRouteQuery | undefined {
   if (route === undefined) return undefined;
-  const strippedPath = route.path.replace(/^\/+/, "");
   return {
-    methodHash: hashTerm(route.method),
-    pathHashes: new Set([route.path, strippedPath].map(hashTerm)),
+    declarationMarkerHash: hashTerm(repositoryRouteDeclarationMarker(route.method, route.path)),
   };
 }
 
@@ -118,46 +87,12 @@ function matchedGroupCounts(
   return { exactHits, structuredHits };
 }
 
-function routeShapeMatches(hashes: ReadonlySet<string>, route: CachedRouteQuery): boolean {
-  const configured =
-    hashes.has(DECLARATION_HASHES.handler) &&
-    DECLARATION_HASHES.configured.some((hash) => hashes.has(hash));
-  const routed =
-    hashes.has(route.methodHash) && DECLARATION_HASHES.routers.some((hash) => hashes.has(hash));
-  return configured || routed || hashes.has(DECLARATION_HASHES.handleFunc);
-}
-
-function routeWindowHashes(
-  lines: readonly WorkspaceIndexLexicalLine[],
-  startIndex: number,
-): ReadonlySet<string> {
-  const hashes = new Set<string>();
-  const startLine = lines[startIndex]?.startLine;
-  if (startLine === undefined) return hashes;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (line === undefined || line.startLine >= startLine + ROUTE_WINDOW_LINES) break;
-    for (const hash of line.termHashes) hashes.add(hash);
-  }
-  return hashes;
-}
-
 function cachedRouteDeclarationMatches(
   record: WorkspaceIndexLexicalRecord,
   route: CachedRouteQuery | undefined,
 ): boolean {
   if (route === undefined) return false;
-  for (let index = 0; index < record.lines.length; index += 1) {
-    const hashes = routeWindowHashes(record.lines, index);
-    if (
-      hashes.has(route.methodHash) &&
-      intersects(hashes, route.pathHashes) &&
-      routeShapeMatches(hashes, route)
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return record.lines.some((line) => line.termHashes.includes(route.declarationMarkerHash));
 }
 
 export function cachedExactSymbolDefinitionMatches(
@@ -165,23 +100,19 @@ export function cachedExactSymbolDefinitionMatches(
   symbolHash: string | undefined,
 ): boolean {
   if (symbolHash === undefined) return false;
-  return record.lines.some((line) => {
-    const hashes = new Set(line.termHashes);
-    return hashes.has(symbolHash) && SYMBOL_DEFINITION_HASHES.some((hash) => hashes.has(hash));
-  });
+  return record.lines.some((line) => line.definitionTermHashes?.includes(symbolHash) === true);
 }
 
 export function scoreCachedLexicalContent(
   record: WorkspaceIndexLexicalRecord,
   prepared: CachedLexicalQuery,
-  query: RetrievalQuery,
   policy: SearchPolicy,
 ): number {
   if (record.truncated) return 0;
   const hits = matchedGroupCounts(record.termHashes, prepared.contentGroups);
   return scoreContentHitsForSearch(
-    query,
     policy,
+    prepared.contentGroups.length,
     { ...hits, substringHits: 0 },
     prepared.exactSymbolHash !== undefined && record.termHashes.includes(prepared.exactSymbolHash),
     cachedRouteDeclarationMatches(record, prepared.route),
@@ -234,7 +165,7 @@ export function cachedContentScores(
   for (const entry of entries) {
     const lexical = !entry.stale ? entry.record?.lexical : undefined;
     if (lexical === undefined) continue;
-    const score = scoreCachedLexicalContent(lexical, prepared, query, policy);
+    const score = scoreCachedLexicalContent(lexical, prepared, policy);
     if (score > 0) scores.set(entry.scopePath, score);
   }
   return scores.size === 0 ? undefined : scores;
