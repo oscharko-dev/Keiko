@@ -10,6 +10,7 @@ const RELATION_LOOKUP_TERMS = new Set([
   "caller",
   "callers",
   "call",
+  "called",
   "calls",
   "git",
   "historie",
@@ -17,6 +18,7 @@ const RELATION_LOOKUP_TERMS = new Set([
   "recency",
   "recent",
   "reference",
+  "referenced",
   "references",
   "referenziert",
   "usage",
@@ -28,13 +30,26 @@ const RELATION_LOOKUP_TERMS = new Set([
   "änderung",
   "änderungen",
 ]);
-const TEST_IDENTIFIER_RE = /(?:tests?|specs?)$/iu;
+const IDENTIFIER_TOKEN_RE = /[A-Za-z_$][A-Za-z0-9_$]*/gu;
+const TEST_IDENTIFIER_SUFFIX_RE = /(?:Test|Tests|Spec|Specs)$/u;
+const DELIMITED_TEST_IDENTIFIER_SUFFIX_RE = /(?:^|[_$])(?:tests?|specs?)$/u;
 
 function hasRelationLookupTerm(text: string): boolean {
   return text
-    .toLocaleLowerCase()
+    .toLowerCase()
     .split(/[^\p{L}\p{N}_]/u)
     .some((term) => RELATION_LOOKUP_TERMS.has(term));
+}
+
+function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
+  const sourceToken = [...text.matchAll(IDENTIFIER_TOKEN_RE)]
+    .map((match) => match[0])
+    .find((token) => token.toLowerCase() === normalizedSymbol.toLowerCase());
+  return (
+    sourceToken !== undefined &&
+    (TEST_IDENTIFIER_SUFFIX_RE.test(sourceToken) ||
+      DELIMITED_TEST_IDENTIFIER_SUFFIX_RE.test(sourceToken))
+  );
 }
 
 export function directDefinitionSymbol(
@@ -48,5 +63,5 @@ export function directDefinitionSymbol(
     (anchor) => anchor.kind === "identifier" && anchor.weight >= 0.85,
   );
   const symbol = identifiers.length === 1 ? identifiers[0]?.term : undefined;
-  return symbol === undefined || TEST_IDENTIFIER_RE.test(symbol) ? undefined : symbol;
+  return symbol === undefined || isTestIdentifier(query.text, symbol) ? undefined : symbol;
 }

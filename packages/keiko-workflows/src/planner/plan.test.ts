@@ -192,6 +192,32 @@ describe("createExplorationPlan", () => {
     expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
   });
 
+  it("keeps route relationship questions on the structural path", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({
+      text: "Where is POST /api/payments/:id/refund defined and used?",
+    });
+    const p = plan({ scope, query: q });
+
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
+  });
+
+  it("keeps ordinary identifiers ending in lowercase test on the direct path", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({ text: "Where is ApplicationContest defined?" });
+    const p = plan({ scope, query: q });
+
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+  });
+
   it("explicitConnection: workspace-root allows API route lookups", () => {
     const scope = happyScope({
       kind: "workspace-root",

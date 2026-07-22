@@ -442,6 +442,11 @@ describe("GatewaySetupDialog", () => {
       screen.getByLabelText(/digital voice.*live transcription deployment/i),
       "realtime-transcribe",
     );
+    const semanticTurnDetection = screen.getByRole("checkbox", {
+      name: /semantic turn detection/i,
+    });
+    expect(semanticTurnDetection).not.toBeChecked();
+    await userEvent.click(semanticTurnDetection);
     await userEvent.type(screen.getByLabelText(/read aloud.*speech-output deployment/i), "tts");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
@@ -452,6 +457,7 @@ describe("GatewaySetupDialog", () => {
         voiceSpeechToTextModelId: "transcribe",
         voiceRealtimeModelId: "realtime",
         voiceRealtimeTranscriptionModelId: "realtime-transcribe",
+        voiceSupportsSemanticTurnDetection: true,
         voiceSpeechOutputModelId: "tts",
         voiceOutputVoiceId: "alloy",
       }),

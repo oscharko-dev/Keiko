@@ -415,7 +415,7 @@ export function lineLooksLikeSymbolDefinition(
     new RegExp(String.raw`\b${modifiers}(?:def|func|fn|fun)\s+${escaped}\s*\(`, flags),
     new RegExp(String.raw`\btype\s+${escaped}\s+(?:struct|interface)\b`, flags),
     new RegExp(
-      String.raw`\b${modifiers}(?!(?:await|return|throw|yield|new)\b)${typedDeclarationToken}(?:\s+${typedDeclarationToken})*\s+${escaped}\s*\(`,
+      String.raw`\b${modifiers}(?!(?:await|return|throw|yield|new|void|typeof|delete)\b)${typedDeclarationToken}(?:\s+${typedDeclarationToken})*\s+${escaped}\s*\(`,
       flags,
     ),
   ];

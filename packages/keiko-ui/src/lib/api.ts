@@ -570,6 +570,7 @@ export interface GatewaySetupInput {
   readonly voiceSpeechToTextModelId?: string | undefined;
   readonly voiceRealtimeModelId?: string | undefined;
   readonly voiceRealtimeTranscriptionModelId?: string | undefined;
+  readonly voiceSupportsSemanticTurnDetection?: boolean | undefined;
   readonly voiceSpeechOutputModelId?: string | undefined;
   readonly voiceOutputVoiceId?: string | undefined;
   readonly voiceProviderLocality?: string | undefined;

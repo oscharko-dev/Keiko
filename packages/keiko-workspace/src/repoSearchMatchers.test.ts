@@ -67,6 +67,15 @@ describe("buildMatcher definition intent scoring", () => {
     expect(lineLooksLikeSymbolDefinition(adversarial, "loadUser", false)).toBe(false);
   });
 
+  it("does not classify JavaScript unary-expression calls as typed declarations", () => {
+    for (const prefix of ["void", "typeof", "delete"]) {
+      expect(lineLooksLikeSymbolDefinition(`${prefix} loadUser()`, "loadUser", false)).toBe(false);
+    }
+    expect(
+      lineLooksLikeSymbolDefinition("public Task<User> loadUser(UserId id) {", "loadUser", false),
+    ).toBe(true);
+  });
+
   it("boosts JVM and .NET class declarations over plain references", () => {
     const matcher = buildMatcher(nlq("Where is PaymentService defined?"));
     const reference = matcher.match("PaymentService registry entry");

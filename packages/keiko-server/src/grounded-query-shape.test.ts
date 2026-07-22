@@ -35,7 +35,14 @@ describe("directDefinitionSymbol", () => {
         [identifier],
       ),
     ).toBeUndefined();
-    for (const relation of ["usages", "Historie", "Änderungen"]) {
+    for (const relation of [
+      "usages",
+      "Historie",
+      "Änderungen",
+      "called",
+      "referenced",
+      "HISTORY",
+    ]) {
       expect(
         directDefinitionSymbol(
           query(`Show the definition and ${relation} of KeikoNonexistentQuantumHandler987`),
@@ -60,6 +67,19 @@ describe("directDefinitionSymbol", () => {
         { ...identifier, term: "paymentservicetest" },
       ]),
     ).toBeUndefined();
+  });
+
+  it("does not reject ordinary identifiers whose lowercase spelling ends in test", () => {
+    expect(
+      directDefinitionSymbol(query("Where is Contest defined?"), [
+        { ...identifier, term: "contest" },
+      ]),
+    ).toBe("contest");
+    expect(
+      directDefinitionSymbol(query("Where is Latest defined?"), [
+        { ...identifier, term: "latest" },
+      ]),
+    ).toBe("latest");
   });
 
   it("requires a definition verb and exactly one high-confidence identifier", () => {

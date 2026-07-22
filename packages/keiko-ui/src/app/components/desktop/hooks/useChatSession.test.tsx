@@ -686,6 +686,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
         budgetTokens: 1200,
         mode: "governed-assist",
         context: {
+          userId: "local-operator",
           conversationId: "chat-grounded",
           projectId: "/repo",
           workspaceId: "/repo",

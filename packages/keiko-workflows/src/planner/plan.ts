@@ -188,15 +188,29 @@ const HISTORY_QUERY_RE =
 const DEFINITION_LOOKUP_RE =
   /\b(?:defined|definition|declared|declaration|implemented|implementation|definiert|deklariert|implementiert)\b/iu;
 const SYMBOL_RELATION_RE =
-  /\b(?:callers?|calls?|references?|referenziert|used|uses|verwendet|aufgerufen|aufrufe?)\b/iu;
+  /\b(?:callers?|calls?|called|references?|referenced|referenziert|used|uses|verwendet|aufgerufen|aufrufe?)\b/iu;
 const ROUTE_TRAVERSAL_RE = /\b(?:handlers?|trace|traces|tracing|call[- ]?paths?|aufrufpfade?)\b/iu;
-const TEST_IDENTIFIER_RE = /(?:tests?|specs?)$/iu;
+const IDENTIFIER_TOKEN_RE = /[A-Za-z_$][A-Za-z0-9_$]*/gu;
+const TEST_IDENTIFIER_SUFFIX_RE = /(?:Test|Tests|Spec|Specs)$/u;
+const DELIMITED_TEST_IDENTIFIER_SUFFIX_RE = /(?:^|[_$])(?:tests?|specs?)$/u;
+
+function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
+  const sourceToken = [...text.matchAll(IDENTIFIER_TOKEN_RE)]
+    .map((match) => match[0])
+    .find((token) => token.toLowerCase() === normalizedSymbol.toLowerCase());
+  return (
+    sourceToken !== undefined &&
+    (TEST_IDENTIFIER_SUFFIX_RE.test(sourceToken) ||
+      DELIMITED_TEST_IDENTIFIER_SUFFIX_RE.test(sourceToken))
+  );
+}
 
 function isDirectRouteLookup(query: RetrievalQuery): boolean {
   return (
     DIRECT_ROUTE_METHOD_RE.test(query.text) &&
     DIRECT_ROUTE_PATH_RE.test(query.text) &&
     !HISTORY_QUERY_RE.test(query.text) &&
+    !SYMBOL_RELATION_RE.test(query.text) &&
     !ROUTE_TRAVERSAL_RE.test(query.text)
   );
 }
@@ -215,7 +229,8 @@ function isDirectSymbolDefinitionLookup(
   const identifiers = anchors.filter(
     (anchor) => anchor.kind === "identifier" && anchor.weight >= 0.85,
   );
-  return identifiers.length === 1 && !TEST_IDENTIFIER_RE.test(identifiers[0]?.term ?? "");
+  const symbol = identifiers[0]?.term;
+  return identifiers.length === 1 && symbol !== undefined && !isTestIdentifier(query.text, symbol);
 }
 
 function composeRings(

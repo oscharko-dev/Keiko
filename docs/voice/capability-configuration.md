@@ -118,8 +118,9 @@ Omit semantic VAD when the configured endpoint does not support it. For provider
 deployment aliases, configure `realtimeTranscriptionModel` explicitly; otherwise a model-family default may
 not resolve and final user speech will never reach the chat. When advertised, Keiko selects low-eagerness
 semantic VAD on the server and preserves it in the browser; a 1.6-second client continuation window merges
-any provider-split phrase before chat submission. The setup wizard adds the semantic flag automatically for
-new Realtime voice entries. The browser never receives the transcription deployment name.
+any provider-split phrase before chat submission. The setup wizard exposes semantic VAD as an explicit,
+off-by-default capability so a deployment never advertises unverified provider support. The browser never
+receives the transcription deployment name.
 
 ### Credentials
 

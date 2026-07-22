@@ -68,6 +68,9 @@ export const EN_MESSAGES = {
     "Digital Voice · live transcription deployment",
   "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
     "your-realtime-transcription-deployment",
+  "gatewaySetup.voice.semanticTurnDetection": "Semantic turn detection",
+  "gatewaySetup.voice.semanticTurnDetectionHint":
+    "Enable only when the Realtime deployment explicitly supports semantic VAD.",
   "gatewaySetup.voice.speechOutputDeployment": "Read aloud · speech-output deployment",
   "gatewaySetup.voice.outputVoice": "Output voice",
   "gatewaySetup.voice.outputVoiceHint": "optional; default alloy",

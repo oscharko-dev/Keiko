@@ -6,6 +6,7 @@ import {
   createServerWorkspaceIndexProvider,
   resolveServerWorkspaceIndexRuntimeDir,
 } from "./workspace-index-provider.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -85,6 +86,54 @@ describe("workspace index provider", () => {
       });
 
       expect(provider(workspaceRoot)).toBe(provider(workspaceRoot));
+    } finally {
+      rmSync(workspaceRoot, { force: true, recursive: true });
+      rmSync(runtimeStateDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rebuilds the cached index when the encryption key changes", () => {
+    const workspaceRoot = tempDir("keiko-index-workspace-");
+    const runtimeStateDir = tempDir("keiko-index-state-");
+    const env: Record<string, string | undefined> = {
+      KEIKO_WORKSPACE_INDEX_KEY: Buffer.alloc(32, 19).toString("base64"),
+    };
+    try {
+      const provider = createServerWorkspaceIndexProvider({ runtimeStateDir, env });
+      const first = provider(workspaceRoot);
+
+      env.KEIKO_WORKSPACE_INDEX_KEY = Buffer.alloc(32, 23).toString("base64");
+      const rotated = provider(workspaceRoot);
+
+      expect(rotated).toBeDefined();
+      expect(rotated).not.toBe(first);
+      expect(provider(workspaceRoot)).toBe(rotated);
+    } finally {
+      rmSync(workspaceRoot, { force: true, recursive: true });
+      rmSync(runtimeStateDir, { force: true, recursive: true });
+    }
+  });
+
+  it("emits a redacted diagnostic when key resolution fails", () => {
+    const workspaceRoot = tempDir("keiko-index-workspace-");
+    const runtimeStateDir = tempDir("keiko-index-state-");
+    const records: ServerDiagnosticRecord[] = [];
+    const invalidKey = Buffer.alloc(31, 29).toString("base64");
+    try {
+      const provider = createServerWorkspaceIndexProvider({
+        runtimeStateDir,
+        env: { KEIKO_WORKSPACE_INDEX_KEY: invalidKey },
+        diagnostics: { record: (record) => records.push(record) },
+      });
+
+      expect(provider(workspaceRoot)).toBeUndefined();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        operation: "workspace.index.open",
+        source: "workspace-index-provider",
+        message: "Workspace index key resolution or initialization failed.",
+      });
+      expect(JSON.stringify(records)).not.toContain(invalidKey);
     } finally {
       rmSync(workspaceRoot, { force: true, recursive: true });
       rmSync(runtimeStateDir, { force: true, recursive: true });

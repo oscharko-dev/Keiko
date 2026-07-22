@@ -80,18 +80,24 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
 
 ## Earlier foundations
 
-### Realtime dialogue (Wave A) — `fix(voice): make realtime dialogue audible and grounded`
+### Superseded: Realtime dialogue (Wave A)
+
+> **Historical architecture:** this section records the former provider-owned dialogue path from
+> `fix(voice): make realtime dialogue audible and grounded`. It is superseded by the canonical-chat
+> parity contract above and is not current setup guidance. Realtime now provides media, VAD, and
+> final transcription only; it receives no assistant instructions or grounding tools and generates
+> no native assistant response.
 
 - **Silent assistant (critical):** the negotiated remote audio track was never attached to an output
   sink (`useRealtimeVoice` wired `onConnectionStateChange` but never `onRemoteTrack`). The remote
   stream is now attached to an autoplaying audio sink.
 - **Ungrounded persona (critical):** the realtime session was created with no `instructions`, so it
   ran the provider default demo persona ("helpful, witty, friendly AI … talk quickly … knowledge
-  cutoff 2023-10"). It now uses the same system persona as the text chat, set via the GA nested
+  cutoff 2023-10"). The historical implementation then used the text-chat persona via the GA nested
   `audio.{input,output}` session schema (verified against the live endpoint; the older top-level
   shape returns HTTP 500).
-- **Voice + transcription:** a realtime-valid output voice and `input_audio_transcription` +
-  `server_vad` turn detection are now configured.
+- **Voice + transcription:** the historical provider-owned path configured a realtime-valid output
+  voice, `input_audio_transcription`, and `server_vad` turn detection.
 - **Invalid-voice guard:** `resolveRealtimeVoice` maps a TTS-only voice id (e.g. `nova`, rejected by
   the realtime model with HTTP 400) to a safe default so a misconfigured persona mapping cannot break
   session creation.
@@ -128,14 +134,16 @@ OpenAI's GPT-Live announcement validates the direction of Keiko's realtime path:
 full-duplex interaction, interruption-aware turn taking, deliberate pauses, sparse backchannels, and
 delegation of deeper work while the interaction layer preserves conversational flow. Keiko already
 ships the applicable provider-neutral foundations: WebRTC media, semantic VAD, barge-in, a floor
-manager with a backchannel effect, grounding and Memoria Viva tools, and separate visible versus
-spoken grounded answers.
+manager with a backchannel effect, and separate visible versus spoken grounded answers. Grounding
+and MemoriaViva remain in the canonical chat pipeline that receives each final transcript; they are
+not Realtime-provider tools.
 
 The review produced two immediate changes that do not depend on an unreleased model API:
 
-- The realtime persona now treats hesitation and short pauses as thinking time, honors an explicit
-  request to keep listening, and permits only sparse non-committal verbal acknowledgements. An
-  acknowledgement is never agreement, confirmation, or permission to complete the user's thought.
+- Keiko's turn-settlement policy treats hesitation and short pauses as thinking time and honors an
+  explicit request to keep listening. The media plane does not synthesize provider-owned
+  acknowledgements, so it cannot turn one into agreement, confirmation, or permission to complete
+  the user's thought.
 - The existing visible/spoken split remains the presentation contract: rich source-backed material
   stays inspectable in chat while the voice renders a concise speech projection. This matches the
   useful "visual answer while talking" pattern without sending links or source metadata to speech.
