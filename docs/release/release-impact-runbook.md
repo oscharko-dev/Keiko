@@ -26,6 +26,19 @@ Before publish, `release:publish` and `prepublishOnly` require a machine-checkab
 
 User findings stay reporter-simple. Reporters provide reproduction and impact; maintainers or agents fill the normalized release-impact triage block after confirming the defect and intended fix.
 
+### Feature PRs and release-cut PRs
+
+A feature or fix PR records the normalized fields above in its PR body or linked issue. When its
+target package version and release-owner approval reference do not exist yet, do not invent them and
+do not append the change to an already published package version. The PR must state that catalog
+insertion is deferred and preserve the prepared metadata for release planning.
+
+The release-cut or release-metadata PR appends the prepared record to
+`release-impact.catalog.json` after the target package version is decided and the required
+release-owner approval evidence exists. That PR owns catalog deduplication, version/tag binding, and
+the publish-mode approval-reference check. This lifecycle split keeps feature review complete without
+mutating an append-only release artifact prematurely.
+
 ## Taxonomy
 
 Use these release-note categories:
