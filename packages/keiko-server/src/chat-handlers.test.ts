@@ -3,8 +3,8 @@ import { parseExpectedGroundingScopeIdentity } from "./chat-handlers.js";
 
 const VALID_GROUNDING_SCOPE_IDENTITY = `gsi-v1:${"a".repeat(64)}`;
 
-describe("parseExpectedGroundingScopeIdentity", () => {
-  it("passes through an omitted or valid server-issued identity", () => {
+describe("parseExpectedGroundingScopeIdentity", (): void => {
+  it("passes through an omitted or valid server-issued identity", (): void => {
     expect(parseExpectedGroundingScopeIdentity(undefined)).toBeUndefined();
     expect(parseExpectedGroundingScopeIdentity(VALID_GROUNDING_SCOPE_IDENTITY)).toBe(
       VALID_GROUNDING_SCOPE_IDENTITY,
@@ -13,7 +13,7 @@ describe("parseExpectedGroundingScopeIdentity", () => {
 
   it.each([null, "", "gsi-v1:not-a-digest", `gsi-v1:${"a".repeat(63)}`, { value: "forged" }])(
     "rejects an invalid or forged identity %#",
-    (value) => {
+    (value): void => {
       expect(parseExpectedGroundingScopeIdentity(value)).toEqual({
         status: 400,
         body: {

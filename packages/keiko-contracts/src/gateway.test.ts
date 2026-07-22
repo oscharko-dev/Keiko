@@ -234,15 +234,18 @@ describe("canonical voice role election", () => {
     ["omitted", undefined],
     ["empty", ""],
     ["whitespace-only", " \t\n "],
-  ] as const)("does not elect a Realtime capability with a %s transcription model", (_, model) => {
-    const incomplete = voiceCap({
-      supportsRealtimeVoice: true,
-      realtimeTranscriptionModel: model,
-    });
+  ] as const)(
+    "does not elect a Realtime capability with a %s transcription model",
+    (_, model): void => {
+      const incomplete = voiceCap({
+        supportsRealtimeVoice: true,
+        realtimeTranscriptionModel: model,
+      });
 
-    expect(isCompleteRealtimeVoiceCapability(incomplete)).toBe(false);
-    expect(selectRealtimeVoiceCapability([incomplete])).toBeUndefined();
-  });
+      expect(isCompleteRealtimeVoiceCapability(incomplete)).toBe(false);
+      expect(selectRealtimeVoiceCapability([incomplete])).toBeUndefined();
+    },
+  );
 });
 
 describe("voice capability compatibility", () => {
