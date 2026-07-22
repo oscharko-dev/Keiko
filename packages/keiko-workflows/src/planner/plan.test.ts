@@ -180,42 +180,32 @@ describe("createExplorationPlan", () => {
     expect(p.clarification).toBeUndefined();
   });
 
-  it("retains structural retrieval when a symbol question asks for usages", () => {
-    const scope = happyScope({
-      kind: "workspace-root",
-      relativePaths: [],
-      explicitConnection: true,
-    });
-    const q = happyQuery({ text: "Where is WindowFrame defined and used?" });
-    const p = plan({ scope, query: q });
-
-    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
-  });
-
-  it("keeps route relationship questions on the structural path", () => {
-    const scope = happyScope({
-      kind: "workspace-root",
-      relativePaths: [],
-      explicitConnection: true,
-    });
-    const q = happyQuery({
+  it.each([
+    {
+      description: "retains structural retrieval when a symbol question asks for usages",
+      text: "Where is WindowFrame defined and used?",
+      expectedRings: ["lexical", "structural", "git-history"],
+    },
+    {
+      description: "keeps route relationship questions on the structural path",
       text: "Where is POST /api/payments/:id/refund defined and used?",
-    });
-    const p = plan({ scope, query: q });
-
-    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
-  });
-
-  it("keeps ordinary identifiers ending in lowercase test on the direct path", () => {
+      expectedRings: ["lexical", "structural", "git-history"],
+    },
+    {
+      description: "keeps ordinary identifiers ending in lowercase test on the direct path",
+      text: "Where is ApplicationContest defined?",
+      expectedRings: ["lexical"],
+    },
+  ])("$description", ({ text, expectedRings }): void => {
     const scope = happyScope({
       kind: "workspace-root",
       relativePaths: [],
       explicitConnection: true,
     });
-    const q = happyQuery({ text: "Where is ApplicationContest defined?" });
+    const q = happyQuery({ text });
     const p = plan({ scope, query: q });
 
-    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+    expect(p.rings.map((ring) => ring.kind)).toEqual(expectedRings);
   });
 
   it("explicitConnection: workspace-root allows API route lookups", () => {
