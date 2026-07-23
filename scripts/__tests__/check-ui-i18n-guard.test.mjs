@@ -389,6 +389,58 @@ test("fails a single-file feature catalog that declares only one language map", 
   );
 });
 
+// A `-i18n.ts` file can also be a key-mapping HELPER routing through the shared catalogs
+// (`managed-language-i18n.ts`, `problems-i18n.ts`, …): no local language map, values typed against
+// the shared catalog's MessageKey. These pin that the guard classifies such a file by content —
+// exempt from the local-map requirement, while NOT letting it satisfy the catalog-update
+// requirement in place of the shared catalogs its keys actually live in.
+const KEY_HELPER_FILE = "packages/keiko-ui/src/app/feature/feature-keys-i18n.ts";
+const KEY_HELPER_SOURCE =
+  'import type { I18nTranslate } from "@/lib/i18n";\n' +
+  'import type { MessageKey } from "@/lib/i18n-messages.en";\n\n' +
+  'const FEATURE_KEYS = {\n  title: "feature.title",\n} as const satisfies Readonly<Record<string, MessageKey>>;\n\n' +
+  "export function featureTranslate(t: I18nTranslate) {\n" +
+  "  return (key: keyof typeof FEATURE_KEYS) => t(FEATURE_KEYS[key]);\n" +
+  "}\n";
+
+test("accepts a shared-catalog key helper with the -i18n.ts suffix and no local maps", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [KEY_HELPER_FILE]: KEY_HELPER_SOURCE,
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, KEY_HELPER_FILE, EN_CATALOG, DE_CATALOG],
+      });
+
+      expect(result.problems).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+test("a key helper does not satisfy the catalog-update requirement by itself", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [KEY_HELPER_FILE]: KEY_HELPER_SOURCE,
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, KEY_HELPER_FILE],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/was not updated/);
+    },
+  );
+});
+
 test("fails UI source changes that only import the i18n module", async () => {
   await withFixture(
     {
