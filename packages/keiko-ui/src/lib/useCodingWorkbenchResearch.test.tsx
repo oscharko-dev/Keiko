@@ -1,6 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  CodingWorkbenchRuntimeResearchChannelPayload,
+  CodingWorkbenchRuntimeResearchGrant,
+} from "@oscharko-dev/keiko-contracts";
 
 import {
   useCodingWorkbenchResearch,
@@ -22,18 +25,20 @@ const PENDING = {
   requestId: "research-approval-1",
   host: "docs.example.org",
   requestLine: "/guide/streams topic=backpressure",
-  expiresAt: "2026-07-20T00:02:00.000Z",
+  expiresAt: "2099-07-20T00:02:00.000Z",
 } as const;
+
+const GRANT: CodingWorkbenchRuntimeResearchGrant = {
+  grantId: "grant-1",
+  domains: ["docs.example.org"],
+  expiresAt: "2099-07-20T00:05:00.000Z",
+};
 
 function active(): CodingWorkbenchRuntimeResearchChannelPayload {
   return {
     session: "active",
     pending: PENDING,
-    grant: {
-      grantId: "grant-1",
-      domains: ["docs.example.org"],
-      expiresAt: "2026-07-20T00:05:00.000Z",
-    },
+    grant: GRANT,
   };
 }
 
@@ -56,11 +61,23 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
+async function flushResearchRead(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe("useCodingWorkbenchResearch", () => {
   beforeEach(() => {
     getResearchMock.mockReset();
     pairingSettledMock.mockReset();
     pairingSettledMock.mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("reads pending and approved state from the one authenticated channel", async () => {
@@ -193,5 +210,63 @@ describe("useCodingWorkbenchResearch", () => {
 
     expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
     expect(getResearchMock).not.toHaveBeenCalled();
+  });
+
+  it("revalidates each expiry and never retains server-expired research state", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-20T00:00:00.000Z");
+    const pending = { ...PENDING, expiresAt: "2026-07-20T00:00:01.000Z" };
+    const grant = { ...GRANT, expiresAt: "2026-07-20T00:00:02.000Z" };
+    const afterPendingExpiry = deferred<CodingWorkbenchRuntimeResearchChannelPayload>();
+    const afterGrantExpiry = deferred<CodingWorkbenchRuntimeResearchChannelPayload>();
+    getResearchMock
+      .mockResolvedValueOnce({ session: "active", pending, grant })
+      .mockReturnValueOnce(afterPendingExpiry.promise)
+      .mockReturnValueOnce(afterGrantExpiry.promise);
+
+    const { result, unmount } = renderHook(() => useCodingWorkbenchResearch(RUN));
+    await flushResearchRead();
+    expect(result.current).toMatchObject({ status: "ready", ask: pending, grant });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_001);
+    });
+    expect(getResearchMock).toHaveBeenCalledTimes(2);
+    expect(result.current).toMatchObject({ status: "ready", ask: null, grant });
+    await act(async () => {
+      afterPendingExpiry.resolve({ session: "active", grant });
+      await afterPendingExpiry.promise;
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(getResearchMock).toHaveBeenCalledTimes(3);
+    expect(result.current).toEqual({ status: "ready", ask: null, grant: null });
+    await act(async () => {
+      afterGrantExpiry.resolve({ session: "active" });
+      await afterGrantExpiry.promise;
+    });
+
+    unmount();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(getResearchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails closed when a response already contains expired research state", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-20T00:00:00.000Z");
+    getResearchMock.mockResolvedValue({
+      session: "active",
+      pending: { ...PENDING, expiresAt: "2026-07-19T23:59:59.999Z" },
+      grant: { ...GRANT, expiresAt: "not-a-timestamp" },
+    });
+
+    const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+    await flushResearchRead();
+
+    expect(result.current).toEqual({ status: "ready", ask: null, grant: null });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(getResearchMock).toHaveBeenCalledTimes(1);
   });
 });
