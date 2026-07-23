@@ -183,6 +183,144 @@ async function applyImport(
 }
 
 describe("editor profile routes", () => {
+  it("rejects every malformed mutation shape with 400 before touching the store", async () => {
+    const { response } = await profiles();
+    const etag = response.headers.get("ETag") ?? '"edp-0"';
+    const malformed: readonly Record<string, unknown>[] = [
+      // action/shape violations
+      { action: "explode", expectedRevision: 0 },
+      { action: "create", expectedRevision: 0 },
+      { action: "create", expectedRevision: 0, displayName: " padded " },
+      { action: "create", expectedRevision: 0, displayName: "Focus", profileRef: "profile-x" },
+      { action: "create", expectedRevision: 0, displayName: "Focus", values: {} },
+      { action: "rename", expectedRevision: 0, displayName: "Focus" },
+      { action: "delete", expectedRevision: 0 },
+      { action: "delete", expectedRevision: 0, profileRef: "profile-x", displayName: "No" },
+      { action: "switch", expectedRevision: 0, profileRef: "profile-x", values: {} },
+      { action: "set", expectedRevision: 0, profileRef: "profile-x" },
+      {
+        action: "set",
+        expectedRevision: 0,
+        profileRef: "profile-x",
+        values: { fontSize: 12 },
+        settingIds: ["fontSize"],
+      },
+      { action: "reset", expectedRevision: 0, profileRef: "profile-x" },
+      { action: "reset", expectedRevision: 0, profileRef: "profile-x", settingIds: [] },
+      {
+        action: "reset",
+        expectedRevision: 0,
+        profileRef: "profile-x",
+        settingIds: ["not-a-setting"],
+      },
+      {
+        action: "reset",
+        expectedRevision: 0,
+        profileRef: "profile-x",
+        settingIds: ["fontSize", "fontSize"],
+      },
+      {
+        action: "reset",
+        expectedRevision: 0,
+        profileRef: "profile-x",
+        settingIds: ["fontSize"],
+        values: {},
+      },
+      // envelope violations
+      { action: "create", expectedRevision: -1, displayName: "Focus" },
+      { action: "create", expectedRevision: 0, displayName: "Focus", schemaVersion: "2" },
+      { action: "create", expectedRevision: 0, displayName: "Focus", unknownKey: true },
+    ];
+    for (const body of malformed) {
+      const rejected = await mutate(
+        body,
+        etag,
+        `malformed-${JSON.stringify(body).length.toString()}`,
+      );
+      expect(rejected.status, JSON.stringify(body)).toBe(400);
+    }
+    // an over-long root is rejected by profileRoot -> null
+    const longRoot = await mutate(
+      { action: "create", expectedRevision: 0, displayName: "Focus", root: "r".repeat(5000) },
+      etag,
+      "malformed-root",
+    );
+    expect(longRoot.status).toBe(400);
+  });
+
+  it("rejects header preconditions that do not parse or do not match the body", async () => {
+    const { response } = await profiles();
+    const etag = response.headers.get("ETag") ?? '"edp-0"';
+    const body = { action: "create", expectedRevision: 0, displayName: "Focus" };
+
+    const emptyKey = await mutate(body, etag, "   ");
+    expect(emptyKey.status).toBe(400);
+
+    // A control-character key is unrepresentable through fetch (undici rejects the header
+    // client-side), so the oversized key exercises the same rejected-key path instead.
+    const oversizedKey = await mutate(body, etag, "k".repeat(500));
+    expect(oversizedKey.status).toBe(400);
+
+    const malformedEtag = await mutate(body, "W/edp-zero", "good-key-1");
+    expect(malformedEtag.status).toBe(400);
+
+    const mismatchedRevision = await mutate(body, '"edp-7"', "good-key-2");
+    expect(mismatchedRevision.status).toBe(400);
+  });
+
+  it("rejects an invalid export profileRef and 400s a hand-rolled import apply", async () => {
+    const badExport = await fetch(
+      `${baseUrl()}/api/editor/settings/profiles/export?profileRef=${encodeURIComponent("../escape")}`,
+    );
+    expect(badExport.status).toBe(400);
+
+    const exported = await exportProfile(EDITOR_M11_DEFAULT_PROFILE_REF);
+    const { response } = await profiles();
+    const preview = await previewImport(
+      exported.manifest,
+      response.headers.get("ETag") ?? '"edp-0"',
+    );
+
+    const tamperedDigest = await fetch(`${baseUrl()}/api/editor/settings/profiles/import/apply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+        "If-Match": `"edp-${String(preview.expectedRevision)}"`,
+        "Idempotency-Key": "apply-tampered",
+      },
+      body: JSON.stringify({
+        schemaVersion: "1",
+        expectedRevision: preview.expectedRevision,
+        manifest: exported.manifest,
+        previewDigest: "not-a-digest",
+        switchAfterImport: true,
+        root: workspaceRoot,
+      }),
+    });
+    expect(tamperedDigest.status).toBe(400);
+
+    const unknownKeys = await fetch(`${baseUrl()}/api/editor/settings/profiles/import/apply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+        "If-Match": `"edp-${String(preview.expectedRevision)}"`,
+        "Idempotency-Key": "apply-unknown",
+      },
+      body: JSON.stringify({
+        schemaVersion: "1",
+        expectedRevision: preview.expectedRevision,
+        manifest: exported.manifest,
+        previewDigest: preview.previewDigest,
+        switchAfterImport: true,
+        root: workspaceRoot,
+        extra: 1,
+      }),
+    });
+    expect(unknownKeys.status).toBe(400);
+  });
+
   it("creates, configures, and live-switches a profile", async () => {
     const initial = await profiles();
     const created = await mutate(
