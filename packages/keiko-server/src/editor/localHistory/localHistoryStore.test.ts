@@ -200,4 +200,100 @@ describe("editor local-history store", () => {
       expect.objectContaining({ code: "CONTENT_UNAVAILABLE" }),
     );
   });
+
+  it("walks the closed error ladder: oversized entry, invalid path, unknown ref, foreign scope", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore({
+      ...storeOptions(fx),
+      limits: { maxEntryBytes: 16 },
+    });
+
+    expect(() => store.capture(captureInput(fx, "x".repeat(64), "user-save", 1_000))).toThrow(
+      expect.objectContaining({ code: "ENTRY_TOO_LARGE" }),
+    );
+
+    expect(() =>
+      store.capture({
+        ...captureInput(fx, "ok\n", "user-save", 1_001),
+        relativePath: "../escape.ts",
+      }),
+    ).toThrow(expect.objectContaining({ code: "INVALID_CAPTURE" }));
+
+    expect(() => store.capture({ ...captureInput(fx, "ok\n", "user-save", Number.NaN) })).toThrow(
+      expect.objectContaining({ code: "INVALID_CAPTURE" }),
+    );
+
+    const entry = store.capture(captureInput(fx, "ok\n", "user-save", 1_002)).entry;
+    expect(() => store.entry(fx.scope, "entry-does-not-exist", 1_003)).toThrow(
+      expect.objectContaining({ code: "ENTRY_NOT_FOUND" }),
+    );
+    const foreignScope = {
+      ...fx.scope,
+      rootIdentityDigest: "f".repeat(64) as typeof fx.scope.rootIdentityDigest,
+    };
+    expect(() => store.read(foreignScope, entry.entryRef, 1_004)).toThrow(
+      expect.objectContaining({ code: "ENTRY_NOT_FOUND" }),
+    );
+    expect(() => store.delete(foreignScope, entry.entryRef)).toThrow(
+      expect.objectContaining({ code: "ENTRY_NOT_FOUND" }),
+    );
+    expect(store.list(foreignScope, undefined, 1_005)).toEqual([]);
+  });
+
+  it("rejects a tampered on-disk index as INDEX_UNAVAILABLE for both corruption shapes", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore(storeOptions(fx));
+    store.capture(captureInput(fx, "persisted\n", "user-save", 1_000));
+
+    const workspaceDirs = readdirSync(join(fx.stateDir, "editor-local-history"));
+    const indexPath = join(
+      fx.stateDir,
+      "editor-local-history",
+      workspaceDirs[0] ?? "",
+      "index.json",
+    );
+
+    writeFileSync(indexPath, "{not json", "utf8");
+    const reopenedCorrupt = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(() => reopenedCorrupt.list(fx.scope, undefined, 1_001)).toThrow(
+      expect.objectContaining({ code: "INDEX_UNAVAILABLE" }),
+    );
+
+    const foreign = { schemaVersion: 1, workspaceId: "someone-else", entries: [] };
+    writeFileSync(indexPath, JSON.stringify(foreign), "utf8");
+    const reopenedForeign = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(() => reopenedForeign.list(fx.scope, undefined, 1_002)).toThrow(
+      expect.objectContaining({ code: "INDEX_UNAVAILABLE" }),
+    );
+  });
+
+  it("guards pinned capacity: pinning beyond the byte budget and capture blocked by pins", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore({
+      ...storeOptions(fx),
+      limits: { maxEntries: 2, maxPinnedBytes: 8 },
+    });
+    const first = store.capture(captureInput(fx, "AAAA\n", "user-save", 1_000)).entry;
+    const second = store.capture(captureInput(fx, "BBBBBBBB\n", "user-save", 2_000)).entry;
+
+    store.setPinned(fx.scope, first.entryRef, true, 2_001);
+    expect(() => store.setPinned(fx.scope, second.entryRef, true, 2_002)).toThrow(
+      expect.objectContaining({ code: "PINNED_BYTE_LIMIT" }),
+    );
+
+    const roomy = fixture();
+    const roomyStore = createEditorLocalHistoryStore({
+      ...storeOptions(roomy),
+      limits: { maxEntries: 2, maxPinnedBytes: 64 },
+    });
+    const pinnedFirst = roomyStore.capture(captureInput(roomy, "AAAA\n", "user-save", 1_000)).entry;
+    const pinnedSecond = roomyStore.capture(
+      captureInput(roomy, "CCCC\n", "user-save", 2_000),
+    ).entry;
+    roomyStore.setPinned(roomy.scope, pinnedFirst.entryRef, true, 2_001);
+    roomyStore.setPinned(roomy.scope, pinnedSecond.entryRef, true, 2_002);
+    expect(() => roomyStore.capture(captureInput(roomy, "DDDD\n", "user-save", 3_000))).toThrow(
+      expect.objectContaining({ code: "PINNED_CAPACITY_EXHAUSTED" }),
+    );
+  });
 });

@@ -6053,6 +6053,23 @@ function EditorRuntimeWidget({
     </div>
   );
 
+  const handleGenerateTestsClick = (): void => {
+    if (canGenerateTests) {
+      runTestGeneration();
+      return;
+    }
+    announceToolbarNotice(
+      testGenBusy
+        ? "Test generation is already running."
+        : "Test generation is unavailable for this file.",
+    );
+  };
+
+  const handleFormatClick = (): void => {
+    if (canFormat) setFormatRequestNonce((value) => value + 1);
+    else announceToolbarNotice("Formatting is unavailable for this file.");
+  };
+
   const renderEditorToolbar = (): ReactNode => (
     <div className="ed-toolbar-actions">
       {toolbarExtras}
@@ -6095,15 +6112,7 @@ function EditorRuntimeWidget({
         <button
           type="button"
           className="ed-save ed-generate-tests"
-          onClick={() => {
-            if (canGenerateTests) runTestGeneration();
-            else
-              announceToolbarNotice(
-                testGenBusy
-                  ? "Test generation is already running."
-                  : "Test generation is unavailable for this file.",
-              );
-          }}
+          onClick={handleGenerateTestsClick}
           aria-disabled={canGenerateTests ? "false" : "true"}
         >
           Tests
@@ -6118,10 +6127,7 @@ function EditorRuntimeWidget({
         <button
           type="button"
           className="ed-save"
-          onClick={() => {
-            if (canFormat) setFormatRequestNonce((value) => value + 1);
-            else announceToolbarNotice("Formatting is unavailable for this file.");
-          }}
+          onClick={handleFormatClick}
           aria-disabled={canFormat ? "false" : "true"}
         >
           Format
