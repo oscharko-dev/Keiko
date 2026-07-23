@@ -333,7 +333,10 @@ function settleIfIdle(
 }
 
 function settleIdleWaiters(waiters: Set<IdleWaiter>, idle: boolean): void {
-  for (const waiter of [...waiters]) settleIdleWaiter(waiters, waiter, idle);
+  // Snapshot before iterating: settling a waiter may synchronously register a NEW waiter, which
+  // must wait for the next settle pass instead of running inside this one.
+  const snapshot = Array.from(waiters);
+  for (const waiter of snapshot) settleIdleWaiter(waiters, waiter, idle);
 }
 
 function settleIdleWaiter(waiters: Set<IdleWaiter>, waiter: IdleWaiter, idle: boolean): void {

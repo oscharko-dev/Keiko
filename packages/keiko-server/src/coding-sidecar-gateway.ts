@@ -675,12 +675,9 @@ function emitGatewayToolContractDiagnostic(
   deps: UiHandlerDeps,
   tools: readonly ToolDefinition[] | undefined,
 ): void {
-  const code =
-    tools === undefined
-      ? "CODING_GATEWAY_TOOL_CONTRACT_MISSING"
-      : tools.length === 0
-        ? "CODING_GATEWAY_TOOL_CONTRACT_EMPTY"
-        : "CODING_GATEWAY_TOOL_CONTRACT_DRIFT";
+  let code = "CODING_GATEWAY_TOOL_CONTRACT_DRIFT";
+  if (tools === undefined) code = "CODING_GATEWAY_TOOL_CONTRACT_MISSING";
+  else if (tools.length === 0) code = "CODING_GATEWAY_TOOL_CONTRACT_EMPTY";
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: ctx.correlationId ?? "unknown",
     timestamp: new Date(Date.now()).toISOString(),
@@ -773,16 +770,21 @@ function gatewayRequestCancellation(
   };
 }
 
+interface GatewayChatDelivery {
+  readonly modelAlias: string;
+  readonly maxOutputTokens: number;
+  readonly upstreamStreamingSupported: boolean;
+}
+
 async function executeGatewayChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   config: GatewayConfig,
-  modelAlias: string,
   parsed: CodingSidecarGatewayChatCompletionRequest,
   runId: string,
-  maxOutputTokens: number,
-  upstreamStreamingSupported: boolean,
+  delivery: GatewayChatDelivery,
 ): Promise<RouteResult | typeof STREAMING> {
+  const { modelAlias, maxOutputTokens, upstreamStreamingSupported } = delivery;
   const cancellation = gatewayRequestCancellation(ctx, deps, config, modelAlias, runId);
   const request = buildChatRequest(parsed, modelAlias, cancellation.signal, maxOutputTokens);
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
@@ -1262,16 +1264,14 @@ export async function handleCodingSidecarGatewayChatCompletions(
       return fixedReadinessResponse(ctx, resolved.result.modelAlias, parsed.stream === true);
     }
   }
-  return executeGatewayChat(
-    ctx,
-    deps,
-    resolved.config,
-    resolved.result.modelAlias,
-    parsed,
-    authentication.runId,
-    resolved.result.runMetadata.maxOutputTokens,
-    upstreamGatewayStreamingSupported(deps, resolved.result.supportsStreaming),
-  );
+  return executeGatewayChat(ctx, deps, resolved.config, parsed, authentication.runId, {
+    modelAlias: resolved.result.modelAlias,
+    maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,
+    upstreamStreamingSupported: upstreamGatewayStreamingSupported(
+      deps,
+      resolved.result.supportsStreaming,
+    ),
+  });
 }
 
 function fixedReadinessResponse(

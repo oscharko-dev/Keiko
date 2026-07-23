@@ -125,8 +125,9 @@ function readWindow(
   maxLines: number | undefined,
 ): ReadWindowResult {
   const lines = text.split("\n");
-  const trailingNewline = lines.length > 1 && lines[lines.length - 1] === "";
-  const totalLines = text.length === 0 ? 0 : trailingNewline ? lines.length - 1 : lines.length;
+  const trailingNewline = lines.length > 1 && lines.at(-1) === "";
+  let totalLines = trailingNewline ? lines.length - 1 : lines.length;
+  if (text.length === 0) totalLines = 0;
   if (startLine === undefined && maxLines === undefined) return { text, totalLines };
   const first = (startLine ?? 1) - 1;
   if (first >= totalLines) return { text: "", totalLines };

@@ -17,7 +17,7 @@ if (typeof window !== "undefined" && !HTMLElement.prototype.scrollIntoView) {
 
 // Monaco probes the legacy clipboard command API during module initialization. jsdom deliberately
 // omits that API, so expose the browser's conservative "unsupported" answer for component tests.
-if (typeof document !== "undefined" && document.queryCommandSupported === undefined) {
+if (typeof document !== "undefined" && !("queryCommandSupported" in document)) {
   Object.defineProperty(document, "queryCommandSupported", {
     configurable: true,
     value: (): boolean => false,

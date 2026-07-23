@@ -371,7 +371,8 @@ async function terminalCompletion(
     const outcome = await record.turnPort.waitForTerminal(runId, record.controller.signal);
     if (outcome !== "succeeded" || record.waitForPendingMutations === undefined) return outcome;
     const settled = await record.waitForPendingMutations(record.controller.signal);
-    return settled ? "succeeded" : record.controller.signal.aborted ? "cancelled" : "failed";
+    if (settled) return "succeeded";
+    return record.controller.signal.aborted ? "cancelled" : "failed";
   } catch {
     // Consumers treat an unprovable terminal outcome as a failed turn; never leave it unhandled.
     return "failed";

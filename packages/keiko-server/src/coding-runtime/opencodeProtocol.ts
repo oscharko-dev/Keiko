@@ -254,7 +254,7 @@ export function projectOpenCodePermissionEvent(
 export function projectOpenCodePermissionRequestId(requestId: string): string | undefined {
   if (!PERMISSION_ID.test(requestId)) return undefined;
   const digest = createHash("sha256").update(requestId, "utf8").digest("hex");
-  return `permission-${BigInt(`0x${digest}`).toString(10)}`;
+  return `permission-${BigInt("0x" + digest).toString(10)}`;
 }
 
 /** A SHA-256 rendered as decimal never exceeds 78 digits. */
