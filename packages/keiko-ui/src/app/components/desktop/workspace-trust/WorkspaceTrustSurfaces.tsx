@@ -1,3 +1,12 @@
+"use client";
+
+import { useEffect, useRef, type ReactNode } from "react";
+import type { WorkspaceTrustReason, WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import type { MessageKey } from "@/lib/i18n-messages.en";
+import { useTranslate } from "@/lib/i18n";
+import { useDialogTabTrap } from "../hooks/useDialogTabTrap";
+import styles from "./WorkspaceTrust.module.css";
+
 function confirmButtonLabel(
   t: ReturnType<typeof useTranslate>,
   mutating: boolean,
@@ -6,15 +15,6 @@ function confirmButtonLabel(
   if (mutating) return t("workspaceTrust.dialog.waiting");
   return action === "grant" ? t("workspaceTrust.dialog.trust") : t("workspaceTrust.dialog.revoke");
 }
-
-("use client");
-
-import { useEffect, useRef, type ReactNode } from "react";
-import type { WorkspaceTrustReason, WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
-import type { MessageKey } from "@/lib/i18n-messages.en";
-import { useTranslate } from "@/lib/i18n";
-import { useDialogTabTrap } from "../hooks/useDialogTabTrap";
-import styles from "./WorkspaceTrust.module.css";
 
 export type WorkspaceTrustSurface = "editor" | "commands" | "languages";
 export type WorkspaceTrustDecision = "grant" | "revoke";
