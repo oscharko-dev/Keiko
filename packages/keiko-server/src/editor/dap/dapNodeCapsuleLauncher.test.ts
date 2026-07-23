@@ -28,6 +28,7 @@ import {
   type DebugCapsuleLauncherDeps,
   type DebugCapsuleSpawnProcess,
 } from "./dapNodeCapsuleLauncher.js";
+import { workspaceRootIdentityDigestFor } from "../../workspace-root-identity.js";
 
 type ChildProcess = ReturnType<DebugCapsuleSpawnProcess>;
 type SpawnOptions = Parameters<DebugCapsuleSpawnProcess>[2];
@@ -133,13 +134,16 @@ function fixture(): {
     artifacts,
     workspaceIdentity: Object.freeze({
       realPath: workspace,
-      identityDigest: hash([
-        workspace,
-        workspaceStat.dev,
-        workspaceStat.ino,
-        workspaceStat.mode,
-        workspaceStat.uid,
-      ]),
+      // Producer parity with `inspectWorkspaceRootIdentity`
+      // (workspace-root-identity.ts): the framed digest is the shared canonical formula since
+      // #2520. Pre-#2643 fixture re-derived the pre-#2520 `hash([...])` and never noticed the
+      // producer/verifier drift because macOS skipped the launch path entirely.
+      identityDigest: workspaceRootIdentityDigestFor(workspace, {
+        dev: workspaceStat.dev,
+        ino: workspaceStat.ino,
+        mode: workspaceStat.mode,
+        uid: workspaceStat.uid,
+      }),
       device: workspaceStat.dev,
       inode: workspaceStat.ino,
       mode: workspaceStat.mode,
@@ -846,6 +850,17 @@ describe("production debug capsule launcher", () => {
 
     rmSync(identity.realPath, { recursive: true });
     expect(debugCapsuleLauncherInternals.workspaceUnchanged(current.envelope)).toBe(false);
+  });
+
+  it("verifies with the same shared framed digest the workspace-identity producer uses (#2643)", () => {
+    // Regression for #2643: pre-fix `workspaceUnchanged` re-derived the legacy
+    // `sha256(JSON.stringify([realPath, dev, ino, mode, uid]))` hash while the producer
+    // (`inspectWorkspaceRootIdentity`) already emits the shared framed digest since #2520.
+    // Producer/verifier drift silently rejected every valid launch on Linux. This test locks
+    // the two to the one canonical formula so a re-introduction fails everywhere — not only
+    // in the Linux-only DAP integration suite.
+    const current = fixture();
+    expect(debugCapsuleLauncherInternals.workspaceUnchanged(current.envelope)).toBe(true);
   });
 
   it("uses the exact command, arguments, options, streams, and handle contract", async () => {
