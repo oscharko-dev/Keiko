@@ -1699,6 +1699,15 @@ function recoverySnapshotChanged(
   );
 }
 
+function tabAriaLabel(
+  path: string,
+  conflictCount: number,
+  sourceControlT: ReturnType<typeof useEditorSourceControlTranslate>,
+): string {
+  if (conflictCount === 0) return path;
+  return `${path}, ${sourceControlT("conflicts.statusAria", { count: conflictCount })}`;
+}
+
 function whenEnabled<T>(enabled: boolean, value: T): T | undefined {
   return enabled ? value : undefined;
 }
@@ -1776,9 +1785,6 @@ function EditorRuntimeWidget({
   onOpenDebugPanel,
   heldTabFile,
 }: EditorRuntimeWidgetProps): ReactNode {
-  // GEN-PERF-EDITOR-003: consumed for identity only — the scalar exists to trip React.memo for
-  // the one pane whose tab visual must repaint; renderTabHandle reads the live flag from a ref.
-  void heldTabFile;
   const commonT = useTranslate();
   const sourceControlT = useEditorSourceControlTranslate();
   const locale = useLocale();
@@ -5915,7 +5921,16 @@ function EditorRuntimeWidget({
   };
 
   const renderOpenDocumentTabs = (): ReactNode => (
-    <div className="ed-tablist" ref={tablistRef} role="tablist" aria-label="Open documents">
+    <div
+      className="ed-tablist"
+      ref={tablistRef}
+      role="tablist"
+      aria-label="Open documents"
+      // GEN-PERF-EDITOR-003: the held-file scalar exists to trip React.memo for the one pane whose
+      // tab visual must repaint; surfacing it as a DOM marker is its one real read and gives the
+      // drag e2e a stable observation point.
+      data-held-tab-file={heldTabFile}
+    >
       {visibleTabs.length > 0 ? (
         visibleTabs.map((path) => {
           const active = path === file;
@@ -5956,11 +5971,7 @@ function EditorRuntimeWidget({
                 data-merge-conflicts={
                   tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)
                 }
-                aria-label={
-                  tabConflictCount > 0
-                    ? `${path}, ${sourceControlT("conflicts.statusAria", { count: tabConflictCount })}`
-                    : path
-                }
+                aria-label={tabAriaLabel(path, tabConflictCount, sourceControlT)}
                 onClickCapture={tabHandle?.onClickCapture}
                 onDragStart={tabHandle?.onDragStart}
                 onDragEnd={tabHandle?.onDragEnd}
