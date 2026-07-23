@@ -82,6 +82,65 @@ describe("CodingRuntimeEventHub", () => {
     expect(replay.events).toEqual([awaiting.event]);
   });
 
+  it("admits the content-free auxiliary facts produced by research, skill, and child events", () => {
+    const hub = new CodingRuntimeEventHub();
+    const inputs: readonly CodingRuntimeEventHubInput[] = [
+      {
+        schemaVersion: "1",
+        kind: "runtime-event",
+        runId: "run-a",
+        state: "running",
+        revision: 1,
+        eventKind: "research-performed",
+        auxiliaryOutcome: "accepted",
+        contentTrust: "untrusted",
+      },
+      {
+        schemaVersion: "1",
+        kind: "runtime-event",
+        runId: "run-a",
+        state: "running",
+        revision: 1,
+        eventKind: "skill-invoked",
+        auxiliaryOutcome: "accepted",
+      },
+      {
+        schemaVersion: "1",
+        kind: "runtime-event",
+        runId: "run-a",
+        state: "running",
+        revision: 1,
+        eventKind: "child-run-completed",
+        auxiliaryOutcome: "accepted",
+      },
+    ];
+
+    const results = inputs.map((input) => hub.publish(input));
+
+    expect(results.every(({ ok }) => ok)).toBe(true);
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.events).toMatchObject(inputs);
+  });
+
+  it("rejects auxiliary facts that violate their event-specific provenance contract", () => {
+    const hub = new CodingRuntimeEventHub();
+
+    expect(
+      hub.publish({
+        schemaVersion: "1",
+        kind: "runtime-event",
+        runId: "run-a",
+        state: "running",
+        revision: 1,
+        eventKind: "skill-invoked",
+        auxiliaryOutcome: "accepted",
+        contentTrust: "untrusted",
+      }),
+    ).toEqual({ ok: false, reason: "invalid-event" });
+  });
+
   it("keeps a 1,000-event burst inside both replay bounds", () => {
     const hub = new CodingRuntimeEventHub();
     for (let index = 0; index < 1_000; index += 1)

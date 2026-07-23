@@ -26,6 +26,7 @@ import type {
   ModelKind,
   ModelProviderConfig,
   ModelTokenAccounting,
+  OutputTokenParameter,
   OutboundHttpEgressConfig,
   ProviderEndpointStyle,
   RealtimeAuthMode,
@@ -60,6 +61,10 @@ const PROVIDER_ENDPOINT_STYLES: readonly ProviderEndpointStyle[] = [
   "azure-openai-deployment",
 ];
 const REALTIME_AUTH_MODES: readonly RealtimeAuthMode[] = ["api-key", "ephemeral-session"];
+const OUTPUT_TOKEN_PARAMETERS: readonly OutputTokenParameter[] = [
+  "max_tokens",
+  "max_completion_tokens",
+];
 const API_VERSION_RE = /^\d{4}-\d{2}-\d{2}(?:-preview)?$/u;
 const MODEL_TOKEN_ACCOUNTING_SOURCES: readonly ModelTokenAccounting["source"][] = ["calibrated"];
 const TOKEN_ACCOUNTING_KNOWN_KEYS: ReadonlySet<string> = new Set([
@@ -615,6 +620,20 @@ function resolveRealtimeAuthMode(
     return undefined;
   }
   return requireEnum<RealtimeAuthMode>(value, path, REALTIME_AUTH_MODES);
+}
+
+function outputTokenParameterConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "outputTokenParameter"> {
+  if (value === undefined) return {};
+  return {
+    outputTokenParameter: requireEnum<OutputTokenParameter>(
+      value,
+      `${path}.outputTokenParameter`,
+      OUTPUT_TOKEN_PARAMETERS,
+    ),
+  };
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -1258,6 +1277,7 @@ function parseProviderConfig(
     ...(endpointStyle === undefined ? {} : { endpointStyle }),
     ...(apiVersion === undefined ? {} : { apiVersion }),
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
+    ...outputTokenParameterConfig(raw.outputTokenParameter, path),
     timeoutMs: requirePositiveInt(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(

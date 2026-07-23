@@ -214,6 +214,93 @@ describe("OpenCode HTTP client", () => {
     ]);
   });
 
+  it("lists only exact permissions and replies once or rejects on the bound route", async () => {
+    const requests: { readonly method: string; readonly path: string; readonly body?: string }[] =
+      [];
+    const pending = [
+      {
+        id: "per_1",
+        sessionID: "ses_1",
+        permission: "keiko_governed_action",
+        patterns: ["src/example.ts"],
+        metadata: {},
+        always: [],
+      },
+    ];
+    const client = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: (url, init) => {
+        const path = new URL(requestUrl(url)).pathname;
+        requests.push({
+          method: init?.method ?? "GET",
+          path,
+          ...(typeof init?.body === "string" ? { body: init.body } : {}),
+        });
+        return Promise.resolve(
+          new Response(path === "/permission" ? JSON.stringify(pending) : "true", {
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      },
+    });
+
+    await expect(client.listPermissions()).resolves.toEqual([{ id: "per_1", sessionID: "ses_1" }]);
+    await expect(client.replyPermission("per_1", "once")).resolves.toBe(true);
+    await expect(client.replyPermission("per_1", "reject")).resolves.toBe(true);
+    expect(requests).toEqual([
+      { method: "GET", path: "/permission" },
+      { method: "POST", path: "/permission/per_1/reply", body: '{"reply":"once"}' },
+      { method: "POST", path: "/permission/per_1/reply", body: '{"reply":"reject"}' },
+    ]);
+  });
+
+  it("rejects malformed permission lists and reply identities before transport", async () => {
+    for (const pending of [
+      [
+        {
+          id: "wrong",
+          sessionID: "ses_1",
+          permission: "gate",
+          patterns: [],
+          metadata: {},
+          always: [],
+        },
+      ],
+      [
+        {
+          id: "per_1",
+          sessionID: "ses_1",
+          permission: "gate",
+          patterns: [],
+          metadata: {},
+          always: [],
+          raw: "secret",
+        },
+      ],
+    ]) {
+      const client = createOpenCodeHttpClient({
+        endpoint: "http://127.0.0.1:43123",
+        password: "p".repeat(43),
+        fetch: () =>
+          Promise.resolve(
+            new Response(JSON.stringify(pending), {
+              headers: { "content-type": "application/json" },
+            }),
+          ),
+      });
+      await expect(client.listPermissions()).rejects.toThrow("permission-invalid");
+    }
+    const fetch = vi.fn();
+    const client = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch,
+    });
+    await expect(client.replyPermission("bad", "once")).rejects.toThrow("permission-invalid");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed, oversized, and unbounded question requests and answers before transport", async () => {
     const malformed = [
       [{ id: "que_1", sessionID: "ses_other", questions: [] }],

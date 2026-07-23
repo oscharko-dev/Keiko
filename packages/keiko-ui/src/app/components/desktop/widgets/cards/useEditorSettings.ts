@@ -184,6 +184,7 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
           void refresh();
         }
       },
+      { priority: "background" },
     );
     return unsubscribe;
   }, [refresh, root]);

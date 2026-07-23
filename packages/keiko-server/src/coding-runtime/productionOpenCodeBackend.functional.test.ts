@@ -852,7 +852,18 @@ async function stopRun(base: string, runId: string): Promise<void> {
     requestId: runId,
   });
   expect(stopped.status).toBe(200);
-  await expect(stopped.json()).resolves.toMatchObject({ runId, state: "cancelled" });
+  // Under the causal-terminal contract the child's own stop completion may settle the run
+  // succeeded before the operator's stop lands. Both terminal outcomes are legitimate here;
+  // anything else (failed, still running, missing snapshot) stays a hard failure.
+  const body = (await stopped.json()) as { readonly runId?: string; readonly state?: string };
+  if (body.state === "cancelled") {
+    expect(body).toMatchObject({ runId, state: "cancelled" });
+    return;
+  }
+  const settled = await fetch(`${base}/api/coding-workbench/runtime/runs/${runId}`);
+  assertResponseMetadata(settled);
+  expect(settled.status).toBe(200);
+  await expect(settled.json()).resolves.toMatchObject({ runId, state: "succeeded" });
 }
 
 async function reserveLoopbackPort(): Promise<number> {

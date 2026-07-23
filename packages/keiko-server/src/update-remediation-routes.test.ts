@@ -1,7 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -12,7 +11,8 @@ import type {
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
-import { createUiServer, UI_HOST } from "./server.js";
+import { UI_HOST } from "./server.js";
+import { startUiTestServer } from "./ui-test-server/_support.js";
 import type { UpdateRemediationManager } from "./update-remediation.js";
 
 function report(): UpdateRemediationStatusReport {
@@ -79,11 +79,6 @@ let staticRoot: string;
 let port: number;
 let updateRemediation: FakeUpdateRemediationManager;
 
-async function listen(srv: Server): Promise<number> {
-  await new Promise<void>((resolve) => srv.listen(0, UI_HOST, resolve));
-  return (srv.address() as AddressInfo).port;
-}
-
 async function closeServer(srv: Server = server): Promise<void> {
   await new Promise<void>((resolve) => {
     srv.close(() => {
@@ -112,17 +107,11 @@ function baseDeps(): UiHandlerDeps {
 }
 
 async function buildServer(handlerDeps: UiHandlerDeps): Promise<{ server: Server; port: number }> {
-  const probe = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps });
-  const chosenPort = await listen(probe);
-  await closeServer(probe);
-  const next = createUiServer({
+  return startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port: chosenPort,
     handlerDeps,
   });
-  await new Promise<void>((resolve) => next.listen(chosenPort, UI_HOST, resolve));
-  return { server: next, port: chosenPort };
 }
 
 function baseUrl(): string {

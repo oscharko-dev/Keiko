@@ -2,6 +2,7 @@ import { randomBytes as nodeRandomBytes } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 
 import {
+  OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   OPENCODE_PINNED_BUILT_IN_TOOLS,
 } from "./opencodeToolSchemas.js";
@@ -12,6 +13,7 @@ export interface OpenCodeLaunchProfileInput {
   readonly randomBytes?: ((size: number) => Buffer) | undefined;
 }
 export const OPENCODE_RUNTIME_MODEL_ALIAS = "coding";
+const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 export type OpenCodeLaunchProfileResult =
   | {
       readonly ok: true;
@@ -79,6 +81,10 @@ export function createFixedOpenCodeConfig(): {
         },
         options: {
           baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
+          // The pinned v1.17.17 child defaults provider chunks to 10 seconds. Coding turns can
+          // legitimately reason longer while Keiko's gateway still enforces its shorter provider
+          // deadline; align the child watchdog with the outer hard turn/authority ceiling.
+          chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
           headers: { Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}" },
         },
       },
@@ -91,6 +97,7 @@ export function createFixedOpenCodeConfig(): {
     permission: Object.fromEntries([
       ["*", "deny"] as const,
       ...OPENCODE_PINNED_BUILT_IN_TOOLS.map((tool) => [tool, "deny"] as const),
+      [OPENCODE_GOVERNED_ACTION_PERMISSION, "ask"] as const,
       ...OPENCODE_MODEL_VISIBLE_TOOL_NAMES.map((tool) => [tool, "allow"] as const),
     ]),
   };

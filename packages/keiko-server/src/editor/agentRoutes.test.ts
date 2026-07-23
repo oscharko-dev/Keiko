@@ -4016,46 +4016,59 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
   });
 
-  it("admits an exact runtime mutation lease without local editor authority registration", async () => {
-    const arranged = arrangeTwoFiles();
-    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
-      "src/a.txt",
-      "src/b.txt",
-    ]);
-    const proposed = {
-      ...arranged.action,
-      authorityRef: { runId: "runtime-run-2483", envelopeDigest: HASH },
-    };
-    const runtimeMutationLease = {
-      matches: vi.fn((): boolean => true),
-      claim: vi.fn((): boolean => true),
-    } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
-    const deps = runtimeMutationDeps(runtimeMutationLease);
+  it.each([
+    ["review-required", true],
+    ["immediate", false],
+  ] as const)(
+    "admits an exact %s runtime mutation lease without local editor authority registration",
+    async (_path, requiresReview) => {
+      const arranged = arrangeTwoFiles();
+      const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
+        "src/a.txt",
+        "src/b.txt",
+      ]);
+      const proposed = {
+        ...arranged.action,
+        authorityRef: { runId: "runtime-run-2483", envelopeDigest: HASH },
+      };
+      const runtimeMutationLease = {
+        matches: vi.fn((): boolean => true),
+        requiresReview: vi.fn((): boolean => requiresReview),
+        claim: vi.fn((): boolean => true),
+        complete: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+      } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+      const deps = runtimeMutationDeps(runtimeMutationLease);
 
-    const admitted = await handleEditorAgentActions(context(proposed), deps);
-    expect(admitted.status).toBe(202);
-    expect(actionResultStatus(admitted.body)).toBe("queued");
-    expect(auditRecords().at(-1)).toMatchObject({
-      actionType: "applyChangeset",
-      disposition: "allowed",
-      outcome: "queued",
-    });
-    expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
-    expect(lastEmittedAction(bridge.frames()).requiresReview).toBe(true);
+      const admitted = await handleEditorAgentActions(context(proposed), deps);
+      expect(admitted.status).toBe(202);
+      expect(actionResultStatus(admitted.body)).toBe("queued");
+      expect(auditRecords().at(-1)).toMatchObject({
+        actionType: "applyChangeset",
+        disposition: "allowed",
+        outcome: "queued",
+      });
+      expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
+      expect(lastEmittedAction(bridge.frames()).requiresReview).toBe(requiresReview);
 
-    const committed = await postActionResult(
-      proposed,
-      "succeeded",
-      proposed.sessionId,
-      undefined,
-      deps,
-    );
-    expect(actionResultStatus(committed.body)).toBe("succeeded");
-    expect(runtimeMutationLease.matches).toHaveBeenCalledOnce();
-    expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
-    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A1\n");
-    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B1\n");
-  });
+      const committed = await postActionResult(
+        proposed,
+        "succeeded",
+        proposed.sessionId,
+        undefined,
+        deps,
+      );
+      expect(actionResultStatus(committed.body)).toBe("succeeded");
+      expect(runtimeMutationLease.matches).toHaveBeenCalledOnce();
+      expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
+      expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Object),
+        true,
+      );
+      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A1\n");
+      expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B1\n");
+    },
+  );
 
   it("keeps a local changeset with an authority reference on the established audit path", async () => {
     const arranged = arrangeTwoFiles();
@@ -4063,9 +4076,12 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     registerTestAuthority(workspaceRoot);
     const runtimeMutationLease = {
       matches: vi.fn((): boolean => false),
+      requiresReview: vi.fn((): boolean => true),
       claim: vi.fn((): boolean => {
         throw new Error("a local editor action must not claim a runtime lease");
       }),
+      complete: vi.fn((): boolean => true),
+      discard: vi.fn((): boolean => true),
     } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
 
     expect(
@@ -4120,11 +4136,14 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       _setEditorAgentPatchWriterForTests({ writeFileUtf8, mkdirp, remove, rename });
       const runtimeMutationLease = {
         matches: vi.fn((): boolean => true),
+        requiresReview: vi.fn((): boolean => true),
         claim: vi.fn(
           (
             _request: Parameters<NonNullable<UiHandlerDeps["runtimeMutationLease"]>["claim"]>[0],
           ): boolean => claim(),
         ),
+        complete: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
       } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
 
       expect(
@@ -4146,6 +4165,10 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       expect(actionResultStatus(denied.body)).toBe("failed");
       expect(runtimeMutationLease.matches).toHaveBeenCalledTimes(1);
       expect(runtimeMutationLease.claim).toHaveBeenCalledTimes(1);
+      expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Object),
+        false,
+      );
       const leaseRequest = runtimeMutationLease.claim.mock.calls[0]?.[0];
       if (leaseRequest === undefined) throw new Error("expected runtime mutation lease request");
       expect(leaseRequest).toMatchObject({
@@ -4185,10 +4208,16 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     });
     const runtimeMutationLease = {
       matches: vi.fn((): boolean => true),
+      requiresReview: vi.fn((): boolean => true),
       claim: vi.fn((): boolean => {
         order.push("claim");
         return true;
       }),
+      complete: vi.fn((_request, succeeded): boolean => {
+        order.push(succeeded ? "complete" : "fail");
+        return true;
+      }),
+      discard: vi.fn((): boolean => true),
     } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
 
     expect(
@@ -4210,6 +4239,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(actionResultStatus(committed.body)).toBe("succeeded");
     expect(runtimeMutationLease.matches).toHaveBeenCalledTimes(1);
     expect(runtimeMutationLease.claim).toHaveBeenCalledTimes(1);
+    expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(expect.any(Object), true);
     expect(order).toEqual(expect.arrayContaining(["claim", "write"]));
     expect(order.indexOf("claim")).toBeLessThan(order.indexOf("write"));
     expect(auditRecords().at(-2)).not.toHaveProperty("targetPath");

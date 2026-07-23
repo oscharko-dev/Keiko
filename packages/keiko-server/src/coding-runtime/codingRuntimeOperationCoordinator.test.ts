@@ -81,6 +81,7 @@ function coordinator(input: {
   readonly taskDispatcher?: CodingRuntimeTaskDispatcher;
   readonly port?: CodingRuntimeQuestionPort;
   readonly stop?: CodingRuntimeManager["stop"];
+  readonly settleTask?: (runId: string, outcome: "cancelled" | "failed" | "succeeded") => void;
 }): CodingRuntimeOperationCoordinator {
   return new CodingRuntimeOperationCoordinator({
     current: () => runningSnapshot(),
@@ -94,6 +95,7 @@ function coordinator(input: {
       runId: current.runId,
     }),
     taskDispatcher: input.taskDispatcher ?? dispatcher(),
+    settleTask: input.settleTask ?? vi.fn(),
     questionPort: input.port ?? questionPort(),
     manager: manager(
       input.stop ?? vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
@@ -119,6 +121,36 @@ describe("CodingRuntimeOperationCoordinator", () => {
       failureCode: "invalid-intent",
     });
     expect(taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports successful and rejected task completions to the lifecycle owner", async () => {
+    const settleTask = vi.fn();
+    let resolveCompletion: ((outcome: "cancelled" | "failed" | "succeeded") => void) | undefined;
+    const completion = new Promise<"cancelled" | "failed" | "succeeded">((resolve) => {
+      resolveCompletion = resolve;
+    });
+    const subject = coordinator({
+      settleTask,
+      taskDispatcher: dispatcher({
+        dispatch: () => Promise.resolve({ ok: true, completion }),
+      }),
+    });
+    await subject.submitFollowUp("run-1", followUp());
+    resolveCompletion?.("succeeded");
+    await vi.waitFor(() => {
+      expect(settleTask).toHaveBeenCalledWith("run-1", "succeeded");
+    });
+
+    const rejected = coordinator({
+      settleTask,
+      taskDispatcher: dispatcher({
+        dispatch: () => Promise.resolve({ ok: true, completion: Promise.reject(new Error()) }),
+      }),
+    });
+    await rejected.submitFollowUp("run-1", followUp("req-2"));
+    await vi.waitFor(() => {
+      expect(settleTask).toHaveBeenCalledWith("run-1", "failed");
+    });
   });
 
   it("fails closed when the task dispatcher throws and frees the request id", async () => {

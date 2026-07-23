@@ -436,6 +436,9 @@ import them automatically from a repository-local `.env`; use an explicit shell 
 env-file launch, `--config`, or the first-run setup flow.
 
 Supported credential headers are `authorization`, `x-litellm-key`, `x-api-key`, and `api-key`.
+Keiko maps the provider-neutral output budget to `max_completion_tokens` for GPT-5 and o1/o3/o4
+model IDs, and to legacy `max_tokens` otherwise. Providers behind an opaque model alias can set
+`outputTokenParameter` explicitly to either wire parameter.
 
 Do not commit gateway config files, API tokens, `.keiko/`, or evidence that contains project-specific review material unless your process explicitly requires it.
 

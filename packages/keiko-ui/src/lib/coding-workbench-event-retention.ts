@@ -9,6 +9,7 @@ import {
   createCodingWorkbenchRuntimeEventSource,
   parseCodingWorkbenchRuntimeEvent,
 } from "./coding-workbench-runtime-api";
+import { reserveInteractiveBrowserStreamCapacity } from "./browser-stream-capacity";
 
 export const CODING_WORKBENCH_EVENT_RETENTION_LIMIT = 500;
 export const CODING_WORKBENCH_OBSERVATION_BATCH_MS = 100;
@@ -72,10 +73,12 @@ export function useCodingWorkbenchRuntimeEventStream(
   handlersRef.current = handlers;
   useEffect(() => {
     if (runId === undefined) return;
+    const releaseCapacity = reserveInteractiveBrowserStreamCapacity();
     let source: EventSource;
     try {
       source = createCodingWorkbenchRuntimeEventSource(runId);
     } catch (error) {
+      releaseCapacity();
       handlersRef.current.onError(error);
       return;
     }
@@ -117,6 +120,7 @@ export function useCodingWorkbenchRuntimeEventStream(
     });
     return (): void => {
       source.close();
+      releaseCapacity();
       if (timer !== undefined) clearTimeout(timer);
     };
   }, [epoch, runId]);

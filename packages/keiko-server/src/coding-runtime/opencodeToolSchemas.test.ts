@@ -36,6 +36,23 @@ describe("OpenCode visible tool contract", () => {
     expect(hasExactOpenCodeVisibleToolContract(OPENCODE_MODEL_VISIBLE_TOOLS)).toBe(false);
   });
 
+  it("requires strict unified headers or the bounded single-file raw-index fallback", () => {
+    const edit = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_changeset_edit");
+    const pattern = edit?.parameters.properties.changeset.properties.patch.pattern;
+    if (pattern === undefined) throw new Error("Expected changeset patch pattern.");
+    const accepted = new RegExp(pattern, "u");
+
+    expect(accepted.test("--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n")).toBe(true);
+    expect(
+      accepted.test(
+        "diff --git a/README.md b/README.md\nindex 1d9d46e..9a35d11 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n",
+      ),
+    ).toBe(true);
+    expect(accepted.test(":100644 100644 1d9d46e 0000000 M README.md\n@@ -1 +1 @@\n")).toBe(true);
+    expect(accepted.test(":100644 100644 1d9d46e 0000000 A README.md\n@@ -1 +1 @@\n")).toBe(false);
+    expect(accepted.test(":100644 100644 1d9d46e 0000000 M README.md\n-old\n+new\n")).toBe(false);
+  });
+
   it.each([
     [
       "the verifier enum",

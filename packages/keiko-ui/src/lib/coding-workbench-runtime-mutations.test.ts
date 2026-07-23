@@ -260,17 +260,14 @@ describe("createFollowUpMutation", () => {
 describe("createResearchRevokeMutation", () => {
   const grant = { grantId: "grant-1", domains: ["nodejs.org"], expiresAt: UPDATED_AT } as const;
 
-  it("requires a run that still carries a live research grant", () => {
-    expect(() => createResearchRevokeMutation(stateWithRun(snapshot()))).toThrowError(
-      expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
-    );
-    expect(() => createResearchRevokeMutation(stateWithRun(null))).toThrowError(
+  it("requires a current run for the authenticated-channel grant", () => {
+    expect(() => createResearchRevokeMutation(stateWithRun(null), grant)).toThrowError(
       expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
     );
   });
 
   it("posts a revision-bound revoke carrying the grant id", async () => {
-    const mutation = createResearchRevokeMutation(stateWithRun(snapshot({ researchGrant: grant })));
+    const mutation = createResearchRevokeMutation(stateWithRun(snapshot()), grant);
     expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
     expect(mutation.mayInstallNewRun).toBe(false);
     await mutation.run();

@@ -73,7 +73,7 @@ type FunctionalEditorAgentClient = ProductionCodingRuntimeResolverInput["editorA
 type FunctionalEditorAction = Parameters<FunctionalEditorAgentClient["action"]>[0];
 type FunctionalEditorActionResult = Awaited<ReturnType<FunctionalEditorAgentClient["action"]>>;
 
-export interface FunctionalRuntimeResolverInput {
+interface FunctionalRuntimeResolverBaseInput {
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
@@ -88,8 +88,57 @@ export interface FunctionalRuntimeResolverInput {
   readonly researchEgressEnabled?: boolean | undefined;
   /** #2387 hermetic research transport; tests never touch the real network. */
   readonly researchFetchImpl?: ProductionCodingRuntimeResolverInput["researchFetchImpl"];
-  /** #2387 hermetic child model; production resolves the same model through the gateway. */
-  readonly childModelPortFactory?: ProductionCodingRuntimeResolverInput["childModelPortFactory"];
+}
+
+type FunctionalChildModelInput =
+  | {
+      readonly childModelPortFactory?: undefined;
+      readonly childModelId?: undefined;
+    }
+  | {
+      /** #2387 hermetic child model; production resolves the same model through the gateway. */
+      readonly childModelPortFactory: NonNullable<
+        ProductionCodingRuntimeResolverInput["childModelPortFactory"]
+      >;
+      /** Provider model id served by `childModelPortFactory`; both are required to mount the child. */
+      readonly childModelId: string;
+    };
+
+export type FunctionalRuntimeResolverInput = FunctionalRuntimeResolverBaseInput &
+  FunctionalChildModelInput;
+
+export interface FunctionalChildModelCandidate {
+  readonly childModelPortFactory?: unknown;
+  readonly childModelId?: unknown;
+}
+
+type ResolvedFunctionalChildModelInput = Partial<
+  Pick<ProductionCodingRuntimeResolverInput, "childModelPortFactory" | "childModelId">
+>;
+
+/** Enforces the child-model factory/id pair even for untyped JavaScript harness callers. */
+export function resolveFunctionalChildModelInput(
+  input: FunctionalChildModelCandidate,
+): ResolvedFunctionalChildModelInput {
+  const { childModelPortFactory, childModelId } = input;
+  if (childModelPortFactory === undefined && childModelId === undefined) return {};
+  if (!isChildModelPortFactory(childModelPortFactory) || !isChildModelId(childModelId)) {
+    throw new Error("functional-child-model-configuration-incomplete");
+  }
+  return {
+    childModelPortFactory,
+    childModelId: (): string => childModelId,
+  };
+}
+
+function isChildModelPortFactory(
+  value: unknown,
+): value is NonNullable<ProductionCodingRuntimeResolverInput["childModelPortFactory"]> {
+  return typeof value === "function";
+}
+
+function isChildModelId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
 /**
@@ -114,7 +163,7 @@ export function createFunctionalRuntimeResolver(
         : { researchEgressEnabled: input.researchEgressEnabled }),
     },
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
-    ...(input.childModelPortFactory ? { childModelPortFactory: input.childModelPortFactory } : {}),
+    ...resolveFunctionalChildModelInput(input),
     backend: createProductionOpenCodeBackend({
       portable: input.portable,
       runtimeStateRoot: input.runtimeStateRoot,
@@ -454,10 +503,14 @@ function researchScriptedResponse(
   transcript: string,
   script: ScriptState,
 ): NormalizedResponse {
-  if (step === 0 || step === 2 || step === 7) {
+  if (step === 0 || step === 2 || step === 6) {
     return tool("keiko_research_fetch", { target: RESEARCH_JOURNEY_URL });
   }
-  if (step === 1 || step === 6) return tool("question", question());
+  // The causal-terminal contract settles the run on the first `stop` completion, so every phase
+  // boundary the journey still needs (revoke, follow-up, deny) is held open by a blocking
+  // question instead of a bare text turn: step 5 keeps the run alive for the revoke phase, and
+  // step 7 keeps it awaiting the operator's deny after the revoked re-ask.
+  if (step === 1 || step === 5 || step === 7) return tool("question", question());
   // #2637: step 3 is the decision the granted page tried to steer. Only a fenced directive lets the
   // journey continue to its skill invocation.
   if (step === 3) return researchPostFetchResponse(transcript, script);

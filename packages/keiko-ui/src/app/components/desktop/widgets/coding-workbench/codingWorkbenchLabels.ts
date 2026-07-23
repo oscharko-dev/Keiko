@@ -1,6 +1,7 @@
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
+  CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
@@ -83,15 +84,16 @@ function setupAnnouncement(
 }
 
 function researchAnnouncement(
-  state: CodingWorkbenchRuntimeState,
+  grant: CodingWorkbenchRuntimeResearchGrant | null,
   t: CodingWorkbenchTranslate,
 ): string {
-  return state.run.value?.researchGrant ? t("codingWorkbench.announcement.researchActive") : "";
+  return grant === null ? "" : t("codingWorkbench.announcement.researchActive");
 }
 
 export function lifecycleAnnouncement(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
+  researchGrant: CodingWorkbenchRuntimeResearchGrant | null = null,
 ): string {
   const snapshot = state.run.value;
   const sourceAvailable =
@@ -110,7 +112,7 @@ export function lifecycleAnnouncement(
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
     readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t),
     recovery,
-    researchAnnouncement(state, t),
+    researchAnnouncement(researchGrant, t),
     setupAnnouncement(state.codexSetup.status, t),
   ]
     .filter((announcement) => announcement.length > 0)

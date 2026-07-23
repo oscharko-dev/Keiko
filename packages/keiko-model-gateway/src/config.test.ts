@@ -104,6 +104,19 @@ describe("parseGatewayConfig", () => {
     ).toThrow(/realtimeAuthMode must be one of/u);
   });
 
+  it("parses and validates the provider output-token parameter", () => {
+    const config = parseGatewayConfig(
+      rawWithProvider((p) => ({ ...p, outputTokenParameter: "max_completion_tokens" })),
+    );
+    expect(config.providers[0]?.outputTokenParameter).toBe("max_completion_tokens");
+
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({ ...p, outputTokenParameter: "unbounded_tokens" })),
+      ),
+    ).toThrow(/outputTokenParameter must be one of/u);
+  });
+
   it("rejects endpoint API version without the Azure deployment endpoint style", () => {
     expect(() =>
       parseGatewayConfig(

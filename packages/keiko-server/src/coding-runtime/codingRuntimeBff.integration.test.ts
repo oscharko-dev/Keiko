@@ -1,17 +1,25 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Integration fixtures are contextually typed. */
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
+import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "../coding-app-session/_support.js";
+import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
+import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
 import { buildCspHeader } from "../csp.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { createUiServer, UI_HOST } from "../server.js";
+import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
+import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createCodingRuntimeControlPlane } from "./codingRuntimeControlPlane.js";
 import { createCodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -38,27 +46,14 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function listen(server: Server): Promise<number> {
-  await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
-  return (server.address() as AddressInfo).port;
-}
-
-async function close(server: Server): Promise<void> {
-  await new Promise<void>((resolve) =>
-    server.close(() => {
-      resolve();
-    }),
-  );
-}
-
 async function startServer(staticRoot: string, handlerDeps: UiHandlerDeps): Promise<number> {
-  const probe = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps });
-  const port = await listen(probe);
-  await close(probe);
-  const server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
-  servers.push(server);
-  return port;
+  const started = await startUiTestServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    handlerDeps,
+  });
+  servers.push(started.server);
+  return started.port;
 }
 
 function post(port: number, body: unknown): Promise<Response> {
@@ -89,6 +84,71 @@ function stop(port: number, runId: string): Promise<Response> {
 }
 
 describe("production coding runtime BFF", () => {
+  it("#2644: exposes a research grant only on the paired research route", async () => {
+    const staticRoot = await mkdtemp(join(tmpdir(), "keiko-runtime-bff-research-"));
+    roots.push(staticRoot);
+    await writeFile(join(staticRoot, "index.html"), "<html></html>", "utf8");
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new Error("expected paired app session");
+    const cookie = `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
+    const host = "approved-route-canary.example";
+    const snapshot: CodingWorkbenchRuntimeSnapshot = {
+      schemaVersion: "1",
+      state: "running",
+      revision: 2,
+      updatedAt: "2026-07-23T00:00:00.000Z",
+      runId: "run-1",
+      requestedMode: "supervised-coding",
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+    };
+    let grantVisible = false;
+    const grant = {
+      grantId: "grant-route-canary",
+      domains: [host],
+      expiresAt: "2099-07-23T00:05:00.000Z",
+    };
+    const orchestrator = {
+      status: (): CodingWorkbenchRuntimeSnapshot => snapshot,
+      getSnapshot: (runId: string): CodingWorkbenchRuntimeSnapshot | undefined =>
+        runId === "run-1" ? snapshot : undefined,
+      pendingResearchAsk: () => undefined,
+      researchGrant: () => (grantVisible ? grant : undefined),
+    };
+    const port = await startServer(staticRoot, {
+      codingRuntimeOrchestrator: orchestrator,
+      codingRuntimeEventHub: { subscribe: () => ({ ok: false, reason: "not-needed" }) },
+      codingAppSessionChannel: channel,
+    } as unknown as UiHandlerDeps);
+    const baseUrl = `http://${UI_HOST}:${String(port)}/api/coding-workbench/runtime`;
+
+    const statusWithoutGrant = await fetch(`${baseUrl}/status`);
+    grantVisible = true;
+    const unpairedStatus = await fetch(`${baseUrl}/status`);
+    const pairedStatus = await fetch(`${baseUrl}/status`, { headers: { cookie } });
+    const unpairedResearch = await fetch(`${baseUrl}/runs/run-1/research`);
+    const pairedResearch = await fetch(`${baseUrl}/runs/run-1/research`, {
+      headers: { cookie },
+    });
+    const bodies = await Promise.all(
+      [statusWithoutGrant, unpairedStatus, pairedStatus, unpairedResearch, pairedResearch].map(
+        (response) => response.json(),
+      ),
+    );
+
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(bodies[2]).toEqual(bodies[0]);
+    expect(bodies[3]).toEqual({ session: "unpaired" });
+    expect(bodies[4]).toEqual({
+      session: "active",
+      grant,
+    });
+  });
+
   it("keeps authority server-owned and dispatches transient intent through a qualified host", async () => {
     const staticRoot = await mkdtemp(join(tmpdir(), "keiko-runtime-bff-"));
     roots.push(staticRoot);

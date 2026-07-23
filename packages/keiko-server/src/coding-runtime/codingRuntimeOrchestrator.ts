@@ -37,6 +37,7 @@ import type {
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
+import type { CodingRuntimeTaskOutcome } from "./productionCodingRuntimeHost.js";
 
 export type {
   CodingRuntimeApprovalAuthority,
@@ -59,6 +60,14 @@ const terminal = new Set<CodingWorkbenchRuntimeStateName>([
   "failed",
   "cancelled",
   "taken-over",
+]);
+const GRANT_VISIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "starting",
+  "ready",
+  "running",
+  "awaiting-approval",
+  "paused",
+  "stopping",
 ]);
 
 /**
@@ -90,8 +99,6 @@ export class CodingRuntimeOrchestrator {
       now: this.now,
       pendingPermission: (runId: string): CodingWorkbenchRuntimePendingPermission | undefined =>
         this.approvals.get(runId)?.permission,
-      researchGrant: (runId: string): CodingWorkbenchRuntimeResearchGrant | undefined =>
-        this.projectedResearchGrant(runId),
     });
     this.operations = new CodingRuntimeOperationCoordinator({
       current: (): CodingRuntimeSnapshot | undefined => this.current(),
@@ -100,6 +107,9 @@ export class CodingRuntimeOrchestrator {
         this.advanceRevision(current, eventKind),
       publicSnapshot: (current): PublicSnapshot => this.projection.publicSnapshot(current),
       taskDispatcher: deps.taskDispatcher,
+      settleTask: (runId, outcome): void => {
+        this.queueTaskSettlement(runId, outcome);
+      },
       questionPort: deps.questionPort,
       manager: deps.manager,
     });
@@ -181,7 +191,7 @@ export class CodingRuntimeOrchestrator {
   /**
    * Drops every live #2387 research grant for the run (parent and children share the run-bound
    * registry entry) in one revision bump. Bound to the observed revision and a live grant id, so a
-   * stale or forged revoke fails closed; the returned snapshot no longer carries `researchGrant`.
+   * stale or forged revoke fails closed. Runtime snapshots never carry grant content (#2644).
    */
   revokeResearch(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
     return this.serialValue(() => {
@@ -221,8 +231,15 @@ export class CodingRuntimeOrchestrator {
     };
   }
 
-  /** Aggregates the run's live grants into the single content-free snapshot projection. */
-  private projectedResearchGrant(runId: string): CodingWorkbenchRuntimeResearchGrant | undefined {
+  /**
+   * Aggregates live grants for the authenticated research channel. General runtime snapshots are
+   * structurally unable to carry this model-selected host content (#2644).
+   */
+  researchGrant(runId: string): CodingWorkbenchRuntimeResearchGrant | undefined {
+    const current = this.current();
+    if (current?.runId !== runId || !GRANT_VISIBLE_STATES.has(current.state)) {
+      return undefined;
+    }
     const registry = this.deps.researchGrants;
     if (registry === undefined) return undefined;
     const grants = registry.activeGrants(runId, this.now().getTime());
@@ -258,13 +275,41 @@ export class CodingRuntimeOrchestrator {
         const rejection = await this.issueApprovedAuthority(current, challenge, actionKind);
         if (rejection !== undefined) return rejection;
       }
+      const permissionSettled = await this.resolveRuntimePermission(
+        current.runId,
+        challenge.permission.requestId,
+        decision,
+      );
+      if (!permissionSettled) {
+        this.approvals.delete(current.runId);
+        return this.stopAfterIssueFailure(current);
+      }
       this.approvals.delete(current.runId);
+      if (decision === "denied") {
+        const stopped = await this.deps.manager.stop(current.runId);
+        if (!stopped.ok) {
+          return this.transition(current, "recovery-required", "recovery-required");
+        }
+      }
       return this.transition(
         current,
         decision === "approved" ? "running" : "failed",
         decision === "approved" ? undefined : "revoked",
       );
     });
+  }
+
+  private async resolveRuntimePermission(
+    runId: string,
+    requestId: string,
+    decision: "approved" | "denied",
+  ): Promise<boolean> {
+    if (this.deps.permissionPort === undefined) return true;
+    try {
+      return await this.deps.permissionPort.resolve({ runId, requestId, decision });
+    } catch {
+      return false;
+    }
   }
 
   private validateApprovalDecision(
@@ -420,6 +465,38 @@ export class CodingRuntimeOrchestrator {
   private ingestTaskSubmitted(current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult {
     if (current.state !== "running") return this.transition(current, "running");
     return this.publishOrRecover(current, "task-submitted");
+  }
+
+  private queueTaskSettlement(runId: string, outcome: CodingRuntimeTaskOutcome): void {
+    const settlement = this.serial(() => this.settleTask(runId, outcome));
+    void settlement.then(
+      (): void => undefined,
+      (): void => this.deps.safeActivityProjection?.markUnavailable(runId),
+    );
+  }
+
+  private async settleTask(runId: string, outcome: CodingRuntimeTaskOutcome): Promise<void> {
+    const current = this.current();
+    if (current?.runId !== runId) return;
+    let stopped: Awaited<ReturnType<CodingRuntimeManager["stop"]>>;
+    try {
+      stopped = await this.deps.manager.stop(runId);
+    } catch {
+      this.transition(current, "recovery-required", "recovery-required");
+      return;
+    }
+    const live = this.current();
+    if (live?.runId !== runId) return;
+    if (!stopped.ok) {
+      this.transition(live, "recovery-required", "recovery-required");
+      return;
+    }
+    const target = outcome === "succeeded" ? "succeeded" : "failed";
+    if (!isLegalCodingWorkbenchRuntimeTransition(live.state, target)) {
+      this.transition(live, "recovery-required", "recovery-required");
+      return;
+    }
+    this.transition(live, target, target === "failed" ? "runtime-failed" : undefined);
   }
 
   private publishOrRecover(

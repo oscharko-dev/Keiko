@@ -83,9 +83,14 @@ export function useWorkspaceSnippets(root: string | undefined): WorkspaceSnippet
 
   useEffect(() => {
     if (root === undefined || root.length === 0) return undefined;
-    return subscribeSharedEventSource(eventsUrl(root), ["ready", "editor-snippets:changed"], () => {
-      void refresh();
-    });
+    return subscribeSharedEventSource(
+      eventsUrl(root),
+      ["ready", "editor-snippets:changed"],
+      () => {
+        void refresh();
+      },
+      { priority: "background" },
+    );
   }, [refresh, root]);
 
   const replace = useCallback(

@@ -19,20 +19,23 @@ import {
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { OPENCODE_RUNTIME_MODEL_ALIAS } from "./coding-runtime/opencodeLaunchProfile.js";
 import { hasExactOpenCodeVisibleToolContract } from "./coding-runtime/opencodeToolSchemas.js";
-import { emitServerDiagnostic } from "./diagnostics-log.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import { startSseHeartbeat } from "./sse.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
+const BUFFERED_STREAM_HEARTBEAT_MS = 5_000;
 const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 
 export interface OpenCodeGatewayReadinessRegistry {
   readonly claim: (runId: string) => boolean;
+  readonly isVerified: (runId: string) => boolean;
   readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
-  readonly clear: (runId: string) => void;
+  readonly clear: (runId: string, preserveVerification?: boolean) => void;
 }
 
 export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadinessRegistry {
@@ -46,6 +49,7 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
       waiters.get(runId)?.(true);
       return true;
     },
+    isVerified: (runId): boolean => observed.has(runId),
     waitForObservedRequest: (runId, signal): Promise<boolean> => {
       if (observed.has(runId)) return Promise.resolve(true);
       if (signal.aborted) return Promise.resolve(false);
@@ -65,8 +69,8 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
         signal.addEventListener("abort", abort, { once: true });
       });
     },
-    clear: (runId): void => {
-      observed.delete(runId);
+    clear: (runId, preserveVerification = false): void => {
+      if (!preserveVerification) observed.delete(runId);
       armed.delete(runId);
       waiters.get(runId)?.(false);
     },
@@ -601,15 +605,21 @@ function validationErrorForChatRequest(
   return undefined;
 }
 
-function emitGatewayFailureDiagnostic(ctx: RouteContext, deps: UiHandlerDeps): void {
-  emitServerDiagnostic(deps.diagnostics, {
-    correlationId: ctx.correlationId ?? "unknown",
-    timestamp: new Date(Date.now()).toISOString(),
-    operation: CODING_SIDECAR_GATEWAY_ROUTE,
-    source: "coding-sidecar-gateway.chat",
-    errorClass: "CodingSidecarGatewayFailure",
-    message: "sidecar-gateway-failed",
-  });
+function emitGatewayFailureDiagnostic(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: ctx.correlationId ?? "unknown",
+      operation: CODING_SIDECAR_GATEWAY_ROUTE,
+      source: "coding-sidecar-gateway.chat",
+      error,
+      redact: (message) => String(deps.redactor(message)),
+    }),
+  );
 }
 
 interface RuntimeCapabilityAuthenticator {
@@ -648,6 +658,35 @@ function bearerCapability(ctx: RouteContext): string | undefined {
 
 function isExactManagedToolSet(tools: readonly ToolDefinition[] | undefined): boolean {
   return hasExactOpenCodeVisibleToolContract(tools);
+}
+
+function isAdmittedManagedToolSet(
+  tools: readonly ToolDefinition[] | undefined,
+  registry: OpenCodeGatewayReadinessRegistry | undefined,
+  runId: string,
+): boolean {
+  return (
+    isExactManagedToolSet(tools) || (tools === undefined && registry?.isVerified(runId) === true)
+  );
+}
+
+function emitGatewayToolContractDiagnostic(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  tools: readonly ToolDefinition[] | undefined,
+): void {
+  let code = "CODING_GATEWAY_TOOL_CONTRACT_DRIFT";
+  if (tools === undefined) code = "CODING_GATEWAY_TOOL_CONTRACT_MISSING";
+  else if (tools.length === 0) code = "CODING_GATEWAY_TOOL_CONTRACT_EMPTY";
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: ctx.correlationId ?? "unknown",
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    source: "coding-sidecar-gateway.tool-contract",
+    errorClass: "CodingSidecarGatewayToolContractRejection",
+    message: "coding-sidecar-gateway-tool-contract-rejected",
+    code,
+  });
 }
 
 function forbiddenGatewayRequest(): RouteResult {
@@ -731,19 +770,26 @@ function gatewayRequestCancellation(
   };
 }
 
+interface GatewayChatDelivery {
+  readonly modelAlias: string;
+  readonly maxOutputTokens: number;
+  readonly upstreamStreamingSupported: boolean;
+}
+
 async function executeGatewayChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   config: GatewayConfig,
-  modelAlias: string,
   parsed: CodingSidecarGatewayChatCompletionRequest,
   runId: string,
-  maxOutputTokens: number,
+  delivery: GatewayChatDelivery,
 ): Promise<RouteResult | typeof STREAMING> {
+  const { modelAlias, maxOutputTokens, upstreamStreamingSupported } = delivery;
   const cancellation = gatewayRequestCancellation(ctx, deps, config, modelAlias, runId);
   const request = buildChatRequest(parsed, modelAlias, cancellation.signal, maxOutputTokens);
+  let bufferedStream: BufferedOpenAiStreamSession | undefined;
   try {
-    if (parsed.stream) {
+    if (parsed.stream && upstreamStreamingSupported) {
       return await streamGatewayChat(
         ctx,
         deps,
@@ -754,6 +800,7 @@ async function executeGatewayChat(
         cancellation.signal,
       );
     }
+    if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
     return await executeBufferedGatewayChat(
       deps,
       config,
@@ -761,11 +808,14 @@ async function executeGatewayChat(
       request,
       runId,
       cancellation.signal,
+      bufferedStream,
     );
-  } catch {
+  } catch (error) {
     recordGatewayOutcome(deps, runId, cancellation.signal.aborted ? "cancelled" : "failed", 0, 0);
-    emitGatewayFailureDiagnostic(ctx, deps);
-    return unavailableError();
+    emitGatewayFailureDiagnostic(ctx, deps, error);
+    return bufferedStream === undefined
+      ? unavailableError()
+      : settleBufferedOpenAiStreamError(bufferedStream, "error");
   } finally {
     cancellation.dispose();
   }
@@ -778,12 +828,15 @@ async function executeBufferedGatewayChat(
   request: GatewayRequest,
   runId: string,
   cancellationSignal: AbortSignal,
-): Promise<RouteResult> {
+  stream: BufferedOpenAiStreamSession | undefined,
+): Promise<RouteResult | typeof STREAMING> {
   const response = await chatFactoryFor(deps)(config, modelAlias)(request);
   const metrics = outputMetrics(response);
   if (cancellationSignal.aborted) {
     recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
-    return unavailableError();
+    return stream === undefined
+      ? unavailableError()
+      : settleBufferedOpenAiStreamError(stream, "error");
   }
   if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
     recordGatewayOutcome(
@@ -793,10 +846,14 @@ async function executeBufferedGatewayChat(
       metrics.completionTokens,
       metrics.outputBytes,
     );
-    return unavailableError();
+    return stream === undefined
+      ? unavailableError()
+      : settleBufferedOpenAiStreamError(stream, "length");
   }
   recordGatewayOutcome(deps, runId, "accepted", metrics.completionTokens, metrics.outputBytes);
-  return openAiResponse(modelAlias, response);
+  return stream === undefined
+    ? openAiResponse(modelAlias, response)
+    : completeBufferedOpenAiStream(stream, response);
 }
 
 // Closed stream state machine keeps iterator, cancellation, and SSE backpressure transitions together.
@@ -812,9 +869,9 @@ async function streamGatewayChat(
   let iterator: AsyncIterator<GatewayStreamChunk>;
   try {
     iterator = chatStreamFactoryFor(deps)(config, modelId)(request)[Symbol.asyncIterator]();
-  } catch {
+  } catch (error) {
     recordGatewayOutcome(deps, runId, "failed", 0, 0);
-    emitGatewayFailureDiagnostic(ctx, deps);
+    emitGatewayFailureDiagnostic(ctx, deps, error);
     return unavailableError();
   }
   const session = createGatewayStreamSession(
@@ -1026,11 +1083,18 @@ function isGatewayRequestCancelled(signal: AbortSignal): boolean {
   return signal.aborted;
 }
 
-function bufferedOpenAiStream(
+interface BufferedOpenAiStreamSession {
+  readonly ctx: RouteContext;
+  readonly id: string;
+  readonly created: number;
+  readonly modelId: string;
+  readonly stopHeartbeat: () => void;
+}
+
+function beginBufferedOpenAiStream(
   ctx: RouteContext,
   modelId: string,
-  response: NormalizedResponse,
-): typeof STREAMING {
+): BufferedOpenAiStreamSession {
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   ctx.res.writeHead(200, {
@@ -1038,9 +1102,26 @@ function bufferedOpenAiStream(
     "Cache-Control": "no-store",
     Connection: "keep-alive",
   });
-  writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { role: "assistant" }, null));
+  if (!writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { role: "assistant" }, null))) {
+    ctx.res.destroy();
+  }
+  return {
+    ctx,
+    id,
+    created,
+    modelId,
+    stopHeartbeat: startSseHeartbeat(ctx.res, BUFFERED_STREAM_HEARTBEAT_MS),
+  };
+}
+
+function completeBufferedOpenAiStream(
+  session: BufferedOpenAiStreamSession,
+  response: NormalizedResponse,
+): typeof STREAMING {
+  const { ctx, id, created, modelId, stopHeartbeat } = session;
+  stopHeartbeat();
   if (response.content.length > 0 || response.toolCalls.length > 0) {
-    writeOpenAiSse(
+    const wrote = writeOpenAiSse(
       ctx,
       openAiStreamChunk(
         id,
@@ -1055,6 +1136,10 @@ function bufferedOpenAiStream(
         null,
       ),
     );
+    if (!wrote) {
+      ctx.res.destroy();
+      return STREAMING;
+    }
   }
   writeStreamTerminal(
     ctx,
@@ -1066,6 +1151,24 @@ function bufferedOpenAiStream(
     response.usage.completionTokens,
   );
   return STREAMING;
+}
+
+function settleBufferedOpenAiStreamError(
+  session: BufferedOpenAiStreamSession,
+  finishReason: "error" | "length",
+): typeof STREAMING {
+  const { ctx, id, created, modelId, stopHeartbeat } = session;
+  stopHeartbeat();
+  writeStreamTerminal(ctx, id, created, modelId, finishReason, 0, 0);
+  return STREAMING;
+}
+
+function bufferedOpenAiStream(
+  ctx: RouteContext,
+  modelId: string,
+  response: NormalizedResponse,
+): typeof STREAMING {
+  return completeBufferedOpenAiStream(beginBufferedOpenAiStream(ctx, modelId), response);
 }
 
 function writeOpenAiSse(ctx: RouteContext, payload: Readonly<Record<string, unknown>>): boolean {
@@ -1123,6 +1226,13 @@ export function handleCodingSidecarGatewayProfile(
   return { status: 200, body: resolveGatewayProfile(deps).result };
 }
 
+function upstreamGatewayStreamingSupported(
+  deps: UiHandlerDeps,
+  advertisedSupport: boolean,
+): boolean {
+  return advertisedSupport || deps.codingSidecarGatewayChatStreamFactory !== undefined;
+}
+
 export async function handleCodingSidecarGatewayChatCompletions(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1144,24 +1254,24 @@ export async function handleCodingSidecarGatewayChatCompletions(
   if (isRouteResult(parsed)) {
     return parsed;
   }
-  if (authentication.runtimeAuthenticated && !isExactManagedToolSet(parsed.tools)) {
-    return forbiddenGatewayRequest();
-  }
   if (authentication.runtimeAuthenticated) {
     const registry = gatewayReadinessRegistry(deps);
-    if (registry?.claim(authentication.runId) === true) {
+    if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
+      emitGatewayToolContractDiagnostic(ctx, deps, parsed.tools);
+      return forbiddenGatewayRequest();
+    }
+    if (isExactManagedToolSet(parsed.tools) && registry?.claim(authentication.runId) === true) {
       return fixedReadinessResponse(ctx, resolved.result.modelAlias, parsed.stream === true);
     }
   }
-  return executeGatewayChat(
-    ctx,
-    deps,
-    resolved.config,
-    resolved.result.modelAlias,
-    parsed,
-    authentication.runId,
-    resolved.result.runMetadata.maxOutputTokens,
-  );
+  return executeGatewayChat(ctx, deps, resolved.config, parsed, authentication.runId, {
+    modelAlias: resolved.result.modelAlias,
+    maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,
+    upstreamStreamingSupported: upstreamGatewayStreamingSupported(
+      deps,
+      resolved.result.supportsStreaming,
+    ),
+  });
 }
 
 function fixedReadinessResponse(

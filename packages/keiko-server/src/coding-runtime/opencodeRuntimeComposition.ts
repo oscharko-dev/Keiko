@@ -51,7 +51,12 @@ import {
   type OpenCodeRuntimeAdapter,
   type OpenCodeSyncHint,
 } from "./opencodeRuntimeAdapter.js";
-import { classifyOpenCodeLiveControl, parseOpenCodeHistory } from "./opencodeProtocol.js";
+import {
+  classifyOpenCodeLiveControl,
+  parseOpenCodeHistory,
+  projectOpenCodePermissionEvent,
+  projectOpenCodePermissionRequestId,
+} from "./opencodeProtocol.js";
 import { normalizeOpenCodeSafeActivityHistory } from "./opencodeSafeActivity.js";
 import {
   OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
@@ -64,6 +69,7 @@ const PINNED_VERSION = "1.17.17";
 const PINNED_RAW_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ABORT_SETTLEMENT_TIMEOUT_MS = 30_000;
+const INITIAL_TURN_BASELINE_STABILIZATION_MS = 500;
 
 interface VerifiedPortableInput {
   readonly verification: PortableSidecarRuntimeVerification;
@@ -108,7 +114,7 @@ export interface OpenCodeRuntimeCompositionInput {
     | undefined;
   readonly gatewayReadiness: {
     readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
-    readonly clear: (runId: string) => void;
+    readonly clear: (runId: string, preserveVerification?: boolean) => void;
   };
   readonly fetch: typeof globalThis.fetch;
   readonly supervisor: RuntimeProcessSupervisor;
@@ -160,6 +166,11 @@ export interface OpenCodeRunPort {
     answers: readonly (readonly string[])[],
   ) => Promise<boolean>;
   readonly rejectQuestion: (runId: string, requestId: string) => Promise<boolean>;
+  readonly replyPermission: (
+    runId: string,
+    requestId: string,
+    reply: "once" | "reject",
+  ) => Promise<boolean>;
 }
 
 interface PreparedRun {
@@ -168,9 +179,11 @@ interface PreparedRun {
   readonly password: string;
   readonly configDigest: string;
   readonly verification: PortableSidecarRuntimeVerification;
+  readonly observedPermissionIds: Set<string>;
   runtimeAdapter?: OpenCodeRuntimeAdapter | undefined;
   client?: OpenCodeHttpClient | undefined;
   sessionId?: string | undefined;
+  initialTurnBaselineStable: boolean;
   ready: boolean;
 }
 
@@ -214,7 +227,9 @@ function createRunPort(runs: Map<string, PreparedRun>): OpenCodeRunPort {
   return {
     submitTask: async (runId, text): Promise<boolean> => {
       const run = readyRun(runId);
-      if (!run?.runtimeAdapter.armTurn()) return false;
+      if (run === undefined) return false;
+      if (!(await synchronizeTurnBaseline(run))) return false;
+      if (!run.runtimeAdapter.armTurn()) return false;
       try {
         await run.client.promptAsync(run.sessionId, text);
         return run.ready;
@@ -228,8 +243,40 @@ function createRunPort(runs: Map<string, PreparedRun>): OpenCodeRunPort {
       const run = readyRun(runId);
       return run?.runtimeAdapter.waitForTerminal(signal) ?? Promise.resolve(false);
     },
+    replyPermission: async (runId, requestId, reply): Promise<boolean> => {
+      const run = readyRun(runId);
+      if (run === undefined) return false;
+      try {
+        const owned = (await run.client.listPermissions()).filter(
+          (request) =>
+            request.sessionID === run.sessionId &&
+            projectOpenCodePermissionRequestId(request.id) === requestId,
+        );
+        const permission = owned[0];
+        return (
+          owned.length === 1 &&
+          permission !== undefined &&
+          (await run.client.replyPermission(permission.id, reply)) &&
+          run.ready
+        );
+      } catch {
+        return false;
+      }
+    },
     ...createQuestionRunPort(readyRun),
   };
+}
+
+async function synchronizeTurnBaseline(run: ReadyRun): Promise<boolean> {
+  if (!run.initialTurnBaselineStable) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, INITIAL_TURN_BASELINE_STABILIZATION_MS);
+    });
+  }
+  const synchronized = await run.runtimeAdapter.reconcile();
+  if (!synchronized.ok) return false;
+  run.initialTurnBaselineStable = true;
+  return true;
 }
 
 function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"] {
@@ -382,14 +429,10 @@ async function prepare(
     const password = profile.env.OPENCODE_SERVER_PASSWORD;
     if (password === undefined) throw new Error("password-missing");
     const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
-    runs.set(request.runId, {
-      runId: request.runId,
-      runRoot,
-      password,
-      configDigest,
-      verification: request.verification,
-      ready: false,
-    });
+    runs.set(
+      request.runId,
+      preparedRun(request.runId, runRoot, password, configDigest, request.verification),
+    );
     return {
       ok: true,
       env: {
@@ -404,6 +447,25 @@ async function prepare(
     rmSync(runRoot, { recursive: true, force: true });
     return { ok: false, reason: "config-materialization-failed" };
   }
+}
+
+function preparedRun(
+  runId: string,
+  runRoot: string,
+  password: string,
+  configDigest: string,
+  verification: PortableSidecarRuntimeVerification,
+): PreparedRun {
+  return {
+    runId,
+    runRoot,
+    password,
+    configDigest,
+    verification,
+    observedPermissionIds: new Set(),
+    initialTurnBaselineStable: false,
+    ready: false,
+  };
 }
 
 // eslint-disable-next-line max-lines-per-function -- handshake keeps attested client/adapter binding atomic.
@@ -520,6 +582,7 @@ function readinessPorts(
         const eventType = event.data.type;
         if (eventType !== "sync") {
           observeLiveQuestion(input, event.data, fixedSessionId);
+          observeLivePermission(run, request, event.data, fixedSessionId);
           const control = classifyOpenCodeLiveControl(event.data);
           const fixedControl = control?.sessionId === fixedSessionId ? control : undefined;
           yield {
@@ -559,6 +622,37 @@ function readinessPorts(
 
 const MAX_STAGED_SAFE_ACTIVITY_ITEMS = 2_048;
 const MAX_STAGED_SAFE_ACTIVITY_BYTES = 128 * 1_024;
+const MAX_OBSERVED_PERMISSION_IDS = 256;
+
+function observeLivePermission(
+  run: PreparedRun,
+  request: OpenCodeLifecycleHandshakeRequest,
+  data: unknown,
+  fixedSessionId: string,
+): void {
+  if (!isPermissionAskedForSession(data, fixedSessionId)) return;
+  const projected = projectOpenCodePermissionEvent(data, fixedSessionId);
+  if (projected === undefined) throw new Error("opencode-permission-invalid");
+  if (run.observedPermissionIds.has(projected.requestId)) return;
+  if (run.observedPermissionIds.size >= MAX_OBSERVED_PERMISSION_IDS) {
+    throw new Error("opencode-permission-limit");
+  }
+  run.observedPermissionIds.add(projected.requestId);
+  request.onPermission(projected);
+}
+
+function isPermissionAskedForSession(value: unknown, fixedSessionId: string): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const event = value as Record<string, unknown>;
+  if (event.type !== "permission.asked") return false;
+  const properties = event.properties;
+  return (
+    typeof properties === "object" &&
+    properties !== null &&
+    !Array.isArray(properties) &&
+    (properties as Record<string, unknown>).sessionID === fixedSessionId
+  );
+}
 
 function stageSafeActivity(
   normalized: ReturnType<typeof normalizeOpenCodeSafeActivityHistory>,
@@ -641,6 +735,7 @@ async function challengeGateway(
     return false;
   const challengeSignal = signal ?? AbortSignal.timeout(timeoutMs);
   const observed = input.gatewayReadiness.waitForObservedRequest(run.runId, challengeSignal);
+  let verified = false;
   try {
     await client.promptAsync(sessionId, "Keiko runtime readiness handshake.", {
       signal: challengeSignal,
@@ -648,11 +743,15 @@ async function challengeGateway(
     const accepted = await observed;
     await client.abortSession(sessionId, { signal: challengeSignal });
     const terminal = await fixedSessionIsTerminal(client, sessionId, challengeSignal);
-    return accepted && terminal;
+    verified = accepted && terminal;
+    return verified;
   } catch {
     return false;
   } finally {
-    input.gatewayReadiness.clear(run.runId);
+    // Preserve the successful exact-tool handshake until runtime disposal. OpenCode's pinned
+    // compaction path intentionally omits `tools`; the gateway admits that privilege-reducing
+    // follow-up only for this verified run. Disposal still clears the verification marker.
+    input.gatewayReadiness.clear(run.runId, verified);
   }
 }
 

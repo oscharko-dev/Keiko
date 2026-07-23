@@ -5,7 +5,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   BrowserToolError,
@@ -28,7 +27,8 @@ import {
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import { createRunRegistry } from "./runs.js";
-import { createUiServer, UI_HOST } from "./server.js";
+import { UI_HOST } from "./server.js";
+import { startUiTestServer } from "./ui-test-server/_support.js";
 
 interface FakeOptions {
   readonly reachable?: boolean;
@@ -125,16 +125,12 @@ async function makeFixture(overrides?: {
   };
   const deps: UiHandlerDeps =
     overrides?.omitBrowser === true ? baseDeps : { ...baseDeps, browser: fakeBrowser };
-  let server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps: deps });
-  await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
-  const port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve) =>
-    server.close(() => {
-      resolve();
-    }),
-  );
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps: deps });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  const started = await startUiTestServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    handlerDeps: deps,
+  });
+  const { port, server } = started;
   return {
     port,
     fakeBrowser,

@@ -1,4 +1,17 @@
-export type OpenCodeEventKind = "observation" | "permission" | "question" | "tool" | "terminal";
+/**
+ * Every event kind the protocol classifier may emit. Validation derives from this single list so
+ * a classifier extension can never silently diverge from the reconciliation admission gates.
+ */
+export const OPEN_CODE_EVENT_KINDS = [
+  "observation",
+  "permission",
+  "question",
+  "tool",
+  "terminal",
+  "terminal-control",
+  "terminal-failure",
+] as const;
+export type OpenCodeEventKind = (typeof OPEN_CODE_EVENT_KINDS)[number];
 export interface OpenCodeReconciliationEvent {
   readonly id: string;
   readonly aggregateId: string;
@@ -283,7 +296,7 @@ function valid(event: OpenCodeReconciliationEvent): boolean {
     Number.isSafeInteger(event.sequence) &&
     event.sequence >= 0 &&
     /^[0-9a-f]{64}$/u.test(event.digest) &&
-    ["observation", "permission", "question", "tool", "terminal"].includes(event.kind)
+    OPEN_CODE_EVENT_KINDS.includes(event.kind)
   );
 }
 function project(event: OpenCodeReconciliationEvent): OpenCodeProjection {

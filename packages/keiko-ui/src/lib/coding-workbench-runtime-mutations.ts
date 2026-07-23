@@ -1,5 +1,6 @@
 import type {
   CodingWorkbenchRuntimeApprovalDecision,
+  CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -168,13 +169,13 @@ export function createRetryMutation(
 
 export function createResearchRevokeMutation(
   current: CodingWorkbenchRuntimeState,
+  grant: CodingWorkbenchRuntimeResearchGrant,
 ): CodingWorkbenchMutationCommand {
   const snapshot = current.run.value;
   const runId = snapshot?.runId;
-  const grant = snapshot?.researchGrant;
-  // Fail closed: a revoke is only ever built against a run that still carries a live grant, so a
-  // stale click after the server already dropped it surfaces as an action error, not a phantom POST.
-  if (!runId || snapshot === null || grant === undefined)
+  // Fail closed: the authenticated-channel grant is bound to the exact observed run revision. A
+  // stale click after the server drops it is still rejected by the server-side registry check.
+  if (!runId || snapshot === null)
     throw codingWorkbenchRuntimeActionError("No internet research grant is available to revoke.");
   const id = newCodingWorkbenchRuntimeRequestId();
   return {

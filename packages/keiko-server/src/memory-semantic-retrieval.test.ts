@@ -12,10 +12,9 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createUiServer, UI_HOST } from "./server.js";
+import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -23,6 +22,7 @@ import {
   buildConversationRetrievalSignals,
   semanticRetrievalGateForText,
 } from "./memory-retrieval-signals.js";
+import { startUiTestServer } from "./ui-test-server/_support.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
   GatewayConfig,
@@ -236,8 +236,13 @@ async function restart(handlerDeps: UiHandlerDeps): Promise<void> {
       resolve();
     });
   });
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  const started = await startUiTestServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    handlerDeps,
+  });
+  server = started.server;
+  port = started.port;
 }
 
 interface SendResult {
@@ -283,9 +288,9 @@ beforeEach(async () => {
   mkdirSync(projectDir);
   store = createInMemoryUiStore();
   store.createProject(projectDir, "repo");
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
-  await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
-  port = (server.address() as AddressInfo).port;
+  const started = await startUiTestServer({ staticRoot, csp: buildCspHeader([]) });
+  server = started.server;
+  port = started.port;
 });
 
 afterEach(async () => {

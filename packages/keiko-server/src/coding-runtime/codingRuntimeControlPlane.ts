@@ -14,6 +14,7 @@ import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
+import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 
@@ -24,6 +25,7 @@ export interface CodingRuntimeHost {
   readonly launchResolver: CodingRuntimeLaunchResolver;
   readonly approvalAuthority: CodingRuntimeApprovalAuthority;
   readonly taskDispatcher?: CodingRuntimeTaskDispatcher | undefined;
+  readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
   // Server-level registry of read-only research grants (#2387). Present once the runtime host is
   // composed; the orchestrator reads it to project the live grant on the snapshot and to revoke it.
@@ -46,8 +48,9 @@ export interface CodingRuntimeHost {
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
+        readonly isVerified: (runId: string) => boolean;
         readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
-        readonly clear: (runId: string) => void;
+        readonly clear: (runId: string, preserveVerification?: boolean) => void;
       }
     | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
@@ -102,6 +105,7 @@ export function createCodingRuntimeControlPlane(
     workspaceLifecycle: input.workspaceLifecycle,
     launchResolver,
     taskDispatcher: input.runtimeHost?.taskDispatcher ?? unavailableTaskDispatcher(),
+    permissionPort: input.runtimeHost?.permissionPort ?? unavailablePermissionPort(),
     questionPort: input.runtimeHost?.questionPort ?? unavailableQuestionPort(),
     ...(input.runtimeHost?.safeActivityProjection
       ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
@@ -142,6 +146,10 @@ function unavailableQuestionPort(): CodingRuntimeQuestionPort {
     answer: () => Promise.resolve(false),
     reject: () => Promise.resolve(false),
   };
+}
+
+function unavailablePermissionPort(): CodingRuntimePermissionPort {
+  return { resolve: () => Promise.resolve(false) };
 }
 
 function runtimeHostCapabilities(

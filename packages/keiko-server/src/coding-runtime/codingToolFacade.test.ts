@@ -53,6 +53,67 @@ describe("CodingToolFacade", () => {
     );
   });
 
+  it("passes the whole-file digest and window facts through instead of recomputing them (#2473)", async () => {
+    const ports = facade();
+    const wholeFileDigest = "b".repeat(64);
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        read: {
+          text: "line two\n",
+          byteCount: 9,
+          digest: wholeFileDigest,
+          totalLines: 40,
+          nextStartLine: 3,
+        },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "read", relativePath: "src/a.ts", startLine: 2, maxLines: 1 }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      read: {
+        text: "line two\n",
+        byteCount: Buffer.byteLength("line two\n", "utf8"),
+        digest: wholeFileDigest,
+        totalLines: 40,
+        nextStartLine: 3,
+      },
+    });
+  });
+
+  it.each([
+    ["a malformed digest", { digest: "not-a-digest", totalLines: 4 }],
+    ["a missing totalLines", { digest: "b".repeat(64) }],
+    ["a negative totalLines", { digest: "b".repeat(64), totalLines: -1 }],
+    ["a nextStartLine below two", { digest: "b".repeat(64), totalLines: 4, nextStartLine: 1 }],
+  ])("fails closed when the delegate read carries %s", async (_name, readFacts) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        read: { text: "line\n", byteCount: 5, ...readFacts },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "read", relativePath: "src/a.ts" }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+    });
+  });
+
   it("denies forged and missing capabilities without calling a delegate", async () => {
     const ports = facade(false);
     const subject = createCodingToolFacade(ports);

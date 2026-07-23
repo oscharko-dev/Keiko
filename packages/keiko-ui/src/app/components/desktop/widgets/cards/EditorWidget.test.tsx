@@ -142,38 +142,36 @@ const diffSurface: { props: EditorDiffSurfaceProps | null; mounts: number; unmou
   mounts: 0,
   unmounts: 0,
 };
-vi.mock("next/dynamic", () => {
-  let dynamicComponentIndex = 0;
-  return {
-    default: () => {
-      const index = dynamicComponentIndex++;
-      if (index > 0) {
-        function EditorDiffSurfaceProbe(props: EditorDiffSurfaceProps): ReactElement {
-          useEffect(() => {
-            diffSurface.mounts += 1;
-            return (): void => {
-              diffSurface.unmounts += 1;
-            };
-          }, []);
-          diffSurface.props = props;
-          return <div data-testid="editor-diff-surface" />;
-        }
-        return EditorDiffSurfaceProbe;
-      }
-      function EditorSurfaceProbe(props: EditorSurfaceProps): ReactElement {
-        useEffect(() => {
-          surface.mounts += 1;
-          return (): void => {
-            surface.unmounts += 1;
-          };
-        }, []);
-        surface.props = props;
-        return <div data-testid="editor-surface" />;
-      }
-      return EditorSurfaceProbe;
-    },
-  };
-});
+vi.mock("next/dynamic", () => ({
+  default: () => {
+    function EditorSurfaceProbe(props: EditorSurfaceProps): ReactElement {
+      useEffect(() => {
+        surface.mounts += 1;
+        return (): void => {
+          surface.unmounts += 1;
+        };
+      }, []);
+      surface.props = props;
+      return <div data-testid="editor-surface" />;
+    }
+    return EditorSurfaceProbe;
+  },
+}));
+
+// EditorDiffSurface is statically imported since the workbench bundle split, so the probe mocks
+// the module itself instead of riding the next/dynamic loader.
+vi.mock("./EditorDiffSurface", () => ({
+  default: function EditorDiffSurfaceProbe(props: EditorDiffSurfaceProps): ReactElement {
+    useEffect(() => {
+      diffSurface.mounts += 1;
+      return (): void => {
+        diffSurface.unmounts += 1;
+      };
+    }, []);
+    diffSurface.props = props;
+    return <div data-testid="editor-diff-surface" />;
+  },
+}));
 
 // The content-free document version the loaded fixture reports; the host captures it and sends it
 // back as the version-aware baseVersion token on save (Issue #1197).

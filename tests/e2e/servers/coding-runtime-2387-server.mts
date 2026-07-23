@@ -84,6 +84,7 @@ await runCodingRuntimeJourneyServer({
     injectionDirective: RESEARCH_INJECTION_DIRECTIVE,
     hermeticFetch: hermeticResearchFetch,
     childModelResponse: childResponse,
+    childModelId: "functional-model",
     toolCallLogPath: researchScriptedToolCallLog,
   },
 });

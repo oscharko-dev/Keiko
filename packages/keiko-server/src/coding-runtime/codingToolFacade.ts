@@ -13,8 +13,12 @@ import {
   isPermissionObservation,
   parseCodingToolRequest,
   type CodingToolActionRequest,
+  type CodingToolEgressReadResult,
+  type CodingToolReadResult,
   type CodingToolResult,
 } from "./codingToolIpc.js";
+
+const READ_DIGEST = /^[a-f0-9]{64}$/u;
 import type {
   CodingToolAdmission,
   CodingToolFacade,
@@ -193,31 +197,44 @@ function projectAuxiliary(
 function projectPayload(
   request: CodingToolActionRequest,
   value: unknown,
-): { readonly text: string; readonly byteCount: number; readonly digest: string } | undefined {
+): CodingToolReadResult | CodingToolEgressReadResult | undefined {
   if (request.action === "read") return projectRead(value);
   if (request.action === "egress") return projectEgressRead(value);
   return undefined;
 }
 
-function projectRead(
-  value: unknown,
-): { readonly text: string; readonly byteCount: number; readonly digest: string } | undefined {
+// The digest is validated and passed through, never recomputed: it covers the WHOLE governed
+// file while `text` may be only the requested window (#2473), and recomputing it over the window
+// would break the changeset expectedContentHash anchor.
+function projectRead(value: unknown): CodingToolReadResult | undefined {
   if (!isRecord(value) || typeof value.text !== "string") return undefined;
   const bytes = Buffer.from(value.text, "utf8");
   if (bytes.length > CODING_TOOL_MAX_READ_BYTES || !isUtf8(bytes)) return undefined;
-  return {
-    text: value.text,
-    byteCount: bytes.length,
-    digest: createHash("sha256").update(bytes).digest("hex"),
-  };
+  if (typeof value.digest !== "string" || !READ_DIGEST.test(value.digest)) return undefined;
+  const facts = readWindowFacts(value);
+  if (facts === undefined) return undefined;
+  return { text: value.text, byteCount: bytes.length, digest: value.digest, ...facts };
+}
+
+function readWindowFacts(
+  value: Record<string, unknown>,
+): { readonly totalLines: number; readonly nextStartLine?: number } | undefined {
+  if (!boundedLineCount(value.totalLines, 0)) return undefined;
+  const nextStartLine = value.nextStartLine;
+  if (nextStartLine === undefined) return { totalLines: value.totalLines };
+  return boundedLineCount(nextStartLine, 2)
+    ? { totalLines: value.totalLines, nextStartLine }
+    : undefined;
+}
+
+function boundedLineCount(value: unknown, minimum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum;
 }
 
 // A research page (#2387) may exceed the IPC read ceiling; unlike a repository read it is
 // truncated at the last complete UTF-8 boundary instead of dropped, so the model always receives
 // the bounded head of the page it was granted. Digest and byte count cover the returned bytes.
-function projectEgressRead(
-  value: unknown,
-): { readonly text: string; readonly byteCount: number; readonly digest: string } | undefined {
+function projectEgressRead(value: unknown): CodingToolEgressReadResult | undefined {
   if (!isRecord(value) || typeof value.text !== "string") return undefined;
   let bytes: Buffer = Buffer.from(value.text, "utf8");
   if (bytes.length > CODING_TOOL_MAX_READ_BYTES) {

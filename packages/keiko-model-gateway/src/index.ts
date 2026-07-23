@@ -32,6 +32,7 @@ export type {
   CompletionModelSelection,
   ModelKind,
   ModelProviderConfig,
+  OutputTokenParameter,
   ProviderEndpointStyle,
   RealtimeAuthMode,
   NormalizedResponse,

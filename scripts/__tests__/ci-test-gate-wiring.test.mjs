@@ -64,6 +64,7 @@ const REQUIRED_EXTENDED_SUITES = [
   "test:e2e:local-knowledge",
   "test:e2e:code-task:opencode-tracer",
   "test:e2e:code-task:authority",
+  "test:e2e:code-task-research-2387",
 ];
 
 // Every command here must run in a GitHub workflow on the default-branch path. Each maps to a

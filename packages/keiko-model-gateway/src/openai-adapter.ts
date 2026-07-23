@@ -86,6 +86,7 @@ interface ChatRequestBody {
   readonly top_p?: number;
   readonly seed?: number;
   readonly max_tokens?: number;
+  readonly max_completion_tokens?: number;
   readonly stream?: boolean;
   readonly stream_options?: { readonly include_usage: boolean };
 }
@@ -144,8 +145,25 @@ function buildMessage(
   };
 }
 
+const COMPLETION_TOKEN_PARAMETER_MODEL_RE = /^(?:gpt-5|o[134])(?:[.-]|$)/iu;
+
+function outputTokenLimit(
+  request: GatewayRequest,
+  config: ModelProviderConfig,
+): Pick<ChatRequestBody, "max_tokens" | "max_completion_tokens"> {
+  if (request.maxOutputTokens === undefined) return {};
+  const parameter =
+    config.outputTokenParameter ??
+    (COMPLETION_TOKEN_PARAMETER_MODEL_RE.test(config.modelId)
+      ? "max_completion_tokens"
+      : "max_tokens");
+  return parameter === "max_completion_tokens"
+    ? { max_completion_tokens: request.maxOutputTokens }
+    : { max_tokens: request.maxOutputTokens };
+}
+
 // eslint-disable-next-line complexity
-function buildBody(request: GatewayRequest): ChatRequestBody {
+function buildBody(request: GatewayRequest, config: ModelProviderConfig): ChatRequestBody {
   assertValidGatewaySamplingParameters(request);
   const messages = request.messages.map(buildMessage);
   const base: ChatRequestBody = { model: request.modelId, messages };
@@ -178,7 +196,7 @@ function buildBody(request: GatewayRequest): ChatRequestBody {
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.topP !== undefined ? { top_p: request.topP } : {}),
     ...(request.seed !== undefined ? { seed: request.seed } : {}),
-    ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
+    ...outputTokenLimit(request, config),
   };
 }
 
@@ -191,9 +209,9 @@ function buildBody(request: GatewayRequest): ChatRequestBody {
 export const STREAM_IDLE_TIMEOUT_MS = 60_000;
 
 // `include_usage` requests a final usage-only chunk so token accounting survives.
-function buildStreamBody(request: GatewayRequest): ChatRequestBody {
+function buildStreamBody(request: GatewayRequest, config: ModelProviderConfig): ChatRequestBody {
   return {
-    ...buildBody(request),
+    ...buildBody(request, config),
     stream: true,
     stream_options: { include_usage: true },
   };
@@ -627,7 +645,9 @@ export class OpenAiAdapter implements ProviderAdapter {
     const cancel = request.cancellationSignal;
     const signal = cancel ? AbortSignal.any([timeoutSignal, cancel]) : timeoutSignal;
     const url = chatCompletionsUrl(config);
-    const body = JSON.stringify(stream ? buildStreamBody(request) : buildBody(request));
+    const body = JSON.stringify(
+      stream ? buildStreamBody(request, config) : buildBody(request, config),
+    );
     const headers = {
       "content-type": "application/json",
       ...apiKeyHeaders(config),

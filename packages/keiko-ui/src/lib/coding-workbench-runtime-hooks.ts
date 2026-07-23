@@ -2,6 +2,7 @@ import { useCallback, useRef, type Dispatch, type RefObject } from "react";
 import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchRuntimeApprovalDecision,
+  CodingWorkbenchRuntimeResearchGrant,
 } from "@oscharko-dev/keiko-contracts";
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
@@ -63,7 +64,7 @@ export interface RuntimeMutationActions {
   readonly pause: () => Promise<void>;
   readonly resume: () => Promise<void>;
   readonly submitFollowUp: (taskIntent: string) => Promise<void>;
-  readonly revokeResearchGrant: () => Promise<void>;
+  readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }
 
 interface RuntimeMutationQueueInput {
@@ -360,8 +361,8 @@ export function useCodingWorkbenchRuntimeMutations(
     [enqueueMutation],
   );
   const revokeResearchGrant = useCallback(
-    (): Promise<void> =>
-      enqueueMutation("research-revoke", (current) => createResearchRevokeMutation(current)),
+    (grant: CodingWorkbenchRuntimeResearchGrant): Promise<void> =>
+      enqueueMutation("research-revoke", (current) => createResearchRevokeMutation(current, grant)),
     [enqueueMutation],
   );
   return {

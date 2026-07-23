@@ -81,6 +81,7 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
+  OutputTokenParameter,
   OutboundHttpEgressConfig,
   ProviderAdapter,
   ResponseFormat,
@@ -299,6 +300,7 @@ describe("keiko-model-gateway package surface", () => {
     pin<ModelProviderConfig>();
     pin<NormalizedResponse>();
     pin<NormalizedToolCall>();
+    pin<OutputTokenParameter>();
     pin<OutboundHttpEgressConfig>();
     pin<ProviderAdapter>();
     pin<ResponseFormat>();

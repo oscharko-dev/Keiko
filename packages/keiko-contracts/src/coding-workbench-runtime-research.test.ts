@@ -16,6 +16,15 @@ function pending(overrides: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
+function grant(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    grantId: "grant-1",
+    domains: ["developer.mozilla.org", "nodejs.org"],
+    expiresAt: "2026-07-20T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("coding workbench runtime research channel payload", () => {
   it("accepts an active payload carrying the reviewable host and request line", () => {
     const result = validateCodingWorkbenchRuntimeResearchChannelPayload({
@@ -32,6 +41,37 @@ describe("coding workbench runtime research channel payload", () => {
     );
   });
 
+  it("accepts a validated live grant only on the active channel", () => {
+    const active = validateCodingWorkbenchRuntimeResearchChannelPayload({
+      session: "active",
+      grant: grant(),
+    });
+    const unpaired = validateCodingWorkbenchRuntimeResearchChannelPayload({
+      session: "unpaired",
+      grant: grant(),
+    });
+
+    expect(active.ok).toBe(true);
+    expect(unpaired).toMatchObject({ ok: false });
+  });
+
+  it("rejects malformed, private, empty, and widened grant projections", () => {
+    for (const candidate of [
+      grant({ domains: [] }),
+      grant({ domains: ["127.0.0.1"] }),
+      grant({ expiresAt: "soon" }),
+      grant({ queryTextDigest: "forbidden" }),
+      "grant-1",
+    ]) {
+      expect(
+        validateCodingWorkbenchRuntimeResearchChannelPayload({
+          session: "active",
+          grant: candidate,
+        }).ok,
+      ).toBe(false);
+    }
+  });
+
   it("keeps the unpaired projection content-free and valid", () => {
     const unpaired = unpairedCodingWorkbenchRuntimeResearchChannelPayload();
 
@@ -46,9 +86,7 @@ describe("coding workbench runtime research channel payload", () => {
     });
 
     if (result.ok) throw new Error("expected the unpaired-with-pending payload to be rejected");
-    expect(result.errors.join(" ")).toContain(
-      "pending must be absent when the session is unpaired",
-    );
+    expect(result.errors.join(" ")).toContain("must be absent when the session is unpaired");
   });
 
   it("rejects an unknown session facet", () => {
@@ -89,19 +127,23 @@ describe("coding workbench runtime research channel payload", () => {
     ).toBe(false);
   });
 
-  it("rejects an empty host and a non-string host", () => {
-    expect(
-      validateCodingWorkbenchRuntimeResearchChannelPayload({
-        session: "active",
-        pending: pending({ host: "" }),
-      }).ok,
-    ).toBe(false);
-    expect(
-      validateCodingWorkbenchRuntimeResearchChannelPayload({
-        session: "active",
-        pending: pending({ host: 42 }),
-      }).ok,
-    ).toBe(false);
+  it("rejects malformed request ids and non-public research hosts", () => {
+    for (const candidate of [
+      pending({ requestId: "not safe" }),
+      pending({ host: "" }),
+      pending({ host: 42 }),
+      pending({ host: "localhost" }),
+      pending({ host: "127.0.0.1" }),
+      pending({ host: "https://nodejs.org" }),
+      pending({ host: "NODEJS.ORG" }),
+    ]) {
+      expect(
+        validateCodingWorkbenchRuntimeResearchChannelPayload({
+          session: "active",
+          pending: candidate,
+        }).ok,
+      ).toBe(false);
+    }
   });
 
   it("rejects a non-UTC or malformed expiry", () => {
