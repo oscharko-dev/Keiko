@@ -22,6 +22,7 @@ import {
   type EditorAgentActionPolicyContext,
   type EditorAgentActionPolicyDecision,
   type EditorAgentAuthorityPolicy,
+  editorAgentRootBindingDenyReason,
 } from "./editor-agent-governance.js";
 import type { EditorAgentActionType } from "./editor-agent.js";
 import { CODING_WORKBENCH_MODES, resolveEffectiveCodingWorkbenchMode } from "./coding-workbench.js";
@@ -689,5 +690,67 @@ describe("execution effect class + requestVerification (Issue #2210, ADR-0126 D4
     );
     expect(withheld.disposition).toBe("denied");
     expect(withheld.denyReason).toBe("mode-policy-denied");
+  });
+});
+
+describe("editorAgentRootBindingDenyReason", () => {
+  const binding = (overrides: Partial<Record<string, unknown>> = {}): never =>
+    ({
+      workspaceId: "ws-a",
+      manifestRef: "manifest-a",
+      manifestRevision: 4,
+      manifestDigest: "d".repeat(64),
+      rootRef: "root-" + "a".repeat(40),
+      rootIdentityDigest: "i".repeat(64),
+      ...overrides,
+    }) as never;
+
+  it("resolves the presence matrix exactly", () => {
+    expect(editorAgentRootBindingDenyReason(undefined, undefined, false)).toBeNull();
+    expect(editorAgentRootBindingDenyReason(undefined, undefined, true)).toBe(
+      "root-binding-required",
+    );
+    expect(editorAgentRootBindingDenyReason(binding(), undefined, true)).toBe(
+      "root-binding-required",
+    );
+    expect(editorAgentRootBindingDenyReason(undefined, binding(), true)).toBe(
+      "root-binding-required",
+    );
+    // Half-present without the explicit requirement is not a soft pass — it is invalid.
+    expect(editorAgentRootBindingDenyReason(binding(), undefined, false)).toBe(
+      "root-binding-invalid",
+    );
+    expect(editorAgentRootBindingDenyReason(undefined, binding(), false)).toBe(
+      "root-binding-invalid",
+    );
+  });
+
+  it("orders the divergence checks: decompose beats invalid beats equality drift", () => {
+    expect(
+      editorAgentRootBindingDenyReason(
+        binding(),
+        binding({ rootRef: "root-" + "b".repeat(40) }),
+        true,
+      ),
+    ).toBe("decompose-per-root");
+    expect(
+      editorAgentRootBindingDenyReason(
+        binding(),
+        binding({ rootIdentityDigest: "x".repeat(64) }),
+        true,
+      ),
+    ).toBe("root-binding-invalid");
+    for (const drift of [
+      { workspaceId: "ws-other" },
+      { manifestRef: "manifest-other" },
+      { manifestRevision: 9 },
+      { manifestDigest: "e".repeat(64) },
+    ]) {
+      expect(
+        editorAgentRootBindingDenyReason(binding(), binding(drift), true),
+        JSON.stringify(drift),
+      ).toBe("root-binding-invalid");
+    }
+    expect(editorAgentRootBindingDenyReason(binding(), binding(), true)).toBeNull();
   });
 });
