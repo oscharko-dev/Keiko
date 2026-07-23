@@ -1633,12 +1633,15 @@ function reserveActionAuthority(
 // budget-exceeded on the very first mutation.
 function validateActionAuthority(
   action: EditorAgentAction,
-  snapshot: EditorAgentSessionSnapshot | undefined,
+  // Bound-session snapshot reads (the only caller — `authorizeSnapshotRead`)
+  // always have a resolved snapshot, so the parameter narrows from the
+  // `reserveActionAuthority` shape here and the snapshot-undefined guard
+  // becomes provably unreachable and is removed.
+  snapshot: EditorAgentSessionSnapshot,
   decision: EditorAgentActionPolicyDecision,
   deps?: EditorAgentRouteDeps,
 ): EditorAgentActionPolicyDecision | null {
   if (EDITOR_AGENT_WORKBENCH_ACTION_CLASS[decision.effectClass] === null) return null;
-  if (snapshot === undefined) return denyByAuthority(decision, "authority-invalid");
   if (action.authorityRef === undefined) {
     return denyByAuthority(decision, "authority-missing");
   }
