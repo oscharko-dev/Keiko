@@ -5,7 +5,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   DocumentationIndexingApproval,
@@ -27,7 +26,8 @@ import {
 } from "./html-manual-citation-navigation.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
-import { createUiServer, UI_HOST } from "./server.js";
+import { UI_HOST } from "./server.js";
+import { startUiTestServer } from "./ui-test-server/_support.js";
 import {
   computeManualRootFingerprint,
   resolveManualApproval,
@@ -188,19 +188,12 @@ interface Fixture {
 async function makeFixture(): Promise<Fixture> {
   const staticRoot = await mkdtemp(join(tmpdir(), "keiko-docs-propose-"));
   const deps = stubDeps();
-  // Bind once to claim a free port, then re-create the server configured for that exact port so the
-  // Host-header authority check (FORBIDDEN_HOST) passes — the server validates Host against its
-  // configured port, not the ephemeral one from binding port 0.
-  let server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps: deps });
-  await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
-  const port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve) =>
-    server.close(() => {
-      resolve();
-    }),
-  );
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps: deps });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  const started = await startUiTestServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    handlerDeps: deps,
+  });
+  const { port, server } = started;
   return {
     port,
     close: async (): Promise<void> => {

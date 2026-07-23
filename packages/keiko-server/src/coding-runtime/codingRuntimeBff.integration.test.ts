@@ -17,8 +17,9 @@ import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js"
 import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
 import { buildCspHeader } from "../csp.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { createUiServer, UI_HOST } from "../server.js";
+import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
+import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createCodingRuntimeControlPlane } from "./codingRuntimeControlPlane.js";
 import { createCodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -45,23 +46,14 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function listen(server: Server): Promise<number> {
-  await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("server did not bind TCP");
-  return address.port;
-}
-
 async function startServer(staticRoot: string, handlerDeps: UiHandlerDeps): Promise<number> {
-  const serverDeps = { staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps };
-  const server = createUiServer(serverDeps);
-  const port = await listen(server);
-  // The real listener binds once and atomically. Before any request can be issued, align the
-  // test-owned authority descriptor with Node's selected port so the production Host/Origin guard
-  // still validates the exact bound endpoint rather than a probe or a synthetic authority.
-  serverDeps.port = port;
-  servers.push(server);
-  return port;
+  const started = await startUiTestServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    handlerDeps,
+  });
+  servers.push(started.server);
+  return started.port;
 }
 
 function post(port: number, body: unknown): Promise<Response> {

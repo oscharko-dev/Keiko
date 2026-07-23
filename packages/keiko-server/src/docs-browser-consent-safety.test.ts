@@ -9,12 +9,12 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
-import { createUiServer, UI_HOST } from "./server.js";
+import { UI_HOST } from "./server.js";
+import { startUiTestServer } from "./ui-test-server/_support.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { listKnowledgePodSummaries } from "@oscharko-dev/keiko-local-knowledge";
 
@@ -45,16 +45,12 @@ async function makeFixture(): Promise<Fixture> {
     store: createInMemoryUiStore(),
     uiDbPath: join(runtimeDir, "ui.sqlite"),
   };
-  let server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps: deps });
-  await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
-  const port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve) =>
-    server.close(() => {
-      resolve();
-    }),
-  );
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps: deps });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  const started = await startUiTestServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    handlerDeps: deps,
+  });
+  const { port, server } = started;
   return {
     port,
     deps,

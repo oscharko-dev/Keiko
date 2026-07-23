@@ -25,13 +25,13 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createUiServer, UI_HOST } from "./server.js";
+import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { startUiTestServer } from "./ui-test-server/_support.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
   GatewayConfig,
@@ -183,13 +183,13 @@ async function restartWithDeps(handlerDeps: UiHandlerDeps): Promise<void> {
       resolve();
     });
   });
-  server = createUiServer({
+  const started = await startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port,
     handlerDeps,
   });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  server = started.server;
+  port = started.port;
 }
 
 beforeEach(async () => {
@@ -200,21 +200,13 @@ beforeEach(async () => {
   store = createInMemoryUiStore();
   store.createProject(projectDir, "repo");
   seenRequests = [];
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
-  await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
-  port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve) => {
-    server.close(() => {
-      resolve();
-    });
-  });
-  server = createUiServer({
+  const started = await startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port,
     handlerDeps: deps(),
   });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  server = started.server;
+  port = started.port;
 });
 
 afterEach(async () => {

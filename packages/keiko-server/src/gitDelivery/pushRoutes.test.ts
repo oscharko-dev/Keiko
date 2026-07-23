@@ -13,17 +13,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import type { AddressInfo } from "node:net";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { GitPublishExecResult, GitRemotePublishAdapter } from "@oscharko-dev/keiko-tools";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { createUiServer, UI_HOST } from "../server.js";
+import { UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
+import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createHandlePushExecute, createHandlePushPreview } from "./pushRoutes.js";
 import type {
   GitDeliveryPushExecuteResponseBody,
@@ -151,17 +151,13 @@ async function closeServer(): Promise<void> {
 }
 
 async function startBound(overrides: Partial<UiHandlerDeps> = {}): Promise<void> {
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
-  await new Promise<void>((res) => server.listen(0, UI_HOST, res));
-  port = (server.address() as AddressInfo).port;
-  await closeServer();
-  server = createUiServer({
+  const started = await startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port,
     handlerDeps: deps(overrides),
   });
-  await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+  server = started.server;
+  port = started.port;
 }
 
 beforeEach(() => {

@@ -8,7 +8,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -22,8 +21,9 @@ import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
 import { createRunRegistry } from "../runs.js";
-import { createUiServer, UI_HOST } from "../server.js";
+import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
+import { startUiTestServer } from "../ui-test-server/_support.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
@@ -64,11 +64,6 @@ function realAdapter(workspace: WorkspaceInfo): ReturnType<typeof createNodeGitW
   return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
 }
 
-async function listen(srv: Server): Promise<number> {
-  await new Promise<void>((resolve) => srv.listen(0, UI_HOST, resolve));
-  return (srv.address() as AddressInfo).port;
-}
-
 async function closeServer(srv: Server = server): Promise<void> {
   await new Promise<void>((resolve) => {
     srv.close(() => {
@@ -78,17 +73,11 @@ async function closeServer(srv: Server = server): Promise<void> {
 }
 
 async function buildServer(handlerDeps: UiHandlerDeps): Promise<{ server: Server; port: number }> {
-  const probe = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps });
-  const chosenPort = await listen(probe);
-  await closeServer(probe);
-  const next = createUiServer({
+  return startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port: chosenPort,
     handlerDeps,
   });
-  await new Promise<void>((resolve) => next.listen(chosenPort, UI_HOST, resolve));
-  return { server: next, port: chosenPort };
 }
 
 function baseUrl(): string {

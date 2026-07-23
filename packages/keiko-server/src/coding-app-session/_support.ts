@@ -8,14 +8,13 @@
 // The root typecheck (`packages/*/src/**/*.ts`) still type-checks this file, so its helpers stay honest.
 
 import { mkdtempSync, realpathSync } from "node:fs";
-import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCspHeader } from "../csp.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
-import { createUiServer, UI_HOST } from "../server.js";
+import { UI_HOST } from "../server.js";
 import { createInMemoryUiStore } from "../store/index.js";
+import { startUiTestServer } from "../ui-test-server/_support.js";
 import type { CodingAppSessionChannelContent } from "./channelContract.js";
 import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
 import type { CodingAppSessionContentSource } from "./sessionChannel.js";
@@ -86,21 +85,6 @@ function tempDir(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
-async function bindServer(handlerDeps: UiHandlerDeps, staticRoot: string): Promise<Server> {
-  // Bind once on an ephemeral port, then patch the server-deps port. `isAllowedHost` reads `port`
-  // from this object per request, so the loopback-authority check matches the actual bound port
-  // without a close-then-rebind step (which races another process for the discovered port).
-  const serverDeps = { staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps };
-  const server = createUiServer(serverDeps);
-  await new Promise<void>((resolve) => {
-    server.listen(0, UI_HOST, (): void => {
-      resolve();
-    });
-  });
-  serverDeps.port = (server.address() as AddressInfo).port;
-  return server;
-}
-
 /**
  * Compose the real BFF (production `buildUiHandlerDeps`) with the injected pairing/content seams and
  * bind it on an ephemeral loopback port; the server-deps port is patched to the bound port so the
@@ -118,8 +102,12 @@ export async function startAppSessionTestServer(
     sessionPairingPort: options.sessionPairingPort,
     codingAppSessionContentSource: options.contentSource,
   });
-  const server = await bindServer(deps, staticRoot);
-  const port = (server.address() as AddressInfo).port;
+  const started = await startUiTestServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    handlerDeps: deps,
+  });
+  const { port, server } = started;
   return {
     baseUrl: `http://${UI_HOST}:${String(port)}`,
     deps,

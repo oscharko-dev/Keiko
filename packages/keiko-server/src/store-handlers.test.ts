@@ -7,10 +7,9 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import type { IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createUiServer, UI_HOST } from "./server.js";
+import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -31,6 +30,7 @@ import {
   type ChatTurnSerializer,
 } from "./chat-turn-serializer.js";
 import type { RouteContext } from "./routes.js";
+import { startUiTestServer } from "./ui-test-server/_support.js";
 import {
   createCapsule,
   openKnowledgeStore,
@@ -170,11 +170,6 @@ function testCapsuleInput(overrides: Partial<CreateCapsuleInput> = {}): CreateCa
   };
 }
 
-async function listen(): Promise<number> {
-  await new Promise<void>((res) => server.listen(0, UI_HOST, res));
-  return (server.address() as AddressInfo).port;
-}
-
 async function closeServer(): Promise<void> {
   await new Promise<void>((res) => {
     server.close(() => {
@@ -185,13 +180,13 @@ async function closeServer(): Promise<void> {
 
 async function restartWithDeps(overrides: Partial<UiHandlerDeps>): Promise<void> {
   await closeServer();
-  server = createUiServer({
+  const started = await startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port,
     handlerDeps: deps(overrides),
   });
-  await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+  server = started.server;
+  port = started.port;
 }
 
 function openGroundedIndex(chatId: string, workspaceRoot = projDir): void {
@@ -235,17 +230,13 @@ beforeEach(async () => {
   writeFileSync(join(projDir, "src", "next"), "next\n");
   writeFileSync(join(projDir, ".env"), "SECRET=1\n");
   store = createInMemoryUiStore();
-  // Two-phase bind so Host check matches the actual port.
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
-  port = await listen();
-  await closeServer();
-  server = createUiServer({
+  const started = await startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port,
     handlerDeps: deps(),
   });
-  await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+  server = started.server;
+  port = started.port;
 });
 
 afterEach(async () => {
