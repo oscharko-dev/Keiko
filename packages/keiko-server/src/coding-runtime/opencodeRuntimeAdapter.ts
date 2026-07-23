@@ -5,6 +5,7 @@ import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js
 import { createFixedOpenCodeConfig } from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
+  OPEN_CODE_EVENT_KINDS,
   type OpenCodeReconciliationEvent,
   type OpenCodeReconciliationPreparation,
   type OpenCodeReconciler,
@@ -772,7 +773,7 @@ function validEvent(event: OpenCodeReconciliationEvent): boolean {
     Number.isSafeInteger(event.sequence) &&
     event.sequence >= 0 &&
     DIGEST.test(event.digest) &&
-    ["observation", "permission", "question", "tool", "terminal"].includes(event.kind)
+    OPEN_CODE_EVENT_KINDS.includes(event.kind)
   );
 }
 

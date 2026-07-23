@@ -250,4 +250,17 @@ describe("OpenCode history reconciliation", () => {
     }
     expect(Object.keys(churn.checkpoints()).length).toBeLessThanOrEqual(256);
   });
+
+  it("admits the terminal-control and terminal-failure kinds the protocol classifier emits (#2644)", () => {
+    const reconciler = createOpenCodeReconciler();
+
+    expect(
+      reconciler.ingest([
+        event("evt_created", 0),
+        event("evt_idle", 1, "terminal-control"),
+        event("evt_failed_completion", 2, "terminal-failure"),
+      ]),
+    ).toMatchObject({ ok: true, applied: 3 });
+    expect(reconciler.checkpoints()).toEqual({ ses_1: 2 });
+  });
 });

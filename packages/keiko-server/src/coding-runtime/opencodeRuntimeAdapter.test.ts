@@ -817,6 +817,28 @@ describe("OpenCode runtime adapter readiness", () => {
     await adapter.close();
   });
 
+  it("keeps history reconciliation live across terminal-control and terminal-failure events (#2644)", async () => {
+    const harness = readinessPorts();
+    let postReady = false;
+    harness.ports.readiness.history = (checkpoints): Promise<readonly GovernedEvent[]> =>
+      Promise.resolve(
+        checkpoints.ses_1 === undefined
+          ? [event(0, "terminal")]
+          : postReady && checkpoints.ses_1 === 0
+            ? [event(1, "terminal-control"), event(2, "terminal-failure"), event(3, "observation")]
+            : [],
+      );
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    postReady = true;
+    // The classifier emits session.idle as terminal-control and a non-stop assistant completion
+    // as terminal-failure; both must reconcile as history, not collapse the whole plan.
+    await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
+    expect(harness.effects).toEqual(expect.arrayContaining(["evt_1", "evt_2", "evt_3"]));
+    await adapter.close();
+  });
+
   it("waits for terminal status after fresh post-arm completion arrives while status is busy", async () => {
     vi.useFakeTimers();
     try {
