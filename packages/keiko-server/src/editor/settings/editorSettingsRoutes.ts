@@ -188,12 +188,9 @@ function hasRevisionPrecondition(
   body: ParsedMutationBody,
   realRoot: string | undefined,
 ): boolean {
-  const revision =
-    body.scope === "user"
-      ? precondition.userRevision
-      : body.scope === "workspace"
-        ? precondition.workspaceRevision
-        : precondition.rootRevision;
+  let revision = precondition.rootRevision;
+  if (body.scope === "user") revision = precondition.userRevision;
+  else if (body.scope === "workspace") revision = precondition.workspaceRevision;
   return (
     revision === body.expectedRevision && precondition.rootToken === expectedRootToken(realRoot)
   );

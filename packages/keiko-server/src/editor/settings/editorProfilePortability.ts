@@ -150,13 +150,9 @@ function sortedEntries(values: UnknownRecord): readonly (readonly [string, unkno
   return Object.entries(values).sort(([left], [right]) => {
     const leftOrder = SETTING_ORDER.get(left as EditorM7SettingId) ?? Number.MAX_SAFE_INTEGER;
     const rightOrder = SETTING_ORDER.get(right as EditorM7SettingId) ?? Number.MAX_SAFE_INTEGER;
-    return leftOrder === rightOrder
-      ? left < right
-        ? -1
-        : left === right
-          ? 0
-          : 1
-      : leftOrder - rightOrder;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    if (left === right) return 0;
+    return left < right ? -1 : 1;
   });
 }
 
@@ -179,12 +175,9 @@ function previewRow(
     return { settingId, disposition: "rejected", reasonCode: parsed.reasonCode };
   }
   const current = activeValues[definition.id];
-  const disposition =
-    current === undefined
-      ? "add"
-      : canonicalise(current) === canonicalise(parsed.value)
-        ? "noOp"
-        : "change";
+  let disposition: "add" | "noOp" | "change" = "change";
+  if (current === undefined) disposition = "add";
+  else if (canonicalise(current) === canonicalise(parsed.value)) disposition = "noOp";
   return { settingId, disposition, value: parsed.value };
 }
 

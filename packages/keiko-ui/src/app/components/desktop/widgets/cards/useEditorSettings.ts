@@ -316,12 +316,9 @@ async function executeMutation(args: MutationArgs): Promise<void> {
   args.setMutating(true);
   args.setIssue(undefined);
   args.setAnnouncement("");
-  const expectedRevision =
-    scope === "user"
-      ? args.snapshot.userRevision
-      : scope === "workspace"
-        ? args.snapshot.workspaceRevision
-        : (args.snapshot.rootRevision ?? 0);
+  let expectedRevision = args.snapshot.rootRevision ?? 0;
+  if (scope === "user") expectedRevision = args.snapshot.userRevision;
+  else if (scope === "workspace") expectedRevision = args.snapshot.workspaceRevision;
   try {
     const body = mutationBody(args, scope, expectedRevision, id, value);
     const result = await mutateEditorSettings(

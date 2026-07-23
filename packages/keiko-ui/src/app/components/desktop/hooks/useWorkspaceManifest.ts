@@ -91,13 +91,10 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
       const next = workspaceManifestEventValue(event);
       const current = manifestRef.current;
       if (next === null) return;
-      if (current?.workspaceId === next.workspaceId) {
-        setManifest(next);
-        setIssue(null);
-      } else if (
-        rootPath !== undefined &&
-        next.roots.some((root) => root.canonicalRoot === rootPath)
-      ) {
+      const sameWorkspace = current?.workspaceId === next.workspaceId;
+      const containsTrackedRoot =
+        rootPath !== undefined && next.roots.some((root) => root.canonicalRoot === rootPath);
+      if (sameWorkspace || containsTrackedRoot) {
         setManifest(next);
         setIssue(null);
       }

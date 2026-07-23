@@ -193,7 +193,7 @@ function canonicalWorkspaceRootBodySegmentIsValid(
   // as distinct. Fail closed so `workspaceCanonicalRootsDoNotOverlap` cannot
   // admit a hostile manifest that splits trust bindings on one dir.
   if (style === "windows") {
-    const last = segment.charCodeAt(segment.length - 1);
+    const last = segment.codePointAt(segment.length - 1);
     if (last === 0x2e /* . */ || last === 0x20 /* space */) return false;
   }
   return true;

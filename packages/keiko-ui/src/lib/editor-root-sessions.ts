@@ -110,7 +110,7 @@ export function serializeEditorRootSessions(
   const retained: EditorRootSession[] = [];
   for (const root of orderedRoots(manifest, activeRootRef)) {
     const session = sessions.get(root.rootRef);
-    if (session === undefined || session.root !== root.canonicalRoot) continue;
+    if (session?.root !== root.canonicalRoot) continue;
     const candidate: EditorRootSessionsEnvelope = {
       schemaVersion: EDITOR_ROOT_SESSIONS_SCHEMA_VERSION,
       sessions: [...retained, session],

@@ -651,7 +651,7 @@ describe("keiko-contracts package surface", () => {
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("DECOMPOSE_PER_ROOT");
-    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(11);
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toHaveLength(11);
     // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
     expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual([
       "CANCELLED",

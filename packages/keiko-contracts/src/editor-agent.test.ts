@@ -1820,7 +1820,7 @@ describe("conflict-code taxonomy (Issue #1391 AC3)", () => {
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("DECOMPOSE_PER_ROOT");
-    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(11);
+    expect(EDITOR_AGENT_CONFLICT_CODES).toHaveLength(11);
     for (const code of EDITOR_AGENT_CONFLICT_CODES) {
       expect(isEditorAgentConflictCode(code)).toBe(true);
     }

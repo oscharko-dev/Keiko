@@ -576,7 +576,7 @@ function payloadMatchesEntry(
   entry: EditorLocalHistoryEntry,
 ): boolean {
   const exactKeys = Object.keys(payload).every((key): boolean =>
-    PAYLOAD_KEYS.some((allowed): boolean => allowed === key),
+    (PAYLOAD_KEYS as readonly string[]).includes(key),
   );
   return [
     exactKeys,

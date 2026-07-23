@@ -148,7 +148,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isHistoryOrigin(value: unknown): value is EditorLocalHistoryOrigin {
-  return EDITOR_LOCAL_HISTORY_ORIGINS.some((origin): boolean => origin === value);
+  return (EDITOR_LOCAL_HISTORY_ORIGINS as readonly unknown[]).includes(value);
 }
 
 function isEncryptedContentRef(value: unknown): value is EditorLocalHistoryEncryptedContentRef {

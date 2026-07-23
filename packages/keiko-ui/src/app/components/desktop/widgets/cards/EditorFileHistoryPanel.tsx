@@ -4,7 +4,6 @@ import dynamic from "next/dynamic";
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -29,8 +28,12 @@ import {
 } from "../../../../../lib/api";
 import { useLocale, useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
 import { Icons } from "../../Icons";
+
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import styles from "./EditorFileHistoryPanel.module.css";
+
+const CloseIcon = Icons.close;
+const PinIcon = Icons.pin;
 
 const HistoryDiffSurface = dynamic<EditorDiffSurfaceProps>(() => import("./EditorDiffSurface"), {
   ssr: false,
@@ -246,7 +249,7 @@ function HistoryHeader({
         aria-label={t("editor.fileHistory.close")}
         onClick={onClose}
       >
-        <Icons.close size={16} />
+        <CloseIcon size={16} />
       </button>
     </header>
   );
@@ -328,7 +331,7 @@ function HistoryRow(props: HistoryRowProps): ReactNode {
           <span>{origin}</span>
           {props.entry.pinned ? (
             <span className={styles.pinnedBadge}>
-              <Icons.pin size={12} /> {t("editor.fileHistory.pinned")}
+              <PinIcon size={12} /> {t("editor.fileHistory.pinned")}
             </span>
           ) : null}
         </span>
@@ -385,12 +388,9 @@ function HistoryList(props: HistoryListProps): ReactNode {
   const windowed = historyVirtualWindow(props.entries.length, scrollTop, viewportHeight);
   const visible = props.entries.slice(windowed.start, windowed.end);
   const focusRelative = (index: number, key: string): void => {
-    const targetIndex =
-      key === "Home"
-        ? 0
-        : key === "End"
-          ? props.entries.length - 1
-          : index + (key === "ArrowDown" ? 1 : -1);
+    let targetIndex = index + (key === "ArrowDown" ? 1 : -1);
+    if (key === "Home") targetIndex = 0;
+    else if (key === "End") targetIndex = props.entries.length - 1;
     const entry = props.entries[Math.min(Math.max(targetIndex, 0), props.entries.length - 1)];
     if (entry === undefined) return;
     const button = rowRefs.current.get(entry.entryRef);
@@ -643,6 +643,30 @@ export function EditorFileHistoryPanel(props: EditorFileHistoryPanelProps): Reac
   }, [busy, compareBase?.entry.entryRef, pending, props, reload, removeEntry, t]);
 
   const entriesVisible = snapshot.status === "ready" && snapshot.entries.length > 0;
+  const listOrEmpty = entriesVisible ? (
+    <HistoryList
+      entries={snapshot.entries}
+      compareBaseRef={compareBase?.entry.entryRef ?? null}
+      onCompareCurrent={(entry) => void compareWithCurrent(entry)}
+      onSelectCompare={(entry) => void selectCompareBase(entry)}
+      onCompareSelected={(entry) => void compareWithSelected(entry)}
+      onRestore={(entry) => void requestRestore(entry)}
+      onPin={(entry) => void togglePin(entry)}
+      onDelete={(entry) => setPending({ kind: "delete", entry })}
+    />
+  ) : (
+    <HistoryEmptyState snapshot={snapshot} reload={reload} />
+  );
+  const historyBody =
+    comparison === null ? (
+      listOrEmpty
+    ) : (
+      <HistoryComparisonView
+        comparison={comparison}
+        onClose={() => setComparison(null)}
+        onError={() => setNotice(t("editor.fileHistory.loadFailed"))}
+      />
+    );
   return (
     <aside
       ref={panelRef}
@@ -655,32 +679,11 @@ export function EditorFileHistoryPanel(props: EditorFileHistoryPanelProps): Reac
         <div className={styles.notice} role="alert">
           <span>{notice}</span>
           <button type="button" aria-label={t("common.dismiss")} onClick={() => setNotice(null)}>
-            <Icons.close size={13} />
+            <CloseIcon size={13} />
           </button>
         </div>
       ) : null}
-      {comparison === null ? (
-        entriesVisible ? (
-          <HistoryList
-            entries={snapshot.entries}
-            compareBaseRef={compareBase?.entry.entryRef ?? null}
-            onCompareCurrent={(entry) => void compareWithCurrent(entry)}
-            onSelectCompare={(entry) => void selectCompareBase(entry)}
-            onCompareSelected={(entry) => void compareWithSelected(entry)}
-            onRestore={(entry) => void requestRestore(entry)}
-            onPin={(entry) => void togglePin(entry)}
-            onDelete={(entry) => setPending({ kind: "delete", entry })}
-          />
-        ) : (
-          <HistoryEmptyState snapshot={snapshot} reload={reload} />
-        )
-      ) : (
-        <HistoryComparisonView
-          comparison={comparison}
-          onClose={() => setComparison(null)}
-          onError={() => setNotice(t("editor.fileHistory.loadFailed"))}
-        />
-      )}
+      {historyBody}
       {pending !== null ? (
         <ConfirmAction
           pending={pending}

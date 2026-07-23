@@ -10,10 +10,14 @@ import { fetchProjects } from "../../../../../lib/api";
 import { useTranslate } from "@/lib/i18n";
 import type { WorkspaceManifestView } from "../../hooks/useWorkspaceManifest";
 import { Icons } from "../../Icons";
+
 import { WorkspaceTrustBadge } from "../../workspace-trust/WorkspaceTrustSurfaces";
 import { useWorkspaceTrust } from "../../workspace-trust/useWorkspaceTrust";
 import { FilesWidget } from "./FilesWidget";
 import styles from "./MultiRootFilesWidget.module.css";
+
+const ChevronRightIcon = Icons.chevronR;
+const CloseIcon = Icons.close;
 
 interface MultiRootFilesWidgetProps {
   readonly manifest: WorkspaceManifest;
@@ -54,12 +58,12 @@ function focusSiblingRootHeader(event: KeyboardEvent<HTMLButtonElement>): void {
   const current = headers.indexOf(event.currentTarget);
   if (current < 0 || headers.length === 0) return;
   event.preventDefault();
-  const target =
-    event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? headers.length - 1
-        : Math.max(0, Math.min(headers.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)));
+  let target = Math.max(
+    0,
+    Math.min(headers.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)),
+  );
+  if (event.key === "Home") target = 0;
+  else if (event.key === "End") target = headers.length - 1;
   headers[target]?.focus();
 }
 
@@ -99,7 +103,7 @@ function RootGroup({
           onClick={() => setExpanded((current) => !current)}
         >
           <span className={styles.cmpCaret} data-expanded={expanded} aria-hidden="true">
-            <Icons.chevronR size={12} />
+            <ChevronRightIcon size={12} />
           </span>
           <span className={styles.cmpRootName}>
             {root.displayName}
@@ -141,7 +145,7 @@ function RootGroup({
           aria-label={t("filesWidget.multiRoot.remove", { name: root.displayName })}
           onClick={() => void workspace.removeRoot(root.rootRef, root.rootRef)}
         >
-          <Icons.close size={12} />
+          <CloseIcon size={12} />
         </button>
       </div>
       {expanded ? (
@@ -191,7 +195,7 @@ function AddRootToolbar({
   const options = useMemo(() => projects, [projects]);
   const actor = manifest.roots.find((root) => root.rootRef === manifest.focusedRootRef);
   return (
-    <div className={styles.cmpToolbar} role="group" aria-label={t("filesWidget.multiRoot.manage")}>
+    <fieldset className={styles.cmpToolbar} aria-label={t("filesWidget.multiRoot.manage")}>
       <select
         className={styles.cmpSelect}
         aria-label={t("filesWidget.multiRoot.project")}
@@ -216,7 +220,7 @@ function AddRootToolbar({
       >
         {t("filesWidget.multiRoot.add")}
       </button>
-    </div>
+    </fieldset>
   );
 }
 

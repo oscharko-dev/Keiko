@@ -30,6 +30,7 @@ import {
   isConversationEligibleModel,
 } from "@/lib/types";
 import { Icons } from "../../Icons";
+
 import KeikoSelect from "../../KeikoSelect";
 import { personaLabel } from "../../VoiceDialogMode";
 import {
@@ -68,6 +69,8 @@ import {
   readWorkspaceCameraSmoothness,
   readWorkspaceGridStrength,
 } from "../../workspace-appearance";
+
+const SettingsIcon = Icons.settings;
 
 function kindLabel(kind: ModelCapability["kind"]): string {
   if (kind === "ocr-vision") return "OCR";
@@ -1301,7 +1304,7 @@ export function SettingsPanel({
                 disabled={openWorkspaceTrust === undefined}
                 onClick={openWorkspaceTrust}
               >
-                <Icons.settings size={14} />
+                <SettingsIcon size={14} />
                 {workspaceT("workspaceTrust.settings.open")}
               </button>
             </div>

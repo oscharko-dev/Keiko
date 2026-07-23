@@ -1,4 +1,13 @@
-"use client";
+function confirmButtonLabel(
+  t: ReturnType<typeof useTranslate>,
+  mutating: boolean,
+  action: "grant" | "revoke",
+): string {
+  if (mutating) return t("workspaceTrust.dialog.waiting");
+  return action === "grant" ? t("workspaceTrust.dialog.trust") : t("workspaceTrust.dialog.revoke");
+}
+
+("use client");
 
 import { useEffect, useRef, type ReactNode } from "react";
 import type { WorkspaceTrustReason, WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
@@ -171,11 +180,7 @@ export function WorkspaceTrustDecisionDialog({
               void onConfirm();
             }}
           >
-            {mutating
-              ? t("workspaceTrust.dialog.waiting")
-              : action === "grant"
-                ? t("workspaceTrust.dialog.trust")
-                : t("workspaceTrust.dialog.revoke")}
+            {confirmButtonLabel(t, mutating, action)}
           </button>
         </div>
       </div>

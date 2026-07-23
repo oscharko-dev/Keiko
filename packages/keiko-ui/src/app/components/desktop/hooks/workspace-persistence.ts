@@ -561,22 +561,35 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
   return sanitizeEditorLayoutJsonLegacy(record);
 }
 
+function sanitizeEditorConfigValue(key: string, value: unknown): AppWindow["cfg"][string] {
+  if (key === "openFiles") return sanitizeEditorOpenFiles(value);
+  if (key === "layoutJson") return sanitizeEditorLayoutJson(value);
+  if (key === "rootSessionsJson") {
+    return sanitizeEditorRootSessionsJson(value, sanitizeEditorLayoutJson);
+  }
+  return sanitizeGenericConfigValue("editor", key, value);
+}
+
 function sanitizeConfigValue(
   type: WindowType,
   key: string,
   value: unknown,
 ): AppWindow["cfg"][string] {
-  if (type === "editor" && key === "openFiles") return sanitizeEditorOpenFiles(value);
-  if (type === "editor" && key === "layoutJson") return sanitizeEditorLayoutJson(value);
-  if (type === "editor" && key === "rootSessionsJson") {
-    return sanitizeEditorRootSessionsJson(value, sanitizeEditorLayoutJson);
-  }
+  if (type === "editor") return sanitizeEditorConfigValue(key, value);
   if (type === "pdfCitationPreview") {
     return sanitizePdfCitationPreviewConfigValue(key, value);
   }
   if (type === "figma" || type === "figmaView" || type === "figmaJson" || type === "figmaImage") {
     return sanitizeFigmaConfigValue(key, value);
   }
+  return sanitizeGenericConfigValue(type, key, value);
+}
+
+function sanitizeGenericConfigValue(
+  type: WindowType,
+  key: string,
+  value: unknown,
+): AppWindow["cfg"][string] {
   if (!isJsonScalar(value) || isCredentialKey(key)) return undefined;
   if (typeof value !== "string") return value;
   // Length gate BEFORE the secret-shape scan: it bounds the persisted payload and

@@ -100,7 +100,7 @@ function isRevision(value: unknown): value is number {
 
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = value.codePointAt(index) ?? 0;
     if (code <= 0x1f || code === 0x7f) return true;
   }
   return false;

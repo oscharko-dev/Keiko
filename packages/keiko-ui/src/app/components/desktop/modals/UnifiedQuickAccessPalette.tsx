@@ -63,6 +63,21 @@ interface UnifiedQuickAccessPaletteProps {
   readonly onClose: () => void;
 }
 
+function partitionSearchOutcomes<T>(
+  outcomes: readonly (
+    | { readonly status: "success"; readonly value: T }
+    | { readonly status: "error"; readonly target: { readonly label: string } }
+  )[],
+): { readonly responses: readonly T[]; readonly failedLabels: readonly string[] } {
+  const responses: T[] = [];
+  const failedLabels: string[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.status === "success") responses.push(outcome.value);
+    else failedLabels.push(outcome.target.label);
+  }
+  return { responses, failedLabels };
+}
+
 function commandMatches(command: QuickAccessCommand, query: string): boolean {
   const needle = query.toLowerCase();
   return `${command.label} ${command.group} ${command.id}`.toLowerCase().includes(needle);
@@ -247,14 +262,8 @@ export function UnifiedQuickAccessPalette({
       )
         .then((outcomes) => {
           if (controller.signal.aborted) return;
-          const responses = outcomes.flatMap((outcome) =>
-            outcome.status === "success" ? [outcome.value] : [],
-          );
-          setFailedRoots(
-            outcomes.flatMap((outcome) =>
-              outcome.status === "error" ? [outcome.target.label] : [],
-            ),
-          );
+          const { responses, failedLabels } = partitionSearchOutcomes(outcomes);
+          setFailedRoots(failedLabels);
           setSearchResults(rankedResults(trimmed, responses));
         })
         .catch(() => {

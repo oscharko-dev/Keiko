@@ -44,16 +44,14 @@ function unpairedEntry(): RouteResult {
 
 function historyError(error: unknown): RouteResult {
   if (!(error instanceof EditorLocalHistoryError)) throw error;
-  const status =
-    error.code === "ENTRY_NOT_FOUND"
-      ? 404
-      : error.code === "PATH_OUTSIDE_WORKSPACE"
-        ? 403
-        : error.code === "PINNED_BYTE_LIMIT" || error.code === "PINNED_CAPACITY_EXHAUSTED"
-          ? 409
-          : error.code === "ENTRY_TOO_LARGE"
-            ? 413
-            : 503;
+  const statusByCode: Partial<Record<typeof error.code, number>> = {
+    ENTRY_NOT_FOUND: 404,
+    PATH_OUTSIDE_WORKSPACE: 403,
+    PINNED_BYTE_LIMIT: 409,
+    PINNED_CAPACITY_EXHAUSTED: 409,
+    ENTRY_TOO_LARGE: 413,
+  };
+  const status = statusByCode[error.code] ?? 503;
   return { status, body: errorBody(error.code, error.message) };
 }
 

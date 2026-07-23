@@ -207,6 +207,7 @@ import type {
 } from "../../../../../lib/types";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
+
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import {
   useRegisterWorkspaceReplaceBuffer,
@@ -275,6 +276,8 @@ import {
   rootHash,
   safeDomIdSegment,
 } from "./editorDocumentUri";
+
+const RestoreIcon = Icons.restore;
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
   ssr: false,
@@ -1771,7 +1774,11 @@ function EditorRuntimeWidget({
   outlineRevealRequest,
   fileHistoryRequestNonce,
   onOpenDebugPanel,
+  heldTabFile,
 }: EditorRuntimeWidgetProps): ReactNode {
+  // GEN-PERF-EDITOR-003: consumed for identity only — the scalar exists to trip React.memo for
+  // the one pane whose tab visual must repaint; renderTabHandle reads the live flag from a ref.
+  void heldTabFile;
   const commonT = useTranslate();
   const sourceControlT = useEditorSourceControlTranslate();
   const locale = useLocale();
@@ -5876,6 +5883,37 @@ function EditorRuntimeWidget({
   const workspaceWatchNeedsAttention =
     workspaceWatch.health !== "healthy" || workspaceWatch.snapshotRequired;
 
+  const renderSummaryTabItem = (path: string): ReactNode => {
+    const tabDirty = effectiveDirtyFiles.has(path);
+    const tabHandle = renderTabHandle?.(path, false, tabDirty, {
+      onDragModeStart: () => setSummaryMenuOpen(false),
+    });
+    return (
+      <button
+        type="button"
+        key={path}
+        className="ed-tab-summary-item"
+        draggable={tabHandle?.draggable}
+        data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+        data-tab-held={tabHandle?.["data-tab-held"]}
+        onClickCapture={tabHandle?.onClickCapture}
+        onDragStart={tabHandle?.onDragStart}
+        onDragEnd={tabHandle?.onDragEnd}
+        onPointerDown={tabHandle?.onPointerDown}
+        onKeyDown={tabHandle?.onKeyDown}
+        onClick={() => handleChooseSummaryTab(path)}
+      >
+        <FileIcon name={path} />
+        <span className="ed-tab-summary-label">{path}</span>
+        {tabDirty ? (
+          <span className="ed-dirty" aria-hidden="true">
+            ●
+          </span>
+        ) : null}
+      </button>
+    );
+  };
+
   const renderOpenDocumentTabs = (): ReactNode => (
     <div className="ed-tablist" ref={tablistRef} role="tablist" aria-label="Open documents">
       {visibleTabs.length > 0 ? (
@@ -6002,36 +6040,7 @@ function EditorRuntimeWidget({
             id={summaryMenuId}
             aria-label="Hidden open documents"
           >
-            {summaryTabs.map((path) => {
-              const tabDirty = effectiveDirtyFiles.has(path);
-              const tabHandle = renderTabHandle?.(path, false, tabDirty, {
-                onDragModeStart: () => setSummaryMenuOpen(false),
-              });
-              return (
-                <button
-                  type="button"
-                  key={path}
-                  className="ed-tab-summary-item"
-                  draggable={tabHandle?.draggable}
-                  data-tab-draggable={tabHandle?.["data-tab-draggable"]}
-                  data-tab-held={tabHandle?.["data-tab-held"]}
-                  onClickCapture={tabHandle?.onClickCapture}
-                  onDragStart={tabHandle?.onDragStart}
-                  onDragEnd={tabHandle?.onDragEnd}
-                  onPointerDown={tabHandle?.onPointerDown}
-                  onKeyDown={tabHandle?.onKeyDown}
-                  onClick={() => handleChooseSummaryTab(path)}
-                >
-                  <FileIcon name={path} />
-                  <span className="ed-tab-summary-label">{path}</span>
-                  {tabDirty ? (
-                    <span className="ed-dirty" aria-hidden="true">
-                      ●
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+            {summaryTabs.map((path) => renderSummaryTabItem(path))}
           </div>
         </details>
       ) : null}
@@ -6059,7 +6068,7 @@ function EditorRuntimeWidget({
           aria-expanded={fileHistoryOpen}
           onClick={() => setFileHistoryOpen((open) => !open)}
         >
-          <Icons.restore size={13} />
+          <RestoreIcon size={13} />
           {commonT("editor.fileHistory.title")}
         </button>
       ) : null}

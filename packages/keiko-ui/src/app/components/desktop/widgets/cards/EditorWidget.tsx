@@ -381,6 +381,10 @@ interface PaneBinding {
   readonly renderTabHandle: NonNullable<EditorRuntimeWidgetProps["renderTabHandle"]>;
 }
 
+function nonEmptyRoot(value: string): string | undefined {
+  return value.length > 0 ? value : undefined;
+}
+
 export function EditorWidget({
   root,
   file,
@@ -408,7 +412,7 @@ export function EditorWidget({
     layoutJson,
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
-  const editorSettings = useEditorSettings(workspaceRoot.length > 0 ? workspaceRoot : undefined);
+  const editorSettings = useEditorSettings(nonEmptyRoot(workspaceRoot));
   const editorShortcutRegistry = useMemo(
     () => resolveEffectiveKeyboardShortcuts(editorSettings.applied.keybindingOverrides),
     [editorSettings.applied.keybindingOverrides],

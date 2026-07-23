@@ -403,9 +403,7 @@ function ReplaceReviews({
           onApply={() => onApply(preview)}
         />
         {multiRoot && messages.has(preview.target.id) ? (
-          <p className={styles.status} role="status">
-            {messages.get(preview.target.id)}
-          </p>
+          <output className={styles.status}>{messages.get(preview.target.id)}</output>
         ) : null}
         <button
           className={styles.modeButton}

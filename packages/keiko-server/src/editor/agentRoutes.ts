@@ -1175,12 +1175,9 @@ function snapshotRootPaths(snapshot: EditorAgentSessionSnapshot): readonly strin
 }
 
 function rootBoundaryError(reason: EditorAgentRootBoundaryReason): RouteResult {
-  const code =
-    reason === "root-binding-required"
-      ? "EDITOR_AGENT_ROOT_BINDING_REQUIRED"
-      : reason === "decompose-per-root"
-        ? "EDITOR_AGENT_DECOMPOSE_PER_ROOT"
-        : "EDITOR_AGENT_ROOT_BINDING_INVALID";
+  let code = "EDITOR_AGENT_ROOT_BINDING_INVALID";
+  if (reason === "root-binding-required") code = "EDITOR_AGENT_ROOT_BINDING_REQUIRED";
+  else if (reason === "decompose-per-root") code = "EDITOR_AGENT_DECOMPOSE_PER_ROOT";
   return {
     status: 403,
     body: errorBody(code, "The editor agent request is not authorized for this workspace root."),

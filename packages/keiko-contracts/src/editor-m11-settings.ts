@@ -334,6 +334,10 @@ function provenance(
   return {};
 }
 
+function scopeForSource(source: EditorM11ResolvedSetting["source"]): "root" | "workspace" | "user" {
+  if (source === "root") return "root";
+  return source === "workspace" ? "workspace" : "user";
+}
 function resolveSetting(
   definition: (typeof EDITOR_M7_SETTING_REGISTRY)[number],
   input: EditorM11SettingsResolutionInput,
@@ -344,7 +348,7 @@ function resolveSetting(
     id: definition.id,
     value: resolvedValue(definition.id, definition.defaultValue, input),
     source,
-    scope: source === "root" ? "root" : source === "workspace" ? "workspace" : "user",
+    scope: scopeForSource(source),
     policyLocked: reasonCode !== undefined,
     ...(reasonCode === undefined ? {} : { reasonCode }),
     effect: definition.effect,

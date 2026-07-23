@@ -495,8 +495,9 @@ function settingSupportsScope(
   definition: EditorM7SettingDefinition,
   scope: EditorSettingsEditScope,
 ): boolean {
-  const inheritedScope = scope === "root" ? "workspace" : scope === "profile" ? "user" : scope;
-  return definition.scopes.includes(inheritedScope);
+  if (scope === "root") return definition.scopes.includes("workspace");
+  if (scope === "profile") return definition.scopes.includes("user");
+  return definition.scopes.includes(scope);
 }
 
 function requiresRoot(scope: EditorSettingsEditScope): boolean {
