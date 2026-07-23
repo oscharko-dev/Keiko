@@ -1,12 +1,15 @@
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
+import { isCodeTaskPublicDomain } from "./code-task-auxiliary.js";
 import {
   exactKeys,
   invalid,
   isOneOf,
   isRecord,
   result,
+  validateSafeId,
   validateStrictUtcInstant,
 } from "./coding-workbench-runtime-api-validation.js";
+import { CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS } from "./coding-workbench-runtime-api.js";
 
 /** A DNS name can never exceed 253 characters; anything longer is not a host we would fetch. */
 export const CODING_WORKBENCH_RESEARCH_HOST_MAX_CHARS = 253;
@@ -39,7 +42,18 @@ export interface CodingWorkbenchRuntimePendingResearch {
 }
 
 /**
- * The research payload as carried over the authenticated app-session channel (#2478, ADR-0141).
+ * A live governed research grant. Its domains are model-selected content and therefore travel only
+ * over the authenticated research channel, never through a general runtime snapshot (#2644).
+ */
+export interface CodingWorkbenchRuntimeResearchGrant {
+  readonly grantId: string;
+  readonly domains: readonly string[];
+  readonly expiresAt: string;
+}
+
+/**
+ * Pending and approved research state as carried over the authenticated app-session channel
+ * (#2478, #2644, ADR-0141).
  *
  * This is deliberately NOT on the unauthenticated status or SSE routes: the host and request line
  * are repository/model-derived text, and the epic keeps those surfaces permanently content-free.
@@ -50,6 +64,7 @@ export interface CodingWorkbenchRuntimePendingResearch {
 export interface CodingWorkbenchRuntimeResearchChannelPayload {
   readonly session: CodingWorkbenchRuntimeResearchSession;
   readonly pending?: CodingWorkbenchRuntimePendingResearch | undefined;
+  readonly grant?: CodingWorkbenchRuntimeResearchGrant | undefined;
 }
 
 /**
@@ -62,22 +77,25 @@ export function unpairedCodingWorkbenchRuntimeResearchChannelPayload(): CodingWo
 }
 
 /**
- * Validate a channel-carried research payload: exact keys, a valid session facet, bounded host and
- * request-line text, a strict UTC expiry, and the invariant that an `unpaired` payload carries no
- * pending ask.
+ * Validate a channel-carried research payload: exact keys, a valid session facet, bounded
+ * model-selected text, strict UTC expiries, and the invariant that an `unpaired` payload carries
+ * neither pending nor approved research state.
  */
 export function validateCodingWorkbenchRuntimeResearchChannelPayload(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResearchChannelPayload> {
   if (!isRecord(value)) return invalid("research channel payload must be an object");
-  const errors = exactKeys(value, ["session", "pending"], "researchChannelPayload");
+  const errors = exactKeys(value, ["session", "pending", "grant"], "researchChannelPayload");
   if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_RESEARCH_SESSION_STATES)) {
     errors.push("researchChannelPayload.session is invalid");
   }
-  if (value.session === "unpaired" && value.pending !== undefined) {
-    errors.push("researchChannelPayload.pending must be absent when the session is unpaired");
+  if (value.session === "unpaired" && (value.pending !== undefined || value.grant !== undefined)) {
+    errors.push(
+      "researchChannelPayload research state must be absent when the session is unpaired",
+    );
   }
   if (value.pending !== undefined) validatePendingResearch(value.pending, errors);
+  if (value.grant !== undefined) validateResearchGrant(value.grant, errors);
   return result(value, errors);
 }
 
@@ -89,11 +107,14 @@ function validatePendingResearch(value: unknown, errors: string[]): void {
   errors.push(
     ...exactKeys(value, ["requestId", "host", "requestLine", "expiresAt"], "pendingResearch"),
   );
-  if (!isBoundedText(value.requestId, CODING_WORKBENCH_RESEARCH_HOST_MAX_CHARS)) {
-    errors.push("pendingResearch.requestId must be a bounded non-empty string");
-  }
-  if (!isBoundedText(value.host, CODING_WORKBENCH_RESEARCH_HOST_MAX_CHARS)) {
-    errors.push("pendingResearch.host must be a bounded non-empty string");
+  validateSafeId(
+    value.requestId,
+    "pendingResearch.requestId",
+    errors,
+    CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+  );
+  if (!isCodeTaskPublicDomain(value.host)) {
+    errors.push("pendingResearch.host must be a canonical public domain");
   }
   // The request line for a bare root fetch is legitimately empty, so only the upper bound applies.
   if (
@@ -105,6 +126,24 @@ function validatePendingResearch(value: unknown, errors: string[]): void {
   validateStrictUtcInstant(value.expiresAt, "pendingResearch.expiresAt", errors);
 }
 
-function isBoundedText(value: unknown, max: number): value is string {
-  return typeof value === "string" && value.length >= 1 && value.length <= max;
+function validateResearchGrant(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("researchChannelPayload.grant must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["grantId", "domains", "expiresAt"], "researchGrant"));
+  validateSafeId(
+    value.grantId,
+    "researchGrant.grantId",
+    errors,
+    CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+  );
+  if (
+    !Array.isArray(value.domains) ||
+    value.domains.length === 0 ||
+    !value.domains.every((domain) => isCodeTaskPublicDomain(domain))
+  ) {
+    errors.push("researchGrant.domains must be a non-empty list of public domains");
+  }
+  validateStrictUtcInstant(value.expiresAt, "researchGrant.expiresAt", errors);
 }

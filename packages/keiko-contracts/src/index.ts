@@ -1193,7 +1193,6 @@ export type {
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
-  CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeResearchRevokeRequest,
   CodingWorkbenchRuntimeRetryRequest,
   CodingWorkbenchRuntimeSnapshot,
@@ -1253,6 +1252,7 @@ export {
 export type {
   CodingWorkbenchRuntimePendingResearch,
   CodingWorkbenchRuntimeResearchChannelPayload,
+  CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeResearchSession,
 } from "./coding-workbench-runtime-research.js";
 export {

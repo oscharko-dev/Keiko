@@ -4,6 +4,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePreference,
+  CodingWorkbenchRuntimeResearchGrant,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchRuntimeState,
@@ -29,7 +30,7 @@ export interface CodingWorkbenchRuntimeActions {
   readonly pause: () => Promise<void>;
   readonly resume: () => Promise<void>;
   readonly submitFollowUp: (taskIntent: string) => Promise<void>;
-  readonly revokeResearchGrant: () => Promise<void>;
+  readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }
 
 interface RuntimeActionInput {

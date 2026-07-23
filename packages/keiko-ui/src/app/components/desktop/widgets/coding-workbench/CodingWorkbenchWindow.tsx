@@ -20,9 +20,9 @@ import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-st
 import { useCodingWorkbenchQuestions } from "@/lib/useCodingWorkbenchQuestions";
 import { useCodingWorkbenchSafeActivity } from "@/lib/useCodingWorkbenchSafeActivity";
 import {
-  useCodingWorkbenchResearchAsk,
-  type CodingWorkbenchResearchAskState,
-} from "@/lib/useCodingWorkbenchResearchAsk";
+  useCodingWorkbenchResearch,
+  type CodingWorkbenchResearchState,
+} from "@/lib/useCodingWorkbenchResearch";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import {
   ModeAuthority,
@@ -58,6 +58,11 @@ function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]):
 export function CodingWorkbenchWindow(): ReactNode {
   const activeWorkspace = useOptionalActiveWorkspace() ?? EMPTY_WORKSPACE;
   const { state, actions } = useCodingWorkbenchRuntime({ workspace: activeWorkspace });
+  const research = useCodingWorkbenchResearch({
+    runId: state.run.value?.runId,
+    revision: state.run.value?.revision,
+    permissionRequestId: state.run.value?.pendingPermission?.requestId,
+  });
   const [taskIntent, setTaskIntent] = useState("");
   const focusRef = useRef<HTMLHeadingElement>(null);
   const approvalAction = useRef(false);
@@ -91,6 +96,7 @@ export function CodingWorkbenchWindow(): ReactNode {
       t={t}
       workbenchLabel={workbenchLabel}
       onDecision={decideApproval}
+      research={research}
     />
   );
 }
@@ -107,6 +113,7 @@ interface WorkbenchContentProps {
   readonly t: CodingWorkbenchTranslate;
   readonly workbenchLabel: string;
   readonly onDecision: (decision: "approved" | "denied") => void;
+  readonly research: CodingWorkbenchResearchState;
 }
 
 function WorkbenchContent({
@@ -121,6 +128,7 @@ function WorkbenchContent({
   t,
   workbenchLabel,
   onDecision,
+  research,
 }: WorkbenchContentProps): ReactNode {
   const runState = state.run.value?.state;
   return (
@@ -132,7 +140,7 @@ function WorkbenchContent({
     >
       <WorkbenchHeader state={state} focusRef={focusRef} />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {lifecycleAnnouncement(state, t)}
+        {lifecycleAnnouncement(state, t, research.grant)}
       </p>
       {alert ? (
         <p className={styles.alert} role="alert">
@@ -147,6 +155,7 @@ function WorkbenchContent({
         onTaskIntentChange={onTaskIntentChange}
         locked={locked}
         onDecision={onDecision}
+        research={research}
       />
     </section>
   );
@@ -160,6 +169,7 @@ function WorkbenchColumns({
   onTaskIntentChange,
   locked,
   onDecision,
+  research,
 }: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t" | "workbenchLabel">): ReactNode {
   // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
   // hand-bound repository can be bound → verified → started entirely from the UI (#2476). It no longer
@@ -219,10 +229,11 @@ function WorkbenchColumns({
           state={state}
           actions={actions}
           refreshWorkspace={() => activeWorkspace.refresh()}
+          researchGrant={research.grant}
         />
       </div>
       <div className={styles.stack}>
-        <PermissionPrompt state={state} onDecision={onDecision} />
+        <PermissionPrompt state={state} research={research} onDecision={onDecision} />
         <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
         <RuntimeControls state={state} actions={actions} />
         <Timeline events={state.events} activity={activity} questions={questions} />
@@ -283,18 +294,15 @@ function RuntimeControls({ state, actions }: LiveSectionProps): ReactNode {
 
 function PermissionPrompt({
   state,
+  research,
   onDecision,
 }: {
   readonly state: CodingWorkbenchRuntimeState;
+  readonly research: CodingWorkbenchResearchState;
   readonly onDecision: (decision: CodingWorkbenchRuntimeApprovalDecision) => void;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const request = state.run.value?.pendingPermission;
-  const research = useCodingWorkbenchResearchAsk({
-    runId: state.run.value?.runId,
-    permissionRequestId: request?.requestId,
-    isNetworkEgress: request?.kind === "network-egress",
-  });
   if (request === undefined) return null;
   const busy = state.mutation.status === "pending";
   return (
@@ -303,7 +311,7 @@ function PermissionPrompt({
         {t("codingWorkbench.approval.title")}
       </PanelTitle>
       <ApprovalFacts request={request} t={t} />
-      <ResearchDestination state={research} t={t} />
+      {request.kind === "network-egress" ? <ResearchDestination state={research} t={t} /> : null}
       <p className={styles.helpText}>{t("codingWorkbench.approval.help")}</p>
       <div className={styles.controls}>
         <button
@@ -337,7 +345,7 @@ function ResearchDestination({
   state,
   t,
 }: {
-  readonly state: CodingWorkbenchResearchAskState;
+  readonly state: CodingWorkbenchResearchState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (state.status === "idle") return null;

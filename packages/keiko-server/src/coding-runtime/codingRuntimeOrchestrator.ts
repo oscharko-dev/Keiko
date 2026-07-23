@@ -60,6 +60,14 @@ const terminal = new Set<CodingWorkbenchRuntimeStateName>([
   "cancelled",
   "taken-over",
 ]);
+const GRANT_VISIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "starting",
+  "ready",
+  "running",
+  "awaiting-approval",
+  "paused",
+  "stopping",
+]);
 
 /**
  * Keeps all lifecycle mutation behind one promise tail. This deliberately provides no replay API:
@@ -90,8 +98,6 @@ export class CodingRuntimeOrchestrator {
       now: this.now,
       pendingPermission: (runId: string): CodingWorkbenchRuntimePendingPermission | undefined =>
         this.approvals.get(runId)?.permission,
-      researchGrant: (runId: string): CodingWorkbenchRuntimeResearchGrant | undefined =>
-        this.projectedResearchGrant(runId),
     });
     this.operations = new CodingRuntimeOperationCoordinator({
       current: (): CodingRuntimeSnapshot | undefined => this.current(),
@@ -181,7 +187,7 @@ export class CodingRuntimeOrchestrator {
   /**
    * Drops every live #2387 research grant for the run (parent and children share the run-bound
    * registry entry) in one revision bump. Bound to the observed revision and a live grant id, so a
-   * stale or forged revoke fails closed; the returned snapshot no longer carries `researchGrant`.
+   * stale or forged revoke fails closed. Runtime snapshots never carry grant content (#2644).
    */
   revokeResearch(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
     return this.serialValue(() => {
@@ -221,8 +227,15 @@ export class CodingRuntimeOrchestrator {
     };
   }
 
-  /** Aggregates the run's live grants into the single content-free snapshot projection. */
-  private projectedResearchGrant(runId: string): CodingWorkbenchRuntimeResearchGrant | undefined {
+  /**
+   * Aggregates live grants for the authenticated research channel. General runtime snapshots are
+   * structurally unable to carry this model-selected host content (#2644).
+   */
+  researchGrant(runId: string): CodingWorkbenchRuntimeResearchGrant | undefined {
+    const current = this.current();
+    if (current?.runId !== runId || !GRANT_VISIBLE_STATES.has(current.state)) {
+      return undefined;
+    }
     const registry = this.deps.researchGrants;
     if (registry === undefined) return undefined;
     const grants = registry.activeGrants(runId, this.now().getTime());

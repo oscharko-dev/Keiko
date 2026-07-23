@@ -32,6 +32,14 @@ export type CodingRuntimeEventHubInput =
         CodingWorkbenchRuntimeSseEvent,
         { kind: "runtime-event" }
       >["eventKind"];
+      readonly auxiliaryOutcome?: Extract<
+        CodingWorkbenchRuntimeSseEvent,
+        { kind: "runtime-event" }
+      >["auxiliaryOutcome"];
+      readonly contentTrust?: Extract<
+        CodingWorkbenchRuntimeSseEvent,
+        { kind: "runtime-event" }
+      >["contentTrust"];
       readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
     };
 
@@ -338,7 +346,17 @@ function isExactInput(value: unknown): value is CodingRuntimeEventHubInput {
       : ["kind", "revision", "runId", "schemaVersion", "state"];
   const allowed =
     record.kind === "runtime-event"
-      ? ["eventKind", "failureCode", "kind", "revision", "runId", "schemaVersion", "state"]
+      ? [
+          "auxiliaryOutcome",
+          "contentTrust",
+          "eventKind",
+          "failureCode",
+          "kind",
+          "revision",
+          "runId",
+          "schemaVersion",
+          "state",
+        ]
       : ["failureCode", "kind", "revision", "runId", "schemaVersion", "state"];
   return keys.every((key) => allowed.includes(key)) && required.every((key) => keys.includes(key));
 }

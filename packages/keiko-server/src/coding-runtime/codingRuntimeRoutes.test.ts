@@ -25,7 +25,7 @@ import {
   handleCodingRuntimeQuestionList,
   handleCodingRuntimeQuestionReject,
   handleCodingRuntimeRecoveryAcknowledgement,
-  handleCodingRuntimeResearchAsk,
+  handleCodingRuntimeResearch,
   handleCodingRuntimeResearchRevoke,
   handleCodingRuntimeResume,
   handleCodingRuntimeRetry,
@@ -100,38 +100,46 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-function runtime(overrides: Partial<Record<string, unknown>> = {}): UiHandlerDeps {
+function runtime(
+  overrides: Partial<Record<string, unknown>> = {},
+  runtimeSnapshot: CodingWorkbenchRuntimeSnapshot = snapshot,
+  researchGrant?: {
+    readonly grantId: string;
+    readonly domains: readonly string[];
+    readonly expiresAt: string;
+  },
+): UiHandlerDeps {
   const calls: unknown[] = [];
   const orchestrator = {
     start: (body: unknown) => {
       calls.push(body);
-      return Promise.resolve({ ok: true as const, snapshot });
+      return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
     },
-    retry: () => Promise.resolve({ ok: true as const, snapshot }),
-    decideApproval: () => Promise.resolve({ ok: true as const, snapshot }),
-    stop: () => Promise.resolve({ ok: true as const, snapshot }),
-    takeover: () => Promise.resolve({ ok: true as const, snapshot }),
-    acknowledgeRecovery: () => Promise.resolve({ ok: true as const, snapshot }),
-    pause: () => Promise.resolve({ ok: true as const, snapshot }),
-    resume: () => Promise.resolve({ ok: true as const, snapshot }),
-    revokeResearch: () => Promise.resolve({ ok: true as const, snapshot }),
+    retry: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
+    decideApproval: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
+    stop: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
+    takeover: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
+    acknowledgeRecovery: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
+    pause: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
+    resume: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
+    revokeResearch: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
     submitFollowUp: (_runId: string, body: unknown) => {
       calls.push(body);
-      return Promise.resolve({ ok: true as const, snapshot });
+      return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
     },
     answerQuestion: (_runId: string, body: unknown) => {
       calls.push(body);
-      return Promise.resolve({ ok: true as const, snapshot });
+      return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
     },
-    rejectQuestion: () => Promise.resolve({ ok: true as const, snapshot }),
+    rejectQuestion: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
     listQuestions: () =>
       Promise.resolve({
         ok: true as const,
-        snapshot,
+        snapshot: runtimeSnapshot,
         questions: { schemaVersion: "1" as const, questions: [] },
       }),
-    status: () => snapshot,
-    getSnapshot: (runId: string) => (runId === "run-1" ? snapshot : undefined),
+    status: () => runtimeSnapshot,
+    getSnapshot: (runId: string) => (runId === "run-1" ? runtimeSnapshot : undefined),
     pendingResearchAsk: (runId: string) =>
       runId === "run-1"
         ? {
@@ -141,6 +149,7 @@ function runtime(overrides: Partial<Record<string, unknown>> = {}): UiHandlerDep
             expiresAt: "2026-07-13T00:02:00.000Z",
           }
         : undefined,
+    researchGrant: (runId: string) => (runId === "run-1" ? researchGrant : undefined),
   };
   const eventHub = {
     subscribe: (
@@ -308,7 +317,7 @@ describe("coding runtime routes", () => {
 
   it("#2387: the paired research route shows the operator the exact host and request line", () => {
     const session = pairedAppSession();
-    const reviewed = handleCodingRuntimeResearchAsk(
+    const reviewed = handleCodingRuntimeResearch(
       context("", { runId: "run-1" }, "/api/coding-workbench/runtime/runs", session.cookie),
       runtime({ codingAppSessionChannel: session.channel }),
     );
@@ -343,7 +352,7 @@ describe("coding runtime routes", () => {
       [{ runId: "run-1" }, runtime()],
     ];
     for (const [params, deps] of cases) {
-      const result = handleCodingRuntimeResearchAsk(context("", params), deps);
+      const result = handleCodingRuntimeResearch(context("", params), deps);
       expect(result).toEqual(unpairedProjection);
       expect(JSON.stringify(result.body)).not.toContain("nodejs.org");
     }
@@ -352,7 +361,7 @@ describe("coding runtime routes", () => {
   it("#2387: a paired read of an unknown run conceals existence instead of reporting no ask", () => {
     const session = pairedAppSession();
 
-    const result = handleCodingRuntimeResearchAsk(
+    const result = handleCodingRuntimeResearch(
       context("", { runId: "run-9" }, "/api/coding-workbench/runtime/runs", session.cookie),
       runtime({ codingAppSessionChannel: session.channel }),
     );
@@ -366,6 +375,75 @@ describe("coding runtime routes", () => {
 
     expect(JSON.stringify(status.body)).not.toContain("nodejs.org");
     expect(JSON.stringify(status.body)).not.toContain("backpressure");
+  });
+
+  it("#2644: rejects caller-controlled status selectors instead of ignoring the request", () => {
+    const status = handleCodingRuntimeStatus(
+      context("", {}, "/api/coding-workbench/runtime/status?include=research"),
+      runtime(),
+    );
+
+    expect(status).toMatchObject({
+      status: 400,
+      body: { error: { code: "CODING_RUNTIME_INVALID_INTENT" } },
+    });
+    expect(JSON.stringify(status.body)).not.toContain("research");
+  });
+
+  it("#2644: serves an approved research host only over the paired research channel", () => {
+    const session = pairedAppSession();
+    const approvedHost = "approved.example.org";
+    const runningSnapshot: CodingWorkbenchRuntimeSnapshot = {
+      ...snapshot,
+      state: "running",
+    };
+    const grant = {
+      grantId: "grant-1",
+      domains: [approvedHost],
+      expiresAt: "2026-07-13T00:03:00.000Z",
+    };
+    const withoutGrant = handleCodingRuntimeStatus(
+      context(""),
+      runtime({ codingAppSessionChannel: session.channel }, runningSnapshot),
+    );
+    const unpairedWithGrant = handleCodingRuntimeStatus(
+      context(""),
+      runtime({ codingAppSessionChannel: session.channel }, runningSnapshot, grant),
+    );
+    const pairedStatus = handleCodingRuntimeStatus(
+      context("", {}, "/api/coding-workbench/runtime/status", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }, runningSnapshot, grant),
+    );
+    const unpairedResearch = handleCodingRuntimeResearch(
+      context("", { runId: "run-1" }),
+      runtime({ codingAppSessionChannel: session.channel }, runningSnapshot, grant),
+    );
+    const pairedResearch = handleCodingRuntimeResearch(
+      context(
+        "",
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs/run-1/research",
+        session.cookie,
+      ),
+      runtime({ codingAppSessionChannel: session.channel }, runningSnapshot, grant),
+    );
+
+    expect(unpairedWithGrant).toEqual(withoutGrant);
+    expect(unpairedResearch).toEqual({ status: 200, body: { session: "unpaired" } });
+    const serialized = [unpairedWithGrant, pairedStatus, unpairedResearch, pairedResearch].map(
+      (result) => JSON.stringify(result.body),
+    );
+    expect(serialized.filter((body) => body.includes(approvedHost))).toHaveLength(1);
+    expect(pairedResearch).toMatchObject({
+      status: 200,
+      body: {
+        session: "active",
+        grant: {
+          grantId: "grant-1",
+          domains: [approvedHost],
+        },
+      },
+    });
   });
 
   it("#2478: unpaired question mutations receive the existence-concealing not-found result", async () => {

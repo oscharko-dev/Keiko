@@ -10,10 +10,10 @@ const RESEARCH_LABEL_ID = "coding-workbench-research-label";
 
 /**
  * #2387 — the live "Internet · Research only" grant chip. It renders only while a governed
- * research grant is present on the run snapshot and exposes the content-free scope, named public
- * domains, and verbatim expiry, plus a revoke control that stays usable during a live run. The
- * server owns the parent-and-children cascade; the UI only posts the revoke and re-renders the
- * returned grant-absent snapshot.
+ * research grant is present on the authenticated research channel and exposes its scope, named
+ * public domains, and verbatim expiry, plus a revoke control that stays usable during a live run.
+ * The server owns the parent-and-children cascade; the UI re-reads channel truth after the
+ * revision-bound revoke.
  */
 export function ResearchGrantChip({
   grant,

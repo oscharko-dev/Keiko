@@ -513,13 +513,14 @@ function createManagedToolFacade({
   explicitSkills,
   onRuntimeEvent,
 }: ManagedToolFacadeInput): CodingToolFacade {
+  const childModelId = input.childModelId?.();
   return createProductionManagedWorktreeToolFacade({
     authority,
     authorityRef: minted.authorityRef,
     taskId: context.taskId,
     // The child agent talks to the gateway directly, so it needs the resolved PROVIDER model id —
     // never the run's launch-profile identifier, which the gateway cannot resolve.
-    ...(input.childModelId?.() === undefined ? {} : { modelId: input.childModelId() }),
+    ...(childModelId === undefined ? {} : { modelId: childModelId }),
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
     researchGrantRegistry: research.grants,

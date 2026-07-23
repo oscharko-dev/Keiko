@@ -90,6 +90,8 @@ export interface FunctionalRuntimeResolverInput {
   readonly researchFetchImpl?: ProductionCodingRuntimeResolverInput["researchFetchImpl"];
   /** #2387 hermetic child model; production resolves the same model through the gateway. */
   readonly childModelPortFactory?: ProductionCodingRuntimeResolverInput["childModelPortFactory"];
+  /** Provider model id served by `childModelPortFactory`; both are required to mount the child. */
+  readonly childModelId?: string | undefined;
 }
 
 /**
@@ -115,6 +117,9 @@ export function createFunctionalRuntimeResolver(
     },
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
     ...(input.childModelPortFactory ? { childModelPortFactory: input.childModelPortFactory } : {}),
+    ...(input.childModelId === undefined
+      ? {}
+      : { childModelId: (): string | undefined => input.childModelId }),
     backend: createProductionOpenCodeBackend({
       portable: input.portable,
       runtimeStateRoot: input.runtimeStateRoot,

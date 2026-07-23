@@ -74,28 +74,31 @@ async function bindFixtureWorkspace(page: Page): Promise<void> {
   await expect(setup).toHaveCount(0);
 }
 
-// A fresh binding has no verified head yet — run the REAL #447 reconciliation route so the runtime
-// authority can prove the managed worktree head before the run starts.
-async function reconcileBoundWorkspace(page: Page): Promise<void> {
-  const response = await page.request.post("/api/task-workspaces/reconciliation", {
-    headers: { "X-Keiko-CSRF": "1" },
-    data: { root: repositoryRoot },
-  });
-  expect(response.ok()).toBe(true);
-}
-
 // The live run snapshot, read from the REAL status route (the same truth the workbench polls).
 async function currentSnapshot(page: Page): Promise<{
   readonly runId?: string;
   readonly revision?: number;
-  readonly researchGrant?: { readonly grantId: string; readonly domains: readonly string[] };
 }> {
   const response = await page.request.get("/api/coding-workbench/runtime/status");
   expect(response.ok()).toBe(true);
   return (await response.json()) as {
     readonly runId?: string;
     readonly revision?: number;
-    readonly researchGrant?: { readonly grantId: string; readonly domains: readonly string[] };
+  };
+}
+
+async function currentResearch(
+  page: Page,
+  runId: string,
+): Promise<{
+  readonly grant?: { readonly grantId: string; readonly domains: readonly string[] };
+}> {
+  const response = await page.request.get(
+    `/api/coding-workbench/runtime/runs/${encodeURIComponent(runId)}/research`,
+  );
+  expect(response.ok()).toBe(true);
+  return (await response.json()) as {
+    readonly grant?: { readonly grantId: string; readonly domains: readonly string[] };
   };
 }
 
@@ -147,8 +150,9 @@ async function answerBlockingQuestion(page: Page): Promise<void> {
 
 // A stale revoke posted over HTTP fails closed: wrong revision → 400, the grant survives.
 async function expectStaleRevokeFailsClosed(page: Page, runId: string): Promise<void> {
-  const live = await currentSnapshot(page);
-  expect(live.researchGrant?.domains).toEqual([RESEARCH_JOURNEY_HOST]);
+  const snapshot = await currentSnapshot(page);
+  const live = await currentResearch(page, runId);
+  expect(live.grant?.domains).toEqual([RESEARCH_JOURNEY_HOST]);
   const stale = await page.request.post(
     `/api/coding-workbench/runtime/runs/${runId}/research/revoke`,
     {
@@ -156,11 +160,12 @@ async function expectStaleRevokeFailsClosed(page: Page, runId: string): Promise<
       data: {
         requestId: "stale-revoke",
         expectedRevision: 0,
-        grantId: live.researchGrant?.grantId ?? "missing",
+        grantId: live.grant?.grantId ?? "missing",
       },
     },
   );
   expect(stale.status()).toBe(400);
+  expect((await currentSnapshot(page)).revision).toBe(snapshot.revision);
 }
 
 // All three #2387 auxiliary capabilities must reach the governed timeline as content-free labels:
@@ -228,7 +233,6 @@ test("#2387 research: approval mints the grant, the governed fetch runs, revoke 
 }) => {
   await openWorkbench(page, launcherPairingFragment());
   await bindFixtureWorkspace(page);
-  await reconcileBoundWorkspace(page);
 
   // Start a supervised run; the scripted model immediately asks to research one public URL. The
   // fetch itself fails closed (no grant yet) and the run halts awaiting the egress approval.
@@ -267,7 +271,7 @@ test("#2387 research: approval mints the grant, the governed fetch runs, revoke 
     })
     .click();
   await expect(chip).toHaveCount(0);
-  expect((await currentSnapshot(page)).researchGrant).toBeUndefined();
+  expect((await currentResearch(page, runId)).grant).toBeUndefined();
 
   // Revoked means revoked: the model's next ask needs a FRESH human approval — the runtime halts
   // again instead of silently reaching the internet. Deny settles the run failed/revoked.
@@ -288,18 +292,26 @@ test("#2387 research: approval mints the grant, the governed fetch runs, revoke 
 test("#2387 research: the grant chip is live server truth, never a static rendering", async ({
   page,
 }) => {
-  // Intercept only the status route with a contract-valid, grant-free snapshot: the chip must not
-  // render, proving it is driven by the live researchGrant projection and not local UI state.
+  // Present a live run but a grant-free authenticated research payload: the chip must not render,
+  // proving it is driven by channel truth and not the general runtime snapshot or local UI state.
   await page.route("**/api/coding-workbench/runtime/status", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         schemaVersion: "1",
-        state: "idle",
-        revision: 0,
+        state: "running",
+        revision: 4,
         updatedAt: new Date().toISOString(),
+        runId: "run-1",
       }),
+    }),
+  );
+  await page.route("**/api/coding-workbench/runtime/runs/run-1/research", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ session: "active" }),
     }),
   );
   await openWorkbench(page);

@@ -253,6 +253,21 @@ same-user local process can read on-disk worktree files directly. The app sessio
 generic HTTP routes from becoming an unauthenticated content projection; it does not claim to revoke
 local filesystem authority.
 
+## Research-grant finalization (Issue #2644)
+
+Approved research domains are model-selected content, just like the pending host and request line.
+`CodingWorkbenchRuntimeSnapshot` therefore excludes research grants structurally for every caller;
+the status and run-snapshot routes cannot expose a grant even if a future server call site forgets
+to branch on session authority. Both pending review state and the live grant travel only through
+the combined, authenticated `/runs/:runId/research` channel payload. An unpaired read returns the
+single `{ session: "unpaired" }` projection before run resolution, independent of run or grant
+existence.
+
+The general status handler still consumes its request context to enforce an exact, input-free
+transport contract: any query parameter is rejected. It does not session-branch the snapshot,
+because doing so would create two general status projections and weaken D3/D6; the stronger
+owner-layer invariant is that neither projection can represent model-selected research content.
+
 ## Consequences
 
 - W1.5 can enforce this authority on the content-bearing routes and migrate the runtime-question

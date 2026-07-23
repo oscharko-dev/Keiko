@@ -19,12 +19,14 @@ import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 
 const CANARY = "CANARY-QUESTION-TEXT-2478";
+const RESEARCH_CANARY = "canary-research-host.example";
 
 /** The content-bearing routes the session guard must cover (the grep-able enforcement list). */
 const ENFORCED_CONTENT_ROUTE_PATTERNS = [
   "/api/coding-workbench/runtime/runs/:runId/questions",
   "/api/coding-workbench/runtime/runs/:runId/questions/answer",
   "/api/coding-workbench/runtime/runs/:runId/questions/reject",
+  "/api/coding-workbench/runtime/runs/:runId/research",
 ] as const;
 
 class SweepResponse extends EventEmitter {
@@ -109,6 +111,17 @@ function canaryRuntimeDeps(channel: UiHandlerDeps["codingAppSessionChannel"]): U
     rejectQuestion: operation,
     listQuestions: () =>
       Promise.resolve({ ok: true as const, snapshot, questions: canaryQuestions }),
+    pendingResearchAsk: () => ({
+      requestId: "research-canary",
+      host: RESEARCH_CANARY,
+      requestLine: "/canary",
+      expiresAt: "2026-07-18T00:02:00.000Z",
+    }),
+    researchGrant: () => ({
+      grantId: "grant-canary",
+      domains: [RESEARCH_CANARY],
+      expiresAt: "2026-07-18T00:05:00.000Z",
+    }),
     status: () => snapshot,
     getSnapshot: (runId: string) => (runId === "run-1" ? snapshot : undefined),
   };
@@ -166,6 +179,12 @@ describe("content route enforcement sweep (#2478)", () => {
       const withoutChannel = await invoke(definition, canaryRuntimeDeps(undefined));
       expect(withChannel, `${definition.method} ${definition.pattern}`).not.toContain(CANARY);
       expect(withoutChannel, `${definition.method} ${definition.pattern}`).not.toContain(CANARY);
+      expect(withChannel, `${definition.method} ${definition.pattern}`).not.toContain(
+        RESEARCH_CANARY,
+      );
+      expect(withoutChannel, `${definition.method} ${definition.pattern}`).not.toContain(
+        RESEARCH_CANARY,
+      );
     }
   });
 
@@ -178,6 +197,8 @@ describe("content route enforcement sweep (#2478)", () => {
       const spoofed = await invoke(definition, canaryRuntimeDeps(channel), forged);
       expect(revoked, `${definition.method} ${definition.pattern}`).not.toContain(CANARY);
       expect(spoofed, `${definition.method} ${definition.pattern}`).not.toContain(CANARY);
+      expect(revoked, `${definition.method} ${definition.pattern}`).not.toContain(RESEARCH_CANARY);
+      expect(spoofed, `${definition.method} ${definition.pattern}`).not.toContain(RESEARCH_CANARY);
     }
   });
 
@@ -190,6 +211,18 @@ describe("content route enforcement sweep (#2478)", () => {
     if (listRoute === undefined) return;
     const served = await invoke(listRoute, canaryRuntimeDeps(channel), cookie);
     expect(served).toContain(CANARY);
+    expect(served).toContain('"session":"active"');
+  });
+
+  it("positive control: a paired caller receives research hosts only from the research route", async () => {
+    const { channel, cookie } = pairedChannel();
+    const researchRoute = sweptGroups.find(
+      (route) => route.pattern === "/api/coding-workbench/runtime/runs/:runId/research",
+    );
+    expect(researchRoute).toBeDefined();
+    if (researchRoute === undefined) return;
+    const served = await invoke(researchRoute, canaryRuntimeDeps(channel), cookie);
+    expect(served).toContain(RESEARCH_CANARY);
     expect(served).toContain('"session":"active"');
   });
 });

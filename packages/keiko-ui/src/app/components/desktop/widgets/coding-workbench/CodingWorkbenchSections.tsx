@@ -3,6 +3,7 @@ import {
   CODING_WORKBENCH_MODES,
   isCodingWorkbenchModeWidening,
   type CodingWorkbenchMode,
+  type CodingWorkbenchRuntimeResearchGrant,
   type CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
@@ -293,6 +294,7 @@ export function ReadinessGrid({
   state,
   actions,
   refreshWorkspace,
+  researchGrant,
 }: {
   readonly state: CodingWorkbenchRuntimeState;
   readonly actions: Pick<
@@ -300,6 +302,7 @@ export function ReadinessGrid({
     "refreshRuntime" | "refreshRun" | "refreshSource" | "revokeResearchGrant"
   >;
   readonly refreshWorkspace: () => Promise<void>;
+  readonly researchGrant: CodingWorkbenchRuntimeResearchGrant | null;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   return (
@@ -317,9 +320,11 @@ export function ReadinessGrid({
         t={t}
       />
       <ResearchGrantChip
-        grant={state.run.value?.researchGrant}
+        grant={researchGrant ?? undefined}
         busy={state.mutation.status === "pending"}
-        onRevoke={() => void actions.revokeResearchGrant()}
+        onRevoke={() => {
+          if (researchGrant !== null) void actions.revokeResearchGrant(researchGrant);
+        }}
       />
     </section>
   );

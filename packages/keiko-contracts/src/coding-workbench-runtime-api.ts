@@ -1,4 +1,3 @@
-import { isCodeTaskPublicDomain } from "./code-task-auxiliary.js";
 import {
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
@@ -167,19 +166,6 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly recoveryAcknowledged?: true | undefined;
   /** Present exactly while the runtime is awaiting an operator decision. */
   readonly pendingPermission?: CodingWorkbenchRuntimePendingPermission | undefined;
-  /**
-   * Present only while a governed read-only research grant is live for this run (#2387). Content
-   * free: the grant id, its named public domains (a policy allowlist, not query evidence), and the
-   * exact expiry — never the sanitized query digest or any fetched bytes. Revoking it (the
-   * /research/revoke route) drops this field for the parent AND every child in one revision bump.
-   */
-  readonly researchGrant?: CodingWorkbenchRuntimeResearchGrant | undefined;
-}
-
-export interface CodingWorkbenchRuntimeResearchGrant {
-  readonly grantId: string;
-  readonly domains: readonly string[];
-  readonly expiresAt: string;
 }
 
 export type CodingWorkbenchRuntimeStatus = CodingWorkbenchRuntimeSnapshot;
@@ -351,7 +337,6 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "failureCode",
       "recoveryAcknowledged",
       "pendingPermission",
-      "researchGrant",
     ],
     "runtimeSnapshot",
   );
@@ -461,33 +446,6 @@ function validateSnapshotFields(value: Record<string, unknown>, errors: string[]
   validateFailureCode(value.failureCode, errors);
   validateRecoveryAcknowledgement(value, errors);
   validatePendingPermission(value, errors);
-  validateResearchGrant(value.researchGrant, errors);
-}
-
-// A live research grant projection: content-free grant id, a non-empty list of validated public
-// domains (a policy allowlist — never an IP literal, loopback, or reserved name), and an exact
-// expiry. The queryTextDigest and any fetched bytes never cross into this UI-facing snapshot.
-function validateResearchGrant(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
-  if (!isRecord(value)) {
-    errors.push("researchGrant must be an object");
-    return;
-  }
-  errors.push(...exactKeys(value, ["grantId", "domains", "expiresAt"], "researchGrant"));
-  validateSafeId(
-    value.grantId,
-    "researchGrant.grantId",
-    errors,
-    CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
-  );
-  if (
-    !Array.isArray(value.domains) ||
-    value.domains.length === 0 ||
-    !value.domains.every((domain) => isCodeTaskPublicDomain(domain))
-  ) {
-    errors.push("researchGrant.domains must be a non-empty list of public domains");
-  }
-  validateStrictUtcInstant(value.expiresAt, "researchGrant.expiresAt", errors);
 }
 
 function validateRecoveryAcknowledgement(value: Record<string, unknown>, errors: string[]): void {

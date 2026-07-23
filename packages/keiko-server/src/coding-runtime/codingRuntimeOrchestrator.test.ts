@@ -794,17 +794,18 @@ describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
     return f;
   }
 
-  it("projects the live research grant onto the snapshot, content-free", async () => {
+  it("projects the live research grant only onto the authenticated-channel source", async () => {
     const f = await grantedFixture();
 
     const snapshot = f.orchestrator.snapshot();
 
-    expect(snapshot.researchGrant).toEqual({
+    expect(f.orchestrator.researchGrant("run-1")).toEqual({
       grantId: "research-grant-1",
       domains: ["docs.example.org"],
       expiresAt: "2026-01-01T00:05:00.000Z",
     });
-    // The projection never leaks the bound digest or the sanitized query.
+    // The general snapshot cannot carry the host, bound digest, or sanitized query.
+    expect(JSON.stringify(snapshot)).not.toContain("docs.example.org");
     expect(JSON.stringify(snapshot)).not.toContain("approved query");
     expect(JSON.stringify(snapshot)).not.toContain("a".repeat(64));
   });
@@ -857,9 +858,7 @@ describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
       FIXTURE_NOW_MS,
     );
 
-    const snapshot = f.orchestrator.snapshot();
-
-    expect(snapshot.researchGrant).toEqual({
+    expect(f.orchestrator.researchGrant("run-1")).toEqual({
       grantId: "research-grant-2",
       domains: ["api.example.net", "docs.example.org"],
       expiresAt: "2026-01-01T00:05:00.000Z",
@@ -878,7 +877,7 @@ describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
 
     const snapshot = successfulSnapshot(revoked);
     expect(snapshot.revision).toBe(before.revision + 1);
-    expect(snapshot.researchGrant).toBeUndefined();
+    expect(f.orchestrator.researchGrant("run-1")).toBeUndefined();
     expect(f.researchGrants.activeGrants("run-1", FIXTURE_NOW_MS)).toEqual([]);
   });
 
@@ -893,7 +892,7 @@ describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
     });
 
     expect(stale).toEqual({ ok: false, failureCode: "invalid-intent" });
-    expect(f.orchestrator.snapshot().researchGrant).toBeDefined();
+    expect(f.orchestrator.researchGrant("run-1")).toBeDefined();
   });
 
   it("fails a revoke naming an unknown grant id closed", async () => {
@@ -907,7 +906,7 @@ describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
     });
 
     expect(forged).toEqual({ ok: false, failureCode: "invalid-intent" });
-    expect(f.orchestrator.snapshot().researchGrant).toBeDefined();
+    expect(f.orchestrator.researchGrant("run-1")).toBeDefined();
   });
 
   it("fails a revoke against a non-current run closed", async () => {
@@ -931,7 +930,7 @@ describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
     // still refuses to show internet reach on a settled run.
     const settled = f.orchestrator.getSnapshot("run-1");
     expect(settled?.state).toBe("cancelled");
-    expect(settled?.researchGrant).toBeUndefined();
+    expect(f.orchestrator.researchGrant("run-1")).toBeUndefined();
   });
 });
 

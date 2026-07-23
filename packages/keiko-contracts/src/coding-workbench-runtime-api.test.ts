@@ -557,7 +557,7 @@ describe("Coding Workbench runtime API failure branches", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it("projects a live research grant on the snapshot and revokes it fail-closed", () => {
+  it("keeps live research grants structurally off the content-free runtime snapshot", () => {
     const withGrant = {
       schemaVersion: "1",
       state: "running",
@@ -570,29 +570,7 @@ describe("Coding Workbench runtime API failure branches", () => {
         expiresAt: AT,
       },
     };
-    expect(validateCodingWorkbenchRuntimeSnapshot(withGrant)).toEqual({
-      ok: true,
-      value: withGrant,
-    });
-    // Empty domains, an IP literal, and a smuggled sub-key all fail closed.
-    expect(
-      validateCodingWorkbenchRuntimeSnapshot({
-        ...withGrant,
-        researchGrant: { ...withGrant.researchGrant, domains: [] },
-      }),
-    ).toMatchObject({ ok: false });
-    expect(
-      validateCodingWorkbenchRuntimeSnapshot({
-        ...withGrant,
-        researchGrant: { ...withGrant.researchGrant, domains: ["127.0.0.1"] },
-      }),
-    ).toMatchObject({ ok: false });
-    expect(
-      validateCodingWorkbenchRuntimeSnapshot({
-        ...withGrant,
-        researchGrant: { ...withGrant.researchGrant, queryTextDigest: "x" },
-      }),
-    ).toMatchObject({ ok: false });
+    expect(validateCodingWorkbenchRuntimeSnapshot(withGrant)).toMatchObject({ ok: false });
 
     expect(
       parseCodingWorkbenchRuntimeResearchRevokeRequest({

@@ -179,35 +179,30 @@ describe("eventDetail untrusted research content", () => {
 });
 
 describe("lifecycleAnnouncement research grant", () => {
-  function withGrant(
-    researchGrant: CodingWorkbenchRuntimeResearchGrant | null,
-  ): CodingWorkbenchRuntimeState {
-    return {
-      ...createInitialCodingWorkbenchRuntimeState(),
-      run: ready({
-        schemaVersion: "1",
-        state: "running",
-        revision: 2,
-        updatedAt: AT,
-        runId: "run-1",
-        ...(researchGrant === null ? {} : { researchGrant }),
-      } as CodingWorkbenchRuntimeSnapshot),
-    };
-  }
+  const state: CodingWorkbenchRuntimeState = {
+    ...createInitialCodingWorkbenchRuntimeState(),
+    run: ready({
+      schemaVersion: "1",
+      state: "running",
+      revision: 2,
+      updatedAt: AT,
+      runId: "run-1",
+    }),
+  };
 
   it("announces an active grant while one is present", () => {
-    const state = withGrant({
+    const grant: CodingWorkbenchRuntimeResearchGrant = {
       grantId: "grant-1",
       domains: ["nodejs.org"],
       expiresAt: "2026-07-13T12:30:00.000Z",
-    });
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    };
+    expect(lifecycleAnnouncement(state, t, grant)).toContain(
       "codingWorkbench.announcement.researchActive",
     );
   });
 
   it("stays silent about research when no grant is present", () => {
-    expect(lifecycleAnnouncement(withGrant(null), t)).not.toContain(
+    expect(lifecycleAnnouncement(state, t, null)).not.toContain(
       "codingWorkbench.announcement.researchActive",
     );
   });

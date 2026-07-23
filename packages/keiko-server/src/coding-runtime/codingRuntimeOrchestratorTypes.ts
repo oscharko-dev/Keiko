@@ -55,9 +55,9 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   readonly serverPrincipal: () => string | undefined;
   /**
-   * Server-level read-only research grant registry (#2387). When present, the snapshot projection
-   * carries the run's live grant and the revoke operation drops it; when absent (no qualified
-   * runtime host), the snapshot never shows a grant and revoke fails closed.
+   * Server-level read-only research grant registry (#2387). The grant is exposed only through the
+   * authenticated research channel and the revoke operation drops it; when the registry is absent
+   * (no qualified runtime host), that channel has no grant and revoke fails closed.
    */
   readonly researchGrants?: ResearchGrantRegistry | undefined;
   /**

@@ -19,7 +19,7 @@ import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 const runtimeHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
-const researchAskHookMock = vi.hoisted(() => vi.fn());
+const researchHookMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -33,8 +33,8 @@ vi.mock("@/lib/useCodingWorkbenchSafeActivity", () => ({
   useCodingWorkbenchSafeActivity: activityHookMock,
 }));
 
-vi.mock("@/lib/useCodingWorkbenchResearchAsk", () => ({
-  useCodingWorkbenchResearchAsk: researchAskHookMock,
+vi.mock("@/lib/useCodingWorkbenchResearch", () => ({
+  useCodingWorkbenchResearch: researchHookMock,
 }));
 
 const AT = "2026-07-13T12:00:00.000Z";
@@ -158,7 +158,7 @@ describe("CodingWorkbenchWindow", () => {
   beforeEach(() => {
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
-    researchAskHookMock.mockReturnValue({ status: "idle", ask: null });
+    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
   });
 
   function egressApprovalState(
@@ -239,8 +239,9 @@ describe("CodingWorkbenchWindow", () => {
   });
 
   it("#2387: shows the research destination the operator is about to approve", async () => {
-    researchAskHookMock.mockReturnValue({
+    researchHookMock.mockReturnValue({
       status: "ready",
+      grant: null,
       ask: {
         requestId: "research-approval-1",
         host: "nodejs.org",
@@ -259,7 +260,7 @@ describe("CodingWorkbenchWindow", () => {
   });
 
   it("#2387: says the destination is unavailable rather than implying there is none", () => {
-    researchAskHookMock.mockReturnValue({ status: "unavailable", ask: null });
+    researchHookMock.mockReturnValue({ status: "unavailable", ask: null, grant: null });
     renderWorkbench(egressApprovalState());
 
     expect(screen.getByText(/Destination unavailable\. Re-pair this window/u)).toBeInTheDocument();
@@ -267,7 +268,7 @@ describe("CodingWorkbenchWindow", () => {
   });
 
   it("#2387: shows no destination block for an approval that is not network egress", () => {
-    researchAskHookMock.mockReturnValue({ status: "idle", ask: null });
+    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
     renderWorkbench(egressApprovalState("delivery-substrate"));
 
     expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
@@ -395,6 +396,12 @@ describe("CodingWorkbenchWindow", () => {
 
   it("surfaces the internet research grant and revokes it during a live run", async () => {
     const user = userEvent.setup();
+    const grant = {
+      grantId: "grant-1",
+      domains: ["developer.mozilla.org", "nodejs.org"],
+      expiresAt: "2026-07-13T12:30:00.000Z",
+    } as const;
+    researchHookMock.mockReturnValue({ status: "ready", ask: null, grant });
     const liveActions = renderWorkbench(
       liveState({
         run: {
@@ -403,11 +410,6 @@ describe("CodingWorkbenchWindow", () => {
           value: snapshot({
             state: "running",
             runId: "run-1",
-            researchGrant: {
-              grantId: "grant-1",
-              domains: ["developer.mozilla.org", "nodejs.org"],
-              expiresAt: "2026-07-13T12:30:00.000Z",
-            },
           }),
         },
       }),
@@ -421,7 +423,7 @@ describe("CodingWorkbenchWindow", () => {
     });
     expect(revoke).toBeEnabled();
     await user.click(revoke);
-    expect(liveActions.revokeResearchGrant).toHaveBeenCalledOnce();
+    expect(liveActions.revokeResearchGrant).toHaveBeenCalledWith(grant);
   });
 });
 

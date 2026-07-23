@@ -93,7 +93,7 @@ function questionsValidator(
   return validated(path, value, validateCodingWorkbenchRuntimeQuestionsChannelPayload);
 }
 
-function researchAskValidator(
+function researchChannelValidator(
   path: string,
   value: unknown,
 ): CodingWorkbenchRuntimeResearchChannelPayload {
@@ -237,8 +237,8 @@ export function submitCodingWorkbenchRuntimeFollowUp(
 }
 
 /**
- * #2387 — revoke the live internet research grant. The server drops the grant for the parent run
- * and every child in one revision bump; the returned snapshot no longer carries `researchGrant`.
+ * Revoke the live internet research grant. The server drops the grant for the parent run and every
+ * child in one revision bump; general runtime snapshots never carry grant content (#2644).
  */
 export function revokeCodingWorkbenchRuntimeResearchGrant(
   runId: string,
@@ -248,19 +248,18 @@ export function revokeCodingWorkbenchRuntimeResearchGrant(
 }
 
 /**
- * Read the run's pending research ask — the public host and the sanitized request line the grant
- * would bind — over the authenticated app-session channel (#2387). The operator has to see the
- * destination before approving egress to it; an unpaired window receives the constant content-free
- * `{ session: "unpaired" }` projection instead of an error or a leaked host.
+ * Read pending and approved research state over the authenticated app-session channel. Both the
+ * proposed and granted domains are model-selected content and therefore never ride the general
+ * runtime snapshot (#2387, #2644).
  */
-export function getCodingWorkbenchRuntimeResearchAsk(
+export function getCodingWorkbenchRuntimeResearch(
   runId: string,
   signal?: AbortSignal,
 ): Promise<CodingWorkbenchRuntimeResearchChannelPayload> {
   return bffFetchJson(
     runPath(runId, "/research"),
     { cache: "no-store", ...(signal ? { signal } : {}) },
-    { validator: researchAskValidator },
+    { validator: researchChannelValidator },
   );
 }
 
