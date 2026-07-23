@@ -211,8 +211,22 @@ const WORKSPACE_READ_SCHEMA = {
       maxLength: 512,
       pattern: "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
     },
+    startLine: {
+      type: "integer",
+      minimum: 1,
+      maximum: 1_000_000,
+      description: "1-based first line of the returned window; pass 1 to start at the file head.",
+    },
+    maxLines: {
+      type: "integer",
+      minimum: 1,
+      maximum: 5_000,
+      description:
+        "Window height in lines; startLine 1 with maxLines 5000 reads a small file whole. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file.",
+    },
   },
-  required: ["relativePath"],
+  // OpenCode v1.17.17 declares every custom-tool argument as required in its provider projection.
+  required: ["relativePath", "startLine", "maxLines"],
 } as const;
 
 const CHANGESET_EDIT_SCHEMA = {
@@ -467,7 +481,7 @@ describe("coding-sidecar gateway", () => {
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([
       ["question", "4f618d23c27d7147ab8564c3ec1050c508762a19b9a4858951a9cd3089b52df3"],
-      ["keiko_workspace_read", "a5d6f6b96c5e0c5906ce1c9bad5b7f13fc4763b762f4aa5d019d6fc2d194ada3"],
+      ["keiko_workspace_read", "56d2649a7a308efdc47db2899922c9889822a17b9d9bd081ee0c099a066411ac"],
       ["keiko_changeset_edit", "59902a2dd9af28ed8b97d1108215c6e88bbe0fba017a4756a99e833b9af48952"],
       ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
       ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
@@ -733,7 +747,7 @@ describe("coding-sidecar gateway", () => {
           {
             name: "keiko_workspace_read",
             parameters: {
-              required: ["relativePath"],
+              required: ["relativePath", "startLine", "maxLines"],
               properties: { ...WORKSPACE_READ_SCHEMA.properties },
               type: "object",
             },

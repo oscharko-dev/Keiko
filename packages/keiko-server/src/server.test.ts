@@ -782,11 +782,14 @@ describe("unknown API routes", () => {
       expect(headerBlob).not.toContain(hostilePath);
 
       expect(records).toHaveLength(1);
+      // The gateway now projects the REAL error through serverDiagnosticFromError (#2644): the
+      // operator sees the true content-free error class and normalized message instead of one
+      // fixed label, while the raw hostile text still never reaches any sink.
       expect(records).toEqual([
         expect.objectContaining({
           source: "coding-sidecar-gateway.chat",
-          errorClass: "CodingSidecarGatewayFailure",
-          message: "sidecar-gateway-failed",
+          errorClass: "Error",
+          message: "server-operation-failed",
         }),
       ]);
       expect(records.some((record) => record.source === "server.top-level-catch")).toBe(false);
