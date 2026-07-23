@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 
+import { validateCodingWorkbenchPermissionRequest } from "@oscharko-dev/keiko-contracts";
+
 import {
   OPENCODE_APPROVED_ENDPOINTS,
   createOpenCodeSseDecoder,
   classifyOpenCodeLiveControl,
   parseOpenCodeHistory,
   parseOpenCodeSse,
+  projectOpenCodePermissionEvent,
+  projectOpenCodePermissionRequestId,
   validateOpenCodeHealth,
 } from "./opencodeProtocol.js";
 
@@ -93,6 +97,45 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
         'id: evt_1\ndata: {"payload":{"id":"evt_1","type":"server.connected","properties":{}}}\n\n',
       ),
     ).toEqual({ ok: false, reason: "frame-invalid" });
+    expect(
+      parseOpenCodeSse(
+        `data: ${JSON.stringify({
+          payload: {
+            type: "permission.asked",
+            properties: {
+              id: "per_legacy",
+              sessionID: "ses_1",
+              permission: "keiko_governed_action",
+              patterns: ["src/example.ts"],
+              metadata: {},
+              always: [],
+            },
+          },
+        })}\n\n`,
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: [{ data: { id: "evt_per_legacy", type: "permission.asked" } }],
+    });
+    for (const payload of [
+      { type: "server.connected", properties: {} },
+      {
+        type: "permission.asked",
+        properties: {
+          id: "bad id",
+          sessionID: "ses_1",
+          permission: "keiko_governed_action",
+          patterns: ["src/example.ts"],
+          metadata: {},
+          always: [],
+        },
+      },
+    ]) {
+      expect(parseOpenCodeSse(`data: ${JSON.stringify({ payload })}\n\n`)).toEqual({
+        ok: false,
+        reason: "frame-invalid",
+      });
+    }
     for (const tool of ["bash", "keiko_repository_read", "keiko_submit_changeset"]) {
       expect(
         parseOpenCodeSse(
@@ -205,7 +248,10 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
           data: { sessionID: "ses_1" },
         },
       ]),
-    ).toMatchObject({ ok: true, value: [{ kind: "terminal", aggregateId: "ses_1", sequence: 0 }] });
+    ).toMatchObject({
+      ok: true,
+      value: [{ kind: "terminal-control", aggregateId: "ses_1", sequence: 0 }],
+    });
     expect(
       parseOpenCodeHistory([
         { id: "evt_2", aggregate_id: "ses_1", seq: 1, type: "unknown.critical", data: {} },
@@ -320,6 +366,27 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     ).toEqual({ ok: false, reason: "event-unknown" });
   });
 
+  it("admits only the boolean assistant summary marker used by compaction", () => {
+    const row = (summary: unknown): Record<string, unknown> =>
+      syncRow(56, "message.updated.1", {
+        sessionID: "ses_1",
+        info: assistantMessage({ summary }),
+      });
+
+    expect(parseOpenCodeHistory([row(true)])).toMatchObject({
+      ok: true,
+      value: [{ sequence: 56, kind: "observation" }],
+    });
+    expect(parseOpenCodeHistory([row(false)])).toMatchObject({ ok: true });
+    for (const invalid of ["private summary", { text: "private summary" }, 1]) {
+      expect(parseOpenCodeHistory([row(invalid)])).toEqual({
+        ok: false,
+        reason: "event-unknown",
+      });
+    }
+    expect(JSON.stringify(parseOpenCodeHistory([row(true)]))).not.toContain("summary");
+  });
+
   // A full assistant response routinely exceeds the uniform 4096-character per-string bound. The
   // real v1.17.17 persists it as ONE durable text part; rejecting it would throw the whole history
   // pull (opencode-history-invalid) and collapse the session's reconciliation. Text stays capped by
@@ -359,6 +426,48 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     expect(JSON.stringify(parseOpenCodeHistory([textRow(5000)]))).not.toContain("xxxxx");
   });
 
+  it("admits only the exact content-free compaction marker emitted after large tool reads", () => {
+    const compactionPart = {
+      id: "prt_compaction",
+      sessionID: "ses_1",
+      messageID: "msg_assistant",
+      type: "compaction",
+      auto: true,
+      overflow: false,
+    };
+    const row = (part: unknown): Record<string, unknown> =>
+      syncRow(61, "message.part.updated.1", {
+        sessionID: "ses_1",
+        part,
+        time: 61,
+      });
+
+    expect(parseOpenCodeHistory([row(compactionPart)])).toMatchObject({
+      ok: true,
+      value: [{ sequence: 61, kind: "observation" }],
+    });
+    expect(
+      parseOpenCodeHistory([row({ ...compactionPart, tail_start_id: "msg_retained_tail" })]),
+    ).toMatchObject({ ok: true });
+    for (const invalid of [
+      { ...compactionPart, auto: "true" },
+      { ...compactionPart, overflow: 0 },
+      { ...compactionPart, tail_start_id: "private-tail" },
+      { ...compactionPart, unexpected: true },
+      { ...compactionPart, messageID: "other" },
+    ]) {
+      expect(parseOpenCodeHistory([row(invalid)])).toEqual({
+        ok: false,
+        reason: "event-unknown",
+      });
+    }
+    expect(
+      JSON.stringify(
+        parseOpenCodeHistory([row({ ...compactionPart, tail_start_id: "msg_retained_tail" })]),
+      ),
+    ).not.toMatch(/auto|tail_start_id/u);
+  });
+
   it("keeps productive tool-loop lifecycle events content-free and non-terminal", () => {
     const sentinel = "SENTINEL_PRIVATE_TOOL_INPUT_AND_OUTPUT";
     const parsed = parseOpenCodeHistory([
@@ -392,6 +501,92 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       value: Array.from({ length: 5 }, () => ({ kind: "observation" })),
     });
     expect(JSON.stringify(parsed)).not.toContain(sentinel);
+  });
+
+  it.each(["length", "content-filter", "error", "unknown"] as const)(
+    "classifies completed assistant finish %s as a failed terminal",
+    (finish) => {
+      expect(
+        parseOpenCodeHistory([
+          syncRow(1, "message.updated.1", {
+            sessionID: "ses_1",
+            info: assistantMessage({ finish, time: { created: 1, completed: 2 } }),
+          }),
+        ]),
+      ).toMatchObject({
+        ok: true,
+        value: [{ sequence: 1, kind: "terminal-failure" }],
+      });
+    },
+  );
+
+  it("admits bounded completed tool output without relaxing metadata or row budgets", () => {
+    const output = "x".repeat(20_000);
+    const base = toolPart("completed", "packages/example.ts");
+    const state = {
+      status: "completed",
+      input: { relativePath: "packages/example.ts" },
+      output,
+      title: "Read",
+      metadata: {},
+      time: { start: 1, end: 2 },
+    };
+    const completed = { ...base, state };
+    const row = (part: unknown): Record<string, unknown> =>
+      syncRow(4, "message.part.updated.1", {
+        sessionID: "ses_1",
+        part,
+        time: 4,
+      });
+
+    const parsed = parseOpenCodeHistory([row(completed)]);
+    expect(parsed).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
+    expect(JSON.stringify(parsed)).not.toContain("xxxxx");
+    expect(
+      parseOpenCodeHistory([
+        row({ ...completed, state: { ...state, output: "x".repeat(66_000), title: "Read" } }),
+      ]),
+    ).toEqual({ ok: false, reason: "event-unknown" });
+    expect(
+      parseOpenCodeHistory([
+        row({
+          ...completed,
+          state: { ...state, output, title: "Read", metadata: { note: "n".repeat(4097) } },
+        }),
+      ]),
+    ).toEqual({ ok: false, reason: "event-unknown" });
+  });
+
+  it("admits only exact bounded tool errors and keeps their messages out of reconciliation", () => {
+    const sentinel = "SENTINEL_PRIVATE_TOOL_ERROR";
+    const base = toolPart("pending", "delegated objective");
+    const errorState = {
+      status: "error",
+      input: { objective: "delegated objective", maxToolCalls: 8 },
+      error: sentinel,
+      time: { start: 1, end: 2 },
+    };
+    const row = (state: unknown): Record<string, unknown> =>
+      syncRow(32, "message.part.updated.1", {
+        sessionID: "ses_1",
+        part: { ...base, tool: "keiko_child_agent", state },
+        time: 32,
+      });
+
+    const parsed = parseOpenCodeHistory([row(errorState)]);
+    expect(parsed).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
+    expect(JSON.stringify(parsed)).not.toContain(sentinel);
+    for (const invalid of [
+      { ...errorState, error: "" },
+      { ...errorState, error: "x".repeat(4097) },
+      { ...errorState, time: { start: 1 } },
+      { ...errorState, unexpected: true },
+    ]) {
+      expect(parseOpenCodeHistory([row(invalid)])).toEqual({
+        ok: false,
+        reason: "event-unknown",
+      });
+    }
   });
 
   it("admits exact bounded question tool lifecycle parts as content-free observations", () => {
@@ -581,6 +776,110 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
         })}\n\n`,
       ),
     ).toEqual({ ok: false, reason: "frame-invalid" });
+  });
+
+  it("projects only exact run-bound governed edit and verification permissions", () => {
+    const base = {
+      id: "evt_permission",
+      type: "permission.asked",
+      properties: {
+        id: "per_1",
+        sessionID: "ses_1",
+        permission: "keiko_governed_action",
+        patterns: ["src/example.ts"],
+        always: [],
+        metadata: {
+          kind: "workspace-write",
+          actionClass: "workspace-write",
+          reasonCode: "approval-required",
+          expiresAt: "2026-07-23T14:05:00.000Z",
+          actionKind: "file-edit",
+          scopeLabel: "workspace-scope",
+          risk: "medium",
+          policyReason: "approval-required",
+          targetPath: "src/example.ts",
+          allowedRelativePaths: ["src/example.ts"],
+          fileCount: 1,
+          addedLines: 1,
+          deletedLines: 1,
+        },
+      },
+    };
+    const projectedEdit = projectOpenCodePermissionEvent(base, "ses_1");
+    expect(projectedEdit).toMatchObject({
+      type: "permission-request",
+      kind: "workspace-write",
+      actionKind: "file-edit",
+      scopeLabel: "workspace-scope",
+    });
+    expect(projectedEdit).toBeDefined();
+    if (projectedEdit === undefined) throw new Error("expected governed edit projection");
+    expect(projectedEdit.requestId).toMatch(/^permission-[0-9]+$/u);
+    expect(
+      validateCodingWorkbenchPermissionRequest({
+        requestId: projectedEdit.requestId,
+        kind: projectedEdit.kind,
+        actionClass: projectedEdit.actionClass,
+        reasonCode: projectedEdit.reasonCode,
+        expiresAt: projectedEdit.expiresAt,
+        actionKind: projectedEdit.actionKind,
+        scopeLabel: projectedEdit.scopeLabel,
+        risk: projectedEdit.risk,
+        policyReason: projectedEdit.policyReason,
+      }),
+    ).toMatchObject({ ok: true });
+    const projectedVerification = projectOpenCodePermissionEvent(
+      {
+        ...base,
+        properties: {
+          ...base.properties,
+          patterns: ["typecheck"],
+          metadata: {
+            kind: "command-execution",
+            actionClass: "verification",
+            reasonCode: "approval-required",
+            expiresAt: "2026-07-23T14:05:00.000Z",
+            actionKind: "verification-command",
+            scopeLabel: "workspace-scope",
+            risk: "low",
+            policyReason: "approval-required",
+            commandLabel: "typecheck",
+          },
+        },
+      },
+      "ses_1",
+    );
+    expect(projectedVerification).toMatchObject({
+      type: "permission-request",
+      kind: "command-execution",
+      actionKind: "verification-command",
+    });
+    expect(projectedVerification?.requestId).toMatch(/^permission-[0-9]+$/u);
+    for (const rejected of [
+      { ...base, extra: true },
+      { ...base, properties: { ...base.properties, sessionID: "ses_foreign" } },
+      {
+        ...base,
+        properties: {
+          ...base.properties,
+          metadata: { ...base.properties.metadata, rawPatch: "secret" },
+        },
+      },
+      {
+        ...base,
+        properties: { ...base.properties, patterns: ["different.ts"] },
+      },
+    ]) {
+      expect(projectOpenCodePermissionEvent(rejected, "ses_1")).toBeUndefined();
+    }
+  });
+
+  it("projects upstream permission ids into stable content-free aliases", () => {
+    const first = projectOpenCodePermissionRequestId("per_upstream_1");
+    expect(first).toMatch(/^permission-[0-9]+$/u);
+    expect(projectOpenCodePermissionRequestId("per_upstream_1")).toBe(first);
+    expect(projectOpenCodePermissionRequestId("per_upstream_2")).not.toBe(first);
+    expect(projectOpenCodePermissionRequestId("permission-1")).toBeUndefined();
   });
 
   it("fails closed when history reports an upstream built-in tool invocation", () => {

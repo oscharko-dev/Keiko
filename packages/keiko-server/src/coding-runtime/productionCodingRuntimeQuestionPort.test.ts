@@ -128,6 +128,7 @@ function unusedRunPort(): OpenCodeRunPort {
     listQuestions: () => Promise.resolve([]),
     answerQuestion: () => Promise.resolve(false),
     rejectQuestion: () => Promise.resolve(false),
+    replyPermission: () => Promise.resolve(false),
   };
 }
 

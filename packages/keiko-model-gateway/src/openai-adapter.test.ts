@@ -479,6 +479,44 @@ describe("OpenAiAdapter.call", () => {
     expect((sentBody as { max_tokens?: number }).max_tokens).toBe(37);
   });
 
+  it("uses max_completion_tokens for GPT-5 and explicit modern provider profiles", async () => {
+    for (const config of [
+      { ...CONFIG, modelId: "gpt-5.4" },
+      { ...CONFIG, outputTokenParameter: "max_completion_tokens" as const },
+    ]) {
+      let sentBody: unknown;
+      const adapter = adapterWith((_url, init) => {
+        const raw = init?.body;
+        sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+        return Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: "bounded" }, finish_reason: "stop" }] }),
+        );
+      });
+
+      await adapter.call({ ...REQUEST, modelId: config.modelId, maxOutputTokens: 37 }, config);
+
+      expect((sentBody as { max_completion_tokens?: number }).max_completion_tokens).toBe(37);
+      expect(sentBody).not.toHaveProperty("max_tokens");
+    }
+  });
+
+  it("allows a legacy parameter override for a GPT-5-compatible alias", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "bounded" }, finish_reason: "stop" }] }),
+      );
+    });
+    const config = { ...CONFIG, modelId: "gpt-5.4", outputTokenParameter: "max_tokens" as const };
+
+    await adapter.call({ ...REQUEST, modelId: config.modelId, maxOutputTokens: 37 }, config);
+
+    expect((sentBody as { max_tokens?: number }).max_tokens).toBe(37);
+    expect(sentBody).not.toHaveProperty("max_completion_tokens");
+  });
+
   it("rejects invalid sampling parameters before sending the provider request", async () => {
     let called = false;
     const adapter = adapterWith(() => {

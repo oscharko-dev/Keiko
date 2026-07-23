@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -223,6 +223,21 @@ describe("real git worktree lifecycle (EV2)", () => {
     expect(await adapter.localBranchExists("keiko/task/none")).toBe(false);
   });
 
+  it("resolves a nested repository root when absolute command output would be redacted", async () => {
+    const nested = join(repoRoot, "packages", "nested");
+    mkdirSync(nested, { recursive: true });
+    const adapter = createNodeGitWorktreeAdapter({
+      workspace: workspaceInfo(nested),
+      processEnv: {
+        PATH: process.env.PATH ?? "",
+        KEIKO_TEST_SENSITIVE_REPOSITORY_ROOT: repoRoot,
+      },
+      now: () => Date.now(),
+    });
+
+    expect(await adapter.resolveRepositoryRoot()).toBe(repoRoot);
+  });
+
   it("adds, lists, then removes a managed worktree on a new task branch", async () => {
     const adapter = createNodeGitWorktreeAdapter(deps());
     const worktreePath = join(worktreeParent, "wt");
@@ -242,6 +257,29 @@ describe("real git worktree lifecycle (EV2)", () => {
     await adapter.pruneWorktrees();
     const finalList = await adapter.listWorktrees();
     expect(finalList.map((entry) => entry.path)).not.toContain(worktreeReal);
+  });
+
+  it("preserves structured worktree paths that match a protected parent environment value", async () => {
+    const adapter = createNodeGitWorktreeAdapter({
+      ...deps(),
+      processEnv: {
+        PATH: process.env.PATH ?? "",
+        KEIKO_TEST_SENSITIVE_MANAGED_ROOT: worktreeParent,
+      },
+    });
+    const worktreePath = join(worktreeParent, "wt-sensitive-parent");
+    const branch = "keiko/task/sensitive-parent-aabbccdd";
+
+    expect(
+      (await adapter.addWorktree({ worktreePath, taskBranch: branch, baseRef: "main" })).ok,
+    ).toBe(true);
+    const worktreeReal = realpathSync(worktreePath);
+    const entry = (await adapter.listWorktrees()).find(
+      (candidate) => realpathSync(candidate.path) === worktreeReal,
+    );
+
+    expect(entry?.path).toBe(worktreeReal);
+    expect(entry?.head).toMatch(/^[0-9a-f]{40}$/u);
   });
 
   it("worktreeStatus reports a clean worktree clean and a dirtied one dirty (#448)", async () => {

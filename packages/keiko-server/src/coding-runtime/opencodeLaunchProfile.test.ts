@@ -5,6 +5,7 @@ import {
   type OpenCodeLaunchProfileInput,
 } from "./opencodeLaunchProfile.js";
 import {
+  OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   OPENCODE_PINNED_BUILT_IN_TOOLS,
 } from "./opencodeToolSchemas.js";
@@ -95,7 +96,8 @@ describe("OpenCode launch profile", () => {
     });
     const options = record(provider.options);
     expect(options.baseURL).toBe("{env:KEIKO_MODEL_GATEWAY_URL}");
-    expect(Object.keys(options)).toEqual(["baseURL", "headers"]);
+    expect(options.chunkTimeout).toBe(30 * 60_000);
+    expect(Object.keys(options)).toEqual(["baseURL", "chunkTimeout", "headers"]);
     expect(provider.env).toEqual([]);
     for (const tool of OPENCODE_PINNED_BUILT_IN_TOOLS) {
       expect(config.tools[tool]).toBe(false);
@@ -105,6 +107,8 @@ describe("OpenCode launch profile", () => {
       expect(config.tools[tool]).toBe(true);
       expect(config.permission[tool]).toBe("allow");
     }
+    expect(config.tools[OPENCODE_GOVERNED_ACTION_PERMISSION]).toBeUndefined();
+    expect(config.permission[OPENCODE_GOVERNED_ACTION_PERMISSION]).toBe("ask");
     expect(config.tools.keiko_repository_read).toBeUndefined();
     expect(config.tools.keiko_submit_changeset).toBeUndefined();
     expect(config.permission.keiko_repository_read).toBeUndefined();
@@ -156,6 +160,7 @@ describe("OpenCode launch profile", () => {
     expect(finalPermissionAction(rules, "question")).toBe("allow");
     expect(finalPermissionAction(rules, "keiko_workspace_read")).toBe("allow");
     expect(finalPermissionAction(rules, "keiko_changeset_edit")).toBe("allow");
+    expect(finalPermissionAction(rules, OPENCODE_GOVERNED_ACTION_PERMISSION)).toBe("ask");
     for (const tool of ["bash", "read", "edit", "unknown_tool"]) {
       expect(finalPermissionAction(rules, tool)).toBe("deny");
     }

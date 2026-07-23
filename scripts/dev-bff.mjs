@@ -1,6 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { setTimeout } from "node:timers";
 import { fileURLToPath } from "node:url";
 import {
   buildCspHeader,
@@ -8,12 +7,14 @@ import {
   createUiServer,
   UI_HOST,
 } from "../packages/keiko-server/dist/index.js";
+import { shutdownDevBff } from "./lib/dev-bff-shutdown.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
 const staticRoot = join(stateDir, "static-placeholder");
 const port = Number(process.env.KEIKO_DEV_BFF_PORT ?? "1984");
 const LOCAL_DOTENV_ENV_NAME_ALLOWLIST = new Set(["FIGMA_ACCESS_TOKEN"]);
+const SHUTDOWN_TIMEOUT_MS = 30_000;
 
 function parseEnvValue(raw) {
   const value = raw.trim();
@@ -68,29 +69,43 @@ const env = loadLocalKeikoEnv({
 });
 const initialProjectPath = env.KEIKO_INITIAL_PROJECT_PATH ?? repoRoot;
 
+const handlerDeps = buildUiHandlerDeps({
+  configPath: env.KEIKO_CONFIG_FILE,
+  evidenceDir: env.KEIKO_EVIDENCE_DIR,
+  uiDbPath: env.KEIKO_UI_DB,
+  env,
+  initialProjectPath,
+});
 const server = createUiServer({
   staticRoot,
   csp: buildCspHeader([]),
   port,
-  handlerDeps: buildUiHandlerDeps({
-    configPath: env.KEIKO_CONFIG_FILE,
-    evidenceDir: env.KEIKO_EVIDENCE_DIR,
-    uiDbPath: env.KEIKO_UI_DB,
-    env,
-    initialProjectPath,
-  }),
+  handlerDeps,
 });
 
 server.listen(port, UI_HOST, () => {
   console.log(`[dev:bff] listening on http://${UI_HOST}:${String(port)}`);
 });
 
-function shutdown() {
-  server.close(() => {
-    process.exit(0);
+let shutdownStarted = false;
+
+async function shutdown() {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  const outcome = await shutdownDevBff({
+    server,
+    dispose: () => handlerDeps.dispose?.(),
+    timeoutMs: SHUTDOWN_TIMEOUT_MS,
   });
-  setTimeout(() => process.exit(0), 5_000).unref();
+  if (!outcome.ok) {
+    const pending = [
+      ...(outcome.serverClosed ? [] : ["http"]),
+      ...(outcome.runtimeDisposed ? [] : ["runtime"]),
+    ];
+    console.error(`[dev:bff] graceful shutdown did not complete (${pending.join("+")}).`);
+  }
+  process.exit(outcome.ok ? 0 : 1);
 }
 
-process.once("SIGINT", shutdown);
-process.once("SIGTERM", shutdown);
+process.once("SIGINT", () => void shutdown());
+process.once("SIGTERM", () => void shutdown());

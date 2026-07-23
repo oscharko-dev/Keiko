@@ -116,7 +116,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
   const dispatch = vi.fn<CodingRuntimeTaskDispatcher["dispatch"]>(() =>
     Promise.resolve({
       ok: true as const,
-      completion: Promise.resolve("succeeded" as const),
+      completion: new Promise<"succeeded">(() => undefined),
     }),
   );
   const taskDispatcher = {
@@ -146,6 +146,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     answer: vi.fn(() => Promise.resolve(true)),
     reject: vi.fn(() => Promise.resolve(true)),
   } satisfies CodingRuntimeQuestionPort;
+  const permissionPort = { resolve: vi.fn(() => Promise.resolve(true)) };
   const safeActivityProjection = activityProjection ?? fakeSafeActivityProjection();
   const researchGrants = createResearchGrantRegistry();
   const pendingResearchApprovals = createPendingResearchApprovals();
@@ -164,6 +165,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     launchResolver: launchResolver as never,
     taskDispatcher,
     questionPort,
+    permissionPort,
     safeActivityProjection,
     serverPrincipal: () => "server",
     researchGrants,
@@ -181,6 +183,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     launchResolver,
     taskDispatcher,
     questionPort,
+    permissionPort,
     safeActivityProjection,
     researchGrants,
     pendingResearchApprovals,
@@ -225,6 +228,59 @@ const start = {
 } as const;
 
 describe("CodingRuntimeOrchestrator", () => {
+  it("reaps the managed runtime and settles a completed task exactly once", async () => {
+    const f = fixture();
+    let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+    const completion = new Promise<"succeeded">((resolve) => {
+      resolveCompletion = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+
+    expect(successfulSnapshot(await f.orchestrator.start(start)).state).toBe("running");
+    resolveCompletion?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.manager.stop).toHaveBeenCalledOnce();
+    expect(f.evidence.settle).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", state: "succeeded" }),
+    );
+  });
+
+  it("fails closed when a task fails or its runtime cannot be reaped", async () => {
+    const failed = fixture();
+    failed.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: Promise.resolve("failed"),
+    });
+    await failed.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(failed.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "runtime-failed",
+      });
+    });
+
+    const unreaped = fixture();
+    unreaped.manager.stop.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    unreaped.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: Promise.resolve("succeeded"),
+    });
+    await unreaped.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(unreaped.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "recovery-required",
+        failureCode: "recovery-required",
+      });
+    });
+  });
+
   it("dispatches transient initial intent after launch and exposes a running run", async () => {
     const f = fixture();
 
@@ -446,6 +502,51 @@ describe("CodingRuntimeOrchestrator", () => {
         ttlMs: 60_000,
       }),
     );
+    expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: "permission-1",
+      decision: "approved",
+    });
+  });
+
+  it("fails closed and stops when the managed runtime cannot settle the exact permission", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "task-permission-failure",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "permission-failure",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-failure",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    f.permissionPort.resolve.mockResolvedValueOnce(false);
+
+    expect(
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-failure",
+        decision: "approved",
+        expectedRevision: 4,
+      }),
+    ).toMatchObject({
+      ok: true,
+      snapshot: { state: "failed", failureCode: "authority-resolution-failed" },
+    });
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
   });
 
   it("rejects stale route/body pairs and keeps a failed approval pending", async () => {

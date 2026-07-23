@@ -14,6 +14,7 @@ import type {
 } from "./codingRuntimeManager.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
+import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -52,6 +53,7 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly launchResolver: CodingRuntimeLaunchResolver;
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
   readonly questionPort: CodingRuntimeQuestionPort;
+  readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   readonly serverPrincipal: () => string | undefined;
   /**

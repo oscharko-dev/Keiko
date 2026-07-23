@@ -17,11 +17,11 @@ import {
   listTaskWorkspaces,
   pauseTaskWorkspace,
   prepareHandoffTaskWorkspace,
-  provisionTaskWorkspace,
   resumeTaskWorkspace,
   setActiveTaskWorkspace,
   type ActiveWorkspaceView,
 } from "@/lib/task-workspace-api";
+import { bindVerifiedTaskWorkspace } from "@/lib/verified-task-workspace-binding";
 import type { ActiveWorkspaceApi } from "../context/ActiveWorkspaceContext";
 
 // The opaque actor identity for this single-operator Studio session. Held constant so lock ownership
@@ -171,7 +171,13 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
     (input: { root: string; taskId: string; baseBranch: string }): Promise<void> =>
       mutate(async () => {
         rootRef.current = input.root;
-        await provisionTaskWorkspace({ ...input, requestedBy: STUDIO_OPERATOR });
+        const result = await bindVerifiedTaskWorkspace({
+          ...input,
+          requestedBy: STUDIO_OPERATOR,
+        });
+        if (!result.ok) {
+          throw new Error("The task workspace could not be verified and activated.");
+        }
       }),
     [mutate],
   );

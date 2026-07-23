@@ -232,7 +232,7 @@ import {
   type EditorAgentActionControllers,
 } from "./editorAgentBridge";
 import { buildEditorAgentChangesetPatch } from "./editorAgentChangeset";
-import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
+import EditorDiffSurface from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import {
   createEditorSemanticTokensHost,
@@ -283,11 +283,6 @@ const EditorDebugSessionHost = dynamic<
   import("./EditorDebugSessionHost").EditorDebugSessionHostProps
 >(() => import("./EditorDebugSessionHost").then((mod) => mod.EditorDebugSessionHost), {
   ssr: false,
-});
-
-const EditorDiffSurface = dynamic<EditorDiffSurfaceProps>(() => import("./EditorDiffSurface"), {
-  ssr: false,
-  loading: () => <div className="ed-host-loading" aria-hidden="true" />,
 });
 
 const EDITOR_REVIEW_SURFACE_STYLE: CSSProperties = {

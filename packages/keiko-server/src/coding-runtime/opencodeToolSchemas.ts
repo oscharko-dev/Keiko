@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 export const OPENCODE_PINNED_VERSION = "1.17.17";
+export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
 const QUESTION_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -55,11 +56,53 @@ const CHANGESET_EDIT_SCHEMA = {
       type: "object",
       additionalProperties: false,
       properties: {
-        patch: { type: "string", maxLength: 262_144 },
-        files: { type: "array", maxItems: 256 },
-        selectedFiles: { type: "array", maxItems: 256 },
-        prepared: { type: "object" },
+        patch: {
+          type: "string",
+          minLength: 1,
+          maxLength: 65_536,
+          pattern: String.raw`^(?:(?:(?:diff --git [^\r\n]+ [^\r\n]+\r?\n)(?:index [^\r\n]+\r?\n)?)?--- (?:a/|/dev/null)|:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M [^\r\n]+\r?\n@@ )`,
+          description:
+            "Strict unified diff for every listed file. Start each file with `--- a/<path>` and `+++ b/<path>` (or `/dev/null`), followed by one or more `@@ -old +new @@` hunks. A single-file `:100644 ... M <path>` raw-index header is accepted only as a compatibility fallback and is normalized before validation.",
+        },
+        files: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              file: {
+                type: "string",
+                minLength: 1,
+                maxLength: 512,
+                pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+              },
+              expectedContentHash: {
+                type: "string",
+                pattern: "^[a-f0-9]{64}$",
+                description: "SHA-256 digest returned by keiko_workspace_read.",
+              },
+            },
+            required: ["file", "expectedContentHash"],
+          },
+          description: "Every file changed by patch, bound to its last governed read digest.",
+        },
+        selectedFiles: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          uniqueItems: true,
+          items: {
+            type: "string",
+            minLength: 1,
+            maxLength: 512,
+            pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+          },
+          description: "Optional subset of files to apply; each entry must occur in files.",
+        },
       },
+      required: ["patch", "files"],
     },
   },
   required: ["changeset"],

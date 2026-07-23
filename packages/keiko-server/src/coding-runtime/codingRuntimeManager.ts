@@ -235,6 +235,7 @@ export interface CodingRuntimeManagerDeps {
 export interface OpenCodeLifecycleHandshakeRequest {
   readonly runId: string;
   readonly startupOutput: OpenCodeStartupOutput;
+  readonly onPermission: (event: SidecarPermissionEvent) => void;
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs: number;
 }
@@ -933,7 +934,9 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active: ActiveRuntime,
     adapter: OpenCodeLifecycleAdapter,
   ): Promise<CodingRuntimeStartResult> {
-    const handshakeFailure = await openCodeHandshakeFailure(adapter, request, active);
+    const handshakeFailure = await openCodeHandshakeFailure(adapter, request, active, (event) => {
+      this.handleOpenCodePermission(active, event);
+    });
     active.startupOutput?.close();
     active.startupOutput = undefined;
     active.stdoutParser = undefined;
@@ -1194,6 +1197,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active.openCodeLifecycleAdapter !== undefined) return;
     const event = normalizeSidecarLine(active, this.nextSequence(active), line.trim());
     if (event !== undefined) this.emit(event);
+  }
+
+  private handleOpenCodePermission(active: ActiveRuntime, event: SidecarPermissionEvent): void {
+    if (this.active !== active || active.stopRequested || active.status !== "ready") return;
+    this.emit(sidecarRuntimeEvent(active, this.nextSequence(active), event));
   }
 
   private emitFailure(active: ActiveRuntime): void {
@@ -1531,6 +1539,7 @@ async function openCodeHandshakeFailure(
   adapter: OpenCodeLifecycleAdapter,
   request: CodingRuntimeLaunchRequest,
   active: ActiveRuntime,
+  onPermission: (event: SidecarPermissionEvent) => void,
 ): Promise<FailureResult | undefined> {
   const controller = new AbortController();
   let resolveCancellation: ((outcome: OpenCodeHandshakeOutcome) => void) | undefined;
@@ -1553,6 +1562,7 @@ async function openCodeHandshakeFailure(
       adapter.handshake({
         runId: request.runId,
         startupOutput: active.startupOutput ?? closedStartupOutput,
+        onPermission,
         signal: controller.signal,
         timeoutMs: request.startTimeoutMs,
       }),

@@ -8,11 +8,12 @@
 // fully exercised without mocking. All servers are closed in afterEach.
 
 import { createServer } from "node:net";
-import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { setTimeout } from "node:timers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -83,6 +84,56 @@ describe("proxyHttp request target validation", () => {
       await new Promise((resolve, reject) =>
         upstream.close((error) => (error ? reject(error) : resolve())),
       );
+    }
+  });
+
+  it("closes a streaming upstream when the downstream browser disconnects", async () => {
+    let upstreamClosed;
+    const upstreamClosedPromise = new Promise((resolve) => {
+      upstreamClosed = resolve;
+    });
+    const upstream = createHttpServer((request, response) => {
+      request.once("close", () => upstreamClosed(true));
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write("event: ready\ndata: {}\n\n");
+    });
+    const proxy = createHttpServer((request, response) => {
+      const address = upstream.address();
+      if (address === null || typeof address === "string") throw new Error("Expected TCP address.");
+      proxyHttp(request, response, address.port);
+    });
+    try {
+      await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+      await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+      const proxyAddress = proxy.address();
+      if (proxyAddress === null || typeof proxyAddress === "string") {
+        throw new Error("Expected TCP address.");
+      }
+      await new Promise((resolve, reject) => {
+        const request = httpRequest(
+          { hostname: "127.0.0.1", port: proxyAddress.port, path: "/api/events" },
+          (response) => {
+            response.once("data", () => {
+              response.destroy();
+              resolve();
+            });
+          },
+        );
+        request.once("error", reject);
+        request.end();
+      });
+      const closed = await Promise.race([
+        upstreamClosedPromise,
+        new Promise((resolve) => setTimeout(() => resolve(false), 250)),
+      ]);
+      expect(closed).toBe(true);
+    } finally {
+      proxy.closeAllConnections();
+      upstream.closeAllConnections();
+      await Promise.all([
+        new Promise((resolve) => proxy.close(resolve)),
+        new Promise((resolve) => upstream.close(resolve)),
+      ]);
     }
   });
 });

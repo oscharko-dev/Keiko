@@ -15,6 +15,15 @@ if (typeof window !== "undefined" && !HTMLElement.prototype.scrollIntoView) {
   HTMLElement.prototype.scrollIntoView = function () {};
 }
 
+// Monaco probes the legacy clipboard command API during module initialization. jsdom deliberately
+// omits that API, so expose the browser's conservative "unsupported" answer for component tests.
+if (typeof document !== "undefined" && document.queryCommandSupported === undefined) {
+  Object.defineProperty(document, "queryCommandSupported", {
+    configurable: true,
+    value: (): boolean => false,
+  });
+}
+
 // Some coverage runners initialise jsdom with an unavailable/incomplete Storage object.
 // Keep tests focused on UI behavior by providing the standard localStorage surface.
 if (

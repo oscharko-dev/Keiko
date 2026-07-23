@@ -3,10 +3,28 @@
 // lock, gates the lifecycle actions to the legal transitions, and wires the action callbacks.
 
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { ActiveWorkspaceProvider, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
 import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
+
+const catalogState = vi.hoisted(() => ({ activeProjectPath: null as string | null }));
+
+vi.mock("./context/ChatSessionContext", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./context/ChatSessionContext")>();
+  return {
+    ...actual,
+    useOptionalChatSessionCatalog: () =>
+      catalogState.activeProjectPath === null
+        ? null
+        : {
+            activeProject: {
+              path: catalogState.activeProjectPath,
+              available: true,
+            },
+          },
+  };
+});
 
 function instance(overrides: Partial<WorkspaceInstance> = {}): WorkspaceInstance {
   return {
@@ -65,6 +83,10 @@ function openPanel(): void {
 }
 
 describe("TaskWorkspaceSwitcher", () => {
+  beforeEach(() => {
+    catalogState.activeProjectPath = null;
+  });
+
   it("shows an unbound label and announces no active workspace", () => {
     renderSwitcher(api());
     expect(screen.getByRole("button", { name: /task workspace/i })).toBeInTheDocument();
@@ -251,6 +273,24 @@ describe("TaskWorkspaceSwitcher", () => {
     expect(value.provision).toHaveBeenCalledWith({
       root: "/repo",
       taskId: "new-task",
+      baseBranch: "dev",
+    });
+  });
+
+  it("creates the first task workspace from the active registered project", () => {
+    catalogState.activeProjectPath = "/registered/repo";
+    const value = api();
+    renderSwitcher(value);
+    openPanel();
+    fireEvent.change(screen.getByPlaceholderText(/446-binding/), {
+      target: { value: "first-task" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. dev/), { target: { value: "dev" } });
+    fireEvent.click(screen.getByRole("button", { name: /create task workspace/i }));
+
+    expect(value.provision).toHaveBeenCalledWith({
+      root: "/registered/repo",
+      taskId: "first-task",
       baseBranch: "dev",
     });
   });

@@ -27,6 +27,7 @@ describe("production coding runtime turn ports", () => {
       listQuestions: () => Promise.resolve([]),
       answerQuestion: () => Promise.resolve(false),
       rejectQuestion: () => Promise.resolve(false),
+      replyPermission: () => Promise.resolve(false),
     };
     const runs = new Map<string, ProductionRuntimeRunRecord>([
       ["run-open", record("run-open", createOpenCodeRuntimeTurnPort(runPort))],
@@ -323,6 +324,40 @@ describe("production runtime singleton manager", () => {
     expect(manager.health()).toEqual({ status: "stopped" });
   });
 
+  it("releases a runtime that stopped itself before admitting the next run", async () => {
+    let firstStatus: "ready" | "stopped" = "ready";
+    const first = fakeManager({
+      health: vi.fn(() =>
+        firstStatus === "stopped"
+          ? { status: "stopped" as const }
+          : { status: "ready" as const, activeRunId: "run-1" },
+      ),
+    });
+    const authority = fakeAuthority();
+    const stopped = managedRecord("run-1", first);
+    const runs = new Map([["run-1", stopped]]);
+    const manager = createProductionRuntimeManager(runs, authority);
+
+    await expect(manager.start(launch("run-1"))).resolves.toMatchObject({ ok: true });
+    firstStatus = "stopped";
+    stopped.controller.abort();
+    const next = fakeManager({
+      start: vi.fn(() =>
+        Promise.resolve({ ok: true as const, runId: "run-2", status: "ready" as const }),
+      ),
+    });
+    runs.set("run-2", managedRecord("run-2", next));
+
+    await expect(manager.start(launch("run-2"))).resolves.toMatchObject({
+      ok: true,
+      runId: "run-2",
+    });
+    expect(stopped.dispose).toHaveBeenCalledOnce();
+    expect(runs.has("run-1")).toBe(false);
+    expect(next.start).toHaveBeenCalledWith(launch("run-2"));
+    expect(authority.abandonUnlaunched).not.toHaveBeenCalled();
+  });
+
   it("routes stop, takeover and reconcile only to the live run and cleans it up", async () => {
     const takeover = vi.fn(() =>
       Promise.resolve({ ok: true as const, status: "stopped" as const }),
@@ -381,6 +416,7 @@ describe("turn port terminal semantics", () => {
       listQuestions: () => Promise.resolve([]),
       answerQuestion: () => Promise.resolve(false),
       rejectQuestion: () => Promise.resolve(false),
+      replyPermission: () => Promise.resolve(false),
     };
     const port = createOpenCodeRuntimeTurnPort(runPort);
 
@@ -469,6 +505,36 @@ describe("turn port terminal semantics", () => {
     const retried = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
     expect(retried.ok).toBe(true);
     if (retried.ok) await expect(retried.completion).resolves.toBe("failed");
+  });
+
+  it("keeps a successful turn live until its pending editor mutation is terminal", async () => {
+    let settleMutation: ((settled: boolean) => void) | undefined;
+    const mutationSettlement = new Promise<boolean>((resolve) => {
+      settleMutation = resolve;
+    });
+    const run = record("run-open", {
+      submitTurn: () => Promise.resolve(true),
+      abortTurn: () => Promise.resolve(true),
+      waitForTerminal: () => Promise.resolve("succeeded" as const),
+    });
+    const waitForPendingMutations = vi.fn(() => mutationSettlement);
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-open", { ...run, waitForPendingMutations }]]),
+    );
+
+    const dispatched = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+    if (!dispatched.ok) throw new Error("expected accepted task");
+    let terminal = false;
+    void dispatched.completion.then(() => {
+      terminal = true;
+    });
+    await vi.waitFor(() => {
+      expect(waitForPendingMutations).toHaveBeenCalledOnce();
+    });
+    expect(terminal).toBe(false);
+
+    settleMutation?.(true);
+    await expect(dispatched.completion).resolves.toBe("succeeded");
   });
 
   it("aborts a task only when the adapter accepts the interruption", async () => {

@@ -18,6 +18,8 @@ import type {
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 const MAX_READ_BYTES = 65_536;
+const RAW_SINGLE_FILE_PATCH =
+  /^:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M ([^\r\n]+)\r?\n(@@ [\s\S]+)$/u;
 
 type RepositoryReadRequest = CodingToolActionOf<"read">;
 type EditorChangesetRequest = CodingToolActionOf<"edit">;
@@ -25,7 +27,9 @@ type EditorChangesetRequest = CodingToolActionOf<"edit">;
 type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action"> &
   Partial<Pick<EditorAgentHttpClient, "listSessions">>;
 
-const EDITOR_SESSION_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
+// The delays total 11.75 s. Together with seven worst-case 2 s session-list calls this remains
+// below the production tool bridge's 30 s deadline, leaving the generated client its outer margin.
+const EDITOR_SESSION_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 3_000, 5_000] as const;
 
 export interface CodingToolReadEditPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
@@ -37,6 +41,7 @@ export interface CodingToolReadEditPortDeps {
   readonly editorAgentClient: EditorAgentActionClient;
   readonly resolveEditorActionContext: () => EditorActionContext;
   readonly resolveRepositoryReadContext?: (() => RuntimeProducerBinding) | undefined;
+  readonly requiresEditorReview?: (() => boolean) | undefined;
   readonly mutationLeaseCoordinator?:
     Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard"> | undefined;
 }
@@ -242,7 +247,22 @@ function validatedChangeset(
   if (isAborted(signal) || !checkGuard(mutationGuard) || !("changeset" in request)) {
     return undefined;
   }
-  return isExactEditorAgentChangeset(request.changeset) ? request.changeset : undefined;
+  if (!isExactEditorAgentChangeset(request.changeset)) return undefined;
+  return normalizeRawSingleFilePatch(request.changeset);
+}
+
+function normalizeRawSingleFilePatch(
+  changeset: EditorAgentChangeset,
+): EditorAgentChangeset | undefined {
+  if (!changeset.patch.startsWith(":")) return changeset;
+  const file = changeset.files[0]?.file;
+  if (changeset.files.length !== 1 || file === undefined) return undefined;
+  const match = RAW_SINGLE_FILE_PATCH.exec(changeset.patch);
+  if (match?.[1] !== file || match[2] === undefined) return undefined;
+  return {
+    ...changeset,
+    patch: `--- a/${file}\n+++ b/${file}\n${match[2]}`,
+  };
 }
 
 function editorStatusCompleted(status: string): boolean {
@@ -277,9 +297,18 @@ function registerMutationLease(
     workspaceRootDigest: binding.workspaceRootDigest,
     actionId: action.actionId,
     idempotencyKey: action.idempotencyKey,
+    requiresReview: resolveReviewRequirement(deps),
     mutationGuard: (): boolean => checkGuard(mutationGuard),
   });
   return registered ? request : undefined;
+}
+
+function resolveReviewRequirement(deps: CodingToolReadEditPortDeps): boolean {
+  try {
+    return deps.requiresEditorReview?.() ?? true;
+  } catch {
+    return true;
+  }
 }
 
 function leaseRequest(

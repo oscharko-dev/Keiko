@@ -77,6 +77,7 @@ export interface VoicePersonaVoice {
 
 export type ProviderEndpointStyle = "openai-compatible" | "azure-openai-deployment";
 export type RealtimeAuthMode = "api-key" | "ephemeral-session";
+export type OutputTokenParameter = "max_tokens" | "max_completion_tokens";
 
 export interface ModelProviderConfig {
   readonly modelId: string;
@@ -86,6 +87,7 @@ export interface ModelProviderConfig {
   readonly endpointStyle?: ProviderEndpointStyle | undefined;
   readonly apiVersion?: string | undefined;
   readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
+  readonly outputTokenParameter?: OutputTokenParameter | undefined;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;

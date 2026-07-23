@@ -61,45 +61,43 @@ vi.mock("next/dynamic", () => {
           return <div data-testid="editor-surface" />;
         };
       }
-      return function EditorDiffSurfaceProbe(props: EditorDiffSurfaceProps): ReactElement {
-        diffSurface.props = props;
-        const [selected, setSelected] = useState(props.model.files[0]?.uri ?? "");
-        return (
-          <div aria-label="Changeset diff">
-            <ul aria-label="Changed files">
-              {props.model.files.map((entry) => (
-                <li key={entry.uri}>
-                  <button
-                    type="button"
-                    aria-pressed={selected === entry.uri}
-                    onClick={() => setSelected(entry.uri)}
-                  >
-                    {`Review ${entry.uri}`}
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <output data-testid="selected-change">{selected}</output>
-            <button
-              type="button"
-              disabled={props.actions?.canApply !== true}
-              onClick={props.onApply}
-            >
-              Apply changeset
-            </button>
-            <button
-              type="button"
-              disabled={props.actions?.canReject !== true}
-              onClick={props.onReject}
-            >
-              Reject changeset
-            </button>
-          </div>
-        );
+      return function DynamicComponentProbe(): ReactElement {
+        return <div data-testid="dynamic-component" />;
       };
     },
   };
 });
+
+vi.mock("./EditorDiffSurface", () => ({
+  default: function EditorDiffSurfaceProbe(props: EditorDiffSurfaceProps): ReactElement {
+    diffSurface.props = props;
+    const [selected, setSelected] = useState(props.model.files[0]?.uri ?? "");
+    return (
+      <div aria-label="Changeset diff">
+        <ul aria-label="Changed files">
+          {props.model.files.map((entry) => (
+            <li key={entry.uri}>
+              <button
+                type="button"
+                aria-pressed={selected === entry.uri}
+                onClick={() => setSelected(entry.uri)}
+              >
+                {`Review ${entry.uri}`}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <output data-testid="selected-change">{selected}</output>
+        <button type="button" disabled={props.actions?.canApply !== true} onClick={props.onApply}>
+          Apply changeset
+        </button>
+        <button type="button" disabled={props.actions?.canReject !== true} onClick={props.onReject}>
+          Reject changeset
+        </button>
+      </div>
+    );
+  },
+}));
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);

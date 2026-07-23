@@ -53,6 +53,7 @@ export function subscribeEditorShortcutOverrides(
       () => {
         void load();
       },
+      { priority: "background" },
     );
   });
 

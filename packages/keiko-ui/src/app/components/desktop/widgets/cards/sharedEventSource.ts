@@ -1,6 +1,10 @@
 "use client";
 
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
+import {
+  backgroundBrowserStreamsSuspended,
+  subscribeBrowserStreamCapacity,
+} from "../../../../../lib/browser-stream-capacity";
 import { secureRandomInt } from "../../../../../lib/secure-random";
 
 type SharedEventListener = (event: MessageEvent<string>) => void;
@@ -11,6 +15,7 @@ interface SharedEventSourceEntry {
   readonly subscribersByType: Map<string, Set<SharedEventListener>>;
   readonly dispatchersByType: Map<string, EventListener>;
   refCount: number;
+  essentialRefCount: number;
   lastEventId: number | undefined;
   reconnectAttempts: number;
   reconnectTimer: number | undefined;
@@ -23,7 +28,12 @@ const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const RECONNECT_JITTER_MS = 500;
 let visibilityListenerInstalled = false;
+let capacityUnsubscribe: (() => void) | undefined;
 let nextSourceGeneration = 0;
+
+export interface SharedEventSourceOptions {
+  readonly priority?: "essential" | "background";
+}
 
 function removeSourceListener(source: EventSource, type: string, dispatcher: EventListener): void {
   const removable = source as EventSource & {
@@ -115,6 +125,7 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   if (
     entry.refCount === 0 ||
     entry.source !== null ||
+    (entry.essentialRefCount === 0 && backgroundBrowserStreamsSuspended()) ||
     documentHidden() ||
     typeof EventSource === "undefined"
   ) {
@@ -137,6 +148,19 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   }
 }
 
+function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
+  for (const entry of sourcesByUrl.values()) {
+    if (entry.essentialRefCount > 0) {
+      openEntrySource(entry);
+    } else if (backgroundStreamsSuspended) {
+      clearReconnectTimer(entry);
+      closeEntrySource(entry);
+    } else {
+      openEntrySource(entry);
+    }
+  }
+}
+
 function handleVisibilityChange(): void {
   if (documentHidden()) {
     for (const entry of sourcesByUrl.values()) {
@@ -154,6 +178,7 @@ function ensureVisibilityListener(): void {
   if (visibilityListenerInstalled || typeof document === "undefined") return;
   document.addEventListener("visibilitychange", handleVisibilityChange);
   visibilityListenerInstalled = true;
+  capacityUnsubscribe = subscribeBrowserStreamCapacity(reconcileCapacity);
 }
 
 function removeVisibilityListenerIfIdle(): void {
@@ -162,6 +187,8 @@ function removeVisibilityListenerIfIdle(): void {
   }
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   visibilityListenerInstalled = false;
+  capacityUnsubscribe?.();
+  capacityUnsubscribe = undefined;
 }
 
 function entryForUrl(url: string): SharedEventSourceEntry {
@@ -173,6 +200,7 @@ function entryForUrl(url: string): SharedEventSourceEntry {
     subscribersByType: new Map(),
     dispatchersByType: new Map(),
     refCount: 0,
+    essentialRefCount: 0,
     lastEventId: undefined,
     reconnectAttempts: 0,
     reconnectTimer: undefined,
@@ -187,9 +215,12 @@ export function subscribeSharedEventSource(
   url: string,
   eventTypes: readonly string[],
   listener: SharedEventListener,
+  options: SharedEventSourceOptions = {},
 ): () => void {
   const entry = entryForUrl(url);
+  const essential = options.priority !== "background";
   entry.refCount += 1;
+  if (essential) entry.essentialRefCount += 1;
   for (const type of eventTypes) {
     const subscribers = entry.subscribersByType.get(type) ?? new Set<SharedEventListener>();
     subscribers.add(listener);
@@ -210,6 +241,15 @@ export function subscribeSharedEventSource(
       }
     }
     entry.refCount -= 1;
+    if (essential) entry.essentialRefCount -= 1;
+    if (
+      entry.refCount > 0 &&
+      entry.essentialRefCount === 0 &&
+      backgroundBrowserStreamsSuspended()
+    ) {
+      clearReconnectTimer(entry);
+      closeEntrySource(entry);
+    }
     if (entry.refCount > 0) return;
     clearReconnectTimer(entry);
     closeEntrySource(entry);

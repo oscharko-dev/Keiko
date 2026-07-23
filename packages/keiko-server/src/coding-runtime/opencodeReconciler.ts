@@ -1,4 +1,11 @@
-export type OpenCodeEventKind = "observation" | "permission" | "question" | "tool" | "terminal";
+export type OpenCodeEventKind =
+  | "observation"
+  | "permission"
+  | "question"
+  | "tool"
+  | "terminal"
+  | "terminal-control"
+  | "terminal-failure";
 export interface OpenCodeReconciliationEvent {
   readonly id: string;
   readonly aggregateId: string;

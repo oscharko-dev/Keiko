@@ -8,6 +8,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 
+import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
 
 const DIGEST = "a".repeat(64);
@@ -247,6 +248,155 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     expect(adapterSignal).toBeInstanceOf(AbortSignal);
   });
 
+  it("normalizes the real single-file raw-index model patch before editor validation", async () => {
+    const editorAction = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        value: {
+          result: {
+            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+            actionId: "edit-raw",
+            sessionId: "session-2332",
+            status: "queued" as const,
+          },
+        },
+      }),
+    );
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action: editorAction },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-2332",
+        authorityRef: { runId: "run-2332", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        {
+          action: "edit",
+          actionId: "edit-raw",
+          idempotencyKey: "edit-raw-key",
+          changeset: {
+            patch:
+              ":100644 100644 1d9d46e 0000000 M README.md\n@@ -1 +1,2 @@\n # Keiko\n+Model edit\n",
+            files: [{ file: "README.md", expectedContentHash: DIGEST }],
+          },
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "completed" });
+    expect(editorAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changeset: {
+          patch: "--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n # Keiko\n+Model edit\n",
+          files: [{ file: "README.md", expectedContentHash: DIGEST }],
+        },
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it.each([
+    ":100644 100644 1d9d46e 0000000 M other.md\n@@ -1 +1 @@\n-old\n+new\n",
+    ":100644 100644 1d9d46e 0000000 A README.md\n@@ -1 +1 @@\n-old\n+new\n",
+    ":100644 100644 1d9d46e 0000000 M README.md\n-old\n+new\n",
+  ])("rejects an unsafe raw-index compatibility patch", async (patch) => {
+    const editorAction = vi.fn();
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action: editorAction },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-2332",
+        authorityRef: { runId: "run-2332", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        {
+          action: "edit",
+          actionId: "edit-raw",
+          idempotencyKey: "edit-raw-key",
+          changeset: {
+            patch,
+            files: [{ file: "README.md", expectedContentHash: DIGEST }],
+          },
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed" });
+    expect(editorAction).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "binds the trusted requiresReview=%s decision into the content-free mutation lease",
+    async (requiresReview) => {
+      const register = vi.fn(
+        (_registration: CodingRuntimeEditorMutationLeaseRegistration): boolean => true,
+      );
+      const liveBinding = {
+        ...admittedBinding,
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      };
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: {
+          action: () =>
+            Promise.resolve({
+              ok: true as const,
+              value: {
+                result: {
+                  schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+                  actionId: "edit-1",
+                  sessionId: "session-2332",
+                  status: "queued" as const,
+                },
+              },
+            }),
+        },
+        resolveEditorActionContext: () => ({
+          sessionId: "session-2332",
+          authorityRef: {
+            runId: liveBinding.runId,
+            envelopeDigest: liveBinding.envelopeDigest,
+          },
+          origin: "agent",
+          workspaceId: liveBinding.workspaceId,
+          workspaceRootDigest: liveBinding.workspaceRootDigest,
+          expiresAt: liveBinding.expiresAt,
+        }),
+        requiresEditorReview: () => requiresReview,
+        mutationLeaseCoordinator: { register, discard: vi.fn((): boolean => true) },
+      });
+
+      await expect(
+        ports.editorChangeset.execute(
+          {
+            action: "edit",
+            actionId: "edit-1",
+            idempotencyKey: "edit-key",
+            changeset: changeset(),
+          },
+          undefined,
+          { check: (): true => true, binding: liveBinding },
+        ),
+      ).resolves.toEqual({ status: "completed" });
+      expect(register).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: "edit-1",
+          idempotencyKey: "edit-key",
+          requiresReview,
+        }),
+      );
+      expect(register.mock.calls[0]?.[0]).not.toHaveProperty("changeset");
+    },
+  );
+
   it("waits boundedly for the live Editor session in the governed workspace", async () => {
     vi.useFakeTimers();
     try {
@@ -286,7 +436,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       );
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(250);
 
       await expect(outcome).resolves.toEqual({ status: "completed" });
       expect(listSessions).toHaveBeenCalledTimes(2);
@@ -325,7 +475,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       );
-      await vi.advanceTimersByTimeAsync(30_500);
+      await vi.advanceTimersByTimeAsync(11_750);
 
       await expect(outcome).resolves.toEqual({ status: "failed" });
       expect(listSessions).toHaveBeenCalledTimes(7);

@@ -18,7 +18,7 @@
 // `listWorktrees` parses `--porcelain` output into structured entries whose paths stay in-process for
 // idempotency and drift inference and are never persisted into evidence (mirrors `readStagedPaths`).
 
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { CommandResult, CommandRule, SandboxPolicy } from "./types.js";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import {
@@ -204,6 +204,23 @@ export function buildShowToplevelArgv(): readonly string[] {
   return ["rev-parse", "--show-toplevel"];
 }
 
+// Resolve the repository root without transporting its absolute path through CommandResult stdout.
+// `runCommand` deliberately redacts every captured stream before returning it; an absolute
+// `--show-toplevel` result can therefore become `[REDACTED]/…` whenever a parent path is also a
+// protected environment value. `--show-cdup` returns only a content-free `../` depth from cwd to the
+// repository root, which remains safe to parse after redaction. The exported --show-toplevel builder
+// stays available for compatibility, but the adapter itself must use this non-content-bearing form.
+function buildRepositoryRootDepthArgv(): readonly string[] {
+  return ["rev-parse", "--show-cdup"];
+}
+
+function repositoryRootFromDepth(workspaceRoot: string, stdout: string): string | undefined {
+  const depth = stdout.trim();
+  if (depth.length === 0) return workspaceRoot;
+  if (!/^(?:\.\.\/)+$/u.test(depth)) return undefined;
+  return resolve(workspaceRoot, depth);
+}
+
 // `git rev-parse --verify --quiet <ref>^{commit}` — exit 0 iff the ref resolves to a commit. Used to
 // confirm the approved base branch exists/resolves before provisioning.
 export function buildRefResolvesArgv(ref: string): readonly string[] {
@@ -336,14 +353,33 @@ interface AdapterContext {
   readonly timeoutMs: number | undefined;
 }
 
+// This adapter consumes command output as trusted in-process structure and never returns raw
+// stdout/stderr. Passing the full parent environment to `runCommand` would make its defense-in-depth
+// literal-secret scrubber replace repository/worktree paths (for example HOME or KEIKO_STATE_DIR)
+// before this adapter can parse them. Give the runner exactly the environment it can pass to the
+// child anyway: executable resolution still receives PATH, locale stays deterministic, credentials
+// remain absent, and structured Git output cannot be semantically corrupted by unrelated secrets.
+function structuredCommandEnvironment(
+  processEnv: NodeJS.ProcessEnv,
+  policy: SandboxPolicy,
+): NodeJS.ProcessEnv {
+  const safe: NodeJS.ProcessEnv = {};
+  for (const name of policy.envAllowlist) {
+    const value = processEnv[name];
+    if (value !== undefined) safe[name] = value;
+  }
+  return safe;
+}
+
 function buildAdapterContext(deps: NodeGitWorktreeAdapterDeps): AdapterContext {
+  const policy = deps.policy ?? DEFAULT_SANDBOX_POLICY;
   return {
     runDeps: {
       workspace: deps.workspace,
-      policy: deps.policy ?? DEFAULT_SANDBOX_POLICY,
+      policy,
       commandRules: GIT_WORKTREE_COMMAND_RULES,
       spawn: deps.spawn ?? nodeSpawnFn,
-      processEnv: deps.processEnv ?? process.env,
+      processEnv: structuredCommandEnvironment(deps.processEnv ?? process.env, policy),
       now: deps.now ?? Date.now,
       ...(deps.resolveExecutable !== undefined
         ? { resolveExecutable: deps.resolveExecutable }
@@ -382,10 +418,9 @@ export function createNodeGitWorktreeAdapter(deps: NodeGitWorktreeAdapterDeps): 
   const ctx = buildAdapterContext(deps);
   return {
     resolveRepositoryRoot: async (): Promise<string | undefined> => {
-      const result = await runGit(ctx, buildShowToplevelArgv());
-      if (result.exitCode !== 0) return undefined;
-      const top = result.stdout.split(/\r?\n/u)[0]?.trim();
-      return top !== undefined && top.length > 0 ? top : undefined;
+      const result = await runGit(ctx, buildRepositoryRootDepthArgv());
+      if (result.exitCode !== 0 || result.truncated) return undefined;
+      return repositoryRootFromDepth(ctx.runDeps.workspace.root, result.stdout);
     },
     refResolves: async (ref: string): Promise<boolean> =>
       (await runGit(ctx, buildRefResolvesArgv(ref))).exitCode === 0,

@@ -17,7 +17,15 @@ export interface CodingRuntimeEditorMutationLeaseRequest {
 
 export interface CodingRuntimeEditorMutationLeasePort {
   readonly matches: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
+  readonly requiresReview: (
+    request: CodingRuntimeEditorMutationLeaseRequest,
+  ) => boolean | undefined;
   readonly claim: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
+  readonly complete: (
+    request: CodingRuntimeEditorMutationLeaseRequest,
+    succeeded: boolean,
+  ) => boolean;
+  readonly discard: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
 }
 
 export interface CodingRuntimeEditorMutationLeaseBroker extends CodingRuntimeEditorMutationLeasePort {
@@ -31,6 +39,7 @@ export interface CodingRuntimeEditorMutationLeaseRegistration {
   readonly workspaceRootDigest: string;
   readonly actionId: string;
   readonly idempotencyKey: string;
+  readonly requiresReview: boolean;
   readonly mutationGuard: () => boolean;
 }
 
@@ -39,6 +48,7 @@ export interface CodingRuntimeEditorMutationLeaseCoordinator {
   readonly register: (registration: CodingRuntimeEditorMutationLeaseRegistration) => boolean;
   readonly discard: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
   readonly revokeRun: (runId: string) => boolean;
+  readonly waitForIdle: (signal: AbortSignal) => Promise<boolean>;
   readonly dispose: () => void;
 }
 
@@ -52,7 +62,11 @@ export function createCodingRuntimeEditorMutationLeaseBroker(): CodingRuntimeEdi
   let disposed = false;
   return {
     matches: (request): boolean => uniqueMatchingPort(ports, request, disposed) !== undefined,
+    requiresReview: (request): boolean | undefined => reviewRequirement(ports, request, disposed),
     claim: (request): boolean => claimMatchingPort(ports, request, disposed),
+    complete: (request, succeeded): boolean =>
+      completeMatchingPort(ports, request, succeeded, disposed),
+    discard: (request): boolean => discardMatchingPort(ports, request, disposed),
     attach: (port): (() => void) | undefined => {
       if (disposed || ports.size >= MAX_ACTIVE_LEASE_PORTS || ports.has(port)) return undefined;
       ports.add(port);
@@ -72,6 +86,31 @@ export function createCodingRuntimeEditorMutationLeaseBroker(): CodingRuntimeEdi
 
 interface LeaseRecord extends CodingRuntimeEditorMutationLeaseRegistration {
   readonly key: string;
+  claimed: boolean;
+}
+
+interface IdleWaiter {
+  readonly resolve: (idle: boolean) => void;
+  readonly signal: AbortSignal;
+  readonly onAbort: () => void;
+}
+
+interface MutationOutcome {
+  latestSucceeded: boolean | undefined;
+}
+
+function reviewRequirement(
+  ports: ReadonlySet<CodingRuntimeEditorMutationLeasePort>,
+  request: CodingRuntimeEditorMutationLeaseRequest,
+  disposed: boolean,
+): boolean | undefined {
+  const port = uniqueMatchingPort(ports, request, disposed);
+  if (port === undefined) return undefined;
+  try {
+    return port.requiresReview(request);
+  } catch {
+    return undefined;
+  }
 }
 
 function claimMatchingPort(
@@ -83,6 +122,35 @@ function claimMatchingPort(
   if (port === undefined) return false;
   try {
     return port.claim(request);
+  } catch {
+    return false;
+  }
+}
+
+function completeMatchingPort(
+  ports: ReadonlySet<CodingRuntimeEditorMutationLeasePort>,
+  request: CodingRuntimeEditorMutationLeaseRequest,
+  succeeded: boolean,
+  disposed: boolean,
+): boolean {
+  const port = uniqueMatchingPort(ports, request, disposed);
+  if (port === undefined) return false;
+  try {
+    return port.complete(request, succeeded);
+  } catch {
+    return false;
+  }
+}
+
+function discardMatchingPort(
+  ports: ReadonlySet<CodingRuntimeEditorMutationLeasePort>,
+  request: CodingRuntimeEditorMutationLeaseRequest,
+  disposed: boolean,
+): boolean {
+  const port = uniqueMatchingPort(ports, request, disposed);
+  if (port === undefined) return false;
+  try {
+    return port.discard(request);
   } catch {
     return false;
   }
@@ -112,20 +180,33 @@ export function createCodingRuntimeEditorMutationLeaseCoordinator(
 ): CodingRuntimeEditorMutationLeaseCoordinator {
   const records = new Map<string, LeaseRecord>();
   const revokedRuns = new Set<string>();
+  const idleWaiters = new Set<IdleWaiter>();
+  const outcome: MutationOutcome = { latestSucceeded: undefined };
   let disposed = false;
   const lease: CodingRuntimeEditorMutationLeasePort = {
     matches: (request): boolean => findRecord(records, request, disposed) !== undefined,
-    claim: (request): boolean => claimRecord(records, request, disposed),
+    requiresReview: (request): boolean | undefined =>
+      findRecord(records, request, disposed)?.requiresReview,
+    claim: (request): boolean => claimRecord(records, idleWaiters, outcome, request, disposed),
+    complete: (request, succeeded): boolean =>
+      completeRecord(records, idleWaiters, outcome, request, succeeded, disposed),
+    discard: (request): boolean =>
+      completeRecord(records, idleWaiters, outcome, request, false, disposed),
   };
   return {
     lease,
     register: (registration): boolean =>
       registerRecord(records, revokedRuns, registration, disposed),
-    discard: (request): boolean => discardRecord(records, request, disposed),
-    revokeRun: (runId): boolean => revokeRun(deps, records, revokedRuns, runId, disposed),
+    discard: (request): boolean =>
+      completeRecord(records, idleWaiters, outcome, request, false, disposed),
+    revokeRun: (runId): boolean =>
+      revokeRun(deps, records, revokedRuns, idleWaiters, outcome, runId, disposed),
+    waitForIdle: (signal): Promise<boolean> =>
+      waitForIdle(records, idleWaiters, outcome, signal, disposed),
     dispose: (): void => {
       disposed = true;
       records.clear();
+      settleIdleWaiters(idleWaiters, false);
     },
   };
 }
@@ -153,39 +234,59 @@ function registerRecord(
     workspaceRootDigest: registration.workspaceRootDigest,
     actionId: registration.actionId,
     idempotencyKey: registration.idempotencyKey,
+    requiresReview: registration.requiresReview,
     mutationGuard: registration.mutationGuard,
+    claimed: false,
   });
   return true;
 }
 
 function claimRecord(
   records: Map<string, LeaseRecord>,
+  idleWaiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
   request: CodingRuntimeEditorMutationLeaseRequest,
   disposed: boolean,
 ): boolean {
   const record = findRecord(records, request, disposed);
-  if (record === undefined) return false;
-  records.delete(record.key);
+  if (record === undefined || record.claimed) return false;
+  let allowed = false;
   try {
-    return record.mutationGuard();
+    allowed = record.mutationGuard();
   } catch {
-    return false;
+    allowed = false;
   }
+  if (allowed) {
+    record.claimed = true;
+    return true;
+  }
+  records.delete(record.key);
+  outcome.latestSucceeded = false;
+  settleIfIdle(records, idleWaiters, outcome);
+  return false;
 }
 
-function discardRecord(
+function completeRecord(
   records: Map<string, LeaseRecord>,
+  idleWaiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
   request: CodingRuntimeEditorMutationLeaseRequest,
+  succeeded: boolean,
   disposed: boolean,
 ): boolean {
   const record = findRecord(records, request, disposed);
-  return record === undefined ? false : records.delete(record.key);
+  if (record === undefined || !records.delete(record.key)) return false;
+  outcome.latestSucceeded = succeeded && record.claimed;
+  settleIfIdle(records, idleWaiters, outcome);
+  return true;
 }
 
 function revokeRun(
   deps: CodingRuntimeEditorMutationLeaseCoordinatorDeps,
   records: Map<string, LeaseRecord>,
   revokedRuns: Set<string>,
+  idleWaiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
   runId: string,
   disposed: boolean,
 ): boolean {
@@ -195,8 +296,50 @@ function revokeRun(
   for (const [key, record] of records) {
     if (record.authorityRef.runId === runId) records.delete(key);
   }
+  outcome.latestSucceeded = false;
+  settleIfIdle(records, idleWaiters, outcome);
   deps.cancelPendingByAuthorityRun(runId);
   return true;
+}
+
+function waitForIdle(
+  records: ReadonlyMap<string, LeaseRecord>,
+  waiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
+  signal: AbortSignal,
+  disposed: boolean,
+): Promise<boolean> {
+  if (disposed || signal.aborted) return Promise.resolve(false);
+  if (records.size === 0) return Promise.resolve(outcome.latestSucceeded !== false);
+  return new Promise((resolve) => {
+    const waiter: IdleWaiter = {
+      resolve,
+      signal,
+      onAbort: (): void => {
+        settleIdleWaiter(waiters, waiter, false);
+      },
+    };
+    waiters.add(waiter);
+    signal.addEventListener("abort", waiter.onAbort, { once: true });
+  });
+}
+
+function settleIfIdle(
+  records: ReadonlyMap<string, LeaseRecord>,
+  waiters: Set<IdleWaiter>,
+  outcome: MutationOutcome,
+): void {
+  if (records.size === 0) settleIdleWaiters(waiters, outcome.latestSucceeded !== false);
+}
+
+function settleIdleWaiters(waiters: Set<IdleWaiter>, idle: boolean): void {
+  for (const waiter of [...waiters]) settleIdleWaiter(waiters, waiter, idle);
+}
+
+function settleIdleWaiter(waiters: Set<IdleWaiter>, waiter: IdleWaiter, idle: boolean): void {
+  if (!waiters.delete(waiter)) return;
+  waiter.signal.removeEventListener("abort", waiter.onAbort);
+  waiter.resolve(idle);
 }
 
 function findRecord(
