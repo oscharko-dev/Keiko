@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  EDITOR_M11_DEFAULT_PROFILE_REF,
   isWorkspaceProfileRef,
   resolveEditorM7Settings,
   type WorkspaceProfileRef,
@@ -183,6 +184,78 @@ describe("editor settings control service", () => {
       kind: "ok",
       profiles: { activeProfileRef: "profile-focus-copy" },
     });
+  });
+
+  it("refuses conflicting, duplicate-name, built-in, and unknown-ref profile mutations", async () => {
+    const refs = ["profile-one", "profile-two"];
+    const control = createEditorSettingsControlService({
+      store: createEditorSettingsStore({ stateDir: temporaryDirectory("editor-profile-guards") }),
+      mutex: createWorkspaceMutexRegistry(),
+      profileRefFactory: () => profileRef(refs.shift() ?? "profile-exhausted"),
+    });
+    await mutateProfile(control, {
+      action: "create",
+      displayName: "One",
+      expectedRevision: 0,
+      idempotencyKey: "guards-create-one",
+    });
+
+    const staleRevision = await mutateProfile(control, {
+      action: "create",
+      displayName: "Two",
+      expectedRevision: 0,
+      idempotencyKey: "guards-create-stale",
+    });
+    expect(staleRevision).toMatchObject({ kind: "conflict" });
+
+    const duplicateName = await mutateProfile(control, {
+      action: "create",
+      displayName: "One",
+      expectedRevision: 1,
+      idempotencyKey: "guards-create-duplicate",
+    });
+    expect(duplicateName.kind).not.toBe("ok");
+
+    const renameBuiltIn = await mutateProfile(control, {
+      action: "rename",
+      displayName: "Not Default Anymore",
+      expectedRevision: 1,
+      idempotencyKey: "guards-rename-builtin",
+      profileRef: EDITOR_M11_DEFAULT_PROFILE_REF,
+    });
+    expect(renameBuiltIn.kind).not.toBe("ok");
+
+    const deleteBuiltIn = await mutateProfile(control, {
+      action: "delete",
+      expectedRevision: 1,
+      idempotencyKey: "guards-delete-builtin",
+      profileRef: EDITOR_M11_DEFAULT_PROFILE_REF,
+    });
+    expect(deleteBuiltIn.kind).not.toBe("ok");
+
+    const unknownRef = await mutateProfile(control, {
+      action: "switch",
+      expectedRevision: 1,
+      idempotencyKey: "guards-switch-unknown",
+      profileRef: profileRef("profile-unknown"),
+    });
+    expect(unknownRef.kind).not.toBe("ok");
+
+    const replayed = await mutateProfile(control, {
+      action: "create",
+      displayName: "One",
+      expectedRevision: 0,
+      idempotencyKey: "guards-create-one",
+    });
+    expect(replayed).toMatchObject({ kind: "ok", profileRef: "profile-one" });
+
+    const reusedKeyDifferentContent = await mutateProfile(control, {
+      action: "create",
+      displayName: "Different",
+      expectedRevision: 1,
+      idempotencyKey: "guards-create-one",
+    });
+    expect(reusedKeyDifferentContent).toMatchObject({ kind: "idempotencyConflict" });
   });
 
   it("composes active profile settings below user overrides and persists switching", async () => {
