@@ -228,7 +228,12 @@ export function subscribeSharedEventSource(
     dispatcherFor(entry, type);
   }
   openEntrySource(entry);
+  // React effect cleanups may run more than once; a second call must not double-decrement the
+  // ref counts (an essential underflow would suspend streams that still have live subscribers).
+  let unsubscribed = false;
   return (): void => {
+    if (unsubscribed) return;
+    unsubscribed = true;
     for (const type of eventTypes) {
       const subscribers = entry.subscribersByType.get(type);
       subscribers?.delete(listener);

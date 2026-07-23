@@ -58,6 +58,20 @@ describe("subscribeSharedEventSource", () => {
     unsubscribe();
   });
 
+  it("keeps the shared stream alive when one subscriber's cleanup runs twice", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const first = subscribeSharedEventSource("/api/commands/events", ["command:run"], () => {});
+    subscribeSharedEventSource("/api/commands/events", ["command:run"], () => {});
+
+    // React effect cleanups can run more than once; a non-idempotent unsubscribe used to
+    // underflow the ref counts and tear down the stream under the remaining subscriber.
+    first();
+    first();
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(FakeEventSource.instances[0]?.closed).toBe(false);
+  });
+
   it("rejects off-origin stream URLs before constructing EventSource", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
 
