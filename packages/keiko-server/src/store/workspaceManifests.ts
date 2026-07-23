@@ -331,9 +331,7 @@ export function deleteSingletonWorkspaceManifestForProject(
   // would then also delete siblings that never belonged to `projectPath`
   // (CR #3640066698 — legitimate TOCTOU window).
   const rootCount = db
-    .prepare(
-      "SELECT COUNT(*) AS count FROM workspace_manifest_roots WHERE workspace_id = ?",
-    )
+    .prepare("SELECT COUNT(*) AS count FROM workspace_manifest_roots WHERE workspace_id = ?")
     .get(membership.workspace_id) as { readonly count?: number } | undefined;
   if ((rootCount?.count ?? 0) > 1) {
     throw new Error("WORKSPACE_NOT_SINGLETON");

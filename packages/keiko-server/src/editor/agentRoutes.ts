@@ -3482,7 +3482,12 @@ async function admitEditorAction(
     const rooted = bindActionRoot(action, snapshot, deps);
     if (!rooted.ok) {
       return rejectActionRequest(
-        action, snapshot, rooted.decision, rooted.result, requestHash, 403,
+        action,
+        snapshot,
+        rooted.decision,
+        rooted.result,
+        requestHash,
+        403,
       );
     }
     action = rooted.action;
@@ -3492,19 +3497,32 @@ async function admitEditorAction(
   if (isServerResolvedAction(action)) {
     if (deps === undefined) {
       return serverResolvedFailure(
-        action, snapshot, decision,
+        action,
+        snapshot,
+        decision,
         failedResult(action, "The server-resolved editor operation is unavailable."),
-        requestHash, 200,
+        requestHash,
+        200,
       );
     }
     return resolveServerAction(action, requestHash, snapshot, decision, deps, signal);
   }
   const admitted = admitAndReserveAction(
-    action, snapshot, decision, runtimeMutation, requestHash, deps,
+    action,
+    snapshot,
+    decision,
+    runtimeMutation,
+    requestHash,
+    deps,
   );
   if ("status" in admitted) return admitted;
   return queueAndEmitAction(
-    action, requestHash, snapshot, decision, admitted.inspection, runtimeMutation,
+    action,
+    requestHash,
+    snapshot,
+    decision,
+    admitted.inspection,
+    runtimeMutation,
   );
 }
 

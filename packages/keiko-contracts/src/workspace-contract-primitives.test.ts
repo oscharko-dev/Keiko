@@ -137,12 +137,12 @@ describe("workspace contract primitives", () => {
     expect(isCanonicalWorkspaceRoot("C:\\work\\app ")).toBe(false);
     expect(isCanonicalWorkspaceRoot("C:\\work\\app.\\child")).toBe(false);
     expect(isCanonicalWorkspaceRoot("C:\\work\\app \\child")).toBe(false);
-    expect(
-      workspaceCanonicalRootsDoNotOverlap(["C:\\work\\app", "C:\\work\\app.\\child"]),
-    ).toBe(false);
-    expect(
-      workspaceCanonicalRootsDoNotOverlap(["C:\\work\\app", "C:\\work\\app \\child"]),
-    ).toBe(false);
+    expect(workspaceCanonicalRootsDoNotOverlap(["C:\\work\\app", "C:\\work\\app.\\child"])).toBe(
+      false,
+    );
+    expect(workspaceCanonicalRootsDoNotOverlap(["C:\\work\\app", "C:\\work\\app \\child"])).toBe(
+      false,
+    );
     // POSIX segments containing a trailing dot remain legal — dots are meaningful there
     // (dotfiles, hidden dirs) and no analogous alias exists in the POSIX open path.
     expect(isCanonicalWorkspaceRoot("/work/app.")).toBe(true);
