@@ -354,6 +354,9 @@ function normalizedRelativePath(value: unknown): value is string {
   return (
     nonEmpty(value) &&
     !value.includes("\0") &&
+    // Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
+    // `file.txt:stream` names an NTFS alternate data stream — neither is workspace-relative.
+    !value.includes(":") &&
     !value.startsWith("/") &&
     !value.startsWith("\\") &&
     value

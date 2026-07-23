@@ -225,7 +225,9 @@ const GOVERNED_VERIFICATION_METADATA_KEYS = [
   "commandLabel",
 ] as const;
 const GOVERNED_VERIFIERS = new Set(["test", "targeted-test", "typecheck", "lint", "build"]);
-const GOVERNED_PATH = /^(?![\\/])(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\\).+$/u;
+// Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
+// `file.txt:stream` names an NTFS alternate data stream — neither is a workspace-relative path.
+const GOVERNED_PATH = /^(?![\\/])(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\\)(?!.*:).+$/u;
 
 /**
  * Converts only Keiko's exact custom-tool permission into the existing sidecar permission

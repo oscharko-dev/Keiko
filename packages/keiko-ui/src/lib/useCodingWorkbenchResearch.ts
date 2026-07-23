@@ -81,8 +81,11 @@ function startResearchSync(
       const nowMs = Date.now();
       publish(scopeResearchStateFromInput(input, projectResearchState(payload, nowMs)));
       expiryTimer = scheduleResearchRefresh(input, payload, nowMs, publish, refresh);
-    } catch {
+    } catch (error) {
       if (!controller.signal.aborted) {
+        // Same bounded console idiom as GEN-STAB-WINDOW-002: the rendered state stays the
+        // content-free "unavailable", but the underlying refresh failure remains diagnosable.
+        console.warn("[keiko] research channel refresh failed", error);
         publish(
           scopeResearchStateFromInput(input, {
             status: "unavailable",

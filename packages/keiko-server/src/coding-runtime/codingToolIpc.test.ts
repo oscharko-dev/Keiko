@@ -35,6 +35,8 @@ describe("coding tool IPC read windows (#2473)", () => {
   });
 
   it.each([
+    ["a Windows drive-qualified path", { relativePath: "C:/Users/evil.txt" }],
+    ["an NTFS alternate-data-stream path", { relativePath: "note.txt:ads" }],
     ["a zero startLine", { startLine: 0 }],
     ["a negative startLine", { startLine: -3 }],
     ["a fractional startLine", { startLine: 1.5 }],

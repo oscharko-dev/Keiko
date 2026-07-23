@@ -869,6 +869,32 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
         ...base,
         properties: { ...base.properties, patterns: ["different.ts"] },
       },
+      // Windows drive-qualified and NTFS alternate-data-stream targets must never project as
+      // workspace-relative edit permissions (CWE-22 on win32 path resolution).
+      {
+        ...base,
+        properties: {
+          ...base.properties,
+          patterns: ["C:/Users/evil.txt"],
+          metadata: {
+            ...base.properties.metadata,
+            targetPath: "C:/Users/evil.txt",
+            allowedRelativePaths: ["C:/Users/evil.txt"],
+          },
+        },
+      },
+      {
+        ...base,
+        properties: {
+          ...base.properties,
+          patterns: ["note.txt:ads"],
+          metadata: {
+            ...base.properties.metadata,
+            targetPath: "note.txt:ads",
+            allowedRelativePaths: ["note.txt:ads"],
+          },
+        },
+      },
     ]) {
       expect(projectOpenCodePermissionEvent(rejected, "ses_1")).toBeUndefined();
     }

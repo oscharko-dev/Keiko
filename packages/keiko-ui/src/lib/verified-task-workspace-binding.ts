@@ -23,6 +23,12 @@ export interface VerifiedTaskWorkspaceBindInput {
   readonly onProvisioned?: (() => void) | undefined;
 }
 
+// Same bounded console idiom as GEN-STAB-WINDOW-002: the caller-visible result stays the
+// sanitized stage label, but the underlying failure remains diagnosable in the local console.
+function warnBindStage(stage: string, error: unknown): void {
+  console.warn(`[keiko] task workspace bind ${stage} failed`, error);
+}
+
 export async function bindVerifiedTaskWorkspace(
   input: VerifiedTaskWorkspaceBindInput,
 ): Promise<VerifiedTaskWorkspaceBindResult> {
@@ -35,22 +41,30 @@ export async function bindVerifiedTaskWorkspace(
       requestedBy: input.requestedBy,
     });
     workspaceId = provisioned.instance.workspaceId;
-  } catch {
+  } catch (error) {
+    warnBindStage("provision", error);
     return { ok: false, stage: "provision" };
   }
-  input.onProvisioned?.();
+  try {
+    // The notification hook must not break the always-resolves contract of this sequence.
+    input.onProvisioned?.();
+  } catch (error) {
+    warnBindStage("provision-callback", error);
+  }
   try {
     const report = await reconcileTaskWorkspaces({ root: input.root });
     if (report.entries.find((entry) => entry.workspaceId === workspaceId)?.status !== "healthy") {
       return { ok: false, stage: "verify" };
     }
-  } catch {
+  } catch (error) {
+    warnBindStage("verify", error);
     return { ok: false, stage: "verify" };
   }
   try {
     await setActiveTaskWorkspace({ workspaceId, requestedBy: input.requestedBy });
     return { ok: true };
-  } catch {
+  } catch (error) {
+    warnBindStage("activate", error);
     return { ok: false, stage: "activate" };
   }
 }
