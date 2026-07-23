@@ -182,6 +182,23 @@ function normalizedCanonicalWorkspaceRoot(
   return style === "windows" ? value.toLowerCase() : value;
 }
 
+function canonicalWorkspaceRootBodySegmentIsValid(
+  segment: string,
+  style: CanonicalWorkspaceRootStyle,
+): boolean {
+  if (segment === "" || segment === "." || segment === "..") return false;
+  // Win32 opens a path by stripping trailing dots and spaces from each
+  // segment: `C:\work\app` and `C:\work\app.\child` (segment `app.`) resolve
+  // to the same filesystem directory but pass a string-prefix overlap check
+  // as distinct. Fail closed so `workspaceCanonicalRootsDoNotOverlap` cannot
+  // admit a hostile manifest that splits trust bindings on one dir.
+  if (style === "windows") {
+    const last = segment.charCodeAt(segment.length - 1);
+    if (last === 0x2e /* . */ || last === 0x20 /* space */) return false;
+  }
+  return true;
+}
+
 function canonicalWorkspaceRootBodyIsValid(
   value: string,
   style: CanonicalWorkspaceRootStyle,
@@ -189,8 +206,8 @@ function canonicalWorkspaceRootBodyIsValid(
   const separator = canonicalWorkspaceRootSeparator(style);
   const bodySegments = value.split(separator).slice(1);
   if (bodySegments.length === 1 && bodySegments[0] === "") return true;
-  return bodySegments.every(
-    (segment): boolean => segment !== "" && segment !== "." && segment !== "..",
+  return bodySegments.every((segment): boolean =>
+    canonicalWorkspaceRootBodySegmentIsValid(segment, style),
   );
 }
 

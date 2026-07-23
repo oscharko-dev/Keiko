@@ -41,7 +41,11 @@ export function EditorProfilesPanel({
     );
     setSelectedRef(snapshot.activeProfileRef);
     setDisplayName(current?.builtIn === true ? "" : (current?.displayName ?? ""));
-  }, [snapshot]);
+    // Depend on the active profile ref, not the whole snapshot container: any
+    // unrelated settings refresh (e.g. SSE `editor-settings:changed`) gives
+    // `snapshot` a new reference and would otherwise reset the selection and
+    // overwrite whatever the user was typing in the rename/duplicate field.
+  }, [snapshot?.activeProfileRef]);
 
   const validName = displayName.trim().length > 0 && displayName.trim() === displayName;
   return (

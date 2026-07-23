@@ -709,12 +709,26 @@ export function useEditorVerificationRun(
 
   useEffect(() => {
     if (root.length === 0) return undefined;
+    // Same staleness guard as the neighboring effect (698): a root switch
+    // during an in-flight trust refetch must not let the OLD root's catalog
+    // overwrite the NEW root's already-fetched one — the parent widget can
+    // self-dispatch this event via trust/revoke immediately before switching.
+    const controller = new AbortController();
     const onTrustChanged = (event: Event): void => {
       if (workspaceTrustEventProjectId(event) !== root) return;
-      void fetchVerificationCatalog(root).then(setCatalog, () => setCatalog(null));
+      void fetchVerificationCatalog(root, controller.signal)
+        .then((next) => {
+          if (!controller.signal.aborted) setCatalog(next);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setCatalog(null);
+        });
     };
     window.addEventListener(WORKSPACE_TRUST_CHANGED_EVENT, onTrustChanged);
-    return () => window.removeEventListener(WORKSPACE_TRUST_CHANGED_EVENT, onTrustChanged);
+    return () => {
+      controller.abort();
+      window.removeEventListener(WORKSPACE_TRUST_CHANGED_EVENT, onTrustChanged);
+    };
   }, [root]);
 
   const runKind = useCallback(

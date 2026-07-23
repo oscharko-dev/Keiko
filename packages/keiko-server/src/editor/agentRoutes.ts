@@ -1255,8 +1255,11 @@ function authorizeSnapshotRead(
   if (policyConflict !== null) {
     return { status: 403, body: { result: resultForAction(policyConflict, snapshot) } };
   }
-  const reservation = reserveActionAuthority(action, snapshot, decision, deps);
-  return reservation === null
+  // Non-consuming validation: bound-session snapshot reads must not increment
+  // the authority envelope's toolCalls counter, or repeated polls silently
+  // burn maxToolCalls before the first real edit ever runs.
+  const authorityRejection = validateActionAuthority(action, snapshot, decision, deps);
+  return authorityRejection === null
     ? null
     : {
         status: 403,
@@ -1620,6 +1623,37 @@ function reserveActionAuthority(
     new Date().toISOString(),
   );
   return reservation.ok ? null : denyByAuthority(decision, authorityDenyReason(reservation));
+}
+
+// Non-consuming twin of `reserveActionAuthority`: mirrors every guard but
+// calls `resolveForAction` instead of `reserveForAction`, so a bound-session
+// poll (snapshot read) validates its authority without incrementing the
+// `toolCalls` usage counter. Without this a governed session that polls N
+// times before its first real edit burns N of maxToolCalls and then hits
+// budget-exceeded on the very first mutation.
+function validateActionAuthority(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  deps?: EditorAgentRouteDeps,
+): EditorAgentActionPolicyDecision | null {
+  if (EDITOR_AGENT_WORKBENCH_ACTION_CLASS[decision.effectClass] === null) return null;
+  if (snapshot === undefined) return denyByAuthority(decision, "authority-invalid");
+  if (action.authorityRef === undefined) {
+    return denyByAuthority(decision, "authority-missing");
+  }
+  const rooted = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
+  if (!rooted.ok) return denyByAuthority(decision, rooted.reason);
+  const pathReason = editorAgentPathBoundaryReason(rooted.root, actionRootPaths(action, snapshot));
+  if (pathReason !== null) return denyByAuthority(decision, pathReason);
+  const resolution = editorAgentAuthorityRegistry.resolveForAction(
+    action.authorityRef,
+    action,
+    snapshot.workspaceRoot,
+    editorAgentDeploymentCeiling(deps),
+    new Date().toISOString(),
+  );
+  return resolution.ok ? null : denyByAuthority(decision, authorityDenyReason(resolution));
 }
 
 // Issue #1395 (AC1) — record one content-free audit entry for this action at its admission decision.

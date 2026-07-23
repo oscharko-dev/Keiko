@@ -903,9 +903,16 @@ export function validateWorkspaceBindingV2(input: unknown): TaskWorkspaceValidat
 
 export function validateWorkspaceBinding(input: unknown): TaskWorkspaceValidation {
   if (!isRecord(input)) return { ok: false, reasons: ["binding must be an object"] };
-  return input.schemaVersion === WORKSPACE_BINDING_V2_SCHEMA_VERSION
-    ? validateWorkspaceBindingV2(input)
-    : validateWorkspaceBindingV1(input);
+  try {
+    return input.schemaVersion === WORKSPACE_BINDING_V2_SCHEMA_VERSION
+      ? validateWorkspaceBindingV2(input)
+      : validateWorkspaceBindingV1(input);
+  } catch {
+    // Fail closed on a hostile `schemaVersion` accessor (Proxy or defineProperty
+    // getter): mirror the try/catch in `validateWorkspaceBindingV2` and match
+    // the throw-free guarantee proved in workspace-manifest.test.ts:138-145.
+    return { ok: false, reasons: ["binding must be an object"] };
+  }
 }
 
 // ─── WorkspaceActivation (mutating server-action intent) ────────────────────────────

@@ -432,9 +432,14 @@ export function EditorWidget({
   layoutRef.current = layout;
   const [dirtyByPane, setDirtyByPane] = useState<EditorDirtyByPane>({});
   const [pendingClose, setPendingClose] = useState<PendingDirtyClose | null>(null);
+  // The dialog stamps the root it was opened for so a root switch that races
+  // the user's Confirm click cannot silently mutate trust on the new root
+  // (M11 CWE-863; the confirm handler closes over a `verification` bound to
+  // the live root).
   const [trustDecision, setTrustDecision] = useState<{
     readonly action: WorkspaceTrustDecision;
     readonly initialPrompt: boolean;
+    readonly root: string;
   } | null>(null);
   const [trustMutationIssue, setTrustMutationIssue] = useState<"update">();
   const [trustMutationPending, setTrustMutationPending] = useState(false);
@@ -526,6 +531,13 @@ export function EditorWidget({
       setOutlineByPane({});
       setOutlineRevealByPane({});
       setAgentReconciliationQueues({});
+      // A trust dialog opened for the previous root must not survive the
+      // switch: `verification` is re-derived from the live root each render,
+      // so confirming the stale dialog after a switch would grant/revoke on
+      // the new root. Fail closed by dismissing everything trust-scoped.
+      setTrustDecision(null);
+      setTrustMutationIssue(undefined);
+      promptedTrustRootRef.current = null;
     }
     if (nextRoot.length === 0 || onWorkspaceChange === undefined) return;
     const normalizedFileChanged = (file?.trim() ?? "") !== nextActivePane.activeFile;
@@ -1389,12 +1401,20 @@ export function EditorWidget({
       promptedTrustRootRef.current !== workspaceRoot
     ) {
       promptedTrustRootRef.current = workspaceRoot;
-      setTrustDecision({ action: "grant", initialPrompt: true });
+      setTrustDecision({ action: "grant", initialPrompt: true, root: workspaceRoot });
     }
   }, [verification.catalog?.workspaceTrust, workspaceRoot]);
 
   const confirmTrustDecision = useCallback(async (): Promise<boolean> => {
     if (trustDecision === null || trustMutationPending) return false;
+    // Root-drift guard: if a root switch raced this confirm handler, the
+    // dialog was opened for a different root than `verification` now targets.
+    // Refuse and fail closed rather than mutate trust on the wrong root.
+    if (trustDecision.root !== workspaceRoot) {
+      setTrustDecision(null);
+      setTrustMutationIssue(undefined);
+      return false;
+    }
     setTrustMutationPending(true);
     try {
       const confirmed = await (trustDecision.action === "grant"
@@ -1410,7 +1430,7 @@ export function EditorWidget({
     } finally {
       setTrustMutationPending(false);
     }
-  }, [trustDecision, trustMutationPending, verification]);
+  }, [trustDecision, trustMutationPending, verification, workspaceRoot]);
 
   // Content-free host snapshot consumed by the palette + keybinding layer. Memoized so the command
   // palette does not receive a new object on unrelated editor chrome renders.
@@ -1435,9 +1455,10 @@ export function EditorWidget({
       runFileTests: verification.runFileTests,
       runWorkspaceVerification: verification.runWorkspaceVerification,
       cancelVerification: verification.cancelVerification,
-      trustWorkspaceScripts: () => setTrustDecision({ action: "grant", initialPrompt: false }),
+      trustWorkspaceScripts: () =>
+        setTrustDecision({ action: "grant", initialPrompt: false, root: workspaceRoot }),
       revokeWorkspaceScriptTrust: () =>
-        setTrustDecision({ action: "revoke", initialPrompt: false }),
+        setTrustDecision({ action: "revoke", initialPrompt: false, root: workspaceRoot }),
       openProblems: () => onOpenProblems?.(workspaceRoot),
       openFileHistory: openActiveFileHistory,
       openDebugPanel: () => onOpenDebugPanel?.(),

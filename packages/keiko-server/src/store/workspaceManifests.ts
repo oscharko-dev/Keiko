@@ -203,12 +203,12 @@ export function ensureProjectWorkspaceManifest(
   now: number,
 ): void {
   if (findWorkspaceManifestRecordByProject(db, projectPath) !== undefined) return;
-  let manifest: WorkspaceManifest;
-  try {
-    manifest = createSingleRootWorkspaceManifest(projectPath, projectName);
-  } catch {
-    return;
-  }
+  // Propagate a manifest-creation failure so the enclosing
+  // createProjectRecord transaction (store/db.ts) rolls back instead of
+  // committing a project row with no workspace manifest — the paired-write
+  // invariant every downstream lookup assumes. AGENTS.md §7: do not swallow
+  // errors on trust-boundary paths.
+  const manifest = createSingleRootWorkspaceManifest(projectPath, projectName);
   if (findWorkspaceManifestRecordByRoot(db, manifest.roots[0]?.rootRef ?? "") !== undefined) return;
   const root = manifest.roots[0];
   if (root === undefined) return;
