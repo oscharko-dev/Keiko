@@ -106,6 +106,72 @@ function view(): EditorSettingsView {
 }
 
 describe("EditorProfilePortability", () => {
+  it("exports the selected profile, reports redactions, and surfaces an export failure", async () => {
+    api.export.mockResolvedValueOnce({
+      kind: "ok",
+      manifest: { profileRef },
+      serializedManifest: JSON.stringify({ kind: "workspace-profile" }),
+      redactions: [{ settingId: "fontSize", rejectedCount: 2 }],
+    });
+    const clicks: string[] = [];
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicks.push(this.download);
+    });
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => "blob:mock"),
+      revokeObjectURL: vi.fn(),
+    });
+
+    render(
+      <I18nProvider>
+        <EditorProfilePortability root="/repo" selected={selected} view={view()} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Export selected profile" }));
+    expect(await screen.findByText(/profile exported/iu)).toBeInTheDocument();
+    expect(clicks).toEqual([`keiko-${profileRef}.json`]);
+
+    api.export.mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", { name: "Export selected profile" }));
+    await waitFor(() => {
+      expect(screen.queryByText(/profile exported/iu)).toBeNull();
+    });
+    anchorClick.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects an oversized import file before any network call", async () => {
+    render(
+      <I18nProvider>
+        <EditorProfilePortability root="/repo" selected={selected} view={view()} />
+      </I18nProvider>,
+    );
+    const big = new File(["x"], "big.json", { type: "application/json" });
+    Object.defineProperty(big, "size", { value: 5 * 1024 * 1024 });
+    fireEvent.change(screen.getByLabelText("Import profile file"), { target: { files: [big] } });
+    await waitFor(() => {
+      expect(api.preview).not.toHaveBeenCalled();
+    });
+  });
+
+  it("surfaces a preview failure as an invalid-manifest issue", async () => {
+    api.preview.mockRejectedValueOnce(new Error("bad json"));
+    render(
+      <I18nProvider>
+        <EditorProfilePortability root="/repo" selected={selected} view={view()} />
+      </I18nProvider>,
+    );
+    const manifest = "{broken";
+    const file = new File([manifest], "broken.json", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: () => Promise.resolve(manifest) });
+    fireEvent.change(screen.getByLabelText("Import profile file"), { target: { files: [file] } });
+    await waitFor(() => expect(api.preview).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("button", { name: "Apply import" })).toBeNull();
+  });
+
   it("requires a server preview before applying a new profile", async () => {
     api.preview.mockResolvedValue(preview);
     api.apply.mockResolvedValue({ kind: "ok" });
