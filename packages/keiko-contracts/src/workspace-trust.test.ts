@@ -152,7 +152,7 @@ describe("canonical workspace trust", () => {
       }),
     ).toBe("approval-required");
 
-    // ADR-0148: every dimension that describes the trusted root still invalidates the grant.
+    // ADR-0155: every dimension that describes the trusted root still invalidates the grant.
     const staleBindings: readonly WorkspaceTrustBinding[] = [
       { ...binding(), manifestRef: OTHER_MANIFEST },
       { ...binding(), rootRef: OTHER_ROOT },
@@ -166,7 +166,7 @@ describe("canonical workspace trust", () => {
       expect(projectCommandTaskTrustState(trustedAssessment(), stale)).toBe("approval-required");
     }
 
-    // ADR-0148: the workspace-level manifest revision and digest are recorded as provenance but no
+    // ADR-0155: the workspace-level manifest revision and digest are recorded as provenance but no
     // longer decide validity — they change on focus and reorder, which carry no authority, and
     // including them revoked every grant on an ordinary Explorer click.
     const viewOnlyBindings: readonly WorkspaceTrustBinding[] = [

@@ -414,8 +414,8 @@ describe("WorkspaceScriptTrust invalidation reasons", () => {
   });
 
   it("keeps the grant when only the workspace-level manifest digest moved", () => {
-    // ADR-0148: focus and reorder bump the manifest revision and digest without changing this
-    // root or its approved basis, so they must not invalidate. Before ADR-0148 this recorded
+    // ADR-0155: focus and reorder bump the manifest revision and digest without changing this
+    // root or its approved basis, so they must not invalidate. Before ADR-0155 this recorded
     // manifest-changed and every Explorer click revoked trust across the workspace.
     const reason = grantAndInjectMutatedRecord((binding) => {
       binding.manifestDigest = "c".repeat(64);

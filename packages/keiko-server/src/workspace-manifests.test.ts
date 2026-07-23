@@ -143,7 +143,7 @@ describe("WorkspaceManifestService", () => {
     // next root refs, and affectedRootPaths reported that same union, so a mutation that changes
     // no membership at all destroyed every stored grant and recomputed every root. Focus and
     // reorder change no membership and therefore no authority.
-    // ADR-0148 completes the repair at the contract layer: the binding comparison no longer
+    // ADR-0155 completes the repair at the contract layer: the binding comparison no longer
     // includes the workspace-level manifest revision and digest, so the grant survives the
     // revision bump that focus and reorder produce.
     const alpha = service.list().find((manifest) => manifest.roots[0]?.canonicalRoot === rootA);
@@ -162,7 +162,7 @@ describe("WorkspaceManifestService", () => {
     expect(focused.affectedRoots).toEqual([]);
     expect(store.readWorkspaceTrustRecord(first.rootRef)).toBeDefined();
     expect(store.readWorkspaceTrustRecord(beta.rootRef)).toBeDefined();
-    // ADR-0148: the grant still projects as trusted, because focus changes no authority.
+    // ADR-0155: the grant still projects as trusted, because focus changes no authority.
     expect(trust.trustLevelForRoot(rootA)).toBe("trusted");
     expect(trust.trustLevelForRoot(rootB)).toBe("trusted");
 

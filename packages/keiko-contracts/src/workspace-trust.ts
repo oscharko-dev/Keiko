@@ -252,7 +252,7 @@ function factsMatch(
 }
 
 /**
- * ADR-0148 narrows this comparison to the dimensions that describe the trusted root itself. The
+ * ADR-0155 narrows this comparison to the dimensions that describe the trusted root itself. The
  * manifest revision and digest are workspace-level and change on focus and reorder, which carry no
  * authority, so including them revoked every grant on an ordinary Explorer click. They are still
  * recorded on the binding as provenance.

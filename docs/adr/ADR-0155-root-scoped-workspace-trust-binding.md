@@ -1,4 +1,4 @@
-# ADR-0148 — Workspace Trust binds a root, not a workspace revision
+# ADR-0155 — Workspace Trust binds a root, not a workspace revision
 
 - Status: Accepted
 - Amends: [ADR-0147](ADR-0147-multi-root-workspaces-trust-profiles-local-history.md) (trust-record
