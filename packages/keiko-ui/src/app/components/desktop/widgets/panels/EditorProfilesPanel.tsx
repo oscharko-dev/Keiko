@@ -41,10 +41,14 @@ export function EditorProfilesPanel({
     );
     setSelectedRef(snapshot.activeProfileRef);
     setDisplayName(current?.builtIn === true ? "" : (current?.displayName ?? ""));
-    // Depend on the active profile ref, not the whole snapshot container: any
-    // unrelated settings refresh (e.g. SSE `editor-settings:changed`) gives
+    // Depend on the active profile ref alone, not the whole snapshot container.
+    // Any unrelated settings refresh (e.g. SSE `editor-settings:changed`) gives
     // `snapshot` a new reference and would otherwise reset the selection and
-    // overwrite whatever the user was typing in the rename/duplicate field.
+    // overwrite whatever the user was typing in the rename/duplicate field
+    // (CR #3613099024). `snapshot.profiles` is still read inside the effect,
+    // but only to project the display name for the ref that just changed —
+    // profile list edits arrive with an activeProfileRef change themselves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot?.activeProfileRef]);
 
   const validName = displayName.trim().length > 0 && displayName.trim() === displayName;

@@ -324,6 +324,20 @@ export function deleteSingletonWorkspaceManifestForProject(
     .prepare("SELECT workspace_id, root_ref FROM workspace_manifest_roots WHERE project_path = ?")
     .get(projectPath) as { readonly workspace_id?: string; readonly root_ref?: string } | undefined;
   if (membership?.workspace_id === undefined || membership.root_ref === undefined) return;
+  // Re-verify the singleton invariant HERE, inside the enclosing write lock,
+  // rather than trusting the caller's pre-transaction guard alone. Between
+  // the caller's rootCount check and BEGIN IMMEDIATE another connection can
+  // add a root to the workspace; without this second check the cascade below
+  // would then also delete siblings that never belonged to `projectPath`
+  // (CR #3640066698 — legitimate TOCTOU window).
+  const rootCount = db
+    .prepare(
+      "SELECT COUNT(*) AS count FROM workspace_manifest_roots WHERE workspace_id = ?",
+    )
+    .get(membership.workspace_id) as { readonly count?: number } | undefined;
+  if ((rootCount?.count ?? 0) > 1) {
+    throw new Error("WORKSPACE_NOT_SINGLETON");
+  }
   db.prepare("DELETE FROM workspace_trust_records WHERE root_ref = ?").run(membership.root_ref);
   db.prepare("DELETE FROM workspace_manifests WHERE workspace_id = ?").run(membership.workspace_id);
 }
