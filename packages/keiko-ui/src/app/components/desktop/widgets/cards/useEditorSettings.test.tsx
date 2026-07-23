@@ -285,7 +285,14 @@ describe("useEditorSettings M7 cross-window integration", () => {
     });
     const { result } = renderHook(() => useEditorSettings("/repo"));
 
-    await waitFor(() => expect(result.current.applied.fontSize).toBe(13));
+    // Gate on the installed snapshot, not on `applied.fontSize === 13`: the fixture's 13 is
+    // byte-identical to DEFAULT_APPLIED_EDITOR_SETTINGS.fontSize, so the old gate passed on the
+    // very first synchronous poll while `snapshot` was still undefined. On a loaded CI worker
+    // `switchProfile` then closed over that pre-fetch render and `executeProfileMutation`
+    // silently no-opped on `profiles === undefined` — fontSize stayed 13 with exactly one fetch,
+    // which is precisely the flake signature this replaces.
+    await waitFor(() => expect(result.current.snapshot?.profiles).toBeDefined());
+    expect(result.current.applied.fontSize).toBe(13);
     await act(async () => {
       await result.current.switchProfile(
         "profile-focus" as EditorM11ProfileSettingsLayer["profileRef"],
