@@ -3444,42 +3444,14 @@ function bindActionRoot(
   };
 }
 
-async function admitEditorAction(
+function admitAndReserveAction(
   action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  runtimeMutation: RuntimeMutationClassification,
   requestHash: string,
   deps: EditorAgentActionRouteDeps | undefined,
-  signal: AbortSignal,
-): Promise<RouteResult> {
-  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
-  if (snapshot !== undefined) {
-    const rooted = bindActionRoot(action, snapshot, deps);
-    if (!rooted.ok) {
-      return rejectActionRequest(
-        action,
-        snapshot,
-        rooted.decision,
-        rooted.result,
-        requestHash,
-        403,
-      );
-    }
-    action = rooted.action;
-  }
-  const runtimeMutation = classifyRuntimeMutation(action, snapshot, deps);
-  const decision = decideActionPolicy(action, snapshot, deps, runtimeMutation);
-  if (isServerResolvedAction(action)) {
-    if (deps === undefined) {
-      return serverResolvedFailure(
-        action,
-        snapshot,
-        decision,
-        failedResult(action, "The server-resolved editor operation is unavailable."),
-        requestHash,
-        200,
-      );
-    }
-    return resolveServerAction(action, requestHash, snapshot, decision, deps, signal);
-  }
+): { readonly ok: true; readonly inspection: AdmissionInspection } | RouteResult {
   const admission = preflight(action, snapshot);
   if (!admission.ok) {
     return rejectActionRequest(action, snapshot, decision, admission.result, requestHash, 409);
@@ -3496,13 +3468,43 @@ async function admitEditorAction(
     const result = conflict(action, "POLICY_DENIED", "The action authority budget is exhausted.");
     return rejectActionRequest(action, snapshot, reservationDenial, result, requestHash, 403);
   }
+  return { ok: true, inspection: admission.inspection };
+}
+
+async function admitEditorAction(
+  action: EditorAgentAction,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps | undefined,
+  signal: AbortSignal,
+): Promise<RouteResult> {
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  if (snapshot !== undefined) {
+    const rooted = bindActionRoot(action, snapshot, deps);
+    if (!rooted.ok) {
+      return rejectActionRequest(
+        action, snapshot, rooted.decision, rooted.result, requestHash, 403,
+      );
+    }
+    action = rooted.action;
+  }
+  const runtimeMutation = classifyRuntimeMutation(action, snapshot, deps);
+  const decision = decideActionPolicy(action, snapshot, deps, runtimeMutation);
+  if (isServerResolvedAction(action)) {
+    if (deps === undefined) {
+      return serverResolvedFailure(
+        action, snapshot, decision,
+        failedResult(action, "The server-resolved editor operation is unavailable."),
+        requestHash, 200,
+      );
+    }
+    return resolveServerAction(action, requestHash, snapshot, decision, deps, signal);
+  }
+  const admitted = admitAndReserveAction(
+    action, snapshot, decision, runtimeMutation, requestHash, deps,
+  );
+  if ("status" in admitted) return admitted;
   return queueAndEmitAction(
-    action,
-    requestHash,
-    snapshot,
-    decision,
-    admission.inspection,
-    runtimeMutation,
+    action, requestHash, snapshot, decision, admitted.inspection, runtimeMutation,
   );
 }
 
