@@ -3471,6 +3471,27 @@ function admitAndReserveAction(
   return { ok: true, inspection: admission.inspection };
 }
 
+async function resolveOrRejectServerAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps | undefined,
+  signal: AbortSignal,
+): Promise<RouteResult> {
+  if (deps === undefined) {
+    return serverResolvedFailure(
+      action,
+      snapshot,
+      decision,
+      failedResult(action, "The server-resolved editor operation is unavailable."),
+      requestHash,
+      200,
+    );
+  }
+  return resolveServerAction(action, requestHash, snapshot, decision, deps, signal);
+}
+
 async function admitEditorAction(
   action: EditorAgentAction,
   requestHash: string,
@@ -3481,31 +3502,15 @@ async function admitEditorAction(
   if (snapshot !== undefined) {
     const rooted = bindActionRoot(action, snapshot, deps);
     if (!rooted.ok) {
-      return rejectActionRequest(
-        action,
-        snapshot,
-        rooted.decision,
-        rooted.result,
-        requestHash,
-        403,
-      );
+      const { decision: d, result: r } = rooted;
+      return rejectActionRequest(action, snapshot, d, r, requestHash, 403);
     }
     action = rooted.action;
   }
   const runtimeMutation = classifyRuntimeMutation(action, snapshot, deps);
   const decision = decideActionPolicy(action, snapshot, deps, runtimeMutation);
   if (isServerResolvedAction(action)) {
-    if (deps === undefined) {
-      return serverResolvedFailure(
-        action,
-        snapshot,
-        decision,
-        failedResult(action, "The server-resolved editor operation is unavailable."),
-        requestHash,
-        200,
-      );
-    }
-    return resolveServerAction(action, requestHash, snapshot, decision, deps, signal);
+    return resolveOrRejectServerAction(action, snapshot, decision, requestHash, deps, signal);
   }
   const admitted = admitAndReserveAction(
     action,
