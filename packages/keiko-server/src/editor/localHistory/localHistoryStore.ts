@@ -63,6 +63,10 @@ export class EditorLocalHistoryError extends Error {
   public constructor(
     public readonly code: EditorLocalHistoryErrorCode,
     message: string,
+    // Content-free guard token ("ROOT_UNRESOLVED", "IDENTITY_DRIFT", …) appended to the redacted
+    // capture diagnostic so an operator can tell WHICH fail-closed guard rejected a capture
+    // without any path or content leaving the process.
+    public readonly detail?: string,
   ) {
     super(message);
     this.name = "EditorLocalHistoryError";

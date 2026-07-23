@@ -94,10 +94,11 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionRotate(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(3);
+    expect(setCookie).toHaveLength(4);
     expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
     expect(String(setCookie)).toContain("Path=/api/coding-workbench");
     expect(String(setCookie)).toContain("Path=/api/git");
+    expect(String(setCookie)).toContain("Path=/api/editor/local-history");
     expect(String(setCookie)).toContain("HttpOnly");
   });
 
@@ -106,7 +107,7 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionSignOut(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(3);
+    expect(setCookie).toHaveLength(4);
     expect(String(setCookie)).toContain("Max-Age=0");
     expect(channel.sessionCount()).toBe(0);
   });

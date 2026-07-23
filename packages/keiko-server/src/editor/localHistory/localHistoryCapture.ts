@@ -18,8 +18,12 @@ export interface EditorLocalHistoryResolvedRoot {
   readonly realRoot: string;
 }
 
-function unavailableRoot(): never {
-  throw new EditorLocalHistoryError("INVALID_CAPTURE", "Local-history workspace is unavailable.");
+function unavailableRoot(detail: string): never {
+  throw new EditorLocalHistoryError(
+    "INVALID_CAPTURE",
+    "Local-history workspace is unavailable.",
+    detail,
+  );
 }
 
 export function resolveEditorLocalHistoryRoot(
@@ -32,7 +36,7 @@ export function resolveEditorLocalHistoryRoot(
     realRoot = realpathSync(realRootInput);
     manifests = new WorkspaceManifestService(deps.store).list();
   } catch {
-    return unavailableRoot();
+    return unavailableRoot("ROOT_UNRESOLVED");
   }
   for (const manifest of manifests) {
     const root = manifest.roots.find((candidate): boolean => candidate.canonicalRoot === realRoot);
@@ -41,10 +45,10 @@ export function resolveEditorLocalHistoryRoot(
     try {
       inspected = inspectWorkspaceRootIdentity(realRoot);
     } catch {
-      return unavailableRoot();
+      return unavailableRoot("IDENTITY_UNREADABLE");
     }
     if (inspected.rootRef !== root.rootRef || inspected.identityDigest !== root.identityDigest) {
-      return unavailableRoot();
+      return unavailableRoot("IDENTITY_DRIFT");
     }
     return {
       workspaceId: manifest.workspaceId,
@@ -53,13 +57,14 @@ export function resolveEditorLocalHistoryRoot(
       realRoot,
     };
   }
-  return unavailableRoot();
+  return unavailableRoot("NOT_A_MEMBER");
 }
 
 function captureFailureCode(error: unknown): string {
-  return error instanceof EditorLocalHistoryError
+  if (!(error instanceof EditorLocalHistoryError)) return "LOCAL_HISTORY_CAPTURE_FAILED";
+  return error.detail === undefined
     ? `LOCAL_HISTORY_${error.code}`
-    : "LOCAL_HISTORY_CAPTURE_FAILED";
+    : `LOCAL_HISTORY_${error.code}_${error.detail}`;
 }
 
 export function emitEditorLocalHistoryCaptureFailure(
