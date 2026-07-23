@@ -108,9 +108,8 @@ export type FunctionalRuntimeResolverInput = FunctionalRuntimeResolverBaseInput 
   FunctionalChildModelInput;
 
 export interface FunctionalChildModelCandidate {
-  readonly childModelPortFactory?:
-    ProductionCodingRuntimeResolverInput["childModelPortFactory"] | undefined;
-  readonly childModelId?: string | undefined;
+  readonly childModelPortFactory?: unknown;
+  readonly childModelId?: unknown;
 }
 
 type ResolvedFunctionalChildModelInput = Partial<
@@ -123,13 +122,23 @@ export function resolveFunctionalChildModelInput(
 ): ResolvedFunctionalChildModelInput {
   const { childModelPortFactory, childModelId } = input;
   if (childModelPortFactory === undefined && childModelId === undefined) return {};
-  if (childModelPortFactory === undefined || childModelId === undefined) {
+  if (!isChildModelPortFactory(childModelPortFactory) || !isChildModelId(childModelId)) {
     throw new Error("functional-child-model-configuration-incomplete");
   }
   return {
     childModelPortFactory,
     childModelId: (): string => childModelId,
   };
+}
+
+function isChildModelPortFactory(
+  value: unknown,
+): value is NonNullable<ProductionCodingRuntimeResolverInput["childModelPortFactory"]> {
+  return typeof value === "function";
+}
+
+function isChildModelId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
 /**

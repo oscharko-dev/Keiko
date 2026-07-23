@@ -33,4 +33,24 @@ describe("functional child-model composition", () => {
       );
     }
   });
+
+  it("rejects malformed complete pairs from untyped harness callers", () => {
+    const malformed = [
+      { childModelPortFactory, childModelId: null },
+      { childModelPortFactory, childModelId: 42 },
+      { childModelPortFactory, childModelId: "" },
+      { childModelPortFactory, childModelId: "   " },
+      { childModelPortFactory, childModelId: " padded-model " },
+      { childModelPortFactory: null, childModelId: "functional-model" },
+      { childModelPortFactory: 42, childModelId: "functional-model" },
+      { childModelPortFactory: {}, childModelId: "functional-model" },
+      { childModelPortFactory: "factory", childModelId: "functional-model" },
+    ] as const;
+
+    for (const candidate of malformed) {
+      expect(() => resolveFunctionalChildModelInput(candidate)).toThrow(
+        "functional-child-model-configuration-incomplete",
+      );
+    }
+  });
 });

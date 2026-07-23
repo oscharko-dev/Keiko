@@ -118,7 +118,7 @@ describe("production coding runtime BFF", () => {
     const grant = {
       grantId: "grant-route-canary",
       domains: [host],
-      expiresAt: "2026-07-23T00:05:00.000Z",
+      expiresAt: "2099-07-23T00:05:00.000Z",
     };
     const orchestrator = {
       status: (): CodingWorkbenchRuntimeSnapshot => snapshot,
