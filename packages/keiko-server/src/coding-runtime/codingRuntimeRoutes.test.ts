@@ -429,19 +429,19 @@ describe("coding runtime routes", () => {
     );
 
     expect(unpairedWithGrant).toEqual(withoutGrant);
+    expect(pairedStatus).toEqual(withoutGrant);
     expect(unpairedResearch).toEqual({ status: 200, body: { session: "unpaired" } });
-    const serialized = [unpairedWithGrant, pairedStatus, unpairedResearch, pairedResearch].map(
-      (result) => JSON.stringify(result.body),
-    );
-    expect(serialized.filter((body) => body.includes(approvedHost))).toHaveLength(1);
-    expect(pairedResearch).toMatchObject({
+    expect(pairedResearch).toEqual({
       status: 200,
       body: {
         session: "active",
-        grant: {
-          grantId: "grant-1",
-          domains: [approvedHost],
+        pending: {
+          requestId: "research-approval-1",
+          host: "nodejs.org",
+          requestLine: "/docs/latest/api/stream.html backpressure",
+          expiresAt: "2026-07-13T00:02:00.000Z",
         },
+        grant,
       },
     });
   });
