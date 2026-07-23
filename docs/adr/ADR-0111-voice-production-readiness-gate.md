@@ -6,6 +6,12 @@
 
 Accepted (Issue #506, Epic #491, 2026-06-25)
 
+Historical point-in-time closure record. [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md)
+subsequently changed the answer authority, final-transcript persistence, memory/retrieval path, TTS
+configuration, and Realtime media direction. This ADR is not current-head release evidence and does
+not waive current required checks, open audit findings, deployment acceptance, or the explicitly
+deferred Oliver live-microphone test.
+
 ## Context
 
 ADR-0100 through ADR-0110 delivered the full optional Voice Digital Twin for Epic #491: the capability-gated

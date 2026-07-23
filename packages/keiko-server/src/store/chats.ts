@@ -22,6 +22,7 @@ import type {
   UpdateChatPatch,
 } from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
+import { deriveChatGroundingScopeIdentity } from "./chat-grounding-scope-identity.js";
 
 const MAX_CONNECTED_SCOPE_PATHS = 50;
 const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
@@ -310,7 +311,7 @@ function rowToChat(row: ChatRow): Chat {
   const status = row.status === null ? undefined : (row.status as "open" | "closed");
   const connectedScopes = decodeConnectedScopes(row.connected_scope_paths, row.connected_scope_at);
   const localKnowledgeScopes = decodeLocalKnowledgeScopes(row.local_knowledge_scope_json);
-  return {
+  const chat: Chat = {
     id: row.id,
     projectPath: row.project_path,
     title: row.title,
@@ -330,6 +331,7 @@ function rowToChat(row: ChatRow): Chat {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+  return { ...chat, groundingScopeIdentity: deriveChatGroundingScopeIdentity(chat) };
 }
 
 const SELECT_COLUMNS =

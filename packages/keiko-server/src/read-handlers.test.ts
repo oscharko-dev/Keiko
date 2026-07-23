@@ -304,6 +304,28 @@ describe("GET /api/voice/capability", () => {
     expect(body.voice.profile).toBe("speech-to-text");
   });
 
+  it("does not advertise WebRTC for a legacy Realtime config without transcription deployment", () => {
+    const config = {
+      ...VOICE_STT_CONFIG,
+      capabilities: VOICE_STT_CONFIG.capabilities?.map((capability) => ({
+        ...capability,
+        supportsRealtimeVoice: true,
+        supportsSpeechOutput: true,
+        supportedVoicePersonas: ["neutral" as const],
+      })),
+    };
+    const result = handleVoiceCapability(
+      ctx("/api/voice/capability"),
+      depsWith({ config, configPresent: true }),
+    );
+    const body = result.body as {
+      voice: { capabilities: { realtimeVoice: boolean }; transport: { webrtcMedia: boolean } };
+    };
+
+    expect(body.voice.capabilities.realtimeVoice).toBe(false);
+    expect(body.voice.transport.webrtcMedia).toBe(false);
+  });
+
   it("never returns the provider base URL, credential, or model id (AC4/AC5)", () => {
     const result = handleVoiceCapability(
       ctx("/api/voice/capability"),
@@ -369,6 +391,7 @@ const VOICE_REALTIME_CONFIG: GatewayConfig = {
   capabilities: (VOICE_STT_CONFIG.capabilities ?? []).map((capability) => ({
     ...capability,
     supportsRealtimeVoice: true,
+    realtimeTranscriptionModel: "configured-realtime-transcription",
   })),
 };
 
@@ -393,6 +416,18 @@ describe("isVoiceRealtimeCapable (Issue #497 — WebSocket control-plane + micro
     expect(
       isVoiceRealtimeCapable(depsWith({ config: VOICE_REALTIME_CONFIG, configPresent: true })),
     ).toBe(true);
+  });
+
+  it("is false when a realtime deployment omits its provider-specific transcription alias", () => {
+    const config = {
+      ...VOICE_REALTIME_CONFIG,
+      capabilities: VOICE_REALTIME_CONFIG.capabilities?.map((capability) => ({
+        ...capability,
+        realtimeTranscriptionModel: undefined,
+      })),
+    };
+
+    expect(isVoiceRealtimeCapable(depsWith({ config, configPresent: true }))).toBe(false);
   });
 
   it("is false when voice is disabled by policy, even when realtime-capable", () => {

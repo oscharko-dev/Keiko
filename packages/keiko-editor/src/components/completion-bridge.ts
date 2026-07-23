@@ -213,6 +213,8 @@ export function editorItemToMonacoSuggestion(
   kinds: MonacoCompletionItemKinds,
   insertAsSnippetRule?: number,
 ): MonacoCompletionSuggestion {
+  const detail = typeof item.detail === "string" ? item.detail : undefined;
+  const sortText = typeof item.sortText === "string" ? item.sortText : undefined;
   return {
     label: item.label,
     kind: editorKindToMonaco(item.kind, kinds),
@@ -221,8 +223,8 @@ export function editorItemToMonacoSuggestion(
       ? { insertTextRules: insertAsSnippetRule }
       : {}),
     range: item.range === undefined ? fallbackRange : editorRangeToMonaco(item.range),
-    ...(item.detail === undefined ? {} : { detail: item.detail }),
-    ...(item.sortText === undefined ? {} : { sortText: item.sortText }),
+    ...(detail === undefined ? {} : { detail }),
+    ...(sortText === undefined ? {} : { sortText }),
   };
 }
 

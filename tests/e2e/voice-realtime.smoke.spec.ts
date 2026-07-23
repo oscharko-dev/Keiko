@@ -57,8 +57,8 @@ const NO_VOICE_CAPABILITY = {
 // intercepts only the voice control path; every other socket (e.g. the dev server's own HMR
 // WebSocket) is delegated to the real implementation so the app still loads.
 const TRANSPORT_FAKES_SCRIPT = `
-  const OFFER = "v=0\\r\\no=- 1 1 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
-  const ANSWER = "v=0\\r\\no=- 2 2 IN IP4 0.0.0.0\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
+  const OFFER = "v=0\\r\\no=- 1 1 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\na=sendonly\\r\\n";
+  const ANSWER = "v=0\\r\\no=- 2 2 IN IP4 0.0.0.0\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\na=recvonly\\r\\n";
   class FakeDataChannel {
     constructor() {
       this.readyState = "open";
@@ -87,7 +87,10 @@ const TRANSPORT_FAKES_SCRIPT = `
       this._channel = null;
     }
     addEventListener() {}
-    addTrack() {}
+    addTransceiver(_track, options) {
+      if (options?.direction !== "sendonly") throw new Error("expected send-only audio");
+      return { direction: "sendonly" };
+    }
     createDataChannel() { this._channel = new FakeDataChannel(); return this._channel; }
     async createOffer() { return { type: "offer", sdp: OFFER }; }
     async setLocalDescription(desc) { this.localDescription = { type: desc.type, sdp: desc.sdp }; }

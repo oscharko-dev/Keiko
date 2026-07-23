@@ -7,28 +7,17 @@
 // the microphone affordance once the resolution reports speech-to-text capability.
 
 import { useEffect, useState } from "react";
-import { fetchVoiceCapability } from "@/lib/api";
+import {
+  clearVoiceCapabilityCacheForTests as clearApiVoiceCapabilityCacheForTests,
+  fetchVoiceCapability,
+  subscribeVoiceCapabilityInvalidation,
+} from "@/lib/api";
 import type { VoiceCapabilityResolution } from "@/lib/types";
 
-// Module-cached single-flight probe. The resolution is content-free and stable for the lifetime of a
-// gateway config, so one fetch is shared across every composer instance and remount (mirrors the
-// `fetchModels` memoized-promise pattern in lib/api.ts). A transport failure is NOT cached, so a later
-// mount retries instead of being stuck on a transient error.
-let capabilityRequest: Promise<VoiceCapabilityResolution> | undefined;
-
-async function loadVoiceCapability(): Promise<VoiceCapabilityResolution> {
-  capabilityRequest ??= fetchVoiceCapability()
-    .then((response) => response.voice)
-    .catch((error: unknown) => {
-      capabilityRequest = undefined;
-      throw error;
-    });
-  return capabilityRequest;
-}
-
-// Test-only reset so each test starts from an unresolved probe (mirrors `clearModelCacheForTests`).
+// The API layer owns the shared single-flight cache so successful gateway setup can invalidate it
+// without coupling the setup surface back to this React hook.
 export function clearVoiceCapabilityCacheForTests(): void {
-  capabilityRequest = undefined;
+  clearApiVoiceCapabilityCacheForTests();
 }
 
 // Returns the resolved voice capability, or `undefined` while the probe is in flight or after it
@@ -39,17 +28,26 @@ export function useVoiceCapability(): VoiceCapabilityResolution | undefined {
 
   useEffect(() => {
     let cancelled = false;
-    void loadVoiceCapability().then(
-      (voice) => {
-        if (!cancelled) setResolution(voice);
-      },
-      () => {
-        // Fail safe: a failed probe leaves the resolution undefined, so the mic stays hidden and the
-        // composer remains fully usable. Never logs the error (it could carry transport detail).
-      },
-    );
+    let generation = 0;
+    const resolveCapability = (): void => {
+      const currentGeneration = generation + 1;
+      generation = currentGeneration;
+      setResolution(undefined);
+      void fetchVoiceCapability().then(
+        ({ voice }) => {
+          if (!cancelled && generation === currentGeneration) setResolution(voice);
+        },
+        () => {
+          // Fail safe: a failed probe leaves the resolution undefined, so the mic stays hidden and
+          // the composer remains fully usable. Never logs errors that may carry transport detail.
+        },
+      );
+    };
+    resolveCapability();
+    const unsubscribe = subscribeVoiceCapabilityInvalidation(resolveCapability);
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 
@@ -79,23 +77,10 @@ export function supportsRealtimeVoice(resolution: VoiceCapabilityResolution | un
   );
 }
 
-// True only when deployments explicitly advertise Realtime function calling. Grounded Voice uses this
-// as the UI-side branch guard: without it the session still opens and every spoken turn is recorded,
-// but the provider is not asked to call Keiko's grounded retrieval tool.
-export function supportsRealtimeToolCalling(
-  resolution: VoiceCapabilityResolution | undefined,
-): boolean {
-  return (
-    resolution !== undefined &&
-    supportsRealtimeVoice(resolution) &&
-    resolution.capabilities.realtimeToolCalling === true
-  );
-}
-
-// True only when the resolved capability advertises optional assistant speech output — the providers
-// that may speak the assistant's reply (text-to-speech or realtime speech output). This is the Issue
-// #501 gate: it is satisfied by the `speech-output` profile and by `full-realtime` (which also speaks),
-// but NEVER by `speech-to-text` (dictation does not imply the assistant can speak — AC1) or `none`.
+// True only when the resolved capability advertises independent text-to-speech output. Realtime is
+// input/VAD/transcription-only and never supplies assistant speech. This is the Issue #501 gate: it is
+// satisfied by the `speech-output` profile and by an aggregate `full-realtime` resolution only when a
+// separate TTS capability is reachable, but NEVER by speech-to-text or Realtime alone.
 // Reuses the same module-cached probe (no second fetch). `undefined` (unresolved/failed) and any
 // unavailable resolution both return false, so a slow or failed probe never lights up the playback UI
 // and Keiko answers in text with no broken playback affordance (AC1).

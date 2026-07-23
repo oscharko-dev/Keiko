@@ -7,7 +7,10 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import { createCodingRuntimeEditorMutationLeaseCoordinator } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
+import {
+  createCodingRuntimeEditorMutationLeaseBroker,
+  createCodingRuntimeEditorMutationLeaseCoordinator,
+} from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import { createEditorAgentRegistry } from "../editor/agentSessionRegistry.js";
 
 const RUN_ID = "runtime-run";
@@ -227,5 +230,59 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
         request({ authorityRef: { runId: "replacement-run", envelopeDigest: ENVELOPE_DIGEST } }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("coding-runtime editor mutation lease broker (Issue #2483)", () => {
+  it("routes one exact active match and detaches it with the run lifecycle", () => {
+    const claim = vi.fn((): boolean => true);
+    const broker = createCodingRuntimeEditorMutationLeaseBroker();
+    const detach = broker.attach({ matches: () => true, claim });
+    if (detach === undefined) throw new Error("expected attached runtime lease");
+
+    expect(broker.matches(request())).toBe(true);
+    expect(broker.claim(request())).toBe(true);
+    expect(claim).toHaveBeenCalledExactlyOnceWith(request());
+
+    detach();
+    expect(broker.matches(request())).toBe(false);
+    expect(broker.claim(request())).toBe(false);
+    expect(claim).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed for ambiguous or throwing active lease ports", () => {
+    const firstClaim = vi.fn((): boolean => true);
+    const secondClaim = vi.fn((): boolean => true);
+    const broker = createCodingRuntimeEditorMutationLeaseBroker();
+    broker.attach({ matches: () => true, claim: firstClaim });
+    broker.attach({ matches: () => true, claim: secondClaim });
+
+    expect(broker.matches(request())).toBe(false);
+    expect(broker.claim(request())).toBe(false);
+    expect(firstClaim).not.toHaveBeenCalled();
+    expect(secondClaim).not.toHaveBeenCalled();
+
+    const throwing = createCodingRuntimeEditorMutationLeaseBroker();
+    throwing.attach({
+      matches: (): never => {
+        throw new Error("unavailable");
+      },
+      claim: (): never => {
+        throw new Error("unavailable");
+      },
+    });
+    expect(throwing.matches(request())).toBe(false);
+    expect(throwing.claim(request())).toBe(false);
+  });
+
+  it("invalidates every attached lease and rejects new attachments after disposal", () => {
+    const broker = createCodingRuntimeEditorMutationLeaseBroker();
+    expect(broker.attach({ matches: () => true, claim: () => true })).toBeTypeOf("function");
+
+    broker.dispose();
+
+    expect(broker.matches(request())).toBe(false);
+    expect(broker.claim(request())).toBe(false);
+    expect(broker.attach({ matches: () => true, claim: () => true })).toBeUndefined();
   });
 });

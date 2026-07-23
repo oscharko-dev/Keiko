@@ -180,7 +180,9 @@ For any `packages/keiko-ui` change, the applicable local gates include:
 - `npm run check:ui-i18n` when user-visible or accessible strings change,
 - `npm run check:editor-release-evidence`.
 
-Contract/package-surface changes additionally require `npm run build && npm run check:package-surface`.
+Contract/package-surface changes additionally require
+`npm run check:package-surface:assembled`. The aggregate performs the complete artifact assembly
+and pruning sequence before the fail-closed surface check.
 Architecture-sensitive changes require `npm run arch:check` and `npm run arch:check:negative`.
 
 ## Consequences

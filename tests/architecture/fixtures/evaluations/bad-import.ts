@@ -3,13 +3,13 @@
  *
  * Deliberately violates the strict evaluations variant of ADR-0019 §"Required
  * Dependency Direction" rule 3 (`keiko-evaluations` may depend on the leaf,
- * infrastructure, and workflow tiers but never on `keiko-cli`, `keiko-server`,
- * or `keiko-ui`). Exists only to prove the architecture gate fires on real
- * violations for the evaluations boundary.
+ * infrastructure, and workflow tiers plus Local Knowledge, but never on `keiko-cli`,
+ * `keiko-server`, or `keiko-ui`). This fixture specifically pins the server denial after
+ * ADR-0152 D5 admits Local Knowledge.
  *
  * Gate wiring:
  *   - rule
- *     `adr-0019-direction-3l-evaluations-only-contracts-security-model-gateway-workspace-tools-harness-workflows-verification-evidence`
+ *     `adr-0019-direction-3l-evaluations-only-contracts-security-model-gateway-workspace-tools-harness-workflows-verification-evidence-local-knowledge`
  *     in `.dependency-cruiser.cjs` extends its `from.path` regex to include
  *     `tests/architecture/fixtures/evaluations/` so this file is treated as if
  *     it were under the `keiko-evaluations` boundary, and its `to.path` regex
@@ -28,9 +28,9 @@
  * regex matches that path string and fires the rule.
  */
 
-import { violationTarget } from "../../../../packages/keiko-cli/src/index.js";
+import { violationTarget } from "../../../../packages/keiko-server/src/index.js";
 
 export const violation: string =
   typeof violationTarget === "string"
     ? violationTarget
-    : "intentional ADR-0019 violation fixture (evaluations boundary)";
+    : "intentional ADR-0019 server violation fixture (evaluations boundary)";

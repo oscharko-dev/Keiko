@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { parseRealtimeVoiceEvent } from "./voice-realtime-events";
+import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES,
+  parseRealtimeVoiceEvent,
+  realtimeTranscriptByteLength,
+  REALTIME_PROVIDER_ERROR_MESSAGE,
+  REALTIME_TRANSCRIPTION_ERROR_MESSAGE,
+  REALTIME_TRANSCRIPT_LIMIT_MESSAGE,
+} from "./voice-realtime-events";
 
 describe("parseRealtimeVoiceEvent", () => {
   it("parses realtime session lifecycle acknowledgements", () => {
@@ -57,135 +65,118 @@ describe("parseRealtimeVoiceEvent", () => {
     ).toEqual({
       kind: "user-transcript-failed",
       itemId: "u1",
-      message: "asr failed",
+      reason: "provider",
+      message: REALTIME_TRANSCRIPTION_ERROR_MESSAGE,
     });
   });
 
-  it("parses assistant transcript delta and done events", () => {
+  it("never forwards provider-controlled error details to browser-visible events", () => {
+    const sensitiveMarker = "credential-marker-should-not-surface";
+
     expect(
       parseRealtimeVoiceEvent({
-        type: "response.output_audio_transcript.delta",
-        response_id: "r1",
-        item_id: "a1",
-        delta: "Hello",
+        type: "error",
+        error: { message: sensitiveMarker, code: sensitiveMarker },
       }),
-    ).toEqual({
-      kind: "assistant-transcript-delta",
-      responseId: "r1",
-      itemId: "a1",
-      delta: "Hello",
+    ).toEqual({ kind: "error", message: REALTIME_PROVIDER_ERROR_MESSAGE });
+    const failedTranscript = parseRealtimeVoiceEvent({
+      type: "conversation.item.input_audio_transcription.failed",
+      error: { message: sensitiveMarker },
     });
-    expect(
-      parseRealtimeVoiceEvent({
-        type: "response.output_audio_transcript.done",
-        response_id: "r1",
-        item_id: "a1",
-        transcript: "Hello there.",
-      }),
-    ).toEqual({
-      kind: "assistant-transcript-committed",
-      responseId: "r1",
-      itemId: "a1",
-      text: "Hello there.",
-    });
+    expect(JSON.stringify(failedTranscript)).not.toContain(sensitiveMarker);
   });
 
-  it("keeps compatibility with older audio_transcript event names", () => {
+  it("accepts one atomic final at the byte cap and rejects content beyond it", () => {
+    const atLimit = "a".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS);
+    const overLimit = `${atLimit}a`;
+
     expect(
       parseRealtimeVoiceEvent({
-        type: "response.audio_transcript.done",
-        response_id: "r-old",
-        transcript: "Done.",
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "at-limit",
+        transcript: atLimit,
+      }),
+    ).toEqual({ kind: "user-transcript-committed", itemId: "at-limit", text: atLimit });
+    expect(
+      parseRealtimeVoiceEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "over-limit",
+        transcript: overLimit,
       }),
     ).toEqual({
-      kind: "assistant-transcript-committed",
-      responseId: "r-old",
+      kind: "user-transcript-failed",
+      itemId: "over-limit",
+      reason: "limit-exceeded",
+      message: REALTIME_TRANSCRIPT_LIMIT_MESSAGE,
+      reviewText: atLimit,
+    });
+    const oversizedDelta = parseRealtimeVoiceEvent({
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "beyond-review-cap-delta",
+      delta: overLimit,
+    });
+    expect(oversizedDelta).toMatchObject({
+      kind: "user-transcript-failed",
+      itemId: "beyond-review-cap-delta",
+      reason: "limit-exceeded",
+      message: REALTIME_TRANSCRIPT_LIMIT_MESSAGE,
+    });
+    if (oversizedDelta?.kind !== "user-transcript-failed") {
+      throw new Error("expected a bounded transcript failure");
+    }
+    expect(oversizedDelta.reviewText).toHaveLength(MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES);
+  });
+
+  it("bounds multibyte transcript review text without splitting a surrogate pair", () => {
+    const beyondReviewCap = "😀".repeat(
+      Math.floor(MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES / 4) + 1,
+    );
+    const parsed = parseRealtimeVoiceEvent({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "multibyte-overflow",
+      transcript: beyondReviewCap,
+    });
+
+    expect(parsed).toMatchObject({
+      kind: "user-transcript-failed",
+      reason: "limit-exceeded",
+      itemId: "multibyte-overflow",
+    });
+    if (parsed?.kind !== "user-transcript-failed" || parsed.reviewText === undefined) {
+      throw new Error("expected reviewable multibyte text");
+    }
+    expect(realtimeTranscriptByteLength(parsed.reviewText)).toBe(
+      MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES,
+    );
+    expect(parsed.reviewText.endsWith("😀")).toBe(true);
+  });
+
+  it("drops every provider-native assistant, audio, response, and tool event", () => {
+    for (const event of [
+      { type: "response.output_audio_transcript.delta", delta: "parallel answer" },
+      { type: "response.output_audio_transcript.done", transcript: "parallel answer" },
+      { type: "response.output_audio.delta", delta: "provider audio" },
+      { type: "output_audio_buffer.started" },
+      { type: "response.function_call_arguments.delta", call_id: "call-1", delta: "{}" },
+      { type: "response.output_item.done", item: { type: "function_call" } },
+      { type: "response.done", response: { id: "r1", status: "completed" } },
+      { type: "response.cancelled", response_id: "r1" },
+    ]) {
+      expect(parseRealtimeVoiceEvent(event)).toBeUndefined();
+    }
+  });
+
+  it("does not retain oversized provider-controlled transcript item identifiers", () => {
+    expect(
+      parseRealtimeVoiceEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "i".repeat(257),
+        transcript: "bounded identity",
+      }),
+    ).toEqual({
+      kind: "user-transcript-committed",
       itemId: undefined,
-      text: "Done.",
-    });
-  });
-
-  it("maps response.done statuses", () => {
-    expect(
-      parseRealtimeVoiceEvent({
-        type: "response.done",
-        response: { id: "r2", status: "cancelled" },
-      }),
-    ).toEqual({
-      kind: "response-done",
-      responseId: "r2",
-      status: "cancelled",
-    });
-  });
-
-  it("parses realtime function-call argument deltas", () => {
-    expect(
-      parseRealtimeVoiceEvent({
-        type: "response.function_call_arguments.delta",
-        response_id: "r-tool",
-        item_id: "item-tool",
-        call_id: "call-1",
-        name: "search_keiko_grounding",
-        delta: '{"query":"Fachkonzept"',
-      }),
-    ).toEqual({
-      kind: "function-call-arguments-delta",
-      responseId: "r-tool",
-      itemId: "item-tool",
-      callId: "call-1",
-      name: "search_keiko_grounding",
-      delta: '{"query":"Fachkonzept"',
-    });
-  });
-
-  it("parses committed function calls from output_item.done", () => {
-    expect(
-      parseRealtimeVoiceEvent({
-        type: "response.output_item.done",
-        response_id: "r-tool",
-        item: {
-          id: "item-tool",
-          type: "function_call",
-          call_id: "call-1",
-          name: "search_keiko_grounding",
-          arguments: '{"query":"Worum geht es im Fachkonzept?"}',
-        },
-      }),
-    ).toEqual({
-      kind: "function-call-committed",
-      responseId: "r-tool",
-      itemId: "item-tool",
-      callId: "call-1",
-      name: "search_keiko_grounding",
-      argumentsText: '{"query":"Worum geht es im Fachkonzept?"}',
-    });
-  });
-
-  it("parses committed function calls from response.done output", () => {
-    expect(
-      parseRealtimeVoiceEvent({
-        type: "response.done",
-        response: {
-          id: "r-tool",
-          status: "completed",
-          output: [
-            {
-              id: "item-tool",
-              type: "function_call",
-              call_id: "call-1",
-              name: "search_keiko_grounding",
-              arguments: { query: "Welche Quellen sind verbunden?" },
-            },
-          ],
-        },
-      }),
-    ).toEqual({
-      kind: "function-call-committed",
-      responseId: "r-tool",
-      itemId: "item-tool",
-      callId: "call-1",
-      name: "search_keiko_grounding",
-      argumentsText: '{"query":"Welche Quellen sind verbunden?"}',
+      text: "bounded identity",
     });
   });
 

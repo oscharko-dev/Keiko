@@ -3,7 +3,7 @@
 // The shipping `check:retrieval-quality` gate scores ONLY lexical `searchText` over toy repos with
 // every threshold = 1 — the production SEMANTIC retrieval + RRF fusion + model reranker + grounded
 // answer path is gated by nothing. This gate closes that hole by driving the REAL functions
-// (grounded-repo-semantic-search + grounded-rerank + grounded-model-reranker) over a distractor-dense
+// (grounded-repo-semantic-search + grounded-rerank + grounded-rerank-facade) over a distractor-dense
 // corpus, and — critically — PROVES the gate is non-tautological by asserting that an injected
 // ranking / reranker regression drops the metrics BELOW the floors. If a regression ever passed, the
 // gate itself is broken and this script fails closed.

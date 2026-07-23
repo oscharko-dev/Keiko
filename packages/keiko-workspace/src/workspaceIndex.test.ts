@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, hkdfSync } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -8,10 +8,13 @@ import {
   statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
+import { sealString } from "@oscharko-dev/keiko-security";
 import { describe, expect, it } from "vitest";
 import {
   nodeWorkspaceFs,
@@ -26,20 +29,41 @@ import {
   buildWorkspaceIndexSnapshot,
   buildWorkspaceIndexScopeKey,
   buildWorkspaceIndexLexicalRecord,
-  createFileWorkspaceIndexStore,
+  createFileWorkspaceIndexStore as createEncryptedFileWorkspaceIndexStore,
   createInMemoryWorkspaceIndexStore,
   createWorkspaceIndex,
   inspectWorkspaceIndexDirectories,
   isWorkspaceIndexSnapshotFresh,
   prepareWorkspaceIndexSnapshot,
+  prepareCachedWorkspaceIndexSnapshot,
   stripTrailingNonWordChars,
   type WorkspaceIndex,
+  type FileWorkspaceIndexStoreOptions,
   type WorkspaceIndexStore,
   type WorkspaceIndexSnapshot,
+  workspaceIndexCandidateSet,
 } from "./workspaceIndex.js";
 
 const MEM_ROOT = "/ws";
 const FIXED_NOW: () => number = () => 1_700_000_000_000;
+const FILE_INDEX_TEST_KEY = Buffer.alloc(32, 23);
+
+function fileIndexStorageGenerationId(): string {
+  const info = "keiko-workspace-index:key-generation:v2";
+  const generationKey = Buffer.from(
+    hkdfSync("sha256", FILE_INDEX_TEST_KEY, "keiko-workspace-index:file-locator-salt:v2", info, 32),
+  );
+  return createHmac("sha256", generationKey).update(info).digest("hex");
+}
+
+function createFileWorkspaceIndexStore(
+  options: Omit<FileWorkspaceIndexStoreOptions, "encryptionKey">,
+): WorkspaceIndexStore {
+  return createEncryptedFileWorkspaceIndexStore({
+    ...options,
+    encryptionKey: FILE_INDEX_TEST_KEY,
+  });
+}
 
 interface MutableTrackedFs {
   readonly counters: {
@@ -365,7 +389,7 @@ function removeRuntimeDir(runtimeDir: string): void {
 
 function runtimeFiles(runtimeDir: string): readonly string[] {
   return readdirSync(runtimeDir)
-    .filter((name) => /^workspace-index-[0-9a-f]{64}\.json$/u.test(name))
+    .filter((name) => /^workspace-index-v2-[0-9a-f]{64}-[0-9a-f]{64}\.json$/u.test(name))
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
@@ -400,6 +424,202 @@ function sampleSnapshot(content: string): WorkspaceIndexSnapshot {
 }
 
 describe("workspaceIndex", () => {
+  it("uses cached lexical evidence to rank a route declaration ahead of path-only decoys", () => {
+    const query = nlq(
+      "Welche Produktionsdatei registriert POST /api/chats/messages/grounded und welcher Handler wird aufgerufen?",
+    );
+    const contents = new Map([
+      ["src/api/chats/messages/grounded/overview.ts", "export const unrelated = true;\n"],
+      [
+        "src/routes.ts",
+        '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n',
+      ],
+      ["src/grounded-qa.ts", "export async function handleGroundedAsk(): Promise<void> {}\n"],
+    ]);
+    const snapshot = buildWorkspaceIndexSnapshot({
+      scope: { relativePaths: [] },
+      policy: {
+        policyMode: "workspace-root-default",
+        applyGitignore: true,
+        omitLowValueWorkspaceFiles: true,
+      },
+      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      discovery: {
+        files: [...contents].map(([scopePath, content]) => ({
+          scopePath,
+          sizeBytes: Buffer.byteLength(content, "utf8"),
+        })),
+        directories: [],
+        filesDiscovered: contents.size,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+        depthPrunedByDiscovery: 0,
+        truncated: false,
+      },
+      records: [...contents].map(([scopePath, content]) => ({
+        scopePath,
+        sizeBytes: Buffer.byteLength(content, "utf8"),
+        kind: "text" as const,
+        lexical: buildWorkspaceIndexLexicalRecord(content),
+      })),
+    });
+    const prepared = prepareCachedWorkspaceIndexSnapshot(snapshot, workspace());
+    const policy = resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" });
+
+    const candidates = workspaceIndexCandidateSet(prepared, query, policy);
+
+    expect(candidates.files[0]?.relativePath).toBe("src/routes.ts");
+    const contentSignal = candidates.diagnostics.rankedCandidates[0]?.signals.find(
+      (signal) => signal.name === "content-term-score",
+    );
+    expect(contentSignal?.value).toBeGreaterThan(229);
+  });
+
+  it("uses privacy-safe cached hashes to rank an exact-symbol definition ahead of references", () => {
+    const exactQuery: RetrievalQuery = {
+      kind: "exact-symbol",
+      text: "dispatchWorkUnit",
+      caseSensitive: false,
+      maxResults: 100,
+      emittedAtMs: 0,
+    };
+    const contents = new Map([
+      ["src/a-reference.ts", "await dispatchWorkUnit();\n"],
+      ["src/service.ts", "export async function dispatchWorkUnit(): Promise<void> {}\n"],
+    ]);
+    const snapshot = buildWorkspaceIndexSnapshot({
+      scope: { relativePaths: [] },
+      policy: {
+        policyMode: "workspace-root-default",
+        applyGitignore: true,
+        omitLowValueWorkspaceFiles: true,
+      },
+      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      discovery: {
+        files: [...contents].map(([scopePath, content]) => ({
+          scopePath,
+          sizeBytes: Buffer.byteLength(content, "utf8"),
+        })),
+        directories: [],
+        filesDiscovered: contents.size,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+        depthPrunedByDiscovery: 0,
+        truncated: false,
+      },
+      records: [...contents].map(([scopePath, content]) => ({
+        scopePath,
+        sizeBytes: Buffer.byteLength(content, "utf8"),
+        kind: "text" as const,
+        lexical: buildWorkspaceIndexLexicalRecord(content),
+      })),
+    });
+    const prepared = prepareCachedWorkspaceIndexSnapshot(snapshot, workspace());
+    const policy = resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" });
+
+    expect(workspaceIndexCandidateSet(prepared, exactQuery, policy).files[0]?.relativePath).toBe(
+      "src/service.ts",
+    );
+  });
+
+  it("content-prescores the first indexed search before applying its scan cap", async () => {
+    const tracked = createTrackedFs({
+      "src/api/chats/messages/grounded/overview.ts": "export const unrelated = true;\n",
+      "src/routes.ts":
+        '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n',
+    });
+    const index = createWorkspaceIndex();
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+
+    const result = await searchText(
+      scope(),
+      nlq("Welche Datei registriert POST /api/chats/messages/grounded?"),
+      limits,
+      { fs: tracked.fs, nowMs: FIXED_NOW, workspaceIndex: index },
+    );
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/routes.ts"]);
+  });
+
+  it("content-prescores unindexed files in a partial snapshot before applying its scan cap", async () => {
+    const files = {
+      "src/api/chats/messages/grounded/overview.ts": "export const unrelated = true;\n",
+      "src/routes.ts":
+        '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n',
+    };
+    const tracked = createTrackedFs(files);
+    const snapshot = buildWorkspaceIndexSnapshot({
+      scope: { relativePaths: [] },
+      policy: {
+        policyMode: "workspace-root-default",
+        applyGitignore: true,
+        omitLowValueWorkspaceFiles: true,
+      },
+      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: 1,
+      discovery: {
+        files: Object.entries(files).map(([scopePath, content]) => ({
+          scopePath,
+          sizeBytes: Buffer.byteLength(content, "utf8"),
+        })),
+        directories: [],
+        filesDiscovered: 2,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+        depthPrunedByDiscovery: 0,
+        truncated: false,
+      },
+      records: [],
+    });
+    const index = createWorkspaceIndex({
+      loadSnapshot: () => snapshot,
+      saveSnapshot: () => undefined,
+    });
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+
+    const result = await searchText(
+      scope(),
+      nlq("Welche Datei registriert POST /api/chats/messages/grounded?"),
+      limits,
+      {
+        fs: tracked.fs,
+        nowMs: FIXED_NOW,
+        workspaceIndex: index,
+        searchHints: { retrievalIntent: "targeted-code-search" },
+      },
+    );
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/routes.ts"]);
+  });
+
+  it("counts cached aliases as one semantic group when selecting the best lines", async () => {
+    const tracked = createTrackedFs({
+      "src/app.ts": [
+        "define defined definition declare declared",
+        "function defined alpha",
+        "function defined beta",
+        "function defined gamma",
+      ].join("\n"),
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+    await searchText(currentScope, nlq("unrelated"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    const result = await searchText(currentScope, nlq("function defined"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(result.atoms.map((atom) => atom.lineRange?.startLine)).toEqual([2, 3, 4]);
+  });
+
   it("normalizes noisy snapshot inputs and caps lexical records deterministically", () => {
     const lineCapped = buildWorkspaceIndexLexicalRecord(
       Array.from({ length: 40 }, (_, index) => `Token${String(index)}`).join(" "),
@@ -530,6 +750,21 @@ describe("workspaceIndex", () => {
     expect(record.truncated).toBe(false);
     expect(record.lines).toEqual([{ startLine: 1, endLine: 1, termHashes: expectedHashes }]);
     expect(record.termHashes).toEqual(expectedHashes);
+  });
+
+  it("stores route declarations only as non-reconstructive hash markers", () => {
+    const secretPath = ["/private/orders/", "customer-secret"].join("");
+    const source = `#[patch("${secretPath}")] async fn update_order() {}`;
+    const record = buildWorkspaceIndexLexicalRecord(source);
+    const serialized = JSON.stringify(record);
+
+    expect(record.truncated).toBe(false);
+    expect(record.termHashes.every((hash) => /^[0-9a-f]{64}$/u.test(hash))).toBe(true);
+    expect(serialized).not.toContain(secretPath);
+    expect(serialized).not.toContain("customer-secret");
+    expect(serialized).not.toContain("patch");
+    expect(serialized).not.toContain("update_order");
+    expect(serialized).not.toContain("keiko-internal-route-declaration");
   });
 
   // SonarCloud S8786: `stripTrailingNonWordChars` replaces the old `/[^\p{L}\p{N}]+$/u` regex,
@@ -756,7 +991,10 @@ describe("workspaceIndex", () => {
       workspaceIndex: index,
     });
 
-    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["docs/readme.md", "src/a.ts"]);
+    expect(result.atoms.map((atom) => atom.scopePath).sort()).toEqual([
+      "docs/readme.md",
+      "src/a.ts",
+    ]);
     expect(tracked.counters.readFileUtf8).toBe(0);
     expect(tracked.counters.readFileBytes).toBe(2);
   });
@@ -1238,7 +1476,7 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("writes file-backed snapshots with hashed filenames and source-free path-free JSON", async () => {
+  it("seals file-backed snapshots so paths, source, and lexical hashes are not recoverable", async () => {
     const runtimeDir = tempRuntimeDir();
     const secret = ["sk-", "abcdef0123456789ABCDEF"].join("");
     const unsupportedSecret = "hf_abcdefghijklmnopqrstuvwxyz123456";
@@ -1260,13 +1498,16 @@ describe("workspaceIndex", () => {
         throw new Error("expected persisted snapshot file");
       }
       const raw = readFileSync(join(runtimeDir, fileName), "utf8");
+      const tokenHash = createHash("sha256").update("token").digest("hex");
 
-      expect(fileName).toMatch(/^workspace-index-[0-9a-f]{64}\.json$/u);
+      expect(fileName).toMatch(/^workspace-index-v2-[0-9a-f]{64}-[0-9a-f]{64}\.json$/u);
       expect(fileName).not.toContain(MEM_ROOT);
+      expect(raw).toMatch(/^kv1\./u);
       expect(raw).not.toContain(MEM_ROOT);
       expect(raw).not.toContain(secret);
       expect(raw).not.toContain(unsupportedSecret);
       expect(raw).not.toContain("export const");
+      expect(raw).not.toContain(tokenHash);
     } finally {
       removeRuntimeDir(runtimeDir);
     }
@@ -1410,15 +1651,58 @@ describe("workspaceIndex", () => {
   it("prunes orphaned temp snapshots under the configured snapshot cap", async () => {
     const runtimeDir = tempRuntimeDir();
     try {
-      const tempFileName = `workspace-index-${"a".repeat(64)}.json.${"b".repeat(16)}.tmp`;
-      writeFileSync(join(runtimeDir, tempFileName), "{}\n", "utf8");
+      const tempFileName = `workspace-index-v2-${fileIndexStorageGenerationId()}-${"a".repeat(64)}.json.${"b".repeat(16)}.tmp`;
+      const tempPath = join(runtimeDir, tempFileName);
+      writeFileSync(tempPath, "{}\n", "utf8");
+      utimesSync(tempPath, 1, 1);
       const store = createFileWorkspaceIndexStore({ runtimeDir, maxSnapshots: 1 });
 
       await store.saveSnapshot("fresh-key", sampleSnapshot("needle"));
 
       const files = runtimeFiles(runtimeDir);
       expect(files).toHaveLength(1);
-      expect(files[0]).toMatch(/^workspace-index-[0-9a-f]{64}\.json$/u);
+      expect(files[0]).toMatch(/^workspace-index-v2-[0-9a-f]{64}-[0-9a-f]{64}\.json$/u);
+      expect(readdirSync(runtimeDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
+  it("preserves fresh temp snapshots within the cleanup budget", async () => {
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const tempFileName = `workspace-index-v2-${fileIndexStorageGenerationId()}-${"a".repeat(64)}.json.${"b".repeat(16)}.tmp`;
+      writeFileSync(join(runtimeDir, tempFileName), "{}\n", "utf8");
+      const store = createFileWorkspaceIndexStore({ runtimeDir, maxSnapshots: 1 });
+
+      await store.saveSnapshot("fresh-key", sampleSnapshot("needle"));
+
+      expect(readdirSync(runtimeDir)).toContain(tempFileName);
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
+  it("prunes excess temp snapshots after the pressure grace period", async () => {
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const generationId = fileIndexStorageGenerationId();
+      const tempNames = Array.from(
+        { length: 5 },
+        (_, index) =>
+          `workspace-index-v2-${generationId}-${index.toString(16).padStart(64, "0")}.json.${"b".repeat(16)}.tmp`,
+      );
+      for (const tempName of tempNames) {
+        const path = join(runtimeDir, tempName);
+        writeFileSync(path, "{}\n", "utf8");
+        const oldEnoughForPressure = Date.now() / 1000 - 60;
+        utimesSync(path, oldEnoughForPressure, oldEnoughForPressure);
+      }
+      const store = createFileWorkspaceIndexStore({ runtimeDir, maxSnapshots: 1 });
+
+      await store.saveSnapshot("fresh-key", sampleSnapshot("needle"));
+
+      expect(readdirSync(runtimeDir).filter((name) => name.endsWith(".tmp"))).toHaveLength(4);
     } finally {
       removeRuntimeDir(runtimeDir);
     }
@@ -1537,7 +1821,13 @@ describe("workspaceIndex", () => {
   it("loads a corrupt file-backed snapshot as undefined", async () => {
     const runtimeDir = tempRuntimeDir();
     try {
-      const store = createFileWorkspaceIndexStore({ runtimeDir });
+      const failures: string[] = [];
+      const store = createFileWorkspaceIndexStore({
+        runtimeDir,
+        onLoadFailure: (failure): void => {
+          failures.push(failure.reason);
+        },
+      });
       await store.saveSnapshot("corrupt-key", sampleSnapshot("needle"));
 
       const [fileName] = runtimeFiles(runtimeDir);
@@ -1547,6 +1837,82 @@ describe("workspaceIndex", () => {
       writeFileSync(join(runtimeDir, fileName), "{broken", "utf8");
 
       await expect(store.loadSnapshot("corrupt-key")).resolves.toBeUndefined();
+      expect(failures).toEqual(["authentication-or-corruption"]);
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
+  it("treats a different encryption-key generation as an isolated cache miss", async () => {
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const writer = createFileWorkspaceIndexStore({ runtimeDir });
+      await writer.saveSnapshot("key-rotation", sampleSnapshot("needle"));
+      await expect(writer.loadSnapshot("key-rotation")).resolves.toBeDefined();
+      const failures: string[] = [];
+      const wrongKeyReader = createEncryptedFileWorkspaceIndexStore({
+        runtimeDir,
+        encryptionKey: Buffer.alloc(32, 31),
+        onLoadFailure: (failure): void => {
+          failures.push(failure.reason);
+        },
+      });
+
+      await expect(wrongKeyReader.loadSnapshot("key-rotation")).resolves.toBeUndefined();
+      expect(failures).toEqual([]);
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
+  it("rebuilds a legacy encrypted snapshot without reporting false corruption", async () => {
+    const runtimeDir = tempRuntimeDir();
+    const storageKey = "legacy-snapshot";
+    const failures: string[] = [];
+    try {
+      const legacySnapshot = { ...sampleSnapshot("needle"), version: 3 };
+      const fileName = `workspace-index-${createHash("sha256").update(storageKey).digest("hex")}.json`;
+      writeFileSync(
+        join(runtimeDir, fileName),
+        sealString(FILE_INDEX_TEST_KEY, JSON.stringify(legacySnapshot)),
+        "utf8",
+      );
+      const store = createFileWorkspaceIndexStore({
+        runtimeDir,
+        onLoadFailure: (failure): void => {
+          failures.push(failure.reason);
+        },
+      });
+
+      await expect(store.loadSnapshot(storageKey)).resolves.toBeUndefined();
+      expect(failures).toEqual([]);
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
+  it("reloads a same-fingerprint snapshot after an atomic store replacement", async () => {
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const store = createFileWorkspaceIndexStore({ runtimeDir });
+      const storageKey = "same-fingerprint";
+      const first = sampleSnapshot("needle");
+      const replacement = sampleSnapshot("poison");
+      await store.saveSnapshot(storageKey, first);
+
+      const [fileName] = runtimeFiles(runtimeDir);
+      if (fileName === undefined) {
+        throw new Error("expected persisted snapshot file");
+      }
+      const path = join(runtimeDir, fileName);
+      const fixedTimeSeconds = 1_700_000_000;
+      utimesSync(path, fixedTimeSeconds, fixedTimeSeconds);
+      await expect(store.loadSnapshot(storageKey)).resolves.toEqual(first);
+
+      await store.saveSnapshot(storageKey, replacement);
+      utimesSync(path, fixedTimeSeconds, fixedTimeSeconds);
+
+      await expect(store.loadSnapshot(storageKey)).resolves.toEqual(replacement);
     } finally {
       removeRuntimeDir(runtimeDir);
     }

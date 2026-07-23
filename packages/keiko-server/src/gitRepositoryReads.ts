@@ -35,6 +35,7 @@ import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { FilesError, runFilesHandler } from "./files.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 
 type UnavailableReason = GitUnavailableReason | "unsafe-repository" | "git-error";
 
@@ -64,12 +65,24 @@ function gitRunnerCacheId(runner: NormalizedGitRouteOptions["runner"]): number {
   return id;
 }
 
-function gitSummaryCacheKey(ctx: RouteContext, options: NormalizedGitRouteOptions): string {
+function gitSummaryCacheKey(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  options: NormalizedGitRouteOptions,
+): string {
+  // Issue #2640: partition the cache by app-session read authority. Without the sessionId leg an
+  // unpaired caller within the TTL could read a summary populated by a paired one — the paired
+  // projection is content-bearing, the unpaired one is content-free, so they must never share a
+  // cache entry. Empty string is the deliberate namespace for "no session" and cannot collide
+  // with a real session id (SESSION_ID_PATTERN in sessionRegistry.ts pins them to `sess_` + 24
+  // hex).
+  const session = resolveAppSessionReadAuthority(deps, ctx.req);
   return JSON.stringify({
     root: ctx.url.searchParams.get("root") ?? "",
     runner: gitRunnerCacheId(options.runner),
     maxStatusBytes: options.maxStatusBytes,
     timeoutMs: options.timeoutMs,
+    sessionId: session?.sessionId ?? "",
   });
 }
 
@@ -84,7 +97,16 @@ function cachedGitSummary(deps: UiHandlerDeps, key: string): GitSummaryCacheEntr
 
 function storeGitSummary(deps: UiHandlerDeps, key: string, value: Promise<RouteResult>): void {
   const byKey = gitSummaryCache.get(deps) ?? new Map<string, GitSummaryCacheEntry>();
-  byKey.set(key, { expiresAt: Date.now() + GIT_SUMMARY_CACHE_TTL_MS, value });
+  const now = Date.now();
+  // Opportunistic sweep on write. Reads only expire the exact key they look up, so partitioning
+  // the cache by session (issue #2640) — which multiplies key cardinality — would otherwise let
+  // one-shot entries linger past their TTL until the deps instance dies. The sweep is bounded by
+  // the current map size and only ever runs on the write path, so it stays proportional to real
+  // traffic.
+  for (const [existingKey, entry] of byKey) {
+    if (entry.expiresAt <= now) byKey.delete(existingKey);
+  }
+  byKey.set(key, { expiresAt: now + GIT_SUMMARY_CACHE_TTL_MS, value });
   gitSummaryCache.set(deps, byKey);
 }
 
@@ -280,7 +302,7 @@ export async function handleGitSummary(
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
     const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
-    const cacheKey = gitSummaryCacheKey(ctx, options);
+    const cacheKey = gitSummaryCacheKey(ctx, deps, options);
     const cached = cachedGitSummary(deps, cacheKey);
     if (cached !== undefined) return cached.value;
     const value = computeGitSummary(ctx, deps, options).catch((error: unknown) => {

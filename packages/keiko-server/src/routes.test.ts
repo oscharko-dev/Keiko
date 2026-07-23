@@ -26,6 +26,17 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
+  it("does not mount provider-native realtime assistant tool routes", () => {
+    for (const pattern of [
+      "/api/voice/realtime/grounded-tool",
+      "/api/voice/realtime/memory-tool",
+      "/api/desktop/chat/voice-turn",
+    ]) {
+      expect(matchRoute("POST", pattern)).toBeUndefined();
+      expect(matchRoute("GET", pattern)).toBeUndefined();
+    }
+  });
+
   it("does not mount deprecated browser-owned runtime authority routes", () => {
     for (const pattern of [
       "/api/editor/agent/authority",
@@ -499,9 +510,6 @@ describe("API route contract", () => {
     // Issue #152 — additive SSE streaming surface alongside the buffered send route.
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/stream"),
-    ).toBeDefined();
-    expect(
-      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/voice-turn"),
     ).toBeDefined();
   });
 

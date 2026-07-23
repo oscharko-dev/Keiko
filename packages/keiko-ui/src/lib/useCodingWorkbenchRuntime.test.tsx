@@ -8,7 +8,7 @@ import type {
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
-} from "./api";
+} from "./coding-workbench-provider-api";
 import {
   createCodingWorkbenchRuntimeEventSource,
   decideCodingWorkbenchRuntimeApproval,
@@ -26,8 +26,8 @@ import {
   type UseCodingWorkbenchRuntimeInput,
 } from "./useCodingWorkbenchRuntime";
 
-vi.mock("./api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api")>();
+vi.mock("./coding-workbench-provider-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./coding-workbench-provider-api")>();
   return {
     ...actual,
     fetchCodingWorkbenchCodexSubscriptionProfile: vi.fn(),

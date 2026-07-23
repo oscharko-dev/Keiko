@@ -1,4 +1,5 @@
 import type {
+  CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeAdapterKind,
   CodingWorkbenchRuntimeAuthorityFacts,
@@ -110,7 +111,10 @@ function admit(
 }
 
 function guarded(
-  authority: Pick<CodingRuntimeAuthorityService, "revalidateCapabilityForMutation">,
+  authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >,
   context: CodingToolAuthorityContextProvider,
   capability: string,
   request: CodingToolActionRequest,
@@ -118,6 +122,10 @@ function guarded(
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
   const mutationGuard = {
     check: (): boolean => revalidate(authority, context, capability, request),
+    resolveParentAuthority: (): CodingWorkbenchAuthorityEnvelope | undefined =>
+      revalidateEnvelope(authority, context, capability, request)?.authority,
+    chargeDelegatedRead: (delegationId: string, idempotencyKey: string): boolean =>
+      chargeDelegatedRead(authority, context, capability, delegationId, idempotencyKey),
     ...(binding === undefined ? {} : { binding }),
   };
   return {
@@ -175,6 +183,15 @@ function revalidate(
   capability: string,
   request: CodingToolActionRequest,
 ): boolean {
+  return revalidateEnvelope(authority, context, capability, request) !== undefined;
+}
+
+function revalidateEnvelope(
+  authority: Pick<CodingRuntimeAuthorityService, "revalidateCapabilityForMutation">,
+  context: CodingToolAuthorityContextProvider,
+  capability: string,
+  request: CodingToolActionRequest,
+): CodingWorkbenchRuntimeAuthorityEnvelope | undefined {
   const trusted = context();
   const resolved = authority.revalidateCapabilityForMutation({
     capability,
@@ -184,7 +201,28 @@ function revalidate(
     deploymentCeiling: trusted.deploymentCeiling,
     nowIso: trusted.nowIso,
   });
-  return resolved.ok && actionAllowed(resolved.envelope, request);
+  return resolved.ok && actionAllowed(resolved.envelope, request) ? resolved.envelope : undefined;
+}
+
+function chargeDelegatedRead(
+  authority: Pick<CodingRuntimeAuthorityService, "resolveCapabilityForDelegation">,
+  context: CodingToolAuthorityContextProvider,
+  capability: string,
+  delegationId: string,
+  idempotencyKey: string,
+): boolean {
+  const trusted = context();
+  return authority.resolveCapabilityForDelegation({
+    capability,
+    adapterKind: trusted.adapterKind,
+    liveFacts: trusted.liveFacts,
+    delegationId,
+    idempotencyKey,
+    usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+    workspaceRoot: trusted.workspaceRoot,
+    deploymentCeiling: trusted.deploymentCeiling,
+    nowIso: trusted.nowIso,
+  }).ok;
 }
 
 function actionAllowed(
@@ -197,29 +235,39 @@ function actionAllowed(
   );
 }
 
-function requiredClasses(
-  request: CodingToolActionRequest,
-): readonly CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["actionClasses"][number][] {
-  switch (request.action) {
-    case "read":
-      return ["workspace-read"];
-    case "edit":
-      return ["workspace-write"];
-    case "command":
-      return ["command-execution"];
-    case "verification":
-      return ["verification"];
-    case "git":
-      return [request.operation === "read" ? "workspace-read" : "workspace-write"];
-    case "delivery":
-      return ["delivery-substrate"];
-    case "connector":
-      return ["connector-access", "network-egress"];
-    case "egress":
-      return ["network-egress"];
+type RuntimeActionClass =
+  CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["actionClasses"][number];
+
+// Static action-class requirement per governed action. Declared as a Record over the full action
+// union minus "git", so adding an action to the union fails to compile until its required classes
+// are named here — a new action can never default to "no class required". "git" is the one action
+// whose requirement depends on the request itself and is resolved below.
+const STATIC_REQUIRED_CLASSES: Readonly<
+  Record<Exclude<CodingToolActionRequest["action"], "git">, readonly RuntimeActionClass[]>
+> = {
+  read: ["workspace-read"],
+  edit: ["workspace-write"],
+  command: ["command-execution"],
+  verification: ["verification"],
+  delivery: ["delivery-substrate"],
+  connector: ["connector-access", "network-egress"],
+  egress: ["network-egress"],
+  skill: ["workspace-read"],
+  "child-agent": ["workspace-read"],
+};
+
+function requiredClasses(request: CodingToolActionRequest): readonly RuntimeActionClass[] {
+  if (request.action === "git") {
+    return [request.operation === "read" ? "workspace-read" : "workspace-write"];
   }
+  return STATIC_REQUIRED_CLASSES[request.action];
 }
 
+// The extra policy beyond the required action class, one exhaustive case per governed action.
+// Keeping every action's disposition in a single compiler-checked switch is what makes this
+// authority decision auditable in one read; splitting it would hide half of the allow/deny surface
+// in a second function.
+// eslint-disable-next-line complexity -- exhaustive authority switch, see above
 function additionalPolicyAllowed(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
   request: CodingToolActionRequest,
@@ -239,6 +287,9 @@ function additionalPolicyAllowed(
       return connectorAllowed(envelope, request.scope);
     case "egress":
       return networkAllowed(envelope);
+    case "skill":
+    case "child-agent":
+      return true;
   }
 }
 

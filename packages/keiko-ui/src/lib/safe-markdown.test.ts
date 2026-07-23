@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseSafeMarkdown, containsDangerousHtml } from "./safe-markdown";
 
 // ---------------------------------------------------------------------------
@@ -326,6 +326,38 @@ describe("parseSafeMarkdown — long source", () => {
     expect(nodes).toHaveLength(100);
     for (const node of nodes) {
       expect(node.kind).toBe("paragraph");
+    }
+  });
+});
+
+describe("parseSafeMarkdown — hostile unmatched link delimiters", () => {
+  it("does not rescan the same suffix for every opening bracket", () => {
+    const source = `${"[".repeat(4096)}] then https://example.com`;
+    const indexOf = vi.spyOn(String.prototype, "indexOf");
+    try {
+      const nodes = parseSafeMarkdown(source);
+      const closingBracketScans = indexOf.mock.calls.filter(([needle]) => needle === "]").length;
+
+      expect(closingBracketScans).toBeLessThanOrEqual(1);
+      expect(nodes[0]?.children?.some((node) => node.href === "https://example.com")).toBe(true);
+    } finally {
+      indexOf.mockRestore();
+    }
+  });
+
+  it("does not rescan the same suffix for every unterminated link target", () => {
+    const source = `${"[](unterminated/".repeat(2048)} then safe text`;
+    const indexOf = vi.spyOn(String.prototype, "indexOf");
+    try {
+      const nodes = parseSafeMarkdown(source);
+      const closingParenthesisScans = indexOf.mock.calls.filter(
+        ([needle]) => needle === ")",
+      ).length;
+
+      expect(closingParenthesisScans).toBeLessThanOrEqual(1);
+      expect(nodes).toEqual([{ kind: "paragraph", children: [{ kind: "text", text: source }] }]);
+    } finally {
+      indexOf.mockRestore();
     }
   });
 });

@@ -13,9 +13,15 @@ import {
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import { expandedQueryTermGroups, expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import { regexSafetyIssue } from "./repoSearchRegexSafety.js";
+import { repositoryRouteDeclarationMatches, repositoryRouteQuery } from "./repoSearchRoutes.js";
+import {
+  repositorySourceLines,
+  repositoryStructuralLine,
+  type RepositorySourceLine,
+} from "./repoSearchSourceClassification.js";
 
 export interface LineMatcher {
-  readonly match: (line: string) => number;
+  readonly match: (line: string, sourceLine?: RepositorySourceLine) => number;
 }
 
 export function fingerprintFor(query: RetrievalQuery): string {
@@ -34,7 +40,7 @@ export function fingerprintFor(query: RetrievalQuery): string {
 // `maxMatchesReturned` budget was exhausted on the first alphabetically-scanned files and the
 // rest of a multi-file scope was never read (a `docs/` connect would only ever surface its
 // first file, never the file the question was actually about). We mirror the exploration
-// planner's fixed English stop-word policy (planner/anchors.ts in keiko-workflows - duplicated
+// planner's fixed English/German stop-word policy (planner/anchors.ts in keiko-workflows - duplicated
 // here rather than imported because the architecture forbids keiko-workspace depending on the
 // higher-level keiko-workflows package): strip surrounding punctuation, drop single-character and
 // stop-word tokens, and keep `adr-0022`/`file.ts`-style hyphenated and dotted identifiers intact.
@@ -197,13 +203,18 @@ const DEFINITION_INTENT_TOKENS: ReadonlySet<string> = new Set([
   "define",
   "defined",
   "definition",
+  "definieren",
+  "definiert",
   "declare",
   "declared",
   "declaration",
+  "deklariert",
   "implement",
   "implements",
   "implemented",
   "implementation",
+  "implementieren",
+  "implementiert",
 ]);
 
 const HTTP_METHOD_TOKENS: ReadonlySet<string> = new Set([
@@ -312,13 +323,30 @@ const memoizedContentTerms: (key: string) => readonly string[] = memoizeByString
   (key: string): readonly string[] => {
     const caseSensitive = key.startsWith("s");
     const queryText = key.slice(2);
-    const rawTokens = expandedQueryTerms(queryText, caseSensitive);
-    return uniqueStrings([
-      ...naturalLanguageContentGroups([rawTokens], caseSensitive).flat(),
-      ...technicalPhraseTerms(queryText, caseSensitive),
-    ]);
+    return uniqueStrings(naturalLanguageContentTermGroups(queryText, caseSensitive).flat());
   },
 );
+
+const memoizedContentTermGroups: (key: string) => readonly (readonly string[])[] =
+  memoizeByStringKey(8, (key: string): readonly (readonly string[])[] => {
+    const caseSensitive = key.startsWith("s");
+    const queryText = key.slice(2);
+    const groups = naturalLanguageContentGroups(
+      expandedQueryTermGroups(queryText, caseSensitive),
+      caseSensitive,
+    ).map(uniqueStrings);
+    return [
+      ...groups,
+      ...technicalPhraseTerms(queryText, caseSensitive).map((term) => [term] as const),
+    ];
+  });
+
+export function naturalLanguageContentTermGroups(
+  queryText: string,
+  caseSensitive: boolean,
+): readonly (readonly string[])[] {
+  return memoizedContentTermGroups(`${caseSensitive ? "s" : "i"} ${queryText}`);
+}
 
 export function naturalLanguageContentTerms(
   queryText: string,
@@ -338,29 +366,36 @@ function isSymbolLikeToken(token: string): boolean {
 function analyzeNaturalLanguageIntent(
   normalizedTokens: readonly string[],
   caseSensitive: boolean,
+  queryText: string,
 ): NaturalLanguageIntent {
   const lowered = normalizedTokens.map((t) => t.toLowerCase());
   const definitionIntent = lowered.some(isDefinitionIntentToken);
   const symbolTokens = uniqueStrings(
     normalizedTokens
-      .filter((t) => isSymbolLikeToken(t) && !DEFINITION_INTENT_TOKENS.has(t.toLowerCase()))
+      .filter((token) => {
+        const lower = token.toLowerCase();
+        if (DEFINITION_INTENT_TOKENS.has(lower)) return false;
+        return (
+          isSymbolLikeToken(token) ||
+          (definitionIntent && token.length >= 2 && !NL_STOP_WORDS.has(lower))
+        );
+      })
       .map((t) => (caseSensitive ? t : t.toLowerCase())),
   );
-  const routeTokens = uniqueStrings(
-    normalizedTokens
+  const route = repositoryRouteQuery(queryText);
+  const routeTokens = uniqueStrings([
+    ...normalizedTokens
       .filter((t) => t.includes("/"))
       .map((t) => (caseSensitive ? t : t.toLowerCase())),
-  );
-  const httpMethods = uniqueStrings(
-    lowered
+    ...(route === undefined ? [] : [route.path]),
+  ]);
+  const httpMethods = uniqueStrings([
+    ...lowered
       .filter((t) => HTTP_METHOD_TOKENS.has(t))
       .map((t) => (caseSensitive ? t : t.toLowerCase())),
-  );
+    ...(route === undefined ? [] : [route.method]),
+  ]);
   return { definitionIntent, symbolTokens, routeTokens, httpMethods };
-}
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function lineLooksLikeImport(line: string): boolean {
@@ -373,88 +408,180 @@ function lineLooksLikeDeclaration(line: string): boolean {
   );
 }
 
-function lineLooksLikeSymbolDefinition(
+const DEFINITION_MODIFIERS_PATTERN = String.raw`(?:(?:export|public|private|protected|internal|static|abstract|final|sealed|partial|data|open|override|virtual|readonly|async)\s+)*`;
+const EXPLICIT_TYPED_VOID_MODIFIERS_PATTERN = String.raw`(?:(?:public|private|protected|internal|static|abstract|final|sealed|partial|override|virtual|extern|native|synchronized)\s+)+`;
+const METHOD_RETURN_TYPE_PATTERN = String.raw`:\s*[^;{}\r\n]{1,500}`;
+const TYPED_DECLARATION_TOKEN_PATTERN = String.raw`[A-Za-z_$][\w$<>,?.\[\]]*`;
+const DEFINITION_IDENTIFIER_PATTERN = String.raw`([\p{ID_Start}_$](?:[\p{ID_Continue}$]|\u200C|\u200D)*)`;
+const NON_TYPE_DECLARATION_TOKENS: ReadonlySet<string> = new Set([
+  "await",
+  "return",
+  "throw",
+  "yield",
+  "new",
+  "void",
+  "typeof",
+  "delete",
+  "go",
+  "defer",
+  "instanceof",
+  "in",
+  "of",
+  "else",
+  "do",
+  "case",
+  "default",
+  "with",
+  "assert",
+  "raise",
+  "del",
+  "not",
+  "and",
+  "or",
+]);
+
+const DEFINITION_CAPTURE_PATTERNS = [
+  new RegExp(
+    String.raw`\b${DEFINITION_MODIFIERS_PATTERN}function\s+${DEFINITION_IDENTIFIER_PATTERN}`,
+    "giu",
+  ),
+  new RegExp(
+    String.raw`\b${DEFINITION_MODIFIERS_PATTERN}(?:const|let|var)\s+${DEFINITION_IDENTIFIER_PATTERN}`,
+    "giu",
+  ),
+  new RegExp(
+    String.raw`\b${DEFINITION_MODIFIERS_PATTERN}(?:class|interface|type|enum|record|struct|trait|object)\s+${DEFINITION_IDENTIFIER_PATTERN}`,
+    "giu",
+  ),
+  new RegExp(String.raw`\b${DEFINITION_IDENTIFIER_PATTERN}\s*[:=]\s*(?:async\s*)?\(`, "giu"),
+  new RegExp(
+    String.raw`\b${DEFINITION_MODIFIERS_PATTERN}(?:def|func|fn|fun)\s+${DEFINITION_IDENTIFIER_PATTERN}\s*\(`,
+    "giu",
+  ),
+  new RegExp(
+    String.raw`\bfunc\s*\([^()\r\n]{1,500}\)\s*${DEFINITION_IDENTIFIER_PATTERN}\s*\(`,
+    "giu",
+  ),
+  new RegExp(String.raw`\btype\s+${DEFINITION_IDENTIFIER_PATTERN}\s+(?:struct|interface)\b`, "giu"),
+  new RegExp(
+    String.raw`\b${DEFINITION_MODIFIERS_PATTERN}void\s+${DEFINITION_IDENTIFIER_PATTERN}\s*\([^;{}]{0,2000}\)\s*(?:throws\s+[^;{}]{1,500}\s*)?(?:\{|=>)`,
+    "giu",
+  ),
+  new RegExp(
+    String.raw`\b${EXPLICIT_TYPED_VOID_MODIFIERS_PATTERN}(?:async\s+)?void\s+${DEFINITION_IDENTIFIER_PATTERN}\s*\([^;{}]{0,2000}\)\s*(?:throws\s+[^;{}]{1,500}\s*)?;`,
+    "giu",
+  ),
+  new RegExp(
+    String.raw`(?:^|[,{;]\s*)${DEFINITION_MODIFIERS_PATTERN}(?:get\s+|set\s+)?\*?${DEFINITION_IDENTIFIER_PATTERN}\s*\([^;{}]{0,2000}\)\s*(?:${METHOD_RETURN_TYPE_PATTERN}\s*)?(?:\{|=>)`,
+    "giu",
+  ),
+  new RegExp(
+    String.raw`(?:^|[,{;]\s*)${DEFINITION_MODIFIERS_PATTERN}(?:get\s+|set\s+)?\*?${DEFINITION_IDENTIFIER_PATTERN}\s*\([^;{}]{0,2000}\)\s*${METHOD_RETURN_TYPE_PATTERN}\s*;`,
+    "giu",
+  ),
+] as const;
+const TYPED_DEFINITION_CAPTURE_PATTERN = new RegExp(
+  String.raw`(?:^|[;{}])\s*${DEFINITION_MODIFIERS_PATTERN}(${TYPED_DECLARATION_TOKEN_PATTERN}(?:\s+${TYPED_DECLARATION_TOKEN_PATTERN})*)\s+${DEFINITION_IDENTIFIER_PATTERN}\s*\(`,
+  "giu",
+);
+
+function addDefinitionCaptures(line: string, pattern: RegExp, symbols: Set<string>): void {
+  pattern.lastIndex = 0;
+  for (const match of line.matchAll(pattern)) {
+    const symbol = match[1];
+    if (symbol !== undefined) symbols.add(symbol);
+  }
+}
+
+function addTypedDefinitionCaptures(line: string, symbols: Set<string>): void {
+  TYPED_DEFINITION_CAPTURE_PATTERN.lastIndex = 0;
+  for (const match of line.matchAll(TYPED_DEFINITION_CAPTURE_PATTERN)) {
+    const typeExpression = match[1];
+    const symbol = match[2];
+    if (
+      typeExpression !== undefined &&
+      symbol !== undefined &&
+      typeExpression.split(/\s+/u).every((token) => !NON_TYPE_DECLARATION_TOKENS.has(token))
+    ) {
+      symbols.add(symbol);
+    }
+  }
+}
+
+export function definitionSymbolsInStructuralLine(line: string): readonly string[] {
+  const symbols = new Set<string>();
+  for (const pattern of DEFINITION_CAPTURE_PATTERNS) addDefinitionCaptures(line, pattern, symbols);
+  addTypedDefinitionCaptures(line, symbols);
+  return [...symbols];
+}
+
+export function lineLooksLikeSymbolDefinition(
   line: string,
   symbolToken: string,
   caseSensitive: boolean,
 ): boolean {
-  const escaped = escapeRegExp(symbolToken);
-  const flags = caseSensitive ? "u" : "iu";
-  const modifiers =
-    "(?:(?:export|public|private|protected|internal|static|abstract|final|sealed|partial|data|open|override|virtual|readonly|async)\\s+)*";
-  const patterns = [
-    new RegExp(`\\b${modifiers}function\\s+${escaped}\\b`, flags),
-    new RegExp(`\\b${modifiers}(?:const|let|var)\\s+${escaped}\\b`, flags),
-    new RegExp(
-      `\\b${modifiers}(?:class|interface|type|enum|record|struct|trait|object)\\s+${escaped}\\b`,
-      flags,
-    ),
-    new RegExp(`\\b${escaped}\\s*[:=]\\s*(?:async\\s*)?\\(`, flags),
-    new RegExp(`\\b${modifiers}(?:def|func|fn|fun)\\s+${escaped}\\s*\\(`, flags),
-    new RegExp(`\\btype\\s+${escaped}\\s+(?:struct|interface)\\b`, flags),
-    new RegExp(`\\b${modifiers}[A-Za-z_$][\\w$<>, ?.[\\]]+\\s+${escaped}\\s*\\(`, flags),
-  ];
-  return patterns.some((pattern) => pattern.test(line));
-}
-
-function routeMethodMatches(haystack: string, method: string): boolean {
-  return [
-    `"${method}"`,
-    `'${method}'`,
-    `.${method}(`,
-    ` ${method}(`,
-    `@${method}mapping`,
-    `methods("${method}"`,
-    `methods('${method}'`,
-  ].some((needle) => haystack.includes(needle));
-}
-
-function routeDeclarationShapeMatches(haystack: string): boolean {
-  return (
-    haystack.includes("method:") ||
-    haystack.includes("pattern:") ||
-    haystack.includes("path:") ||
-    haystack.includes("router.") ||
-    haystack.includes("app.") ||
-    haystack.includes("server.") ||
-    haystack.includes("@") ||
-    haystack.includes("handlefunc") ||
-    haystack.includes("route(")
+  return structuralLineLooksLikeSymbolDefinition(
+    repositoryStructuralLine(line),
+    symbolToken,
+    caseSensitive,
   );
 }
 
-function lineLooksLikeRouteDeclaration(haystack: string, intent: NaturalLanguageIntent): boolean {
-  const routeHit = intent.routeTokens.some((token) => haystack.includes(token));
-  const methodHit = intent.httpMethods.some((method) => routeMethodMatches(haystack, method));
-  return routeHit && methodHit && routeDeclarationShapeMatches(haystack);
+export function structuralLineLooksLikeSymbolDefinition(
+  structuralLine: string,
+  symbolToken: string,
+  caseSensitive: boolean,
+): boolean {
+  return definitionSymbolsInStructuralLine(structuralLine).some((symbol) =>
+    caseSensitive
+      ? symbol === symbolToken
+      : symbol.toLocaleLowerCase("en-US") === symbolToken.toLocaleLowerCase("en-US"),
+  );
+}
+
+function lineLooksLikeRouteDeclaration(
+  codeHaystack: string,
+  structuralHaystack: string,
+  intent: NaturalLanguageIntent,
+): boolean {
+  const routeHit = intent.routeTokens.some((token) => codeHaystack.includes(token));
+  return (
+    routeHit &&
+    intent.httpMethods.some((method) =>
+      repositoryRouteDeclarationMatches(codeHaystack, method, structuralHaystack),
+    )
+  );
 }
 
 function adjustedDefinitionIntentScore(
-  line: string,
-  haystack: string,
+  sourceLine: RepositorySourceLine,
   baseScore: number,
   intent: NaturalLanguageIntent,
   caseSensitive: boolean,
 ): number {
-  if (!intent.definitionIntent) {
-    return baseScore;
-  }
-  let bonus = 0;
+  const codeHaystack = caseSensitive ? sourceLine.code : sourceLine.code.toLowerCase();
+  const structuralHaystack = caseSensitive
+    ? sourceLine.structural
+    : sourceLine.structural.toLowerCase();
+  const routeBonus = lineLooksLikeRouteDeclaration(codeHaystack, structuralHaystack, intent)
+    ? 0.65
+    : 0;
+  if (!intent.definitionIntent) return Math.min(1, baseScore + routeBonus);
+  let bonus = routeBonus;
   let penalty = 0;
   for (const symbolToken of intent.symbolTokens) {
-    if (!haystack.includes(symbolToken)) {
+    if (!structuralHaystack.includes(symbolToken)) {
       continue;
     }
-    if (lineLooksLikeSymbolDefinition(line, symbolToken, caseSensitive)) {
+    if (
+      structuralLineLooksLikeSymbolDefinition(sourceLine.structural, symbolToken, caseSensitive)
+    ) {
       bonus = Math.max(bonus, 0.75);
-    } else if (lineLooksLikeDeclaration(line)) {
+    } else if (lineLooksLikeDeclaration(sourceLine.structural)) {
       bonus = Math.max(bonus, 0.55);
-    } else if (lineLooksLikeImport(line)) {
+    } else if (lineLooksLikeImport(sourceLine.structural)) {
       penalty = Math.max(penalty, 0.2);
     }
-  }
-  if (lineLooksLikeRouteDeclaration(haystack, intent)) {
-    bonus = Math.max(bonus, 0.65);
   }
   return Math.max(0, Math.min(1, baseScore + bonus - penalty));
 }
@@ -489,16 +616,12 @@ function adjustedVersionDeclarationScore(
 }
 
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
-  const rawGroups = expandedQueryTermGroups(query.text, query.caseSensitive);
   const intentTokens = expandedQueryTerms(query.text, true);
   const normalizedTokens = naturalLanguageNormalizedTokens(intentTokens);
   // GRD-033: dedupe alternatives inside each original-token group so aliases/stems improve recall
   // without making every alias an additional required term in `hits/total`.
-  const tokenGroups = [
-    ...naturalLanguageContentGroups(rawGroups, query.caseSensitive).map(uniqueStrings),
-    ...technicalPhraseTerms(query.text, query.caseSensitive).map((term) => [term] as const),
-  ];
-  const intent = analyzeNaturalLanguageIntent(normalizedTokens, query.caseSensitive);
+  const tokenGroups = naturalLanguageContentTermGroups(query.text, query.caseSensitive);
+  const intent = analyzeNaturalLanguageIntent(normalizedTokens, query.caseSensitive, query.text);
   // The ecosystem declaration-line patterns whose routing pattern matched this query (e.g. for a
   // Java question: maven.compiler/java.version; for a Go question: go/toolchain directives).
   const versionDeclarationPatterns = ecosystemVersionDeclarationPatterns.filter((p) =>
@@ -506,10 +629,12 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   );
   const total = tokenGroups.length;
   return {
-    match: (line: string): number => {
+    match: (line: string, providedSourceLine?: RepositorySourceLine): number => {
       if (total === 0) {
         return 0;
       }
+      const sourceLine = providedSourceLine ?? repositorySourceLines(line)[0];
+      if (sourceLine === undefined) return 0;
       const haystack = query.caseSensitive ? line : line.toLowerCase();
       let hits = 0;
       for (const group of tokenGroups) {
@@ -521,8 +646,7 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
         return 0;
       }
       const definitionAdjusted = adjustedDefinitionIntentScore(
-        line,
-        haystack,
+        sourceLine,
         hits / total,
         intent,
         query.caseSensitive,

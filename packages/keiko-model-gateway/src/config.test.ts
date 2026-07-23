@@ -1858,16 +1858,16 @@ describe("parseGatewayConfig — voiceProfiles parsing (Issue #1557)", () => {
     ).toThrow(/voiceProfiles requires a kind:"voice" capability that advertises/);
   });
 
-  it("accepts voiceProfiles on a realtime provider (realtime counts as output)", () => {
-    const config = parseGatewayConfig(
-      ttsProviderRaw("keiko-realtime", [{ persona: "neutral", voiceId: "voice-neutral-01" }], {
-        supportsSpeechOutput: false,
-        supportsSpeechInput: true,
-        supportsRealtimeVoice: true,
-      }),
-    );
-    const cap = config.capabilities?.find((c) => c.id === "keiko-realtime");
-    expect(cap?.supportedVoicePersonas).toEqual(["neutral"]);
+  it("rejects voiceProfiles on a realtime-only provider", () => {
+    expect(() =>
+      parseGatewayConfig(
+        ttsProviderRaw("keiko-realtime", [{ persona: "neutral", voiceId: "voice-neutral-01" }], {
+          supportsSpeechOutput: false,
+          supportsSpeechInput: true,
+          supportsRealtimeVoice: true,
+        }),
+      ),
+    ).toThrow(/voiceProfiles requires .*supportsSpeechOutput/u);
   });
 
   // HAZARD-1: derivation must target the MERGED (effective) capability. A top-level `capabilities`
@@ -1950,8 +1950,8 @@ describe("parseGatewayConfig — voiceProfiles parsing (Issue #1557)", () => {
     );
   });
 
-  // AC2: all five deployment classes representable by modelId + flags + voiceProfiles, no hard-coded
-  // deployment names anywhere in the parser.
+  // AC2: all five deployment classes remain representable without conflating realtime transport
+  // deployments with synthesis-persona providers.
   it("represents all five deployment classes by modelId (AC2, no hard-coding)", () => {
     const raw = {
       providers: [
@@ -1984,7 +1984,6 @@ describe("parseGatewayConfig — voiceProfiles parsing (Issue #1557)", () => {
             supportsRealtimeVoice: true,
             voiceProviderLocality: "customer-hosted",
           },
-          voiceProfiles: [{ persona: "male", voiceId: "rt-male" }],
         },
         {
           ...validProvider(),
@@ -1995,7 +1994,6 @@ describe("parseGatewayConfig — voiceProfiles parsing (Issue #1557)", () => {
             supportsRealtimeVoice: true,
             voiceProviderLocality: "customer-hosted",
           },
-          voiceProfiles: [{ persona: "neutral", voiceId: "rtstt-neutral" }],
         },
       ],
       circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
@@ -2010,12 +2008,12 @@ describe("parseGatewayConfig — voiceProfiles parsing (Issue #1557)", () => {
       "keiko-realtime",
       "keiko-realtime-stt",
     ]);
-    // STT-only carries no personas; the four output-capable ones do.
+    // Only explicit speech-output providers carry personas.
     expect(personasOf("keiko-stt")).toBeUndefined();
     expect(personasOf("keiko-tts")).toEqual(["neutral"]);
     expect(personasOf("keiko-audio-output")).toEqual(["female"]);
-    expect(personasOf("keiko-realtime")).toEqual(["male"]);
-    expect(personasOf("keiko-realtime-stt")).toEqual(["neutral"]);
+    expect(personasOf("keiko-realtime")).toBeUndefined();
+    expect(personasOf("keiko-realtime-stt")).toBeUndefined();
   });
 
   it("rejects supportedVoicePersonas as a raw INPUT key on the strict capability parser", () => {

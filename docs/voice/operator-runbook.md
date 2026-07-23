@@ -13,7 +13,8 @@ The scope covers:
 - Provider registration and credential placement (Azure Foundry, customer-hosted private endpoints, local-only / no-voice deployments).
 - Verification that Permissions-Policy and kill-switch controls are correctly wired.
 - Validation that provider secrets never leak into responses, evidence, or logs.
-- Confirmation that raw/generated audio is never persisted.
+- Confirmation that raw microphone and generated speech audio remain ephemeral, while a settled final
+  transcript follows normal canonical chat persistence.
 - Incident response when provider credentials are suspected compromised.
 
 Voice is optional and defaults to disabled. This runbook assumes you have read [capability-configuration.md](capability-configuration.md) and [deployment-profile-matrix.md](deployment-profile-matrix.md).
@@ -26,13 +27,18 @@ Voice providers operate in three localities; only explicitly configured provider
 | ------------------- | ------------------------- | -------------------------- | -------------------------------- |
 | **Azure Foundry**   | `keiko-stt`, `keiko-tts`  | Sealed vault on Keiko host | Outbound to configured Azure URL |
 | **Customer-hosted** | Private RFC-1918 endpoint | Sealed vault on Keiko host | Outbound to configured endpoint  |
-| **Local-only**      | No voice provider         | N/A                        | No voice egress                  |
+| **Local-only**      | Host-local voice provider | Local credential or N/A    | No external voice egress         |
+
+No-voice is a separate deployment state: no capable provider is configured and no voice egress occurs.
 
 In all cases:
 
 - **The long-lived provider API key stays server-side** in the sealed credential vault.
-- **The browser never receives a secret** — only content-free enum metadata (persona names, availability status).
-- **Audio and transcripts are never persisted to disk** unless explicitly archived by the user.
+- **The browser never receives a provider secret.** The capability endpoint returns only safe enums and
+  booleans; live UI paths necessarily hold bounded transcript and playback data in memory.
+- **Raw microphone audio, generated speech audio, and partial transcripts are never persisted.** A settled
+  final user transcript is intentionally persisted as the normal canonical chat message so memory,
+  retrieval, grounding, citations, and assistant persistence are identical to typed chat.
 
 See [deployment-profile-matrix.md §5](deployment-profile-matrix.md#5-credential-posture-per-environment) for the full matrix.
 
@@ -81,7 +87,9 @@ Environment secrets are never written back to disk (transient, by design) and ar
 
 ### 3.2 Voice provider personas (product voices — male / female / neutral)
 
-Product voice personas are the **output** voices the assistant uses (relevant for TTS or full-realtime providers only). The persona → provider-voice-id mapping is sensitive and must never reach the browser.
+Product voice personas are the **output** voices the assistant uses through explicit TTS providers only.
+Realtime providers contribute no output voice. The persona → provider-voice-id mapping is sensitive and
+must never reach the browser.
 
 Personas are declared on the credential-tier `voiceProfiles` array:
 
@@ -123,6 +131,10 @@ export KEIKO_VOICE_DISABLED=1
 export KEIKO_VOICE_DISABLED=true
 ```
 
+The environment belongs to the Keiko server process. Setting it in a shell does not alter a server
+that is already running: set the value in the service/development launch environment and restart Keiko
+through the deployment's normal process manager (locally, stop and restart `npm run dev:start`).
+
 The `/api/voice/capability` endpoint will report `available: false`, `reason: "policy-disabled"`, and the UI will render no voice affordance. Keiko remains fully usable for chat, editing, and non-voice workflows.
 
 ## 4. Validation checklist after configuring a provider
@@ -140,7 +152,7 @@ The `Permissions-Policy` header must permit microphone access only when voice is
 **No-voice deployment (or kill-switch enabled):**
 
 ```bash
-curl -I http://127.0.0.1:1983/api/voice/capability
+curl -sS -D - -o /dev/null http://127.0.0.1:1983/api/voice/capability
 ```
 
 Look for:
@@ -154,7 +166,7 @@ Microphone must be `()` (blocked).
 **Voice-capable deployment (STT or realtime):**
 
 ```bash
-curl -I http://127.0.0.1:1983/api/voice/capability
+curl -sS -D - -o /dev/null http://127.0.0.1:1983/api/voice/capability
 ```
 
 Look for:
@@ -169,18 +181,33 @@ Microphone must be `(self)` (allow same-origin only), never wider.
 
 ### 4.2 Verify the kill-switch blocks voice routes
 
-When voice is disabled by policy, the `/api/voice/transcribe` and `/api/voice/speak` routes return a static, redacted 503 error.
+When voice is disabled by policy, `/api/voice/transcribe`, `/api/voice/speak`, and
+`/api/voice/speak/stream` return a static, redacted 503 error. The `/api/voice/control` WebSocket
+upgrade also remains unavailable.
 
 **With kill-switch enabled:**
 
 ```bash
 export KEIKO_VOICE_DISABLED=1
-curl -X POST http://127.0.0.1:1983/api/voice/transcribe \
+# Restart Keiko with this environment before making the requests.
+
+curl -sS -i -X POST http://127.0.0.1:1983/api/voice/transcribe \
   -H "Content-Type: application/json" \
+  -H "X-Keiko-CSRF: 1" \
   -d '{"audio": "ZmFrZS1hdWRpbw==", "mimeType": "audio/webm"}'
+
+curl -sS -i -X POST http://127.0.0.1:1983/api/voice/speak \
+  -H "Content-Type: application/json" \
+  -H "X-Keiko-CSRF: 1" \
+  -d '{"text": "Kill-switch verification."}'
+
+curl -sS -i -X POST http://127.0.0.1:1983/api/voice/speak/stream \
+  -H "Content-Type: application/json" \
+  -H "X-Keiko-CSRF: 1" \
+  -d '{"text": "Kill-switch verification."}'
 ```
 
-Expected response:
+Each request must return HTTP 503 with `error.code: "VOICE_UNAVAILABLE"`. The transcribe message is:
 
 ```json
 {
@@ -191,7 +218,20 @@ Expected response:
 }
 ```
 
+Both synthesis routes use the equally static message `"Assistant speech output is not available."`.
+
 **Critical:** The response contains no provider secret, base URL, model ID, or diagnostic hint. It is identical to the response when no voice provider is configured at all.
+
+The WebSocket denial is exercised by the hermetic server integration test rather than an ad-hoc shell
+upgrade that can accidentally omit the browser `Origin`/`Host` posture:
+
+```bash
+npx vitest run packages/keiko-server/src/voice-control-ws.test.ts \
+  -t "rejects the upgrade when voice is disabled by policy even if realtime-capable"
+```
+
+That test starts its own loopback server, supplies a valid Realtime-capable configuration with policy
+disabled, and asserts that `/api/voice/control` cannot upgrade. It makes no provider call.
 
 ### 4.3 Verify no secret leakage in responses
 
@@ -202,6 +242,7 @@ Provider secrets (API keys, voice IDs, base URLs) must never appear in any `/api
 ```bash
 curl -X POST http://127.0.0.1:1983/api/voice/speak \
   -H "Content-Type: application/json" \
+  -H "X-Keiko-CSRF: 1" \
   -d '{"text": "Hello, this is a test of the voice system."}'
 ```
 
@@ -210,23 +251,50 @@ Response (on success):
 ```json
 {
   "audio": "//NExAAiw0EWRTqAA=...",
-  "mimeType": "audio/mpeg"
+  "mimeType": "audio/ogg"
 }
 ```
 
-**Verify no leakage:**
+**Verify the public success schema without scanning or printing the base64 payload:**
 
 ```bash
 curl -X POST http://127.0.0.1:1983/api/voice/speak \
   -H "Content-Type: application/json" \
+  -H "X-Keiko-CSRF: 1" \
   -d '{"text": "Hello"}' | \
-  grep -E "apiKey|secret|baseUrl|voiceId|endpoint" && echo "FAIL: Secret detected" || echo "PASS"
+  node -e '
+let raw = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { raw += chunk; });
+process.stdin.on("end", () => {
+  try {
+    const body = JSON.parse(raw);
+    const keys = Object.keys(body).sort();
+    const expected = ["audio", "mimeType"];
+    const schemaMatches =
+      JSON.stringify(keys) === JSON.stringify(expected) &&
+      typeof body.audio === "string" &&
+      body.audio.length > 0 &&
+      /^[A-Za-z0-9+/]*={0,2}$/.test(body.audio) &&
+      body.mimeType === "audio/ogg";
+    if (!schemaMatches) throw new Error("schema mismatch");
+    process.stdout.write("PASS: expected public schema only\n");
+  } catch {
+    process.stderr.write("FAIL: unexpected response schema\n");
+    process.exitCode = 1;
+  }
+});'
 ```
+
+This validates the complete top-level key set and expected value types. It deliberately never prints the
+audio field or an unexpected response body. A substring search over base64 is not a valid leakage check:
+arbitrary encoded audio can coincidentally contain human-readable marker text.
 
 The response body must contain **only**:
 
 - `audio` (base64-encoded audio bytes, not the raw bytes)
-- `mimeType` (e.g., `"audio/mpeg"`)
+- `mimeType` (the canonical MIME returned for the requested format; normally `"audio/ogg"` for the
+  current buffered Opus fallback)
 
 No provider credential, endpoint, or voice identifier must appear.
 
@@ -259,7 +327,9 @@ find "$EVIDENCE_DIR" -type f -name "*.json" -exec grep -l "RIFF\|ftyp" {} \;
 
 ### 4.5 Verify provider key does not appear in logs or evidence metadata
 
-Provider API keys and base URLs must never appear in Keiko logs or evidence records, even in redacted form.
+Provider API keys and raw base URLs must never appear in Keiko logs or evidence records. Fixed redaction
+markers, hashes, and correlation identifiers are permitted; they must not allow reconstruction of the raw
+value.
 
 **Check logs:** Keiko writes operational logs to the process stdout/stderr (capture them with your process manager, container runtime, or `keiko ui ... > keiko.log 2>&1`). Scan the captured log for any provider host or model id:
 
@@ -292,7 +362,12 @@ If a provider API key is suspected compromised (e.g., accidentally logged, sent 
    - Restart Keiko to pick up the new credential.
 
 3. **Redeploy and re-validate.**
-   - Verify the new credential is in place: `curl http://127.0.0.1:1983/api/voice/capability` should return `available: true` (if voice is configured) and make no network errors.
+   - Submit the replacement through Keiko's Gateway Setup save/verification flow. That product-owned
+     flow performs the configured provider readiness checks without placing the credential in shell
+     arguments or logs.
+   - After a successful setup verification, use `GET /api/voice/capability` only to confirm that the
+     parsed capability is available. This endpoint is metadata-only and does not authenticate a rotated
+     credential or contact the provider.
    - Re-run the validation checklist (§4.1–§4.5) to confirm no stale secrets are lingering.
 
 4. **Audit historical evidence and logs.**

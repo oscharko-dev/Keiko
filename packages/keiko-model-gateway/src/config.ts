@@ -12,11 +12,7 @@ import {
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { VOICE_PERSONAS, VOICE_PROVIDER_LOCALITIES } from "./types.js";
-import {
-  isVoiceCapability,
-  modelSupportsRealtimeVoice,
-  modelSupportsSpeechOutput,
-} from "@oscharko-dev/keiko-contracts";
+import { isVoiceCapability, modelSupportsSpeechOutput } from "@oscharko-dev/keiko-contracts";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
 import type {
@@ -1501,10 +1497,10 @@ function deriveSupportedPersonas(
   if (
     capability === undefined ||
     !isVoiceCapability(capability) ||
-    !(modelSupportsSpeechOutput(capability) || modelSupportsRealtimeVoice(capability))
+    !modelSupportsSpeechOutput(capability)
   ) {
     throw new ConfigInvalidError(
-      `provider '${modelId}' voiceProfiles requires a kind:"voice" capability that advertises supportsSpeechOutput or supportsRealtimeVoice`,
+      `provider '${modelId}' voiceProfiles requires a kind:"voice" capability that advertises supportsSpeechOutput`,
     );
   }
   return {

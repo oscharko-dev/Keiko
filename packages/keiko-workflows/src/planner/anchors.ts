@@ -1,7 +1,7 @@
 // Deterministic search-anchor extraction for the exploration planner (Epic #177, Issue #181).
 // Pure JS — no IO, no clock, no randomness. Given free-form prompt text, this module produces
 // a small, stable, weight-ordered set of search anchors. The stop-word list is intentionally
-// fixed and English-only; expanding language coverage is a follow-up issue.
+// fixed and bilingual (English/German) so supported prompts remain deterministic.
 
 const MAX_INPUT_LENGTH = 4096;
 
@@ -160,6 +160,7 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
 const QUOTED_SINGLE_RE = /'([^'\n]+)'/g;
 const BACKTICK_RE = /`([^`\n]+)`/g;
+const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // Bounded per-segment (<=64 chars) and per-depth (<=64 levels) repetition — generous for any
 // realistic repository path, but it caps the worst-case backtracking work a single scan position
 // can spend to a fixed constant instead of one growing with input length. The previous unbounded
@@ -170,13 +171,20 @@ const BACKTICK_RE = /`([^`\n]+)`/g;
 // exercise the pattern directly, past extractAnchors's MAX_INPUT_LENGTH guard, for the S8786
 // regression test.
 export const PATH_RE = /(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}/g;
-const API_ROUTE_RE = /(^|[^A-Za-z0-9_.-])((?:\/[A-Za-z0-9_.:{}-]+){2,})/g;
+const API_ROUTE_RE =
+  /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
+const DEFINITION_TARGET_BEFORE_VERB_RE =
+  /\b([a-z_$][a-z0-9_$]{2,127})\s+(?:defined|declared|implemented|definiert|deklariert|implementiert)\b/giu;
+const DEFINITION_TARGET_AFTER_VERB_RE =
+  /\b(?:define|declare|implement|definieren|deklarieren|implementieren)\s+(?:(?:we|wir|ich|du|sie|man)\s+)?([a-z_$][a-z0-9_$]{2,127})\b/giu;
+const DEFINITION_TARGET_AFTER_NOUN_RE =
+  /\b(?:definition|declaration|implementation|deklaration|implementierung)\s+(?:(?:of|von)\s+)?([a-z_$][a-z0-9_$]{2,127})\b/giu;
 // Requires a genuine lower/digit -> upper transition so all-caps acronyms and SHOUTING words
 // (WHY, HTTP, BROKEN) are NOT mistaken for code identifiers. A spurious 0.85 identifier anchor
 // would both satisfy the clarification gate for a vague question and seed symbol-file retrieval
 // with a non-symbol — see planner/plan.ts decideClarification and grounded symbolFileAnchorTerms.
 const CAMEL_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*[a-z0-9][A-Z][A-Za-z0-9_$]*)\b/g;
-const TOKEN_SPLIT_RE = /[^A-Za-z0-9_.]+/;
+const TOKEN_SPLIT_RE = /[^\p{L}\p{N}_.]+/u;
 const TECHNICAL_TERM_PATTERNS: readonly {
   readonly pattern: RegExp;
   readonly term: string;
@@ -224,13 +232,34 @@ interface MutableAnchor {
   kind: SearchAnchorKind;
 }
 
+const SENTENCE_PATH_SUFFIX = new Set([":", ";", ",", ".", "-"]);
+
+function trimTrailingCharacters(value: string, characters: ReadonlySet<string>): string {
+  let end = value.length;
+  while (end > 0 && characters.has(value[end - 1] ?? "")) end -= 1;
+  return value.slice(0, end);
+}
+
+function trimEdgeDots(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === ".") start += 1;
+  while (end > start && value[end - 1] === ".") end -= 1;
+  return value.slice(start, end);
+}
+
 function pushAnchor(
   out: MutableAnchor[],
   raw: string,
   kind: SearchAnchorKind,
   weight: number,
 ): void {
-  const term = raw.trim().toLowerCase();
+  const trimmed = raw.trim();
+  const withoutSentencePunctuation =
+    kind === "path" && trimmed.startsWith("/")
+      ? trimTrailingCharacters(trimmed, SENTENCE_PATH_SUFFIX)
+      : trimmed;
+  const term = withoutSentencePunctuation.toLowerCase();
   if (term.length > 0) {
     out.push({ term, weight, kind });
   }
@@ -242,6 +271,7 @@ function collectMatches(
   kind: SearchAnchorKind,
   weight: number,
   out: MutableAnchor[],
+  accept: (value: string) => boolean = () => true,
 ): string {
   const re = new RegExp(pattern.source, pattern.flags);
   const parts: string[] = [];
@@ -250,14 +280,22 @@ function collectMatches(
   while (match !== null) {
     const full = match[0];
     const captured = match[2] ?? match[1] ?? full;
-    pushAnchor(out, captured, kind, weight);
     parts.push(source.slice(cursor, match.index));
-    parts.push(" ".repeat(full.length));
+    if (accept(captured)) {
+      pushAnchor(out, captured, kind, weight);
+      parts.push(" ".repeat(full.length));
+    } else {
+      parts.push(full);
+    }
     cursor = match.index + full.length;
     match = re.exec(source);
   }
   parts.push(source.slice(cursor));
   return parts.join("");
+}
+
+function isDefinitionTarget(value: string): boolean {
+  return !STOP_WORDS.has(value.toLowerCase());
 }
 
 function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
@@ -284,11 +322,12 @@ function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
 function tokenizeRemaining(remaining: string, out: MutableAnchor[]): number {
   let considered = 0;
   for (const raw of remaining.split(TOKEN_SPLIT_RE)) {
-    if (raw.length === 0) {
+    const normalizedRaw = trimEdgeDots(raw);
+    if (normalizedRaw.length === 0) {
       continue;
     }
     considered += 1;
-    const token = raw.toLowerCase();
+    const token = normalizedRaw.toLowerCase();
     if (token.length < 3) {
       continue;
     }
@@ -340,8 +379,33 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   let remaining = collectMatches(text, QUOTED_DOUBLE_RE, "quoted", 1, collected);
   remaining = collectMatches(remaining, QUOTED_SINGLE_RE, "quoted", 1, collected);
   remaining = collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected);
+  remaining = collectMatches(remaining, DOCUMENT_REFERENCE_RE, "identifier", 0.95, collected);
   remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
   remaining = collectMatches(remaining, PATH_RE, "path", 0.95, collected);
+  remaining = collectMatches(
+    remaining,
+    DEFINITION_TARGET_BEFORE_VERB_RE,
+    "identifier",
+    0.85,
+    collected,
+    isDefinitionTarget,
+  );
+  remaining = collectMatches(
+    remaining,
+    DEFINITION_TARGET_AFTER_VERB_RE,
+    "identifier",
+    0.85,
+    collected,
+    isDefinitionTarget,
+  );
+  remaining = collectMatches(
+    remaining,
+    DEFINITION_TARGET_AFTER_NOUN_RE,
+    "identifier",
+    0.85,
+    collected,
+    isDefinitionTarget,
+  );
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);
   const tokensConsidered = tokenizeRemaining(remaining, collected);

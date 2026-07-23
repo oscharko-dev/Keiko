@@ -172,6 +172,35 @@
   overflow-wrap: anywhere;
 }
 
+/* #2387: the destination of a pending research fetch, set apart from the vocabulary facts above
+   because it is the one part of the approval carrying model-chosen text the operator must read. */
+.approvalResearch {
+  /* <fieldset> for its native "group" role (S6819); the UA border/margin/padding are reset here so
+     the panel keeps the same box the previous div had. */
+  min-width: 0;
+  margin: var(--space-4) 0 0;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+}
+
+.approvalResearchTitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+}
+
+.approvalResearchDetail {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-label);
+}
+
+.approvalResearch .approvalFacts {
+  margin-top: var(--space-2);
+}
+
 .button {
   min-height: var(--control-height);
   max-width: 100%;
@@ -272,6 +301,286 @@
 
 .timelineSpacer {
   pointer-events: none;
+}
+
+.activityStatus {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  border-inline-start: 3px solid var(--feedback-info);
+  padding: var(--space-2) var(--space-3);
+  background: var(--feedback-info-surface);
+  color: var(--text-primary);
+}
+
+.activityStatus[data-activity-state="paused"],
+.activityStatus[data-activity-state="recovery"],
+.activityStatus[data-activity-state="unavailable"],
+.activityStatus[data-activity-state="disconnected"] {
+  border-inline-start-color: var(--feedback-warning);
+  background: var(--feedback-warning-surface);
+}
+
+.activityStatus[data-activity-state="offline"],
+.activityStatus[data-activity-state="error"] {
+  border-inline-start-color: var(--feedback-danger);
+  background: var(--feedback-danger-surface);
+}
+
+.activityStatus p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.timelineBody,
+.toolCard,
+.planCard,
+.questionInline {
+  min-width: 0;
+}
+
+.messageText {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.messageText p,
+.planCard p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.toolCard {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  background: var(--surface-inset);
+}
+
+.toolCard[data-tool-state="succeeded"] {
+  border-color: var(--feedback-success);
+}
+
+.toolCard[data-tool-state="failed"],
+.toolCard[data-tool-state="denied"] {
+  border-color: var(--feedback-danger);
+}
+
+.toolCard[data-tool-state="cancelled"] {
+  border-color: var(--feedback-warning);
+}
+
+.activityBadge {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-primary);
+  background: var(--surface-primary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.activityBadge[data-state="succeeded"],
+.activityBadge[data-state="completed"] {
+  border-color: var(--feedback-success);
+}
+
+.activityBadge[data-state="failed"],
+.activityBadge[data-state="denied"] {
+  border-color: var(--feedback-danger);
+}
+
+.activityBadge[data-state="cancelled"] {
+  border-color: var(--feedback-warning);
+}
+
+.planCard {
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  background: var(--surface-accent-subtle);
+}
+
+.planSteps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding-inline-start: var(--space-5);
+}
+
+.planSteps li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.planSteps .activityBadge {
+  margin-inline-start: var(--space-2);
+}
+
+.questionInline {
+  width: 100%;
+  border: 1px solid var(--feedback-warning);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  background: var(--feedback-warning-surface);
+}
+
+.changesMessage,
+.changesNotice {
+  margin: var(--space-4) 0 0;
+  border-inline-start: 3px solid var(--feedback-info);
+  padding: var(--space-3);
+  color: var(--text-primary);
+  background: var(--feedback-info-surface);
+  font-size: var(--text-label);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.changesMessage[role="alert"] {
+  border-inline-start-color: var(--feedback-warning);
+  background: var(--feedback-warning-surface);
+}
+
+.changesMessage p {
+  margin: 0 0 var(--space-3);
+}
+
+.changesRevision {
+  margin: var(--space-4) 0 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  overflow-wrap: anywhere;
+}
+
+.changesLayout {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(11rem, 0.42fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+
+.changesFiles,
+.changesDiffPane {
+  min-width: 0;
+}
+
+.changesPaneTitle {
+  margin: 0 0 var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.changesFileList {
+  max-height: 32rem;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: 0;
+  overflow: auto;
+  background: var(--surface-inset);
+  list-style: none;
+  overscroll-behavior: contain;
+}
+
+.changesFileList:focus-visible,
+.changesDiff:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: var(--space-1);
+}
+
+.changesFileItem {
+  min-width: 0;
+}
+
+.changesFileButton {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  block-size: 3.375rem;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: flex-start;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.changesFileButton:hover {
+  background: var(--surface-accent-subtle);
+}
+
+.changesFileButton[aria-pressed="true"] {
+  box-shadow: inset 3px 0 0 var(--border-accent);
+  background: var(--surface-accent-subtle);
+}
+
+.changesFileButton:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: calc(-1 * var(--focus-w));
+}
+
+.changesPath {
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changesFileState {
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  white-space: nowrap;
+}
+
+.changesSpacer {
+  pointer-events: none;
+}
+
+.changesDiff {
+  max-height: 32rem;
+  min-height: 10rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  overflow: auto;
+  background: var(--surface-inset);
+  overscroll-behavior: contain;
+}
+
+.truncationMark {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--feedback-warning);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
 }
 
 .questionStatus {

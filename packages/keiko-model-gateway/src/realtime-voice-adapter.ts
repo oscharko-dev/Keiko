@@ -34,11 +34,14 @@ import type { RealtimeAuthMode } from "./types.js";
 // endpoint cannot stream an unbounded body into the loopback control plane.
 export const MAX_SDP_BYTES = 256_000;
 
-// The voice ids the OpenAI/Azure-Foundry realtime models accept. This set is NARROWER than the
-// text-to-speech voice set (TTS also offers e.g. 'nova'/'onyx'); a persona→voice mapping authored for
-// TTS can therefore carry a voice the realtime model rejects — verified against the live endpoint,
-// where realtime `voice: "nova"` returns HTTP 400 and would break session creation. `resolveRealtimeVoice`
-// guards against that by falling back to a safe default for any non-realtime voice id.
+// Published in the 0.2.15 root package and therefore retained as a compatibility-only surface.
+// Productive negotiation never reads these defaults: every session requires an explicit deployment
+// alias and emits no provider-native assistant output.
+/** Compatibility only. Supply the configured realtime-transcription deployment explicitly. */
+export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
+/** Compatibility only. Supply the configured streaming-transcription deployment explicitly. */
+export const DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
+/** Compatibility only. Realtime provider voices are not used by the canonical Twin chat pipeline. */
 export const REALTIME_VOICES = [
   "alloy",
   "ash",
@@ -51,14 +54,27 @@ export const REALTIME_VOICES = [
   "shimmer",
   "verse",
 ] as const;
+/** Compatibility only. Realtime provider voices are not used by the canonical Twin chat pipeline. */
 export type RealtimeVoice = (typeof REALTIME_VOICES)[number];
+/** Compatibility only. Realtime provider voices are not used by the canonical Twin chat pipeline. */
 export const DEFAULT_REALTIME_VOICE: RealtimeVoice = "alloy";
-export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
-export const DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
+
+/** Compatibility only. Realtime provider voices are not used by the canonical Twin chat pipeline. */
+export function isRealtimeVoice(voiceId: string | undefined): voiceId is RealtimeVoice {
+  return voiceId !== undefined && (REALTIME_VOICES as readonly string[]).includes(voiceId);
+}
+
+/** Compatibility only. Realtime provider voices are not used by the canonical Twin chat pipeline. */
+export function resolveRealtimeVoice(voiceId: string | undefined): RealtimeVoice {
+  return isRealtimeVoice(voiceId) ? voiceId : DEFAULT_REALTIME_VOICE;
+}
+
 export const DEFAULT_REALTIME_TRANSCRIPTION_DELAY = "low" as const;
 export const DEFAULT_REALTIME_VAD_THRESHOLD = 0.5;
 export const DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS = 300;
 export const DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS = 500;
+// Published 0.2.15 value retained byte-for-byte. Productive negotiation never forwards its legacy
+// interrupt flag: realtimeTurnDetection() force-overrides both assistant-response controls to false.
 export const DEFAULT_REALTIME_TURN_DETECTION = {
   type: "server_vad",
   threshold: DEFAULT_REALTIME_VAD_THRESHOLD,
@@ -67,47 +83,28 @@ export const DEFAULT_REALTIME_TURN_DETECTION = {
   interrupt_response: true,
 } as const;
 
-export function isRealtimeVoice(voiceId: string | undefined): voiceId is RealtimeVoice {
-  return voiceId !== undefined && (REALTIME_VOICES as readonly string[]).includes(voiceId);
-}
-
-// Returns the requested voice when it is realtime-valid, otherwise the safe default — so an operator
-// mapping that reuses a TTS-only voice id for the realtime model never breaks the session.
-export function resolveRealtimeVoice(voiceId: string | undefined): RealtimeVoice {
-  return isRealtimeVoice(voiceId) ? voiceId : DEFAULT_REALTIME_VOICE;
-}
-
 export interface RealtimeNegotiationRequest {
   readonly endpoint: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string;
   readonly realtimeAuthMode?: RealtimeAuthMode;
   readonly modelId: string;
-  // The realtime session shape to mint when using ephemeral-session auth. Dialogue is the existing
-  // speech-in/speech-out Keiko session. Transcription is the P3 live-dictation path: speech-in/text-out
-  // only, no assistant output, no tools, and no spoken instructions.
+  // The realtime session shape to mint when using ephemeral-session auth. The default realtime shape
+  // is media/VAD/input-transcription only: provider-native assistant responses are disabled and Keiko's
+  // canonical chat pipeline owns every answer. Transcription is the P3 live-dictation path.
   readonly sessionType?: RealtimeSessionType | undefined;
-  // Grounded session configuration applied server-side at ephemeral-session mint time so the realtime
-  // assistant speaks as Keiko (not the provider's default demo persona) and emits user-utterance
-  // transcripts. These never reach the browser as anything other than the session's own behavior.
-  //   - instructions: the Keiko system persona (same source the text chat uses), so spoken and written
-  //     Keiko cannot diverge.
-  //   - voiceId: a provider realtime-VALID voice id resolved from the configured persona mapping.
-  //   - transcriptionModel: enables input-audio transcription so the chat transcript can capture what
-  //     the user said by voice.
-  // Applied only in ephemeral-session mode (the path that mints the session config). Omitted fields
-  // fall back to provider defaults.
-  readonly instructions?: string;
-  readonly voiceId?: string;
-  readonly transcriptionModel?: string;
+  // Provider-specific deployment alias that enables input transcription. Required even for unified
+  // auth: Keiko must never assume an OpenAI-specific model name exists on Azure/customer providers.
+  readonly transcriptionModel?: string | undefined;
   readonly transcriptionLanguage?: string | undefined;
   readonly transcriptionDelay?: RealtimeTranscriptionDelay | undefined;
   readonly turnDetection?: Readonly<Record<string, unknown>> | undefined;
+  // Published 0.2.15 request fields retained for source compatibility. The canonical Twin pipeline
+  // deliberately ignores them and never forwards provider-native instructions, voices, or tools.
+  readonly instructions?: string | undefined;
+  readonly voiceId?: string | undefined;
   readonly tools?: readonly RealtimeSessionTool[] | undefined;
   readonly toolChoice?: RealtimeSessionToolChoice | undefined;
-  // Used for grounded sessions when the provider does not support realtime function calls. Server VAD
-  // should still detect turn boundaries and emit transcription, but the provider must not auto-answer
-  // from its own context before Keiko retrieves a grounded response through the BFF.
   readonly disableAutomaticResponse?: boolean | undefined;
   // Optional content-free abuse-monitoring identifier (OpenAI `safety_identifier`). A stable, pseudonymous
   // token — never PII, never a raw chat id — so the provider can rate-limit / flag abuse per end user.
@@ -127,6 +124,7 @@ export type RealtimeSessionType = "dialogue" | "transcription";
 
 export type RealtimeTranscriptionDelay = "minimal" | "low" | "medium" | "high" | "xhigh";
 
+/** Compatibility only. Provider-native realtime tools are disabled by the canonical pipeline. */
 export interface RealtimeFunctionTool {
   readonly type: "function";
   readonly name: string;
@@ -134,8 +132,10 @@ export interface RealtimeFunctionTool {
   readonly parameters: Record<string, unknown>;
 }
 
+/** Compatibility only. Provider-native realtime tools are disabled by the canonical pipeline. */
 export type RealtimeSessionTool = RealtimeFunctionTool;
 
+/** Compatibility only. Provider-native realtime tools are disabled by the canonical pipeline. */
 export type RealtimeSessionToolChoice =
   | "auto"
   | "none"
@@ -345,23 +345,23 @@ async function dispatch(
 
 function realtimeTurnDetection(request: RealtimeNegotiationRequest): Record<string, unknown> {
   const configured = request.turnDetection ?? DEFAULT_REALTIME_TURN_DETECTION;
-  return request.disableAutomaticResponse === true
-    ? { ...configured, create_response: false }
-    : { ...configured };
+  // Load-bearing canonical-chat invariant: caller-provided tuning can adjust acoustic endpointing but
+  // can never re-enable a provider-native assistant response or provider playback interruption.
+  return { ...configured, interrupt_response: false, create_response: false };
 }
 
 // Builds the ephemeral client-secret request body. The session-config schema is the GA nested
 // `audio.{input,output}` shape (verified against the live Azure Foundry realtime endpoint: the older
-// top-level `voice`/`input_audio_transcription` shape is rejected with HTTP 500). `instructions` and
-// `audio.output.voice` are only included when supplied, while input transcription is fail-safe for the
-// dialogue path so a minted realtime session always emits user-utterance transcripts.
+// top-level `voice`/`input_audio_transcription` shape is rejected with HTTP 500). Input transcription
+// is always explicit; assistant instructions, tools, voices, and output configuration are deliberately
+// absent because the canonical chat pipeline owns the visible and spoken assistant response.
 // True for a present, non-empty string. Factored out so buildClientSecretBody's optional-field guards
 // read as a single predicate each (keeps its cyclomatic complexity within the gate).
 function nonEmptyString(value: string | undefined): value is string {
   return value !== undefined && value.length > 0;
 }
 
-function buildDialogueClientSecretSession(
+function buildMediaTranscriptionClientSecretSession(
   request: RealtimeNegotiationRequest,
 ): Record<string, unknown> {
   const session: Record<string, unknown> = {
@@ -369,34 +369,20 @@ function buildDialogueClientSecretSession(
     model: request.modelId,
     output_modalities: ["audio"],
   };
-  if (nonEmptyString(request.instructions)) {
-    session.instructions = request.instructions;
-  }
   if (nonEmptyString(request.safetyIdentifier)) {
     // OpenAI's abuse-monitoring identifier. Opt-in (see RealtimeNegotiationRequest.safetyIdentifier), so
     // a session config that omits it is byte-for-byte the prior shape and cannot regress strict providers.
     session.safety_identifier = request.safetyIdentifier;
   }
-  if (request.tools !== undefined && request.tools.length > 0) {
-    session.tools = request.tools;
-    session.tool_choice = request.toolChoice ?? "auto";
-  }
   const audioInput: Record<string, unknown> = {
-    // server_vad gives provider-side end-of-turn detection and barge-in (interrupt_response) for the
-    // realtime media plane without any client polling. Prefix padding captures speech that starts
-    // during browser EC/NS/AGC warm-up or immediately after the visible session start.
+    // server_vad provides endpointing for the transcription-only media plane without client polling.
+    // Provider response creation/interruption stays disabled; canonical local playback owns barge-in.
+    // Prefix padding captures speech that starts during browser EC/NS/AGC warm-up or immediately after
+    // the visible session start.
     turn_detection: realtimeTurnDetection(request),
   };
-  audioInput.transcription = {
-    model: nonEmptyString(request.transcriptionModel)
-      ? request.transcriptionModel
-      : DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
-  };
-  const audio: Record<string, unknown> = { input: audioInput };
-  if (nonEmptyString(request.voiceId)) {
-    audio.output = { voice: request.voiceId };
-  }
-  session.audio = audio;
+  audioInput.transcription = { model: request.transcriptionModel };
+  session.audio = { input: audioInput };
   return session;
 }
 
@@ -404,9 +390,7 @@ function buildTranscriptionClientSecretSession(
   request: RealtimeNegotiationRequest,
 ): Record<string, unknown> {
   const transcription: Record<string, unknown> = {
-    model: nonEmptyString(request.transcriptionModel)
-      ? request.transcriptionModel
-      : DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+    model: request.transcriptionModel,
     delay: request.transcriptionDelay ?? DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
   };
   if (nonEmptyString(request.transcriptionLanguage)) {
@@ -428,7 +412,7 @@ function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
 function buildRealtimeSession(request: RealtimeNegotiationRequest): Record<string, unknown> {
   return request.sessionType === "transcription"
     ? buildTranscriptionClientSecretSession(request)
-    : buildDialogueClientSecretSession(request);
+    : buildMediaTranscriptionClientSecretSession(request);
 }
 
 function extractEphemeralToken(parsed: unknown): string | undefined {
@@ -530,11 +514,14 @@ async function decodeSuccess(response: Response): Promise<RealtimeNegotiationOut
 export async function requestRealtimeNegotiation(
   request: RealtimeNegotiationRequest,
 ): Promise<RealtimeNegotiationOutcome> {
-  const built = buildRequest(request);
+  const transcriptionModel = request.transcriptionModel?.trim() ?? "";
+  if (transcriptionModel.length === 0) return { ok: false, kind: "unsupported-model" };
+  const normalizedRequest = { ...request, transcriptionModel };
+  const built = buildRequest(normalizedRequest);
   const dispatched =
-    request.realtimeAuthMode === "ephemeral-session"
-      ? await dispatchWithEphemeralToken(built, request)
-      : await dispatch(built, request.fetchImpl, request.egress);
+    normalizedRequest.realtimeAuthMode === "ephemeral-session"
+      ? await dispatchWithEphemeralToken(built, normalizedRequest)
+      : await dispatch(built, normalizedRequest.fetchImpl, normalizedRequest.egress);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };
   }

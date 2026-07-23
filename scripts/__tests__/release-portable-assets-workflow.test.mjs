@@ -511,7 +511,7 @@ describe("Windows portable production signing workflow", () => {
     );
     expect(assembleJob).toContain("attestations: write");
     expect(assembleJob).toContain("id-token: write");
-    expect(assembleJob).toContain("actions/attest@a1948c3f048ba23858d222213b7c278aabede763");
+    expect(assembleJob).toContain("actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6");
     // Together with the total-count and windowsJob assertions above, this proves the two
     // `id-token: write` occurrences are exactly stage-windows-production and assemble - no job
     // in between (macOS staging/signing, Windows/macOS qualification) carries either grant.
@@ -777,7 +777,7 @@ describe("macOS portable production signing workflow", () => {
     expect(smokeJob).toContain("platform_target: macos-x64");
     expect(smokeJob).toContain("runner: macos-15-intel");
     expect(smokeJob).toContain("persist-credentials: false");
-    expect(smokeJob).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
+    expect(smokeJob).toContain("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020");
     expect(smokeJob).toContain("environment: portable-release-signing");
     expect(smokeJob).not.toMatch(/secrets\.|id-token: write|upload-artifact/u);
     expect(smokeJob).toContain("Download immutable verified macOS artifact");

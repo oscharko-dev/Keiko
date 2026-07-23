@@ -24,6 +24,12 @@ const HOST = "127.0.0.1";
 // changes what the browser shows and reddens the smoke.
 const REPLY_MARKER = "KEIKO_E2E_STREAM_OK";
 const JOURNAL_CAPTURE_MARKER = "KEIKO_E2E_JOURNAL_CAPTURE";
+const SALIENCE_PROMPT_MARKER = "You extract durable memories from a chat turn";
+const GROUNDED_PROMPT_MARKER =
+  "You are Keiko answering a repository question from a connected Files scope";
+const GROUNDING_PARITY_EVIDENCE_MARKER = "KEIKO_E2E_GROUNDING_PARITY";
+const GROUNDING_PARITY_REPLY =
+  "repositoryParityStatus is defined in the repository fixture [src/repository-parity.ts:2].";
 const REPLY_TOKENS = [REPLY_MARKER, " deterministic", " provider", " pong", " 4242."];
 const REPLY_TEXT = REPLY_TOKENS.join("");
 
@@ -83,7 +89,18 @@ function streamCompletion(res) {
 }
 
 function bufferedContent(rawRequest) {
-  if (!rawRequest.includes(JOURNAL_CAPTURE_MARKER)) return REPLY_TEXT;
+  if (
+    rawRequest.includes(GROUNDED_PROMPT_MARKER) &&
+    rawRequest.includes(GROUNDING_PARITY_EVIDENCE_MARKER)
+  ) {
+    return GROUNDING_PARITY_REPLY;
+  }
+  if (
+    !rawRequest.includes(JOURNAL_CAPTURE_MARKER) ||
+    !rawRequest.includes(SALIENCE_PROMPT_MARKER)
+  ) {
+    return REPLY_TEXT;
+  }
   return JSON.stringify([
     {
       source: "user",
@@ -119,6 +136,64 @@ function bufferedCompletion(res, rawRequest) {
   res.end(JSON.stringify(body));
 }
 
+// Deterministic OpenAI-compatible embeddings (Issue #2556). Local Knowledge cannot create a capsule
+// at all without an embedding-capable model, so without this the repository-pod flow could only be
+// proven a layer at a time and never as the product a user actually drives. Pointing the gateway at
+// this loopback server exercises the whole path — capsule, connect, index, retrieve — through the
+// real model gateway, with a byte-reproducible vector instead of a provider call: same input always
+// yields the same vector, so cosine similarity stays meaningful and the run is repeatable on any
+// host without credentials.
+// Validated, not just coerced: Number("") is 0, Number("abc") is NaN, and either one turns
+// `new Array(EMBEDDING_DIMENSIONS)` into an empty array or a RangeError far from the typo that
+// caused it. A verification aid that misconfigures itself silently is worse than one that refuses.
+const EMBEDDING_DIMENSIONS = (() => {
+  const raw = process.env.KEIKO_E2E_EMBEDDING_DIMENSIONS;
+  if (raw === undefined || raw === "") return 16;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 4096) {
+    throw new Error(`KEIKO_E2E_EMBEDDING_DIMENSIONS must be an integer in 1..4096, got ${raw}`);
+  }
+  return parsed;
+})();
+
+function deterministicEmbedding(input) {
+  const vector = new Array(EMBEDDING_DIMENSIONS).fill(0);
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    const slot = (code + index) % EMBEDDING_DIMENSIONS;
+    vector[slot] = (vector[slot] ?? 0) + ((code % 31) + 1) / 32;
+  }
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+  if (norm === 0) return vector.map(() => 1 / Math.sqrt(EMBEDDING_DIMENSIONS));
+  return vector.map((value) => value / norm);
+}
+
+function embeddingsResponse(res, raw) {
+  let parsed = {};
+  try {
+    const value = JSON.parse(raw || "{}");
+    // JSON.parse succeeds on "null", "42" and "[]" too, and reading .input off null throws. Only
+    // a plain object can carry the request fields; anything else falls through to the empty body.
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) parsed = value;
+  } catch {
+    // Malformed body → treat as one empty input so the response shape stays valid.
+  }
+  const inputs = Array.isArray(parsed.input) ? parsed.input : [String(parsed.input ?? "")];
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(
+    JSON.stringify({
+      object: "list",
+      model: String(parsed.model ?? "keiko-e2e-embedding"),
+      data: inputs.map((value, index) => ({
+        object: "embedding",
+        index,
+        embedding: deterministicEmbedding(String(value)),
+      })),
+      usage: { prompt_tokens: inputs.length, total_tokens: inputs.length },
+    }),
+  );
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? "/", `http://${HOST}:${String(PORT)}`);
   if (req.method === "GET" && url.pathname === "/healthz") {
@@ -140,6 +215,10 @@ const server = createServer((req, res) => {
         bufferedCompletion(res, raw);
       }
     });
+    return;
+  }
+  if (req.method === "POST" && url.pathname.endsWith("/embeddings")) {
+    void readBody(req).then((raw) => embeddingsResponse(res, raw));
     return;
   }
   res.writeHead(404, { "content-type": "application/json" });

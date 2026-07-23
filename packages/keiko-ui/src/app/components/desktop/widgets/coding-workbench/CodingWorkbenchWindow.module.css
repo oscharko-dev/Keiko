@@ -41,6 +41,10 @@
     grid-template-columns: 1fr;
   }
 
+  .changesLayout {
+    grid-template-columns: 1fr;
+  }
+
   .button {
     width: 100%;
   }
@@ -68,7 +72,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .timeline {
+  .timeline,
+  .changesFileList,
+  .changesDiff {
     scroll-behavior: auto;
   }
 }
@@ -83,7 +89,23 @@
   .setupPlan,
   .taskInput,
   .setupInput,
-  .alert {
+  .alert,
+  .activityStatus,
+  .toolCard,
+  .planCard,
+  .questionInline,
+  .activityBadge {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  .changesMessage,
+  .changesNotice,
+  .changesFileList,
+  .changesDiff,
+  .changesFileButton {
     border-color: CanvasText;
     color: CanvasText;
     background: Canvas;
@@ -91,7 +113,8 @@
   }
 
   .modeOption[data-selected="true"],
-  .sourceCard[data-selected="true"] {
+  .sourceCard[data-selected="true"],
+  .changesFileButton[aria-pressed="true"] {
     outline: var(--focus-w) solid Highlight;
   }
 
@@ -110,9 +133,15 @@
 
   .statePill,
   .statusBadge,
-  .resourceState {
+  .resourceState,
+  .activityBadge {
     border-color: CanvasText;
     color: CanvasText;
+    background: Canvas;
+  }
+
+  .timelineMarker {
+    border-color: CanvasText;
     background: Canvas;
   }
 }

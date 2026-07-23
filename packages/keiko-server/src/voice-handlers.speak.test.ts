@@ -61,8 +61,8 @@ const SPEECH_OUTPUT_CONFIG: GatewayConfig = {
   ],
 };
 
-// A speech-output provider WITHOUT any persona mapping: synthesis still works with the adapter's
-// default voice (no voiceProfiles configured).
+// A speech-output provider WITHOUT any persona mapping. The route must fail closed before egress;
+// provider voice names are not portable and there is no universal default.
 const SPEECH_OUTPUT_NO_PERSONA_CONFIG: GatewayConfig = {
   ...SPEECH_OUTPUT_CONFIG,
   providers: [
@@ -166,12 +166,53 @@ function audioOk(): TextToSpeechOutcome {
   };
 }
 
-function ctx(body: unknown): RouteContext {
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function speakContext(body: unknown): {
+  readonly context: RouteContext;
+  readonly request: IncomingMessage;
+  readonly response: FakeRes;
+} {
+  const request = Readable.from([Buffer.from(JSON.stringify(body), "utf8")], {
+    autoDestroy: false,
+  }) as IncomingMessage;
+  const response = new FakeRes();
   return {
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
-    res: {} as RouteContext["res"],
-    params: {},
-    url: new URL("http://127.0.0.1/api/voice/speak"),
+    request,
+    response,
+    context: {
+      req: request,
+      res: response as unknown as RouteContext["res"],
+      params: {},
+      url: new URL("http://127.0.0.1/api/voice/speak"),
+    },
+  };
+}
+
+function ctx(body: unknown): RouteContext {
+  return speakContext(body).context;
+}
+
+function cancellationAwareSpeechStub(
+  captured: ReturnType<typeof deferred<TextToSpeechRequest>>,
+): (request: TextToSpeechRequest) => Promise<TextToSpeechOutcome> {
+  return (request): Promise<TextToSpeechOutcome> => {
+    captured.resolve(request);
+    return new Promise((resolve) => {
+      request.signal?.addEventListener(
+        "abort",
+        () => {
+          resolve({ ok: false, kind: "cancelled" });
+        },
+        { once: true },
+      );
+    });
   };
 }
 
@@ -246,6 +287,24 @@ describe("POST /api/voice/speak — capability gate (AC1/AC4)", () => {
     expect(errorCode(result.body)).toBe("VOICE_UNAVAILABLE");
   });
 
+  it("returns 503 without egress for a Realtime-only media deployment", async () => {
+    const realtimeOnly: GatewayConfig = {
+      ...STT_ONLY_CONFIG,
+      capabilities: (STT_ONLY_CONFIG.capabilities ?? []).map((capability) => ({
+        ...capability,
+        supportsSpeechInput: false,
+        supportsRealtimeVoice: true,
+      })),
+    };
+    const { deps, seen } = speakDeps({ config: realtimeOnly });
+
+    const result = await handleVoiceSpeak(ctx({ text: "hello" }), deps);
+
+    expect(result.status).toBe(503);
+    expect(errorCode(result.body)).toBe("VOICE_UNAVAILABLE");
+    expect(seen).toHaveLength(0);
+  });
+
   it("returns 503 VOICE_UNAVAILABLE when voice is disabled by policy, even with a provider", async () => {
     const { deps, seen } = speakDeps({ env: { KEIKO_VOICE_DISABLED: "1" } });
     const result = await handleVoiceSpeak(ctx({ text: "hello" }), deps);
@@ -257,10 +316,35 @@ describe("POST /api/voice/speak — capability gate (AC1/AC4)", () => {
 });
 
 describe("POST /api/voice/speak — successful synthesis (AC1/AC2)", () => {
+  it("aborts buffered synthesis and removes lifecycle listeners on client disconnect", async () => {
+    const fixture = speakContext({ text: "spoken answer" });
+    const captured = deferred<TextToSpeechRequest>();
+    const deps = depsWith({
+      config: SPEECH_OUTPUT_CONFIG,
+      configPresent: true,
+      voiceSpeechRequest: cancellationAwareSpeechStub(captured),
+    });
+
+    const handling = handleVoiceSpeak(fixture.context, deps);
+    const request = await captured.promise;
+    expect(request.signal).toBeDefined();
+    expect(request.signal?.aborted).toBe(false);
+    expect(fixture.request.listenerCount("aborted")).toBe(1);
+    expect(fixture.response.listenerCount("close")).toBe(1);
+
+    fixture.response.emit("close");
+
+    expect(request.signal?.aborted).toBe(true);
+    await expect(handling).resolves.toMatchObject({ status: 502 });
+    expect(fixture.request.listenerCount("aborted")).toBe(0);
+    expect(fixture.response.listenerCount("close")).toBe(0);
+  });
+
   it("synthesizes the visible answer against the configured provider and returns base64 audio", async () => {
     const { deps, seen } = speakDeps();
     const answer = "This is exactly the assistant text shown in the transcript.";
-    const result = await handleVoiceSpeak(ctx({ text: answer }), deps);
+    const fixture = speakContext({ text: answer });
+    const result = await handleVoiceSpeak(fixture.context, deps);
     expect(result.status).toBe(200);
     const body = result.body as { audio: string; mimeType: string };
     expect(Buffer.from(body.audio, "base64").toString("utf8")).toBe(AUDIO_MARKER);
@@ -276,6 +360,8 @@ describe("POST /api/voice/speak — successful synthesis (AC1/AC2)", () => {
     // The interactive speak path requests opus (audio/ogg): faster to first audio and ~4x smaller
     // than the previous mp3 default (measured against the live endpoint).
     expect(seen[0]?.responseFormat).toBe("opus");
+    expect(fixture.request.listenerCount("aborted")).toBe(0);
+    expect(fixture.response.listenerCount("close")).toBe(0);
   });
 
   it("sends speech-friendly prose while the visible answer keeps clickable Markdown sources", async () => {
@@ -311,22 +397,20 @@ describe("POST /api/voice/speak — successful synthesis (AC1/AC2)", () => {
     expect(seen[0]?.voice).toBe("ember-internal-voice-id-112233");
   });
 
-  it("synthesizes with the adapter default voice when the provider maps no personas", async () => {
+  it("fails closed before provider egress when no explicit voice is mapped", async () => {
     const { deps, seen } = speakDeps({ config: SPEECH_OUTPUT_NO_PERSONA_CONFIG });
     const result = await handleVoiceSpeak(ctx({ text: "spoken answer" }), deps);
-    expect(result.status).toBe(200);
-    // No voice id is pinned by the BFF; the adapter applies its provider-neutral default.
-    expect(seen[0]?.voice).toBeUndefined();
+    expect(result.status).toBe(503);
+    expect(errorCode(result.body)).toBe("VOICE_UNAVAILABLE");
+    expect(seen).toHaveLength(0);
   });
 
-  it("falls back to a mapped voice in canonical order when the requested persona is unmapped", async () => {
-    // SPEECH_OUTPUT_CONFIG maps female + male but NOT neutral. A request for the unmapped persona must
-    // still synthesize, using the first persona-mapped provider in canonical order (male) rather than
-    // rejecting (D4 fallback contract).
+  it("fails closed when the requested persona has no exact provider mapping", async () => {
     const { deps, seen } = speakDeps();
     const result = await handleVoiceSpeak(ctx({ text: "spoken answer", persona: "neutral" }), deps);
-    expect(result.status).toBe(200);
-    expect(seen[0]?.voice).toBe("ember-internal-voice-id-112233");
+    expect(result.status).toBe(503);
+    expect(errorCode(result.body)).toBe("VOICE_UNAVAILABLE");
+    expect(seen).toHaveLength(0);
   });
 });
 
@@ -369,13 +453,31 @@ describe("POST /api/voice/speak — provider failure mapping (AC4)", () => {
     ["tls-ca-failure", 502, "VOICE_PROVIDER_ERROR"],
   ] as const)("maps adapter failure %s to HTTP %i %s", async (kind, status, code) => {
     const { deps } = speakDeps({}, { ok: false, kind });
-    const result = await handleVoiceSpeak(ctx({ text: "hello" }), deps);
+    const fixture = speakContext({ text: "hello" });
+    const result = await handleVoiceSpeak(fixture.context, deps);
     expect(result.status).toBe(status);
     expect(errorCode(result.body)).toBe(code);
     // No provider body, URL, or secret is ever interpolated into a failure envelope.
     const serialized = JSON.stringify(result.body);
     expect(serialized).not.toContain(PROVIDER_SECRET);
     expect(serialized).not.toContain(PROVIDER_BASE_URL);
+    expect(fixture.request.listenerCount("aborted")).toBe(0);
+    expect(fixture.response.listenerCount("close")).toBe(0);
+  });
+
+  it("removes lifecycle listeners when the synthesis seam rejects", async () => {
+    const fixture = speakContext({ text: "hello" });
+    const deps = depsWith({
+      config: SPEECH_OUTPUT_CONFIG,
+      configPresent: true,
+      voiceSpeechRequest: () => Promise.reject(new Error("synthetic synthesis failure")),
+    });
+
+    await expect(handleVoiceSpeak(fixture.context, deps)).rejects.toThrow(
+      "synthetic synthesis failure",
+    );
+    expect(fixture.request.listenerCount("aborted")).toBe(0);
+    expect(fixture.response.listenerCount("close")).toBe(0);
   });
 });
 
@@ -385,7 +487,9 @@ class FakeRes extends EventEmitter {
   headers: Record<string, string> | undefined;
   readonly chunks: Uint8Array[] = [];
   ended = false;
+  closed = false;
   destroyed = false;
+  writableEnded = false;
   private writeCount = 0;
 
   constructor(private readonly backpressureAt?: number) {
@@ -407,6 +511,7 @@ class FakeRes extends EventEmitter {
   }
   end(): void {
     this.ended = true;
+    this.writableEnded = true;
   }
   destroy(): void {
     this.destroyed = true;
@@ -430,7 +535,9 @@ function streamOf(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
 
 function streamCtx(body: unknown, res: FakeRes): RouteContext {
   return {
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
+    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")], {
+      autoDestroy: false,
+    }) as IncomingMessage,
     res: res as unknown as RouteContext["res"],
     params: {},
     url: new URL("http://127.0.0.1/api/voice/speak/stream"),
@@ -462,7 +569,8 @@ describe("POST /api/voice/speak/stream", () => {
       },
     });
 
-    const outcome = await handleVoiceSpeakStream(streamCtx({ text: "spoken answer" }, res), deps);
+    const context = streamCtx({ text: "spoken answer" }, res);
+    const outcome = await handleVoiceSpeakStream(context, deps);
     expect(outcome).toBe(STREAMING);
     expect(res.statusCode).toBe(200);
     expect(res.headers?.["Content-Type"]).toBe("audio/pcm");
@@ -473,6 +581,8 @@ describe("POST /api/voice/speak/stream", () => {
     // The streaming path requests raw pcm (fastest to first audio).
     expect(seen[0]?.responseFormat).toBe("pcm");
     expect(seen[0]?.signal).toBeDefined();
+    expect(context.req.listenerCount("aborted")).toBe(0);
+    expect(res.listenerCount("close")).toBe(0);
   });
 
   it("waits for response drain under backpressure without truncating the PCM stream", async () => {
@@ -502,11 +612,14 @@ describe("POST /api/voice/speak/stream", () => {
       voiceSpeechStreamRequest: (): Promise<TextToSpeechStreamOutcome> =>
         Promise.resolve({ ok: false, kind: "rate-limited" }),
     });
-    const outcome = await handleVoiceSpeakStream(streamCtx({ text: "spoken answer" }, res), deps);
+    const context = streamCtx({ text: "spoken answer" }, res);
+    const outcome = await handleVoiceSpeakStream(context, deps);
     expect(outcome).not.toBe(STREAMING);
     expect((outcome as RouteResult).status).toBe(429);
     expect(res.statusCode).toBeUndefined(); // never committed a 200 + audio headers
     expect(res.ended).toBe(false);
+    expect(context.req.listenerCount("aborted")).toBe(0);
+    expect(res.listenerCount("close")).toBe(0);
   });
 
   it("emits a redacted diagnostic when a committed provider stream fails", async () => {

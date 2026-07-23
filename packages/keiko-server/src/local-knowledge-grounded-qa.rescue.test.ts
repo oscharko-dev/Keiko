@@ -486,6 +486,10 @@ describe("local-knowledge citation rescue (#189)", () => {
 // so that a bidi char in the question content reaches the fallback path (redactor returns non-string)
 // and we observe the persisted message in the UiStore to confirm the char was stripped, not kept.
 
+// `expect.any` is typed `any`; pinning it to the field type keeps the full-object diagnostics
+// literals below type-safe while tolerating real elapsed time on provider-backed paths.
+const ANY_LATENCY_MS = expect.any(Number) as unknown as number;
+
 let rescueStore: UiStore;
 let rescueTmp: string;
 
@@ -497,6 +501,111 @@ beforeEach(() => {
 afterEach(() => {
   rescueStore.close();
   rmSync(rescueTmp, { recursive: true, force: true });
+});
+
+describe("local-knowledge answer-only memory boundary", () => {
+  it("keeps memory out of retrieval while including it in the production answer prompt", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Memory Boundary Capsule",
+      capsuleId: "cap-memory-boundary",
+      sourceId: "src-memory-boundary",
+      text: "alpha is the grounded answer",
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "memory-boundary-project");
+    const created = rescueStore.createChat(project.path, "Memory boundary", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const memoryMarker = "MEMORY_ONLY_PREFERENCE_9f41";
+    const modelPrompts: string[] = [];
+    const fakeModel: ModelPort = {
+      call: (request) => {
+        modelPrompts.push(request.messages.map((message) => message.content).join("\n"));
+        const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
+        return Promise.resolve({
+          modelId: "chat-model",
+          content: isQueryTransform ? '{"queries":["alpha"]}' : "You prefer pnpm.",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: isQueryTransform ? "memory-query-transform" : "memory-answer",
+            promptTokens: 5,
+            completionTokens: 12,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        });
+      },
+    };
+    const embeddingInputs: string[] = [];
+    const adapter = scriptedAdapter();
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: (request) => {
+        embeddingInputs.push(request.input);
+        return adapter.request(request);
+      },
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      {
+        chatId: chat.id,
+        content: "   ",
+        answerContent: `User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm. ${memoryMarker}`,
+        answerOnlyContextAvailable: true,
+        modelId: "chat-model",
+      },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(embeddingInputs.join("\n")).not.toContain(memoryMarker);
+    const answerPrompts = modelPrompts.filter((prompt) =>
+      prompt.includes("Indexed knowledge scope:"),
+    );
+    const retrievalPrompts = modelPrompts.filter(
+      (prompt) => !prompt.includes("Indexed knowledge scope:"),
+    );
+    expect(retrievalPrompts.join("\n")).not.toContain(memoryMarker);
+    expect(answerPrompts.length).toBeGreaterThan(0);
+    expect(answerPrompts.every((prompt) => prompt.includes(memoryMarker))).toBe(true);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.content).toBe("You prefer pnpm.");
+    expect(answer.noEvidence).toBe(true);
+    expect(answer.noEvidenceReason).toBe("answer-only-memory");
+    expect(answer.citations).toEqual([]);
+    expect(answer.contextPack.citationCount).toBe(0);
+  });
 });
 
 describe("redactText fallback — non-string redactor output strips unsafe chars instead of returning raw", () => {
@@ -786,9 +895,15 @@ function expectAppliedRerankerDiagnostics(
   const indexLifecycle = answer.contextPack.indexLifecycle;
   const indexedCapsule = indexLifecycle?.capsules[0];
   const citation = answer.citations[0];
-  expect(reranker).toMatchObject({ status: "applied", keptCount: 1 });
-  expect(reranker?.candidateCount).toBeGreaterThan(0);
-  expect(reranker?.documentCount).toBe(reranker?.candidateCount);
+  // Byte-diff pin (issue #2567 D5): the FULL emitted diagnostics object, so an added field fails.
+  expect(reranker).toEqual({
+    status: "applied",
+    mode: "provider-backed",
+    candidateCount: 1,
+    documentCount: 1,
+    keptCount: 1,
+    latencyMs: ANY_LATENCY_MS,
+  });
   expect(answer.contextPack.referencesUsed).toBe(1);
   expect(indexLifecycle).toMatchObject({
     schemaVersion: "local-knowledge-index-lifecycle-v1",
@@ -1215,11 +1330,14 @@ describe("local-knowledge reranker diagnostics", () => {
       { readonly groundingKind: "local-knowledge" }
     >;
     expect(rerankCalls).toBe(0);
-    expect(answer.contextPack.reranker).toMatchObject({
+    expect(answer.contextPack.reranker).toEqual({
       status: "denied",
       mode: "local-only",
-      failureKind: "policy-denied",
+      candidateCount: 1,
       documentCount: 0,
+      keptCount: 1,
+      failureKind: "policy-denied",
+      latencyMs: 0,
     });
     expect(answer.retrievalActivity?.pods[0]).toMatchObject({
       state: "degraded",
@@ -1320,11 +1438,14 @@ describe("local-knowledge reranker diagnostics", () => {
     // Deny-wins: a single member that denies external reranking vetoes the provider call for the whole
     // fused candidate set, yet synthesis still proceeds over the preserved order (#1923 / #1924).
     expect(rerankCalls).toBe(0);
-    expect(answer.contextPack.reranker).toMatchObject({
+    expect(answer.contextPack.reranker).toEqual({
       status: "denied",
       mode: "local-only",
-      failureKind: "policy-denied",
+      candidateCount: 1,
       documentCount: 0,
+      keptCount: 1,
+      failureKind: "policy-denied",
+      latencyMs: 0,
     });
   });
 
@@ -1386,12 +1507,17 @@ describe("local-knowledge reranker diagnostics", () => {
       GroundedAnswer,
       { readonly groundingKind: "local-knowledge" }
     >;
-    expect(answer.contextPack.reranker).toMatchObject({
+    // Byte-diff pin (issue #2567 D5). `candidateCount` is the FULL fused reference pool (8), not
+    // the provider subset capped at maxPromptReferences — the unconfigured reranker never had a
+    // provider subset. This matches the pre-facade single-scope contract exactly.
+    expect(answer.contextPack.reranker).toEqual({
       status: "disabled",
       mode: "none",
-      failureKind: "not-configured",
+      candidateCount: 8,
       documentCount: 0,
       keptCount: 2,
+      failureKind: "not-configured",
+      latencyMs: 0,
     });
     // A reranker that was simply never configured is the default, fully-supported install state — it
     // must NOT degrade the Knowledge Pod activity row (#1922 regression: the single-scope path now
@@ -1497,13 +1623,16 @@ describe("local-knowledge reranker diagnostics", () => {
       >;
       expect(rerankCalls).toBe(1);
       expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
-      expect(answer.contextPack.reranker).toMatchObject({
+      // Byte-diff pin (issue #2567 D5): toEqual, NOT toMatchObject — an ADDED diagnostics field is a
+      // wire change on the grounded-answer contract and must fail here rather than pass silently.
+      expect(answer.contextPack.reranker).toEqual({
         status,
         mode: "provider-backed",
-        failureKind: kind,
         candidateCount: 2,
         documentCount: 2,
         keptCount: 2,
+        failureKind: kind,
+        latencyMs: ANY_LATENCY_MS,
       });
       expect(JSON.stringify(answer.contextPack.reranker)).not.toContain("reranker.example");
       expect(JSON.stringify(answer.contextPack.reranker)).not.toContain("reranker-test-key");
@@ -1513,6 +1642,97 @@ describe("local-knowledge reranker diagnostics", () => {
       });
     },
   );
+
+  // The "invalid-response" case above is a TRANSPORT-level outcome, so it short-circuits before
+  // applyRerankMapping ever runs. This journey instead returns a transport-SUCCESSFUL response whose
+  // indices are unusable (duplicate index 0) — the only route by which the mapping guard itself can
+  // produce the caller-visible "invalid-response" status.
+  it("degrades to fused order for a transport-successful duplicate-index response", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Duplicate Index Capsule",
+      capsuleId: "cap-reranker-duplicate",
+      sourceId: "src-reranker-duplicate",
+      text: "alpha beta duplicate index first. alpha beta duplicate index second.",
+      chunkingOptions: { maxTokens: 4, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "reranker-duplicate-project");
+    const created = rescueStore.createChat(project.path, "Reranker duplicate", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    let rerankCalls = 0;
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+        grounding: { maxPromptReferences: 2 },
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://reranker.example/v1",
+          apiKey: "reranker-test-key",
+          timeoutMs: 30_000,
+        },
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => answerModel("Alpha beta [1]. Alpha beta [2].", "reranker-duplicate"),
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: scriptedAdapter().request,
+      rerankRequest: () => {
+        rerankCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          value: { modelId: "qwen3-reranker", results: [{ index: 0 }, { index: 0 }] },
+        });
+      },
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(rerankCalls).toBe(1);
+    // Fallback is the preserved fused order, not the unusable provider ordering.
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
+    expect(answer.contextPack.reranker).toEqual({
+      status: "invalid-response",
+      mode: "provider-backed",
+      candidateCount: 2,
+      documentCount: 2,
+      keptCount: 2,
+      failureKind: "invalid-response",
+      latencyMs: ANY_LATENCY_MS,
+    });
+    expect(answer.retrievalActivity?.pods[0]).toMatchObject({
+      state: "degraded",
+      reasonCodes: ["searched", "reranker-invalid-response"],
+    });
+  });
 });
 
 describe("reranker reference selection helpers (#1922 / #1925 / #1926)", () => {
@@ -2471,7 +2691,7 @@ describe("local-knowledge retrieval activity", () => {
       expect(records[0]).toMatchObject({
         source: "retrieval-activity.tryBuild",
         errorClass: "Error",
-        message: "Knowledge Pod retrieval activity validation failed.",
+        message: "server-operation-failed",
       });
     } finally {
       knowledgeStore.close();

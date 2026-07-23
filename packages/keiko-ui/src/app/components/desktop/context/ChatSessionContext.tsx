@@ -12,10 +12,10 @@ type ChatSessionActionKeys =
   | "openChat"
   | "addProject"
   | "sendMessage"
+  | "enqueueCanonicalVoiceTurn"
+  | "canonicalVoiceCaptureMustPause"
+  | "retryPendingCanonicalVoiceTurn"
   | "regenerateMessage"
-  | "appendVoiceTurn"
-  | "runRealtimeGroundedTool"
-  | "runRealtimeMemoryTool"
   | "cancelSend"
   | "replaceChat"
   | "cancelGrounded"
@@ -76,6 +76,15 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       openChat: value.openChat,
       addProject: value.addProject,
       sendMessage: value.sendMessage,
+      ...(value.enqueueCanonicalVoiceTurn === undefined
+        ? {}
+        : { enqueueCanonicalVoiceTurn: value.enqueueCanonicalVoiceTurn }),
+      ...(value.canonicalVoiceCaptureMustPause === undefined
+        ? {}
+        : { canonicalVoiceCaptureMustPause: value.canonicalVoiceCaptureMustPause }),
+      ...(value.retryPendingCanonicalVoiceTurn === undefined
+        ? {}
+        : { retryPendingCanonicalVoiceTurn: value.retryPendingCanonicalVoiceTurn }),
       regenerateMessage: value.regenerateMessage,
       cancelSend: value.cancelSend,
       replaceChat: value.replaceChat,
@@ -90,13 +99,6 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       rejectMemoryCandidate: value.rejectMemoryCandidate,
       forgetMemoryAction: value.forgetMemoryAction,
       ...(value.clearError === undefined ? {} : { clearError: value.clearError }),
-      ...(value.appendVoiceTurn === undefined ? {} : { appendVoiceTurn: value.appendVoiceTurn }),
-      ...(value.runRealtimeGroundedTool === undefined
-        ? {}
-        : { runRealtimeGroundedTool: value.runRealtimeGroundedTool }),
-      ...(value.runRealtimeMemoryTool === undefined
-        ? {}
-        : { runRealtimeMemoryTool: value.runRealtimeMemoryTool }),
     }),
     [
       value.clearError,
@@ -107,10 +109,10 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.openChat,
       value.addProject,
       value.sendMessage,
+      value.enqueueCanonicalVoiceTurn,
+      value.canonicalVoiceCaptureMustPause,
+      value.retryPendingCanonicalVoiceTurn,
       value.regenerateMessage,
-      value.appendVoiceTurn,
-      value.runRealtimeGroundedTool,
-      value.runRealtimeMemoryTool,
       value.cancelSend,
       value.replaceChat,
       value.cancelGrounded,
@@ -171,6 +173,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       loading: value.loading,
       sending: value.sending,
       sendStatus: value.sendStatus,
+      canonicalVoiceTurnRequiresRetry: value.canonicalVoiceTurnRequiresRetry,
       regeneratingMessageId: value.regeneratingMessageId,
       error: value.error,
       latestGrounded: value.latestGrounded,
@@ -193,6 +196,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.loading,
       value.sending,
       value.sendStatus,
+      value.canonicalVoiceTurnRequiresRetry,
       value.regeneratingMessageId,
       value.error,
       value.latestGrounded,

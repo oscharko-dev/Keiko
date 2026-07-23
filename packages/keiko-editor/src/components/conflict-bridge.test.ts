@@ -149,7 +149,7 @@ describe("registerConflictBridge", () => {
 
     harness.bridge.next();
     harness.bridge.previous();
-    expect(harness.editor.setPosition).toHaveBeenCalledTimes(2);
+    expect(harness.editor.setPosition.mock.calls).toHaveLength(2);
     harness.bridge.dispose();
   });
 
@@ -159,9 +159,9 @@ describe("registerConflictBridge", () => {
     await vi.runAllTimersAsync();
 
     harness.bridge.previous();
-    expect(harness.editor.setPosition).toHaveBeenLastCalledWith({ lineNumber: 13, column: 1 });
+    expect(harness.editor.setPosition.mock.lastCall).toEqual([{ lineNumber: 13, column: 1 }]);
     harness.bridge.next();
-    expect(harness.editor.setPosition).toHaveBeenLastCalledWith({ lineNumber: 1, column: 1 });
+    expect(harness.editor.setPosition.mock.lastCall).toEqual([{ lineNumber: 1, column: 1 }]);
   });
 
   it("starts navigation at either edge when the cursor is outside every conflict", async () => {
@@ -172,8 +172,8 @@ describe("registerConflictBridge", () => {
 
     next.bridge.next();
     previous.bridge.previous();
-    expect(next.editor.setPosition).toHaveBeenLastCalledWith({ lineNumber: 1, column: 1 });
-    expect(previous.editor.setPosition).toHaveBeenLastCalledWith({ lineNumber: 6, column: 1 });
+    expect(next.editor.setPosition.mock.lastCall).toEqual([{ lineNumber: 1, column: 1 }]);
+    expect(previous.editor.setPosition.mock.lastCall).toEqual([{ lineNumber: 6, column: 1 }]);
   });
 
   it.each(ACCEPTANCE_ACTIONS)(
@@ -311,9 +311,9 @@ describe("registerConflictBridge", () => {
     harness.bridge.previous();
     await harness.bridge.accept("both");
 
-    expect(harness.editor.setPosition).not.toHaveBeenCalled();
+    expect(harness.editor.setPosition.mock.calls).toHaveLength(0);
     expect(harness.executeEdits).not.toHaveBeenCalled();
-    expect(harness.editor.deltaDecorations).toHaveBeenCalledWith([], []);
+    expect(harness.editor.deltaDecorations.mock.calls).toContainEqual([[], []]);
   });
 
   it("coalesces content scans and keeps decoration identities separate", async () => {
@@ -324,7 +324,7 @@ describe("registerConflictBridge", () => {
     harness.initialModel.fire();
     harness.initialModel.fire();
     await vi.runAllTimersAsync();
-    expect(harness.editor.deltaDecorations).toHaveBeenCalledTimes(2);
+    expect(harness.editor.deltaDecorations.mock.calls).toHaveLength(2);
     expect(harness.editor.deltaDecorations.mock.calls[0]?.[1]).toHaveLength(2);
   });
 });

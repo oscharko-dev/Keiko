@@ -4,6 +4,12 @@
 
 Specification for Epic #491, the deliverable of Issue [#505](https://github.com/oscharko-dev/Keiko/issues/505) and the authoritative companion to [ADR-0110](../adr/ADR-0110-voice-evaluation-harness.md). It **defines** the capstone evaluation harness: what it proves, how to run it, its architecture, the dimension→acceptance-criterion mapping, the CI-safe mock and fixture strategy, and an explicit closure checklist. The harness lives in [`packages/keiko-evaluations/src/voice-twin/`](../../packages/keiko-evaluations/src/voice-twin/).
 
+> **Current scope note (ADR-0154):** this remains a deterministic capability/profile contract harness,
+> not a complete release proof for the current Twin pipeline. It does not exercise exactly-once final
+> handoff, canonical chat persistence, the store-bound same-chat serializer, Realtime output rejection,
+> retrieval/MemoriaViva parity, grounded citations, or canonical TTS binding. Those invariants are
+> covered by the current Voice, Chat, server, retrieval, and browser suites on the exact PR head.
+
 ## 0. What the harness proves
 
 The harness proves two critical invariants for the **entire** Voice Digital Twin:
@@ -13,7 +19,7 @@ The harness proves two critical invariants for the **entire** Voice Digital Twin
 
 **Why this matters.** Each child issue (#493–#504) shipped its own self-contained feature suite (dictation-ui, discussion-intelligence, spoken-action-governance, session-recap). Those suites test feature-level behavior. The harness tests the **foundation every feature depends on** — the capability contract itself. A bug in the capability table affects all six child features at once; a single failing test in the harness is therefore a blocker for Epic #491 closure.
 
-**The harness is not a transport test.** Transport-level behavior (WebSocket handshake, WebRTC media plane, reconnect recovery) is tested in `keiko-server/src/voice-realtime.ts` and `keiko-ui/src/app/components/desktop/hooks/voice-*.test.ts` suites. **The harness is not a reducer behavior test.** Runtime mechanics (timing engine state transitions, turn-manager overlap synthesis, transcript reducer partial-text churn) are tested in their own keiko-ui suites (ADR-0103 §32 tests, ADR-0104 §44 tests, ADR-0105 §33 tests, ADR-0106 §28 tests). The harness proves that the **contract surface** those reducers and transports consume is correct.
+**The harness is not a transport test.** Transport-level behavior (WebSocket handshake, WebRTC media plane, reconnect recovery) is tested in `keiko-server/src/voice-realtime.ts` and `keiko-ui/src/app/components/desktop/hooks/voice-*.test.ts` suites. **The harness is not a reducer behavior test.** Runtime mechanics (timing engine state transitions, turn-manager overlap synthesis, transcript reducer partial-text churn) are tested in their own keiko-ui suites under ADR-0103 through ADR-0106. The harness proves that the **contract surface** those reducers and transports consume is correct.
 
 ## 1. How to run it
 
@@ -36,7 +42,9 @@ and hypothesis transcripts, ordered enum/timestamp traces, acoustic-profile labe
 terms, and numeric budgets. It stores no raw production audio, no provider credentials, no provider URLs,
 and no raw provider event bodies.
 
-All 32+ tests must pass and suite verdict must be `GO`. Coverage minimum for `keiko-evaluations` package is 90.94 lines / 90.54 statements / 77.36 branches / 95.05 functions.
+Every discovered test must pass and the suite verdict must be `GO`. The current package coverage floors are
+read from `docs/qa/package-coverage-baseline.json`; this document deliberately does not duplicate their
+numeric values.
 
 Run in CI (as part of the standard test pipeline):
 
@@ -91,7 +99,9 @@ The suite tests every cell and asserts that the effective profile, allowed messa
 | `suite.test.ts`             | Full-suite integration test: all fixtures run, coverage flags verified, AC-specific assertions                          |
 | `*.test.ts`                 | Per-module unit tests for privacy/metrics/scorer/runner/capability (mutation-robust)                                    |
 
-Every production `.ts` file is paired with a `.test.ts` file. Tests achieve ~100% line/branch/function coverage of the production code.
+Every production `.ts` file is paired with a `.test.ts` file. The committed package-coverage baseline
+and the exact PR-head quality gate are authoritative for line, branch, and function coverage; this
+document does not freeze a percentage that can drift as the package evolves.
 
 ### Determinism guarantee
 
@@ -194,7 +204,8 @@ The Deliverable column quotes Issue #505's verbatim Deliverables.
 | CI-safe mock or fixture strategy                                   | Every production file is pure; sub-second run; no network/clock/credentials; determinism assertion; fs only in test files                                             | Proved |
 | Evaluation documentation and closure checklist                     | This document (`evaluation-harness.md`) + [ADR-0110](../adr/ADR-0110-voice-evaluation-harness.md) + §5 closure checklist                                              | Proved |
 
-Coverage floor (`docs/qa/package-coverage-baseline.json`: lines 90.94 / statements 90.54 / branches 77.36 / functions 95.05) is **maintained and raised** — the new files run at ~99% statements / 100% functions, lifting the package aggregate.
+The committed coverage floor in `docs/qa/package-coverage-baseline.json` is enforced by the quality gate.
+Current percentages come from the exact gate run and are not copied into this long-lived specification.
 
 ## 6. Honest limitations
 
@@ -202,10 +213,10 @@ Coverage floor (`docs/qa/package-coverage-baseline.json`: lines 90.94 / statemen
 
 This harness **does not** detect bugs in the timing engine, turn manager, transcript reducer, or playback controller. Those are tested in their own keiko-ui suites:
 
-- ADR-0103 voice-timebase.ts: 32 tests, 100% coverage
-- ADR-0104 voice-turn-manager.ts: 44 tests, 100% coverage
-- ADR-0105 voice-transcript-segments.ts: 33 tests, 100% coverage
-- ADR-0106 voice-playback-state.ts: 28 tests, 100% coverage
+- ADR-0103 `voice-timebase.ts`
+- ADR-0104 `voice-turn-manager.ts`
+- ADR-0105 `voice-transcript-segments.ts`
+- ADR-0106 `voice-playback-state.ts`
 
 If a reducer implements a transition that the contract table permits but the reducer incorrectly rejects (or vice versa), the keiko-ui suite catches it. This harness assumes the reducer respects the contract it imports.
 
@@ -217,16 +228,17 @@ import-bounded harness (ADR-0019 rule 3l forbids importing the keiko-ui timing e
 break determinism). The harness therefore proves the deterministic **latency posture class** each profile's
 media transport fixes (`latency-class-metric`: `none`→`none`, `gateway-batch`→`batch`,
 `webrtc`→`interactive-realtime`). The wall-clock timing behaviour itself — ring-drain timing, backpressure,
-catch-up — is measured by the keiko-ui `voice-timebase.ts` suite ([ADR-0103](../adr/ADR-0103-voice-timing-engine.md),
-32 deterministic tests with an injected clock).
+catch-up — is measured by the deterministic keiko-ui `voice-timebase.ts` suite with an injected clock
+([ADR-0103](../adr/ADR-0103-voice-timing-engine.md)).
 
 P10 adds the offline `VoiceAcousticEval` companion gate for acoustic-quality budgets that can be scored
 without a live provider. It covers exactly `first-word`, `trailing-word`, `noisy-room`, `laptop-echo`,
 `headset`, `fast-interrupt`, `long-pause`, `unfinished-utterance`, `exact-identifiers`, and
 `grounded-vs-casual`; scores WER/CER, first/last-token retention, exact identifier retention, first
 partial latency, final transcript latency, TTFA, local duck latency, interrupt ack latency, premature
-finalization, and grounded-tool-before-answer ordering; and includes adversarial negative fixtures that
-must be caught. It is still not a live WebRTC wall-clock transport measurement: it scores deterministic
+finalization, and canonical-grounding-before-answer ordering. The retained metric literal
+`grounded-tool-before-answer` is a historical schema name; it no longer denotes a Realtime provider
+tool. The suite includes adversarial negative fixtures that must be caught. It is still not a live WebRTC wall-clock transport measurement: it scores deterministic
 fixture traces and returns a CI-blocking GO/NO-GO verdict with no network, credentials, or raw audio.
 
 ### VOICE_TWIN_REPLAY_CAPACITY is a local constant
@@ -246,50 +258,22 @@ The denylist covers only packages listed in [`docs/voice/supply-chain-policy.md`
 
 AC5 bounding is enforced by _limiting which endpoints are reachable_ (only configured model providers) and _which models are electable_ (only capable, configured models), not by a deny-all-others host allowlist. The [privacy-contract.md](privacy-contract.md) §1 honest limitation applies here: `gatewayFetch` has no positive destination allowlist. A future, optional egress policy layer (opt-in positive host/base-URL deny list) would require a separate issue. The harness documents this gap in its output so operators are not misled.
 
-## 7. Example: running and interpreting output
+## 7. Running and interpreting output
+
+Run the suite from the repository root:
 
 ```bash
-$ npx vitest run packages/keiko-evaluations/src/voice-twin
-
-✓ packages/keiko-evaluations/src/voice-twin/suite.test.ts (24 tests) 1234ms
-  ✓ AC1/AC2 no-voice: dormant when voice unavailable
-  ✓ AC3 stt: STT affords partial preview, commit, discard
-  ✓ AC4 full-realtime: WebRTC media + proxied-SDP + loopback control
-  ✓ AC5 privacy: egress auditor rejects unapproved destinations
-  ✓ AC5 privacy: real-repo manifest scan is clean (no denied packages)
-  ✓ AC6 metrics: interruption, end-of-turn, correction, recovery, buffer
-  ✓ Capability-matrix-consistency: all cells match contract tables
-  ✓ Determinism: two runs deep-equal
-  ✓ Coverage: all six environments × profiles exercised
-  [12 more tests...]
-
-✓ packages/keiko-evaluations/src/voice-twin/capability.test.ts (8)
-✓ packages/keiko-evaluations/src/voice-twin/privacy.test.ts (12)
-✓ packages/keiko-evaluations/src/voice-twin/metrics.test.ts (9)
-✓ packages/keiko-evaluations/src/voice-twin/scorer.test.ts (8)
-✓ packages/keiko-evaluations/src/voice-twin/runner.test.ts (6)
-
-Test Files  6 passed (6)
-     Tests  63 passed (63)
-
-Verdict: GO
-Capability matrix: VERIFIED
-Privacy bounding: VERIFIED (no denied packages, all positive egresses approved)
-Metrics: VERIFIED (all five AC6 dimensions exercised)
-Coverage: 98.2% (voice-twin), 92.1% (keiko-evaluations overall)
+npx vitest run packages/keiko-evaluations/src/voice-twin
 ```
 
-If any dimension fails, the output names it:
+A successful run exits zero and reports a `GO` verdict with the capability matrix, privacy bounding,
+metrics, and required environment/profile coverage verified. The authoritative file, test, and coverage
+counts are those printed by that exact run and by the coverage gate; this document intentionally carries
+no copied snapshot.
 
-```
-✗ external-destination-privacy: FAIL in privacy-negative-fixture
-  Auditor returned approved=false (correct)
-  but oracle.expectedApproved=false contradicts
-  → This proves the auditor catches violations (expected).
-  However, dimension verdict is FAIL if oracle and auditor disagree.
-```
-
-(This is a contrived example; the actual test ensures they agree.)
+If a dimension fails, the output names the dimension and fixture and the process exits non-zero. A
+negative fixture passes only when the corresponding auditor rejects the violation and the oracle agrees.
+Treat any oracle/auditor disagreement as a real gate failure rather than rewriting the expected result.
 
 ## 8. Related documentation
 
@@ -303,4 +287,7 @@ If any dimension fails, the output names it:
 
 ## 9. Current integration status
 
-The harness is **complete and CI-gated** as of Issue #505. The suite runs in `npm run test:coverage:quality` on every PR and must show `GO` verdict with zero failing dimensions to merge. All 63 tests pass; coverage is 98.2% on voice-twin modules and 92.1% on the overall keiko-evaluations package.
+The harness is **complete and CI-gated** as of Issue #505. The suite runs in
+`npm run test:coverage:quality` on every PR and must show a `GO` verdict with zero failing dimensions to
+merge. Test discovery and coverage values are reported by the exact PR-head gate run rather than frozen
+in this document.

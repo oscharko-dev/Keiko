@@ -7,7 +7,7 @@ import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
   prepareCodingWorkbenchCodexSubscriptionSetup,
-} from "./api";
+} from "./coding-workbench-provider-api";
 import {
   codingWorkbenchFailureStatus,
   codingWorkbenchRuntimeApiError,
@@ -19,6 +19,7 @@ import {
   createFollowUpMutation,
   createLifecycleMutation,
   createRecoveryAcknowledgementMutation,
+  createResearchRevokeMutation,
   createRetryMutation,
   createRunBoundMutation,
   createStartMutation,
@@ -62,6 +63,7 @@ export interface RuntimeMutationActions {
   readonly pause: () => Promise<void>;
   readonly resume: () => Promise<void>;
   readonly submitFollowUp: (taskIntent: string) => Promise<void>;
+  readonly revokeResearchGrant: () => Promise<void>;
 }
 
 interface RuntimeMutationQueueInput {
@@ -357,6 +359,11 @@ export function useCodingWorkbenchRuntimeMutations(
       enqueueMutation("follow-up", (current) => createFollowUpMutation(taskIntent, current)),
     [enqueueMutation],
   );
+  const revokeResearchGrant = useCallback(
+    (): Promise<void> =>
+      enqueueMutation("research-revoke", (current) => createResearchRevokeMutation(current)),
+    [enqueueMutation],
+  );
   return {
     start,
     decideApproval,
@@ -367,5 +374,6 @@ export function useCodingWorkbenchRuntimeMutations(
     pause,
     resume,
     submitFollowUp,
+    revokeResearchGrant,
   };
 }

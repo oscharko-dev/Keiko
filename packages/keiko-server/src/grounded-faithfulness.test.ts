@@ -11,17 +11,20 @@ import {
   type EntailmentVerdict,
   entailmentUnavailableMarker,
   incompleteAnswerMarker,
+  missingCitationMarker,
   packExcerptCount,
   packHasUsableEvidence,
   packsHaveUsableEvidence,
   parseInlineCitations,
   reconcileClaimEntailment,
   reconcileInlineCitations,
+  reconcileNumericCitations,
   segmentCitedClaims,
   splitClaimSpans,
   stripInlineCitations,
   unsupportedCitationMarker,
   unsupportedClaimMarker,
+  unsupportedNumericCitationMarker,
 } from "./grounded-faithfulness.js";
 
 const NOW = 1_700_000_000_000;
@@ -125,10 +128,39 @@ describe("parseInlineCitations", () => {
     expect(cites.map((c) => c.scopePath).sort()).toEqual(["src/a.ts", "src/b.ts"]);
   });
 
+  it("preserves valid Unicode, whitespace, and parenthesized repository paths", () => {
+    const cites = parseInlineCitations(
+      "Siehe [src/Über uns/Bestellung (neu).ts:12-14] und [docs/日本語.md:3].",
+    );
+
+    expect(cites).toEqual([
+      {
+        raw: "src/Über uns/Bestellung (neu).ts:12-14",
+        scopePath: "src/Über uns/Bestellung (neu).ts",
+        lineRange: { startLine: 12, endLine: 14 },
+      },
+      {
+        raw: "docs/日本語.md:3",
+        scopePath: "docs/日本語.md",
+        lineRange: { startLine: 3, endLine: 3 },
+      },
+    ]);
+  });
+
   it("does NOT treat prose brackets, footnotes, or markdown links as citations", () => {
     expect(parseInlineCitations("footnote [1] and a list [a, b, c]")).toHaveLength(0);
     expect(parseInlineCitations("a [markdown link](https://example.com/x)")).toHaveLength(0);
+    expect(parseInlineCitations("a [src/readme.md](https://example.com/x)")).toHaveLength(0);
+    expect(parseInlineCitations("a [src/readme.md][repository docs]")).toHaveLength(0);
     expect(parseInlineCitations("bracketed [TODO] note")).toHaveLength(0);
+  });
+
+  it("rejects non-positive, reversed, and unsafe line ranges", () => {
+    expect(
+      parseInlineCitations(
+        "Invalid [src/a.ts:0], [src/b.ts:20-10], and [src/c.ts:9007199254740992].",
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -154,12 +186,97 @@ describe("reconcileInlineCitations", () => {
     expect([...result.citedScopePaths]).toEqual(["src/a.ts"]);
   });
 
+  it("does not validate an exact line against path-level evidence with no line window", () => {
+    const pathLevel = excerpt("src/a.ts", 1, 5);
+    const index = buildPackCitationIndex([
+      packWith([
+        {
+          scopePath: "src/a.ts",
+          excerpts: [{ ...pathLevel, atom: { ...pathLevel.atom, lineRange: undefined } }],
+        },
+      ]),
+    ]);
+
+    const result = reconcileInlineCitations("Unverifiable location [src/a.ts:3].", index);
+
+    expect(result.unsupported.map((citation) => citation.raw)).toEqual(["src/a.ts:3"]);
+    expect([...result.citedScopePaths]).toEqual([]);
+  });
+
   it("flags a line range wholly outside every excerpt window for a present path", () => {
     const index = buildPackCitationIndex([
       packWith([{ scopePath: "src/a.ts", excerpts: [excerpt("src/a.ts", 1, 5)] }]),
     ]);
     const result = reconcileInlineCitations("Claim in [src/a.ts:900-950].", index);
     expect(result.unsupported.map((c) => c.scopePath)).toEqual(["src/a.ts"]);
+  });
+
+  it("flags a citation that only overlaps but is not contained by an evidence window", () => {
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: "src/a.ts", excerpts: [excerpt("src/a.ts", 10, 20)] }]),
+    ]);
+    const result = reconcileInlineCitations("Overbroad claim [src/a.ts:1-1000].", index);
+
+    expect(result.unsupported.map((citation) => citation.raw)).toEqual(["src/a.ts:1-1000"]);
+    expect([...result.citedScopePaths]).toEqual([]);
+  });
+
+  it("accepts a citation fully covered by adjacent evidence windows", () => {
+    const index = buildPackCitationIndex([
+      packWith([
+        {
+          scopePath: "src/a.ts",
+          excerpts: [excerpt("src/a.ts", 1, 10), excerpt("src/a.ts", 11, 20)],
+        },
+      ]),
+    ]);
+    const result = reconcileInlineCitations("Joined evidence [src/a.ts:5-15].", index);
+
+    expect(result.unsupported).toEqual([]);
+    expect([...result.citedScopePaths]).toEqual(["src/a.ts"]);
+  });
+
+  it("does not join adjacent windows that came from different source packs", () => {
+    const first = packWith([
+      { scopePath: "src/shared.ts", excerpts: [excerpt("src/shared.ts", 1, 10)] },
+    ]);
+    const secondBase = packWith([
+      { scopePath: "src/shared.ts", excerpts: [excerpt("src/shared.ts", 11, 20)] },
+    ]);
+    const second = {
+      ...secondBase,
+      stableId: "pack-2",
+      scope: { ...secondBase.scope, scopeId: "cs-2", workspaceRoot: "/other-repo" },
+    };
+    const result = reconcileInlineCitations(
+      "Cross-source join [src/shared.ts:5-15].",
+      buildPackCitationIndex([first, second]),
+    );
+
+    expect(result.unsupported.map((citation) => citation.raw)).toEqual(["src/shared.ts:5-15"]);
+    expect([...result.citedScopePaths]).toEqual([]);
+  });
+
+  it("uses an explicit source ordinal to disambiguate identical repository paths", () => {
+    const first = packWith([
+      { scopePath: "src/shared.ts", excerpts: [excerpt("src/shared.ts", 1, 10)] },
+    ]);
+    const second = packWith([
+      { scopePath: "src/shared.ts", excerpts: [excerpt("src/shared.ts", 11, 20)] },
+    ]);
+    const answer = "Second source only [source:2|src/shared.ts:11-20].";
+
+    expect(parseInlineCitations(answer)).toEqual([
+      {
+        raw: "source:2|src/shared.ts:11-20",
+        sourceId: "2",
+        scopePath: "src/shared.ts",
+        lineRange: { startLine: 11, endLine: 20 },
+      },
+    ]);
+    const result = reconcileInlineCitations(answer, buildPackCitationIndex([first, second]));
+    expect(result.unsupported).toEqual([]);
+    expect([...result.citedScopePaths]).toEqual(["src/shared.ts"]);
   });
 
   it("returns no unsupported markers when every citation is supported", () => {
@@ -180,6 +297,32 @@ describe("unsupportedCitationMarker", () => {
     );
     expect(marker?.kind).toBe("unsupported-citation");
     expect(marker?.claim).toContain("src/x.ts");
+  });
+
+  it("builds a body-free warning when source-backed output omits citations", () => {
+    expect(missingCitationMarker(NOW)).toEqual({
+      kind: "unsupported-citation",
+      claim:
+        "The answer used retrieved evidence without a supported inline citation. Treat its " +
+        "source-backed claims as unverified.",
+      impactedAtomIds: [],
+      emittedAtMs: NOW,
+    });
+  });
+});
+
+describe("numeric citation reconciliation", () => {
+  it("keeps known markers and reports each unknown marker once", () => {
+    const result = reconcileNumericCitations(
+      "Known [1], unknown [99], repeated [99], and known [2].",
+      new Set([1, 2]),
+    );
+
+    expect([...result.citedMarkers]).toEqual([1, 2]);
+    expect(result.unsupportedMarkers).toEqual([99]);
+    expect(unsupportedNumericCitationMarker(result.unsupportedMarkers, NOW)?.claim).toContain(
+      "[99]",
+    );
   });
 });
 
@@ -312,6 +455,29 @@ describe("buildPackExcerptTextResolver", () => {
     expect(
       resolver({ raw: "x", scopePath: "src/missing.ts", lineRange: undefined }),
     ).toBeUndefined();
+  });
+
+  it("resolves duplicate paths only within the explicitly named source", () => {
+    const sourceAwareResolver = buildPackExcerptTextResolver([
+      packWith([
+        {
+          scopePath: "src/shared.ts",
+          excerpts: [excerptWith("src/shared.ts", 1, 10, "first source content")],
+        },
+      ]),
+      packWith([
+        {
+          scopePath: "src/shared.ts",
+          excerpts: [excerptWith("src/shared.ts", 1, 10, "second source content")],
+        },
+      ]),
+    ]);
+    const qualified = parseInlineCitations("[source:2|src/shared.ts:1-10]")[0];
+    const ambiguous = parseInlineCitations("[src/shared.ts:1-10]")[0];
+    if (qualified === undefined || ambiguous === undefined) throw new Error("expected citations");
+
+    expect(sourceAwareResolver(qualified)).toBe("second source content");
+    expect(sourceAwareResolver(ambiguous)).toBeUndefined();
   });
 });
 

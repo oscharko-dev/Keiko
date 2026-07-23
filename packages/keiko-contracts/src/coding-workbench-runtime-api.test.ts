@@ -7,6 +7,7 @@ import {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  parseCodingWorkbenchRuntimeResearchRevokeRequest,
   parseCodingWorkbenchRuntimeRetryRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
@@ -456,5 +457,162 @@ describe("Coding Workbench runtime API failure branches", () => {
     expect(
       validateCodingWorkbenchRuntimeSseEvent({ ...event, failureCode: "raw-stack-trace" }),
     ).toMatchObject({ ok: false, errors: ["failureCode is invalid"] });
+  });
+
+  // #2637 (review #2646): the SSE boundary enforces the research/outcome binding, not just the field
+  // type. Every invalid combination below would let the timeline misstate what a run took in.
+  it("binds the #2637 contentTrust marker to an accepted research-performed frame", () => {
+    const frame = (extra: Record<string, unknown>): Record<string, unknown> => ({
+      schemaVersion: "1",
+      cursor: "cursor-trust",
+      sequence: 9,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 9,
+      ...extra,
+    });
+
+    const accepted = frame({
+      eventKind: "research-performed",
+      auxiliaryOutcome: "accepted",
+      contentTrust: "untrusted",
+    });
+    expect(validateCodingWorkbenchRuntimeSseEvent(accepted)).toEqual({ ok: true, value: accepted });
+
+    const required = "contentTrust is required on an accepted research-performed frame";
+    const forbidden = "contentTrust is only admissible on an accepted research-performed frame";
+
+    // Accepted research WITHOUT the marker.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent(
+        frame({ eventKind: "research-performed", auxiliaryOutcome: "accepted" }),
+      ),
+    ).toMatchObject({ ok: false, errors: [required] });
+    // Empty and malformed markers are not "present".
+    for (const contentTrust of ["", null, "trusted", 1]) {
+      expect(
+        validateCodingWorkbenchRuntimeSseEvent(
+          frame({ eventKind: "research-performed", auxiliaryOutcome: "accepted", contentTrust }),
+        ),
+      ).toMatchObject({ ok: false, errors: [required] });
+    }
+    // A denied research frame took nothing in.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent(
+        frame({
+          eventKind: "research-performed",
+          auxiliaryOutcome: "denied",
+          contentTrust: "untrusted",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errors: [forbidden] });
+    // A skill invocation is not a research read.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent(
+        frame({
+          eventKind: "skill-invoked",
+          auxiliaryOutcome: "accepted",
+          contentTrust: "untrusted",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errors: [forbidden] });
+    // Nor is a status frame.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent(frame({ kind: "status", contentTrust: "untrusted" })),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("carries a bounded #2387 auxiliaryOutcome on a runtime-event frame", () => {
+    const event = {
+      schemaVersion: "1",
+      cursor: "cursor-2",
+      sequence: 4,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 5,
+      eventKind: "child-run-completed",
+      auxiliaryOutcome: "limit-reached",
+    };
+    expect(validateCodingWorkbenchRuntimeSseEvent(event)).toEqual({ ok: true, value: event });
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...event, auxiliaryOutcome: "granted" }),
+    ).toMatchObject({ ok: false, errors: ["auxiliaryOutcome is invalid"] });
+    // auxiliaryOutcome is not part of the status-frame key set.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({
+        schemaVersion: "1",
+        cursor: "cursor-3",
+        sequence: 6,
+        occurredAt: AT,
+        kind: "status",
+        runId: "run-1",
+        state: "running",
+        revision: 7,
+        auxiliaryOutcome: "accepted",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("projects a live research grant on the snapshot and revokes it fail-closed", () => {
+    const withGrant = {
+      schemaVersion: "1",
+      state: "running",
+      revision: 2,
+      updatedAt: AT,
+      runId: "run-1",
+      researchGrant: {
+        grantId: "grant-1",
+        domains: ["developer.mozilla.org", "nodejs.org"],
+        expiresAt: AT,
+      },
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(withGrant)).toEqual({
+      ok: true,
+      value: withGrant,
+    });
+    // Empty domains, an IP literal, and a smuggled sub-key all fail closed.
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...withGrant,
+        researchGrant: { ...withGrant.researchGrant, domains: [] },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...withGrant,
+        researchGrant: { ...withGrant.researchGrant, domains: ["127.0.0.1"] },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...withGrant,
+        researchGrant: { ...withGrant.researchGrant, queryTextDigest: "x" },
+      }),
+    ).toMatchObject({ ok: false });
+
+    expect(
+      parseCodingWorkbenchRuntimeResearchRevokeRequest({
+        requestId: "req-1",
+        expectedRevision: 2,
+        grantId: "grant-1",
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      parseCodingWorkbenchRuntimeResearchRevokeRequest({
+        requestId: "req-1",
+        expectedRevision: -1,
+        grantId: "grant-1",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["expectedRevision must be a non-negative safe integer"],
+    });
+    expect(
+      parseCodingWorkbenchRuntimeResearchRevokeRequest({ requestId: "req-1", grantId: "grant-1" }),
+    ).toMatchObject({ ok: false });
   });
 });

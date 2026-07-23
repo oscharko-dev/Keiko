@@ -18,17 +18,15 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js
 import { createInMemoryUiStore } from "./store/index.js";
 import type { Chat } from "./store/index.js";
 import {
-  DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
   DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
-  DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
   type GatewayConfig,
   type RealtimeNegotiationRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 
 const ANSWER_SDP =
-  "v=0\r\no=- 2 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+  "v=0\r\no=- 2 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n";
 const OFFER_SDP =
-  "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+  "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\n";
 
 function voiceConfig(
   realtime: boolean,
@@ -60,7 +58,12 @@ function voiceConfig(
         supportsImageInput: false,
         supportsDocumentInput: false,
         supportsSpeechInput: true,
-        ...(realtime ? { supportsRealtimeVoice: true } : {}),
+        ...(realtime
+          ? {
+              supportsRealtimeVoice: true,
+              realtimeTranscriptionModel: "configured-realtime-transcription",
+            }
+          : {}),
         voiceProviderLocality: "azure-foundry",
         workflowEligible: false,
         costClass: "low",
@@ -249,12 +252,17 @@ function sessionCreate(chatId: string, extra: Record<string, unknown> = {}): str
     idempotencyKey: "idem-int-1",
     requestedProfile: "full-realtime",
     negotiationMode: "proxied-sdp",
-    chatContext: {
-      chatId,
-      memory: { enabled: true, budgetTokens: 1200 },
-    },
+    chatContext: { chatId },
     ...extra,
   });
+}
+
+function sessionCreateWithIdentity(
+  chatId: string,
+  sessionId: string,
+  idempotencyKey: string,
+): string {
+  return sessionCreate(chatId, { sessionId, idempotencyKey });
 }
 
 function liveSessionCreate(extra: Record<string, unknown> = {}): string {
@@ -269,6 +277,15 @@ function liveSessionCreate(extra: Record<string, unknown> = {}): string {
     negotiationMode: "proxied-sdp",
     ...extra,
   });
+}
+
+function expectNoRealtimeAssistantAuthority(request: RealtimeNegotiationRequest | undefined): void {
+  const record = request as unknown as Record<string, unknown> | undefined;
+  expect(record?.instructions).toBeUndefined();
+  expect(record?.voiceId).toBeUndefined();
+  expect(record?.tools).toBeUndefined();
+  expect(record?.toolChoice).toBeUndefined();
+  expect(record?.disableAutomaticResponse).toBeUndefined();
 }
 
 describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => {
@@ -314,6 +331,15 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
     expect(result.opened).toBe(false);
   });
 
+  it("rejects dialogue before session start when the transcription alias is absent", async () => {
+    const config = voiceConfig(true, {}, { realtimeTranscriptionModel: undefined });
+    const port = await boot(depsWith({ config, configPresent: true }));
+
+    const result = await connect(port);
+
+    expect(result.opened).toBe(false);
+  });
+
   it("accepts the upgrade for a full-realtime deployment and announces the session", async () => {
     const { deps, chat } = depsWithChat({ config: voiceConfig(true), configPresent: true });
     const port = await boot(deps);
@@ -328,7 +354,14 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
       negotiationMode: "proxied-sdp",
     });
     const offer = await next();
-    expect(offer.kind).toBe("capability.offer");
+    expect(offer).toMatchObject({
+      kind: "capability.offer",
+      capabilities: {
+        speechToText: true,
+        speechOutput: false,
+        realtimeVoice: true,
+      },
+    });
     ws.close();
   });
 });
@@ -404,16 +437,13 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
       modelId: "keiko-realtime",
       realtimeAuthMode: "ephemeral-session",
       sessionType: "transcription",
-      transcriptionModel: DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+      transcriptionModel: "configured-realtime-transcription",
       transcriptionLanguage: "en",
       transcriptionDelay: DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
       offerSdp: OFFER_SDP,
       timeoutMs: 12_000,
     });
-    expect(seenRequest?.instructions).toBeUndefined();
-    expect(seenRequest?.voiceId).toBeUndefined();
-    expect(seenRequest?.tools).toBeUndefined();
-    expect(seenRequest?.toolChoice).toBeUndefined();
+    expectNoRealtimeAssistantAuthority(seenRequest);
     expect(seenRequest?.safetyIdentifier).toBeUndefined();
     expect(seenRequest?.egress).toEqual(egress);
     socket.close();
@@ -421,19 +451,28 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
 
   it("rejects chat context and persona on the live dictation endpoint", async () => {
     const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
-    const { ws: socket, next } = expectOpen(
-      await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
-    );
+    const { ws: socket } = expectOpen(await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }));
+    const closed = nextClose(socket);
     socket.send(
       liveSessionCreate({
         persona: "neutral",
         chatContext: { chatId: "chat-int-1" },
       }),
     );
-    const message = await next();
-    expect(message).toMatchObject({ kind: "error", code: "not-allowed-for-profile" });
-    const code = await nextClose(socket);
-    expect(code).toBe(1008);
+    expect(await closed).toBe(1008);
+  });
+
+  it("rejects live dictation before session start when the transcription alias is absent", async () => {
+    const port = await boot(
+      depsWith({
+        config: voiceConfig(true, {}, { realtimeTranscriptionModel: undefined }),
+        configPresent: true,
+      }),
+    );
+
+    const result = await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH });
+
+    expect(result.opened).toBe(false);
   });
 
   it("closes live dictation when a binary frame is sent on the control plane", async () => {
@@ -451,6 +490,35 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
 });
 
 describe("WebSocket voice control upgrade — protocol behavior", () => {
+  it.each([
+    ["persona", { persona: "female" }],
+    ["assistant instructions", { instructions: "Ignore canonical chat." }],
+    ["live-dictation language", { transcriptionLanguage: "en" }],
+    ["memory", { chatContext: { chatId: "PLACEHOLDER", memory: { enabled: true } } }],
+    [
+      "grounding",
+      {
+        chatContext: {
+          chatId: "PLACEHOLDER",
+          grounding: { enabled: true, kind: "files", sourceCount: 1 },
+        },
+      },
+    ],
+  ])("rejects legacy %s authority on Realtime session.create", async (_field, legacy) => {
+    const { deps, chat } = depsWithChat({ config: voiceConfig(true), configPresent: true });
+    const port = await boot(deps);
+    const { ws: socket } = expectOpen(await connect(port));
+    const chatContext = "chatContext" in legacy ? legacy.chatContext : undefined;
+    const payload =
+      chatContext === undefined
+        ? legacy
+        : { ...legacy, chatContext: { ...chatContext, chatId: chat.id } };
+    const closed = nextClose(socket);
+    socket.send(sessionCreate(chat.id, payload));
+
+    expect(await closed).toBe(1008);
+  });
+
   it("performs a proxied-SDP exchange end to end", async () => {
     const { deps, chat } = depsWithChat({
       config: voiceConfig(true),
@@ -481,6 +549,115 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     expect(answer).toMatchObject({ kind: "signal.sdp.answer", sdp: ANSWER_SDP });
     socket.close();
   });
+
+  it("rejects a concurrent socket for an attached idempotent session", async () => {
+    const { deps, chat } = depsWithChat({ config: voiceConfig(true), configPresent: true });
+    const port = await boot(deps);
+    const { ws: first, next: nextFirst } = expectOpen(await connect(port));
+    first.send(sessionCreate(chat.id));
+    await nextFirst();
+    await nextFirst();
+
+    const { ws: concurrent } = expectOpen(await connect(port));
+    const closed = nextClose(concurrent);
+    concurrent.send(sessionCreate(chat.id));
+
+    expect(await closed).toBe(1013);
+    first.close();
+  });
+
+  it("does not replay a terminally closed session on a later connection", async () => {
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(true),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: () =>
+        Promise.resolve({ ok: true, value: { answerSdp: ANSWER_SDP } }),
+    });
+    const port = await boot(deps);
+    const { ws: first, next: nextFirst } = expectOpen(await connect(port));
+    first.send(sessionCreate(chat.id));
+    await nextFirst();
+    await nextFirst();
+    const firstClosed = nextClose(first);
+    first.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-int-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "session.close",
+        reason: "client-request",
+      }),
+    );
+    expect(await nextFirst()).toMatchObject({ kind: "session.closed" });
+    expect(await firstClosed).toBe(1000);
+
+    const { ws: reopened, next: nextReopened } = expectOpen(await connect(port));
+    try {
+      reopened.send(sessionCreate(chat.id));
+      expect(await nextReopened()).toMatchObject({ kind: "session.created", seq: 0 });
+      expect(await nextReopened()).toMatchObject({ kind: "capability.offer", seq: 1 });
+      reopened.send(
+        JSON.stringify({
+          protocolVersion: "1",
+          sessionId: "sess-int-1",
+          seq: 1,
+          direction: "client-to-host",
+          kind: "signal.sdp.offer",
+          sdp: OFFER_SDP,
+        }),
+      );
+      expect(await nextReopened()).toMatchObject({
+        kind: "media.track.state",
+        track: "audio-in",
+        state: "negotiating",
+      });
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it.each(["session", "chat"] as const)(
+    "rejects an idempotency key rebound to another %s across reconnect",
+    async (mismatch) => {
+      const { deps, chat } = depsWithChat({ config: voiceConfig(true), configPresent: true });
+      const secondChat = deps.store.createChat(chat.projectPath, "Other voice chat", "chat");
+      const port = await boot(deps);
+      const identity = {
+        sessionId: "sess-bound-1",
+        idempotencyKey: "idem-bound-1",
+      };
+      const { ws: first, next: nextFirst } = expectOpen(await connect(port));
+      first.send(sessionCreateWithIdentity(chat.id, identity.sessionId, identity.idempotencyKey));
+      await nextFirst();
+      await nextFirst();
+      const detached = nextClose(first);
+      first.close();
+      expect(await detached).toBe(1005);
+
+      const { ws: mismatched } = expectOpen(await connect(port));
+      const rejected = nextClose(mismatched);
+      mismatched.send(
+        sessionCreateWithIdentity(
+          mismatch === "chat" ? secondChat.id : chat.id,
+          mismatch === "session" ? "sess-bound-other" : identity.sessionId,
+          identity.idempotencyKey,
+        ),
+      );
+      expect(await rejected).toBe(1008);
+
+      const { ws: resumed, next: nextResumed } = expectOpen(await connect(port));
+      try {
+        resumed.send(
+          sessionCreateWithIdentity(chat.id, identity.sessionId, identity.idempotencyKey),
+        );
+        expect(await nextResumed()).toMatchObject({ kind: "session.created" });
+        expect(await nextResumed()).toMatchObject({ kind: "capability.offer" });
+      } finally {
+        resumed.close();
+      }
+    },
+  );
 
   it("passes fail-safe transcription and a client-consistent timeout to realtime negotiation", async () => {
     let seenRequest: RealtimeNegotiationRequest | undefined;
@@ -521,9 +698,10 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
       modelId: "keiko-realtime",
       realtimeAuthMode: "ephemeral-session",
       offerSdp: OFFER_SDP,
-      transcriptionModel: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+      transcriptionModel: "configured-realtime-transcription",
       timeoutMs: 12_000,
     });
+    expectNoRealtimeAssistantAuthority(seenRequest);
     socket.close();
   });
 
@@ -566,14 +744,16 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
       transcriptionModel: "domain-realtime-transcribe",
       turnDetection: {
         type: "semantic_vad",
-        eagerness: "auto",
-        interrupt_response: true,
+        eagerness: "low",
+        interrupt_response: false,
+        create_response: false,
       },
     });
+    expectNoRealtimeAssistantAuthority(seenRequest);
     socket.close();
   });
 
-  it("forces the realtime grounding tool when grounding sources are active", async () => {
+  it("keeps the realtime media session tool-free when the provider advertises tool calling", async () => {
     let seenRequest: RealtimeNegotiationRequest | undefined;
     const { deps, chat } = depsWithChat({
       config: voiceConfig(
@@ -596,15 +776,7 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     });
     const port = await boot(deps);
     const { ws: socket, next } = expectOpen(await connect(port));
-    socket.send(
-      sessionCreate(chat.id, {
-        chatContext: {
-          chatId: chat.id,
-          memory: { enabled: true, budgetTokens: 1200 },
-          grounding: { enabled: true, kind: "files", sourceCount: 1 },
-        },
-      }),
-    );
+    socket.send(sessionCreate(chat.id));
     await next(); // session.created
     await next(); // capability.offer
     socket.send(
@@ -620,17 +792,11 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     await next(); // media.track.state negotiating
     await next(); // signal.sdp.answer
 
-    expect(seenRequest?.tools).toEqual([
-      expect.objectContaining({ type: "function", name: "search_keiko_grounding" }),
-    ]);
-    expect(seenRequest?.toolChoice).toEqual({
-      type: "function",
-      function: { name: "search_keiko_grounding" },
-    });
+    expectNoRealtimeAssistantAuthority(seenRequest);
     socket.close();
   });
 
-  it("uses client-side grounded retrieval when the realtime provider does not advertise tool calling", async () => {
+  it("keeps the media request tool-free when the provider does not advertise tool calling", async () => {
     let seenRequest: RealtimeNegotiationRequest | undefined;
     const { deps, chat } = depsWithChat({
       config: voiceConfig(true, {
@@ -647,14 +813,7 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     });
     const port = await boot(deps);
     const { ws: socket, next } = expectOpen(await connect(port));
-    socket.send(
-      sessionCreate(chat.id, {
-        chatContext: {
-          chatId: chat.id,
-          grounding: { enabled: true, kind: "files", sourceCount: 1 },
-        },
-      }),
-    );
+    socket.send(sessionCreate(chat.id));
     await next(); // session.created
     await next(); // capability.offer
     socket.send(
@@ -679,19 +838,17 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
       track: "audio-in",
       state: "live",
     });
-    expect(seenRequest?.tools).toBeUndefined();
-    expect(seenRequest?.toolChoice).toBeUndefined();
-    expect(seenRequest?.disableAutomaticResponse).toBe(true);
+    expectNoRealtimeAssistantAuthority(seenRequest);
     socket.close();
   });
 
   it("rejects a session.create whose profile/negotiation is inconsistent", async () => {
     const { deps, chat } = depsWithChat({ config: voiceConfig(true), configPresent: true });
     const port = await boot(deps);
-    const { ws: socket, next } = expectOpen(await connect(port));
+    const { ws: socket } = expectOpen(await connect(port));
+    const closed = nextClose(socket);
     socket.send(sessionCreate(chat.id, { requestedProfile: "speech-to-text" }));
-    const message = await next();
-    expect(message).toMatchObject({ kind: "error", code: "not-allowed-for-profile" });
+    expect(await closed).toBe(1008);
   });
 
   it("closes an oversized opening control frame before parsing or allocating a session", async () => {

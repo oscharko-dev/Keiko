@@ -437,6 +437,7 @@ interface StartBridgeControl {
   readonly sseFrame?: string;
   readonly historyCalls?: Readonly<Record<string, number>>[];
   readonly governedEvents?: Readonly<Record<string, unknown>>[];
+  readonly questionObservations?: string[];
   readonly safeActivity?: FixtureSafeActivity;
   readonly diagnostics?: ServerDiagnosticSink;
   readonly runControl?: {
@@ -460,6 +461,19 @@ function optionalSafeActivity(control: StartBridgeControl | undefined): {
   readonly safeActivity?: FixtureSafeActivity;
 } {
   return control?.safeActivity === undefined ? {} : { safeActivity: control.safeActivity };
+}
+
+function optionalQuestionObservations(control: StartBridgeControl | undefined): {
+  readonly onQuestionObserved?: (identity: string) => void;
+} {
+  const sink = control?.questionObservations;
+  return sink === undefined
+    ? {}
+    : {
+        onQuestionObserved: (identity: string): void => {
+          sink.push(identity);
+        },
+      };
 }
 
 function optionalDiagnostics(control: StartBridgeControl | undefined): {
@@ -638,6 +652,7 @@ async function startBridgeFixture(
       },
     },
     ...optionalSafeActivity(control),
+    ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
@@ -1102,6 +1117,31 @@ describe("private OpenCode run control", () => {
     });
     try {
       expect(historyCalls).toEqual([{}, { ses_tool: 0 }]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("observes live fixed-session question frames and ignores foreign or unbound ones", async () => {
+    const questionObservations: string[] = [];
+    const fixture = await startBridgeFixture(facade, undefined, {
+      sseFrame: [
+        'data: {"payload":{"id":"evt_q1","type":"question.asked","properties":{"sessionID":"ses_tool","id":"que_1"}}}\n\n',
+        'data: {"payload":{"id":"evt_q2","type":"question.replied","properties":{"sessionID":"ses_tool","requestID":"que_1"}}}\n\n',
+        'data: {"payload":{"id":"evt_q3","type":"question.asked","properties":{"sessionID":"ses_other","id":"que_2"}}}\n\n',
+        'data: {"payload":{"id":"evt_q4","type":"question.rejected","properties":{}}}\n\n',
+      ].join(""),
+      questionObservations,
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(questionObservations.length).toBeGreaterThanOrEqual(2);
+      });
+      // Foreign-session and session-unbound frames observe nothing; dedupe is the consumer's job.
+      expect(questionObservations).toEqual([
+        "question.asked\u0000evt_q1",
+        "question.replied\u0000evt_q2",
+      ]);
     } finally {
       await fixture.stop();
     }

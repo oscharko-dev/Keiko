@@ -33,6 +33,7 @@ import {
 } from "@oscharko-dev/keiko-git";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import { FilesError, resolveRoot, runFilesHandler } from "./files.js";
 import { parseGitBlamePorcelain } from "./gitBlameParser.js";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
@@ -145,16 +146,62 @@ export function optionsWithDefaults(
   };
 }
 
+/**
+ * Purely lexical pre-check: does the RAW `root` query value name a path inside Keiko's managed
+ * task-worktree root? No filesystem call, so it cannot itself leak existence. Returns false when no
+ * managed root is composed or no root was requested — those fall through to the normal path.
+ */
+function unauthorizedManagedRootRequest(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  requestedRoot: string | null,
+): boolean {
+  const managedRoot = deps.managedTaskWorkspaceRoot;
+  if (managedRoot === undefined || requestedRoot === null || requestedRoot.length === 0) {
+    return false;
+  }
+  return containsPath(resolve(managedRoot), resolve(requestedRoot));
+}
+
+async function isResolvedManagedRoot(
+  managedRoot: string | undefined,
+  resolvedTarget: string,
+): Promise<boolean> {
+  if (managedRoot === undefined) return false;
+  const resolvedManagedRoot = await realpath(managedRoot).catch(() => resolve(managedRoot));
+  return containsPath(resolvedManagedRoot, resolvedTarget);
+}
+
 export async function resolveRepository(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   options: NormalizedGitRouteOptions,
 ): Promise<RepositoryContext | GitRepositoryStatusResponse> {
-  const selectedRoot = await resolveRoot(
-    deps.store,
-    ctx.url.searchParams.get("root"),
-    deps.redactor,
-  );
+  const requestedRoot = ctx.url.searchParams.get("root");
+  // Classify the RAW input before touching the filesystem. `resolveRoot` throws for a missing or
+  // invalid directory, so resolving first let an unpaired caller tell "exists under the managed
+  // root" (content-free unavailable) from "does not exist" (a 400) — an existence oracle for
+  // managed worktree paths, which is exactly what this gate exists to prevent. The post-realpath
+  // check below stays as defence in depth for symlink and alias forms the raw prefix cannot see.
+  if (
+    unauthorizedManagedRootRequest(deps, ctx, requestedRoot) &&
+    resolveAppSessionReadAuthority(deps, ctx.req) === undefined
+  ) {
+    return genericUnavailable(requestedRoot ?? "", "unknown");
+  }
+  const selectedRoot = await resolveRoot(deps.store, requestedRoot, deps.redactor);
+  // Issue #2482 / ADR-0141 W1.9: any generic Git read whose RESOLVED root is inside Keiko's
+  // managed task-worktree root requires the launcher-attested app session. Classifying after
+  // resolveRoot closes trailing-separator, `.`-segment, and outside-symlink aliases of a managed
+  // worktree. An unpaired, forged, revoked, or expired session receives the same schema-valid,
+  // content-free unavailable projection as an unavailable repository; ordinary roots retain the
+  // existing generic Git behavior. This is uniform content posture, not an OS read-authority claim.
+  if (
+    (await isResolvedManagedRoot(deps.managedTaskWorkspaceRoot, selectedRoot.realRoot)) &&
+    resolveAppSessionReadAuthority(deps, ctx.req) === undefined
+  ) {
+    return genericUnavailable(selectedRoot.root, "unknown");
+  }
   const membership = await resolveGitMembership(selectedRoot.realRoot, options.runner, {
     timeoutMs: options.timeoutMs,
     ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),

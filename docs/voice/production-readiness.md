@@ -1,14 +1,22 @@
-# Voice Digital Twin — production-readiness gate (Epic #491)
+# Voice Digital Twin — historical production-readiness gate (Epic #491)
 
 **Audience:** verification leads, security reviewers, and release/governance owners deciding whether the
 optional Voice Digital Twin is safe to enable for regulated deployments.
 
-This document is the deliverable of Issue [#506](https://github.com/oscharko-dev/Keiko/issues/506) — the
-**formal production-readiness gate** for Epic #491. It is the authoritative companion to
+This document is the historical deliverable of Issue
+[#506](https://github.com/oscharko-dev/Keiko/issues/506) — the **formal production-readiness gate at the
+Epic #491 closure point**. It is the companion to
 [ADR-0111](../adr/ADR-0111-voice-production-readiness-gate.md). It consolidates the closure evidence that the
 six epic invariants hold across the no-voice, STT-only, full-realtime, Azure Foundry, and customer-hosted
 deployment profiles, and it records — without softening — the limitations a conservative gate must keep
 visible.
+
+> **Current authority:** this is a dated closure record, not proof for the current PR head. ADR-0102
+> subsequently implemented the loopback-WebSocket/WebRTC transport, and
+> [ADR-0154](../adr/ADR-0154-canonical-twin-voice-pipeline.md) narrowed Realtime to input media, VAD, and
+> final transcription. Current release readiness comes from the exact-head required gates and the current
+> audit report. Historical branch, UI, test-count, and CI statements below must not be projected onto a
+> later release without rerunning their named evidence.
 
 The gate is **conservative by construction**: every claim below cites a reproducible artifact (code symbol,
 test, evaluation dimension, CI job, dependency scan, or GitHub state). Where a proof is structural or
@@ -23,21 +31,22 @@ Each acceptance criterion of Issue #506 maps to cited, reproducible evidence. "L
 proven by the **union** of independent layers (contract data, server enforcement, UI gating, evaluation,
 CI), not a single artifact.
 
-| #   | Acceptance criterion                                                                     | Status     | Primary evidence (see linked sections)                                    |
-| --- | ---------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------- |
-| AC1 | No-voice deployments remain fully functional                                             | ✅ Proven  | [§2](#2-ac1--no-voice-deployments-remain-fully-functional)                |
-| AC2 | Voice features appear only when required capabilities exist                              | ✅ Proven  | [§3](#3-ac2--voice-features-appear-only-when-required-capabilities-exist) |
-| AC3 | Audio and voice session state remain local except explicit calls to configured endpoints | ✅ Proven† | [§4](#4-ac3--audio-and-session-state-remain-local)                        |
-| AC4 | Azure Foundry and customer-hosted profiles documented without making either mandatory    | ✅ Proven  | [§5](#5-ac4--deployment-profiles-documented-neither-mandatory)            |
-| AC5 | No unapproved runtime media packages were introduced                                     | ✅ Proven  | [§6](#6-ac5--no-unapproved-runtime-media-packages)                        |
-| AC6 | The epic contains final closure evidence and all child issues are closed                 | ✅ Proven  | [§7](#7-ac6--epic-closure-and-child-issue-verification)                   |
+| #   | Acceptance criterion                                                                     | Status at #506 closure | Primary evidence (see linked sections)                                    |
+| --- | ---------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------- |
+| AC1 | No-voice deployments remain fully functional                                             | ✅ Proven              | [§2](#2-ac1--no-voice-deployments-remain-fully-functional)                |
+| AC2 | Voice features appear only when required capabilities exist                              | ✅ Proven              | [§3](#3-ac2--voice-features-appear-only-when-required-capabilities-exist) |
+| AC3 | Audio and voice session state remain local except explicit calls to configured endpoints | ✅ Proven†             | [§4](#4-ac3--audio-and-session-state-remain-local)                        |
+| AC4 | Azure Foundry and customer-hosted profiles documented without making either mandatory    | ✅ Proven              | [§5](#5-ac4--deployment-profiles-documented-neither-mandatory)            |
+| AC5 | No unapproved runtime media packages were introduced                                     | ✅ Proven              | [§6](#6-ac5--no-unapproved-runtime-media-packages)                        |
+| AC6 | The epic contains final closure evidence and all child issues are closed                 | ✅ Proven              | [§7](#7-ac6--epic-closure-and-child-issue-verification)                   |
 
-† AC3 is proven structurally and by the egress-bounding seams; the full-realtime WebRTC media plane is a
-direct browser↔provider channel whose locality rests on documentation + CSP, not an end-to-end network test
-(see [§8](#8-known-limitations)).
+† At #506 closure AC3 was proven structurally and by the then-documented egress seams. The current
+full-realtime media plane is a direct, send-only browser→provider WebRTC channel. Its network acceptability
+is deployment evidence, not something CSP `connect-src` proves; the shipped client supplies no custom
+STUN/TURN or relay configuration (see [§8](#8-known-limitations)).
 
-All evidence is reproducible from the repository root with no voice credentials, no model endpoint, and no
-network access. See [§9 Reproduction](#9-reproduction-appendix) for the exact commands.
+Repository-local evidence is reproducible with no voice credentials or model endpoint. Historical GitHub
+state checks in §9 require network access and are not part of the hermetic test evidence.
 
 ## 2. AC1 — No-voice deployments remain fully functional
 
@@ -57,17 +66,17 @@ default Keiko deployment configures zero voice (or any) model capabilities.
 - **`none` renders no UI.** `VoiceProfile` lists `none` first and the contract states it means "no voice
   affordance is rendered at all"
   ([`packages/keiko-contracts/src/gateway.ts`](../../packages/keiko-contracts/src/gateway.ts), `VoiceProfile`
-  / `VoiceCapabilityResolution`). All four voice surfaces (dictation mic, realtime button, speech-output
-  mute, recap) render only behind `voice*Visible` conditionals in
+  / `VoiceCapabilityResolution`). At the #506 closure point the voice surfaces, including the then-separate
+  Realtime control, rendered only behind `voice*Visible` conditionals in
   [`ChatWindow.tsx`](../../packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx); every `supports*`
   predicate is false for a `none`/unavailable resolution **and** for an in-flight/failed probe
   ([`useVoiceCapability.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/useVoiceCapability.ts)),
   so the composer stays text-capable regardless.
 
-**The decisive regression evidence:** the entire package suite, UI suite, and e2e smoke run green in CI under
-the default configuration with **no voice provider configured** (`CAPABILITY_DATA` empty; no `KEIKO_VOICE` /
-`VOICE_PROVIDER` environment variable exists anywhere in `.github/workflows/`). Chat, workflows, memory,
-repository context, and evidence features are exercised by their existing suites with voice absent.
+**Historical regression evidence:** at the #506 closure head, the package suite, UI suite, and e2e smoke
+were reported green in CI under the default configuration with **no voice provider configured**
+(`CAPABILITY_DATA` empty). Current readiness requires rerunning the exact-head gates; this paragraph is not
+a substitute for their result.
 
 - Unit/integration: `voice-capability.test.ts` ("no-voice profile (AC1)"), `read-handlers.test.ts`, and the
   keiko-ui `ChatWindow.voice.test.tsx` no-voice cases assert the composer is present and editable while no
@@ -119,12 +128,13 @@ The evaluation layer corroborates the contract data: `deriveCapabilityCell`
 The local-first data boundary is specified in [privacy-contract.md](privacy-contract.md) §1 and enforced by
 reusing existing seams — voice introduces no bespoke HTTP or signaling client for provider calls.
 
-- **Single model-traffic egress.** All voice model traffic routes through `gatewayFetch`
+- **Single provider-HTTP egress.** Provider signaling, STT, and TTS HTTP calls route through `gatewayFetch`
   ([`packages/keiko-model-gateway/src/http.ts`](../../packages/keiko-model-gateway/src/http.ts)) via the
   provider-neutral adapters
   ([`realtime-voice-adapter.ts`](../../packages/keiko-model-gateway/src/realtime-voice-adapter.ts),
   [`speech-to-text-adapter.ts`](../../packages/keiko-model-gateway/src/speech-to-text-adapter.ts)), inheriting
-  proxy, CA, timeout, and byte-cap behavior (ADR-0038).
+  proxy, CA, timeout, and byte-cap behavior (ADR-0038). Realtime microphone media is the separately
+  reviewed browser→provider WebRTC plane described below and does not traverse `gatewayFetch`.
 - **Provider-bounded reachability, fail-closed.** Only configured **and** capable models are electable
   (`assertConfiguredModel` / `selectConfiguredModel` / `selectCompletionModel` in
   [`packages/keiko-model-gateway/src/model-selection.ts`](../../packages/keiko-model-gateway/src/model-selection.ts));
@@ -142,14 +152,14 @@ reusing existing seams — voice introduces no bespoke HTTP or signaling client 
   ([privacy-contract.md](privacy-contract.md) §2–§3; ADR-0046/0047/0048). Voice audit records are
   content-free (counts and enums only), as recorded in the child ADRs (ADR-0108/0109).
 
-**Two egress channels — stated explicitly.** Voice has two outbound paths: (a) the **proxied-SDP / STT model
-channel** through `gatewayFetch`, and (b) the **full-realtime WebRTC media plane**, which is a direct
-browser↔provider DTLS-SRTP channel that does **not** traverse `gatewayFetch`
-([realtime-transport.md](realtime-transport.md), [privacy-contract.md](privacy-contract.md) §4). Channel (b)
-is bounded by configuration (only configured STUN/TURN/media hosts), the same-origin control plane, and CSP
-`connect-src 'self'`, not by an executable network test. This is acceptable for "egress only to configured
-endpoints" but must not be described as if `gatewayFetch` bounds 100% of voice egress (see
-[§8](#8-known-limitations)).
+**Two egress channels — current clarification.** Voice has two outbound paths: (a) provider HTTP calls,
+including proxied SDP, STT, and TTS, through `gatewayFetch`; and (b) the send-only Realtime WebRTC media
+plane, a direct browser→provider DTLS-SRTP channel that does **not** traverse `gatewayFetch`
+([realtime-transport.md](realtime-transport.md), [privacy-contract.md](privacy-contract.md) §4). The shipped
+browser supplies no caller STUN/TURN or custom relay hosts. The same-origin control plane and CSP protect
+HTTP/WebSocket browser surfaces but are not a positive destination allowlist for WebRTC media. Customer
+network routing remains a deployment acceptance check and must not be described as if `gatewayFetch` bounds
+all voice egress (see [§8](#8-known-limitations)).
 
 ## 5. AC4 — Deployment profiles documented, neither mandatory
 
@@ -169,19 +179,19 @@ and the no-voice baseline, and is the AC4 evidence:
   `VOICE_ENVIRONMENT_DESCRIPTORS` in
   [`profiles.ts`](../../packages/keiko-evaluations/src/voice-twin/profiles.ts)).
 
-AC4 is fully satisfied by existing documentation with no outstanding action.
+At #506 closure, AC4 was recorded as satisfied by the cited documentation. Current deployment readiness
+still requires its own network and provider acceptance checks.
 
 ## 6. AC5 — No unapproved runtime media packages
 
 The dependency budget for the entire epic is **the existing `ws` package + browser-native WebRTC APIs**, and
 nothing else ([supply-chain-policy.md](supply-chain-policy.md)).
 
-- **The epic's entire dependency delta is one manifest line.** Diffed against the integration merge-base
-  (`8cdf2d69`), the only dependency added across all `package.json` files is `"ws": "^8.21.0"` declared in
-  [`packages/keiko-server/package.json`](../../packages/keiko-server/package.json). `ws` is now declared in
-  three manifests (root CLI, `keiko-tools`, and — added by #497 — `keiko-server`); the resolved version is
-  unchanged and **no new package was added to `package-lock.json`**. This keiko-server declaration is the
-  explicit, ADR-gated decision recorded in
+- **The epic's historical dependency delta was one manifest declaration.** Issue #497 added `ws` to
+  [`packages/keiko-server/package.json`](../../packages/keiko-server/package.json) while the package was
+  already present in the monorepo. Current manifests and `package-lock.json` consistently resolve `ws`
+  8.21.0 across the root CLI, `keiko-tools`, and `keiko-server`. The server declaration is the explicit,
+  ADR-gated decision recorded in
   [ADR-0102](../adr/ADR-0102-realtime-voice-transport.md) (re-opening the loopback WebSocket control plane);
   the dependency **count** is unchanged. `ws` is a WebSocket library (MIT), not a media/WebRTC package.
 - **No denied media package is present.** A scan of every `packages/**/package.json` and the root manifest
@@ -195,12 +205,12 @@ nothing else ([supply-chain-policy.md](supply-chain-policy.md)).
   license gate (`npm run check:workspace-supply-chain`) run in the CI `Build, scan, SBOM, smoke` job;
   `.github/workflows/dependency-review.yml` denies high-severity and copyleft (GPL/AGPL/LGPL) licenses on PRs.
 
-**Limitations (recorded):** the evaluation scan is **name-based and manifest-only** (it reads declared
+**Limitations recorded at #506:** the evaluation scan is **name-based and manifest-only** (it reads declared
 dependencies, not the resolved lockfile tree), so a renamed vendor or a transitively-pulled denied package
 could evade that specific check — mitigated for this epic because the lockfile diff independently proved zero
-new packages. The `dependency-review.yml` diff gate currently triggers on PRs to `dev` / `feat/keiko-editor` /
-`release/**`, not the epic branch, so it enforces at the eventual `feat/keiko-voice-digital-twin → dev`
-integration PR, which must be green before general availability is declared. See [§8](#8-known-limitations).
+new packages. At that time, the `dependency-review.yml` diff gate targeted the eventual
+`feat/keiko-voice-digital-twin → dev` integration boundary rather than every epic child branch. See
+[§8](#8-known-limitations).
 
 ## 7. AC6 — Epic closure and child-issue verification
 
@@ -213,8 +223,9 @@ integration PR, which must be green before general availability is declared. See
 
 ## 8. Known limitations
 
-A conservative gate keeps these visible; none blocks general availability **once documented** and the epic
-closure comment plus the green `feat/keiko-voice-digital-twin → dev` integration PR are in place.
+A conservative gate kept these visible at the #506 closure point. That historical conclusion does not
+waive a current exact-head gate, audit finding, deployment acceptance check, or the outstanding renewed
+live-microphone test.
 
 1. **No positive destination allowlist.** `validateBaseUrl`
    ([`packages/keiko-model-gateway/src/config.ts`](../../packages/keiko-model-gateway/src/config.ts))
@@ -222,9 +233,10 @@ closure comment plus the green `feat/keiko-voice-digital-twin → dev` integrati
    customer-hosted deployments. AC3 is satisfied by bounding which endpoints are reachable and which models
    are electable, not by a deny-everything-else allowlist. A thin opt-in egress-policy layer is deferred to a
    future child issue.
-2. **WebRTC media-plane locality is documentary.** The full-realtime media plane egresses browser↔provider
-   directly (not via `gatewayFetch`); its locality rests on configuration + CSP `connect-src 'self'`, with no
-   end-to-end network test.
+2. **WebRTC media-plane locality is deployment-specific.** The full-realtime media plane sends microphone
+   media browser→provider directly (not via `gatewayFetch`). The shipped browser has no caller-configured
+   STUN/TURN or custom relay, but CSP `connect-src` is not a WebRTC destination allowlist and CI has no
+   end-to-end customer-network test.
 3. **No-voice e2e is stubbed.** The e2e no-voice path stubs the capability endpoint; the regulation-grade
    no-voice regression guarantee rests on the unit/handler suites.
 4. **Denied-media scan is name-based / manifest-only.** It does not walk transitive `package-lock.json`
@@ -249,11 +261,12 @@ deployment that requires them:
 
 ## 10. Reproduction appendix
 
-All commands run from the repository root with no voice credentials and no network access:
+Run repository-local commands from the repository root with no voice credentials or model endpoint. The
+final historical GitHub-state query is explicitly networked:
 
 ```bash
 # AC1/AC2/AC5 — full voice-twin evaluation suite (GO/NO-GO gate; no clock/network/model)
-npx vitest run packages/keiko-evaluations/src/voice-twin            # 8 files, 168 tests
+npx vitest run packages/keiko-evaluations/src/voice-twin
 
 # AC5 — the epic's entire dependency delta (expect a single "+ ws" line)
 git diff "$(git merge-base HEAD origin/dev)"...HEAD -- '**/package.json' 'package.json' | grep -E '^\+\s+"'
@@ -268,13 +281,13 @@ grep -rEn '"ws":' --include=package.json . --exclude-dir=node_modules
 # AC1 — empty default capability registry
 sed -n '1,9p' packages/keiko-model-gateway/src/capabilities.data.ts
 
-# AC6 — all child issues closed COMPLETED
+# AC6 historical GitHub state — requires authenticated network access
 for n in $(seq 492 505); do gh issue view "$n" --json number,state,stateReason; done
 ```
 
-The same evidence runs in CI: the `ci` job's `test:coverage:quality` step executes the package + evaluation
-suites, and the `ui` job's `test:coverage:ui` and `test:e2e:smoke` steps execute the UI and smoke suites —
-all with no voice provider configured.
+At the historical closure point, corresponding CI jobs executed the package/evaluation, UI-coverage, and
+smoke suites with no voice provider configured. The current required-check set and results must be read
+from the exact PR head.
 
 ## 11. References
 

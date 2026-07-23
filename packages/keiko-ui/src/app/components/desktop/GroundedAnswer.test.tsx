@@ -959,6 +959,21 @@ describe("GroundedAnswer", () => {
     expect(screen.queryByText(/src\/weak\.ts/)).not.toBeInTheDocument();
   });
 
+  it("preserves distinct cited ranges for one evidence atom", () => {
+    const citations = [
+      citation({ stableId: "shared", lineRange: { startLine: 1, endLine: 4 }, score: 0.9 }),
+      citation({ stableId: "shared", lineRange: { startLine: 10, endLine: 12 }, score: 0.8 }),
+      citation({ stableId: "shared", lineRange: { startLine: 1, endLine: 4 }, score: 0.1 }),
+    ];
+
+    const { container } = render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
+
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(2);
+    expect(screen.getByText("src/foo.ts:1-4")).toBeInTheDocument();
+    expect(screen.getByText("src/foo.ts:10-12")).toBeInTheDocument();
+    expect(screen.getByText(/2 citations.*5 \/ 32 files read/)).toBeInTheDocument();
+  });
+
   it("renders no disclosure button when the citation list is within the cap", () => {
     const citations = Array.from({ length: 8 }, (_, i) =>
       citation({ stableId: `atom-${String(i)}`, scopePath: `src/f-${String(i)}.ts` }),
@@ -1312,6 +1327,27 @@ describe("GroundedAnswer", () => {
     expect(container.querySelectorAll("script")).toHaveLength(0);
   });
 
+  it("renders hostile repository and Knowledge citation labels only as escaped text", () => {
+    const hostile = '<img src=x onerror="globalThis.pwned=true"><script>alert(1)</script>';
+    const { container } = render(
+      <>
+        <GroundedAnswer
+          answer={answer({ citations: [citation({ scopePath: hostile })] })}
+          busy={false}
+        />
+        <GroundedAnswer
+          answer={localKnowledgeAnswer([
+            knowledgeCitation({ label: hostile, source: `<svg onload="pwned()">${hostile}</svg>` }),
+          ])}
+          busy={false}
+        />
+      </>,
+    );
+
+    expect(container.textContent).toContain(hostile);
+    expect(container.querySelector("img, script, svg, [onerror], [onload]")).toBeNull();
+  });
+
   it("RB-4 (GEN-AI-GROUNDING-007): surfaces a summary-level warning on empty evidence, not hidden in the disclosure", () => {
     const a = answer({
       uncertainty: [{ kind: "no-evidence", claim: "No repository evidence matched." }],
@@ -1321,6 +1357,19 @@ describe("GroundedAnswer", () => {
     expect(warning).not.toBeNull();
     expect(warning?.textContent).toContain("Needs review");
     expect(warning?.textContent?.toLowerCase()).toContain("not grounded");
+  });
+
+  it("labels a memory-only local answer as ungrounded without inventing source citations", () => {
+    const memoryOnly = {
+      ...localKnowledgeAnswer([]),
+      content: "You prefer pnpm.",
+      noEvidence: true,
+      noEvidenceReason: "answer-only-memory",
+    };
+    const { container } = render(<GroundedAnswer answer={memoryOnly} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent?.toLowerCase()).toContain("not grounded");
+    expect(container.querySelectorAll(".grounded-citation")).toHaveLength(0);
   });
 
   it("RB-4 (GEN-AI-GROUNDING-007): flags unsupported (fabricated) citations at the summary level", () => {

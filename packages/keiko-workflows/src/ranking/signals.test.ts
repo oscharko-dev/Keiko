@@ -105,6 +105,15 @@ describe("extractSignals", () => {
     expect(result.generatedHint).toBe(true);
   });
 
+  it("detects case-normalized StorybookStatic bundles as generated context", () => {
+    const result = extractSignals(
+      [atom("only-for-internal-use/StorybookStatic/assets/iframe.js", 1)],
+      [],
+      REQUIRED_HINTS,
+    );
+    expect(result.generatedHint).toBe(true);
+  });
+
   it("stacktrace-position-bonus fires when a quoted anchor mentions the path", () => {
     const result = extractSignals(
       [atom("src/foo.ts", 0.3)],
@@ -279,6 +288,18 @@ describe("extractSignals — intent context (M4)", () => {
       });
       expect(result.signals.find((s) => s.name === "structural-edge")?.value).toBe(1);
     }
+  });
+
+  it("marks a discovered symbol definition as stronger structural evidence", () => {
+    const result = extractSignals(
+      [structuralAtom("src/service.ts", 1, "discovered-symbol-definition")],
+      [],
+      REQUIRED_HINTS,
+      { retrievalIntent: "targeted-code-search" },
+    );
+
+    expect(result.signals.find((signal) => signal.name === "structural-edge")?.value).toBe(1);
+    expect(result.signals.find((signal) => signal.name === "symbol-definition")?.value).toBe(1);
   });
 
   it("appends git-recency and git-churn when git-history metrics are present", () => {

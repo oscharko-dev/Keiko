@@ -1,6 +1,313 @@
 import { describe, expect, it } from "vitest";
+import type { ContextCoverageTruncationReason } from "@oscharko-dev/keiko-contracts/connected-context";
 
-import { looksLikeBlockHeader, looksLikeSignatureStart } from "./repoSearchLineSelection.js";
+import {
+  collectBestLines,
+  looksLikeBlockHeader,
+  looksLikeSignatureStart,
+} from "./repoSearchLineSelection.js";
+
+describe("collectBestLines", () => {
+  it("never returns a closed preceding brace range for a later matching line", () => {
+    const text = [
+      "const routes = [",
+      '  { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },',
+      "  // Grounded repository-aware Q&A.",
+      '  { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },',
+      "];",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("/grounded") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 4, startLine: 4, endLine: 4, score: 1 }]);
+  });
+
+  it("does not extend a Python citation past the last physical line", () => {
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      "def handler():\n    return needle\n",
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 2, startLine: 1, endLine: 2, score: 1 }]);
+  });
+
+  it("keeps a genuine nested Python block after brace ranges take precedence", () => {
+    const text = [
+      "def handler():",
+      "    if enabled:",
+      "        return needle",
+      "    return fallback",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 3, startLine: 2, endLine: 3, score: 1 }]);
+  });
+
+  it("ignores braces inside quoted strings when selecting an enclosing function", () => {
+    const text = [
+      "function handler() {",
+      '  const closingBrace = "}";',
+      "  return needle;",
+      "}",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 3, startLine: 1, endLine: 4, score: 1 }]);
+  });
+
+  it("does not mistake an indented JavaScript continuation for a Python block", () => {
+    const text = [
+      "function handler() {",
+      "  const needle = createValue(",
+      "    first,",
+      "    second,",
+      "  );",
+      "}",
+      "const unrelated = {};",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("const needle") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 2, startLine: 1, endLine: 6, score: 1 }]);
+  });
+
+  it("ignores braces inside JavaScript regex literals when selecting an enclosing function", () => {
+    const text = [
+      "function handler() {",
+      "  const closingBrace = /}/u;",
+      "  return needle;",
+      "}",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 3, startLine: 1, endLine: 4, score: 1 }]);
+  });
+
+  it("ignores regex braces after JavaScript control-flow headers", () => {
+    for (const statement of [
+      "if (enabled) /}/u.test(value);",
+      "while (enabled) /}/u.test(value);",
+      "for (const value of values) /}/u.test(value);",
+    ]) {
+      const text = ["function handler() {", `  ${statement}`, "  return needle;", "}"].join("\n");
+      const best = collectBestLines(
+        {
+          limits: { elapsedMsMax: 1_000 },
+          matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
+          nowMs: () => 0,
+          startMs: 0,
+        },
+        text,
+        { truncated: false },
+      );
+
+      expect(best).toEqual([{ line: 3, startLine: 1, endLine: 4, score: 1 }]);
+    }
+  });
+
+  it.each([
+    ["typeof", "function handler() {", "const kind = typeof /}/u;"],
+    ["void", "function handler() {", "void /}/u.test(value);"],
+    ["delete", "function handler() {", "delete /}/u.lastIndex;"],
+    ["await", "async function handler() {", "const match = await /}/u.exec(value);"],
+    ["instanceof", "function handler() {", "const match = value instanceof /}/u;"],
+    ["in", "function handler() {", 'const match = "key" in /}/u;'],
+    ["new", "function handler() {", "const match = new /}/u;"],
+    ["of", "function handler() {", "for (const item of /}/u.exec(value) ?? []) consume(item);"],
+    ["else", "function handler() {", "if (enabled) work(); else /}/u.test(value);"],
+    ["do", "function handler() {", "do /}/u.test(value); while (enabled);"],
+    ["extends", "class Handler extends /}/u {", "static value = true;"],
+    ["default", "export default /}/u && function handler() {", "const value = true;"],
+  ])("ignores regex braces after the JavaScript %s keyword", (_keyword, header, statement) => {
+    const text = [
+      header,
+      `  ${statement}`,
+      "  const needle = true;",
+      "  return needle;",
+      "}",
+      "const unrelated = {};",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("const needle") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 3, startLine: 1, endLine: 5, score: 1 }]);
+  });
+
+  it.each(["object.in", "object.αin"])(
+    "does not treat a keyword suffix in %s before division as a regex prefix",
+    (property) => {
+      const text = [
+        "function handler() {",
+        `  const needle = ${property} / divisor; }`,
+        "const unrelated = {};",
+      ].join("\n");
+      const best = collectBestLines(
+        {
+          limits: { elapsedMsMax: 1_000 },
+          matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
+          nowMs: () => 0,
+          startMs: 0,
+        },
+        text,
+        { truncated: false },
+      );
+
+      expect(best).toEqual([{ line: 2, startLine: 1, endLine: 2, score: 1 }]);
+    },
+  );
+
+  it("ignores fake opening braces inside multiline block comments", () => {
+    const text = [
+      "/*",
+      "function fake() {",
+      "*/",
+      "consume(needle);",
+      "const unrelated = {};",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 4, startLine: 4, endLine: 4, score: 1 }]);
+  });
+
+  it.each([
+    "return <section data={{ nested: true }}>{needle}<Widget value={{ deep: true }} /></section>; }",
+    "return <>{needle}<Widget value={{ nested: true }} /></>; }",
+  ])("counts a same-line function close after TSX without consuming later lines", (statement) => {
+    const text = [
+      "function Component() {",
+      "  const needle = true;",
+      `  ${statement}`,
+      "const unrelated = {};",
+      "const tail = true;",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("const needle") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 2, startLine: 1, endLine: 3, score: 1 }]);
+  });
+
+  it("records timeout as the reason when line selection exhausts its deadline", () => {
+    const state = {
+      truncated: false,
+      truncationReasons: new Set<ContextCoverageTruncationReason>(),
+    };
+    collectBestLines(
+      {
+        limits: { elapsedMsMax: 1 },
+        matcher: { match: () => 0 },
+        nowMs: () => 2,
+        startMs: 0,
+      },
+      "first\nsecond",
+      state,
+    );
+
+    expect(state.truncated).toBe(true);
+    expect([...state.truncationReasons]).toEqual(["timeout"]);
+  });
+
+  it("stops line matching when the request is aborted", () => {
+    const controller = new AbortController();
+    const state = {
+      truncated: false,
+      truncationReasons: new Set<ContextCoverageTruncationReason>(),
+    };
+    let calls = 0;
+    const runner = {
+      limits: { elapsedMsMax: 1_000 },
+      matcher: {
+        match: (): number => {
+          calls += 1;
+          controller.abort();
+          return 0;
+        },
+      },
+      nowMs: (): number => 0,
+      startMs: 0,
+      signal: controller.signal,
+    };
+
+    collectBestLines(runner, Array.from({ length: 300 }, () => "line").join("\n"), state);
+
+    expect(calls).toBe(1);
+    expect(state.truncated).toBe(true);
+    expect([...state.truncationReasons]).toEqual(["aborted"]);
+  });
+});
 
 describe("looksLikeBlockHeader", () => {
   it("recognises common signature shapes across languages", () => {

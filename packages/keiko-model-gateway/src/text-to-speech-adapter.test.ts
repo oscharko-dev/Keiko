@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MAX_SPEECH_AUDIO_BYTES,
   requestTextToSpeech,
@@ -89,23 +89,59 @@ describe("requestTextToSpeech", () => {
     });
   });
 
-  it("defaults the voice to alloy and mp3 when none is pinned", async () => {
-    let seenBody = "";
-    const outcome = await requestTextToSpeech({
-      endpoint: ENDPOINT,
-      apiKey: SECRET_API_KEY,
-      modelId: "keiko-tts",
-      input: ANSWER,
-      fetchImpl: mockFetch((_url, init) => {
-        seenBody = bodyText(init);
-        return audioResponse(AUDIO_BYTES);
+  it("fails closed before egress when no explicit provider voice is pinned", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await expect(
+      requestTextToSpeech({
+        endpoint: ENDPOINT,
+        apiKey: SECRET_API_KEY,
+        modelId: "keiko-tts",
+        input: ANSWER,
+        fetchImpl,
       }),
+    ).resolves.toEqual({
+      ok: false,
+      kind: "unsupported-model",
     });
-    expect(outcome.ok).toBe(true);
-    const payload = JSON.parse(seenBody) as Record<string, unknown>;
-    expect(payload.voice).toBe("alloy");
-    expect(payload.response_format).toBe("mp3");
-    expect(payload.speed).toBeUndefined();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   "])("fails closed before egress for an empty voice (%j)", async (voice) => {
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await expect(
+      requestTextToSpeech({
+        endpoint: ENDPOINT,
+        apiKey: SECRET_API_KEY,
+        modelId: "keiko-tts",
+        input: ANSWER,
+        voice,
+        fetchImpl,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      kind: "unsupported-model",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("keeps the streaming surface optional and fail-closed before egress", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await expect(
+      requestTextToSpeechStream({
+        endpoint: ENDPOINT,
+        apiKey: SECRET_API_KEY,
+        modelId: "keiko-tts",
+        input: ANSWER,
+        fetchImpl,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      kind: "unsupported-model",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("supports a custom apiKeyHeaderName (Azure api-key), response format, and speed", async () => {
@@ -117,6 +153,7 @@ describe("requestTextToSpeech", () => {
       apiKeyHeaderName: "api-key",
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       responseFormat: "opus",
       speed: 1.25,
       fetchImpl: mockFetch((_url, init) => {
@@ -170,6 +207,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       responseFormat: "wav",
       fetchImpl: mockFetch(() => audioResponse(AUDIO_BYTES, null)),
     });
@@ -185,6 +223,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       fetchImpl: mockFetch(() => audioResponse(AUDIO_BYTES, "application/json")),
     });
     expect(outcome.ok).toBe(true);
@@ -199,6 +238,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       fetchImpl: mockFetch(() => audioResponse(AUDIO_BYTES, "audio/mpeg; charset=binary")),
     });
     expect(outcome.ok).toBe(true);
@@ -213,6 +253,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       fetchImpl: mockFetch(() => audioResponse(new Uint8Array(0))),
     });
     expect(outcome).toEqual({ ok: false, kind: "empty-audio" });
@@ -225,6 +266,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       maxAudioBytes: 16,
       fetchImpl: mockFetch(() => audioResponse(tooBig)),
     });
@@ -248,6 +290,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       fetchImpl: mockFetch(
         () =>
           new Response("provider error body — never surfaced", {
@@ -265,6 +308,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       fetchImpl: mockFetch(() => {
         throw new Error("socket hang up");
       }),
@@ -284,6 +328,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       fetchImpl: mockFetch(() => {
         throw new OutboundHttpEgressError(code, "egress failure");
       }),
@@ -297,6 +342,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       fetchImpl: mockFetch(() => {
         throw new DOMException("timed out", "TimeoutError");
       }),
@@ -310,6 +356,7 @@ describe("requestTextToSpeech", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       signal: controller.signal,
       fetchImpl: mockFetch(() => {
         throw new DOMException("aborted", "AbortError");
@@ -364,6 +411,7 @@ describe("requestTextToSpeechStream", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       responseFormat: "pcm",
       fetchImpl,
     });
@@ -380,6 +428,7 @@ describe("requestTextToSpeechStream", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       fetchImpl,
     });
     expect(outcome).toEqual({ ok: false, kind: "rate-limited" });
@@ -392,6 +441,7 @@ describe("requestTextToSpeechStream", () => {
       apiKey: SECRET_API_KEY,
       modelId: "keiko-tts",
       input: ANSWER,
+      voice: "configured-voice",
       responseFormat: "pcm",
       maxAudioBytes: 10,
       fetchImpl,

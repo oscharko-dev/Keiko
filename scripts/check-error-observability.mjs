@@ -3,9 +3,9 @@
 //
 // Drives the REAL built BFF (packages/keiko-server/dist) end to end: a route handler is forced to
 // throw, and the gate asserts the top-level catch (a) returns an opaque 500 that carries a well-formed
-// correlation id, (b) echoes that id on the X-Keiko-Correlation-Id response header, (c) routes the
-// redacted cause to the operator diagnostic sink keyed by the same id, (d) never leaks the raw cause
-// to the browser, and (e) honours a well-formed UI-supplied correlation id (UI -> server continuity).
+// correlation id, (b) echoes that id on the X-Keiko-Correlation-Id response header, (c) routes
+// body-free class/code/request/count metadata to the operator sink keyed by the same id, (d) never
+// leaks the raw cause to either channel, and (e) honours a well-formed UI-supplied correlation id.
 //
 // It goes RED against the pre-RB-6 defect: a bare `.catch(() => { ... })` that discards the error and
 // emits an id-less 500 fails assertions (b)/(a)/(c). This is the standalone, workflow-wired counterpart
@@ -85,7 +85,11 @@ function throwingDeps(mod, records) {
     store: {
       ...store,
       listProjects: () => {
-        throw new Error(SECRET_MARKER);
+        throw Object.assign(new Error(SECRET_MARKER), {
+          code: "OBSERVABILITY_GATE_FAILURE",
+          requestId: "observability-gateway-request-7",
+          partialUsage: { promptTokens: 13, completionTokens: 5 },
+        });
       },
     },
   };
@@ -141,16 +145,33 @@ function assertOpaque500WithId(res) {
   return cid;
 }
 
-function assertDiagnosticCaptured(records, cid) {
-  if (records.length !== 1) fail(`expected exactly 1 diagnostic record, got ${records.length}`);
-  const [record] = records;
+function assertDiagnosticIdentity(record, cid) {
   if (record.correlationId !== cid)
     fail("diagnostic record correlationId does not match the 500 id");
   if (record.source !== "server.top-level-catch")
     fail(`unexpected diagnostic source ${record.source}`);
-  if (!String(record.message).includes(SECRET_MARKER)) {
-    fail("diagnostic record did not capture the underlying cause");
-  }
+  if (record.operation !== "server.request") fail(`unexpected operation ${record.operation}`);
+  if (record.errorClass !== "Error") fail(`unexpected errorClass ${record.errorClass}`);
+}
+
+function assertDiagnosticMachineMetadata(record) {
+  if (record.message !== "server-operation-failed")
+    fail(`unexpected body-free summary ${record.message}`);
+  if (record.code !== "OBSERVABILITY_GATE_FAILURE")
+    fail(`machine error code was not retained (${record.code})`);
+  if (record.gatewayRequestId !== "observability-gateway-request-7")
+    fail(`gateway request id was not retained (${record.gatewayRequestId})`);
+  if (record.partialUsage?.promptTokens !== 13 || record.partialUsage?.completionTokens !== 5)
+    fail("partial usage counts were not retained");
+}
+
+function assertDiagnosticCaptured(records, cid) {
+  if (records.length !== 1) fail(`expected exactly 1 diagnostic record, got ${records.length}`);
+  const [record] = records;
+  assertDiagnosticIdentity(record, cid);
+  assertDiagnosticMachineMetadata(record);
+  if (JSON.stringify(record).includes(SECRET_MARKER))
+    fail("raw cause leaked into the operator diagnostic record");
 }
 
 async function assertClientIdHonoured(port) {
@@ -177,7 +198,7 @@ async function main() {
     await new Promise((res) => server.close(res));
   }
   console.log(
-    "check:error-observability PASS — top-level 500 carries a correlation id + header, the redacted cause is logged, and a UI-supplied id round-trips.",
+    "check:error-observability PASS — correlation/class/machine metadata survives, diagnostics stay body-free, and a UI-supplied id round-trips.",
   );
 }
 

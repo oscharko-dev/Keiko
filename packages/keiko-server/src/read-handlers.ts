@@ -7,9 +7,11 @@
 // `config: undefined` rather than throwing).
 
 import {
+  findConfiguredCapability,
   toSafeObject,
   listSafeConfiguredCapabilities,
   resolveVoiceCapability,
+  selectRealtimeVoiceModel,
   type EnvSource,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
@@ -127,7 +129,12 @@ export function isVoiceRealtimeCapable(deps: UiHandlerDeps): boolean {
   const voice = resolveVoiceCapability(config, {
     policyDisabled: isVoiceDisabledByPolicy(deps.env),
   });
-  return voice.available && voice.transport.webrtcMedia;
+  const realtimeModelId = selectRealtimeVoiceModel(config);
+  const transcriptionModel =
+    realtimeModelId === undefined
+      ? undefined
+      : findConfiguredCapability(config, realtimeModelId)?.realtimeTranscriptionModel?.trim();
+  return voice.available && voice.transport.webrtcMedia && Boolean(transcriptionModel);
 }
 
 // Route 4 — launch-form metadata: the workflow descriptors plus the synthesized explain-plan and

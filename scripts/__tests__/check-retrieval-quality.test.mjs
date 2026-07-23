@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { binaryNdcgAtK } from "@oscharko-dev/keiko-contracts";
 import {
   evaluateQualityBudget,
-  ndcgAtK,
   recallAtK,
   reciprocalRank,
   regressFixtureExpectations,
@@ -80,8 +80,11 @@ describe("check-retrieval-quality helpers", () => {
   });
 
   it("computes nDCG@k with ideal ordering normalized to 1", () => {
-    expect(ndcgAtK(["a.ts", "b.ts"], ["a.ts", "b.ts"], 2)).toBe(1);
-    expect(ndcgAtK(["x.ts", "a.ts"], ["a.ts"], 2)).toBeCloseTo(1 / Math.log2(3), 6);
+    // The gate script used to wrap `binaryNdcgAtK` in a local `ndcgAtK` name; the wrapper was a
+    // dead abstraction that also tripped the retrieval-metrics single-owner scan, so it now calls
+    // the canonical helper from `@oscharko-dev/keiko-contracts` directly.
+    expect(binaryNdcgAtK(["a.ts", "b.ts"], ["a.ts", "b.ts"], 2)).toBe(1);
+    expect(binaryNdcgAtK(["x.ts", "a.ts"], ["a.ts"], 2)).toBeCloseTo(1 / Math.log2(3), 6);
   });
 
   it("reports every failed budget dimension", () => {

@@ -8,6 +8,7 @@ import {
   cloneRepository,
   clearConfigCacheForTests,
   clearModelCacheForTests,
+  clearVoiceCapabilityCacheForTests,
   clearProjectRequestForTests,
   deleteChat,
   deleteProject,
@@ -54,7 +55,6 @@ import {
   retryUpdateSession,
   runUpdateRemediationAction,
   startUpdateSession,
-  fetchCodingWorkbenchSidecarGatewayProfile,
   requestEditorCodeActions,
   requestEditorCompletion,
   requestEditorDefinition,
@@ -354,59 +354,26 @@ describe("editor agent bridge capability serialization", () => {
   });
 });
 
-describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+describe("Coding Workbench provider API isolation (issue #2639)", () => {
+  it("keeps CodingWorkbench provider validators out of api.ts eager imports", () => {
+    // The three provider profile fetchers live in ./coding-workbench-provider-api so that the
+    // desktop shell's first-load chunk does not drag in `coding-workbench` /
+    // `coding-workbench-evidence` (~12 KiB gzip) via the codex-auth validators. Any regression
+    // that re-eagerly imports them from ./api will fail this assertion (and, once CI/Linux
+    // measures it, the check:editor-bundle-size ceiling).
+    const eagerContractsImports = [
+      ...API_SOURCE.matchAll(
+        /import\s*\{([\s\S]*?)\}\s*from\s*["']@oscharko-dev\/keiko-contracts["'];/gu,
+      ),
+    ]
+      .map((match) => match[1] ?? "")
+      .join("\n");
 
-  it("accepts a valid sidecar gateway profile response", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        status: "available",
-        profileId: "coding-safe-openai-compatible",
-        modelAlias: "azure-coding-model",
-        localEndpointPath: "/api/coding-sidecar/gateway",
-        supportsStreaming: false,
-        supportsToolCalling: true,
-        runMetadata: {
-          maxPromptTokens: 128_000,
-          maxOutputTokens: 4_096,
-          maxInputMessages: 64,
-          maxRequestBytes: 64_000,
-        },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({
-      status: "available",
-      modelAlias: "azure-coding-model",
-    });
-  });
-
-  it("rejects malformed sidecar gateway profile responses", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        status: "available",
-        profileId: "coding-safe-openai-compatible",
-        modelAlias: "azure-coding-model",
-        localEndpointPath: "/api/coding-sidecar/gateway",
-        supportsStreaming: false,
-        supportsToolCalling: true,
-        runMetadata: {
-          maxPromptTokens: 128_000,
-          maxOutputTokens: 4_096,
-          maxInputMessages: "64",
-          maxRequestBytes: 64_000,
-        },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
-      code: "CONTRACT_VALIDATION_FAILED",
-      status: 502,
-    });
+    expect(eagerContractsImports).not.toContain("validateCodingWorkbenchCodexSubscriptionProfile");
+    expect(eagerContractsImports).not.toContain("validateCodingWorkbenchCodexAuthSetupPlan");
+    expect(API_SOURCE).not.toContain("fetchCodingWorkbenchSidecarGatewayProfile");
+    expect(API_SOURCE).not.toContain("fetchCodingWorkbenchCodexSubscriptionProfile");
+    expect(API_SOURCE).not.toContain("prepareCodingWorkbenchCodexSubscriptionSetup");
   });
 });
 
@@ -1949,6 +1916,7 @@ describe("fetchConfig", () => {
 
 describe("fetchVoiceCapability (Issue #493)", () => {
   afterEach(() => {
+    clearVoiceCapabilityCacheForTests();
     vi.unstubAllGlobals();
   });
 
@@ -1970,6 +1938,23 @@ describe("fetchVoiceCapability (Issue #493)", () => {
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
+  });
+
+  it("shares one in-flight and fulfilled capability probe until configuration changes", async () => {
+    const voice = {
+      available: false,
+      profile: "none",
+      capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
+      transport: { websocketControl: false, webrtcMedia: false },
+      reason: "no-voice-provider",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ voice }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await Promise.all([fetchVoiceCapability(), fetchVoiceCapability(), fetchVoiceCapability()]);
+    await fetchVoiceCapability();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces an unavailable resolution without throwing", async () => {

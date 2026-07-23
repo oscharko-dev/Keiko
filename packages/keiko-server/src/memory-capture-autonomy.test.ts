@@ -174,12 +174,18 @@ function turnRequest(content: string): SendDesktopChatRequest {
   return { content, memory: { enabled: true } } as unknown as SendDesktopChatRequest;
 }
 
-function runTurn(
+async function runTurn(
   deps: UiHandlerDeps,
   ctx: ConversationMemoryRuntimeContext,
   content: string,
 ): Promise<readonly unknown[]> {
-  return collectMemoryActions(deps, turnRequest(content), ctx, "gpt-test", "ok");
+  const request = turnRequest(content);
+  const deterministic = await collectMemoryActions(deps, request, ctx);
+  // Canonical chat now starts fallible model-assisted salience only after the Assistant commit.
+  // Drive that post-commit phase explicitly so this journey remains deterministic and never infers
+  // completion from a background timer.
+  const salient = await captureSalientFromTurn(deps, request, ctx, "gpt-test", "ok");
+  return [...deterministic, ...salient];
 }
 
 function readMemories(

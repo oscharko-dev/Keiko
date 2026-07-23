@@ -145,7 +145,7 @@ describe("dev quality workflows", () => {
     const crossPlatform = ci.match(/ {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}ui:\n)/u)?.[0];
     expect(crossPlatform).toBeDefined();
     expect(crossPlatform).toContain(
-      "actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1",
+      "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
     );
     expect(crossPlatform).toContain("npm run check:native:macos");
     expect(crossPlatform).toContain("npm run check:native:windows");

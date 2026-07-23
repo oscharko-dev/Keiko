@@ -12,6 +12,7 @@
 // transcript live only in React state for the lifetime of the flow and are never logged.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError, transcribeDictation } from "@/lib/api";
 import type { VoiceTranscriptionRequest, VoiceTranscriptionResult } from "@/lib/api";
 import {
@@ -32,7 +33,10 @@ import {
   type VoiceLatencyObserver,
   type VoiceLatencyObserverSink,
 } from "./voice-latency-observer";
-import { parseRealtimeVoiceEvent } from "./voice-realtime-events";
+import {
+  parseRealtimeVoiceEvent,
+  REALTIME_TRANSCRIPT_LIMIT_MESSAGE,
+} from "./voice-realtime-events";
 import {
   createBrowserVoiceRtcTransport,
   VoiceRtcError,
@@ -222,6 +226,9 @@ function classifyError(error: unknown): { reason: DictationErrorReason; message:
 }
 
 function classifyRealtimeError(error: unknown): { reason: DictationErrorReason; message: string } {
+  if (error instanceof Error && error.message === REALTIME_TRANSCRIPT_LIMIT_MESSAGE) {
+    return { reason: "transcribe-failed", message: REALTIME_TRANSCRIPT_LIMIT_MESSAGE };
+  }
   if (error instanceof VoiceRtcError) {
     const reason: DictationErrorReason =
       error.reason === "permission-denied" ||
@@ -296,6 +303,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
   const realtimeStartAbortRef = useRef<AbortController | undefined>(undefined);
   const realtimeLiveTranscriptRef = useRef("");
   const realtimeFinalTranscriptRef = useRef<string | undefined>(undefined);
+  const realtimeTranscriptErrorRef = useRef<string | undefined>(undefined);
   const realtimeDeltaSeenRef = useRef(false);
   const realtimeFallbackToBatchRef = useRef(false);
   const realtimeFinalWaiterRef = useRef<
@@ -377,6 +385,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
     realtimeSessionRef.current = undefined;
     realtimeLiveTranscriptRef.current = "";
     realtimeFinalTranscriptRef.current = undefined;
+    realtimeTranscriptErrorRef.current = undefined;
     realtimeDeltaSeenRef.current = false;
   }, []);
 
@@ -384,6 +393,9 @@ export function useDictation(options: UseDictationOptions): DictationController 
     readonly text: string;
     readonly note?: string;
   }> => {
+    if (realtimeTranscriptErrorRef.current !== undefined) {
+      return Promise.reject(new Error(realtimeTranscriptErrorRef.current));
+    }
     const finalText = realtimeFinalTranscriptRef.current?.trim();
     if (finalText !== undefined && finalText.length > 0) {
       return Promise.resolve({ text: finalText });
@@ -412,7 +424,17 @@ export function useDictation(options: UseDictationOptions): DictationController 
         return;
       }
       if (parsed.kind === "user-transcript-delta") {
-        realtimeLiveTranscriptRef.current += parsed.delta;
+        if (realtimeTranscriptErrorRef.current !== undefined) return;
+        const transcript = `${realtimeLiveTranscriptRef.current}${parsed.delta}`;
+        if (transcript.length > MAX_DESKTOP_CHAT_INPUT_CHARS) {
+          realtimeLiveTranscriptRef.current = "";
+          realtimeFinalTranscriptRef.current = undefined;
+          realtimeTranscriptErrorRef.current = REALTIME_TRANSCRIPT_LIMIT_MESSAGE;
+          dispatch({ type: "liveTranscript", transcript: "" });
+          rejectRealtimeFinal(new Error(REALTIME_TRANSCRIPT_LIMIT_MESSAGE));
+          return;
+        }
+        realtimeLiveTranscriptRef.current = transcript;
         if (!realtimeDeltaSeenRef.current) {
           realtimeDeltaSeenRef.current = true;
           latency.mark("live_transcription_delta");
@@ -425,6 +447,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
         return;
       }
       if (parsed.kind === "user-transcript-committed") {
+        if (realtimeTranscriptErrorRef.current !== undefined) return;
         const text = parsed.text.trim();
         if (text.length === 0) {
           return;
@@ -438,6 +461,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
         return;
       }
       if (parsed.kind === "user-transcript-failed") {
+        realtimeTranscriptErrorRef.current = parsed.message;
         rejectRealtimeFinal(new Error(parsed.message));
       }
     },
@@ -632,6 +656,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
     cancelledRef.current = false;
     realtimeLiveTranscriptRef.current = "";
     realtimeFinalTranscriptRef.current = undefined;
+    realtimeTranscriptErrorRef.current = undefined;
     realtimeDeltaSeenRef.current = false;
     latency.reset();
     latency.mark("mic_click");

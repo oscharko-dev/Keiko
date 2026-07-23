@@ -5,6 +5,7 @@ on:
     branches:
       - dev
       - feat/dev
+      - feat/epic-open-code-engine-in-keiko-2473
       - feat/keiko-editor
       - feat/keiko-agent-native-editor-foundation-and-runtime
       - feat/prompt-enhancer-1307
@@ -21,6 +22,7 @@ on:
     branches:
       - dev
       - feat/dev
+      - feat/epic-open-code-engine-in-keiko-2473
       - feat/keiko-editor
       - feat/keiko-agent-native-editor-foundation-and-runtime
       - feat/prompt-enhancer-1307
@@ -51,7 +53,7 @@ jobs:
       - name: Confirm dev branch gate
         run: |
           case "${GITHUB_REF}:${GITHUB_BASE_REF}" in
-            refs/heads/dev: | refs/heads/feat/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/feat/epic-built-in-editor-2285-M11: | refs/heads/feat/epic-memoria-viva-2538: | refs/heads/epic/coding-workbench-opencode-codex: | refs/heads/release/*: | *:dev | *:feat/dev | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:feat/epic-built-in-editor-2285-M11 | *:feat/epic-memoria-viva-2538 | *:epic/coding-workbench-opencode-codex | *:release/*)
+            refs/heads/dev: | refs/heads/feat/dev: | refs/heads/feat/epic-open-code-engine-in-keiko-2473: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/feat/epic-built-in-editor-2285-M11: | refs/heads/feat/epic-memoria-viva-2538: | refs/heads/epic/coding-workbench-opencode-codex: | refs/heads/release/*: | *:dev | *:feat/dev | *:feat/epic-open-code-engine-in-keiko-2473 | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:feat/epic-built-in-editor-2285-M11 | *:feat/epic-memoria-viva-2538 | *:epic/coding-workbench-opencode-codex | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
             *)
@@ -71,7 +73,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -150,6 +152,19 @@ jobs:
         # claim is falsely flagged, an unavailable judge stops degrading to WARN, or a pass-through
         # judge still "detects" (the checker must be load-bearing — non-tautology proven in CI).
         run: npm run check:grounded-entailment
+      - name: Provision the sqlite-vec loadable extension (Issue #2566)
+        # The ANN proof in the closeout gate below drives the real extension. It is not an npm
+        # dependency — sqlite-vec publishes an invalid SPDX license string that both the
+        # dependency-review policy and check:workspace-supply-chain reject — so it is fetched here
+        # and verified against a pinned SHA-256, the same way the Sonar Scanner CLI is obtained.
+        run: npm run provision:sqlite-vec
+      - name: Knowledge M2 closeout gate (Knowledge M2.8, Epic #2556)
+        # The wave's anti-false-green artifact. Re-runs the six substrate proofs (ANN activation,
+        # one reranker transport importer, the evaluation fold, the retrieval-context wire snapshot,
+        # the repository pod, and the wave bookkeeping state read out of docs/qa/knowledge-m2-wave.md)
+        # and compares the committed docs/qa/knowledge-m2-substrate-evidence.md against a freshly
+        # rendered one, failing closed on drift. Uses the compiled dist built by `npm run typecheck`.
+        run: npm run check:knowledge-m2-closeout
       - name: Server error observability gate (RB-6, GEN-OBS-DIAGNOSTICS-901)
         # Drives the REAL built BFF: forces a handler throw and asserts the top-level catch returns an
         # opaque 500 that carries a correlation id (body + X-Keiko-Correlation-Id header), routes the
@@ -188,7 +203,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -202,6 +217,16 @@ jobs:
           # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
           # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Provision the sqlite-vec loadable extension (Issue #2566)
+        # Not an npm dependency: sqlite-vec publishes an invalid SPDX license string, which both the
+        # dependency-review policy and check:workspace-supply-chain reject — the latter by design has
+        # no exception mechanism. Fetched here and verified against a pinned SHA-256 instead, the
+        # same way the Sonar Scanner CLI is obtained below. Without the binary the vector-index suite
+        # asserts its fail-closed fallback rather than skipping, so this step adds real-binary
+        # coverage. It does gate: a failed download or a checksum mismatch exits nonzero and fails
+        # the job, which is the intended behaviour — a tampered artifact must stop the run, not
+        # silently downgrade it to fallback coverage. Hosts with no published asset return success.
+        run: npm run provision:sqlite-vec
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:coverage:quality
@@ -373,7 +398,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Run zizmor
-        uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa # v0.5.7
+        uses: zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02 # v0.6.0
         with:
           version: "1.26.1"
           config: .github/zizmor.yml
@@ -394,7 +419,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -446,7 +471,7 @@ jobs:
       # unverified-staging and do not add attestation noise for commits that never ship.
       - name: Attest build provenance for root SBOM
         if: github.event_name == 'push'
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: sbom.cdx.json
       - name: Upload workspace SBOMs (Issue #169 AC4)
@@ -457,7 +482,7 @@ jobs:
           retention-days: 90
       - name: Attest build provenance for workspace SBOMs
         if: github.event_name == 'push'
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: sbom/workspace-*.cdx.json
 
@@ -478,11 +503,11 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: runner.os == 'Windows'
         with:
           dotnet-version: "8.0.x"
@@ -556,7 +581,7 @@ jobs:
           # Keep that commit reachable instead of relying on the default single-commit checkout.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -671,6 +696,6 @@ jobs:
       # attestation subject to at this point, so this attests the SBOM document's own provenance.
       - name: Attest build provenance for UI SBOM
         if: github.event_name == 'push'
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: ui-sbom.cdx.json

@@ -18,6 +18,7 @@ class FakeWebSocket {
 
   private readonly listeners: Record<string, WsListener[]> = {};
   public readonly url: string;
+  public readonly sent: Record<string, unknown>[] = [];
   public closed = false;
 
   constructor(url: string) {
@@ -29,7 +30,9 @@ class FakeWebSocket {
     (this.listeners[type] ??= []).push(cb);
   }
 
-  send(_data: string): void {}
+  send(data: string): void {
+    this.sent.push(JSON.parse(data) as Record<string, unknown>);
+  }
 
   close(): void {
     this.closed = true;
@@ -191,6 +194,52 @@ describe("createBrowserVoiceControlClient", () => {
     expect(ws.closed).toBe(true);
   });
 
+  it("close() synchronously clears a pending handshake deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const { factory, latest } = makeFactory();
+      const client = createBrowserVoiceControlClient(factory);
+      const settled = client.negotiate("v=0\r\npending-offer");
+      const rejection = expect(settled).rejects.toMatchObject({ reason: "connection-failed" });
+      const ws = latest();
+      ws.fireOpen();
+
+      client.close({ resumable: true });
+      const pendingTimersAfterClose = vi.getTimerCount();
+      // A real WebSocket will normally emit close later. Fire it only after observing the immediate
+      // cleanup so this test proves close() itself owns its deadline and unmount cannot leak a timer.
+      ws.fireClose();
+      await rejection;
+
+      expect(pendingTimersAfterClose).toBe(0);
+      expect(ws.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("close() terminates an established session before closing its socket", async () => {
+    const { factory, latest } = makeFactory();
+    const client = createBrowserVoiceControlClient(factory);
+    const negotiated = client.negotiate("v=0\r\noffer");
+    const ws = latest();
+    ws.fireOpen();
+    ws.fireMessage(serverMsg("session.created"));
+    ws.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nanswer" }));
+    await negotiated;
+
+    client.close();
+
+    expect(ws.sent.map((message) => message.kind)).toEqual([
+      "session.create",
+      "signal.sdp.offer",
+      "session.close",
+    ]);
+    expect(ws.sent.some((message) => String(message.kind).startsWith("transcript."))).toBe(false);
+    expect(ws.sent[2]).toMatchObject({ seq: 2, direction: "client-to-host" });
+    expect(ws.closed).toBe(true);
+  });
+
   it("sends session.create on WS open with correct protocol version", async () => {
     const { factory, latest } = makeFactory();
     const sendSpy = vi.fn();
@@ -214,17 +263,18 @@ describe("createBrowserVoiceControlClient", () => {
     ws.fireClose();
   });
 
-  it("includes the selected persona (content-free) in session.create when provided", async () => {
+  it("sends only canonical chat identity and no TTS persona in session.create", async () => {
     const { factory, latest } = makeFactory();
     const sendSpy = vi.fn();
-    const client = createBrowserVoiceControlClient(factory, "female");
+    const client = createBrowserVoiceControlClient(factory, { chatId: "chat-1" });
     void client.negotiate("v=0\r\noffer").catch(() => {});
     const ws = latest();
     ws.send = sendSpy;
     ws.fireOpen();
     const parsed = JSON.parse(sendSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
     expect(parsed.kind).toBe("session.create");
-    expect(parsed.persona).toBe("female");
+    expect(parsed.chatContext).toEqual({ chatId: "chat-1" });
+    expect(parsed.persona).toBeUndefined();
     ws.fireClose();
   });
 
@@ -255,6 +305,12 @@ describe("createBrowserVoiceControlClient", () => {
     firstWs.fireMessage(serverMsg("session.created"));
     firstWs.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nfirst-answer" }));
     await expect(first).resolves.toBe("v=0\r\nfirst-answer");
+    client.close({ resumable: true });
+    expect(firstSent.map((message) => message.kind)).toEqual([
+      "session.create",
+      "signal.sdp.offer",
+    ]);
+    expect(firstWs.closed).toBe(true);
 
     const secondSent: Record<string, unknown>[] = [];
     const second = client.negotiate("v=0\r\nsecond-offer");
@@ -275,6 +331,45 @@ describe("createBrowserVoiceControlClient", () => {
     expect(secondSent[1]).toMatchObject({ kind: "signal.sdp.offer", seq: 2 });
   });
 
+  it("isolates a replacement negotiation from late messages on the closed socket", async () => {
+    const { factory, latest } = makeFactory();
+    const client = createBrowserVoiceControlClient(factory);
+
+    const first = client.negotiate("v=0\r\nfirst-offer");
+    const firstWs = latest();
+    firstWs.fireOpen();
+    firstWs.fireMessage(serverMsg("session.created"));
+    firstWs.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nfirst-answer" }));
+    await expect(first).resolves.toBe("v=0\r\nfirst-answer");
+    client.close({ resumable: true });
+
+    const second = client.negotiate("v=0\r\nsecond-offer");
+    const secondWs = latest();
+    secondWs.fireOpen();
+
+    // A buffered/replayed event from the replaced socket must stay bound to that socket. If its
+    // listener dereferences the client's mutable current socket, it injects the first SDP offer into
+    // the replacement handshake and can make the server negotiate the wrong media session.
+    firstWs.fireMessage(serverMsg("session.created"));
+    expect(firstWs.sent.map((message) => message.kind)).toEqual([
+      "session.create",
+      "signal.sdp.offer",
+    ]);
+    expect(secondWs.sent.map((message) => message.kind)).toEqual(["session.create"]);
+
+    secondWs.fireMessage(serverMsg("session.created"));
+    // Reattach intentionally replays the prior replay-eligible session.created and then announces
+    // the live attachment. Both describe one handshake, so they must emit one SDP offer sequence.
+    secondWs.fireMessage(serverMsg("session.created"));
+    secondWs.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nsecond-answer" }));
+    await expect(second).resolves.toBe("v=0\r\nsecond-answer");
+    expect(secondWs.sent[1]).toMatchObject({
+      kind: "signal.sdp.offer",
+      seq: 2,
+      sdp: "v=0\r\nsecond-offer",
+    });
+  });
+
   it("rejects connection-failed and closes the socket when the handshake stalls past the timeout", async () => {
     vi.useFakeTimers();
     try {
@@ -289,6 +384,9 @@ describe("createBrowserVoiceControlClient", () => {
       await vi.advanceTimersByTimeAsync(DEFAULT_VOICE_PROTOCOL_TIMEOUTS.signalingMs + 50);
       await rejection;
       expect(ws.closed).toBe(true);
+      const sentAtTimeout = ws.sent.length;
+      ws.fireMessage(serverMsg("session.created"));
+      expect(ws.sent).toHaveLength(sentAtTimeout);
     } finally {
       vi.useRealTimers();
     }

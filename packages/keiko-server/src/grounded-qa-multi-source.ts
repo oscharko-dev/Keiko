@@ -8,7 +8,7 @@
 // gateway messages, citations, and evidence from the exact same primitives.
 
 import { basename } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   ContextOverflowError,
   resolveCostClass,
@@ -44,7 +44,7 @@ import {
 import type { RouteResult } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
 import { currentRedactionSecrets } from "./deps.js";
-import type { Chat } from "./store/index.js";
+import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
   clarificationUserMessage,
@@ -53,10 +53,9 @@ import {
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
-import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
+import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
-import { rememberGroundedTurn } from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 import {
@@ -67,14 +66,19 @@ import {
 import {
   GROUNDED_NO_EVIDENCE_ANSWER,
   buildPackCitationIndex,
+  citationSourceIdForIndex,
   incompleteAnswerMarker,
+  missingCitationMarker,
   packsHaveUsableEvidence,
   reconcileInlineCitations,
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import {
+  buildAnswerCitations,
+  buildSourcedAnswerCitations,
+} from "./grounded-citation-projection.js";
+import {
   appendGroundedAnswerEntailment,
-  buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
   clarificationRequest,
@@ -83,18 +87,20 @@ import {
   evidenceLines,
   groundedContextAssemblyInput,
   groundedContextSummaryInput,
+  groundedEvidenceRunId,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
   mappedWorkspaceError,
   modelInputPromptByteLimit,
   packBudgetSummary,
-  persistGroundedExchange,
   promptByteLength,
+  registerGroundedTurn,
   redactString,
   uncertaintyLines,
   withPromptExcerptByteLimit,
 } from "./grounded-qa.js";
+import { persistGroundedExchange } from "./grounded-message-persistence.js";
 
 export { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 
@@ -397,8 +403,8 @@ function buildRawMultiSourceGatewayMessages(
     "User question:",
     redactString(redactor, question),
     "",
-    `Connected sources (${String(labeledPacks.length)}). For every repository claim, attribute it`,
-    "to its source label (e.g. [source: api] src/file.ts:10-20) in addition to the file reference.",
+    `Connected sources (${String(labeledPacks.length)}). For every repository claim, cite its`,
+    "source ordinal and file in one marker (e.g. [source:1|src/file.ts:10-20]).",
     "",
     ...sections,
   ].join("\n");
@@ -519,8 +525,10 @@ export type GroundedRetriever = (input: OrchestratorInput) => Promise<RetrievalO
 export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): GroundedRetriever {
   return (input: OrchestratorInput): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
-    const repoSemanticSearchProvider =
-      deps === undefined ? undefined : configuredRepoSemanticSearchProviderFor(deps, signal);
+    const semanticLease =
+      deps === undefined
+        ? { provider: undefined, close: (): void => undefined }
+        : configuredRepoSemanticSearchProviderLeaseFor(deps, signal, input.workspaceRoot);
     return retrieveConnectedContextPack(input, {
       answerer: { answer: (): Promise<string> => Promise.resolve("") },
       nowMs,
@@ -529,7 +537,11 @@ export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): Gro
       ...(deps?.workspaceIndexForRoot === undefined
         ? {}
         : { workspaceIndexForRoot: deps.workspaceIndexForRoot }),
-      ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
+      ...(semanticLease.provider === undefined
+        ? {}
+        : { repoSemanticSearchProvider: semanticLease.provider }),
+    }).finally(() => {
+      semanticLease.close();
     });
   };
 }
@@ -596,6 +608,11 @@ export interface MultiSourceAskInput {
   readonly chat: Chat;
   readonly scopes: readonly ChatConnectedScope[];
   readonly content: string;
+  readonly answerContent?: string | undefined;
+  readonly answerOnlyContextAvailable?: boolean | undefined;
+  readonly clientTurnId?: string | undefined;
+  readonly commitTurnId?: string | undefined;
+  readonly userMessage?: ChatMessage | undefined;
   readonly modelId: string;
   readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
@@ -656,6 +673,7 @@ async function retrieveOneSource(
       workspaceRoot: scope.workspaceRoot,
       budget,
     });
+    ensureNotCancelled(ctx.signal);
   } catch (error) {
     const classified = classifyPerSourceRetrieveError(error, label);
     if (classified === undefined) throw error; // non-workspace error → outer handler
@@ -695,6 +713,7 @@ async function retrieveAllSources(
 
   const workerCount = Math.min(MAX_RETRIEVAL_CONCURRENCY, Math.max(1, ctx.scopes.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  ensureNotCancelled(ctx.signal);
   const sources = acc.retrieved.filter((source): source is RetrievedSource => source !== undefined);
   const skipped = acc.skipped;
   const firstError = acc.firstError;
@@ -708,16 +727,49 @@ interface SourceCitationBundle {
   readonly labeledCitations: readonly GroundedEvidenceCitation[];
 }
 
+function labelAnswerCitations(
+  citations: readonly GroundedEvidenceCitation[],
+  sourceLabel: string,
+  redactor: Redactor,
+): readonly GroundedEvidenceCitation[] {
+  return citations.map((citation) => ({
+    ...citation,
+    source: redactString(redactor, sourceLabel),
+  }));
+}
+
+export function buildLabeledAnswerCitations(
+  pack: ConnectedContextPack,
+  assistantContent: string,
+  sourceLabel: string,
+  redactor: Redactor,
+): readonly GroundedEvidenceCitation[] {
+  return labelAnswerCitations(
+    buildAnswerCitations(pack, assistantContent, (value) => redactString(redactor, value)),
+    sourceLabel,
+    redactor,
+  );
+}
+
 function sourceCitationBundles(
   sources: readonly RetrievedSource[],
   redactor: Redactor,
+  assistantContent: string,
 ): readonly SourceCitationBundle[] {
-  return sources.map((source) => {
-    const citations = buildCitations(source.pack, redactor);
+  const projected = buildSourcedAnswerCitations(
+    sources.map((source) => source.pack),
+    assistantContent,
+    (value) => redactString(redactor, value),
+  );
+  return sources.map((source, index) => {
+    const sourceId = citationSourceIdForIndex(index);
+    const citations = projected
+      .filter((entry) => entry.sourceId === sourceId)
+      .map((entry) => entry.citation);
     return {
       source,
       citations,
-      labeledCitations: citations.map((citation) => ({ ...citation, source: source.label })),
+      labeledCitations: labelAnswerCitations(citations, source.label, redactor),
     };
   });
 }
@@ -761,10 +813,16 @@ function persistPerSourceEvidence(
 } {
   let firstRunId: string | undefined;
   const runIds: string[] = [];
-  for (const { source: src, citations } of bundles) {
+  for (const [ordinal, { source: src, citations }] of bundles.entries()) {
     const finishedAt = Date.now();
     const startedAt = Math.max(0, finishedAt - src.elapsedMs);
-    const runId = `grounded-${randomUUID()}`;
+    const runId = groundedEvidenceRunId({
+      chatId: ctx.chat.id,
+      clientTurnId: ctx.clientTurnId,
+      workspaceRoot: src.scope.workspaceRoot,
+      sourceKind: "folder",
+      ordinal,
+    });
     persistConnectedContextEvidence(
       {
         runId,
@@ -806,7 +864,7 @@ function assembleMultiSourceAnswer(
   },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
-  const citationBundles = sourceCitationBundles(sources, redactor);
+  const citationBundles = sourceCitationBundles(sources, redactor, assistant.content);
   const citations = ids.abstained ? [] : mergedCitations(citationBundles);
   const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
     buildGroundedAnswerContextPackSummary(
@@ -871,8 +929,13 @@ function buildMultiSourceReconciliationUncertainty(
     buildPackCitationIndex(sources.map((s) => s.pack)),
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
+  const missing =
+    unsupported === undefined && reconciliation.citedScopePaths.size === 0
+      ? missingCitationMarker(nowMs)
+      : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),
+    ...(missing === undefined ? [] : [missing]),
     ...(assistant.finishReason === "length" ? [incompleteAnswerMarker(nowMs)] : []),
   ];
   return markers.map((m) => ({ kind: m.kind, claim: redactString(redactor, m.claim) }));
@@ -931,11 +994,13 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   if (isRouteResult(assistant)) {
     return assistant;
   }
+  ensureNotCancelled(ctx.signal);
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,
     redactString(ctx.deps.redactor, ctx.content),
     redactString(ctx.deps.redactor, assistant.content),
+    ctx.userMessage,
   );
   const assembled = assembleMultiSourceAnswer(ctx, retrieved, skipped, assistant, {
     userMessageId: userMessage.id,
@@ -943,15 +1008,19 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     abstained,
   });
   const answer = await applyMultiSourceEntailment(ctx, assembled, assistant, retrieved, abstained);
+  ensureNotCancelled(ctx.signal);
   ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (!abstained) {
-    rememberGroundedTurn({
-      assistantMessageId: assistantMessage.id,
-      chatId: ctx.chat.id,
-      workspaceRoot: retrieved[0]?.pack.scope.workspaceRoot ?? ctx.chat.projectPath,
-      ...(answer.evidenceRunId === undefined ? {} : { evidenceRunId: answer.evidenceRunId }),
-      packs: retrieved.map((source) => source.pack),
-    });
+    registerGroundedTurn(
+      {
+        assistantMessageId: assistantMessage.id,
+        chatId: ctx.chat.id,
+        workspaceRoot: retrieved[0]?.pack.scope.workspaceRoot ?? ctx.chat.projectPath,
+        ...(answer.evidenceRunId === undefined ? {} : { evidenceRunId: answer.evidenceRunId }),
+        packs: retrieved.map((source) => source.pack),
+      },
+      ctx.commitTurnId ?? ctx.clientTurnId,
+    );
   }
   return { status: 200, body: answer };
 }
@@ -970,7 +1039,8 @@ async function answerMultiSource(
   retrieved: readonly RetrievedSource[],
   abstained: boolean,
 ): Promise<GroundedAnswerResult | RouteResult> {
-  if (abstained) {
+  ensureNotCancelled(ctx.signal);
+  if (abstained && ctx.answerOnlyContextAvailable !== true) {
     return {
       content: GROUNDED_NO_EVIDENCE_ANSWER,
       usage: { promptTokens: 0, completionTokens: 0 },
@@ -979,7 +1049,7 @@ async function answerMultiSource(
   try {
     const assistant = normalizeGroundedAnswerPayload(
       await ctx.answerer(
-        ctx.content,
+        ctx.answerContent ?? ctx.content,
         retrieved.map((s) => ({ label: s.label, pack: s.pack })),
       ),
     );

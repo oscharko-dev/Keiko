@@ -4016,6 +4016,47 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
   });
 
+  it("admits an exact runtime mutation lease without local editor authority registration", async () => {
+    const arranged = arrangeTwoFiles();
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
+      "src/a.txt",
+      "src/b.txt",
+    ]);
+    const proposed = {
+      ...arranged.action,
+      authorityRef: { runId: "runtime-run-2483", envelopeDigest: HASH },
+    };
+    const runtimeMutationLease = {
+      matches: vi.fn((): boolean => true),
+      claim: vi.fn((): boolean => true),
+    } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+    const deps = runtimeMutationDeps(runtimeMutationLease);
+
+    const admitted = await handleEditorAgentActions(context(proposed), deps);
+    expect(admitted.status).toBe(202);
+    expect(actionResultStatus(admitted.body)).toBe("queued");
+    expect(auditRecords().at(-1)).toMatchObject({
+      actionType: "applyChangeset",
+      disposition: "allowed",
+      outcome: "queued",
+    });
+    expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
+    expect(lastEmittedAction(bridge.frames()).requiresReview).toBe(true);
+
+    const committed = await postActionResult(
+      proposed,
+      "succeeded",
+      proposed.sessionId,
+      undefined,
+      deps,
+    );
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(runtimeMutationLease.matches).toHaveBeenCalledOnce();
+    expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A1\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B1\n");
+  });
+
   it("keeps a local changeset with an authority reference on the established audit path", async () => {
     const arranged = arrangeTwoFiles();
     await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);

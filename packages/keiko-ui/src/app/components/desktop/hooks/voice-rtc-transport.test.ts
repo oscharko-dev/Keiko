@@ -1,6 +1,6 @@
 // Issue #497 — the browser WebRTC capture adapter. Exercises createBrowserVoiceRtcTransport with
 // stubbed getUserMedia + RTCPeerConnection globals (mirroring dictation-recorder.test.ts), covering
-// the support probe, happy connect → offerSdp, applyAnswer, track/state callbacks, and the
+// the support probe, happy connect → offerSdp, applyAnswer, state callbacks, and the
 // permission-denied / no-microphone / unsupported / generic error classification.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,12 @@ type Listener = (event: unknown) => void;
 let nextDataChannelReadyState: RTCDataChannelState = "open";
 let lastDataChannel: FakeDataChannel | undefined;
 let lastPeerConnectionConfig: RTCConfiguration | undefined;
+let lastTransceiverOptions: RTCRtpTransceiverInit | undefined;
+let lastPeerConnection: FakePeerConnection | undefined;
+
+const SEND_ONLY_OFFER =
+  "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+const RECEIVE_ONLY_ANSWER = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n";
 
 class FakeDataChannel {
   public readyState: RTCDataChannelState;
@@ -56,7 +62,7 @@ class FakePeerConnection {
   public connectionState: RTCPeerConnectionState = "new";
   public localDescription: RTCSessionDescriptionInit | null = {
     type: "offer",
-    sdp: "v=0\r\nfake-sdp-offer",
+    sdp: SEND_ONLY_OFFER,
   };
   public remoteDescription: RTCSessionDescriptionInit | null = null;
 
@@ -64,17 +70,20 @@ class FakePeerConnection {
   public onconnectionstatechange: (() => void) | null = null;
 
   private readonly listeners: Record<string, Listener[]> = {};
-  private readonly senders: RTCRtpSender[] = [];
   private readonly channels: FakeDataChannel[] = [];
+  public readonly close = vi.fn();
 
   constructor(config?: RTCConfiguration) {
     lastPeerConnectionConfig = config;
+    lastPeerConnection = this;
   }
 
-  addTrack(_track: MediaStreamTrack, _stream: MediaStream): RTCRtpSender {
-    const sender = { track: _track, stop: vi.fn() } as unknown as RTCRtpSender;
-    this.senders.push(sender);
-    return sender;
+  addTransceiver(track: MediaStreamTrack, options?: RTCRtpTransceiverInit): RTCRtpTransceiver {
+    lastTransceiverOptions = options;
+    return {
+      direction: options?.direction ?? "sendrecv",
+      sender: { track },
+    } as unknown as RTCRtpTransceiver;
   }
 
   createDataChannel(_label: string): RTCDataChannel {
@@ -85,7 +94,7 @@ class FakePeerConnection {
   }
 
   async createOffer(): Promise<RTCSessionDescriptionInit> {
-    return { type: "offer", sdp: "v=0\r\nfake-sdp-offer" };
+    return { type: "offer", sdp: SEND_ONLY_OFFER };
   }
 
   async setLocalDescription(_desc: RTCSessionDescriptionInit): Promise<void> {}
@@ -105,20 +114,11 @@ class FakePeerConnection {
     }
   }
 
-  close(): void {}
-
   // Test helper: simulate a connection state change.
   simulateConnectionState(state: RTCPeerConnectionState): void {
     this.connectionState = state;
     if (this.onconnectionstatechange !== null) {
       this.onconnectionstatechange();
-    }
-  }
-
-  // Test helper: simulate a remote track.
-  simulateRemoteTrack(stream: MediaStream): void {
-    if (this.ontrack !== null) {
-      this.ontrack({ streams: [stream] } as unknown as RTCTrackEvent);
     }
   }
 }
@@ -148,6 +148,8 @@ afterEach(() => {
   nextDataChannelReadyState = "open";
   lastDataChannel = undefined;
   lastPeerConnectionConfig = undefined;
+  lastTransceiverOptions = undefined;
+  lastPeerConnection = undefined;
 });
 
 describe("realtimeVoiceTransportSupported", () => {
@@ -187,8 +189,11 @@ describe("createBrowserVoiceRtcTransport", () => {
     stubMedia(async () => fakeStream(track), track);
     const transport = createBrowserVoiceRtcTransport();
     const session = await transport.connect();
-    expect(session.offerSdp).toBe("v=0\r\nfake-sdp-offer");
+    expect(session.offerSdp).toBe(SEND_ONLY_OFFER);
     expect(lastPeerConnectionConfig).toBe(APPROVED_VOICE_RTC_CONFIGURATION);
+    expect(lastTransceiverOptions).toMatchObject({ direction: "sendonly" });
+    expect(session.offerSdp).toContain("a=sendonly");
+    expect(session.offerSdp).not.toContain("a=sendrecv");
   });
 
   it("keeps the approved WebRTC config free of browser-configured ICE servers", () => {
@@ -216,7 +221,36 @@ describe("createBrowserVoiceRtcTransport", () => {
       // (ICE_GATHER_TIMEOUT_MS = 2_000 in the source).
       await vi.advanceTimersByTimeAsync(2_000);
       const session = await connectPromise;
-      expect(session.offerSdp).toBe("v=0\r\nfake-sdp-offer");
+      expect(session.offerSdp).toBe(SEND_ONLY_OFFER);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels ICE gathering immediately and closes partial resources on abort", async () => {
+    vi.useFakeTimers();
+    try {
+      class GatheringPeerConnection extends FakePeerConnection {
+        public override iceGatheringState: RTCIceGatheringState = "gathering";
+      }
+      const track = { stop: vi.fn() };
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: { getUserMedia: vi.fn(async () => fakeStream(track)) },
+      });
+      vi.stubGlobal("RTCPeerConnection", GatheringPeerConnection);
+      const controller = new AbortController();
+      const connected = createBrowserVoiceRtcTransport().connect({ signal: controller.signal });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(1);
+
+      controller.abort();
+
+      await expect(connected).rejects.toMatchObject({ reason: "connection-failed" });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(lastDataChannel?.close).toHaveBeenCalledOnce();
+      expect(lastPeerConnection?.close).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
@@ -271,10 +305,43 @@ describe("createBrowserVoiceRtcTransport", () => {
     stubMedia(async () => fakeStream({ stop: vi.fn() }));
     const transport = createBrowserVoiceRtcTransport();
     const session = await transport.connect();
-    await session.applyAnswer("v=0\r\nfake-answer-sdp");
+    await session.applyAnswer(RECEIVE_ONLY_ANSWER);
     // The FakePeerConnection sets remoteDescription; we verify via the answer SDP stored.
     // (The stub's setRemoteDescription is async-no-op; we just verify no error is thrown.)
     expect(true).toBe(true);
+  });
+
+  it("rejects a remote answer that attempts to send provider audio", async () => {
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const session = await createBrowserVoiceRtcTransport().connect();
+
+    await expect(
+      session.applyAnswer("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n"),
+    ).rejects.toMatchObject({ reason: "negotiation-failed" });
+  });
+
+  it("rejects duplicate or conflicting direction attributes in an audio answer", async () => {
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const session = await createBrowserVoiceRtcTransport().connect();
+
+    await expect(
+      session.applyAnswer("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\na=sendrecv\r\n"),
+    ).rejects.toMatchObject({ reason: "negotiation-failed" });
+    await expect(
+      session.applyAnswer("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\na=recvonly\r\n"),
+    ).rejects.toMatchObject({ reason: "negotiation-failed" });
+  });
+
+  it("rejects an answer when any one of several audio sections is permissive", async () => {
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const session = await createBrowserVoiceRtcTransport().connect();
+
+    await expect(
+      session.applyAnswer(
+        "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n" +
+          "m=audio 9 UDP/TLS/RTP/SAVPF 112\r\na=sendrecv\r\n",
+      ),
+    ).rejects.toMatchObject({ reason: "negotiation-failed" });
   });
 
   it("onConnectionStateChange fires when the peer connection state changes", async () => {
@@ -289,18 +356,6 @@ describe("createBrowserVoiceRtcTransport", () => {
     // Since FakePeerConnection is a class we can introspect, this test verifies callback wiring
     // by using a spy on the callback itself.
     expect(stateChanges).toHaveLength(0);
-  });
-
-  it("onRemoteTrack fires when a remote track arrives", async () => {
-    stubMedia(async () => fakeStream({ stop: vi.fn() }));
-    const transport = createBrowserVoiceRtcTransport();
-    const session = await transport.connect();
-
-    const trackStreams: MediaStream[] = [];
-    session.onRemoteTrack((stream) => trackStreams.push(stream));
-    // Callback registration is tested; the actual firing requires a RTCTrackEvent which is not
-    // produced in jsdom — this verifies the wiring compiles and runs without error.
-    expect(trackStreams).toHaveLength(0);
   });
 
   it("close() stops all sender tracks", async () => {
@@ -372,11 +427,96 @@ describe("createBrowserVoiceRtcTransport", () => {
     const channel = lastDataChannel;
     expect(channel).toBeDefined();
 
-    expect(session.sendDataChannelEvent?.({ type: "session.update" })).toBe(true);
+    const sessionUpdate = { type: "session.update", session: { type: "realtime" } };
+    expect(session.sendDataChannelEvent?.(sessionUpdate)).toBe(true);
     expect(channel?.send).not.toHaveBeenCalled();
 
     channel?.open();
-    expect(channel?.send).toHaveBeenCalledWith(JSON.stringify({ type: "session.update" }));
+    expect(channel?.send).toHaveBeenCalledWith(JSON.stringify(sessionUpdate));
+  });
+
+  it("rejects provider-assistant commands and unsafe session mutations", async () => {
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const session = await createBrowserVoiceRtcTransport().connect();
+    const channel = lastDataChannel;
+
+    expect(session.sendDataChannelEvent?.({ type: "response.create" })).toBe(false);
+    expect(session.sendDataChannelEvent?.({ type: "response.cancel" })).toBe(false);
+    expect(
+      session.sendDataChannelEvent?.({
+        type: "session.update",
+        session: { type: "realtime", instructions: "Act as an assistant." },
+      }),
+    ).toBe(false);
+    expect(
+      session.sendDataChannelEvent?.({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          audio: {
+            input: {
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+                create_response: true,
+                interrupt_response: false,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(channel?.send).not.toHaveBeenCalled();
+  });
+
+  it("allows only transcription commit and response-disabled VAD updates", async () => {
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const session = await createBrowserVoiceRtcTransport().connect();
+    const channel = lastDataChannel;
+    const update = {
+      type: "session.update",
+      session: {
+        type: "realtime",
+        audio: {
+          input: {
+            turn_detection: {
+              type: "semantic_vad",
+              eagerness: "low",
+              create_response: false,
+              interrupt_response: false,
+            },
+          },
+        },
+      },
+    };
+
+    expect(session.sendDataChannelEvent?.({ type: "input_audio_buffer.commit" })).toBe(true);
+    expect(session.sendDataChannelEvent?.(update)).toBe(true);
+    expect(channel?.send).toHaveBeenNthCalledWith(
+      1,
+      JSON.stringify({ type: "input_audio_buffer.commit" }),
+    );
+    expect(channel?.send).toHaveBeenNthCalledWith(2, JSON.stringify(update));
+  });
+
+  it("fails closed before parsing an oversized provider data-channel event", async () => {
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const session = await createBrowserVoiceRtcTransport().connect();
+    const received: unknown[] = [];
+    session.onDataChannelEvent?.((event) => received.push(event));
+
+    lastDataChannel?.fireMessage(
+      JSON.stringify({
+        type: "response.output_audio.delta",
+        delta: "x".repeat(2_100_000),
+      }),
+    );
+
+    expect(received).toHaveLength(1);
+    expect((received[0] as { readonly type?: unknown }).type).toBe("error");
+    expect(Object.hasOwn(received[0] as object, "delta")).toBe(false);
   });
 
   it("reports the current data-channel state immediately on subscription", async () => {

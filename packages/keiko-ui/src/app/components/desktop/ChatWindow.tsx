@@ -33,10 +33,7 @@ import {
   type SetStateAction,
   type SyntheticEvent,
 } from "react";
-import type {
-  VoiceSessionChatContext,
-  VoiceSessionGroundingContext,
-} from "@oscharko-dev/keiko-contracts";
+import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import {
   useChatSessionCatalog,
   useChatSessionComposer,
@@ -79,6 +76,7 @@ import { FileIcon } from "./widgets/shared/projectTree";
 import type {
   AttachmentRejectionReason,
   ChatSessionApi,
+  SendMessageOutcome,
   SendStatus,
   SentDocumentDisclosure,
 } from "./hooks/useChatSession";
@@ -86,7 +84,6 @@ import {
   supportsDictation,
   supportsRealtimeVoice,
   supportsSpeechOutput,
-  supportsRealtimeToolCalling,
   useVoiceCapability,
 } from "./hooks/useVoiceCapability";
 import { useDictation, type DictationController } from "./hooks/useDictation";
@@ -97,6 +94,7 @@ import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
 import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
+import { VoiceRealtimeStatusFromController } from "./VoiceRealtime";
 import {
   usePdfCitationPreviewController,
   type CitationPreviewController,
@@ -106,6 +104,7 @@ import { registerPdfCitationPreviewMessageTarget } from "./widgets/cards/pdf-cit
 import {
   deriveVoiceAuraState,
   deriveVoiceDialogState,
+  playbackPhaseToTurnState,
   voiceAuraStateHeadline,
   type VoiceAuraIntensity,
   type VoiceAuraState,
@@ -182,6 +181,67 @@ const CHAT_TURN_WINDOW_OVERSCAN = 8;
 // settle before a screen reader announces, so it hears the meaningful state, not every flicker.
 const DIALOG_ANNOUNCE_DEBOUNCE_MS = 400;
 const CHAT_TURN_ESTIMATED_BLOCK_SIZE_PX = 132;
+const MAX_ADMITTED_CANONICAL_VOICE_TURNS = 128;
+
+interface PendingVoiceAnswer {
+  readonly chatId: string;
+  readonly assistantMessageId: string;
+  readonly dialogGeneration: number;
+}
+
+interface CanonicalVoiceTurnOutcomeContext {
+  readonly activeChatId: string | undefined;
+  readonly admittedTurnIds: Set<string>;
+  readonly chatId: string;
+  readonly composerMounted: boolean;
+  readonly currentDialogGeneration: number;
+  readonly deliveryKey: string;
+  readonly dialogGeneration: number;
+  readonly setPendingVoiceAnswer: (answer: PendingVoiceAnswer) => void;
+}
+
+async function deliverCanonicalVoiceTurn(
+  sendMessage: ChatSessionApi["sendMessage"],
+  text: string,
+  clientTurnId: string,
+): Promise<SendMessageOutcome> {
+  return sendMessage({ text, clientTurnId, reportOutcome: true });
+}
+
+function rememberAdmittedCanonicalVoiceTurn(ids: Set<string>, deliveryKey: string): void {
+  if (ids.has(deliveryKey)) return;
+  if (ids.size >= MAX_ADMITTED_CANONICAL_VOICE_TURNS) {
+    const oldest = ids.values().next().value;
+    if (oldest !== undefined) ids.delete(oldest);
+  }
+  ids.add(deliveryKey);
+}
+
+function applyCanonicalVoiceTurnOutcome(
+  outcome: SendMessageOutcome,
+  context: CanonicalVoiceTurnOutcomeContext,
+): SendMessageOutcome {
+  if (
+    outcome.status === "completed" ||
+    (outcome.status === "cancelled" && outcome.userPersisted) ||
+    (outcome.status === "failed" && outcome.userPersisted === true)
+  ) {
+    rememberAdmittedCanonicalVoiceTurn(context.admittedTurnIds, context.deliveryKey);
+  }
+  if (
+    outcome.status === "completed" &&
+    context.composerMounted &&
+    context.activeChatId === context.chatId &&
+    context.currentDialogGeneration === context.dialogGeneration
+  ) {
+    context.setPendingVoiceAnswer({
+      chatId: context.chatId,
+      assistantMessageId: outcome.assistantMessageId,
+      dialogGeneration: context.dialogGeneration,
+    });
+  }
+  return outcome;
+}
 // GEN-PERF-CHAT-015 — below the windowing threshold every turn is fully rendered; with
 // code-block/citation-heavy answers that is ~150-200 DOM nodes per turn, all paying
 // layout/paint even when scrolled out of the window's viewport. content-visibility lets
@@ -2233,20 +2293,14 @@ async function collectFirstAttachmentRejection(
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the realtime voice session's chat context
-// payload: undefined with no active chat, otherwise the chat id, memory settings, and (if the
-// chat has grounding enabled) the grounding context. Same conditional shape as the original.
+// payload: undefined with no active chat, otherwise only the chat id needed to bind lifecycle and
+// diagnostics. Retrieval, memory, and history belong to the canonical chat request and are deliberately
+// not duplicated into the transcription-only Realtime session.
 function composerRealtimeVoiceChatContext(
   activeChat: Chat | undefined,
-  memoryEnabled: boolean,
-  memoryBudgetTokens: number,
-  grounding: VoiceSessionGroundingContext | undefined,
 ): VoiceSessionChatContext | undefined {
   if (activeChat === undefined) return undefined;
-  return {
-    chatId: activeChat.id,
-    memory: { enabled: memoryEnabled, budgetTokens: memoryBudgetTokens },
-    ...(grounding === undefined ? {} : { grounding }),
-  };
+  return { chatId: activeChat.id };
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — when the active voice composer layer
@@ -2268,28 +2322,6 @@ function syncVoiceDialogLayerFocus(params: {
   restoreFocusRef.current = false;
   const target = active ? voiceDialogButton : normalVoiceDialogButton;
   target?.focus();
-}
-
-// Extracted from ComposerCoreImpl (SonarCloud S3776) — two independent effects that keep Voice
-// Dialogue honest about its own preconditions: auto-leave when it becomes unavailable mid-session
-// (e.g. the active chat is cleared), and stop the realtime transport once the dialogue layer is no
-// longer active. Same two effects and dependency arrays as the original, just relocated.
-function useVoiceDialogAutoLeaveEffects(
-  voiceDialogActive: boolean,
-  voiceDialogAvailable: boolean,
-  realtimeVoice: RealtimeVoiceController,
-  leaveVoiceDialog: () => void,
-): void {
-  useEffect(() => {
-    if (voiceDialogActive && !voiceDialogAvailable) {
-      leaveVoiceDialog();
-    }
-  }, [leaveVoiceDialog, voiceDialogActive, voiceDialogAvailable]);
-  useEffect(() => {
-    if (!voiceDialogActive && realtimeVoice.phase !== "idle") {
-      realtimeVoice.stop();
-    }
-  }, [voiceDialogActive, realtimeVoice]);
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the @-mention repository picker's
@@ -2473,26 +2505,6 @@ function composerDictationVisibility(
   return { voiceDictationVisible, liveDictationEnabled };
 }
 
-interface ComposerVoiceToolAvailability {
-  readonly voiceGroundingToolAvailable: boolean;
-  readonly voiceMemoryToolAvailable: boolean;
-}
-
-// Extracted from ComposerCoreImpl (SonarCloud S3776) — whether the realtime voice session may
-// call the grounded-retrieval / memory tools, gated on the relevant feature being active plus the
-// deployment's realtime tool-calling support.
-function composerVoiceToolAvailability(
-  voiceGroundingActive: boolean,
-  memoryEnabled: boolean,
-  voiceCapability: VoiceCapabilityResolution | undefined,
-): ComposerVoiceToolAvailability {
-  return {
-    voiceGroundingToolAvailable:
-      voiceGroundingActive && supportsRealtimeToolCalling(voiceCapability),
-    voiceMemoryToolAvailable: memoryEnabled && supportsRealtimeToolCalling(voiceCapability),
-  };
-}
-
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the composer's post-textarea status row:
 // the send-lifecycle announcement (hidden during Voice Dialogue) and the dictation transcript
 // preview (hidden during Voice Dialogue or when dictation isn't available).
@@ -2531,10 +2543,13 @@ function ComposerVoiceOverlay({
   voiceDialogAvailable,
   voiceLayerRef,
   voiceDialogActive,
+  partialUserTranscript,
   realtimeVoiceMuted,
+  realtimeVoiceController,
   onToggleVoiceMute,
   playbackButtonRef,
   onToggleVoiceDialog,
+  onDismissVoiceError,
   voiceDialogButtonRef,
   compact,
 }: {
@@ -2543,10 +2558,13 @@ function ComposerVoiceOverlay({
   readonly voiceDialogAvailable: boolean;
   readonly voiceLayerRef: Ref<HTMLDivElement>;
   readonly voiceDialogActive: boolean;
+  readonly partialUserTranscript: string | undefined;
   readonly realtimeVoiceMuted: boolean;
+  readonly realtimeVoiceController: RealtimeVoiceController;
   readonly onToggleVoiceMute: () => void;
   readonly playbackButtonRef: Ref<HTMLButtonElement>;
   readonly onToggleVoiceDialog: () => void;
+  readonly onDismissVoiceError: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
   readonly compact: boolean;
 }): ReactNode {
@@ -2564,15 +2582,28 @@ function ComposerVoiceOverlay({
           data-composer-layer="voice"
           aria-hidden={voiceDialogActive ? undefined : true}
         >
-          <VoiceDialogComposerControls
-            voiceMuted={realtimeVoiceMuted}
-            onToggleVoiceMute={onToggleVoiceMute}
-            playbackButtonRef={playbackButtonRef}
-            voiceDialogActive={voiceDialogActive}
-            onToggleVoiceDialog={onToggleVoiceDialog}
-            voiceDialogButtonRef={voiceDialogButtonRef}
-            compact={compact}
-          />
+          <div className={styles["cmp-voice-content"]}>
+            {voiceDialogActive && partialUserTranscript !== undefined ? (
+              <p className={styles["cmp-partial-transcript"]} aria-live="off">
+                {partialUserTranscript}
+              </p>
+            ) : null}
+            {voiceDialogActive && realtimeVoiceController.phase === "error" ? (
+              <VoiceRealtimeStatusFromController
+                controller={realtimeVoiceController}
+                onAfterDismiss={onDismissVoiceError}
+              />
+            ) : null}
+            <VoiceDialogComposerControls
+              voiceMuted={realtimeVoiceMuted}
+              onToggleVoiceMute={onToggleVoiceMute}
+              playbackButtonRef={playbackButtonRef}
+              voiceDialogActive={voiceDialogActive}
+              onToggleVoiceDialog={onToggleVoiceDialog}
+              voiceDialogButtonRef={voiceDialogButtonRef}
+              compact={compact}
+            />
+          </div>
         </div>
       ) : null}
     </>
@@ -2601,6 +2632,9 @@ function ComposerCoreImpl({
     sendStatus,
     setDraft,
     sendMessage,
+    enqueueCanonicalVoiceTurn,
+    canonicalVoiceCaptureMustPause,
+    cancelSend,
     models,
     selectedModel,
     pendingAttachments,
@@ -2629,6 +2663,10 @@ function ComposerCoreImpl({
   const [rejectionMime, setRejectionMime] = useState<string | undefined>();
 
   const selectedModelCapability = models.find((m) => m.id === selectedModel);
+  const canonicalVoiceTargetModelId =
+    selectedModelCapability?.kind === "chat"
+      ? selectedModelCapability.id
+      : activeChat?.selectedModel;
 
   // Derive whether any attachment kinds are supported by the selected model.
   const attachEnabled = composerAttachEnabled(selectedModelCapability);
@@ -2673,52 +2711,147 @@ function ComposerCoreImpl({
     onInsert: insertTranscript,
     realtime: { enabled: liveDictationEnabled },
   });
-  // Issue #1559/#1560 — dialog-mode availability + persona selection. Voice Dialogue is true
-  // WebRTC realtime speech-to-speech; STT dictation remains a separate "speech to draft" feature.
+  // Issue #1559/#1560 — dialog-mode availability + persona selection. Voice Dialogue combines
+  // WebRTC input/transcription with canonical chat and independent TTS; Realtime never answers.
+  // Batch STT dictation remains a separate "speech to draft" feature.
   const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
+  // The canonical send result identifies the assistant row created for this exact spoken turn. TTS
+  // remains disabled until that row is visible in the active chat; no latest-message or timestamp
+  // heuristic may associate an unrelated concurrent answer with the voice turn.
+  const [pendingVoiceAnswer, setPendingVoiceAnswer] = useState<PendingVoiceAnswer | null>(null);
+  const activeChatIdRef = useRef(activeChat?.id);
+  activeChatIdRef.current = activeChat?.id;
+  const voiceDialogSessionChatIdRef = useRef<string | undefined>(undefined);
+  const voiceDialogLifecycleActiveRef = useRef(false);
+  const voiceDialogActive =
+    voiceDialog.active && voiceDialogSessionChatIdRef.current === activeChat?.id;
+  const voiceDialogGenerationRef = useRef(0);
+  const previousVoiceDialogChatIdRef = useRef(activeChat?.id);
+  useEffect(() => {
+    if (previousVoiceDialogChatIdRef.current === activeChat?.id) return;
+    previousVoiceDialogChatIdRef.current = activeChat?.id;
+    voiceDialogGenerationRef.current += 1;
+  }, [activeChat?.id]);
+  const admittedCanonicalVoiceTurnIdsRef = useRef<Set<string>>(new Set());
+  const canonicalVoiceTurnDeliveriesRef = useRef<Map<string, Promise<SendMessageOutcome>>>(
+    new Map(),
+  );
+  const composerMountedRef = useRef(true);
+  useEffect(() => {
+    composerMountedRef.current = true;
+    return () => {
+      composerMountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (pendingVoiceAnswer?.chatId !== activeChat?.id) {
+      if (pendingVoiceAnswer !== null) setPendingVoiceAnswer(null);
+    }
+  }, [activeChat?.id, pendingVoiceAnswer]);
+  const voiceAnswer =
+    pendingVoiceAnswer === null ||
+    pendingVoiceAnswer.chatId !== activeChat?.id ||
+    pendingVoiceAnswer.dialogGeneration !== voiceDialogGenerationRef.current
+      ? undefined
+      : messages.find(
+          (message) =>
+            message.id === pendingVoiceAnswer.assistantMessageId &&
+            message.chatId === pendingVoiceAnswer.chatId &&
+            message.role === "assistant",
+        );
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
-    // Voice output is owned by the explicit Voice Dialogue loop. A reload or normal text chat must not
-    // auto-speak the latest settled assistant answer just because speech output is available.
-    enabled: false,
-    text: undefined,
-    messageId: undefined,
+    // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and
+    // pre-existing history remain silent, while synthesized speech is byte-for-byte the visible answer.
+    enabled: voiceDialogActive && voiceAnswer !== undefined,
+    text: voiceAnswer?.content,
+    messageId: voiceAnswer?.id,
+    persona: voiceDialog.persona,
   });
-  const voiceGrounding = voiceSessionGroundingContext(activeChat);
-  const voiceGroundingActive = voiceGrounding?.enabled === true;
-  const { voiceGroundingToolAvailable, voiceMemoryToolAvailable } = composerVoiceToolAvailability(
-    voiceGroundingActive,
-    session.memoryEnabled,
-    voiceCapability,
+  const commitCanonicalVoiceTurn = useCallback(
+    ({
+      turnId,
+      text,
+    }: {
+      readonly turnId: string;
+      readonly text: string;
+    }): boolean | "accepted-stop" => {
+      const chatId = activeChat?.id;
+      if (
+        chatId === undefined ||
+        activeChat === undefined ||
+        canonicalVoiceTargetModelId === undefined
+      )
+        return false;
+      const dialogGeneration = voiceDialogGenerationRef.current;
+      const deliveryKey = `${chatId}:${turnId}`;
+      if (admittedCanonicalVoiceTurnIdsRef.current.has(deliveryKey)) return true;
+      const existing = canonicalVoiceTurnDeliveriesRef.current.get(deliveryKey);
+      if (existing !== undefined) return true;
+      const queued = enqueueCanonicalVoiceTurn?.({
+        text,
+        clientTurnId: turnId,
+        target: { chat: activeChat, modelId: canonicalVoiceTargetModelId },
+        allowReservedCapacity: true,
+      });
+      if (enqueueCanonicalVoiceTurn !== undefined && queued === undefined) return false;
+      const pauseCapture = queued !== undefined && canonicalVoiceCaptureMustPause?.() === true;
+      const delivery = (queued ?? deliverCanonicalVoiceTurn(sendMessage, text, turnId))
+        .then((outcome): SendMessageOutcome =>
+          applyCanonicalVoiceTurnOutcome(outcome, {
+            activeChatId: activeChatIdRef.current,
+            admittedTurnIds: admittedCanonicalVoiceTurnIdsRef.current,
+            chatId,
+            composerMounted: composerMountedRef.current,
+            currentDialogGeneration: voiceDialogGenerationRef.current,
+            deliveryKey,
+            dialogGeneration,
+            setPendingVoiceAnswer,
+          }),
+        )
+        .finally((): void => {
+          canonicalVoiceTurnDeliveriesRef.current.delete(deliveryKey);
+        });
+      canonicalVoiceTurnDeliveriesRef.current.set(deliveryKey, delivery);
+      return pauseCapture ? "accepted-stop" : true;
+    },
+    [
+      activeChat,
+      canonicalVoiceCaptureMustPause,
+      canonicalVoiceTargetModelId,
+      enqueueCanonicalVoiceTurn,
+      sendMessage,
+    ],
+  );
+  const interruptCanonicalVoiceTurn = useCallback((): void => {
+    voiceDialogGenerationRef.current += 1;
+    playback.interrupt();
+    cancelSend();
+    setPendingVoiceAnswer(null);
+  }, [cancelSend, playback]);
+  const canStartCanonicalVoiceCapture = useCallback(
+    (): boolean => canonicalVoiceCaptureMustPause?.() !== true,
+    [canonicalVoiceCaptureMustPause],
   );
   const realtimeVoice = useRealtimeVoice({
-    persona: voiceDialog.persona,
-    chatContext: composerRealtimeVoiceChatContext(
-      activeChat,
-      session.memoryEnabled,
-      session.memoryBudgetTokens,
-      voiceGrounding,
-    ),
-    groundingActive: voiceGroundingActive,
-    groundingToolActive: voiceGroundingToolAvailable,
-    memoryToolActive: voiceMemoryToolAvailable,
-    memoryContextText: session.latestMemory?.context.text,
-    onGroundedToolCall: session.runRealtimeGroundedTool,
-    onMemoryToolCall: session.runRealtimeMemoryTool,
-    onVoiceTurnCommitted: (messages) => session.appendVoiceTurn?.(messages),
+    chatContext: composerRealtimeVoiceChatContext(activeChat),
+    canStartCapture: canStartCanonicalVoiceCapture,
+    onCanonicalUserTurn: commitCanonicalVoiceTurn,
+    onUserSpeechStart: interruptCanonicalVoiceTurn,
   });
   const voiceDialogAvailable = voiceDialog.available && activeChat !== undefined;
+  const playbackTurnState = playbackPhaseToTurnState(playback.snapshot.phase);
   const voiceDialogState = deriveVoiceDialogState({
     realtimePhase: realtimeVoice.phase,
-    turnState: realtimeVoice.turnSnapshot.state,
+    turnState: playbackTurnState === "idle" ? realtimeVoice.turnSnapshot.state : playbackTurnState,
     muted: realtimeVoice.muted,
   });
   const voiceAura = deriveVoiceAuraState({
-    voiceDialogActive: voiceDialog.active,
+    voiceDialogActive,
     voiceDialogAvailable,
     voiceDialogState,
-    listening: realtimeVoice.listening,
-    speaking: realtimeVoice.speaking,
+    listening: realtimeVoice.listening && !playback.snapshot.active,
+    speaking: playback.snapshot.speaking,
     sending,
     sendStatus,
     hasSessionError: error !== undefined || realtimeVoice.error !== undefined,
@@ -2747,43 +2880,61 @@ function ComposerCoreImpl({
     if (!voiceDialogAvailable) {
       return;
     }
+    setPendingVoiceAnswer(null);
+    voiceDialogSessionChatIdRef.current = activeChat?.id;
+    voiceDialogLifecycleActiveRef.current = true;
     voiceDialog.enter();
     realtimeVoice.start();
-  }, [voiceDialog, voiceDialogAvailable, realtimeVoice]);
+  }, [activeChat?.id, voiceDialog, voiceDialogAvailable, realtimeVoice]);
   const leaveVoiceDialog = useCallback(() => {
-    realtimeVoice.stop();
+    const hadActiveSession = voiceDialogSessionChatIdRef.current !== undefined;
+    voiceDialogSessionChatIdRef.current = undefined;
+    voiceDialogLifecycleActiveRef.current = false;
+    if (hadActiveSession) {
+      voiceDialogGenerationRef.current += 1;
+      realtimeVoice.stop();
+      playback.stop();
+      setPendingVoiceAnswer(null);
+    }
     voiceDialog.leave();
-  }, [realtimeVoice, voiceDialog]);
+  }, [playback, realtimeVoice, voiceDialog]);
+  useEffect(() => {
+    if (voiceDialogActive) {
+      voiceDialogLifecycleActiveRef.current = true;
+      return;
+    }
+    if (!voiceDialogLifecycleActiveRef.current && !voiceDialog.active) return;
+    voiceDialogLifecycleActiveRef.current = false;
+    leaveVoiceDialog();
+  }, [leaveVoiceDialog, voiceDialog.active, voiceDialogActive]);
   // The normal and dialogue layers use distinct controls so each state can cross-fade without
   // moving layout. Flag a user-driven toggle and hand focus to the newly active layer (WCAG 2.4.3).
   // Programmatic auto-leave never sets the flag, so it never steals focus from the user.
   const restoreVoiceDialogFocusRef = useRef(false);
   const toggleVoiceDialog = useCallback(() => {
     restoreVoiceDialogFocusRef.current = true;
-    if (voiceDialog.active) {
+    if (voiceDialogActive) {
       leaveVoiceDialog();
     } else {
       enterVoiceDialog();
     }
-  }, [voiceDialog.active, enterVoiceDialog, leaveVoiceDialog]);
-  useVoiceDialogAutoLeaveEffects(
-    voiceDialog.active,
-    voiceDialogAvailable,
-    realtimeVoice,
-    leaveVoiceDialog,
-  );
-  const previousVoiceDialogActiveRef = useRef(voiceDialog.active);
+  }, [voiceDialogActive, enterVoiceDialog, leaveVoiceDialog]);
+  const previousVoiceDialogActiveRef = useRef(voiceDialogActive);
   useEffect(() => {
+    if (voiceDialogActive && realtimeVoice.phase === "error") {
+      restoreVoiceDialogFocusRef.current = false;
+      return;
+    }
     // The previously active layer becomes inert; move focus to the switch in the newly active
     // layer so a keyboard user is not dropped onto <body>. Runs only for a user-driven toggle.
     syncVoiceDialogLayerFocus({
-      active: voiceDialog.active,
+      active: voiceDialogActive,
       previousActiveRef: previousVoiceDialogActiveRef,
       restoreFocusRef: restoreVoiceDialogFocusRef,
       voiceDialogButton: voiceDialogButtonRef.current,
       normalVoiceDialogButton: normalVoiceDialogButtonRef.current,
     });
-  }, [voiceDialog.active]);
+  }, [realtimeVoice.phase, voiceDialogActive]);
 
   const repositoryRoots = useMemo(
     () => connectedRepositoryRoots(activeChat, activeProject?.path),
@@ -2938,21 +3089,21 @@ function ComposerCoreImpl({
     ],
   );
 
-  const composerBoxClassName = composerBoxClassNameFor(compact, voiceDialog.active);
+  const composerBoxClassName = composerBoxClassNameFor(compact, voiceDialogActive);
   // React 18 treats `inert` as an unknown non-boolean attribute. Toggle the native attribute in
   // the commit ref so each fading layer becomes non-interactive synchronously, without rendering
   // duplicate accessibility targets or emitting a runtime warning.
   const normalLayerRef = useCallback(
     (node: HTMLDivElement | null): void => {
-      node?.toggleAttribute("inert", voiceDialog.active);
+      node?.toggleAttribute("inert", voiceDialogActive);
     },
-    [voiceDialog.active],
+    [voiceDialogActive],
   );
   const voiceLayerRef = useCallback(
     (node: HTMLDivElement | null): void => {
-      node?.toggleAttribute("inert", !voiceDialog.active);
+      node?.toggleAttribute("inert", !voiceDialogActive);
     },
-    [voiceDialog.active],
+    [voiceDialogActive],
   );
 
   const voiceAuraDataAttributes = composerVoiceAuraDataAttributes(voiceAura);
@@ -2978,7 +3129,7 @@ function ComposerCoreImpl({
         ref={normalLayerRef}
         className={`${styles.composerLayer} ${styles.normalLayer}`}
         data-composer-layer="normal"
-        aria-hidden={voiceDialog.active ? true : undefined}
+        aria-hidden={voiceDialogActive ? true : undefined}
       >
         <div className="cmp-input-stack">
           {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
@@ -3055,7 +3206,7 @@ function ComposerCoreImpl({
             input stack so it is contextually adjacent to the textarea and announced to assistive
             tech. It renders live capture feedback while recording and stays hidden only when idle. */}
           <ComposerStatusRow
-            voiceDialogActive={voiceDialog.active}
+            voiceDialogActive={voiceDialogActive}
             sendStatus={sendStatus}
             voiceDictationVisible={voiceDictationVisible}
             dictation={dictation}
@@ -3089,11 +3240,14 @@ function ComposerCoreImpl({
         announcedVoiceHeadline={announcedVoiceHeadline}
         voiceDialogAvailable={voiceDialogAvailable}
         voiceLayerRef={voiceLayerRef}
-        voiceDialogActive={voiceDialog.active}
+        voiceDialogActive={voiceDialogActive}
+        partialUserTranscript={realtimeVoice.partialUserTranscript}
         realtimeVoiceMuted={realtimeVoice.muted}
+        realtimeVoiceController={realtimeVoice}
         onToggleVoiceMute={realtimeVoice.toggleMute}
         playbackButtonRef={playbackButtonRef}
         onToggleVoiceDialog={toggleVoiceDialog}
+        onDismissVoiceError={leaveVoiceDialog}
         voiceDialogButtonRef={voiceDialogButtonRef}
         compact={controlsNarrow}
       />
@@ -3208,35 +3362,6 @@ function hasConnectorGroundingScope(chat: Chat | undefined): boolean {
 
 function hasGroundingScope(chat: Chat | undefined): boolean {
   return hasFolderGroundingScope(chat) || hasConnectorGroundingScope(chat);
-}
-
-function voiceSessionGroundingContext(
-  chat: Chat | undefined,
-): VoiceSessionGroundingContext | undefined {
-  if (chat === undefined) return undefined;
-  const folderCount =
-    chat.connectedScopes !== undefined
-      ? chat.connectedScopes.length
-      : chat.connectedScope !== undefined
-        ? 1
-        : 0;
-  const connectorCount =
-    chat.localKnowledgeScopes !== undefined
-      ? chat.localKnowledgeScopes.length
-      : chat.localKnowledgeScope !== undefined
-        ? 1
-        : 0;
-  const sourceCount = folderCount + connectorCount;
-  if (sourceCount === 0) return undefined;
-  const kind: VoiceSessionGroundingContext["kind"] =
-    folderCount > 0 && connectorCount > 0
-      ? "hybrid"
-      : sourceCount > 1
-        ? "multi"
-        : folderCount > 0
-          ? "files"
-          : "knowledge";
-  return { enabled: true, sourceCount, kind };
 }
 
 function formatScopeUpdateError(error: unknown, t: I18nTranslate): string {
@@ -4467,6 +4592,38 @@ function ChatWindowLog({
 // Extracted from ChatWindow (SonarCloud S3776) — the composer form and its two error-notice
 // slots (Issue #1560's single stable composer render site, see the render-site comment kept at
 // the call site).
+function ComposerSendNotice({
+  canonicalVoiceTurnRequiresRetry,
+  retryPendingCanonicalVoiceTurn,
+  error,
+  clearError,
+}: {
+  readonly canonicalVoiceTurnRequiresRetry: boolean;
+  readonly retryPendingCanonicalVoiceTurn: (() => void) | undefined;
+  readonly error: string | undefined;
+  readonly clearError: (() => void) | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  if (canonicalVoiceTurnRequiresRetry) {
+    return (
+      <div className={styles.pendingVoiceTurnNotice} role="alert">
+        <span>{t("chat.voice.pendingTurn")}</span>
+        <button
+          type="button"
+          className="cmp-voice-btn cmp-voice-btn-primary"
+          onClick={retryPendingCanonicalVoiceTurn}
+        >
+          {t("chat.voice.retryPendingTurn")}
+        </button>
+      </div>
+    );
+  }
+  if (error === undefined) return null;
+  return (
+    <ErrorNoticeFromError error={error} fallback={t("chat.error.send")} onDismiss={clearError} />
+  );
+}
+
 function ChatWindowComposerFooter({
   visible,
   activeChat,
@@ -4479,6 +4636,8 @@ function ChatWindowComposerFooter({
   sendMessage,
   error,
   clearError,
+  canonicalVoiceTurnRequiresRetry,
+  retryPendingCanonicalVoiceTurn,
 }: {
   readonly visible: readonly ChatMessage[];
   readonly activeChat: Chat | undefined;
@@ -4491,6 +4650,8 @@ function ChatWindowComposerFooter({
   readonly sendMessage: () => Promise<void>;
   readonly error: string | undefined;
   readonly clearError: (() => void) | undefined;
+  readonly canonicalVoiceTurnRequiresRetry: boolean;
+  readonly retryPendingCanonicalVoiceTurn: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
   return (
@@ -4512,13 +4673,12 @@ function ChatWindowComposerFooter({
               controlsNarrow={effectiveControlsNarrow}
               barCompact={effectiveBarCompact}
             />
-            {error !== undefined ? (
-              <ErrorNoticeFromError
-                error={error}
-                fallback={t("chat.error.send")}
-                onDismiss={clearError}
-              />
-            ) : null}
+            <ComposerSendNotice
+              canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry}
+              retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
+              error={error}
+              clearError={clearError}
+            />
           </form>
         </div>
       ) : null}
@@ -4567,6 +4727,8 @@ export function ChatWindow({
     cancelGrounded,
     activeProject,
     activeChat,
+    canonicalVoiceTurnRequiresRetry,
+    retryPendingCanonicalVoiceTurn,
     replaceChat,
     latestMemory,
     lastSentDocuments,
@@ -4600,7 +4762,9 @@ export function ChatWindow({
   );
   const onApplyCodeBlock =
     codeApplyWorkspaceRoot === undefined ? undefined : queueAssistantCodeBlockApply;
-  const ready = isComposerReadyToSend(draft, sending, loading, noEligibleModels);
+  const ready =
+    isComposerReadyToSend(draft, sending, loading, noEligibleModels) &&
+    canonicalVoiceTurnRequiresRetry !== true;
   const visible = useMemo(() => visibleOnly(messages), [messages]);
   const hasLiveStreamingAssistant = hasLiveStreamingAssistantContent(streamingAssistantMessage);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -4793,6 +4957,8 @@ export function ChatWindow({
         sendMessage={sendMessage}
         error={error}
         clearError={session.clearError}
+        canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry === true}
+        retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
       />
     </div>
   );

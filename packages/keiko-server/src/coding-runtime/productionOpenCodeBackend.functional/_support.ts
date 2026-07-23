@@ -16,13 +16,19 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
+  GatewayRequest,
   GatewayStreamChunk,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { applyPatch, inspectPatch } from "@oscharko-dev/keiko-tools";
 
 import { createOpenCodeGatewayReadinessRegistry } from "../../coding-sidecar-gateway.js";
+import {
+  RESEARCH_UNTRUSTED_BEGIN_FENCE,
+  RESEARCH_UNTRUSTED_END_FENCE,
+} from "../researchContentQuarantine.js";
 import { createFakeSessionPairingPort } from "../../coding-app-session/_support.js";
+import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../coding-app-session/launcherSessionPairingPort.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../../deps.js";
 import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
 import type { VerificationRunnerManager } from "../../editor/verificationRunner.js";
@@ -42,13 +48,25 @@ import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js"
 const MAX_READ_BYTES = 65_536;
 export const FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX = "VISIBLE_ASSISTANT_TEXT_2479:";
 export const FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL = "TRUNCATED_TAIL_2479";
+export const FUNCTIONAL_PLAN_STEP_READ = "PLAN_STEP_READ_2480";
+export const FUNCTIONAL_PLAN_STEP_EDIT = "PLAN_STEP_EDIT_2480";
+export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
+/** Rides an unprojected todo field; it must never appear in any sink, including the feed. */
+export const FUNCTIONAL_PLAN_DROPPED_CANARY = "PLAN_DROPPED_CANARY_2480";
 
 export interface ScriptState {
-  mode: "productive" | "out-of-scope" | "discovery";
+  mode: "productive" | "out-of-scope" | "discovery" | "research";
   calls: number;
   readonly old: string;
   readonly next: string;
   toolCallId?: string;
+  /**
+   * #2637: the visible directive the granted research page carries. Supplied by the e2e server
+   * entry, which owns the fixture page, so this harness holds no injection payload of its own.
+   */
+  readonly injectionDirective?: string;
+  /** Invoked with every scripted tool name so a journey can assert what the model REQUESTED. */
+  readonly observeToolCall?: (name: string) => void;
 }
 
 type FunctionalEditorAgentClient = ProductionCodingRuntimeResolverInput["editorAgentClient"];
@@ -66,6 +84,12 @@ export interface FunctionalRuntimeResolverInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>;
   readonly diagnostics?: ServerDiagnosticSink;
+  /** #2387: opens the network-egress class so the research approval loop is reachable. */
+  readonly researchEgressEnabled?: boolean | undefined;
+  /** #2387 hermetic research transport; tests never touch the real network. */
+  readonly researchFetchImpl?: ProductionCodingRuntimeResolverInput["researchFetchImpl"];
+  /** #2387 hermetic child model; production resolves the same model through the gateway. */
+  readonly childModelPortFactory?: ProductionCodingRuntimeResolverInput["childModelPortFactory"];
 }
 
 /**
@@ -85,7 +109,12 @@ export function createFunctionalRuntimeResolver(
       managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
       deploymentCeiling: "autonomous-delivery",
       readWorkspaceHead: input.readWorkspaceHead,
+      ...(input.researchEgressEnabled === undefined
+        ? {}
+        : { researchEgressEnabled: input.researchEgressEnabled }),
     },
+    ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
+    ...(input.childModelPortFactory ? { childModelPortFactory: input.childModelPortFactory } : {}),
     backend: createProductionOpenCodeBackend({
       portable: input.portable,
       runtimeStateRoot: input.runtimeStateRoot,
@@ -147,8 +176,14 @@ export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps 
 export interface DiscoveryBffDepsInput {
   readonly stateRoot: string;
   readonly workspaceLifecycle: WorkspaceLifecycleService;
+  readonly workspaceProvisioning?:
+    NonNullable<Parameters<typeof buildUiHandlerDeps>[0]["workspaceProvisioning"]> | undefined;
+  readonly workspaceReconciliation?:
+    NonNullable<Parameters<typeof buildUiHandlerDeps>[0]["workspaceReconciliation"]> | undefined;
   readonly script: ScriptState;
   readonly uiPort: number;
+  readonly launcherSessionSecret?: string | undefined;
+  readonly observeGatewayRequest?: ((request: GatewayRequest) => void) | undefined;
 }
 
 /**
@@ -168,21 +203,39 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
     KEIKO_UI_PORT: String(input.uiPort),
     KEIKO_CODING_RUNTIME_DEV_LANE: "1",
     KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery",
+    ...(input.launcherSessionSecret === undefined
+      ? {}
+      : { [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: input.launcherSessionSecret }),
   };
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(input.stateRoot, "evidence"),
     env,
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
+    ...(input.workspaceProvisioning === undefined
+      ? {}
+      : { workspaceProvisioning: input.workspaceProvisioning }),
     workspaceLifecycle: input.workspaceLifecycle,
+    ...(input.workspaceReconciliation === undefined
+      ? {}
+      : { workspaceReconciliation: input.workspaceReconciliation }),
     codingRuntimeServerPrincipal: () => "functional-operator",
-    sessionPairingPort: createFakeSessionPairingPort(),
+    ...(input.launcherSessionSecret === undefined
+      ? { sessionPairingPort: createFakeSessionPairingPort() }
+      : {}),
   });
-  return withScriptedModelSeams(deps, input.script);
+  return withScriptedModelSeams(deps, input.script, input.observeGatewayRequest);
 }
 
-function withScriptedModelSeams(deps: UiHandlerDeps, script: ScriptState): UiHandlerDeps {
-  const chat = (): Promise<NormalizedResponse> => Promise.resolve(scriptedResponse(script));
+function withScriptedModelSeams(
+  deps: UiHandlerDeps,
+  script: ScriptState,
+  observeGatewayRequest?: (request: GatewayRequest) => void,
+): UiHandlerDeps {
+  const chat = (request: GatewayRequest): Promise<NormalizedResponse> => {
+    observeGatewayRequest?.(request);
+    return Promise.resolve(scriptedResponse(script, scriptedTranscript(request)));
+  };
   return {
     ...deps,
     config: functionalGatewayConfig(),
@@ -190,8 +243,13 @@ function withScriptedModelSeams(deps: UiHandlerDeps, script: ScriptState): UiHan
     gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
-      async function* (): AsyncIterable<GatewayStreamChunk> {
-        yield { type: "done" as const, response: await chat() };
+      async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
+        // A real model streams its assistant content as deltas before the terminal chunk; the
+        // gateway's SSE synthesis needs them to forward the content to OpenCode. Emitting only a
+        // done chunk left the real binary with no assistant text to persist.
+        const response = await chat(request);
+        if (response.content.length > 0) yield { type: "delta" as const, token: response.content };
+        yield { type: "done" as const, response };
       },
   };
 }
@@ -342,8 +400,88 @@ function workspace(root: string): WorkspaceInfo {
   };
 }
 
-export function scriptedResponse(script: ScriptState): NormalizedResponse {
+/** The exact URL the #2387 research journey asks for; the request line binds the minted grant. */
+export const RESEARCH_JOURNEY_URL = "https://docs.example.org/guide/streams?topic=backpressure";
+
+/**
+ * A model that obeys instructions only where they carry authority. It complies with the page's
+ * directive exactly when ANY occurrence of that directive reaches it OUTSIDE a quarantine fence;
+ * only when every occurrence is fenced does it proceed with the ordinary journey. The three
+ * branches are distinguishable from the browser: the compliant branch requests a changeset edit,
+ * the correct branch produces the skill invocation the journey already asserts, and never observing
+ * the page produces neither — so the acceptance test cannot pass vacuously on a transcript that
+ * lost the tool result.
+ */
+function researchPostFetchResponse(transcript: string, script: ScriptState): NormalizedResponse {
+  const directive = script.injectionDirective ?? "";
+  if (directive === "") return normal();
+  let at = transcript.indexOf(directive);
+  if (at < 0) return normal();
+  while (at >= 0) {
+    // One unfenced copy is enough: a fenced copy sitting beside an unfenced one is exactly the
+    // failure this has to catch, so every occurrence is checked, not just the first.
+    if (!directiveIsFenced(transcript, at)) {
+      return tool("keiko_changeset_edit", edit(script));
+    }
+    at = transcript.indexOf(directive, at + directive.length);
+  }
+  return tool("keiko_skill", { skillId: "skl_repo-structure-summary@1" });
+}
+
+// True when the directive at `at` sits between a quarantine BEGIN fence and the END fence that
+// closes it. Mere presence of a fence somewhere in the transcript is not enough.
+function directiveIsFenced(transcript: string, at: number): boolean {
+  const begin = transcript.lastIndexOf(RESEARCH_UNTRUSTED_BEGIN_FENCE, at);
+  if (begin < 0) return false;
+  const end = transcript.indexOf(RESEARCH_UNTRUSTED_END_FENCE, begin);
+  return end > at;
+}
+
+/** Flattens the conversation the runtime sends the model into one searchable transcript. */
+export function scriptedTranscript(request: GatewayRequest | undefined): string {
+  return request === undefined ? "" : JSON.stringify(request.messages);
+}
+
+// #2387 journey turns. The blocking `question` steps are the halt points that keep every governed
+// fetch inside a RUNNING run (a paused run's sticky ingest guard would drop the content-free
+// research events): step 0 asks for the URL (no grant → permission request, fetch fails closed),
+// step 1 blocks on a question until the operator has approved, step 2 performs the governed fetch,
+// step 3 is the #2637 injection decision (it invokes the approved skill only when the page's
+// directive arrived fenced), step 4 runs the bounded child, and step 5 ends turn 1; step 6 (turn 2,
+// after revoke) blocks again and step 7 retries the fetch under a fresh approval request.
+function researchScriptedResponse(
+  step: number,
+  transcript: string,
+  script: ScriptState,
+): NormalizedResponse {
+  if (step === 0 || step === 2 || step === 7) {
+    return tool("keiko_research_fetch", { target: RESEARCH_JOURNEY_URL });
+  }
+  if (step === 1 || step === 6) return tool("question", question());
+  // #2637: step 3 is the decision the granted page tried to steer. Only a fenced directive lets the
+  // journey continue to its skill invocation.
+  if (step === 3) return researchPostFetchResponse(transcript, script);
+  if (step === 4) {
+    return tool("keiko_child_agent", {
+      objective: "Inspect the repository structure without mutation",
+      maxToolCalls: 2,
+    });
+  }
+  return normal();
+}
+
+export function scriptedResponse(script: ScriptState, transcript = ""): NormalizedResponse {
+  const response = scriptedResponseFor(script, transcript);
+  // Report what the model REQUESTED, whatever the runtime later does with it. A journey asserting
+  // "no mutation was attempted" needs the request, not the applied diff: a downstream denial leaves
+  // the workspace clean either way.
+  for (const call of response.toolCalls) script.observeToolCall?.(call.name);
+  return response;
+}
+
+function scriptedResponseFor(script: ScriptState, transcript: string): NormalizedResponse {
   const step = script.calls++;
+  if (script.mode === "research") return researchScriptedResponse(step, transcript, script);
   if (script.mode === "out-of-scope") {
     return step === 0
       ? tool("keiko_changeset_edit", {
@@ -363,11 +501,45 @@ export function scriptedResponse(script: ScriptState): NormalizedResponse {
     if (step === 0) return tool("keiko_workspace_read", { relativePath: "src/example.ts" });
     return step === 1 ? tool("question", question()) : normal();
   }
-  if (step === 0)
+  return productiveResponse(step, script);
+}
+
+function productiveResponse(step: number, script: ScriptState): NormalizedResponse {
+  if (step === 0) return tool("todowrite", planUpdate(1));
+  if (step === 1)
     return tool("keiko_workspace_read", { relativePath: "src/example.ts" }, script.toolCallId);
-  if (step === 1) return tool("question", question());
-  if (step === 2) return tool("keiko_changeset_edit", edit(script));
-  return step === 3 ? tool("keiko_verification", { verifierId: "typecheck" }) : normal();
+  if (step === 2) return tool("question", question());
+  if (step === 3) return tool("keiko_changeset_edit", edit(script));
+  if (step === 4) return tool("todowrite", planUpdate(2));
+  return step === 5 ? tool("keiko_verification", { verifierId: "typecheck" }) : normal();
+}
+
+/** Revision 1 opens two steps; revision 2 flips their states and appends the verify step. */
+function planUpdate(revision: 1 | 2): Record<string, unknown> {
+  const opened = [
+    {
+      content: FUNCTIONAL_PLAN_STEP_READ,
+      status: revision === 1 ? "in_progress" : "completed",
+      priority: "high",
+    },
+    {
+      content: FUNCTIONAL_PLAN_STEP_EDIT,
+      status: revision === 1 ? "pending" : "in_progress",
+      priority: "medium",
+    },
+  ];
+  if (revision === 1) return { todos: opened };
+  return {
+    todos: [
+      ...opened,
+      {
+        content: FUNCTIONAL_PLAN_STEP_VERIFY,
+        status: "pending",
+        priority: "low",
+        notes: FUNCTIONAL_PLAN_DROPPED_CANARY,
+      },
+    ],
+  };
 }
 
 function question(): Record<string, unknown> {
@@ -398,8 +570,11 @@ function digest(value: string): string {
 function normal(): NormalizedResponse {
   return {
     modelId: "functional-model",
+    // Intrinsically over the projection's segment bound so the assistant text truncates identically
+    // for the scripted child and the real binary (which streams the raw content, without the
+    // child's artificial display expansion). Exercises the long-text admission fix end to end.
     content: `${FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX}${"x".repeat(
-      Math.floor(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS / 8),
+      CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS + 512,
     )}${FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL}`,
     finishReason: "stop",
     toolCalls: [],
@@ -417,7 +592,15 @@ function normal(): NormalizedResponse {
 let scriptedToolCallSequence = 0;
 
 function tool(
-  name: "keiko_workspace_read" | "keiko_changeset_edit" | "keiko_verification" | "question",
+  name:
+    | "keiko_workspace_read"
+    | "keiko_changeset_edit"
+    | "keiko_verification"
+    | "keiko_research_fetch"
+    | "keiko_skill"
+    | "keiko_child_agent"
+    | "question"
+    | "todowrite",
   args: Record<string, unknown>,
   callId?: string,
 ): NormalizedResponse {

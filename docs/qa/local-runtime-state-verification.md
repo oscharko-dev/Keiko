@@ -1,6 +1,7 @@
 # Local runtime-state confidentiality — verification record
 
-Status: 0.2.0 — Issue #1325 (closure of Epic #1319, "Harden local runtime state confidentiality for
+Original closure baseline: 0.2.0 — reviewed against the current 0.2.15 runtime-state contract by the
+PR #2665 audit. Issue #1325 closed Epic #1319 ("Harden local runtime state confidentiality for
 regulated deployments").
 
 This is the consolidated verification record for the local `.keiko` at-rest posture. It proves that
@@ -37,7 +38,7 @@ it is reproduced here as the closure snapshot.
 | Figma PAT vault (`figma-token.vault` + key)     | `0o600`         | n/a                            | AES-256-GCM                                                           | n/a       | GCM auth                               |
 | Memory vault (`keiko-memory.db`)                | `0o600`/`0o700` | audit events                   | AES-256-GCM content                                                   | n/a       | GCM auth                               |
 | Local Knowledge (`capsules.db`)                 | `0o600`/`0o700` | lexical projection secret scan | AES-256-GCM reconstructive content; declared plaintext FTS projection | n/a       | GCM auth + sealed probe + scope marker |
-| UI database (`keiko-ui.db`)                     | `0o600`/`0o700` | n/a                            | n/a (UI state)                                                        | n/a       | n/a                                    |
+| UI database (`keiko-ui.db`)                     | `0o600`/`0o700` | n/a                            | deferred (project/chat/message content; ADR-0013 D10)                 | n/a       | n/a                                    |
 | Evidence run manifests (`<runId>.json`)         | `0o600`/`0o700` | yes                            | deferred                                                              | n/a       | n/a                                    |
 | QI manifests (`<runId>.qi.json`)                | `0o600`/`0o700` | yes                            | deferred                                                              | yes       | SHA-256                                |
 | QI candidates (`<runId>.candidates.json`)       | `0o600`/`0o700` | yes                            | deferred                                                              | yes       | n/a                                    |
@@ -164,6 +165,9 @@ $ npx vitest run scripts/__tests__/check-local-state.test.mjs
 - The keyfile key tier stores the key beside the ciphertext; regulated deployments should prefer an
   injected `KEIKO_*_KEY` (from a secrets manager) or the OS keychain.
 - Cleartext metadata leaks the shape of stored data, not its content.
+- The UI database (`keiko-ui.db`) stores project, chat, and message content under owner-only
+  `0o700`/`0o600` permissions, but application-level encryption remains deferred by ADR-0013 D10.
+  Deployments that require chat-at-rest confidentiality must use host full-disk encryption.
 - The read-only auditor confirms the Local Knowledge encryption marker, verifies that the
   key-verification probe is present and sealed (`kv1.` envelope), and checks every populated
   reconstructive Local Knowledge column for sealed values. It does not decrypt the probe (no key is

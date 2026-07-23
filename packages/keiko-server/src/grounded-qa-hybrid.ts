@@ -6,7 +6,6 @@
 // byte-identical (AC). It composes the exported folder helpers (grounded-qa-multi-source.ts) and
 // connector seams (local-knowledge-grounded-qa.ts) without re-implementing retrieval.
 
-import { randomUUID } from "node:crypto";
 import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
@@ -18,6 +17,7 @@ import {
   runLocalKnowledgeRetrieval,
   type KnowledgeStore,
   type RetrievalResult,
+  type VectorIndexOptions,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   KnowledgeCapsule,
@@ -26,11 +26,9 @@ import type {
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  applyModelRerankResults,
-  invalidRerankMappingDiagnostics,
   rerankAndSelect,
-  selectTopPromptCandidates,
-  withKeptCount,
+  withFinalMarkers,
+  withModelRerankScore,
   type RerankInput,
   type SelectedCandidate,
 } from "./grounded-rerank.js";
@@ -100,16 +98,18 @@ import {
 import {
   buildPackCitationIndex,
   incompleteAnswerMarker,
+  missingCitationMarker,
   reconcileInlineCitations,
+  reconcileNumericCitations,
   unsupportedCitationMarker,
+  unsupportedNumericCitationMarker,
 } from "./grounded-faithfulness.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
-import { requestConfiguredRerank } from "./grounded-model-reranker.js";
+import { rerankSelection } from "./grounded-rerank-facade.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import {
   appendGroundedAnswerEntailment,
-  buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
   clarificationRequest,
@@ -117,14 +117,15 @@ import {
   ensureNotCancelled,
   groundedContextAssemblyInput,
   groundedContextSummaryInput,
+  groundedEvidenceRunId,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
   mappedWorkspaceError,
-  persistGroundedExchange,
   promptSafeExcerptText,
   redactString,
 } from "./grounded-qa.js";
+import { persistGroundedExchange } from "./grounded-message-persistence.js";
 
 // ─── Canonical connector reader ───────────────────────────────────────────────
 
@@ -161,6 +162,10 @@ export type HybridAnswerer = (system: string, user: string) => Promise<GroundedA
 export interface HybridGroundedAskCtx {
   readonly chat: Chat;
   readonly content: string;
+  readonly answerContent?: string | undefined;
+  readonly answerOnlyContextAvailable?: boolean | undefined;
+  readonly clientTurnId?: string | undefined;
+  readonly userMessage?: ChatMessage | undefined;
   readonly modelId: string;
   readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
@@ -232,6 +237,12 @@ type HybridPayload = FolderPayload | ConnectorPayload;
 // Builds a single RRF-selected set that covers both folder and connector candidates. The selected
 // set is the SOLE source of truth for both the prompt and the citations; the two paths must not
 // diverge from this point forward.
+function isFolderCandidate(
+  candidate: SelectedCandidate<HybridPayload>,
+): candidate is SelectedCandidate<FolderPayload> {
+  return candidate.kind === "folder";
+}
+
 function isConnectorCandidate(
   candidate: SelectedCandidate<HybridPayload>,
 ): candidate is SelectedCandidate<ConnectorPayload> {
@@ -407,56 +418,27 @@ interface HybridRerankedSelection {
   readonly diagnostics: GroundedRerankerDiagnostics;
 }
 
-function policyDeniedRerankDiagnostics(
-  candidateCount: number,
-  keptCount: number,
-): GroundedRerankerDiagnostics {
-  return {
-    status: "denied",
-    mode: "local-only",
-    candidateCount,
-    documentCount: 0,
-    keptCount,
-    failureKind: "policy-denied",
-    latencyMs: 0,
-  };
-}
-
 async function rerankHybridSelection(
   ctx: HybridGroundedAskCtx,
   preliminary: readonly SelectedCandidate<HybridPayload>[],
   limits: ReturnType<typeof currentGroundingLimits>,
   externalRerankingDenied: boolean,
 ): Promise<HybridRerankedSelection> {
-  const fallback = selectTopPromptCandidates(preliminary, limits.maxPromptReferences);
-  if (externalRerankingDenied) {
-    return {
-      selected: fallback,
-      diagnostics: policyDeniedRerankDiagnostics(preliminary.length, fallback.length),
-    };
-  }
-  const attempt = await requestConfiguredRerank({
+  const result = await rerankSelection({
     deps: ctx.deps,
     query: ctx.content,
-    documents: preliminary.map((candidate) => candidate.redactedText),
+    candidates: preliminary,
+    documentFor: (candidate) => candidate.redactedText,
     topN: limits.maxPromptReferences,
     signal: ctx.signal,
+    policy: {
+      externalReranking: externalRerankingDenied ? "deny" : "allow",
+      localReranking: "allow",
+    },
+    applyScore: withModelRerankScore,
+    fallbackMode: "slice-topN",
   });
-  if (attempt.outcome === undefined) {
-    return { selected: fallback, diagnostics: withKeptCount(attempt.diagnostics, fallback.length) };
-  }
-  const reranked = applyModelRerankResults(
-    preliminary,
-    attempt.outcome.value.results,
-    limits.maxPromptReferences,
-  );
-  if (reranked === undefined) {
-    return {
-      selected: fallback,
-      diagnostics: invalidRerankMappingDiagnostics(attempt.diagnostics, fallback.length),
-    };
-  }
-  return { selected: reranked, diagnostics: withKeptCount(attempt.diagnostics, reranked.length) };
+  return { selected: withFinalMarkers(result.selected), diagnostics: result.diagnostics };
 }
 
 function connectorsDenyExternalReranking(connectors: readonly RetrievedConnector[]): boolean {
@@ -504,6 +486,7 @@ async function retrieveFolderIntoSlot(
   let out: RetrievalOnlyOutput;
   try {
     out = await retriever({ scope, query, workspaceRoot: scope.workspaceRoot, budget });
+    ensureNotCancelled(ctx.signal);
   } catch (error) {
     // Mirror retrieveOneConnector (GRD-006): a per-source embedding-adapter outage is a skippable
     // degradation (answer from the remaining sources, record the skip). EVERY other error MUST
@@ -559,10 +542,12 @@ async function retrieveFolderPacks(
         label,
         index: i,
       });
+      ensureNotCancelled(ctx.signal);
     }
   };
   const workerCount = Math.min(MAX_FOLDER_RETRIEVAL_CONCURRENCY, folderScopes.length);
   await Promise.all(Array.from({ length: workerCount }, worker));
+  ensureNotCancelled(ctx.signal);
   const retrieved: RetrievedFolder[] = [];
   const skipped: SkippedConnector[] = [];
   for (const slot of slots) {
@@ -619,6 +604,7 @@ type RetrievalQueryShape = Parameters<typeof runLocalKnowledgeRetrieval>[1];
 function defaultConnectorRetrieve(
   ctx: HybridGroundedAskCtx,
   connectorScopeCount: number,
+  vectorIndex: VectorIndexOptions,
 ): ConnectorRetrieve {
   return async (store, scope, _selected): Promise<RetrievalResult> => {
     const embeddingAdapter = createEmbeddingAdapter(ctx.deps);
@@ -626,7 +612,7 @@ function defaultConnectorRetrieve(
       throw new EmbeddingAdapterError(embeddingAdapter);
     }
     return runLocalKnowledgeRetrieval(
-      { store, embeddingAdapter, signal: ctx.signal },
+      { store, embeddingAdapter, signal: ctx.signal, vectorIndex },
       connectorQuery(scope, ctx.content, connectorScopeCount),
     );
   };
@@ -697,10 +683,12 @@ async function retrieveConnectorIntoSlot(
 async function retrieveConnectors(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
+  vectorIndex: VectorIndexOptions,
   connectorScopes: readonly ChatLocalKnowledgeScope[],
   resolved: readonly SelectedLocalKnowledgeScope[],
 ): Promise<ConnectorRetrieval | RouteResult> {
-  const retrieve = ctx.connectorRetrieve ?? defaultConnectorRetrieve(ctx, connectorScopes.length);
+  const retrieve =
+    ctx.connectorRetrieve ?? defaultConnectorRetrieve(ctx, connectorScopes.length, vectorIndex);
   const labels = connectorLabels(resolved.map((s) => s.scopeLabel));
   // Index-addressed slots keep the emitted order identical to the scope order regardless of
   // which worker finishes first — evidence and labels stay deterministic.
@@ -720,10 +708,12 @@ async function retrieveConnectors(
         selected,
         label,
       });
+      ensureNotCancelled(ctx.signal);
     }
   };
   const workerCount = Math.min(MAX_CONNECTOR_RETRIEVAL_CONCURRENCY, connectorScopes.length);
   await Promise.all(Array.from({ length: workerCount }, worker));
+  ensureNotCancelled(ctx.signal);
   const retrieved: RetrievedConnector[] = [];
   const skipped: SkippedConnector[] = [];
   for (const slot of slots) {
@@ -823,6 +813,15 @@ export function createHybridAnswerer(
 
 // Both citation arrays are derived from the SAME selected set so that the [n] markers in the
 // prompt are always consistent with the citation arrays surfaced to the client.
+function citedHybridSelections(
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  assistantContent: string,
+): readonly SelectedCandidate<HybridPayload>[] {
+  const supportedMarkers = new Set(selected.map((candidate) => candidate.marker));
+  const { citedMarkers } = reconcileNumericCitations(assistantContent, supportedMarkers);
+  return selected.filter((candidate) => citedMarkers.has(candidate.marker));
+}
+
 function selectedFolderCitations(
   selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
@@ -975,6 +974,7 @@ function emptyFolderSummary(): GroundedAnswerContextPackSummary {
 
 function folderSummary(
   folders: readonly RetrievedFolder[],
+  cited: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
   deps: Pick<UiHandlerDeps, "contextProfile">,
 ): GroundedAnswerContextPackSummary {
@@ -983,12 +983,24 @@ function folderSummary(
     folders.map((src) =>
       buildGroundedAnswerContextPackSummary(
         src.pack,
-        buildCitations(src.pack, redactor).length,
+        folderCitationCount(src.pack, cited),
         src.elapsedMs,
         groundedContextSummaryInput(deps, src.pack),
       ),
     ),
   );
+}
+
+function folderCitationCount(
+  pack: ConnectedContextPack,
+  cited: readonly SelectedCandidate<HybridPayload>[],
+): number {
+  const availableIds = new Set(
+    pack.files.flatMap((file) => file.excerpts.map((excerpt) => excerpt.atom.stableId)),
+  );
+  return cited
+    .filter(isFolderCandidate)
+    .filter((candidate) => availableIds.has(candidate.payload.stableId)).length;
 }
 
 function hashString32(value: string): string {
@@ -1075,7 +1087,9 @@ function folderUncertainty(
 function hybridReconciliationUncertainty(
   assistant: GroundedAnswerResult,
   folders: readonly RetrievedFolder[],
+  selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
+  sourceEvidenceAvailable: boolean,
 ): readonly GroundedUncertainty[] {
   const nowMs = Date.now();
   const reconciliation = reconcileInlineCitations(
@@ -1083,8 +1097,27 @@ function hybridReconciliationUncertainty(
     buildPackCitationIndex(folders.map((f) => f.pack)),
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
+  const supportedNumericMarkers = new Set(selected.map((candidate) => candidate.marker));
+  const numericReconciliation = reconcileNumericCitations(
+    assistant.content,
+    supportedNumericMarkers,
+  );
+  const unsupportedNumeric = unsupportedNumericCitationMarker(
+    numericReconciliation.unsupportedMarkers,
+    nowMs,
+  );
+  const missing =
+    sourceEvidenceAvailable &&
+    unsupported === undefined &&
+    unsupportedNumeric === undefined &&
+    reconciliation.citedScopePaths.size === 0 &&
+    numericReconciliation.citedMarkers.size === 0
+      ? missingCitationMarker(nowMs)
+      : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),
+    ...(unsupportedNumeric === undefined ? [] : [unsupportedNumeric]),
+    ...(missing === undefined ? [] : [missing]),
     ...(assistant.finishReason === "length" ? [incompleteAnswerMarker(nowMs)] : []),
   ];
   return markers.map((m) => ({ kind: m.kind, claim: redactString(redactor, m.claim) }));
@@ -1129,13 +1162,20 @@ async function applyHybridEntailment(
 function persistFolderEvidence(
   ctx: HybridGroundedAskCtx,
   folders: readonly RetrievedFolder[],
+  cited: readonly SelectedCandidate<HybridPayload>[],
 ): { readonly firstRunId: string | undefined; readonly runIds: readonly string[] } {
   let firstRunId: string | undefined;
   const runIds: string[] = [];
-  for (const src of folders) {
+  for (const [ordinal, src] of folders.entries()) {
     const finishedAt = Date.now();
     const startedAt = Math.max(0, finishedAt - src.elapsedMs);
-    const runId = `grounded-${randomUUID()}`;
+    const runId = groundedEvidenceRunId({
+      chatId: ctx.chat.id,
+      clientTurnId: ctx.clientTurnId,
+      workspaceRoot: src.scope.workspaceRoot,
+      sourceKind: "folder",
+      ordinal,
+    });
     persistConnectedContextEvidence(
       {
         runId,
@@ -1144,7 +1184,7 @@ function persistFolderEvidence(
         chatId: ctx.chat.id,
         plan: src.plan,
         pack: src.pack,
-        citationCount: buildCitations(src.pack, ctx.deps.redactor).length,
+        citationCount: folderCitationCount(src.pack, cited),
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
@@ -1289,6 +1329,18 @@ function persistConnectorAudit(
   emitAnswerContextAudit(sink, store, selected, modelId, occurredAt);
 }
 
+function persistHybridEvidence(
+  ctx: HybridGroundedAskCtx,
+  sources: RetrievedSources,
+  store: KnowledgeStore,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  cited: readonly SelectedCandidate<HybridPayload>[],
+): Pick<HybridGroundedAnswer, "evidenceRunId" | "evidenceRunIds"> {
+  const folder = persistFolderEvidence(ctx, sources.folders, cited);
+  persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
+  return { evidenceRunId: folder.firstRunId, evidenceRunIds: folder.runIds };
+}
+
 // ─── Assembly + public entry ──────────────────────────────────────────────────
 
 interface RetrievedSources {
@@ -1300,16 +1352,21 @@ interface RetrievedSources {
   readonly connectorSourceCount: number;
 }
 
+interface HybridContextPackInput {
+  readonly ctx: HybridGroundedAskCtx;
+  readonly sources: RetrievedSources;
+  readonly selected: readonly SelectedCandidate<HybridPayload>[];
+  readonly limits: ReturnType<typeof currentGroundingLimits>;
+  readonly assistant: GroundedAnswerResult;
+  readonly knowledgeCitationCount: number;
+  readonly reranker: GroundedRerankerDiagnostics;
+}
+
 function buildHybridContextPack(
-  ctx: HybridGroundedAskCtx,
-  sources: RetrievedSources,
-  selected: readonly SelectedCandidate<HybridPayload>[],
-  limits: ReturnType<typeof currentGroundingLimits>,
+  input: HybridContextPackInput,
   summary: GroundedAnswerContextPackSummary,
-  assistant: GroundedAnswerResult,
-  knowledgeCitationCount: number,
-  reranker: GroundedRerankerDiagnostics,
 ): HybridGroundedAnswer["contextPack"] {
+  const { ctx, sources, selected, limits, assistant, knowledgeCitationCount, reranker } = input;
   const selectedConnectorCount = selected.filter((s) => s.kind === "connector").length;
   return {
     kind: "hybrid",
@@ -1363,32 +1420,108 @@ function hybridAnswerUncertainty(
     ...skippedUncertainty(sources.skippedFolders, redactor),
     ...skippedUncertainty(sources.skipped, redactor),
     ...noEvidenceUncertainty(selected, redactor),
-    ...hybridReconciliationUncertainty(assistant, sources.folders, redactor),
+    ...hybridReconciliationUncertainty(assistant, sources.folders, selected, redactor, true),
   ];
 }
 
 function hybridAnswerContextPack(
-  ctx: HybridGroundedAskCtx,
-  sources: RetrievedSources,
-  selected: readonly SelectedCandidate<HybridPayload>[],
-  limits: ReturnType<typeof currentGroundingLimits>,
-  assistant: GroundedAnswerResult,
-  knowledgeCitationCount: number,
-  reranker: GroundedRerankerDiagnostics,
+  input: HybridContextPackInput & {
+    readonly cited: readonly SelectedCandidate<HybridPayload>[];
+  },
 ): HybridGroundedAnswer["contextPack"] {
-  const summary = folderSummary(sources.folders, ctx.deps.redactor, {
+  const { ctx, sources, cited } = input;
+  const summary = folderSummary(sources.folders, cited, ctx.deps.redactor, {
     contextProfile: ctx.contextProfile,
   });
-  return buildHybridContextPack(
-    ctx,
-    sources,
-    selected,
-    limits,
-    summary,
-    assistant,
-    knowledgeCitationCount,
+  return buildHybridContextPack(input, summary);
+}
+
+function hybridEvidenceForAnswer(
+  ctx: HybridGroundedAskCtx,
+  sources: RetrievedSources,
+  store: KnowledgeStore,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  cited: readonly SelectedCandidate<HybridPayload>[],
+  sourceEvidenceAvailable: boolean,
+): Pick<HybridGroundedAnswer, "evidenceRunId" | "evidenceRunIds"> {
+  if (sourceEvidenceAvailable) return persistHybridEvidence(ctx, sources, store, selected, cited);
+  persistConnectorAudit(store, sources.connectors, [], ctx.modelId);
+  return { evidenceRunIds: [] };
+}
+
+function hybridUncertaintyForAnswer(
+  sources: RetrievedSources,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  assistant: GroundedAnswerResult,
+  redactor: Redactor,
+  sourceEvidenceAvailable: boolean,
+): readonly GroundedUncertainty[] {
+  if (sourceEvidenceAvailable) {
+    return hybridAnswerUncertainty(sources, selected, assistant, redactor);
+  }
+  return [
+    ...folderUncertainty(sources.folders, redactor),
+    ...skippedUncertainty(sources.skippedFolders, redactor),
+    ...skippedUncertainty(sources.skipped, redactor),
+    ...noEvidenceUncertainty(selected, redactor),
+    ...hybridReconciliationUncertainty(
+      assistant,
+      sources.folders,
+      selected,
+      redactor,
+      sourceEvidenceAvailable,
+    ),
+  ];
+}
+
+function projectHybridAnswer(
+  ctx: HybridGroundedAskCtx,
+  sources: RetrievedSources,
+  store: KnowledgeStore,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  assistant: GroundedAnswerResult,
+  reranker: GroundedRerankerDiagnostics,
+  sourceEvidenceAvailable: boolean,
+): {
+  readonly cited: readonly SelectedCandidate<HybridPayload>[];
+  readonly citations: readonly GroundedEvidenceCitation[];
+  readonly knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[];
+  readonly retrievalActivity: HybridGroundedAnswer["retrievalActivity"];
+  readonly evidence: Pick<HybridGroundedAnswer, "evidenceRunId" | "evidenceRunIds">;
+  readonly uncertainty: readonly GroundedUncertainty[];
+} {
+  const cited = citedHybridSelections(selected, assistant.content);
+  const citations = selectedFolderCitations(cited, ctx.deps.redactor);
+  const knowledgeCitations = selectedConnectorCitations(store, cited, ctx.deps.redactor);
+  const retrievalActivity = buildHybridRetrievalActivity(
+    store,
+    sources.connectors,
+    sources.skipped,
+    knowledgeCitations,
     reranker,
+    ctx.deps.diagnostics,
   );
+  return {
+    cited,
+    citations,
+    knowledgeCitations,
+    retrievalActivity,
+    evidence: hybridEvidenceForAnswer(
+      ctx,
+      sources,
+      store,
+      selected,
+      cited,
+      sourceEvidenceAvailable,
+    ),
+    uncertainty: hybridUncertaintyForAnswer(
+      sources,
+      selected,
+      assistant,
+      ctx.deps.redactor,
+      sourceEvidenceAvailable,
+    ),
+  };
 }
 
 function assembleHybridAnswer(
@@ -1400,45 +1533,40 @@ function assembleHybridAnswer(
   assistant: GroundedAnswerResult,
   reranker: GroundedRerankerDiagnostics,
   ids: { readonly userMessageId: string; readonly assistantMessageId: string },
+  sourceEvidenceAvailable = true,
 ): HybridGroundedAnswer {
   const { redactor } = ctx.deps;
-  const citations = selectedFolderCitations(selected, redactor);
-  const knowledgeCitations = selectedConnectorCitations(store, selected, redactor);
-  const retrievalActivity = buildHybridRetrievalActivity(
-    store,
-    sources.connectors,
-    sources.skipped,
-    knowledgeCitations,
-    reranker,
-    ctx.deps.diagnostics,
-  );
-  const { firstRunId: evidenceRunId, runIds: evidenceRunIds } = persistFolderEvidence(
+  const projection = projectHybridAnswer(
     ctx,
-    sources.folders,
+    sources,
+    store,
+    selected,
+    assistant,
+    reranker,
+    sourceEvidenceAvailable,
   );
-  persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
   return {
     groundingKind: "hybrid",
     ...ids,
-    evidenceRunId,
-    evidenceRunIds,
+    ...projection.evidence,
     content: redactString(redactor, assistant.content),
-    citations,
-    knowledgeCitations,
-    uncertainty: hybridAnswerUncertainty(sources, selected, assistant, redactor),
+    citations: projection.citations,
+    knowledgeCitations: projection.knowledgeCitations,
+    uncertainty: projection.uncertainty,
     omittedCount: sources.folders.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs,
-    retrievalActivity,
-    contextPack: hybridAnswerContextPack(
+    retrievalActivity: projection.retrievalActivity,
+    contextPack: hybridAnswerContextPack({
       ctx,
       sources,
       selected,
+      cited: projection.cited,
       limits,
       assistant,
-      knowledgeCitations.length,
+      knowledgeCitationCount: projection.knowledgeCitations.length,
       reranker,
-    ),
+    }),
   };
 }
 
@@ -1462,20 +1590,48 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
   return { answer: createHybridAnswerer(model, ctx.modelId, ctx.signal) };
 }
 
-function assembleHybridNoEvidenceRoute(
+async function noEvidenceAssistant(
+  ctx: HybridGroundedAskCtx,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): Promise<GroundedAnswerResult | RouteResult> {
+  ensureNotCancelled(ctx.signal);
+  if (ctx.answerOnlyContextAvailable !== true) {
+    return {
+      content: HYBRID_NO_EVIDENCE_ANSWER,
+      usage: { promptTokens: 0, completionTokens: 0 },
+    };
+  }
+  const answerer = resolveHybridAnswerer(ctx);
+  if ("status" in answerer) return answerer;
+  const user = buildRerankedHybridUserMessage(
+    ctx.answerContent ?? ctx.content,
+    selected,
+    ctx.deps.redactor,
+  );
+  const answer = normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
+  ensureNotCancelled(ctx.signal);
+  return answer;
+}
+
+async function assembleHybridNoEvidenceRoute(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
   meta: AnswerMeta,
   selected: readonly SelectedCandidate<HybridPayload>[],
   limits: ReturnType<typeof currentGroundingLimits>,
   reranker: GroundedRerankerDiagnostics,
-): RouteResult {
-  const content = redactString(ctx.deps.redactor, HYBRID_NO_EVIDENCE_ANSWER);
+): Promise<RouteResult> {
+  const assistant = await noEvidenceAssistant(ctx, selected);
+  if ("status" in assistant) return assistant;
+  ensureNotCancelled(ctx.signal);
+  const content = redactString(ctx.deps.redactor, assistant.content);
+  ensureNotCancelled(ctx.signal);
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,
     redactString(ctx.deps.redactor, ctx.content),
     content,
+    ctx.userMessage,
   );
   const answer = assembleHybridAnswer(
     ctx,
@@ -1490,9 +1646,10 @@ function assembleHybridNoEvidenceRoute(
     store,
     selected,
     limits,
-    { content, usage: { promptTokens: 0, completionTokens: 0 } },
+    { ...assistant, content },
     reranker,
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
+    false,
   );
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
   ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer, previewCitations);
@@ -1502,8 +1659,11 @@ function assembleHybridNoEvidenceRoute(
 export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<RouteResult> {
   const env = openStoreForDeps(ctx.deps);
   try {
-    return await runHybridWithStore(ctx, env.store);
+    return await runHybridWithStore(ctx, env.store, env.vectorIndex);
   } catch (error) {
+    if (ctx.signal.aborted) {
+      return { status: 499, body: errorBody("CANCELLED", "Grounded request was cancelled.") };
+    }
     return mapHybridError(error, ctx.deps);
   } finally {
     env.close();
@@ -1658,6 +1818,7 @@ function capSourcesToLimits(
 async function runHybridWithStore(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
+  vectorIndex: VectorIndexOptions,
 ): Promise<RouteResult> {
   const limits = currentGroundingLimits(ctx.deps);
   const capped = capSourcesToLimits(ctx, limits);
@@ -1671,8 +1832,9 @@ async function runHybridWithStore(
       query,
       ctx.folderRetriever ?? defaultRetriever(ctx.signal, ctx.deps),
     ),
-    retrieveConnectors(ctx, store, capped.connectorScopes, resolved),
+    retrieveConnectors(ctx, store, vectorIndex, capped.connectorScopes, resolved),
   ]);
+  ensureNotCancelled(ctx.signal);
   // Merge upfront-skipped folders (inaccessible/denied at canonicalization), over-cap folder skips,
   // and retrieval-time folder skips so all omissions appear in the assembled uncertainty entries.
   const folderResult: FolderRetrieval = {
@@ -1728,6 +1890,7 @@ async function selectHybridPromptCandidates(
     limits,
     externalRerankingDenied,
   );
+  ensureNotCancelled(ctx.signal);
   return {
     selected: externalRerankingDenied
       ? hydrateConnectorSelections(store, selected, ctx.deps.redactor, limits.maxExcerptChars)
@@ -1751,12 +1914,17 @@ async function answerAndAssemble(
     connectors,
     limits,
   );
+  ensureNotCancelled(ctx.signal);
   if (selected.length === 0) {
-    return assembleHybridNoEvidenceRoute(ctx, store, meta, selected, limits, reranker);
+    return await assembleHybridNoEvidenceRoute(ctx, store, meta, selected, limits, reranker);
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
-  const user = buildRerankedHybridUserMessage(ctx.content, selected, ctx.deps.redactor);
+  const user = buildRerankedHybridUserMessage(
+    ctx.answerContent ?? ctx.content,
+    selected,
+    ctx.deps.redactor,
+  );
   const assistant = normalizeGroundedAnswerPayload(
     await answerer.answer(HYBRID_SYSTEM_PROMPT, user),
   );
@@ -1813,6 +1981,7 @@ async function finalizeHybridAnswer(
     folders,
     meta.connectorResult.retrieved,
   );
+  ensureNotCancelled(ctx.signal);
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
   ctx.deps.store.attachGroundedAnswer(ids.assistantMessageId, finalAnswer, previewCitations);
   return { status: 200, body: finalAnswer };
@@ -1827,6 +1996,7 @@ function persistHybridGroundedExchange(
     ctx.chat.id,
     redactString(ctx.deps.redactor, ctx.content),
     redactString(ctx.deps.redactor, assistantContent),
+    ctx.userMessage,
   );
 }
 

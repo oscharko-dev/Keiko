@@ -165,27 +165,53 @@ export const EN_MESSAGES = {
   "common.on": "on",
   "common.off": "off",
   "common.advanced": "advanced",
+  "gatewaySetup.loading.title": "Preparing model gateway setup",
+  "gatewaySetup.loading.description":
+    "Loading the local setup controls. No provider request has been started.",
+  "gatewaySetup.loading.error": "The setup controls could not be loaded.",
   "gatewaySetup.voice.title": "Audio & Digital Voice",
   "gatewaySetup.voice.description":
     "Optional models for dictation, live conversation, and spoken answers.",
   "gatewaySetup.voice.guidance":
-    "Configure only what you need: Dictate requires a speech-to-text deployment. Digital Voice requires a separate Realtime deployment. The same audio connection and credential are used for the selected deployments below. Use the exact deployment names shown by your provider.",
+    "Configure only what you need: Dictate requires a speech-to-text deployment. Digital Voice requires a Realtime media deployment and its compatible live-transcription deployment. Read aloud requires a speech-output deployment. Deployment names are provider-specific. To replace an audio endpoint, re-enter a fresh credential and provider locality plus every role that should move; roles you omit stay on their stored connection.",
   "gatewaySetup.voice.selectedCapabilities":
     "Selected capabilities: Dictate {dictate} · Digital Voice {digitalVoice} · Read aloud {readAloud}.",
   "gatewaySetup.voice.dictateDeployment": "Dictate · speech-to-text deployment",
   "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeployment":
+    "Digital Voice · live transcription deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
+    "your-realtime-transcription-deployment",
+  "gatewaySetup.voice.realtimeTranscriptionRequiredLabel": "required with Realtime",
+  "gatewaySetup.voice.realtimeTranscriptionRequired":
+    "Enter the compatible live-transcription deployment for this Realtime deployment.",
+  "gatewaySetup.voice.realtimeRequired":
+    "A live-transcription deployment requires an explicit Realtime deployment.",
+  "gatewaySetup.voice.deploymentRequired":
+    "Enter at least one explicit voice deployment: speech-to-text, Realtime with live transcription, or speech output.",
+  "gatewaySetup.voice.endpointMigrationRequired":
+    "Replacing a stored audio endpoint requires a fresh credential, an explicitly selected provider locality, and at least one deployment role to move.",
+  "gatewaySetup.voice.semanticTurnDetection": "Semantic turn detection",
+  "gatewaySetup.voice.semanticTurnDetectionHint":
+    "Enable only when this Realtime deployment explicitly supports semantic VAD. Replacing the deployment resets this capability.",
   "gatewaySetup.voice.speechOutputDeployment": "Read aloud · speech-output deployment",
   "gatewaySetup.voice.outputVoice": "Output voice",
-  "gatewaySetup.voice.outputVoiceHint": "optional; default alloy",
+  "gatewaySetup.voice.outputVoiceHint":
+    "required for Read Aloud; use an ID supported by the selected provider",
+  "gatewaySetup.voice.outputVoiceRequired":
+    "An explicit provider voice ID is required when a speech-output deployment is configured or replaced.",
   "gatewaySetup.voice.endpointUrl": "Audio endpoint URL",
+  "gatewaySetup.voice.preserveExistingHint": "leave blank to keep",
   "gatewaySetup.voice.endpointReplacePlaceholder":
-    "Only enter a value to replace the stored audio URL",
+    "Replace together with credential, locality, and explicit target roles",
   "gatewaySetup.voice.credential": "Audio credential",
   "gatewaySetup.voice.credentialReplacePlaceholder":
     "Only enter a value to replace the stored audio credential",
   "gatewaySetup.voice.credentialPlaceholder": "Paste your audio credential",
   "gatewaySetup.voice.authHeader": "Audio auth header",
+  "gatewaySetup.voice.authHeaderPreservePlaceholder": "Leave blank to keep stored header",
   "gatewaySetup.voice.timeout": "Audio timeout (ms)",
+  "gatewaySetup.voice.timeoutPreservePlaceholder": "Leave blank to keep stored timeout",
   "gatewaySetup.voice.storedAria": "Stored audio credentials",
   "gatewaySetup.voice.audioModels": "Audio models",
   "gatewaySetup.voice.updateSettings": "Update audio and Digital Voice settings",
@@ -338,6 +364,9 @@ export const EN_MESSAGES = {
   "chat.voice.interrupt": "Interrupt the assistant",
   "chat.voice.interruptShort": "Interrupt",
   "chat.voice.interruptAvailable": "Available while Keiko is speaking.",
+  "chat.voice.pendingTurn":
+    "Your spoken turn is still waiting for a confirmed answer. Retry it before sending another message.",
+  "chat.voice.retryPendingTurn": "Retry spoken turn",
   "chat.error.send": "Could not send message.",
   "chat.error.load": "Could not load chat.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",

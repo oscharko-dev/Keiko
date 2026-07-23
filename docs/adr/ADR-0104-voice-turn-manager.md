@@ -6,6 +6,12 @@
 
 Accepted (Issue #499, Epic #491, 2026-06-24)
 
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md). The current Realtime hook reuses the
+manager for bounded floor-state snapshots, while canonical Chat owns turn delivery and independent TTS
+owns assistant playback. Barge-in stops local TTS and reopens input; it does not cancel or create a
+provider assistant response. Provider-response and separate transcript-store assumptions below are
+historical where they conflict with that boundary.
+
 ## Version
 
 0.2.0

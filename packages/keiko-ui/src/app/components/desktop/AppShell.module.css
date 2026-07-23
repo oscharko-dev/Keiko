@@ -1,0 +1,22 @@
+.gatewaySetupDialog {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: min(760px, calc(100vw - 48px));
+  max-width: none;
+  margin: auto;
+  color: inherit;
+  font: inherit;
+}
+
+.gatewaySetupDialog::backdrop {
+  background: transparent;
+}
+
+@media (max-width: 760px) {
+  .gatewaySetupDialog {
+    width: min(760px, calc(100vw - 28px));
+    max-height: calc(100vh - 28px);
+    max-height: calc(100dvh - 28px);
+  }
+}

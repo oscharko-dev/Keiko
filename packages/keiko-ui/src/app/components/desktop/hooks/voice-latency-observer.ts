@@ -2,8 +2,8 @@
 // dictate and realtime voice paths.
 //
 // This layer records WHEN well-known lifecycle marks happen (mic click, permission grant, first audio
-// level, RTC connected, first assistant audio, interrupt ack, …) so the perceived latency of both voice
-// paths can be measured and regressions caught — WITHOUT ever touching content. It is load-bearing for
+// level, RTC connected, final transcript, …) so the perceived latency of both voice input paths can be
+// measured and regressions caught — WITHOUT ever touching content. It is load-bearing for
 // the privacy contract: no transcript, no SDP/ICE string, no audio frame, and no free text ever enters
 // here. Only the mark enum literal and a monotonic millisecond timestamp are recorded, and only enum
 // literals + millisecond deltas leave (to an optional sink). The clock is injectable so the layer is
@@ -36,10 +36,7 @@ type VoiceLatencyMark =
   | "session_updated" // provider acknowledged session.update
   | "session_ready" // hook dispatched 'connected' (session usable)
   | "user_speech_start" // provider/local VAD detected user speech onset
-  | "vad_stop" // end-of-turn detected
-  | "first_assistant_audio" // first assistant audio output of a turn
-  | "interrupt_sent" // barge-in cancel dispatched
-  | "interrupt_ack"; // provider acknowledged the cancel
+  | "vad_stop"; // end-of-turn detected
 
 export interface VoiceLatencySample {
   readonly mark: VoiceLatencyMark;
@@ -94,9 +91,6 @@ const DEFAULT_VOICE_LATENCY_LEGS: readonly (readonly [VoiceLatencyMark, VoiceLat
   ["mic_click", "session_ready"],
   ["rtc_offer_created", "sdp_answer"],
   ["rtc_connected", "session_ready"],
-  // Realtime: end-of-turn → first assistant audio (TTFA), and barge-in latency.
-  ["vad_stop", "first_assistant_audio"],
-  ["interrupt_sent", "interrupt_ack"],
 ];
 
 function defaultNow(): number {

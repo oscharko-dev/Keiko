@@ -3,9 +3,9 @@
 // (validation, scope guard, citation ordering, message persistence) are exercised without
 // spinning up a real workspace or HTTP server.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -21,7 +21,11 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MAX_DESKTOP_CHAT_INPUT_BYTES,
+  type Chat,
+  type GroundedAnswer,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import {
   buildGroundedGatewayMessages,
@@ -48,6 +52,7 @@ import {
   type GatewayConfig,
   type GatewayRequest,
   type NormalizedResponse,
+  type OpenAIEmbeddingOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   openKnowledgeStore,
@@ -59,6 +64,21 @@ import {
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
+import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { handleSendDesktopChat } from "./chat-handlers.js";
+import {
+  canonicalChatTurnGroundingScopeIdentity,
+  canonicalChatTurnIdentityContent,
+} from "./chat-turn-identity.js";
+import { handleUpdateChat } from "./store-handlers.js";
+import { createChatTurnSerializer, type ChatTurnSerializer } from "./chat-turn-serializer.js";
+import {
+  CONVERSATION_MEMORY_FENCE_END,
+  CONVERSATION_MEMORY_FENCE_START,
+} from "./conversation-prompt.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -81,6 +101,17 @@ function asConnectedAnswer(answer: GroundedAnswer): ConnectedAnswer {
 
 function fakeReq(body: string): IncomingMessage {
   return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function fakeRes(): RouteContext["res"] {
@@ -463,13 +494,28 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-async function setupChatWithScope(): Promise<{ chatId: string; projectPath: string }> {
+async function setupChatWithoutScope(): Promise<{ chatId: string; projectPath: string }> {
   const project = store.createProject(tmp, "demo");
   const chat = store.createChat(project.path, "Investigation", CHAT_MODEL);
-  store.updateChat(chat.id, {
+  return Promise.resolve({ chatId: chat.id, projectPath: project.path });
+}
+
+function requiredChat(chatId: string): Chat {
+  const chat = store.findChatById(chatId);
+  if (chat === undefined) throw new Error("expected persisted chat");
+  return chat;
+}
+
+function connectTestScope(chatId: string): void {
+  store.updateChat(chatId, {
     connectedScope: { kind: "directory", relativePaths: ["src"], connectedAtMs: NOW },
   });
-  return Promise.resolve({ chatId: chat.id, projectPath: project.path });
+}
+
+async function setupChatWithScope(): Promise<{ chatId: string; projectPath: string }> {
+  const chat = await setupChatWithoutScope();
+  connectTestScope(chat.chatId);
+  return chat;
 }
 
 function seedScopedRepo(projectPath: string): void {
@@ -480,6 +526,29 @@ function seedScopedRepo(projectPath: string): void {
     "export function MyClass() {\n  return 'foo';\n}\n",
     "utf8",
   );
+}
+
+function insertGroundedTestMemory(vault: MemoryVaultStore, id: string, body: string): void {
+  const now = NOW;
+  vault.insertMemory({
+    id: id as MemoryId,
+    schemaVersion: "1",
+    scope: { kind: "user", userId: "local-operator" as MemoryUserId },
+    type: "preference",
+    body,
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: now,
+      confidence: 1,
+      sensitivity: "public",
+    },
+    validity: { validFrom: now },
+    status: "accepted",
+    pinned: false,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+  });
 }
 
 async function runHandler(
@@ -654,6 +723,561 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it("shares the chat turn serializer with the ungrounded route", async () => {
+    const { chatId, projectPath } = await setupChatWithoutScope();
+    const firstResponse = deferred<NormalizedResponse>();
+    const firstStarted = deferred<undefined>();
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        firstStarted.resolve(undefined);
+        return firstResponse.promise;
+      },
+    };
+    const serializer = createChatTurnSerializer();
+    let serializationEntries = 0;
+    const observingSerializer: ChatTurnSerializer = {
+      runExclusive: (chat, signal, operation) => {
+        serializationEntries += 1;
+        return serializer.runExclusive(chat, signal, operation);
+      },
+    };
+    const sharedDeps = deps(model, {}, { chatTurnSerializer: observingSerializer });
+    const first = handleSendDesktopChat(
+      ctx(
+        JSON.stringify({
+          chatId,
+          projectPath,
+          content: "ungrounded first",
+          modelId: CHAT_MODEL,
+          clientTurnId: "cross-route-first",
+        }),
+      ),
+      sharedDeps,
+    );
+    await firstStarted.promise;
+    connectTestScope(chatId);
+
+    let groundedCalls = 0;
+    const grounded = handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "grounded second",
+          modelId: CHAT_MODEL,
+          clientTurnId: "cross-route-second",
+        }),
+      ),
+      sharedDeps,
+      () => {
+        groundedCalls += 1;
+        return Promise.resolve({
+          pack: emptyPack(),
+          assistantContent: "grounded answer",
+          elapsedMs: 1,
+        });
+      },
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(groundedCalls).toBe(0);
+    expect(store.listMessages(chatId).map((entry) => entry.content)).toEqual(["ungrounded first"]);
+
+    firstResponse.resolve({
+      modelId: CHAT_MODEL,
+      content: "ungrounded answer",
+      finishReason: "stop",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: "cross-route-serialization",
+        promptTokens: 1,
+        completionTokens: 1,
+        latencyMs: 1,
+        costClass: "medium",
+      },
+    });
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    await expect(grounded).resolves.toMatchObject({ status: 200 });
+    expect(groundedCalls).toBe(1);
+    expect(store.listMessages(chatId).map((entry) => entry.content)).toEqual([
+      "ungrounded first",
+      "ungrounded answer",
+      "grounded second",
+      "grounded answer",
+    ]);
+    expect(serializationEntries).toBe(2);
+  });
+
+  it("rejects replaying a completed plain turn through the grounded route", async () => {
+    const { chatId, projectPath } = await setupChatWithoutScope();
+    const content = "same canonical question";
+    const clientTurnId = "plain-then-grounded";
+    const sharedDeps = deps(fakeModel("plain answer", []));
+    const plain = await handleSendDesktopChat(
+      ctx(JSON.stringify({ chatId, projectPath, content, clientTurnId, modelId: CHAT_MODEL })),
+      sharedDeps,
+    );
+    connectTestScope(chatId);
+    let groundedCalls = 0;
+
+    const grounded = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content, clientTurnId, modelId: CHAT_MODEL })),
+      sharedDeps,
+      () => {
+        groundedCalls += 1;
+        return Promise.resolve({
+          pack: emptyPack(),
+          assistantContent: "must not run",
+          elapsedMs: 1,
+        });
+      },
+    );
+
+    expect(plain).toMatchObject({ status: 200 });
+    expect(grounded).toMatchObject({
+      status: 409,
+      body: { error: { code: "CHAT_TURN_IDEMPOTENCY_CONFLICT" } },
+    });
+    expect(groundedCalls).toBe(0);
+    expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+      content,
+      "plain answer",
+    ]);
+  });
+
+  it("revalidates connected scopes after waiting for the chat turn lock", async () => {
+    const { chatId, projectPath } = await setupChatWithoutScope();
+    const firstResponse = deferred<NormalizedResponse>();
+    const firstStarted = deferred<undefined>();
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        firstStarted.resolve(undefined);
+        return firstResponse.promise;
+      },
+    };
+    const sharedDeps = deps(model);
+    const first = handleSendDesktopChat(
+      ctx(
+        JSON.stringify({
+          chatId,
+          projectPath,
+          content: "hold the queue",
+          clientTurnId: "scope-revalidation-first",
+        }),
+      ),
+      sharedDeps,
+    );
+    await firstStarted.promise;
+    connectTestScope(chatId);
+    let groundedCalls = 0;
+    const grounded = handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "must use current scope",
+          clientTurnId: "scope-revalidation-second",
+        }),
+      ),
+      sharedDeps,
+      () => {
+        groundedCalls += 1;
+        return Promise.resolve({
+          pack: emptyPack(),
+          assistantContent: "stale scope answer",
+          elapsedMs: 1,
+        });
+      },
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    store.updateChat(chatId, { connectedScope: null });
+
+    firstResponse.resolve({
+      modelId: CHAT_MODEL,
+      content: "queue released",
+      finishReason: "stop",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: "scope-revalidation",
+        promptTokens: 1,
+        completionTokens: 1,
+        latencyMs: 1,
+        costClass: "medium",
+      },
+    });
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    await expect(grounded).resolves.toMatchObject({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST" } },
+    });
+    expect(groundedCalls).toBe(0);
+    expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+      "hold the queue",
+      "queue released",
+    ]);
+  });
+
+  it("captures a grounded disconnect before body parsing without admitting or running", async () => {
+    const { chatId } = await setupChatWithScope();
+    const req = new PassThrough() as unknown as IncomingMessage;
+    const res = fakeRes();
+    let groundedCalls = 0;
+    const outcome = handleGroundedAsk(
+      {
+        req,
+        res,
+        params: {},
+        url: new URL("http://localhost/api/chats/messages/grounded"),
+      },
+      deps(),
+      () => {
+        groundedCalls += 1;
+        return Promise.resolve({
+          pack: emptyPack(),
+          assistantContent: "must not run",
+          elapsedMs: 1,
+        });
+      },
+    );
+
+    (req as unknown as PassThrough).write(Buffer.from(`{"chatId":"${chatId}",`));
+    res.emit("close");
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    expect(groundedCalls).toBe(0);
+    expect(store.listMessages(chatId)).toEqual([]);
+    expect(req.listenerCount("data")).toBe(0);
+    expect(req.listenerCount("end")).toBe(1);
+    expect(req.listenerCount("error")).toBe(1);
+    expect(req.listenerCount("close")).toBe(1);
+    expect(req.listenerCount("aborted")).toBe(0);
+    expect(res.listenerCount("close")).toBe(0);
+    const closed = new Promise<void>((resolve) => {
+      req.once("close", resolve);
+    });
+    (req as unknown as PassThrough).destroy();
+    await closed;
+    expect(req.listenerCount("end")).toBe(0);
+    expect(req.listenerCount("error")).toBe(0);
+    expect(req.listenerCount("close")).toBe(0);
+  });
+
+  it("maps a generic grounded runner abort rejection to cancellation", async () => {
+    const { chatId } = await setupChatWithScope();
+    const res = fakeRes();
+    const started = deferred<undefined>();
+    let rejectRunner!: (error: Error) => void;
+    const runnerOutcome = new Promise<OrchestratorOutput>((_resolve, reject) => {
+      rejectRunner = reject;
+    });
+    const outcome = handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "generic grounded abort",
+          clientTurnId: "generic-grounded-abort",
+        }),
+        res,
+      ),
+      deps(),
+      () => {
+        started.resolve(undefined);
+        return runnerOutcome;
+      },
+    );
+    await started.promise;
+
+    expect(res.writableEnded).toBe(false);
+    expect(res.listenerCount("close")).toBe(1);
+    res.emit("close");
+    expect(res.listenerCount("close")).toBe(0);
+    rejectRunner(new Error("runner emitted a generic abort error"));
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "generic grounded abort" },
+    ]);
+    expect(
+      store.inspectChatTurn(
+        chatId,
+        "generic-grounded-abort",
+        canonicalChatTurnIdentityContent({
+          routeKind: "grounded",
+          content: "generic grounded abort",
+          modelId: CHAT_MODEL,
+          groundingScopeIdentity: canonicalChatTurnGroundingScopeIdentity(requiredChat(chatId)),
+          memory: null,
+        }),
+      ).kind,
+    ).toBe("retryable");
+  });
+
+  it.each([undefined, "never-settling-grounded-turn"])(
+    "keeps the chat lock until a grounded runner that ignored cancellation settles (%s)",
+    async (clientTurnId) => {
+      const { chatId } = await setupChatWithScope();
+      const res = fakeRes();
+      const started = deferred<undefined>();
+      const abandoned = deferred<OrchestratorOutput>();
+      const sharedDeps = deps(fakeModel("successor answer", []));
+      const outcome = handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "abandoned grounded request",
+            ...(clientTurnId === undefined ? {} : { clientTurnId }),
+          }),
+          res,
+        ),
+        sharedDeps,
+        () => {
+          started.resolve(undefined);
+          return abandoned.promise;
+        },
+      );
+      await started.promise;
+      let successorCalls = 0;
+      const successor = handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "successor grounded turn",
+            clientTurnId: `successor-${clientTurnId ?? "legacy"}`,
+          }),
+        ),
+        sharedDeps,
+        () => {
+          successorCalls += 1;
+          return Promise.resolve({
+            pack: emptyPack(),
+            assistantContent: "successor answer",
+            elapsedMs: 1,
+          });
+        },
+      );
+
+      res.emit("close");
+
+      await expect(outcome).resolves.toMatchObject({ status: 499 });
+      await Promise.resolve();
+      expect(successorCalls).toBe(0);
+      abandoned.resolve({
+        pack: emptyPack(),
+        assistantContent: "late grounded answer",
+        elapsedMs: 1,
+      });
+      await expect(successor).resolves.toMatchObject({ status: 200 });
+      expect(successorCalls).toBe(1);
+      expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+        "abandoned grounded request",
+        "successor grounded turn",
+        "successor answer",
+      ]);
+    },
+  );
+
+  it("fails closed when the grounded scope changes through a direct store mutation", async () => {
+    const { chatId } = await setupChatWithScope();
+    const started = deferred<undefined>();
+    const answer = deferred<OrchestratorOutput>();
+    const outcome = handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "scope-sensitive request" })),
+      deps(),
+      () => {
+        started.resolve(undefined);
+        return answer.promise;
+      },
+    );
+    await started.promise;
+
+    store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
+    answer.resolve({ pack: emptyPack(), assistantContent: "stale scoped answer", elapsedMs: 1 });
+
+    await expect(outcome).resolves.toMatchObject({
+      status: 409,
+      body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+    });
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "scope-sensitive request" },
+    ]);
+  });
+
+  it("rejects a queued grounded turn before memory or retrieval when its captured scope changed", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const capturedIdentity = store.findChatById(chatId)?.groundingScopeIdentity;
+    store.updateChat(chatId, {
+      connectedScopes: [
+        { kind: "directory", relativePaths: ["other"], root: projectPath, connectedAtMs: 99 },
+      ],
+    });
+    const memoryDir = join(tmp, "scope-token-memory");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertGroundedTestMemory(memoryVault, "scope-token-memory", "A durable private preference");
+    const embedding = vi.fn((): Promise<OpenAIEmbeddingOutcome> =>
+      Promise.resolve({
+        ok: true,
+        value: {
+          modelId: "text-embedding-3-small",
+          vector: new Float32Array([1, 0]),
+        },
+      }),
+    );
+    const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+    try {
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "Use only the captured repository",
+            clientTurnId: "captured-grounding-scope",
+            expectedGroundingScopeIdentity: capturedIdentity,
+            memory: {
+              enabled: true,
+              budgetTokens: 1200,
+              mode: "governed-assist",
+              context: {
+                userId: "local-operator",
+                workspaceId: projectPath,
+                projectId: projectPath,
+                conversationId: chatId,
+              },
+            },
+          }),
+        ),
+        deps(
+          fakeModel("unused", []),
+          {},
+          { memoryVault, localKnowledgeEmbeddingRequest: embedding },
+        ),
+        scopedRunner,
+      );
+
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+      });
+      expect(scopedRunner).not.toHaveBeenCalled();
+      expect(embedding).not.toHaveBeenCalled();
+      expect(store.listMessages(chatId)).toMatchObject([
+        { role: "user", content: "Use only the captured repository" },
+      ]);
+    } finally {
+      memoryVault.close();
+    }
+  });
+
+  it("linearizes a scope PATCH after the active grounded turn", async () => {
+    const { chatId } = await setupChatWithScope();
+    const started = deferred<undefined>();
+    const answer = deferred<OrchestratorOutput>();
+    const sharedDeps = deps();
+    const grounded = handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "linearized scope request" })),
+      sharedDeps,
+      () => {
+        started.resolve(undefined);
+        return answer.promise;
+      },
+    );
+    await started.promise;
+    const patch = handleUpdateChat(
+      {
+        req: fakeReq(JSON.stringify({ connectedScopes: null })),
+        res: fakeRes(),
+        params: {},
+        url: new URL(`http://localhost/api/chats?id=${chatId}`),
+      },
+      sharedDeps,
+    );
+    let patchSettled = false;
+    void patch.then(() => {
+      patchSettled = true;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(patchSettled).toBe(false);
+    expect(store.findChatById(chatId)?.connectedScope).toBeDefined();
+
+    answer.resolve({ pack: emptyPack(), assistantContent: "linearized answer", elapsedMs: 1 });
+
+    await expect(grounded).resolves.toMatchObject({ status: 200 });
+    await expect(patch).resolves.toMatchObject({ status: 200 });
+    expect(store.findChatById(chatId)?.connectedScope).toBeUndefined();
+    expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
+      "linearized scope request",
+      "linearized answer",
+    ]);
+  });
+
+  it.each([undefined, "grounded-memory-attach-cancel"])(
+    "keeps the assistant uncommitted when cancellation interrupts memory finalization (%s)",
+    async (clientTurnId) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      const memoryDir = join(tmp, `grounded-memory-attach-${clientTurnId ?? "legacy"}`);
+      mkdirSync(memoryDir);
+      const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+      const embeddingStarted = deferred<undefined>();
+      const embedding = deferred<OpenAIEmbeddingOutcome>();
+      const res = fakeRes();
+      const request = {
+        chatId,
+        content: "remember that I prefer dark mode",
+        ...(clientTurnId === undefined ? {} : { clientTurnId }),
+        memory: {
+          enabled: true,
+          budgetTokens: 1200,
+          mode: "governed-assist",
+          context: {
+            userId: "local-operator",
+            workspaceId: projectPath,
+            projectId: projectPath,
+            conversationId: chatId,
+          },
+        },
+      };
+      const outcome = handleGroundedAsk(
+        ctx(JSON.stringify(request), res),
+        deps(
+          fakeModel("unused", []),
+          {},
+          {
+            config: nonChatRequestedModelConfig(),
+            memoryVault,
+            localKnowledgeEmbeddingRequest: () => {
+              embeddingStarted.resolve(undefined);
+              return embedding.promise;
+            },
+          },
+        ),
+        runner(emptyPack(), "Dark mode remembered."),
+      );
+      await embeddingStarted.promise;
+
+      res.emit("close");
+
+      await expect(outcome).resolves.toMatchObject({ status: 499 });
+      expect(store.listMessages(chatId)).toMatchObject([
+        { role: "user", content: "remember that I prefer dark mode" },
+      ]);
+      embedding.resolve({
+        ok: true,
+        value: {
+          vector: Float32Array.from([1, 0]),
+          modelId: "text-embedding-3-small",
+        },
+      });
+      await Promise.resolve();
+      expect(store.listMessages(chatId)).toHaveLength(1);
+      memoryVault.close();
+    },
+  );
+
   it("rejects body that is not JSON with 400 BAD_REQUEST", async () => {
     const result = await runHandler("not-json");
     expect(result.status).toBe(400);
@@ -667,6 +1291,60 @@ describe("handleGroundedAsk", () => {
   it("rejects when content is empty", async () => {
     const result = await runHandler(JSON.stringify({ chatId: "abc", content: "  " }));
     expect(result.status).toBe(400);
+  });
+
+  it("admits a 16,001-character grounded final atomically and rejects multibyte overflow", async () => {
+    const { chatId } = await setupChatWithScope();
+    const longFinal = `${"a".repeat(8_000)} ${"b".repeat(8_000)}`;
+    let groundedCalls = 0;
+    let groundedQuery: string | undefined;
+    const groundedRunner: GroundedRunner = (input) => {
+      groundedCalls += 1;
+      groundedQuery = input.query.text;
+      return Promise.resolve({
+        pack: emptyPack(),
+        assistantContent: "One grounded answer.",
+        elapsedMs: 1,
+      });
+    };
+    const accepted = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: longFinal,
+          clientTurnId: "long-grounded-final",
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(),
+      groundedRunner,
+    );
+
+    expect(accepted.status).toBe(200);
+    expect(groundedCalls).toBe(1);
+    expect(groundedQuery).toBe(longFinal);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: longFinal },
+      { role: "assistant", content: "One grounded answer." },
+    ]);
+
+    const multibyteOverflow = "😀".repeat(Math.floor(MAX_DESKTOP_CHAT_INPUT_BYTES / 4) + 1);
+    const rejected = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: multibyteOverflow,
+          clientTurnId: "overlong-grounded-final",
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(),
+      groundedRunner,
+    );
+
+    expect(rejected.status).toBe(400);
+    expect(groundedCalls).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(2);
   });
 
   it("rejects when chat does not exist with 404 NOT_FOUND", async () => {
@@ -683,7 +1361,7 @@ describe("handleGroundedAsk", () => {
     expect(body.error.message).toContain("connected scope");
   });
 
-  it("maps typed workspace search errors to safe 400 responses without persistence", async () => {
+  it("maps typed workspace errors safely while retaining the admitted user turn", async () => {
     const { chatId } = await setupChatWithScope();
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "explain src/foo.ts" })),
@@ -694,7 +1372,9 @@ describe("handleGroundedAsk", () => {
     const body = result.body as { error: { code: string; message: string } };
     expect(body.error.code).toBe("BAD_REQUEST");
     expect(body.error.message).toBe("Query is not usable.");
-    expect(store.listMessages(chatId)).toEqual([]);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "explain src/foo.ts" },
+    ]);
   });
 
   it("rejects a grounded ask whose workspace root is on the deny-list before invoking the runner", async () => {
@@ -1166,7 +1846,7 @@ describe("handleGroundedAsk", () => {
     expect(body.error.code).toBe("NO_MODEL");
   });
 
-  it("does not persist messages when the HTTP request is cancelled during the model call", async () => {
+  it("persists the admitted user turn when the HTTP request is cancelled during the model call", async () => {
     const { chatId, projectPath } = await setupChatWithScope();
     seedScopedRepo(projectPath);
     const res = fakeRes();
@@ -1198,7 +1878,9 @@ describe("handleGroundedAsk", () => {
     );
 
     expect(result.status).toBe(499);
-    expect(store.listMessages(chatId)).toEqual([]);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: GROUNDED_FIXTURE_QUESTION },
+    ]);
   });
 
   it("redacts grounded user content before persisting the user message", async () => {
@@ -1237,7 +1919,7 @@ describe("handleGroundedAsk", () => {
       runner(invalidPack),
     );
     expect(result.status).toBe(500);
-    expect(store.listMessages(chatId)).toEqual([]);
+    expect(store.listMessages(chatId)).toMatchObject([{ role: "user", content: "hello" }]);
   });
 
   it("fails closed when the runner returns a malformed pack that would make validation throw", async () => {
@@ -1250,19 +1932,20 @@ describe("handleGroundedAsk", () => {
       } satisfies OrchestratorOutput);
     const result = await runHandler(JSON.stringify({ chatId, content: "hello" }), malformedRunner);
     expect(result.status).toBe(500);
-    expect(store.listMessages(chatId)).toEqual([]);
+    expect(store.listMessages(chatId)).toMatchObject([{ role: "user", content: "hello" }]);
   });
 
   it("happy path: persists user + assistant messages and returns sorted citations", async () => {
     const { chatId } = await setupChatWithScope();
+    const assistantContent = "Inspected 2 file(s) [src/bar.ts] and [src/foo.ts:10-20].";
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "How does MyClass work?" })),
       deps(),
-      runner(packWithCitations(), "Inspected 2 file(s) ..."),
+      runner(packWithCitations(), assistantContent),
     );
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    expect(answer.content).toBe("Inspected 2 file(s) ...");
+    expect(answer.content).toBe(assistantContent);
     expect(answer.elapsedMs).toBe(42);
     // Citations sorted by score desc — atom-high before atom-low.
     expect(answer.citations.map((c) => c.stableId)).toEqual(["atom-high", "atom-low"]);
@@ -1278,7 +1961,632 @@ describe("handleGroundedAsk", () => {
     expect(userMsg?.role).toBe("user");
     expect(userMsg?.content).toBe("How does MyClass work?");
     expect(assistMsg?.role).toBe("assistant");
-    expect(assistMsg?.content).toBe("Inspected 2 file(s) ...");
+    expect(assistMsg?.content).toBe(assistantContent);
+  });
+
+  it("replays a completed grounded turn with the same canonical message ids", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    let runnerCalls = 0;
+    const countingRunner: GroundedRunner = (input) => {
+      runnerCalls += 1;
+      return runner(packWithCitations(), "Canonical grounded answer.")(input);
+    };
+    const request = {
+      chatId,
+      content: "How does MyClass work?",
+      clientTurnId: "grounded-voice-turn-1",
+      memory: {
+        enabled: false,
+        budgetTokens: 1200,
+        mode: "governed-assist",
+        context: {
+          userId: "local-operator",
+          workspaceId: projectPath,
+          projectId: projectPath,
+          conversationId: chatId,
+        },
+      },
+    };
+
+    const first = await handleGroundedAsk(ctx(JSON.stringify(request)), deps(), countingRunner);
+    const replay = await handleGroundedAsk(ctx(JSON.stringify(request)), deps(), countingRunner);
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    const firstAnswer = asConnectedAnswer(first.body as GroundedAnswer);
+    const replayAnswer = asConnectedAnswer(replay.body as GroundedAnswer);
+    expect(replayAnswer.userMessageId).toBe(firstAnswer.userMessageId);
+    expect(replayAnswer.assistantMessageId).toBe(firstAnswer.assistantMessageId);
+    expect(replayAnswer.citations).toEqual(firstAnswer.citations);
+    expect(replayAnswer.memory).toEqual(firstAnswer.memory);
+    expect(runnerCalls).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(2);
+
+    const modelConflict = await handleGroundedAsk(
+      ctx(JSON.stringify({ ...request, modelId: "different-semantic-model" })),
+      deps(),
+      countingRunner,
+    );
+    expect(modelConflict.status).toBe(409);
+    expect(runnerCalls).toBe(1);
+
+    const memoryConflict = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          ...request,
+          memory: { ...request.memory, budgetTokens: request.memory.budgetTokens + 1 },
+        }),
+      ),
+      deps(),
+      countingRunner,
+    );
+    expect(memoryConflict.status).toBe(409);
+    expect(runnerCalls).toBe(1);
+
+    const conflict = await handleGroundedAsk(
+      ctx(JSON.stringify({ ...request, content: "Different text for the same turn." })),
+      deps(),
+      countingRunner,
+    );
+    expect(conflict.status).toBe(409);
+    expect(runnerCalls).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(2);
+  });
+
+  it("rejects a closed grounded turn before admission and reuses its id after restore", async () => {
+    const { chatId } = await setupChatWithScope();
+    store.updateChat(chatId, { status: "closed" });
+    let runnerCalls = 0;
+    const countingRunner: GroundedRunner = (input) => {
+      runnerCalls += 1;
+      return runner(packWithCitations(), "Restored grounded answer.")(input);
+    };
+    const request = {
+      chatId,
+      content: "Ground this only after restore.",
+      clientTurnId: "closed-grounded-turn",
+    };
+
+    const closed = await handleGroundedAsk(ctx(JSON.stringify(request)), deps(), countingRunner);
+    expect(closed).toMatchObject({
+      status: 409,
+      body: { error: { code: "CHAT_CLOSED" } },
+    });
+    expect(runnerCalls).toBe(0);
+    expect(store.listMessages(chatId)).toHaveLength(0);
+
+    store.updateChat(chatId, { status: "open" });
+    const restored = await handleGroundedAsk(ctx(JSON.stringify(request)), deps(), countingRunner);
+    expect(restored.status).toBe(200);
+    expect(runnerCalls).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(2);
+
+    store.updateChat(chatId, { status: "closed" });
+    const replay = await handleGroundedAsk(ctx(JSON.stringify(request)), deps(), countingRunner);
+    expect(replay.status).toBe(200);
+    expect(runnerCalls).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(2);
+  });
+
+  it("reuses one evidence manifest when completion fails after evidence persistence", async () => {
+    const { chatId } = await setupChatWithScope();
+    const evidenceStore = createInMemoryEvidenceStore();
+    let failCompletion = true;
+    const completionFailingStore: UiStore = {
+      ...store,
+      completeChatTurn: (...args) => {
+        if (failCompletion) {
+          failCompletion = false;
+          return { kind: "conflict" };
+        }
+        return store.completeChatTurn(...args);
+      },
+    };
+    let runnerCalls = 0;
+    const countingRunner: GroundedRunner = (input) => {
+      runnerCalls += 1;
+      return runner(packWithCitations(), "Deterministic evidence answer.")(input);
+    };
+    const request = {
+      chatId,
+      content: "Where is MyClass defined?",
+      clientTurnId: "grounded-evidence-completion-retry",
+    };
+
+    const failed = await handleGroundedAsk(
+      ctx(JSON.stringify(request)),
+      deps(undefined, {}, { evidenceStore, store: completionFailingStore }),
+      countingRunner,
+    );
+    expect(failed.status).toBe(500);
+    expect(store.listMessages(chatId)).toHaveLength(1);
+    expect(evidenceStore.list()).toHaveLength(1);
+
+    const semanticConflict = await handleGroundedAsk(
+      ctx(JSON.stringify({ ...request, modelId: "different-semantic-model" })),
+      deps(undefined, {}, { evidenceStore }),
+      countingRunner,
+    );
+    expect(semanticConflict.status).toBe(409);
+    expect(runnerCalls).toBe(1);
+    expect(store.listMessages(chatId)).toHaveLength(1);
+
+    const retried = await handleGroundedAsk(
+      ctx(JSON.stringify(request)),
+      deps(undefined, {}, { evidenceStore }),
+      countingRunner,
+    );
+    const replay = await handleGroundedAsk(
+      ctx(JSON.stringify(request)),
+      deps(undefined, {}, { evidenceStore }),
+      countingRunner,
+    );
+    expect(retried.status).toBe(200);
+    expect(replay.status).toBe(200);
+    const retriedAnswer = asConnectedAnswer(retried.body as GroundedAnswer);
+    const replayAnswer = asConnectedAnswer(replay.body as GroundedAnswer);
+    expect(replayAnswer.assistantMessageId).toBe(retriedAnswer.assistantMessageId);
+    expect(replayAnswer.evidenceRunId).toBe(retriedAnswer.evidenceRunId);
+    expect(evidenceStore.list()).toHaveLength(1);
+    expect(runnerCalls).toBe(2);
+    expect(store.listMessages(chatId)).toHaveLength(2);
+  });
+
+  it("keeps grounded v3 identity stable when memory capture precedes completion failure", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const memoryDir = join(tmp, "grounded-memory-completion-retry-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    let failCompletion = true;
+    const completionFailingStore: UiStore = {
+      ...store,
+      completeChatTurn: (...args) => {
+        if (failCompletion) {
+          failCompletion = false;
+          return { kind: "conflict" };
+        }
+        return store.completeChatTurn(...args);
+      },
+    };
+    let runnerCalls = 0;
+    const countingRunner: GroundedRunner = (input) => {
+      runnerCalls += 1;
+      return runner(emptyPack(), "Dark mode preference acknowledged.")(input);
+    };
+    const request = {
+      chatId,
+      content: "remember that I prefer dark mode",
+      clientTurnId: "grounded-memory-capture-completion-retry",
+      memory: {
+        enabled: true,
+        budgetTokens: 1200,
+        mode: "governed-assist",
+        context: {
+          userId: "local-operator",
+          workspaceId: projectPath,
+          projectId: projectPath,
+          conversationId: chatId,
+        },
+      },
+    };
+
+    try {
+      const failed = await handleGroundedAsk(
+        ctx(JSON.stringify(request)),
+        deps(undefined, {}, { memoryVault, store: completionFailingStore }),
+        countingRunner,
+      );
+      const memoryIdsAfterFailure = memoryVault
+        .listMemoriesAcrossScopes(memoryVault.listMemoryScopes())
+        .map((memory) => memory.id);
+      expect(failed.status).toBe(500);
+      expect(memoryIdsAfterFailure.length).toBeGreaterThan(0);
+      expect(store.listMessages(chatId)).toHaveLength(1);
+
+      const retried = await handleGroundedAsk(
+        ctx(JSON.stringify(request)),
+        deps(undefined, {}, { memoryVault }),
+        countingRunner,
+      );
+      const replay = await handleGroundedAsk(
+        ctx(JSON.stringify(request)),
+        deps(undefined, {}, { memoryVault }),
+        countingRunner,
+      );
+      expect(retried.status).toBe(200);
+      expect(replay.status).toBe(200);
+      expect(asConnectedAnswer(replay.body as GroundedAnswer).assistantMessageId).toBe(
+        asConnectedAnswer(retried.body as GroundedAnswer).assistantMessageId,
+      );
+      expect(
+        memoryVault
+          .listMemoriesAcrossScopes(memoryVault.listMemoryScopes())
+          .map((memory) => memory.id),
+      ).toEqual(memoryIdsAfterFailure);
+      expect(runnerCalls).toBe(2);
+      expect(store.listMessages(chatId)).toHaveLength(2);
+    } finally {
+      memoryVault.close();
+    }
+  });
+
+  it("preserves the disabled MemoriaViva branch for a grounded turn", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "Remember that I work as a software developer.",
+          memory: {
+            enabled: false,
+            budgetTokens: 1200,
+            mode: "governed-assist",
+            context: {
+              userId: "local-operator",
+              workspaceId: projectPath,
+              projectId: projectPath,
+              conversationId: chatId,
+            },
+          },
+        }),
+      ),
+      deps(),
+      runner(emptyPack(), "Acknowledged."),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer & {
+      readonly memory?: { readonly context: { readonly enabled: boolean } };
+    };
+    expect(answer.memory?.context.enabled).toBe(false);
+  });
+
+  it("retrieves grounded memory from the user question without assistant-answer bias", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const memoryDir = join(tmp, "grounded-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    try {
+      insertGroundedTestMemory(
+        memoryVault,
+        "mem-package-manager",
+        "Use pnpm for package installs.",
+      );
+      insertGroundedTestMemory(
+        memoryVault,
+        "mem-production-database",
+        "The production database uses PostgreSQL.",
+      );
+      let answerQuestion: string | undefined;
+      let answerOnlyContextAvailable = false;
+      const memoryAwareRunner: GroundedRunner = (input) => {
+        answerQuestion = (
+          input as OrchestratorInput & { readonly answerQuestion?: string | undefined }
+        ).answerQuestion;
+        answerOnlyContextAvailable = input.answerOnlyContextAvailable === true;
+        return runner(
+          emptyPack(),
+          "Use pnpm for package installs. The production database uses PostgreSQL.",
+        )(input);
+      };
+
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "Which package manager should I use for installs?",
+            memory: {
+              enabled: true,
+              budgetTokens: 1200,
+              mode: "governed-assist",
+              context: {
+                userId: "local-operator",
+                workspaceId: projectPath,
+                projectId: projectPath,
+                conversationId: chatId,
+              },
+            },
+          }),
+        ),
+        deps(undefined, {}, { memoryVault }),
+        memoryAwareRunner,
+      );
+
+      expect(result.status).toBe(200);
+      const answer = result.body as GroundedAnswer & {
+        readonly memory?: {
+          readonly context: { readonly memories: readonly { readonly bodyExcerpt: string }[] };
+        };
+      };
+      const recalled = answer.memory?.context.memories.map((memory) => memory.bodyExcerpt) ?? [];
+      const generationQuestion = answerQuestion ?? "";
+      expect(recalled).toContain("Use pnpm for package installs.");
+      expect(recalled).not.toContain("The production database uses PostgreSQL.");
+      expect(generationQuestion).toContain("Use pnpm for package installs.");
+      expect(generationQuestion).not.toContain("The production database uses PostgreSQL.");
+      expect(generationQuestion).toContain(CONVERSATION_MEMORY_FENCE_START);
+      expect(generationQuestion).toContain(CONVERSATION_MEMORY_FENCE_END);
+      expect(generationQuestion.indexOf(CONVERSATION_MEMORY_FENCE_START)).toBeLessThan(
+        generationQuestion.indexOf("Use pnpm for package installs."),
+      );
+      expect(generationQuestion.indexOf("Use pnpm for package installs.")).toBeLessThan(
+        generationQuestion.indexOf(CONVERSATION_MEMORY_FENCE_END),
+      );
+      expect(answerOnlyContextAvailable).toBe(true);
+      expect(
+        memoryVault
+          .getAccessStats(["mem-package-manager" as MemoryId])
+          .get("mem-package-manager" as MemoryId)?.accessCount,
+      ).toBe(1);
+    } finally {
+      memoryVault.close();
+    }
+  });
+
+  it("keeps a successful grounded answer when optional memory enrichment fails", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const memoryDir = join(tmp, "failing-grounded-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertGroundedTestMemory(memoryVault, "mem-package-manager", "Use pnpm for package installs.");
+    const failingMemoryVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        if (property === "listMemoriesByScope") {
+          return (): never => {
+            throw new Error("sensitive-memory-backend-detail");
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+
+    try {
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "Which package manager should I use?",
+            memory: {
+              enabled: true,
+              budgetTokens: 1200,
+              mode: "governed-assist",
+              context: {
+                userId: "local-operator",
+                workspaceId: projectPath,
+                projectId: projectPath,
+                conversationId: chatId,
+              },
+            },
+          }),
+        ),
+        deps(
+          undefined,
+          {},
+          {
+            memoryVault: failingMemoryVault,
+            diagnostics: { record: (record) => diagnostics.push(record) },
+          },
+        ),
+        runner(emptyPack(), "Use the package manager configured by the repository."),
+      );
+
+      expect(result.status).toBe(200);
+      expect((result.body as GroundedAnswer).content).toContain("package manager");
+      expect(
+        (result.body as GroundedAnswer & { readonly memory?: unknown }).memory,
+      ).toBeUndefined();
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        operation: "grounded.memory",
+        source: "grounded-qa.attach-memory",
+        message: "grounded-memory-enrichment-failed",
+      });
+      expect(JSON.stringify(diagnostics)).not.toContain("sensitive-memory-backend-detail");
+    } finally {
+      memoryVault.close();
+    }
+  });
+
+  it("keeps canonical Voice and typed grounding behavior equal when memory preparation fails", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const memoryDir = join(tmp, "canonical-grounded-memory-retry-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertGroundedTestMemory(memoryVault, "mem-package-manager", "Use npm for package installs.");
+    const failingMemoryVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        if (property === "listMemoriesByScope") {
+          return (): never => {
+            throw new Error("sensitive-canonical-memory-backend-detail");
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    let runnerCalls = 0;
+    const countingRunner: GroundedRunner = (input) => {
+      runnerCalls += 1;
+      return runner(emptyPack(), "Use npm for package installs.")(input);
+    };
+    const request = {
+      chatId,
+      content: "Which package manager should I use?",
+      clientTurnId: "canonical-grounded-memory-prepare-retry",
+      memory: {
+        enabled: true,
+        budgetTokens: 1200,
+        mode: "governed-assist",
+        context: {
+          userId: "local-operator",
+          workspaceId: projectPath,
+          projectId: projectPath,
+          conversationId: chatId,
+        },
+      },
+    };
+
+    try {
+      const first = await handleGroundedAsk(
+        ctx(JSON.stringify(request)),
+        deps(
+          undefined,
+          {},
+          {
+            memoryVault: failingMemoryVault,
+            diagnostics: { record: (record) => diagnostics.push(record) },
+          },
+        ),
+        countingRunner,
+      );
+      expect(first.status).toBe(200);
+      expect(runnerCalls).toBe(1);
+      const firstAnswer = asConnectedAnswer(first.body as GroundedAnswer);
+      expect(firstAnswer.memory).toBeUndefined();
+      expect(store.listMessages(chatId)).toHaveLength(2);
+      expect(JSON.stringify(diagnostics)).not.toContain(
+        "sensitive-canonical-memory-backend-detail",
+      );
+
+      const replay = await handleGroundedAsk(
+        ctx(JSON.stringify(request)),
+        deps(undefined, {}, { memoryVault }),
+        countingRunner,
+      );
+      expect(replay.status).toBe(200);
+      const replayAnswer = asConnectedAnswer(replay.body as GroundedAnswer);
+      expect(replayAnswer.userMessageId).toBe(firstAnswer.userMessageId);
+      expect(replayAnswer.assistantMessageId).toBe(firstAnswer.assistantMessageId);
+      expect(runnerCalls).toBe(1);
+      expect(store.listMessages(chatId)).toHaveLength(2);
+    } finally {
+      memoryVault.close();
+    }
+  });
+
+  it("keeps a canonical grounded answer when optional memory capture fails", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const memoryDir = join(tmp, "canonical-grounded-memory-capture-failure-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const failingMemoryVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        if (property === "insertMemory") {
+          return (): never => {
+            throw new Error("sensitive-canonical-memory-capture-detail");
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const request = {
+      chatId,
+      content: "remember that I prefer dark mode",
+      clientTurnId: "canonical-grounded-memory-capture-failure",
+      memory: {
+        enabled: true,
+        budgetTokens: 1200,
+        mode: "governed-assist",
+        context: {
+          userId: "local-operator",
+          workspaceId: projectPath,
+          projectId: projectPath,
+          conversationId: chatId,
+        },
+      },
+    };
+
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify(request)),
+        deps(
+          undefined,
+          {},
+          {
+            memoryVault: failingMemoryVault,
+            diagnostics: { record: (record) => diagnostics.push(record) },
+          },
+        ),
+        runner(emptyPack(), "Dark mode preference acknowledged."),
+      );
+
+      expect(result.status).toBe(200);
+      expect((result.body as GroundedAnswer).content).toContain("Dark mode");
+      expect(store.listMessages(chatId)).toHaveLength(2);
+      expect(diagnostics).toMatchObject([
+        {
+          operation: "grounded.memory",
+          source: "grounded-qa.attach-memory",
+          message: "grounded-memory-enrichment-failed",
+        },
+      ]);
+      expect(JSON.stringify(diagnostics)).not.toContain(
+        "sensitive-canonical-memory-capture-detail",
+      );
+    } finally {
+      memoryVault.close();
+    }
+  });
+
+  it("keeps the pre-resolved memory context when chat lookup changes after answering", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    let contextUnavailable = false;
+    const contextUnavailableStore: UiStore = {
+      ...store,
+      attachGroundedAnswer: (messageId, answer) => {
+        const stored = store.attachGroundedAnswer(messageId, answer);
+        contextUnavailable = true;
+        return stored;
+      },
+      findChatById: (id) => store.findChatById(id),
+      listChats: (path) => (contextUnavailable ? [] : store.listChats(path)),
+    };
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: "Which package manager should I use?",
+          memory: {
+            enabled: true,
+            budgetTokens: 1200,
+            mode: "governed-assist",
+            context: {
+              userId: "local-operator",
+              workspaceId: projectPath,
+              projectId: projectPath,
+              conversationId: chatId,
+            },
+          },
+        }),
+      ),
+      deps(
+        undefined,
+        {},
+        {
+          store: contextUnavailableStore,
+          diagnostics: { record: (record) => diagnostics.push(record) },
+        },
+      ),
+      runner(emptyPack(), "Use the package manager configured by the repository."),
+    );
+
+    expect(result.status).toBe(200);
+    expect((result.body as GroundedAnswer).content).toContain("package manager");
+    expect(
+      (
+        result.body as GroundedAnswer & {
+          readonly memory?: { readonly context: { readonly enabled: boolean } };
+        }
+      ).memory?.context.enabled,
+    ).toBe(true);
+    expect(diagnostics).toEqual([]);
   });
 
   it("returns empty citations + uncertainty when the pack carries none", async () => {
@@ -1479,10 +2787,12 @@ describe("handleGroundedAsk", () => {
     expect(body.error.code).toBe("BAD_REQUEST");
     expect(body.error.message).toBe("modelId must be a configured chat model id.");
     expect(requests).toEqual([]);
-    expect(store.listMessages(chat.id)).toEqual([]);
+    expect(store.listMessages(chat.id)).toMatchObject([
+      { role: "user", content: "What is alpha?" },
+    ]);
   });
 
-  it("does not persist a single-connector answer when the client disconnects after answering", async () => {
+  it("retains the single-connector user turn when the client disconnects after answering", async () => {
     const project = store.createProject(tmp, "demo");
     const chat = store.createChat(project.path, "Knowledge chat", CHAT_MODEL);
     const uiDbPath = join(tmp, "keiko-ui.db");
@@ -1526,7 +2836,9 @@ describe("handleGroundedAsk", () => {
     );
     expect(result.status).toBe(499);
     expect(requests).toHaveLength(1);
-    expect(store.listMessages(chat.id)).toEqual([]);
+    expect(store.listMessages(chat.id)).toMatchObject([
+      { role: "user", content: "What is alpha?" },
+    ]);
   });
 
   it("does not record model-context-sent when the model call fails", async () => {
@@ -1718,7 +3030,7 @@ describe("handleGroundedAsk", () => {
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "How does the whole system work?" })),
       deps(),
-      runner(packWithCitations(), "overview"),
+      runner(packWithCitations(), "overview [src/bar.ts] [src/foo.ts:10-20]"),
     );
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);

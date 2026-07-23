@@ -9,31 +9,28 @@ import { fileURLToPath } from "node:url";
 import { TextEncoder } from "node:util";
 
 import {
+  LocalKnowledgeEval,
+  binaryNdcgAtK,
+  evaluateFloors,
+  mean,
+  runRegressionProbes,
+} from "@oscharko-dev/keiko-evaluations";
+import { DEFAULT_SEARCH_LIMITS, readExcerpt, searchText } from "@oscharko-dev/keiko-workspace";
+
+const {
   ALL_FIXTURES,
   PASS_THRESHOLDS,
   computeRetrievalModeComparison,
   renderRetrievalModeComparisonReport,
   renderRetrievalEvalQualityGateReport,
   runRetrievalEval,
-} from "@oscharko-dev/keiko-local-knowledge";
-import { DEFAULT_SEARCH_LIMITS, readExcerpt, searchText } from "@oscharko-dev/keiko-workspace";
+} = LocalKnowledgeEval;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_BUDGET_PATH = resolve(HERE, "check-retrieval-quality.budget.json");
 const MEM_ROOT = "/quality";
 const FIXED_NOW = () => 1_700_000_000_000;
 const EVAL_K = 5;
-const LOCAL_KNOWLEDGE_DIMENSIONS = [
-  "recall",
-  "precision",
-  "meanReciprocalRank",
-  "ndcg",
-  "sourceIsolation",
-  "citationQuality",
-  "noEvidenceAccuracy",
-  "contextBudgetFit",
-];
-
 const CASES = [
   {
     id: "java-maven-version-declaration",
@@ -293,32 +290,15 @@ export function recallAtK(paths, relevantPaths, k) {
   return hits / relevantPaths.length;
 }
 
-function dcg(binaryRelevance) {
-  let score = 0;
-  for (let i = 0; i < binaryRelevance.length; i += 1) {
-    if (binaryRelevance[i] !== 1) {
-      continue;
-    }
-    score += 1 / Math.log2(i + 2);
-  }
-  return score;
-}
-
-export function ndcgAtK(paths, relevantPaths, k) {
-  const relevant = new Set(relevantPaths);
-  const actual = paths.slice(0, k).map((path) => (relevant.has(path) ? 1 : 0));
-  const ideal = Array.from({ length: Math.min(k, relevantPaths.length) }, () => 1);
-  const idealDcg = dcg(ideal);
-  return idealDcg === 0 ? 1 : dcg(actual) / idealDcg;
-}
-
 export function evaluateQualityBudget(summary, budget) {
-  const failures = [];
-  if (summary.top1Rate < budget.minTop1Rate) failures.push("top1Rate");
-  if (summary.recallAtK < budget.minRecallAtK) failures.push("recallAtK");
-  if (summary.mrr < budget.minMrr) failures.push("mrr");
-  if (summary.ndcgAtK < budget.minNdcgAtK) failures.push("ndcgAtK");
-  if (summary.lineHitRate < budget.minLineHitRate) failures.push("lineHitRate");
+  const minimumResult = evaluateFloors(summary, {
+    top1Rate: budget.minTop1Rate,
+    recallAtK: budget.minRecallAtK,
+    mrr: budget.minMrr,
+    ndcgAtK: budget.minNdcgAtK,
+    lineHitRate: budget.minLineHitRate,
+  });
+  const failures = [...minimumResult.failures];
   if (summary.generatedLeakCount > budget.maxGeneratedLeakCount)
     failures.push("generatedLeakCount");
   if (summary.failedCases.length > 0) failures.push("caseFailures");
@@ -469,15 +449,11 @@ async function evaluateCase(testCase) {
     generatedLeakCount: leaked.length,
     recallAtK: recallAtK(paths, testCase.relevantPaths, EVAL_K),
     mrr: reciprocalRank(paths, testCase.relevantPaths),
-    ndcgAtK: ndcgAtK(paths, testCase.relevantPaths, EVAL_K),
+    ndcgAtK: binaryNdcgAtK(paths, testCase.relevantPaths, EVAL_K),
     observedTop: paths[0] ?? "",
     expectedTop: testCase.expectedTop,
     leaked,
   };
-}
-
-function average(values) {
-  return values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function summarize(results) {
@@ -486,11 +462,11 @@ function summarize(results) {
     .map((result) => result.id);
   return {
     cases: results.length,
-    top1Rate: average(results.map((result) => (result.topHit ? 1 : 0))),
-    recallAtK: average(results.map((result) => result.recallAtK)),
-    mrr: average(results.map((result) => result.mrr)),
-    ndcgAtK: average(results.map((result) => result.ndcgAtK)),
-    lineHitRate: average(results.map((result) => (result.lineHit ? 1 : 0))),
+    top1Rate: mean(results.map((result) => (result.topHit ? 1 : 0))),
+    recallAtK: mean(results.map((result) => result.recallAtK)),
+    mrr: mean(results.map((result) => result.mrr)),
+    ndcgAtK: mean(results.map((result) => result.ndcgAtK)),
+    lineHitRate: mean(results.map((result) => (result.lineHit ? 1 : 0))),
     generatedLeakCount: results.reduce((sum, result) => sum + result.generatedLeakCount, 0),
     failedCases,
   };
@@ -536,10 +512,7 @@ async function runWorkspaceQualityCheck(workspaceCases, budgetPath, log) {
 }
 
 function localKnowledgeFailuresFor(scorecard) {
-  const failures = [];
-  for (const dimension of LOCAL_KNOWLEDGE_DIMENSIONS) {
-    if (scorecard.dimensions[dimension] < PASS_THRESHOLDS[dimension]) failures.push(dimension);
-  }
+  const failures = [...evaluateFloors(scorecard.dimensions, PASS_THRESHOLDS).failures];
   if (!scorecard.passed && failures.length === 0) failures.push("passed");
   return failures;
 }
@@ -550,14 +523,14 @@ function summarizeLocalKnowledgeScorecards(scorecards) {
     fixtures: scorecards.length,
     passed: scorecards.length - failed.length,
     failedFixtureIds: failed.map((scorecard) => scorecard.fixtureId),
-    recall: average(scorecards.map((scorecard) => scorecard.dimensions.recall)),
-    precision: average(scorecards.map((scorecard) => scorecard.dimensions.precision)),
-    meanReciprocalRank: average(
+    recall: mean(scorecards.map((scorecard) => scorecard.dimensions.recall)),
+    precision: mean(scorecards.map((scorecard) => scorecard.dimensions.precision)),
+    meanReciprocalRank: mean(
       scorecards.map((scorecard) => scorecard.dimensions.meanReciprocalRank),
     ),
-    ndcg: average(scorecards.map((scorecard) => scorecard.dimensions.ndcg)),
-    sourceIsolation: average(scorecards.map((scorecard) => scorecard.dimensions.sourceIsolation)),
-    noEvidenceAccuracy: average(
+    ndcg: mean(scorecards.map((scorecard) => scorecard.dimensions.ndcg)),
+    sourceIsolation: mean(scorecards.map((scorecard) => scorecard.dimensions.sourceIsolation)),
+    noEvidenceAccuracy: mean(
       scorecards.map((scorecard) => scorecard.dimensions.noEvidenceAccuracy),
     ),
   };
@@ -699,57 +672,40 @@ export function regressFixtureExpectations(fixture) {
   return clone;
 }
 
-// AUDIT-E1858-OPT-001: a probe id that resolves to no fixture (e.g. a future typo) must be a
-// hard failure, not a silent reduction in coverage — the aggregate `probed > 0` guard only
-// checks "did the mechanism run at all", not "did every listed id resolve".
-function unresolvedProbeFixtureIds(fixtures, probeFixtureIds) {
-  const selectedIds = new Set(fixtures.map((fixture) => fixture.id));
-  return probeFixtureIds.filter((id) => !selectedIds.has(id));
-}
-
 export async function runLocalKnowledgeRegressionProbes(
   log,
   fixtures = ALL_FIXTURES,
   runner = runRetrievalEval,
   probeFixtureIds = REGRESSION_PROBE_FIXTURE_IDS,
 ) {
-  const selected = fixtures.filter((fixture) => probeFixtureIds.includes(fixture.id));
-  const unresolved = unresolvedProbeFixtureIds(selected, probeFixtureIds);
-  const tautological = [];
-  let probed = 0;
-  for (const fixture of selected) {
-    const regressed = regressFixtureExpectations(fixture);
-    if (regressed.queries.length === 0) continue;
-    probed += 1;
-    const card = await runner(regressed);
-    const droppedBelowFloors = localKnowledgeFailuresFor(card).length > 0;
-    log(
-      `local-knowledge-retrieval-regression: probe=${fixture.id} expected=below-floors observed=${
-        droppedBelowFloors ? "below-floors" : "PASSED"
-      }`,
-    );
-    if (!droppedBelowFloors) tautological.push(fixture.id);
-  }
-  if (probed === 0) {
+  const result = await runRegressionProbes({
+    fixtures,
+    probeFixtureIds,
+    fixtureId: (fixture) => fixture.id,
+    regressFixture: (fixture) => {
+      const regressed = regressFixtureExpectations(fixture);
+      return regressed.queries.length === 0 ? undefined : regressed;
+    },
+    runFixture: runner,
+    droppedBelowFloors: (card) => localKnowledgeFailuresFor(card).length > 0,
+    observe: ({ fixtureId, droppedBelowFloors }) =>
+      log(
+        `local-knowledge-retrieval-regression: probe=${fixtureId} expected=below-floors observed=${
+          droppedBelowFloors ? "below-floors" : "PASSED"
+        }`,
+      ),
+  });
+  if (result.probed === 0) {
     log(
       `local-knowledge-retrieval-regression: no probe fixtures matched ${probeFixtureIds.join(", ")}`,
     );
   }
-  if (unresolved.length > 0) {
+  if (result.unresolved.length > 0) {
     log(
-      `local-knowledge-retrieval-regression: unresolved probe fixture ids: ${unresolved.join(", ")}`,
+      `local-knowledge-retrieval-regression: unresolved probe fixture ids: ${result.unresolved.join(", ")}`,
     );
   }
-  return {
-    ok: isRegressionProbeClean(tautological, probed, unresolved),
-    tautological,
-    probed,
-    unresolved,
-  };
-}
-
-function isRegressionProbeClean(tautological, probed, unresolved) {
-  return tautological.length === 0 && probed > 0 && unresolved.length === 0;
+  return result;
 }
 
 function regressionFailureMessage(regression) {

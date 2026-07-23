@@ -1,10 +1,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
 import {
   ApiError,
   askGrounded,
-  appendDesktopChatVoiceTurn,
   createDesktopChat,
   fetchChatMessages,
   fetchChats,
@@ -16,12 +16,15 @@ import {
   CONTEXT_OVERSIZED_USER_MESSAGE,
   GROUNDED_ATTACHMENT_NOTICE,
   MAX_ATTACHMENT_BYTES,
+  canonicalVoicePageOutboxRetainsPlaintextForTests,
+  clearCanonicalVoicePageOutboxForTests,
   clearChatSessionBootstrapCacheForTests,
   isInFlight,
   notifyChatDeleted,
   notifyChatUpsert,
   pickChatModelId,
   resolveSelectedModelId,
+  type SendMessageOutcome,
   useChatSession,
 } from "./useChatSession";
 import {
@@ -29,6 +32,14 @@ import {
   useConversationMemorySettings,
 } from "./memorySettings";
 import { loadMemoryAutonomyMode } from "@/lib/memory-api";
+import {
+  clearCanonicalVoiceHasherForTests,
+  prepareCanonicalVoiceHasher,
+} from "./canonical-voice-hasher";
+
+beforeAll(async () => {
+  await prepareCanonicalVoiceHasher();
+});
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {
@@ -49,7 +60,6 @@ vi.mock("@/lib/api", () => ({
     }
   },
   askGrounded: vi.fn(),
-  appendDesktopChatVoiceTurn: vi.fn(),
   createDesktopChat: vi.fn(),
   createProject: vi.fn(),
   fetchChatMessages: vi.fn(),
@@ -58,7 +68,6 @@ vi.mock("@/lib/api", () => ({
   fetchProjects: vi.fn(),
   sendDesktopChat: vi.fn(),
   sendDesktopChatStream: vi.fn(),
-  runRealtimeGroundedTool: vi.fn(),
   updateChat: vi.fn(),
 }));
 
@@ -74,6 +83,7 @@ vi.mock("@/lib/memory-api", () => ({
 }));
 
 afterEach(() => {
+  clearCanonicalVoicePageOutboxForTests();
   vi.clearAllMocks();
   clearChatSessionBootstrapCacheForTests();
   resetConversationMemorySettingsForTests();
@@ -125,8 +135,23 @@ function chat(patch: Partial<Chat> = {}): Chat {
     updatedAt: 1,
     connectedScopes: [],
     localKnowledgeScopes: [],
+    groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
     ...patch,
   } as Chat;
+}
+
+function canonicalVoiceTurn(
+  text: string,
+  clientTurnId: string,
+  targetChat: Chat = chat(),
+  modelId: string = targetChat.selectedModel,
+): {
+  readonly text: string;
+  readonly clientTurnId: string;
+  readonly target: { readonly chat: Chat; readonly modelId: string };
+  readonly allowReservedCapacity?: true;
+} {
+  return { text, clientTurnId, target: { chat: targetChat, modelId } };
 }
 
 function message(patch: Partial<ChatMessage> = {}): ChatMessage {
@@ -475,6 +500,177 @@ describe("useChatSession stale async landing guards", () => {
     expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["msg-b"]);
     expect(rendered.result.current.sendStatus).toBe("cancelled");
   });
+
+  it("does not let a late grounded reconciliation restore the previous chat", async () => {
+    const chatA = chat({
+      id: "chat-a",
+      title: "A",
+      updatedAt: 30,
+      connectedScopes: [{ kind: "files", relativePaths: ["README.md"], connectedAtMs: 1 }],
+    });
+    const chatB = chat({ id: "chat-b", title: "B", updatedAt: 20 });
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-a", streaming: false })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chatA, chatB] });
+    vi.mocked(fetchChatMessages).mockResolvedValueOnce({ messages: [] });
+    vi.mocked(askGrounded).mockResolvedValue({
+      assistantMessageId: "assistant-a",
+      content: "grounded answer",
+      citations: [],
+    } as unknown as Awaited<ReturnType<typeof askGrounded>>);
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    const messagesA = deferred<{ messages: readonly ChatMessage[] }>();
+    const chatsA = deferred<{ chats: readonly Chat[] }>();
+    vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
+      chatId === chatA.id
+        ? messagesA.promise
+        : Promise.resolve({ messages: [message({ id: "msg-b", chatId: chatB.id })] }),
+    );
+    vi.mocked(fetchChats).mockReturnValue(chatsA.promise);
+
+    let sendPromise!: Promise<SendMessageOutcome>;
+    act(() => {
+      sendPromise = rendered.result.current.sendMessage({
+        text: "ground question for A",
+        reportOutcome: true,
+      });
+    });
+    await waitFor(() => expect(fetchChatMessages).toHaveBeenCalledWith(chatA.id, "/repo"));
+
+    await act(async () => {
+      await rendered.result.current.openChat(chatB);
+    });
+    expect(rendered.result.current.activeChat?.id).toBe(chatB.id);
+
+    await act(async () => {
+      messagesA.resolve({
+        messages: [
+          message({ id: "user-a", chatId: chatA.id, content: "ground question for A" }),
+          message({ id: "assistant-a", chatId: chatA.id, role: "assistant" }),
+        ],
+      });
+      chatsA.resolve({ chats: [{ ...chatA, updatedAt: 40 }, chatB] });
+      await sendPromise;
+    });
+
+    expect(rendered.result.current.activeChat?.id).toBe(chatB.id);
+    expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["msg-b"]);
+  });
+
+  it("does not let a cancelled send overwrite the status of its replacement", async () => {
+    const rendered = await setupSwitchSession();
+    const first = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    const second = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    const completed = {
+      chat: chat({ id: "chat-current", selectedModel: "chat-a", updatedAt: 40 }),
+      messages: [
+        message({ id: "user-b", chatId: "chat-current", content: "replacement" }),
+        message({ id: "assistant-b", chatId: "chat-current", role: "assistant" }),
+      ],
+    } as Awaited<ReturnType<typeof sendDesktopChat>>;
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockResolvedValue(completed);
+
+    let firstSend!: Promise<SendMessageOutcome>;
+    act(() => {
+      firstSend = rendered.result.current.sendMessage({ text: "cancel me", reportOutcome: true });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      rendered.result.current.cancelSend();
+    });
+    let replacement!: Promise<SendMessageOutcome>;
+    act(() => {
+      replacement = rendered.result.current.sendMessage({
+        text: "replacement",
+        reportOutcome: true,
+      });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      first.reject(new DOMException("cancelled", "AbortError"));
+      await firstSend;
+    });
+    expect(rendered.result.current.sendStatus).toBe("contacting");
+
+    let thirdOutcome!: SendMessageOutcome;
+    await act(async () => {
+      thirdOutcome = await rendered.result.current.sendMessage({
+        text: "must remain blocked",
+        reportOutcome: true,
+      });
+    });
+    expect(thirdOutcome).toEqual({ status: "not-sent" });
+    expect(sendDesktopChat).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      second.resolve(completed);
+      await replacement;
+    });
+  });
+
+  it("does not let an old cancellation reconciliation delete a completed replacement", async () => {
+    const rendered = await setupSwitchSession();
+    const firstResponse = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    const staleReconciliation = deferred<{ messages: readonly ChatMessage[] }>();
+    const replacementResponse = {
+      chat: chat({ id: "chat-current", selectedModel: "chat-a", updatedAt: 50 }),
+      messages: [
+        message({ id: "canonical-user-b", chatId: "chat-current", content: "replacement" }),
+        message({
+          id: "canonical-assistant-b",
+          chatId: "chat-current",
+          role: "assistant",
+          content: "replacement answer",
+        }),
+      ],
+    } as Awaited<ReturnType<typeof sendDesktopChat>>;
+    vi.mocked(fetchChatMessages).mockReturnValue(staleReconciliation.promise);
+    vi.mocked(sendDesktopChat)
+      .mockReturnValueOnce(firstResponse.promise)
+      .mockResolvedValueOnce(replacementResponse);
+
+    let firstSend!: Promise<SendMessageOutcome>;
+    act(() => {
+      firstSend = rendered.result.current.sendMessage({ text: "cancel me", reportOutcome: true });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(1));
+    act(() => {
+      rendered.result.current.cancelSend();
+    });
+    firstResponse.resolve(replacementResponse);
+    await waitFor(() => expect(fetchChatMessages).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      await rendered.result.current.sendMessage({ text: "replacement", reportOutcome: true });
+    });
+    expect(rendered.result.current.messages.map((entry) => entry.id)).toContain(
+      "canonical-assistant-b",
+    );
+
+    await act(async () => {
+      staleReconciliation.resolve({
+        messages: [
+          message({ id: "canonical-user-a", chatId: "chat-current", content: "cancel me" }),
+        ],
+      });
+      await firstSend;
+    });
+
+    expect(rendered.result.current.messages.map((entry) => entry.id).slice(-2)).toEqual([
+      "canonical-user-b",
+      "canonical-assistant-b",
+    ]);
+  });
 });
 
 describe("useChatSession pending attachment validation", () => {
@@ -599,9 +795,9 @@ describe("useChatSession pending attachment validation", () => {
 
 describe("useChatSession sendMessage — grounded attachment guard", () => {
   // Helper: bootstrap the hook with a grounded chat and a model that accepts documents.
-  async function setupGroundedSession(): Promise<
-    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
-  > {
+  async function setupGroundedSession(
+    initialMessages: readonly ChatMessage[] = [],
+  ): Promise<ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>> {
     const groundedChat = chat({
       id: "chat-grounded",
       selectedModel: "chat-doc",
@@ -613,7 +809,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
     vi.mocked(fetchChats).mockResolvedValue({ chats: [groundedChat] });
-    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: initialMessages });
 
     const rendered = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
@@ -678,9 +874,155 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     });
 
     expect(askGrounded).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(askGrounded).mock.calls[0]?.[0]).toMatchObject({
+      chatId: "chat-grounded",
+      content: "Summarise the repo.",
+      memory: {
+        enabled: true,
+        budgetTokens: 1200,
+        mode: "governed-assist",
+        context: {
+          userId: "local-operator",
+          conversationId: "chat-grounded",
+          projectId: "/repo",
+          workspaceId: "/repo",
+        },
+      },
+    });
     // Exactly one of each reconcile fetch — no duplicate messages/chats refetch.
     expect(fetchChatMessages).toHaveBeenCalledTimes(1);
     expect(fetchChats).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the exact grounded assistant id for a canonical voice turn", async () => {
+    const { result } = await setupGroundedSession();
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [
+        message({ id: "grounded-user", chatId: "chat-grounded", role: "user" }),
+        message({ id: "grounded-assistant", chatId: "chat-grounded", role: "assistant" }),
+      ],
+    });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ id: "chat-grounded" })] });
+    vi.mocked(askGrounded).mockResolvedValue({
+      assistantMessageId: "grounded-assistant",
+      content: "Grounded answer",
+      citations: [],
+    } as unknown as Awaited<ReturnType<typeof askGrounded>>);
+    let outcome: SendMessageOutcome | undefined;
+
+    await act(async () => {
+      outcome = await result.current.sendMessage({
+        text: "ground this voice turn",
+        clientTurnId: "grounded-voice-1",
+        reportOutcome: true,
+      });
+    });
+
+    expect(outcome).toEqual({
+      status: "completed",
+      assistantMessageId: "grounded-assistant",
+    });
+    expect(askGrounded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientTurnId: "grounded-voice-1",
+        expectedGroundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("does not mistake a stale identical server message for this failed admission", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const { result } = await setupGroundedSession();
+      vi.mocked(askGrounded).mockRejectedValueOnce(new Error("transport failed"));
+      vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+        messages: [
+          message({
+            id: "stale-same-content",
+            chatId: "chat-grounded",
+            content: "repeatable question",
+            timestamp: 9_999,
+          }),
+        ],
+      });
+      let outcome: SendMessageOutcome | undefined;
+
+      await act(async () => {
+        outcome = await result.current.sendMessage({
+          text: "repeatable question",
+          reportOutcome: true,
+        });
+      });
+
+      expect(outcome).toEqual({ status: "failed" });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("accepts an identical canonical user message created at this admission boundary", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    try {
+      const { result } = await setupGroundedSession();
+      vi.mocked(askGrounded).mockRejectedValueOnce(new Error("response lost"));
+      vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+        messages: [
+          message({
+            id: "new-canonical-user",
+            chatId: "chat-grounded",
+            content: "accepted question",
+            timestamp: 20_000,
+          }),
+        ],
+      });
+      let outcome: SendMessageOutcome | undefined;
+
+      await act(async () => {
+        outcome = await result.current.sendMessage({
+          text: "accepted question",
+          reportOutcome: true,
+        });
+      });
+
+      expect(outcome).toEqual({ status: "in-progress" });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("recognizes the existing canonical user row while a same-id retry is still active", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const canonicalUser = message({
+        id: "existing-canonical-user",
+        chatId: "chat-grounded",
+        content: "active canonical question",
+        timestamp: 10_000,
+      });
+      const { result } = await setupGroundedSession();
+      vi.mocked(fetchChatMessages).mockClear();
+      vi.mocked(askGrounded).mockRejectedValueOnce(
+        new ApiError("CHAT_TURN_IN_PROGRESS", "still active", 409),
+      );
+      vi.mocked(fetchChatMessages).mockResolvedValueOnce({ messages: [canonicalUser] });
+      let outcome: SendMessageOutcome | undefined;
+
+      await act(async () => {
+        outcome = await result.current.sendMessage({
+          text: "active canonical question",
+          clientTurnId: "same-provider-item",
+          reportOutcome: true,
+        });
+      });
+
+      expect(outcome).toEqual({ status: "in-progress" });
+      expect(fetchChatMessages).toHaveBeenCalledOnce();
+      expect(result.current.messages).toEqual([canonicalUser]);
+      expect(result.current.messages.some((entry) => entry.id.startsWith("local-"))).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 
@@ -703,9 +1045,21 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
       chats: [chat({ selectedModel: "chat-attachments" })],
     });
     vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const canonicalUser = message({
+      id: "attachment-user",
+      chatId: "chat-1",
+      role: "user",
+      content: "Use the attached context.",
+    });
+    const canonicalAssistant = message({
+      id: "attachment-assistant",
+      chatId: "chat-1",
+      role: "assistant",
+      content: "Attachment answer.",
+    });
     vi.mocked(sendDesktopChat).mockResolvedValue({
       chat: chat({ selectedModel: "chat-attachments" }),
-      messages: [],
+      messages: [canonicalUser, canonicalAssistant],
       memory: undefined,
     } as never);
 
@@ -771,59 +1125,6 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
   });
 });
 
-describe("useChatSession appendVoiceTurn", () => {
-  async function setupVoiceTurnSession(): Promise<
-    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
-  > {
-    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-a" })] });
-    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
-    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ selectedModel: "chat-a" })] });
-    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
-
-    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
-    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
-    return rendered;
-  }
-
-  it("retries one transient voice-turn append failure before surfacing an error", async () => {
-    const updated = chat({ updatedAt: 20, title: "spoken turn" });
-    const user = message({ id: "voice-user", role: "user", content: "Remember the release gate." });
-    const assistant = message({
-      id: "voice-assistant",
-      role: "assistant",
-      content: "I will remember it.",
-    });
-    vi.mocked(appendDesktopChatVoiceTurn)
-      .mockRejectedValueOnce(new ApiError("INTERNAL", "temporary", 500))
-      .mockResolvedValueOnce({
-        chat: updated,
-        messages: [user, assistant],
-      });
-    const { result } = await setupVoiceTurnSession();
-
-    await act(async () => {
-      await result.current.appendVoiceTurn?.([
-        { role: "user", content: "Remember the release gate." },
-        { role: "assistant", content: "I will remember it." },
-      ]);
-    });
-
-    expect(appendDesktopChatVoiceTurn).toHaveBeenCalledTimes(2);
-    const firstInput = vi.mocked(appendDesktopChatVoiceTurn).mock.calls[0]?.[0];
-    const secondInput = vi.mocked(appendDesktopChatVoiceTurn).mock.calls[1]?.[0];
-    expect(firstInput?.idempotencyKey).toBeDefined();
-    expect(secondInput?.idempotencyKey).toBe(firstInput?.idempotencyKey);
-    expect(secondInput?.messages.map((entry) => entry.timestamp)).toEqual(
-      firstInput?.messages.map((entry) => entry.timestamp),
-    );
-    expect(result.current.error).toBeUndefined();
-    expect(result.current.messages.map((entry) => [entry.role, entry.content])).toEqual([
-      ["user", "Remember the release gate."],
-      ["assistant", "I will remember it."],
-    ]);
-  });
-});
-
 describe("useChatSession sendMessage — explicit text option (Issue #1561)", () => {
   // The voice dialogue session hands a committed spoken transcript to sendMessage via `options.text`.
   // It must send that text through the same context-bearing path as a typed draft, and must not depend
@@ -840,7 +1141,10 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
     vi.mocked(sendDesktopChat).mockResolvedValue({
       chat: chat({ selectedModel: "chat-a" }),
-      messages: [],
+      messages: [
+        message({ id: "user-explicit", role: "user" }),
+        message({ id: "assistant-explicit", role: "assistant" }),
+      ],
       memory: undefined,
     } as never);
 
@@ -876,7 +1180,7 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     expect(result.current.error).toBe(CONTEXT_OVERSIZED_USER_MESSAGE);
   });
 
-  it("prefers the explicit text over the current draft and clears the draft afterward", async () => {
+  it("prefers the explicit text and preserves the user's typed draft", async () => {
     const { result } = await setupUngroundedSession();
     act(() => {
       result.current.setDraft("stale draft");
@@ -887,7 +1191,7 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     });
 
     expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("spoken question wins");
-    expect(result.current.draft).toBe("");
+    expect(result.current.draft).toBe("stale draft");
   });
 
   it("ignores a whitespace-only explicit text (committed-only invariant)", async () => {
@@ -915,6 +1219,1394 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
 
     expect(sendDesktopChat).toHaveBeenCalledTimes(1);
     expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("first");
+  });
+
+  it("reports canonical voice admission without changing the typed send surface", async () => {
+    const { result } = await setupUngroundedSession();
+    let firstOutcome: SendMessageOutcome | undefined;
+    let blockedOutcome: SendMessageOutcome | undefined;
+
+    await act(async () => {
+      const first = result.current.sendMessage({
+        text: "accepted voice final",
+        clientTurnId: "voice-final-1",
+        reportOutcome: true,
+      });
+      const blocked = result.current.sendMessage({
+        text: "must remain pending",
+        clientTurnId: "voice-final-2",
+        reportOutcome: true,
+      });
+      [firstOutcome, blockedOutcome] = await Promise.all([first, blocked]);
+    });
+
+    expect(firstOutcome).toEqual({
+      status: "completed",
+      assistantMessageId: "assistant-explicit",
+    });
+    expect(blockedOutcome).toEqual({ status: "not-sent" });
+    expect(sendDesktopChat).toHaveBeenCalledOnce();
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
+      clientTurnId: "voice-final-1",
+    });
+  });
+});
+
+describe("useChatSession canonical Voice FIFO", () => {
+  async function setupVoiceQueueSession(
+    chats: readonly Chat[] = [chat()],
+    projects: readonly ProjectWithAvailability[] = [project()],
+    models: readonly ModelCapability[] = [model({ streaming: false })],
+  ): Promise<ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>> {
+    vi.mocked(fetchModels).mockResolvedValue({ models: Array.from(models) });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: Array.from(projects) });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: Array.from(chats) });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  function completedTurn(
+    content: string,
+    assistantId: string,
+    chatId = "chat-1",
+  ): Awaited<ReturnType<typeof sendDesktopChat>> {
+    return {
+      chat: chat({ id: chatId }),
+      messages: [
+        message({ id: `${assistantId}-user`, chatId, content, role: "user" }),
+        message({ id: assistantId, chatId, content: `Answer: ${content}`, role: "assistant" }),
+      ],
+      memory: undefined,
+    } as unknown as Awaited<ReturnType<typeof sendDesktopChat>>;
+  }
+
+  it("fails closed without retaining a transcript when hashing was not prepared", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const sentinel = "unprepared private spoken sentinel";
+    clearCanonicalVoiceHasherForTests();
+
+    try {
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(sentinel, "unprepared-hasher-turn"),
+        );
+      });
+
+      expect(delivery).toBeUndefined();
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+      expect(canonicalVoicePageOutboxRetainsPlaintextForTests(sentinel)).toBe(false);
+      expect(rendered.result.current.messages).not.toContainEqual(
+        expect.objectContaining({ content: sentinel }),
+      );
+      expect(rendered.result.current.error).toContain("could not be added to chat");
+    } finally {
+      await prepareCanonicalVoiceHasher();
+    }
+  });
+
+  it("persists a 16,001-character final as one user turn with one assistant before the next utterance", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const longFinal = `${"a".repeat(8_000)} ${"b".repeat(8_000)}`;
+    vi.mocked(sendDesktopChat).mockImplementation((request) =>
+      Promise.resolve(
+        completedTurn(
+          request.content,
+          request.clientTurnId === "long-voice-final" ? "long-assistant" : "next-assistant",
+          request.chatId,
+        ),
+      ),
+    );
+
+    let firstOutcome: SendMessageOutcome | undefined;
+    await act(async () => {
+      firstOutcome = await rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn(longFinal, "long-voice-final"),
+      );
+    });
+
+    expect(firstOutcome).toEqual({
+      status: "completed",
+      assistantMessageId: "long-assistant",
+    });
+    expect(sendDesktopChat).toHaveBeenCalledOnce();
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0].content).toBe(longFinal);
+    expect(
+      rendered.result.current.messages.filter(
+        (candidate) => candidate.role === "user" && candidate.content === longFinal,
+      ),
+    ).toHaveLength(1);
+    expect(
+      rendered.result.current.messages.filter((candidate) => candidate.id === "long-assistant"),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      await rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("A separate next utterance.", "next-voice-final"),
+      );
+    });
+
+    expect(sendDesktopChat).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(sendDesktopChat).mock.calls[1]?.[0].content).toBe(
+      "A separate next utterance.",
+    );
+    expect(
+      rendered.result.current.messages.filter(
+        (candidate) => candidate.role === "user" && candidate.content === longFinal,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("retains only a digest after settlement and enforces duplicate identity by digest", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const sentinel = "private spoken sentinel 4c75d49b";
+    vi.mocked(sendDesktopChat).mockResolvedValue(completedTurn(sentinel, "digest-assistant"));
+
+    let first: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn(sentinel, "voice-digest-id"),
+      );
+    });
+    await expect(first).resolves.toEqual({
+      status: "completed",
+      assistantMessageId: "digest-assistant",
+    });
+    expect(canonicalVoicePageOutboxRetainsPlaintextForTests(sentinel)).toBe(false);
+
+    let duplicate: Promise<SendMessageOutcome> | undefined;
+    let conflict: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      duplicate = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn(sentinel, "voice-digest-id"),
+      );
+      conflict = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("different content", "voice-digest-id"),
+      );
+    });
+    await expect(duplicate).resolves.toEqual({
+      status: "completed",
+      assistantMessageId: "digest-assistant",
+    });
+    expect(conflict).toBeUndefined();
+    expect(sendDesktopChat).toHaveBeenCalledOnce();
+    expect(rendered.result.current.error).toContain("identity was reused");
+  });
+
+  it("purges a suspended transcript when its chat is deleted", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const sentinel = "deleted spoken sentinel a0eb470c";
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockRejectedValue(new TypeError("network unavailable"));
+    vi.useFakeTimers();
+    try {
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(sentinel, "voice-delete-pending"),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(true);
+      expect(canonicalVoicePageOutboxRetainsPlaintextForTests(sentinel)).toBe(true);
+
+      act(() => {
+        notifyChatDeleted("chat-1");
+      });
+      await expect(delivery).resolves.toEqual({ status: "failed", retryable: false });
+      expect(canonicalVoicePageOutboxRetainsPlaintextForTests(sentinel)).toBe(false);
+      expect(rendered.result.current.activeChat).toBeUndefined();
+      expect(rendered.result.current.messages).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a cancelled Voice turn before advancing when reconciliation is unknown", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const neverReconciles = deferred<{ messages: readonly ChatMessage[] }>();
+    vi.mocked(fetchChatMessages).mockClear();
+    vi.mocked(fetchChatMessages).mockReturnValue(neverReconciles.promise);
+    const requestIds: Array<string | undefined> = [];
+    vi.mocked(sendDesktopChat).mockImplementation((request, signal) => {
+      requestIds.push(request.clientTurnId);
+      if (requestIds.length === 2) {
+        return Promise.resolve(completedTurn("first final", "first-assistant"));
+      }
+      if (requestIds.length === 3) {
+        return Promise.resolve(completedTurn("second final", "second-assistant"));
+      }
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("cancelled", "AbortError"));
+          },
+          { once: true },
+        );
+      });
+    });
+    vi.useFakeTimers();
+    try {
+      let first: Promise<SendMessageOutcome> | undefined;
+      let second: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("first final", "voice-reconcile-timeout-first"),
+        );
+        second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("second final", "voice-reconcile-timeout-second"),
+        );
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        rendered.result.current.cancelSend();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(7_000);
+      });
+
+      await expect(first).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "first-assistant",
+      });
+      await expect(second).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "second-assistant",
+      });
+      expect(requestIds).toEqual([
+        "voice-reconcile-timeout-first",
+        "voice-reconcile-timeout-first",
+        "voice-reconcile-timeout-second",
+      ]);
+      expect(vi.mocked(fetchChatMessages).mock.calls[0]?.[2]?.aborted).toBe(true);
+      expect(
+        rendered.result.current.messages.filter(
+          (candidate) => candidate.role === "user" && candidate.content === "first final",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a failed Voice turn before advancing when reconciliation finds no row", async () => {
+    const rendered = await setupVoiceQueueSession();
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const requestIds: Array<string | undefined> = [];
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      requestIds.push(request.clientTurnId);
+      if (requestIds.length === 1) return Promise.reject(new TypeError("network unavailable"));
+      return Promise.resolve(
+        completedTurn(
+          request.content,
+          requestIds.length === 2 ? "first-network-assistant" : "second-network-assistant",
+        ),
+      );
+    });
+    vi.useFakeTimers();
+    try {
+      let first: Promise<SendMessageOutcome> | undefined;
+      let second: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("first network final", "voice-network-first"),
+        );
+        second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("second network final", "voice-network-second"),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      await expect(first).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "first-network-assistant",
+      });
+      await expect(second).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "second-network-assistant",
+      });
+      expect(requestIds).toEqual([
+        "voice-network-first",
+        "voice-network-first",
+        "voice-network-second",
+      ]);
+      expect(
+        rendered.result.current.messages.filter(
+          (candidate) => candidate.role === "user" && candidate.content === "first network final",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry an identity conflict before advancing the Voice FIFO", async () => {
+    const rendered = await setupVoiceQueueSession();
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const requestIds: Array<string | undefined> = [];
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      requestIds.push(request.clientTurnId);
+      return requestIds.length === 1
+        ? Promise.reject(
+            new ApiError("CHAT_TURN_IDEMPOTENCY_CONFLICT", "Turn identity conflicts.", 409),
+          )
+        : Promise.resolve(completedTurn("second after conflict", "conflict-second-assistant"));
+    });
+
+    let first: Promise<SendMessageOutcome> | undefined;
+    let second: Promise<SendMessageOutcome> | undefined;
+    let duplicate: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("conflicting first final", "voice-conflict-first"),
+      );
+      second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("second after conflict", "voice-conflict-second"),
+      );
+    });
+
+    await expect(first).resolves.toEqual({ status: "failed", retryable: false });
+    await expect(second).resolves.toEqual({
+      status: "completed",
+      assistantMessageId: "conflict-second-assistant",
+    });
+    act(() => {
+      duplicate = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("conflicting first final", "voice-conflict-first"),
+      );
+    });
+    await expect(duplicate).resolves.toEqual({ status: "failed", retryable: false });
+    expect(requestIds).toEqual(["voice-conflict-first", "voice-conflict-second"]);
+  });
+
+  it("releases capacity for terminal unpersisted conflicts and caches their identities", async () => {
+    const rendered = await setupVoiceQueueSession();
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockRejectedValue(
+      new ApiError("CHAT_TURN_IDEMPOTENCY_CONFLICT", "Turn identity conflicts.", 409),
+    );
+
+    for (let index = 0; index < 129; index += 1) {
+      let outcome: SendMessageOutcome | undefined;
+      await act(async () => {
+        outcome = await rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(`conflict ${String(index)}`, `terminal-conflict-${String(index)}`),
+        );
+      });
+      expect(outcome).toEqual({ status: "failed", retryable: false });
+    }
+    let duplicate: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      duplicate = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("conflict 0", "terminal-conflict-0"),
+      );
+    });
+
+    await expect(duplicate).resolves.toEqual({ status: "failed", retryable: false });
+    expect(sendDesktopChat).toHaveBeenCalledTimes(129);
+    expect(rendered.result.current.error).not.toContain("queue is full");
+  });
+
+  it("settles a persisted scope conflict once before advancing the Voice FIFO", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const requestIds: Array<string | undefined> = [];
+    vi.mocked(fetchChatMessages).mockRejectedValue(new TypeError("reconciliation unavailable"));
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      requestIds.push(request.clientTurnId);
+      return requestIds.length === 1
+        ? Promise.reject(
+            new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+          )
+        : Promise.resolve(completedTurn("second after scope change", "scope-second-assistant"));
+    });
+
+    let first: Promise<SendMessageOutcome> | undefined;
+    let duplicate: Promise<SendMessageOutcome> | undefined;
+    let second: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("scope-bound first final", "voice-scope-first"),
+      );
+      second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("second after scope change", "voice-scope-second"),
+      );
+    });
+
+    await expect(first).resolves.toEqual({
+      status: "failed",
+      retryable: false,
+      userPersisted: true,
+    });
+    await expect(second).resolves.toEqual({
+      status: "completed",
+      assistantMessageId: "scope-second-assistant",
+    });
+    act(() => {
+      duplicate = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("scope-bound first final", "voice-scope-first"),
+      );
+    });
+    await expect(duplicate).resolves.toEqual({
+      status: "failed",
+      retryable: false,
+      userPersisted: true,
+    });
+    expect(requestIds).toEqual(["voice-scope-first", "voice-scope-second"]);
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
+      expectedGroundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+    });
+  });
+
+  it("requires an explicit retry after a finite unpersisted window and preserves FIFO order", async () => {
+    const rendered = await setupVoiceQueueSession();
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const requestIds: Array<string | undefined> = [];
+    let serviceAvailable = false;
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      requestIds.push(request.clientTurnId);
+      if (!serviceAvailable) return Promise.reject(new TypeError("network unavailable"));
+      return Promise.resolve(
+        completedTurn(
+          request.content,
+          request.clientTurnId === "voice-offline-first"
+            ? "offline-first-assistant"
+            : "offline-second-assistant",
+        ),
+      );
+    });
+    vi.useFakeTimers();
+    try {
+      let first: Promise<SendMessageOutcome> | undefined;
+      let second: Promise<SendMessageOutcome> | undefined;
+      let firstSettled = false;
+      act(() => {
+        first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("offline first final", "voice-offline-first"),
+        );
+        second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("offline second final", "voice-offline-second"),
+        );
+        void first?.then(() => {
+          firstSettled = true;
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(firstSettled).toBe(false);
+      expect(requestIds).toEqual([
+        "voice-offline-first",
+        "voice-offline-first",
+        "voice-offline-first",
+      ]);
+      expect(requestIds.every((id) => id === "voice-offline-first")).toBe(true);
+      expect(rendered.result.current.error).toContain("spoken turn is still pending");
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(requestIds).toHaveLength(3);
+
+      let typedOutcome: SendMessageOutcome | undefined;
+      await act(async () => {
+        typedOutcome = await rendered.result.current.sendMessage({
+          text: "typed overtaker",
+          reportOutcome: true,
+        });
+      });
+      expect(typedOutcome).toEqual({ status: "not-sent" });
+      expect(requestIds).toHaveLength(3);
+
+      serviceAvailable = true;
+      rendered.unmount();
+      const resumed = renderHook(() => useChatSession({ autoCreate: false }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(requestIds).toHaveLength(3);
+      expect(resumed.result.current.canonicalVoiceTurnRequiresRetry).toBe(true);
+      act(() => {
+        resumed.result.current.retryPendingCanonicalVoiceTurn?.();
+      });
+      await expect(first).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "offline-first-assistant",
+      });
+      await expect(second).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "offline-second-assistant",
+      });
+      expect(requestIds.at(-2)).toBe("voice-offline-first");
+      expect(requestIds.at(-1)).toBe("voice-offline-second");
+      expect(
+        resumed.result.current.messages.filter(
+          (candidate) => candidate.role === "user" && candidate.content === "offline first final",
+        ),
+      ).toHaveLength(1);
+      resumed.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the suspended head retry visible and actionable after switching chats", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const rendered = await setupVoiceQueueSession([chatA, chatB]);
+    const requestIds: Array<string | undefined> = [];
+    let serviceAvailable = false;
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      requestIds.push(request.clientTurnId);
+      if (!serviceAvailable) return Promise.reject(new TypeError("network unavailable"));
+      return Promise.resolve(
+        completedTurn(
+          request.content,
+          request.clientTurnId === "voice-a" ? "assistant-a" : "assistant-b",
+          request.chatId,
+        ),
+      );
+    });
+    vi.useFakeTimers();
+    try {
+      let first: Promise<SendMessageOutcome> | undefined;
+      let second: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("voice in A", "voice-a", chatA),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+        await rendered.result.current.openChat(chatB);
+      });
+      act(() => {
+        second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("voice in B", "voice-b", chatB),
+        );
+      });
+
+      expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(true);
+      expect(requestIds).toEqual(["voice-a", "voice-a", "voice-a"]);
+
+      serviceAvailable = true;
+      act(() => {
+        rendered.result.current.retryPendingCanonicalVoiceTurn?.();
+      });
+      await expect(first).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "assistant-a",
+      });
+      await expect(second).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "assistant-b",
+      });
+      expect(requestIds.slice(-2)).toEqual(["voice-a", "voice-b"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not resume a suspended head when a later chat is deleted", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const rendered = await setupVoiceQueueSession([chatA, chatB]);
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockRejectedValue(new TypeError("network unavailable"));
+    vi.useFakeTimers();
+    try {
+      let second: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        void rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("suspended A", "suspended-a", chatA),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      act(() => {
+        second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("queued B", "queued-b", chatB),
+        );
+        notifyChatDeleted("chat-b");
+      });
+      await expect(second).resolves.toEqual({ status: "failed", retryable: false });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(sendDesktopChat).toHaveBeenCalledTimes(3);
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("projects one final transcript immediately while a composer turn owns the send slot", async () => {
+    const composer = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockReturnValueOnce(composer.promise)
+      .mockResolvedValueOnce(completedTurn("queued voice final", "voice-assistant"));
+    const rendered = await setupVoiceQueueSession();
+    let composerPromise: Promise<void> | undefined;
+    act(() => {
+      composerPromise = rendered.result.current.sendMessage({ text: "typed first" });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    let duplicate: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("queued voice final", "voice-fifo-1"),
+      );
+      duplicate = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("queued voice final", "voice-fifo-1"),
+      );
+    });
+
+    expect(delivery).toBe(duplicate);
+    expect(
+      rendered.result.current.messages.filter(
+        (candidate) => candidate.role === "user" && candidate.content === "queued voice final",
+      ),
+    ).toHaveLength(1);
+    expect(rendered.result.current.messages.map((candidate) => candidate.content)).toEqual([
+      "typed first",
+      "queued voice final",
+    ]);
+    expect(sendDesktopChat).toHaveBeenCalledOnce();
+    expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 100)).toBe(false);
+
+    composer.resolve(completedTurn("typed first", "typed-assistant"));
+    let outcome: SendMessageOutcome | undefined;
+    await act(async () => {
+      await composerPromise;
+      outcome = await delivery;
+    });
+
+    expect(outcome).toEqual({ status: "completed", assistantMessageId: "voice-assistant" });
+    expect(sendDesktopChat).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(sendDesktopChat).mock.calls[1]?.[0]).toMatchObject({
+      content: "queued voice final",
+      clientTurnId: "voice-fifo-1",
+    });
+    expect(vi.mocked(sendDesktopChat).mock.calls[1]?.[0]).not.toHaveProperty("documentContext");
+    expect(vi.mocked(sendDesktopChat).mock.calls[1]?.[0]).not.toHaveProperty("attachments");
+    expect(
+      rendered.result.current.messages.filter(
+        (candidate) => candidate.role === "user" && candidate.content === "queued voice final",
+      ),
+    ).toHaveLength(1);
+    expect(rendered.result.current.messages.map((candidate) => candidate.content)).toEqual([
+      "typed first",
+      "Answer: typed first",
+      "queued voice final",
+      "Answer: queued voice final",
+    ]);
+  });
+
+  it("elects another live subscriber when the outbox drain owner unmounts", async () => {
+    const firstRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockImplementationOnce((_request, signal) => {
+        signal?.addEventListener(
+          "abort",
+          () => firstRequest.reject(new DOMException("cancelled", "AbortError")),
+          { once: true },
+        );
+        return firstRequest.promise;
+      })
+      .mockResolvedValueOnce(completedTurn("multi-window final", "multi-window-assistant"));
+    const windowA = await setupVoiceQueueSession();
+    const windowB = await setupVoiceQueueSession();
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = windowB.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("multi-window final", "multi-window-turn"),
+      );
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+
+    windowB.unmount();
+    await expect(delivery).resolves.toEqual({
+      status: "completed",
+      assistantMessageId: "multi-window-assistant",
+    });
+    expect(vi.mocked(sendDesktopChat).mock.calls.map(([request]) => request.clientTurnId)).toEqual([
+      "multi-window-turn",
+      "multi-window-turn",
+    ]);
+    windowA.unmount();
+  });
+
+  it("keeps a final bound to its chat project while another project is opening", async () => {
+    const originalProject = project("/repo");
+    const nextProject = project("/next");
+    const originalChat = chat({ projectPath: originalProject.path });
+    const nextChat = chat({ id: "chat-next", projectPath: nextProject.path });
+    const rendered = await setupVoiceQueueSession([originalChat], [originalProject, nextProject]);
+    const projectChats = deferred<Awaited<ReturnType<typeof fetchChats>>>();
+    vi.mocked(fetchChats).mockReturnValueOnce(projectChats.promise);
+    vi.mocked(sendDesktopChat).mockResolvedValue(
+      completedTurn("project transition final", "voice-project-assistant"),
+    );
+
+    let projectSwitch: Promise<void> | undefined;
+    act(() => {
+      projectSwitch = rendered.result.current.openProject(nextProject);
+    });
+    await waitFor(() => expect(rendered.result.current.activeProject?.path).toBe("/next"));
+
+    let outcome: SendMessageOutcome | undefined;
+    await act(async () => {
+      outcome = await rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("project transition final", "voice-project-transition", originalChat),
+      );
+    });
+
+    expect(outcome).toEqual({
+      status: "completed",
+      assistantMessageId: "voice-project-assistant",
+    });
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
+      chatId: originalChat.id,
+      projectPath: originalProject.path,
+      clientTurnId: "voice-project-transition",
+    });
+
+    projectChats.resolve({ chats: [nextChat] });
+    await act(async () => {
+      await projectSwitch;
+    });
+  });
+
+  it("reserves one production final across ChatSession replacement before capture pauses", async () => {
+    vi.mocked(sendDesktopChat).mockImplementation((request, signal) => {
+      if (request.clientTurnId !== undefined) {
+        return Promise.resolve(
+          completedTurn(request.content, `assistant-${request.clientTurnId}`, request.chatId),
+        );
+      }
+      return new Promise((_resolve, reject) => {
+        const abort = (): void => reject(new DOMException("cancelled", "AbortError"));
+        if (signal?.aborted === true) {
+          abort();
+          return;
+        }
+        signal?.addEventListener("abort", abort, { once: true });
+      });
+    });
+    const first = await setupVoiceQueueSession();
+    let composerSend: Promise<void> | undefined;
+    act(() => {
+      composerSend = first.result.current.sendMessage({ text: "hold the shared send slot" });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+
+    const regularDeliveries: Array<Promise<SendMessageOutcome>> = [];
+    act(() => {
+      for (let index = 0; index < 128; index += 1) {
+        const delivery = first.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("regular queued final", `regular-${String(index)}`),
+        );
+        if (delivery !== undefined) regularDeliveries.push(delivery);
+      }
+    });
+    expect(regularDeliveries).toHaveLength(128);
+    expect(first.result.current.canonicalVoiceCaptureMustPause?.()).toBe(true);
+
+    let reservedDelivery: Promise<SendMessageOutcome> | undefined;
+    let overflowDelivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      reservedDelivery = first.result.current.enqueueCanonicalVoiceTurn?.({
+        ...canonicalVoiceTurn("reserved final survives replacement", "reserved-final"),
+        allowReservedCapacity: true,
+      });
+      overflowDelivery = first.result.current.enqueueCanonicalVoiceTurn?.({
+        ...canonicalVoiceTurn("absolute overflow must fail", "absolute-overflow"),
+        allowReservedCapacity: true,
+      });
+    });
+    expect(reservedDelivery).toBeDefined();
+    expect(overflowDelivery).toBeUndefined();
+    expect(first.result.current.canonicalVoiceCaptureMustPause?.()).toBe(true);
+
+    first.unmount();
+    await act(async () => {
+      await composerSend;
+    });
+    const replacement = await setupVoiceQueueSession();
+    const admittedReserve = reservedDelivery;
+    if (admittedReserve === undefined)
+      throw new Error("Expected the reserved final to be admitted.");
+    let reserveOutcome: SendMessageOutcome | undefined;
+    await act(async () => {
+      reserveOutcome = await admittedReserve;
+    });
+
+    expect(reserveOutcome).toEqual({
+      status: "completed",
+      assistantMessageId: "assistant-reserved-final",
+    });
+    const reservedRequests = vi
+      .mocked(sendDesktopChat)
+      .mock.calls.filter(([request]) => request.clientTurnId === "reserved-final");
+    expect(reservedRequests).toHaveLength(1);
+    expect(reservedRequests[0]?.[0].content).toBe("reserved final survives replacement");
+    expect(replacement.result.current.canonicalVoiceCaptureMustPause?.()).toBe(false);
+    replacement.unmount();
+  });
+
+  it("keeps a queue-rejected final bound to chat A when capacity returns after opening B", async () => {
+    const chatA = chat({
+      id: "chat-a",
+      projectPath: "/repo-a",
+      selectedModel: "model-a",
+      groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+      updatedAt: 2,
+    });
+    const chatB = chat({
+      id: "chat-b",
+      projectPath: "/repo-b",
+      selectedModel: "model-b",
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      updatedAt: 1,
+    });
+    const composer = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat).mockImplementation((request) =>
+      request.clientTurnId === undefined
+        ? composer.promise
+        : Promise.resolve(
+            completedTurn(request.content, `assistant-${request.clientTurnId}`, request.chatId),
+          ),
+    );
+    const rendered = await setupVoiceQueueSession(
+      [chatA, chatB],
+      [project("/repo-a"), project("/repo-b")],
+      [model({ id: "model-a", streaming: false }), model({ id: "model-b", streaming: false })],
+    );
+    let composerSend: Promise<void> | undefined;
+    act(() => {
+      composerSend = rendered.result.current.sendMessage({ text: "occupy A" });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+    const filler = "capacity filler";
+    const queued: Array<Promise<SendMessageOutcome>> = [];
+    const captured = canonicalVoiceTurn(
+      "final captured under A",
+      "captured-chat-a",
+      chatA,
+      "model-a",
+    );
+    act(() => {
+      for (let index = 0; index < 128; index += 1) {
+        const delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(filler, `capacity-a-${String(index)}`, chatA, "model-a"),
+        );
+        if (delivery !== undefined) queued.push(delivery);
+      }
+    });
+    let rejected: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      rejected = rendered.result.current.enqueueCanonicalVoiceTurn?.(captured);
+    });
+    expect(rejected).toBeUndefined();
+
+    await act(async () => {
+      await rendered.result.current.openChat(chatB);
+    });
+    composer.resolve(completedTurn("occupy A", "composer-a", chatA.id));
+    await act(async () => {
+      await composerSend;
+      await queued[0];
+    });
+    let outcome: SendMessageOutcome | undefined;
+    await act(async () => {
+      outcome = await rendered.result.current.enqueueCanonicalVoiceTurn?.(captured);
+    });
+
+    expect(outcome).toEqual({
+      status: "completed",
+      assistantMessageId: "assistant-captured-chat-a",
+    });
+    const request = vi
+      .mocked(sendDesktopChat)
+      .mock.calls.find(([candidate]) => candidate.clientTurnId === "captured-chat-a")?.[0];
+    expect(request).toMatchObject({
+      chatId: "chat-a",
+      projectPath: "/repo-a",
+      modelId: "model-a",
+      expectedGroundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+    });
+    expect(askGrounded).not.toHaveBeenCalled();
+  });
+
+  it("keeps a queue-rejected final on its captured plain route after the chat becomes grounded", async () => {
+    const plain = chat({
+      id: "scope-chat",
+      projectPath: "/repo",
+      selectedModel: "model-a",
+      connectedScopes: [],
+      groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+    });
+    const grounded = chat({
+      ...plain,
+      connectedScopes: [
+        { kind: "files" as const, relativePaths: ["src/index.ts"], connectedAtMs: 2 },
+      ],
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      updatedAt: plain.updatedAt + 1,
+    });
+    const composer = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      if (request.clientTurnId === undefined) return composer.promise;
+      if (request.clientTurnId === "captured-scope-a") {
+        return Promise.reject(
+          new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+        );
+      }
+      return Promise.resolve(
+        completedTurn(request.content, `assistant-${request.clientTurnId}`, request.chatId),
+      );
+    });
+    vi.mocked(fetchChatMessages).mockRejectedValue(new TypeError("reconciliation unavailable"));
+    const rendered = await setupVoiceQueueSession(
+      [plain],
+      [project()],
+      [model({ id: "model-a", streaming: false })],
+    );
+    let composerSend: Promise<void> | undefined;
+    act(() => {
+      composerSend = rendered.result.current.sendMessage({ text: "occupy plain route" });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+    const filler = "capacity filler";
+    const queued: Array<Promise<SendMessageOutcome>> = [];
+    const captured = canonicalVoiceTurn(
+      "final captured before grounding",
+      "captured-scope-a",
+      plain,
+      "model-a",
+    );
+    act(() => {
+      for (let index = 0; index < 128; index += 1) {
+        const delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(filler, `capacity-scope-${String(index)}`, plain, "model-a"),
+        );
+        if (delivery !== undefined) queued.push(delivery);
+      }
+    });
+    let rejected: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      rejected = rendered.result.current.enqueueCanonicalVoiceTurn?.(captured);
+    });
+    expect(rejected).toBeUndefined();
+    act(() => rendered.result.current.replaceChat(grounded));
+    await waitFor(() =>
+      expect(rendered.result.current.activeChat?.groundingScopeIdentity).toBe(
+        grounded.groundingScopeIdentity,
+      ),
+    );
+
+    composer.resolve(completedTurn("occupy plain route", "composer-plain", plain.id));
+    await act(async () => {
+      await composerSend;
+      await queued[0];
+    });
+    let outcome: SendMessageOutcome | undefined;
+    await act(async () => {
+      outcome = await rendered.result.current.enqueueCanonicalVoiceTurn?.(captured);
+    });
+
+    expect(outcome).toEqual({ status: "failed", retryable: false, userPersisted: true });
+    const request = vi
+      .mocked(sendDesktopChat)
+      .mock.calls.find(([candidate]) => candidate.clientTurnId === "captured-scope-a")?.[0];
+    expect(request).toMatchObject({
+      chatId: plain.id,
+      projectPath: plain.projectPath,
+      modelId: "model-a",
+      expectedGroundingScopeIdentity: plain.groundingScopeIdentity,
+    });
+    expect(askGrounded).not.toHaveBeenCalled();
+  });
+
+  it("keeps a Composer send bound to its chat while another project is opening", async () => {
+    const originalProject = project("/repo");
+    const nextProject = project("/next");
+    const originalChat = chat({ projectPath: originalProject.path });
+    const nextChat = chat({ id: "chat-next", projectPath: nextProject.path });
+    const rendered = await setupVoiceQueueSession([originalChat], [originalProject, nextProject]);
+    const projectChats = deferred<Awaited<ReturnType<typeof fetchChats>>>();
+    vi.mocked(fetchChats).mockReturnValueOnce(projectChats.promise);
+    vi.mocked(sendDesktopChat).mockResolvedValue(
+      completedTurn("composer during project transition", "composer-project-assistant"),
+    );
+
+    let projectSwitch: Promise<void> | undefined;
+    act(() => {
+      projectSwitch = rendered.result.current.openProject(nextProject);
+    });
+    await waitFor(() => expect(rendered.result.current.activeProject?.path).toBe("/next"));
+
+    await act(async () => {
+      await rendered.result.current.sendMessage({ text: "composer during project transition" });
+    });
+
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
+      chatId: originalChat.id,
+      projectPath: originalProject.path,
+    });
+
+    projectChats.resolve({ chats: [nextChat] });
+    await act(async () => {
+      await projectSwitch;
+    });
+  });
+
+  it("settles a durably admitted permanent model failure and advances the FIFO", async () => {
+    const retiredChat = chat({ selectedModel: "retired-chat-deployment" });
+    const rendered = await setupVoiceQueueSession([retiredChat], [project()], []);
+    const durableUser = message({
+      id: "durable-retired-model-user",
+      content: "final after model removal",
+      role: "user",
+      timestamp: Date.now() + 1,
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [durableUser],
+    });
+    vi.mocked(sendDesktopChat)
+      .mockRejectedValueOnce(
+        new ApiError("MODEL_NOT_FOUND", "The configured chat deployment is unavailable.", 400),
+      )
+      .mockResolvedValueOnce({
+        chat: retiredChat,
+        messages: [
+          message({
+            id: "next-permanent-user",
+            content: "next final after permanent failure",
+            role: "user",
+          }),
+          message({
+            id: "next-permanent-assistant",
+            content: "Answer: next final after permanent failure",
+            role: "assistant",
+          }),
+        ],
+      });
+    let first: Promise<SendMessageOutcome> | undefined;
+    let second: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("final after model removal", "voice-retired-model", retiredChat),
+      );
+      second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn(
+          "next final after permanent failure",
+          "voice-after-retired-model",
+          retiredChat,
+        ),
+      );
+    });
+
+    await expect(first).resolves.toEqual({
+      status: "failed",
+      retryable: false,
+      userPersisted: true,
+    });
+    await expect(second).resolves.toEqual({
+      status: "completed",
+      assistantMessageId: "next-permanent-assistant",
+    });
+    expect(vi.mocked(sendDesktopChat).mock.calls.map(([request]) => request.clientTurnId)).toEqual([
+      "voice-retired-model",
+      "voice-after-retired-model",
+    ]);
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
+      chatId: retiredChat.id,
+      modelId: "retired-chat-deployment",
+      clientTurnId: "voice-retired-model",
+    });
+  });
+
+  it("does not use an older identical user message as proof of canonical admission", async () => {
+    const rendered = await setupVoiceQueueSession();
+    vi.mocked(sendDesktopChat).mockRejectedValue(
+      new ApiError("MODEL_NOT_FOUND", "The configured chat deployment is unavailable.", 400),
+    );
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [
+        message({
+          id: "older-identical-user",
+          content: "repeat this final",
+          role: "user",
+          timestamp: 1,
+        }),
+      ],
+    });
+
+    let outcome: SendMessageOutcome | undefined;
+    await act(async () => {
+      outcome = await rendered.result.current.sendMessage({
+        text: "repeat this final",
+        clientTurnId: "new-provider-item",
+        reportOutcome: true,
+      });
+    });
+
+    expect(outcome).toEqual({ status: "failed" });
+    expect(rendered.result.current.messages).toContainEqual(
+      expect.objectContaining({
+        content: "repeat this final",
+        id: expect.stringMatching(/^local-voice-/),
+      }),
+    );
+  });
+
+  it("suspends persisted in-progress reconciliation until an explicit exact-id retry", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const canonicalUser = message({
+      id: "durable-voice-user",
+      content: "long reconciliation",
+      role: "user",
+      timestamp: 10_000,
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [canonicalUser] });
+    let canonicalCompleted = false;
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      return request.clientTurnId === "voice-reconcile-long" && !canonicalCompleted
+        ? Promise.reject(new ApiError("CHAT_TURN_IN_PROGRESS", "still active", 409))
+        : Promise.resolve(
+            completedTurn(
+              request.content,
+              request.clientTurnId === "voice-reconcile-long"
+                ? "reconciled-assistant"
+                : "bounded-next-assistant",
+            ),
+          );
+    });
+    vi.useFakeTimers();
+    try {
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      let next: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("long reconciliation", "voice-reconcile-long"),
+        );
+        next = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("next after bounded poll", "voice-after-bounded-poll"),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(true);
+      expect(
+        vi.mocked(sendDesktopChat).mock.calls.map(([request]) => request.clientTurnId),
+      ).toEqual(["voice-reconcile-long", "voice-reconcile-long", "voice-reconcile-long"]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(sendDesktopChat).toHaveBeenCalledTimes(3);
+
+      canonicalCompleted = true;
+      act(() => {
+        rendered.result.current.retryPendingCanonicalVoiceTurn?.();
+      });
+      await expect(delivery).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "reconciled-assistant",
+      });
+      await expect(next).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "bounded-next-assistant",
+      });
+      expect(
+        vi.mocked(sendDesktopChat).mock.calls.map(([request]) => request.clientTurnId),
+      ).toEqual([
+        "voice-reconcile-long",
+        "voice-reconcile-long",
+        "voice-reconcile-long",
+        "voice-reconcile-long",
+        "voice-after-bounded-poll",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets an admitted Voice request finish against its captured chat after navigation", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const rendered = await setupVoiceQueueSession([chatA, chatB]);
+    const response = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat).mockReturnValue(response.promise);
+    vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
+      Promise.resolve({
+        messages:
+          chatId === "chat-a" ? completedTurn("voice for A", "assistant-a", "chat-a").messages : [],
+      }),
+    );
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("voice for A", "voice-chat-switch", chatA),
+      );
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+    const requestSignal = vi.mocked(sendDesktopChat).mock.calls[0]?.[1];
+
+    await act(async () => {
+      await rendered.result.current.openChat(chatB);
+    });
+    expect(requestSignal?.aborted).toBe(false);
+    response.resolve(completedTurn("voice for A", "assistant-a", "chat-a"));
+    let outcome: SendMessageOutcome | undefined;
+    await act(async () => {
+      outcome = await delivery;
+    });
+
+    expect(outcome).toEqual({ status: "completed", assistantMessageId: "assistant-a" });
+    expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+    await act(async () => {
+      await rendered.result.current.openChat(chatA);
+    });
+    expect(rendered.result.current.messages.map((candidate) => candidate.id)).toEqual([
+      "assistant-a-user",
+      "assistant-a",
+    ]);
+  });
+
+  it("does not surface a late grounded Voice failure in a different chat", async () => {
+    const chatA = chat({
+      id: "chat-a",
+      updatedAt: 2,
+      connectedScopes: [{ kind: "files" as const, relativePaths: ["README.md"], connectedAtMs: 1 }],
+    });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const rendered = await setupVoiceQueueSession([chatA, chatB]);
+    const response = deferred<Awaited<ReturnType<typeof askGrounded>>>();
+    vi.mocked(askGrounded).mockReturnValue(response.promise);
+    vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
+      Promise.resolve({
+        messages:
+          chatId === "chat-a"
+            ? [
+                message({
+                  id: "grounded-chat-switch-user",
+                  chatId,
+                  content: "grounded voice for A",
+                  role: "user",
+                  timestamp: Date.now(),
+                }),
+              ]
+            : [],
+      }),
+    );
+
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("grounded voice for A", "grounded-chat-switch", chatA),
+      );
+    });
+    await waitFor(() => expect(askGrounded).toHaveBeenCalledOnce());
+    await act(async () => {
+      await rendered.result.current.openChat(chatB);
+    });
+
+    response.reject(new ApiError("GROUNDING_FAILED", "A failed after navigation.", 500));
+    await act(async () => {
+      await delivery;
+    });
+
+    expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+    expect(rendered.result.current.error).toBeUndefined();
+  });
+
+  it("accepts 128 maximum-size finals, rejects item 129, and retains the FIFO on teardown", async () => {
+    vi.mocked(sendDesktopChat).mockImplementation((_request, signal) => {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("cancelled", "AbortError")),
+          { once: true },
+        );
+      });
+    });
+    const rendered = await setupVoiceQueueSession();
+    act(() => {
+      void rendered.result.current.sendMessage({ text: "occupy send slot" });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+    const maximumFinal = "q".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS);
+    const queued: Promise<SendMessageOutcome>[] = [];
+    act(() => {
+      for (let index = 0; index < 128; index += 1) {
+        const promise = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(maximumFinal, `queued-id-${String(index)}`),
+        );
+        if (promise !== undefined) queued.push(promise);
+      }
+    });
+    let overflow: SendMessageOutcome | undefined;
+    await act(async () => {
+      overflow = await rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("overflow final", "overflow-id"),
+      );
+    });
+
+    expect(overflow).toBeUndefined();
+    expect(queued).toHaveLength(128);
+    expect(rendered.result.current.error).toContain("queue is full");
+    const firstQueued = queued[0];
+    let firstSettled = false;
+    void firstQueued?.then(() => {
+      firstSettled = true;
+    });
+    act(() => rendered.unmount());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(firstSettled).toBe(false);
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[1]?.aborted).toBe(true);
+  });
+
+  it("rejects ownership without a server-issued scope identity before any canonical request", async () => {
+    const unprojected = chat({ groundingScopeIdentity: undefined });
+    const rendered = await setupVoiceQueueSession([unprojected]);
+
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("retain until chat reload", "missing-scope-token", unprojected),
+      );
+    });
+
+    expect(delivery).toBeUndefined();
+    await waitFor(() =>
+      expect(rendered.result.current.error).toContain("scope could not be frozen"),
+    );
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+    expect(askGrounded).not.toHaveBeenCalled();
   });
 });
 

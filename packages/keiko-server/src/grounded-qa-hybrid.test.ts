@@ -56,6 +56,7 @@ import {
   connectorQuery,
   connectorRetrievalTopK,
   estimateConnectorExcerptBytes,
+  runHybridGroundedAsk,
   type ConnectorRetrieve,
 } from "./grounded-qa-hybrid.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -68,13 +69,25 @@ import { mockRequest, mockResponse } from "./_support.js";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const NOW = 1_700_000_000_000;
+
+// `expect.any` is typed `any`; pinning it to the field type keeps the full-object diagnostics
+// literals below type-safe while tolerating real elapsed time on provider-backed paths.
+const ANY_LATENCY_MS = expect.any(Number) as unknown as number;
 const CHAT_MODEL = "example-chat-model";
-const HYBRID_ANSWER_SENTINEL = "Hybrid answer from injected seam.";
+const HYBRID_ANSWER_SENTINEL = "Hybrid answer from injected seam [1] [2].";
 
 // ─── Store + temp-dir lifecycle ───────────────────────────────────────────────
 
 let store: UiStore;
 let tmp: string;
+
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 beforeEach(() => {
   store = createInMemoryUiStore();
@@ -261,6 +274,44 @@ function auditKindsFor(capsuleId: KnowledgeCapsuleId): readonly string[] {
       readonly kind: string;
     }[];
     return rows.map((row) => row.kind);
+  } finally {
+    knowledgeStore.close();
+  }
+}
+
+interface AuditReferenceCounts {
+  readonly kind: string;
+  readonly referenceCount: number;
+  readonly citationCount: number;
+}
+
+function auditReferenceCountsFor(capsuleId: KnowledgeCapsuleId): readonly AuditReferenceCounts[] {
+  const knowledgeStore = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+  });
+  try {
+    const rows = knowledgeStore._internal.db
+      .prepare(
+        "SELECT kind, details_json FROM capsule_audit_events WHERE capsule_id = :capsuleId AND kind IN ('answer-context-assembled', 'model-context-sent') ORDER BY kind ASC",
+      )
+      .all({ capsuleId: String(capsuleId) }) as unknown as readonly {
+      readonly kind: string;
+      readonly details_json: string;
+    }[];
+    return rows.map((row) => {
+      const details = JSON.parse(row.details_json) as {
+        readonly referenceCount?: unknown;
+        readonly citationCount?: unknown;
+      };
+      if (typeof details.referenceCount !== "number" || typeof details.citationCount !== "number") {
+        throw new Error("expected metadata-only reference counts");
+      }
+      return {
+        kind: row.kind,
+        referenceCount: details.referenceCount,
+        citationCount: details.citationCount,
+      };
+    });
   } finally {
     knowledgeStore.close();
   }
@@ -609,13 +660,16 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.contextPack.knowledge.referencesUsed).toBeLessThanOrEqual(
       answer.contextPack.knowledge.referenceBudget,
     );
-    expect(answer.contextPack.reranker).toMatchObject({
+    // Byte-diff pin (issue #2567 D5): toEqual, NOT toMatchObject — an ADDED diagnostics field is a
+    // wire change on the grounded-answer contract and must fail here rather than pass silently.
+    expect(answer.contextPack.reranker).toEqual({
       status: "disabled",
       mode: "none",
       candidateCount: 2,
       documentCount: 0,
       keptCount: 2,
       failureKind: "not-configured",
+      latencyMs: 0,
     });
     expect(answer.contextPack.knowledge.reranker?.status).toBe("disabled");
     // Regression for Epic #1820 / #1922: a not-configured reranker is the default, fully-supported
@@ -641,6 +695,156 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       "model-context-sent",
       "retrieval-performed",
     ]);
+  });
+
+  it("does not project selected evidence that the assistant did not cite", async () => {
+    const { capsuleId } = await seedReadyCapsule("Uncited Docs");
+    const evidenceJson: string[] = [];
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/uncited.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("uncited-repo"),
+    };
+    const chatId = makeHybridChat(
+      [folderScope],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What evidence is relevant?" })),
+      hybridDeps({
+        evidenceStore: {
+          put: (_runId, json): string => {
+            evidenceJson.push(json);
+            return "evidence.json";
+          },
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+      }),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(
+          new Map([["src/uncited.ts", folderPack("src/uncited.ts", 0.7, "uncited-atom")]]),
+        ),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer("Answer without citation markers."),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.citations).toEqual([]);
+    expect(answer.knowledgeCitations).toEqual([]);
+    expect(answer.contextPack.folder.citationCount).toBe(0);
+    expect(answer.contextPack.knowledge.citationCount).toBe(0);
+    expect(answer.retrievalActivity?.summary.citationCount).toBe(0);
+    expect(answer.uncertainty).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "unsupported-citation",
+          claim: expect.stringContaining("without a supported inline citation") as unknown,
+        }),
+      ]),
+    );
+    expect(auditReferenceCountsFor(capsuleId)).toEqual([
+      { kind: "answer-context-assembled", referenceCount: 1, citationCount: 1 },
+      { kind: "model-context-sent", referenceCount: 1, citationCount: 1 },
+    ]);
+    const manifest = JSON.parse(evidenceJson[0] ?? "{}") as {
+      readonly connectedContext?: {
+        readonly summary?: { readonly citationCount?: unknown } | undefined;
+      };
+    };
+    expect(manifest.connectedContext?.summary?.citationCount).toBe(0);
+  });
+
+  it("surfaces an unknown numeric evidence marker as unsupported", async () => {
+    const { capsuleId } = await seedReadyCapsule("Unknown Marker Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/unknown-marker.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("unknown-marker-repo"),
+    };
+    const chatId = makeHybridChat(
+      [folderScope],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Which evidence supports this?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(
+          new Map([
+            [
+              "src/unknown-marker.ts",
+              folderPack("src/unknown-marker.ts", 0.7, "unknown-marker-atom"),
+            ],
+          ]),
+        ),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer("Unsupported evidence marker [99]."),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.citations).toEqual([]);
+    expect(answer.knowledgeCitations).toEqual([]);
+    expect(answer.uncertainty).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "unsupported-citation",
+          claim: expect.stringContaining("[99]") as unknown as string,
+        }),
+      ]),
+    );
+  });
+
+  it("projects only the selected evidence marker cited by the assistant", async () => {
+    const { capsuleId } = await seedReadyCapsule("Partially Cited Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/partial.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("partial-repo"),
+    };
+    const chatId = makeHybridChat(
+      [folderScope],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Which source proves this?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(
+          new Map([["src/partial.ts", folderPack("src/partial.ts", 0.7, "partial-atom")]]),
+        ),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer("Only one source supports this [1]."),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    const markers = [
+      ...answer.citations.map((citation) => `[${String(citation.marker)}]`),
+      ...answer.knowledgeCitations.map((citation) => citation.marker),
+    ];
+    expect(markers).toEqual(["[1]"]);
+    expect(
+      answer.contextPack.folder.citationCount + answer.contextPack.knowledge.citationCount,
+    ).toBe(1);
   });
 
   it("omits connector audit evidence when connector evidence persistence is denied", async () => {
@@ -684,7 +888,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(auditKindsFor(capId)).toEqual([]);
   });
 
-  it("does not persist a hybrid answer when the client disconnects after answering", async () => {
+  it("retains the hybrid user turn when the client disconnects after answering", async () => {
     const { capsuleId: capId } = await seedReadyCapsule("Disconnect Docs");
     const folderScope: ChatConnectedScope = {
       kind: "directory",
@@ -720,7 +924,69 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     );
 
     expect(result.status).toBe(499);
-    expect(store.listMessages(chatId)).toEqual([]);
+    expect(store.listMessages(chatId)).toMatchObject([{ role: "user", content: "What changed?" }]);
+  });
+
+  it("returns 499 when empty hybrid retrieval ignores cancellation and resolves late", async () => {
+    const { capsuleId } = await seedReadyCapsule("Late Empty Retrieval Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/late-empty.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("late-empty-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const folder = deferred<RetrievalOnlyOutput>();
+    const connector = deferred<RetrievalResult>();
+    const retrievalStarted = deferred<undefined>();
+    let started = 0;
+    let answerCalls = 0;
+    const markStarted = (): void => {
+      started += 1;
+      if (started === 2) retrievalStarted.resolve(undefined);
+    };
+    const res = fakeRes();
+    const outcome = handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "late empty hybrid" }), res),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: () => {
+          markStarted();
+          return folder.promise;
+        },
+        connectorRetrieve: () => {
+          markStarted();
+          return connector.promise;
+        },
+        answer: () => {
+          answerCalls += 1;
+          return Promise.resolve("must not answer");
+        },
+      },
+    );
+    await retrievalStarted.promise;
+
+    res.emit("close");
+
+    await expect(outcome).resolves.toMatchObject({ status: 499 });
+    folder.resolve({
+      pack: { ...folderPack("src/late-empty.ts", 0.5, "late-empty"), files: [] },
+      elapsedMs: 1,
+      plan: { state: "ready" } as never,
+    });
+    connector.resolve({ references: [], noEvidence: true, reason: "no-vectors" });
+    await Promise.resolve();
+    expect(answerCalls).toBe(0);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "late empty hybrid" },
+    ]);
   });
 
   it("strips planner scaffolding from hybrid answers and carries final model usage", async () => {
@@ -1018,6 +1284,7 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(false);
     expect(answer.retrievalActivity?.summary.unavailableCount).toBe(2);
     expect(answer.retrievalActivity?.summary.referenceCount).toBe(0);
     expect(answer.retrievalActivity?.summary.citationCount).toBe(0);
@@ -1033,6 +1300,48 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     }
     expect(auditKindsFor(capA)).toEqual(["retrieval-performed"]);
     expect(auditKindsFor(capB)).toEqual(["retrieval-performed"]);
+  });
+
+  it("answers from explicit personal context without projecting empty hybrid sources", async () => {
+    const { capsuleId: capA } = await seedReadyCapsule("Memory Empty A Docs");
+    const { capsuleId: capB } = await seedReadyCapsule("Memory Empty B Docs");
+    const chatId = makeHybridChat(
+      [],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    );
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new Error("expected hybrid chat");
+    let answererCalls = 0;
+    const result = await runHybridGroundedAsk({
+      chat,
+      content: "What package manager do I prefer?",
+      answerContent:
+        "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
+      answerOnlyContextAvailable: true,
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: hybridDeps(),
+      signal: new AbortController().signal,
+      connectorRetrieve: () =>
+        Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" }),
+      answer: () => {
+        answererCalls += 1;
+        return Promise.resolve("You prefer pnpm.");
+      },
+    });
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answererCalls).toBe(1);
+    expect(answer.content).toBe("You prefer pnpm.");
+    expect(answer.citations).toEqual([]);
+    expect(answer.knowledgeCitations).toEqual([]);
+    expect(answer.evidenceRunId).toBeUndefined();
+    expect(answer.evidenceRunIds).toEqual([]);
+    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(false);
   });
 });
 
@@ -1758,6 +2067,69 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
 // ─── Case 4c: Configured model reranker over hybrid candidates ────────────────
 
 describe("hybrid model reranker", () => {
+  it("keeps memory context out of retrieval and reranking while including it in generation", async () => {
+    const { capsuleId } = await seedReadyCapsule("Memory Boundary Docs");
+    const canonicalQuestion = "Where is the payment handler defined?";
+    const memoryMarker = "MEMORY-ONLY-MARKER";
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/memory-boundary.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("memory-boundary-repo"),
+    };
+    const chatId = makeHybridChat(
+      [folderScope],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new Error("expected hybrid chat");
+    const retrievalQueries: string[] = [];
+    const rerankQueries: string[] = [];
+    const answerUsers: string[] = [];
+    const baseRetriever = folderRetrieverFor(
+      new Map([
+        [
+          "src/memory-boundary.ts",
+          folderPack("src/memory-boundary.ts", 0.5, "memory-boundary-atom"),
+        ],
+      ]),
+    );
+    const deps = hybridDeps({
+      config: rerankerGatewayConfig(),
+      configPresent: true,
+      rerankRequest: (request) => {
+        rerankQueries.push(request.query);
+        return Promise.resolve(successfulRerank([0, 1]));
+      },
+    });
+
+    const result = await runHybridGroundedAsk({
+      chat,
+      content: canonicalQuestion,
+      answerContent: `${canonicalQuestion}\n\nConversation memory:\n${memoryMarker}`,
+      modelId: CHAT_MODEL,
+      contextProfile: deps.contextProfile,
+      deps,
+      signal: new AbortController().signal,
+      folderRetriever: async (input) => {
+        retrievalQueries.push(input.query.text);
+        return await baseRetriever(input);
+      },
+      connectorRetrieve: singleConnectorRetrieve(capsuleId),
+      answer: (_system, user) => {
+        answerUsers.push(user);
+        return Promise.resolve("Memory-aware hybrid answer [1] [2].");
+      },
+    });
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(retrievalQueries).toEqual([canonicalQuestion]);
+    expect(rerankQueries).toEqual([canonicalQuestion]);
+    expect(answerUsers[0]).toContain(memoryMarker);
+    expect(retrievalQueries.join(" ")).not.toContain(memoryMarker);
+    expect(rerankQueries.join(" ")).not.toContain(memoryMarker);
+  });
+
   it("reorders the preliminary candidate pool before prompt and citation assembly", async () => {
     const { capsuleId: capId } = await seedReadyCapsule("Rerank Docs");
     const folderScope: ChatConnectedScope = {
@@ -1806,11 +2178,13 @@ describe("hybrid model reranker", () => {
     expect((seenUsers[0] ?? "").indexOf("[1] ### Folder source")).toBeLessThan(
       (seenUsers[0] ?? "").indexOf("[2] ### Connector source"),
     );
-    expect(answer.contextPack.reranker).toMatchObject({
+    expect(answer.contextPack.reranker).toEqual({
       status: "applied",
+      mode: "provider-backed",
       candidateCount: 2,
       documentCount: 2,
       keptCount: 2,
+      latencyMs: ANY_LATENCY_MS,
     });
     expect(answer.retrievalActivity?.pods[0]?.modes).toContain("reranked");
   });
@@ -1858,12 +2232,14 @@ describe("hybrid model reranker", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
     expect(rerankCalls).toBe(0);
-    expect(answer.contextPack.reranker).toMatchObject({
+    expect(answer.contextPack.reranker).toEqual({
       status: "denied",
       mode: "local-only",
-      failureKind: "policy-denied",
       candidateCount: 2,
+      documentCount: 0,
       keptCount: 2,
+      failureKind: "policy-denied",
+      latencyMs: 0,
     });
     expect(answer.retrievalActivity?.pods[0]?.reasonCodes).toContain("policy-denied");
   });
@@ -1907,13 +2283,14 @@ describe("hybrid model reranker", () => {
       expect(result.status, JSON.stringify(result.body)).toBe(200);
       const answer = asHybrid(result.body as GroundedAnswer);
       expect(answer.knowledgeCitations[0]?.marker).toBe("[1]");
-      expect(answer.contextPack.reranker).toMatchObject({
+      expect(answer.contextPack.reranker).toEqual({
         status: "unavailable",
         mode: "provider-backed",
-        failureKind: kind,
         candidateCount: 2,
         documentCount: 2,
         keptCount: 2,
+        failureKind: kind,
+        latencyMs: ANY_LATENCY_MS,
       });
       expect(answer.retrievalActivity?.pods[0]).toMatchObject({
         state: "degraded",
@@ -1958,11 +2335,106 @@ describe("hybrid model reranker", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.contextPack.reranker).toMatchObject({
+    expect(answer.contextPack.reranker).toEqual({
       status: "invalid-response",
       mode: "provider-backed",
-      failureKind: "invalid-response",
+      candidateCount: 2,
+      documentCount: 2,
       keptCount: 2,
+      failureKind: "invalid-response",
+      latencyMs: ANY_LATENCY_MS,
+    });
+  });
+
+  // The transport-level invalid-response journey above short-circuits BEFORE applyRerankMapping, so
+  // it never proves the mapping rejection reaches the wire. This drives a transport-SUCCESSFUL
+  // response whose indices are unusable (duplicate index 0), which is the only way the caller-level
+  // "invalid-response" status can originate from the mapping guard itself.
+  it("falls back with invalid-response diagnostics for a duplicate-index provider response", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Duplicate Rerank Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/rerank-duplicate.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("rerank-duplicate-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const packMap = new Map([
+      ["src/rerank-duplicate.ts", folderPack("src/rerank-duplicate.ts", 0.5, "rerank-dup-atom")],
+    ]);
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Duplicate index fallback?" })),
+      hybridDeps({
+        config: rerankerGatewayConfig(),
+        configPresent: true,
+        rerankRequest: () => Promise.resolve(successfulRerank([0, 0])),
+      }),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer("Duplicate index fallback answer [1] [2]."),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    // Fallback selection is the preliminary order, so the connector keeps its pre-rerank marker.
+    expect(answer.knowledgeCitations[0]?.marker).toBe("[1]");
+    expect(answer.contextPack.reranker).toEqual({
+      status: "invalid-response",
+      mode: "provider-backed",
+      candidateCount: 2,
+      documentCount: 2,
+      keptCount: 2,
+      failureKind: "invalid-response",
+      latencyMs: ANY_LATENCY_MS,
+    });
+  });
+
+  // The empty-pool-and-unconfigured intersection — the ONE state where the two pre-facade
+  // implementations disagreed (issue #2567 D5). The shared facade resolves it to the single-scope
+  // answer: the configuration check wins, so "not-configured" is reported even with nothing to
+  // rerank. This is a deliberate, declared behavior change against the legacy hybrid path, which
+  // emitted a bare "disabled" here. See the rationale comment on `rerankSelection`.
+  it("reports not-configured with an empty candidate pool on the no-evidence route", async () => {
+    const { capsuleId: capA } = await seedReadyCapsule("Empty Pool Rerank A");
+    const { capsuleId: capB } = await seedReadyCapsule("Empty Pool Rerank B");
+    const chatId = makeHybridChat(
+      [],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    );
+    const connectorRetrieve: ConnectorRetrieve = () =>
+      Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" });
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Anything at all?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      { connectorRetrieve, answer: throwingHybridAnswerer() },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.contextPack.reranker).toEqual({
+      status: "disabled",
+      mode: "none",
+      candidateCount: 0,
+      documentCount: 0,
+      keptCount: 0,
+      failureKind: "not-configured",
+      latencyMs: 0,
     });
   });
 });
@@ -2344,7 +2816,7 @@ describe("ask-path source cap — connectors capped at maxLocalKnowledgeSources"
       {
         folderRetriever: folderRetrieverFor(packMap),
         connectorRetrieve: trackingConnectorRetrieve,
-        answer: sentinelAnswerer(),
+        answer: sentinelAnswerer("Capped connector answer [1] [2] [3]."),
       },
     );
 
@@ -2433,7 +2905,7 @@ describe("ask-path source cap — connectors capped at maxLocalKnowledgeSources"
       {
         folderRetriever: folderRetrieverFor(packMap),
         connectorRetrieve: trackingConnectorRetrieve,
-        answer: sentinelAnswerer(),
+        answer: sentinelAnswerer("At-limit connector answer [1] [2] [3]."),
       },
     );
 

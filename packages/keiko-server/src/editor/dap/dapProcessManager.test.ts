@@ -606,17 +606,25 @@ describe("dapProcessManager canonical orchestration", () => {
     { supportsConfigurationDoneRequest: "true" },
     { supportsSetVariable: 1 },
   ])("fails closed on malformed initialize capabilities %#", async (initializeResponse) => {
-    const transport = endpoint();
-    transport.initializeResponse = initializeResponse;
-    const current = setup({ endpoint: transport });
+    vi.useFakeTimers();
+    try {
+      const transport = endpoint();
+      transport.initializeResponse = initializeResponse;
+      const current = setup({ endpoint: transport });
+      const starting = current.manager.start(startInput);
+      const rejection = expect(starting).rejects.toMatchObject({
+        code: "STARTUP_THROTTLED",
+      });
 
-    await expect(current.manager.start(startInput)).rejects.toMatchObject({
-      code: "STARTUP_THROTTLED",
-    });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await rejection;
 
-    expect(transport.commands).toStrictEqual(["initialize", "initialize"]);
-    expect(current.launch).toHaveBeenCalledTimes(2);
-    expect(current.manager.health("session_a")).toBeUndefined();
+      expect(transport.commands).toStrictEqual(["initialize", "initialize"]);
+      expect(current.launch).toHaveBeenCalledTimes(2);
+      expect(current.manager.health("session_a")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("configures after initialized without waiting for the withheld launch response", async () => {
@@ -801,7 +809,7 @@ describe("dapProcessManager canonical orchestration", () => {
     await expect(current.manager.reconcile()).rejects.toMatchObject({
       code: "CLIENT_DISPOSED",
     });
-    expect(current.handle.cleanup).toHaveBeenCalledOnce();
+    expect(current.handle.cleanup.mock.calls).toHaveLength(1);
   });
 
   it("publishes the exact terminal state for explicit stop, revocation, and malformed input", async () => {
@@ -1566,7 +1574,7 @@ describe("dapProcessManager canonical orchestration", () => {
     expect(current.launch).toHaveBeenCalledTimes(1);
     expect(current.connect).toHaveBeenCalledTimes(1);
     expect(firstHandle.terminateScope).toHaveBeenCalledTimes(1);
-    expect(firstHandle.cleanup).toHaveBeenCalledTimes(1);
+    expect(firstHandle.cleanup.mock.calls).toHaveLength(1);
     expect(current.records.slice(-2)).toMatchObject([
       { eventKind: "failure", reason: "startupFailed" },
       { eventKind: "teardown", reason: "startupFailed" },
@@ -1579,13 +1587,13 @@ describe("dapProcessManager canonical orchestration", () => {
     await stopped.manager.start(startInput);
     await stopped.manager.stop("session_a");
     expect(stopped.handle.terminateScope).toHaveBeenCalledTimes(1);
-    expect(stopped.handle.cleanup).toHaveBeenCalledTimes(1);
+    expect(stopped.handle.cleanup.mock.calls).toHaveLength(1);
 
     const crashed = setup();
     await crashed.manager.start(startInput);
     await crashed.handle.emitExit();
     expect(crashed.handle.terminateScope).toHaveBeenCalledTimes(1);
-    expect(crashed.handle.cleanup).toHaveBeenCalledTimes(1);
+    expect(crashed.handle.cleanup.mock.calls).toHaveLength(1);
     expect(crashed.manager.health("session_a")).toBeUndefined();
   });
 
@@ -1600,8 +1608,8 @@ describe("dapProcessManager canonical orchestration", () => {
 
     await expect(current.manager.start(startInput)).rejects.toThrow("private");
     expect(current.handle.terminateScope).toHaveBeenCalledTimes(1);
-    expect(current.handle.cleanup).toHaveBeenCalledTimes(1);
-    expect(current.transport.close).toHaveBeenCalledTimes(1);
+    expect(current.handle.cleanup.mock.calls).toHaveLength(1);
+    expect(current.transport.close.mock.calls).toHaveLength(1);
     expect(current.resourceCleanups[0]).toHaveBeenCalledTimes(1);
     expect(current.resourceCleanups[1]).toHaveBeenCalledTimes(1);
     expect(current.manager.health("session_a")).toMatchObject({
@@ -1625,7 +1633,7 @@ describe("dapProcessManager canonical orchestration", () => {
     expect(current.registry.health()).toBe("ready");
     expect(current.manager.health("session_a")).toBeUndefined();
     expect(current.handle.terminateScope).toHaveBeenCalledTimes(1);
-    expect(current.transport.close).toHaveBeenCalledTimes(1);
+    expect(current.transport.close.mock.calls).toHaveLength(1);
     expect(current.resourceCleanups[0]).toHaveBeenCalledTimes(1);
     expect(current.resourceCleanups[1]).toHaveBeenCalledTimes(1);
   });
@@ -1662,7 +1670,7 @@ describe("dapProcessManager canonical orchestration", () => {
     await vi.waitFor(() => {
       expect(current.handle.terminateScope).toHaveBeenCalledTimes(1);
     });
-    expect(current.handle.cleanup).toHaveBeenCalledTimes(1);
+    expect(current.handle.cleanup.mock.calls).toHaveLength(1);
     expect(current.records.some((record) => record.reason === "unexpectedEof")).toBe(true);
     expect(current.manager.health("session_a")).toBeUndefined();
     expect(projected).toStrictEqual([
@@ -1713,7 +1721,7 @@ describe("dapProcessManager canonical orchestration", () => {
       expect.objectContaining({ code: "SESSION_TERMINATING" }),
     );
     await vi.advanceTimersByTimeAsync(250);
-    expect(hanging.destroy).toHaveBeenCalledTimes(1);
+    expect(hanging.destroy.mock.calls).toHaveLength(1);
     expect(current.registry.health()).toBe("terminationPending");
     vi.useRealTimers();
   });
@@ -1739,7 +1747,7 @@ describe("dapProcessManager canonical orchestration", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     await vi.waitFor(() => {
-      expect(pending.destroy).toHaveBeenCalledTimes(1);
+      expect(pending.destroy.mock.calls).toHaveLength(1);
       expect(current.manager.health("session_a")).toBeUndefined();
     });
     vi.useRealTimers();
@@ -1927,7 +1935,7 @@ describe("dapProcessManager canonical orchestration", () => {
     await rejectedStart;
     expect(current.connect).not.toHaveBeenCalled();
     expect(late.terminateScope).toHaveBeenCalledTimes(1);
-    expect(late.cleanup).toHaveBeenCalledTimes(1);
+    expect(late.cleanup.mock.calls).toHaveLength(1);
     expect(current.records.filter((record) => record.reason === "serverShutdown")).toHaveLength(2);
   });
 
@@ -1948,8 +1956,8 @@ describe("dapProcessManager canonical orchestration", () => {
     await current.manager.shutdown();
     resolveEndpoint?.(lateEndpoint);
     await rejectedStart;
-    expect(lateEndpoint.close).toHaveBeenCalledTimes(1);
-    expect(lateEndpoint.destroy).not.toHaveBeenCalled();
+    expect(lateEndpoint.close.mock.calls).toHaveLength(1);
+    expect(lateEndpoint.destroy.mock.calls).toHaveLength(0);
     expect(current.handle.terminateScope).toHaveBeenCalledTimes(1);
   });
 

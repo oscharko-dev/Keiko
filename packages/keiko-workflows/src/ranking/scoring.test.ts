@@ -162,4 +162,46 @@ describe("weightsForIntent / isIntentBoosted", () => {
     expect(defaultScore).toBeCloseTo(0.5 * DEFAULT_SCORING_WEIGHTS.provenanceBestScore, 10);
     expect(boostedScore).toBeGreaterThan(defaultScore);
   });
+
+  it("preserves the configured direct-definition share for a definition-only hit", () => {
+    const definitionOnly: ExtractedSignals = {
+      scopePath: "src/handler.ts",
+      signals: [{ name: "symbol-definition", value: 1 }],
+      baseScore: 0,
+      generatedHint: false,
+    };
+
+    expect(computeScore(definitionOnly, weightsForIntent("targeted-code-search"))).toBeCloseTo(
+      0.3,
+      10,
+    );
+  });
+
+  it("keeps a direct definition ahead when strong base and structural signals would otherwise saturate", () => {
+    const common: ExtractedSignals = {
+      scopePath: "src/handler.ts",
+      signals: [
+        { name: "provenance-best-score", value: 1 },
+        { name: "provenance-count", value: 1 },
+        { name: "anchor-overlap", value: 1 },
+        { name: "path-depth-affinity", value: 1 },
+        { name: "test-pair-bonus", value: 1 },
+        { name: "stacktrace-position-bonus", value: 1 },
+        { name: "structural-edge", value: 1 },
+      ],
+      baseScore: 1,
+      generatedHint: false,
+    };
+    const definition: ExtractedSignals = {
+      ...common,
+      signals: [...common.signals, { name: "symbol-definition", value: 1 }],
+    };
+    const weights = weightsForIntent("targeted-code-search");
+
+    const commonScore = computeScore(common, weights);
+    const definitionScore = computeScore(definition, weights);
+
+    expect(definitionScore).toBeGreaterThan(commonScore);
+    expect(definitionScore - commonScore).toBeCloseTo(0.3, 10);
+  });
 });

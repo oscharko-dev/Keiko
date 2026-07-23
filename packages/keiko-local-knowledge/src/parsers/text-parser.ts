@@ -3,9 +3,10 @@
 // is split on ATX-style headings (`^#{1,6}\\s`) into one section per heading run with the
 // hierarchical sectionPath populated from heading text.
 //
-// Source code (.ts/.js/.py/.yaml/etc) routes here too via `languageHint`. The lexical scan
-// runs once over the decoded string and stops emitting units the moment any limit (deadline
-// / cancellation / unit count) trips.
+// Configuration and text-like formats without a dedicated structural parser route here too via
+// `languageHint`. Source-code formats owned by code-parser.ts are registered before this adapter.
+// The lexical scan runs once over the decoded string and stops emitting units the moment any
+// limit (deadline / cancellation / unit count) trips.
 
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";

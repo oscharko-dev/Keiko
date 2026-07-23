@@ -12,7 +12,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { freshStore } from "../_support.js";
-import { scriptedAdapter, seedCapsuleWithVectors } from "../retrieval/_support.js";
+import {
+  deterministicVector,
+  scriptedAdapter,
+  seedCapsuleWithVectors,
+} from "../retrieval/_support.js";
 import type { KnowledgeStore } from "../store.js";
 
 import { runGroundedAnswer } from "./grounded-answer-runner.js";
@@ -96,6 +100,67 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.noEvidence).toBe(false);
     expect(result.answer).toContain("Found");
     expect(result.citations.length).toBeGreaterThan(0);
+  });
+
+  it("keeps generation-only context out of retrieval and reranking queries", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-memory" });
+    const retrievalInputs: string[] = [];
+    const transformedQueries: string[] = [];
+    const generator = fakeGenerator("Found grounded evidence [1].");
+    const query: ConversationGroundedQuery = {
+      conversationId: "conv-memory",
+      capsuleId: seeded.capsuleId,
+      text: "alpha",
+      strategy: "broad",
+      answerQuestion: "User question:\nalpha\n\nIncluded memory context:\nUse pnpm.",
+    };
+
+    await runGroundedAnswer(
+      {
+        retrieval: {
+          store,
+          embeddingAdapter: scriptedAdapter({
+            responder: (request) => {
+              retrievalInputs.push(request.input);
+              return {
+                ok: true,
+                value: {
+                  vector: deterministicVector(request.input, 3),
+                  modelId: "text-embedding-test",
+                },
+              };
+            },
+          }),
+          queryTransformer: {
+            rewrite: (request) => {
+              transformedQueries.push(request.query);
+              return Promise.resolve([request.query]);
+            },
+          },
+        },
+        answerGenerator: generator,
+        referenceReranker: {
+          rerank: (input) => {
+            expect(input.query.text).toBe("alpha");
+            return Promise.resolve({
+              references: input.references,
+              diagnostics: {
+                status: "applied",
+                candidateCount: input.references.length,
+                documentCount: input.references.length,
+                keptCount: input.references.length,
+              },
+            });
+          },
+        },
+      },
+      query,
+    );
+
+    expect(transformedQueries).toEqual(["alpha"]);
+    expect(retrievalInputs.join("\n")).not.toContain("Use pnpm");
+    expect(generator.calls[0]?.query.answerQuestion).toContain("Use pnpm");
   });
 
   it("retries once with citationRepair when the model omits markers", async () => {
@@ -225,6 +290,31 @@ describe("runGroundedAnswer — no-evidence short-circuit", () => {
     expect(result.noEvidence).toBe(true);
     expect(result.reason).toBe("empty-query");
     expect(generator).not.toHaveBeenCalled();
+  });
+
+  it("uses explicit answer-only context without turning it into source evidence", async () => {
+    const { store } = getFixture();
+    const generator = vi.fn((): Promise<string> => Promise.resolve("You prefer pnpm."));
+    const result = await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: { generate: generator },
+      },
+      {
+        conversationId: "conv-memory-only",
+        text: "What package manager do I prefer?",
+        answerQuestion:
+          "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
+        answerOnlyContextAvailable: true,
+      },
+    );
+
+    expect(generator).toHaveBeenCalledOnce();
+    expect(result.answer).toBe("You prefer pnpm.");
+    expect(result.noEvidence).toBe(true);
+    expect(result.answerOnlyContextUsed).toBe(true);
+    expect(result.references).toEqual([]);
+    expect(result.citations).toEqual([]);
   });
 });
 

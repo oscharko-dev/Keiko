@@ -61,7 +61,7 @@ describe("node managed LSP control wiring", () => {
       correlationId: "managed-lsp-evidence-projection",
       operation: "managed-lsp.evidence.project",
       source: "managed-lsp-control",
-      message: "[REDACTED]",
+      message: "server-operation-failed",
     });
     expect(JSON.stringify(records)).not.toContain(secret);
   });

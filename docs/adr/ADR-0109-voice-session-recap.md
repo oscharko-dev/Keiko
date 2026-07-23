@@ -4,11 +4,48 @@
 
 ## Status
 
-Accepted (Issue #504, Epic #491, 2026-06-25)
+Accepted (Issue #504, Epic #491, 2026-06-25); amended 2026-07-21 and by
+[ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) on 2026-07-22. Canonical per-turn capture is
+normative. The recap contract and server route remain, but the current UI contains no recap caller;
+the route is not the productive Twin memory path.
 
 ## Version
 
-0.2.0
+0.3.1
+
+## 2026-07-21 amendment — per-turn capture is canonical; recap is aggregation only
+
+The original decision assumed that a full-realtime user turn might never enter the normal chat request
+because speech travelled on the WebRTC media plane. That assumption is superseded. In Digital Voice, the
+Realtime provider now owns media transport, VAD, and transcription only. Every final transcript is submitted
+as a normal user message through the same chat-session send path as typed input.
+
+This amendment is authoritative wherever the historical text below conflicts with it:
+
+1. The final spoken transcript appears immediately in the existing chat and runs the normal retrieval,
+   grounding, context, approval, and `collectMemoryActions` pipeline. MemoriaViva capture therefore happens
+   per committed user turn under the same memory settings and governance as typed chat.
+2. The Realtime session has automatic response creation disabled and advertises no Keiko retrieval or memory
+   tools. It cannot persist or speak a competing provider-native assistant answer.
+3. The sole assistant answer is the canonical chat answer. Speech output synthesizes that exact visible text;
+   source metadata, code, tables, and other rich rendering remain visual.
+4. Interim transcription is ephemeral UI state. It is replaced by the final user chat message and is never
+   persisted as a transcript or memory input. Raw audio remains transient.
+5. Session recap remains useful as an explicit aggregation and review action across several committed turns.
+   It is no longer the primary or only way for full-realtime speech to reach MemoriaViva.
+6. Endpointing is deliberately patient. A capable provider uses semantic VAD with low eagerness, and the
+   browser keeps a final transcript provisional for 1.6 seconds. New speech in that continuation window
+   joins the same user turn; repeated boundary words are deduplicated. Only the settled turn enters chat.
+7. Grounded asks carry and return the same governed memory request/result as ungrounded chat. Repository or
+   Knowledge Pod retrieval therefore cannot bypass MemoriaViva merely because it owns answer generation.
+8. The recap contract and server route remain in the tree, but there is no current UI hook, component,
+   or caller. References below to `useVoiceSessionRecap`, `VoiceRecap.tsx`, an inert recap button, or
+   future wiring are retained historical design text, not a description of current UI availability.
+
+The recap contracts, content-free audit, review queue, and explicit user-trigger semantics remain accepted.
+The old statements that full-realtime `request.content` is absent, that recap fills the only per-turn memory
+gap, or that live voice-to-chat wiring is deferred are retained below as historical rationale and are
+superseded by this amendment.
 
 ## Context
 
@@ -24,10 +61,10 @@ adding gates, removing none.
 The existing per-turn memory capture path (`collectMemoryActions` in `keiko-server/src/chat-handlers.ts`)
 runs `extractCandidatesFromUserText` on `request.content` (the user's typed or dictation-derived text
 message) per turn, gated by `memory.enabled`. This works well for STT dictation where the transcript IS
-`request.content`. For full-realtime voice sessions, `request.content` may be empty or absent because
-the user's speech is carried over the WebRTC audio plane, not as a text body in the chat request. As a
-result, full-realtime voice turns produce no per-turn memory candidates from user speech — a gap this
-issue fills.
+`request.content`. Historically, full-realtime voice sessions did not submit their committed transcript as
+`request.content`, so they produced no per-turn memory candidates. The 2026-07-21 amendment closes that gap
+at the owning layer: the final transcript is now normal chat request content. Recap remains an additional
+aggregation surface.
 
 Issue #504 delivers a voice session recap: a user-triggered summary of committed voice-session output
 that derives memory candidates exclusively from the committed transcript projection. The recap must be:
@@ -508,13 +545,18 @@ for the user to review and tag manually.
 
 ## Acceptance Criteria — Mechanism Table
 
+> **Historical #504 closure table:** this records the evidence claim at the original implementation
+> point. It is not current-head evidence. In particular, ADR-0154 intentionally changed the canonical
+> chat and per-turn memory path, and the historical UI hook no longer exists; current exact-head tests
+> and gates are authoritative.
+
 | AC   | Acceptance Criterion                                           | Concrete Mechanism                                                                                                           | Evidence                                                                      |
 | ---- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | AC1  | Voice recap is fully dormant when voice is unavailable         | `voiceRecapAllowed(profile)` returns `false` for `none`/`speech-output`; hook short-circuits before any state read or call  | Contract test + eval `dormant-no-voice` fixture; no observer fires            |
 | AC2  | Recap input is committed transcript only                       | `selectCommittedVoiceTranscript(segments)` is the sole input; partial/stable/discarded/redacted excluded by construction    | By construction in `voice-transcript.ts`; eval `corrections-excluded` fixture |
 | AC3  | Candidates enter existing review queue as `"proposed"`         | `extractCandidatesFromUserText` → `vault.insertMemory(initialStatus:"proposed")`; reviewed via existing endpoints           | Server tests on recap handler; review-queue integration test                  |
 | AC4  | No raw audio, no transcript text stored beyond extraction call | Contract types carry only counts/enums; server never persists `committedText`; audit record is content-free                 | Module forbidden-substring scan; eval `raw-audio-never-stored` fixture        |
-| AC5  | Text-chat path and per-turn capture untouched                  | New route only; `collectMemoryActions` / `captureMemoryActions` / `CONVERSATION_SYSTEM_PROMPT` byte-identical               | Existing chat-handler tests pass unchanged; diff shows no mutation to those paths |
+| AC5  | Text-chat path and per-turn capture untouched at the #504 head | Historical new-route-only mechanism; ADR-0154 later changed canonical chat and per-turn capture intentionally               | Archived #504 evidence only; current exact-head canonical chat tests are authoritative |
 | AC6  | Secrets in transcript are rejected before vault insert         | `extractCandidatesFromUserText` runs `scanForSecrets` internally; `"rejected"` outcomes counted but never stored as records | eval `secret-in-transcript` fixture; server test with credential string input |
 
 ## Related
@@ -536,14 +578,13 @@ for the user to review and tag manually.
   the contract types and functions (Artifact A).
 - [`packages/keiko-server/src/voice-recap.ts`](../../packages/keiko-server/src/voice-recap.ts) —
   the server handler (Artifact B).
-- [`packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts) —
-  the UI hook (Artifact C).
+- The historical Artifact C UI hook and `VoiceRecap.tsx` component are not present in the current tree.
 - [`packages/keiko-memory-capture/src/index.ts`](../../packages/keiko-memory-capture/src/index.ts) —
   `extractCandidatesFromUserText`; the governed capture entry point this feature reuses.
 - [`packages/keiko-server/src/memory-handlers.ts`](../../packages/keiko-server/src/memory-handlers.ts) —
   existing review-queue and mutation endpoints recap review actions delegate to.
 - [`packages/keiko-ui/src/lib/memory-api.ts`](../../packages/keiko-ui/src/lib/memory-api.ts) —
-  existing UI client for memory review actions reused by `VoiceRecap.tsx`.
+  existing UI client for memory review actions; it is not currently wired to the recap route.
 - Epic [#491](https://github.com/oscharko-dev/Keiko/issues/491), Issue
   [#504](https://github.com/oscharko-dev/Keiko/issues/504).
 

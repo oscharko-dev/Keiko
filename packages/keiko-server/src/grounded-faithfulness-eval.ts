@@ -9,12 +9,18 @@
 // fabricated citations (or stops abstaining on empty evidence) turns the gate red.
 
 import {
+  buildPackCitationIndex,
   packHasUsableEvidence,
   reconcileInlineCitations,
   type PackCitationIndex,
 } from "./grounded-faithfulness.js";
 import { buildEvalContextPack, evalFileEntry, evalUncertainty } from "./grounded-eval-support.js";
-import type { ConnectedContextPack, LineRange } from "@oscharko-dev/keiko-contracts";
+import type {
+  ConnectedContextPack,
+  EvalBudget,
+  EvalFloorResult,
+  LineRange,
+} from "@oscharko-dev/keiko-contracts";
 
 type FaithfulnessVariant =
   "faithful" | "hallucinated-citation" | "confident-over-empty" | "refusal";
@@ -27,6 +33,7 @@ interface FaithfulnessFixture {
   // Per-path excerpt windows (optional) for line-range validation.
   readonly packLineWindows?: Readonly<Record<string, readonly LineRange[]>>;
   readonly answerText: string;
+  readonly expectedUnsupportedCitations: readonly string[];
 }
 
 // Distractor-dense: every fixture shares the same non-empty evidence pack (except the empty-evidence
@@ -42,6 +49,8 @@ const PACK_PATHS = [
   CONNECTOR_PAGE_PATH,
   CONNECTOR_ISSUE_PATH,
 ];
+const DEFAULT_PACK_LINE_WINDOWS: readonly LineRange[] = [{ startLine: 1, endLine: 100 }];
+const NO_UNSUPPORTED_CITATIONS: readonly string[] = [];
 
 const FIXTURES: readonly FaithfulnessFixture[] = [
   {
@@ -49,6 +58,7 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     variant: "faithful",
     packScopePaths: PACK_PATHS,
     answerText: "Login validates the session in [src/auth/login.ts:10-20].",
+    expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
   {
     name: "faithful-multi",
@@ -56,12 +66,14 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     packScopePaths: PACK_PATHS,
     answerText:
       "The route is registered in [src/http/routes.ts:5-9] and reads config from [src/config/env.ts].",
+    expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
   {
     name: "faithful-no-citations",
     variant: "faithful",
     packScopePaths: PACK_PATHS,
     answerText: "The service authenticates users and dispatches HTTP routes.",
+    expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
   {
     name: "hallucinated-path",
@@ -69,12 +81,14 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     packScopePaths: PACK_PATHS,
     answerText:
       "Login validates in [src/auth/login.ts:10-20] and reads secrets from [src/secret/keys.ts:40-55].",
+    expectedUnsupportedCitations: ["src/secret/keys.ts:40-55"],
   },
   {
     name: "hallucinated-only",
     variant: "hallucinated-citation",
     packScopePaths: PACK_PATHS,
     answerText: "The token is signed in [src/crypto/never-retrieved.ts:1-3].",
+    expectedUnsupportedCitations: ["src/crypto/never-retrieved.ts:1-3"],
   },
   {
     name: "hallucinated-line-out-of-window",
@@ -82,12 +96,14 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     packScopePaths: PACK_PATHS,
     packLineWindows: { "src/auth/login.ts": [{ startLine: 1, endLine: 30 }] },
     answerText: "See [src/auth/login.ts:900-950] for the handler.",
+    expectedUnsupportedCitations: ["src/auth/login.ts:900-950"],
   },
   {
     name: "faithful-connector-page",
     variant: "faithful",
     packScopePaths: PACK_PATHS,
     answerText: `The restart procedure is documented in [${CONNECTOR_PAGE_PATH}:3-9].`,
+    expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
   {
     name: "hallucinated-connector-page",
@@ -95,24 +111,28 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     packScopePaths: PACK_PATHS,
     answerText:
       "The rollback steps are documented in [confluence/ENG/pages/424242.html:1-12] of the wiki.",
+    expectedUnsupportedCitations: ["confluence/ENG/pages/424242.html:1-12"],
   },
   {
     name: "faithful-connector-issue",
     variant: "faithful",
     packScopePaths: PACK_PATHS,
     answerText: `PLAT-2 tracks the login regression; see [${CONNECTOR_ISSUE_PATH}:2-6].`,
+    expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
   {
     name: "hallucinated-connector-issue",
     variant: "hallucinated-citation",
     packScopePaths: PACK_PATHS,
     answerText: "The estimate is recorded on [jira/PLAT/issues/424242.html:1-4] in the tracker.",
+    expectedUnsupportedCitations: ["jira/PLAT/issues/424242.html:1-4"],
   },
   {
     name: "confident-over-empty",
     variant: "confident-over-empty",
     packScopePaths: [],
     answerText: "The system uses OAuth2 with PKCE and rotates refresh tokens every 24 hours.",
+    expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
   {
     name: "refusal-on-empty",
@@ -120,23 +140,27 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     packScopePaths: [],
     answerText:
       "I could not find repository evidence in the connected scope to answer this question.",
+    expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
 ];
 
 function indexFor(fixture: FaithfulnessFixture): PackCitationIndex {
-  return {
-    scopePaths: new Set(fixture.packScopePaths),
-    lineWindowsByPath: new Map(
-      Object.entries(fixture.packLineWindows ?? {}).map(([path, windows]) => [path, windows]),
-    ),
-  };
+  return buildPackCitationIndex([packFor(fixture)]);
 }
 
 // A minimal pack carrying exactly the fixture's evidence, so packHasUsableEvidence reflects the
 // real abstention predicate rather than a hand-set boolean.
 function packFor(fixture: FaithfulnessFixture): ConnectedContextPack {
   return buildEvalContextPack(
-    fixture.packScopePaths.map((scopePath) => evalFileEntry(scopePath, [{ content: "" }])),
+    fixture.packScopePaths.map((scopePath) =>
+      evalFileEntry(
+        scopePath,
+        (fixture.packLineWindows?.[scopePath] ?? DEFAULT_PACK_LINE_WINDOWS).map((lineRange) => ({
+          content: "eval evidence",
+          lineRange,
+        })),
+      ),
+    ),
     fixture.packScopePaths.length === 0 ? [evalUncertainty("no-evidence")] : [],
   );
 }
@@ -156,6 +180,12 @@ function rate(hits: number, total: number): number {
   return total === 0 ? 1 : hits / total;
 }
 
+function citationsMatchExpected(actual: readonly string[], expected: readonly string[]): boolean {
+  return (
+    actual.length === expected.length && actual.every((value, index) => value === expected[index])
+  );
+}
+
 export function runGroundedFaithfulnessEval(): GroundedFaithfulnessScorecard {
   const failures: string[] = [];
   const hallucinated = FIXTURES.filter((f) => f.variant === "hallucinated-citation");
@@ -167,10 +197,11 @@ export function runGroundedFaithfulnessEval(): GroundedFaithfulnessScorecard {
   let detected = 0;
   for (const fixture of hallucinated) {
     const result = reconcileInlineCitations(fixture.answerText, indexFor(fixture));
-    if (result.unsupported.length > 0) {
+    const unsupported = result.unsupported.map((citation) => citation.raw);
+    if (citationsMatchExpected(unsupported, fixture.expectedUnsupportedCitations)) {
       detected += 1;
     } else {
-      failures.push(`missed fabricated citation in '${fixture.name}'`);
+      failures.push(`citation reconciliation mismatch in '${fixture.name}'`);
     }
   }
 
@@ -202,11 +233,10 @@ export function runGroundedFaithfulnessEval(): GroundedFaithfulnessScorecard {
   };
 }
 
-export interface GroundedFaithfulnessBudget {
-  readonly minUnsupportedDetectionRate: number;
-  readonly minCitationPrecision: number;
-  readonly minAbstentionOnEmptyRate: number;
-}
+type GroundedFaithfulnessBudgetMetric =
+  "minUnsupportedDetectionRate" | "minCitationPrecision" | "minAbstentionOnEmptyRate";
+
+export type GroundedFaithfulnessBudget = EvalBudget<GroundedFaithfulnessBudgetMetric>;
 
 // Faithfulness is a correctness invariant: fabricated citations must ALWAYS be flagged and empty
 // evidence must ALWAYS abstain (rates = 1). Citation precision is gated < 1 tolerance is NOT allowed
@@ -220,7 +250,7 @@ export const DEFAULT_GROUNDED_FAITHFULNESS_BUDGET: GroundedFaithfulnessBudget = 
 export function evaluateGroundedFaithfulnessBudget(
   scorecard: GroundedFaithfulnessScorecard,
   budget: GroundedFaithfulnessBudget = DEFAULT_GROUNDED_FAITHFULNESS_BUDGET,
-): { readonly ok: boolean; readonly failures: readonly string[] } {
+): EvalFloorResult {
   const failures = [...scorecard.failures];
   if (scorecard.unsupportedDetectionRate < budget.minUnsupportedDetectionRate)
     failures.push("unsupportedDetectionRate");

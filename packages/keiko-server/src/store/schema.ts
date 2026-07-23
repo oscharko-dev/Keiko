@@ -5,7 +5,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { migrateLegacyProjectManifests } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 15;
 
 interface Migration {
   readonly version: number;
@@ -364,7 +364,26 @@ CREATE TABLE memory_autonomy_policy (
 ) STRICT;
 `;
 
-// V12 (issue #2521, epic #2285, ADR-0147 D3/D8) — persisted canonical workspace-trust records.
+// V12 — durable, content-bounded identity for canonical chat-turn retries. Only a SHA-256 digest
+// scoped to the chat is stored; the opaque provider/client identity never reaches SQLite. The same
+// turn may own at most one user row and one assistant row, and divergent text fails closed. NULL
+// preserves all historical and ordinary typed Composer messages.
+const V12_SQL = `
+ALTER TABLE chat_messages ADD COLUMN client_turn_id TEXT;
+ALTER TABLE chat_messages ADD COLUMN client_turn_state TEXT;
+CREATE UNIQUE INDEX uniq_chat_messages_client_turn_role
+  ON chat_messages(chat_id, client_turn_id, role)
+  WHERE client_turn_id IS NOT NULL;
+`;
+
+// V13 — immutable content identity for canonical retries. Visible user text remains governed by the
+// caller's redaction policy, while idempotency compares only this scope-bound digest of the original
+// chat/turn/content tuple. No raw provider id or message body is added to the identity column.
+const V13_SQL = `
+ALTER TABLE chat_messages ADD COLUMN client_turn_content_digest TEXT;
+`;
+
+// V14 (issue #2521, epic #2285, ADR-0147 D3/D8) — persisted canonical workspace-trust records.
 // ADR-0147 D8 mandates uiDb (one transaction domain) so a future root-removal (#2524) and trust
 // invalidation commit atomically; JSON-beside-SQLite was explicitly rejected. Content-free by
 // construction: `root_ref` is an opaque derived reference, `record_json` is the validated
@@ -373,7 +392,7 @@ CREATE TABLE memory_autonomy_policy (
 // The denormalized columns are written from that same record and are never used as authority:
 // `revision` backs monotonic revision reads, `updated_at` orders deterministic bounded pruning, and
 // the `trust` enum is DB-layer enum enforcement plus cheap content-free inspection.
-const V12_SQL = `
+const V14_SQL = `
 CREATE TABLE workspace_trust_records (
   root_ref     TEXT NOT NULL PRIMARY KEY,
   revision     INTEGER NOT NULL,
@@ -392,11 +411,11 @@ CREATE TABLE workspace_trust_records (
 CREATE INDEX idx_workspace_trust_updated ON workspace_trust_records(updated_at, root_ref);
 `;
 
-// V13 (issue #2524, epic #2285, ADR-0147 D1/D8/D9) — server-owned ordered workspace manifests.
+// V15 (issue #2524, epic #2285, ADR-0147 D1/D8/D9) — server-owned ordered workspace manifests.
 // Root rows reference, rather than replace, the existing projects registry. `record_json` is the
 // authoritative closed WorkspaceManifest contract; relational columns enforce unique membership,
 // stable order, and the one-transaction root-removal/trust-invalidation boundary.
-const V13_SQL = `
+const V15_SQL = `
 CREATE TABLE workspace_manifests (
   workspace_id       TEXT NOT NULL PRIMARY KEY,
   schema_version     INTEGER NOT NULL,
@@ -452,7 +471,9 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 10, sql: V10_SQL },
   { version: 11, sql: V11_SQL },
   { version: 12, sql: V12_SQL },
-  { version: 13, sql: V13_SQL, apply: migrateLegacyProjectManifests },
+  { version: 13, sql: V13_SQL },
+  { version: 14, sql: V14_SQL },
+  { version: 15, sql: V15_SQL, apply: migrateLegacyProjectManifests },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

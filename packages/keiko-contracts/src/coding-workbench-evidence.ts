@@ -92,6 +92,13 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   // `event-question-1`). "question" is an inert product vocabulary word — question text itself
   // never enters evidence, and the label still passes every secret/URL/path detector.
   "question",
+  // Issue #2387: the three auxiliary-capability event surfaces label their content-free lifecycle
+  // events (e.g. `event-research-1`, `event-skill-1`, `event-child-1`). Like "question" these are
+  // inert product-vocabulary words; the research query, skill body, and child scratch never enter
+  // evidence, and the labels still pass every secret/URL/path detector.
+  "research",
+  "skill",
+  "child",
   "branch",
   "browser",
   "busy",

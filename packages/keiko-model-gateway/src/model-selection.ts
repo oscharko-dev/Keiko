@@ -3,11 +3,14 @@ import {
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
+  isCompleteRealtimeVoiceCapability,
   listCapabilities,
   modelSupportsRealtimeVoice,
-  modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
   resolveVoiceCapabilityFromCapabilities,
+  selectRealtimeVoiceCapability,
+  selectSpeechInputCapability,
+  selectSpeechOutputCapability,
   selectCompletionModelFromCapabilities,
   type CompletionSelectionOptions,
   type VoiceResolutionOptions,
@@ -301,6 +304,12 @@ function voiceResolutionCacheKey(options: VoiceResolutionOptions): string {
   return `${options.policyDisabled === true ? "1" : "0"}:${unreachableKey}`;
 }
 
+function effectiveConfiguredVoiceCapability(capability: ModelCapability): ModelCapability {
+  return modelSupportsRealtimeVoice(capability) && !isCompleteRealtimeVoiceCapability(capability)
+    ? { ...capability, supportsRealtimeVoice: false }
+    : capability;
+}
+
 // Voice-capability resolution (Issue #493, ADR-0100 D1/D2). Resolves the configured capabilities
 // and applies the voice profile ladder. Only configured providers are eligible, so a voice
 // capability that names no provider can never be elected — the same fail-closed rule as completion
@@ -320,7 +329,7 @@ export function resolveVoiceCapability(
     return cached;
   }
   const resolved = resolveVoiceCapabilityFromCapabilities(
-    listConfiguredCapabilities(config),
+    listConfiguredCapabilities(config).map(effectiveConfiguredVoiceCapability),
     options,
   );
   byOptions.set(key, resolved);
@@ -333,35 +342,17 @@ export function resolveVoiceCapability(
 // `selectConfiguredModel` — so a voice capability that names no provider can never be elected, and a
 // no-voice deployment yields undefined (the BFF dictation route then answers voice-unavailable, AC1).
 export function selectSpeechToTextModel(config: ConfiguredCapabilitySource): string | undefined {
-  let best: ModelCapability | undefined;
-  for (const capability of listConfiguredCapabilities(config)) {
-    if (!modelSupportsSpeechInput(capability)) {
-      continue;
-    }
-    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
-      best = capability;
-    }
-  }
-  return best?.id;
+  return selectSpeechInputCapability(listConfiguredCapabilities(config))?.id;
 }
 
 // Realtime-voice model selection (Issue #497, ADR-0100 D3, ADR-0101). Returns the configured voice
-// provider that advertises realtime voice (full-duplex conversation), cheapest-first by cost class,
-// or undefined when none is configured. Only configured providers are eligible — the same
+// provider that advertises complete Realtime WebRTC input/VAD/transcription, cheapest-first by cost
+// class, or undefined when none is configured. Only configured providers are eligible — the same
 // fail-closed rule as `selectSpeechToTextModel` — so a voice capability that names no provider can
 // never be elected, and a no-voice / STT-only deployment yields undefined (the BFF realtime route
 // then answers voice-unavailable and the WebSocket control upgrade stays hard-rejected, AC1/AC3).
 export function selectRealtimeVoiceModel(config: ConfiguredCapabilitySource): string | undefined {
-  let best: ModelCapability | undefined;
-  for (const capability of listConfiguredCapabilities(config)) {
-    if (!modelSupportsRealtimeVoice(capability)) {
-      continue;
-    }
-    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
-      best = capability;
-    }
-  }
-  return best?.id;
+  return selectRealtimeVoiceCapability(listConfiguredCapabilities(config))?.id;
 }
 
 // Speech-output model selection (Issue #1557, ADR-0094 D6). Returns the configured voice provider
@@ -369,16 +360,7 @@ export function selectRealtimeVoiceModel(config: ConfiguredCapabilitySource): st
 // when none is configured. Only configured providers are eligible — the same fail-closed rule as
 // `selectSpeechToTextModel` — so a no-voice / STT-only deployment yields undefined.
 export function selectSpeechOutputModel(config: ConfiguredCapabilitySource): string | undefined {
-  let best: ModelCapability | undefined;
-  for (const capability of listConfiguredCapabilities(config)) {
-    if (!modelSupportsSpeechOutput(capability)) {
-      continue;
-    }
-    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
-      best = capability;
-    }
-  }
-  return best?.id;
+  return selectSpeechOutputCapability(listConfiguredCapabilities(config))?.id;
 }
 
 // The persona → voice-id resolution for one configured voice provider, or undefined when the
@@ -393,7 +375,7 @@ function voiceIdForPersona(
 }
 
 // Server-side persona → voice-id resolver (Issue #1557, ADR-0094 D6) — the seam Issue #1558 consumes.
-// Among configured providers whose capability advertises speech output OR realtime voice AND whose
+// Among configured synthesis providers whose capability advertises speech output and whose
 // `voiceProfiles` maps `persona`, returns the cheapest-first `{ modelId, voiceId }`, or undefined.
 // The returned `voiceId` is provider-sensitive, so this STAYS server-side and is never a BFF body.
 export function selectVoicePersonaVoice(
@@ -402,7 +384,7 @@ export function selectVoicePersonaVoice(
 ): { readonly modelId: string; readonly voiceId: string } | undefined {
   let best: { readonly capability: ModelCapability; readonly voiceId: string } | undefined;
   for (const capability of listConfiguredCapabilities(config)) {
-    if (!modelSupportsSpeechOutput(capability) && !modelSupportsRealtimeVoice(capability)) {
+    if (!modelSupportsSpeechOutput(capability)) {
       continue;
     }
     const voiceId = voiceIdForPersona(config, capability.id, persona);

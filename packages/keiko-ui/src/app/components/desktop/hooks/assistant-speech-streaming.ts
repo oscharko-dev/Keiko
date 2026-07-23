@@ -46,6 +46,7 @@ const TARGET_SAMPLE_RATE = 24_000;
 const PRIME_FRAMES = 2_400;
 const WORKLET_URL = "/keiko-playback-worklet.js";
 const WORKLET_NAME = "keiko-playback";
+const AUDIO_CONTEXT_CLEANUP_ERROR = "Assistant speech audio context cleanup failed.";
 
 function streamingSupported(): boolean {
   return typeof AudioContext !== "undefined" && typeof AudioWorkletNode !== "undefined";
@@ -53,6 +54,14 @@ function streamingSupported(): boolean {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+class AssistantSpeechSetupInvalidatedError extends Error {}
+
+interface AssistantSpeechNodeLease {
+  readonly context: AudioContext;
+  readonly generation: number;
+  readonly node: AudioWorkletNode;
 }
 
 // Converts a little-endian PCM16 byte chunk to Int16 samples, carrying any trailing odd byte forward so
@@ -86,49 +95,99 @@ export function createBrowserAssistantSpeechStreamingSink():
   let context: AudioContext | undefined;
   let node: AudioWorkletNode | undefined;
   let positionFrames = 0;
+  let lifecycleGeneration = 0;
+  let setupPromise: Promise<AssistantSpeechNodeLease> | undefined;
+  const contextClosures = new WeakMap<AudioContext, Promise<void>>();
 
-  async function ensureNode(): Promise<AudioWorkletNode> {
-    if (node !== undefined) {
-      return node;
+  function closeAudioContextOnce(ctx: AudioContext): Promise<void> {
+    const activeClosure = contextClosures.get(ctx);
+    if (activeClosure !== undefined) return activeClosure;
+    const closure = ctx.close().catch(() => {
+      window.reportError(new Error(AUDIO_CONTEXT_CLEANUP_ERROR));
+    });
+    contextClosures.set(ctx, closure);
+    return closure;
+  }
+
+  function releaseWorkletNode(workletNode: AudioWorkletNode | undefined): void {
+    workletNode?.port.postMessage(null);
+    if (workletNode !== undefined) workletNode.port.onmessage = null;
+    workletNode?.port.close?.();
+    try {
+      workletNode?.disconnect();
+    } catch {
+      // already disconnected
     }
-    const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+  }
+
+  function setupIsCurrent(ctx: AudioContext, generation: number): boolean {
+    return context === ctx && lifecycleGeneration === generation;
+  }
+
+  async function initializeNode(
+    ctx: AudioContext,
+    generation: number,
+  ): Promise<AssistantSpeechNodeLease> {
+    let candidate: AudioWorkletNode | undefined;
     try {
       await ctx.audioWorklet.addModule(WORKLET_URL);
-      const workletNode = new AudioWorkletNode(ctx, WORKLET_NAME, {
+      if (!setupIsCurrent(ctx, generation)) throw new AssistantSpeechSetupInvalidatedError();
+      candidate = new AudioWorkletNode(ctx, WORKLET_NAME, {
         numberOfInputs: 0,
         numberOfOutputs: 1,
         outputChannelCount: [1],
       });
-      workletNode.connect(ctx.destination);
-      context = ctx;
-      node = workletNode;
-      return workletNode;
+      candidate.connect(ctx.destination);
+      if (!setupIsCurrent(ctx, generation)) throw new AssistantSpeechSetupInvalidatedError();
+      node = candidate;
+      return { context: ctx, generation, node: candidate };
     } catch (error) {
-      await ctx.close().catch(() => {
-        // close failed while setup already failed; do not retain the context for reuse
-      });
+      if (node !== candidate) releaseWorkletNode(candidate);
+      if (context === ctx) context = undefined;
+      await closeAudioContextOnce(ctx);
       throw error;
+    }
+  }
+
+  async function ensureNode(): Promise<AssistantSpeechNodeLease> {
+    if (node !== undefined && context !== undefined) {
+      return { context, generation: lifecycleGeneration, node };
+    }
+    if (setupPromise !== undefined) return setupPromise;
+    const generation = lifecycleGeneration;
+    const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    context = ctx;
+    const pending = initializeNode(ctx, generation);
+    setupPromise = pending;
+    try {
+      return await pending;
+    } finally {
+      if (setupPromise === pending) setupPromise = undefined;
     }
   }
 
   function closeContext(): void {
     const currentNode = node;
     const currentContext = context;
+    lifecycleGeneration += 1;
+    setupPromise = undefined;
     node = undefined;
     context = undefined;
     positionFrames = 0;
-    currentNode?.port.postMessage(null);
-    if (currentNode !== undefined) {
-      currentNode.port.onmessage = null;
-    }
-    currentNode?.port.close?.();
-    try {
-      currentNode?.disconnect();
-    } catch {
-      // already disconnected
-    }
-    void currentContext?.close().catch(() => {
-      // close failure must not leave a stale context/node eligible for reuse
+    releaseWorkletNode(currentNode);
+    if (currentContext !== undefined) void closeAudioContextOnce(currentContext);
+  }
+
+  function leaseIsCurrent(lease: AssistantSpeechNodeLease, signal: AbortSignal): boolean {
+    return (
+      !signal.aborted && setupIsCurrent(lease.context, lease.generation) && node === lease.node
+    );
+  }
+
+  async function cancelResponseBody(response: Response): Promise<void> {
+    if (response.body === null) return;
+    await response.body.cancel().catch(() => {
+      // a stale playback is already detached; cancellation remains best-effort
     });
   }
 
@@ -174,20 +233,21 @@ export function createBrowserAssistantSpeechStreamingSink():
 
   return {
     async play(input, signal, handlers): Promise<boolean> {
-      let workletNode: AudioWorkletNode;
+      let lease: AssistantSpeechNodeLease;
       try {
-        workletNode = await ensureNode();
-      } catch {
+        lease = await ensureNode();
+      } catch (error) {
+        if (signal.aborted || error instanceof AssistantSpeechSetupInvalidatedError) return true;
         return false; // worklet/context unavailable → caller falls back to the buffered path
       }
-      if (signal.aborted) {
-        return true;
-      }
+      if (!leaseIsCurrent(lease, signal)) return true;
       positionFrames = 0;
       let started = false;
-      await context?.resume().catch(() => {
+      await lease.context.resume().catch(() => {
         // a context that cannot resume still receives data; autoplay policy resolves on the user gesture
       });
+      if (!leaseIsCurrent(lease, signal)) return true;
+      const workletNode = lease.node;
       workletNode.port.postMessage({ type: "config", primeFrames: PRIME_FRAMES });
       workletNode.port.onmessage = (event: MessageEvent): void => {
         const data = event.data as { type?: string; frames?: number };
@@ -212,6 +272,10 @@ export function createBrowserAssistantSpeechStreamingSink():
         // Any up-front failure (provider error, network) before audio has started: fall back to the
         // buffered path so a turn is never lost and a stubbed/working buffered route still plays.
         return false;
+      }
+      if (!leaseIsCurrent(lease, signal)) {
+        await cancelResponseBody(response);
+        return true;
       }
       if (response.body === null) {
         return false;

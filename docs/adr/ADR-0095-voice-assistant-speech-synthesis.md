@@ -2,7 +2,13 @@
 
 ## Status
 
-Proposed (Issue #1558, Epic #1556, 2026-06-26)
+Accepted (Issue #1558, Epic #1556, implemented 2026-06-26)
+
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md). Productive speech is derived only
+from the completed canonical assistant message; Realtime has no assistant or tool-output path. A TTS
+deployment and persona-to-voice mapping are explicit and provider-specific, with no adapter-default
+voice fallback. The preferred BFF route streams bounded PCM from `/api/voice/speak/stream`; the
+buffered `/api/voice/speak` route remains an Opus fallback.
 
 ## Version
 
@@ -80,13 +86,19 @@ provider body, URL, path, IP, or credential.
 
 ### D4 — Server-side persona → voice-id resolution; the voice id never leaves the server
 
+> **Current amendment:** ADR-0154 removes the historical provider-neutral default-voice fallback.
+> Productive Twin requires an explicit speech-output provider and at least one explicit
+> `voiceProfiles` mapping. A requested unmapped persona fails closed rather than silently selecting a
+> provider voice. An unrelated update may preserve an existing mapping, but changing the TTS
+> deployment requires an explicitly compatible mapping.
+
 The route accepts the answer `text` and an optional `persona` from the closed `VOICE_PERSONAS` set. It
-resolves the model + provider voice id with the #1557 seam: a requested persona is honored when mapped
-(`selectVoicePersonaVoice`); otherwise the first persona-mapped provider in canonical order is used;
-otherwise the cheapest `selectSpeechOutputModel` with the adapter's provider-neutral default voice. The
-resolved `voiceId` is sensitive (it lives on the credential-tier `voiceProfiles`) and is forwarded to
-the provider but **never** appears in any response. This keeps `keiko-tts` deployments that map personas
-and bare speech-output deployments without persona mappings both functional.
+resolves the model and provider voice id through the #1557 seam only from an explicit `voiceProfiles`
+mapping. A requested persona must resolve exactly; when no persona is requested, the first explicitly
+mapped voice in canonical product-persona order is used. An unmapped request or a configuration with no
+compatible mapping fails closed, with no adapter-default voice. The resolved `voiceId` is sensitive (it
+lives on the credential-tier `voiceProfiles`) and is forwarded to the provider but **never** appears in
+any response.
 
 ### D5 — Bounded, speech-safe rendering; over-long answers degrade rather than truncate
 
@@ -102,30 +114,42 @@ content. The visible message remains unchanged and reviewable with clickable sou
 syntax that is unusable or unsafe when spoken is removed. If no speakable content remains, synthesis is
 rejected rather than producing silence.
 
-Realtime grounded-tool HTTP results retain both the full answer and its speech projection for the local
-chat. The browser sends only the speech projection, delivery instruction, status, and no-evidence flag in
-the provider function-call output; URLs, citations, source labels, and persistence ids do not cross into
-the provider's spoken-response context.
+> **Historical #1558 integration, removed by ADR-0154:** Realtime grounded-tool HTTP results retained
+> both the full answer and its speech projection for local chat, then returned the projection in a
+> provider function-call output. Current Realtime exposes no grounded or memory tool and consumes no
+> assistant function-call output. Canonical chat retains the full visible answer, grounding metadata,
+> citations, and source ranges; only its speech-safe projection is sent to the independent TTS provider.
 
-### D6 — Success body is base64 audio, not redacted, with a canonicalized MIME type
+### D6 — Buffered success body is base64 audio, not redacted, with a canonicalized MIME type
 
-The success body is `{ audio: <base64>, mimeType }`. The audio is content-free synthesized speech of
-the already-visible answer and carries no credential or URL, so it is **not** passed through the secret
-redactor: redacting a multi-megabyte base64 blob would risk corrupting the audio with no security
-benefit. The `mimeType` is canonicalized against a closed server allowlist (`audio/mpeg` default), so no
-provider-controlled string crosses the boundary. The audio buffer goes out of scope after the response
-and is never written to the evidence store, a side file, a log, or any on-disk location.
+> **Current amendment:** generated audio is transient customer-reconstructive media, not
+> `content-free` evidence. It is never logged or persisted. The preferred streaming route returns
+> bounded `audio/pcm` with `Cache-Control: no-store`; the buffered JSON fallback requests Opus and
+> returns canonical `audio/ogg` base64.
+
+The buffered fallback success body is `{ audio: <base64>, mimeType }`. The audio is transient
+customer-reconstructive synthesized speech of the already-visible answer and carries no credential or
+URL, so it is **not** passed through the secret redactor: redacting a multi-megabyte base64 blob would
+risk corrupting the audio with no security benefit. The buffered route requests Opus and canonicalizes
+the allowlisted MIME type to `audio/ogg`; the preferred streaming route returns bounded `audio/pcm`.
+Neither route accepts a provider-controlled MIME string across the boundary. Audio goes out of scope
+after playback and is never written to the evidence store, a side file, a log, or any on-disk location.
 
 ### D7 — Audio playback engine bound to the visible assistant message (semantic answer stays aligned)
 
+> **Current amendment:** the Chat-owned Voice queue invokes speech only for the exact successful
+> canonical delivery outcome and matching assistant-message identity. `useAssistantSpeech` first uses
+> `/api/voice/speak/stream`, then the buffered `/api/voice/speak` fallback when streaming is unavailable.
+> Failed, cancelled, stale-chat, unrelated, or already-spoken messages cannot arm playback.
+
 `packages/keiko-ui/.../hooks/useAssistantSpeech.ts` is the audio integration #501 deferred. It wraps the
 `useVoicePlayback` reducer and, when speech output is advertised and a **complete** assistant message is
-visible, synthesizes that message's exact rendered `content` through `/api/voice/speak`, plays the
-returned audio through one `HTMLAudioElement`, and drives the reducer `prepare → play-started → complete
-/ fail`. The synthesis input is keyed by the assistant message id, so a turn is spoken at most once and
-always speaks the text the reader sees (AC2). A streaming or pending turn is excluded until it settles.
-The hook holds no credential and never persists the audio: the object URL lives only for one spoken
-turn.
+visible, synthesizes that message's exact rendered `content` through the preferred
+`/api/voice/speak/stream` route, falling back to buffered `/api/voice/speak` only when streaming is
+unavailable. It drives the reducer `prepare → play-started → complete / fail`. The synthesis input is
+keyed by the assistant message id, so a turn is spoken at most once and always speaks the text the reader
+sees (AC2). A streaming or pending turn is excluded until it settles. The hook holds no credential and
+never persists either streamed or buffered audio.
 
 The browser always submits the complete visible message; the server owns the deterministic speech-safe
 projection in D5. This keeps answer meaning aligned while allowing links and citations to remain clickable
@@ -179,6 +203,10 @@ still ends the partial response deterministically.
   browser smoke proves the capability-gated control renders and stays text-capable.
 
 ## Alternatives Considered
+
+> The first alternative records the original #1558 decision. Subsequent implementation added the
+> bounded PCM streaming route as the preferred path while retaining the original JSON/base64 route as
+> a compatibility fallback; that later choice is normative.
 
 - **Stream the audio response straight to the browser as `audio/*`.** Rejected: the BFF response
   pipeline is JSON-envelope-shaped (redactor, `errorBody`), and a base64 clip inside the existing

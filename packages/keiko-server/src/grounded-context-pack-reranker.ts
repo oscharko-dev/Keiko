@@ -5,7 +5,7 @@ import type { RerankerSeam } from "@oscharko-dev/keiko-workflows";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
-import { requestConfiguredRerank } from "./grounded-model-reranker.js";
+import { rerankSelection } from "./grounded-rerank-facade.js";
 
 const MAX_ATOMS_PER_CANDIDATE = 6;
 const MAX_CANDIDATE_DOCUMENT_CHARS = 2_000;
@@ -64,30 +64,6 @@ function withRerankerSignal(candidate: CandidateFile, result: RerankResult): Can
   };
 }
 
-function applyResults(
-  candidates: readonly CandidateFile[],
-  results: readonly RerankResult[],
-  topK: number,
-): readonly CandidateFile[] | undefined {
-  const used = new Set<number>();
-  const reordered: CandidateFile[] = [];
-  for (const result of results) {
-    if (!Number.isInteger(result.index) || result.index < 0 || result.index >= candidates.length) {
-      return undefined;
-    }
-    if (used.has(result.index)) {
-      return undefined;
-    }
-    const candidate = candidates[result.index];
-    if (candidate === undefined) {
-      return undefined;
-    }
-    used.add(result.index);
-    reordered.push(withRerankerSignal(candidate, result));
-  }
-  return reordered.slice(0, topK);
-}
-
 export function configuredContextPackRerankerFor(
   deps: UiHandlerDeps,
   query: RetrievalQuery,
@@ -101,17 +77,17 @@ export function configuredContextPackRerankerFor(
     name: "configured-model-reranker",
     isAvailable: () => Promise.resolve({ available: true, modelLabel: reranker.modelId }),
     rerank: async (candidates, atomsByPath, topK): Promise<readonly CandidateFile[]> => {
-      const attempt = await requestConfiguredRerank({
+      const result = await rerankSelection({
         deps,
         query: query.text,
-        documents: candidates.map((candidate) => candidateDocument(deps, candidate, atomsByPath)),
+        candidates,
+        documentFor: (candidate) => candidateDocument(deps, candidate, atomsByPath),
         topN: topK,
         signal,
+        applyScore: withRerankerSignal,
+        fallbackMode: "identity",
       });
-      if (attempt.outcome === undefined) {
-        return candidates;
-      }
-      return applyResults(candidates, attempt.outcome.value.results, topK) ?? candidates;
+      return result.selected;
     },
   };
 }

@@ -6,6 +6,12 @@
 
 Accepted (Issue #505, Epic #491, 2026-06-25)
 
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) as to proof scope. The deterministic
+contract/profile harness remains valid, but it is not complete current Twin release evidence: it does
+not exercise canonical final handoff, store-bound same-chat serialization, persistence,
+retrieval/MemoriaViva parity, citation projection, Realtime output rejection, or TTS binding. Current
+route, server, UI, retrieval, and browser suites must prove those invariants on the exact PR head.
+
 ## Context
 
 ADR-0100 through ADR-0109 delivered the full Voice Digital Twin: capability metadata (#493), the BFF

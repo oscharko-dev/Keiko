@@ -1,11 +1,14 @@
 import { dirname } from "node:path";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import type { KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
+import type { KnowledgeStore, VectorIndexOptions } from "@oscharko-dev/keiko-local-knowledge";
 import {
+  createLocalKnowledgeStoreVectorIndexPort,
   KnowledgeStoreError,
   openKnowledgeStore,
+  resolveVectorIndexOptions,
   resolveKnowledgeStorePath,
   updateCapsuleState,
+  vectorIndexPortAsKnowledgeAdapter,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
 import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
@@ -79,6 +82,7 @@ export function recoverAbandonedIndexingJobs(store: KnowledgeStore): void {
 export interface OpenKnowledgeStoreForDeps {
   readonly store: KnowledgeStore;
   readonly dbPath: string;
+  readonly vectorIndex: VectorIndexOptions;
   close(): void;
 }
 
@@ -111,15 +115,42 @@ export function openKnowledgeStoreForDeps(
   }
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
   const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
-  const store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
+  const openOptions = localKnowledgeVectorIndexOptions(deps);
+  const store = openKnowledgeStore(
+    protection === undefined
+      ? { dbPath, vectorIndex: openOptions }
+      : { dbPath, protection, vectorIndex: openOptions },
+  );
   if (options.recover === true) {
     recoverAbandonedIndexingJobs(store);
   }
+  // ADR-0152 D3: knowledge retrieval is served through the pillar-neutral `VectorIndexPort`.
+  // The port implementation is bound to THIS store; the adapter shim wires it into the
+  // existing `VectorIndexOptions.adapter` seam so `tryVectorIndexForCapsule` keeps using the
+  // same call, and the `openOptions` (which decided extension loading at open time) are passed
+  // through without their adapter slot so the port dispatch does not re-enter through itself.
+  const vectorIndex: VectorIndexOptions = {
+    ...openOptions,
+    adapter: vectorIndexPortAsKnowledgeAdapter(
+      createLocalKnowledgeStoreVectorIndexPort({
+        namespace: "knowledge",
+        store,
+        vectorIndexOptions: openOptions,
+      }),
+    ),
+  };
   return {
     store,
     dbPath,
+    vectorIndex,
     close: (): void => {
       store.close();
     },
   };
+}
+
+export function localKnowledgeVectorIndexOptions(
+  deps: Pick<UiHandlerDeps, "env">,
+): VectorIndexOptions {
+  return resolveVectorIndexOptions(undefined, deps.env);
 }

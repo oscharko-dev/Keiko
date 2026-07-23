@@ -8,14 +8,22 @@ lifecycle and integration boundary; the reducer that drives state changes lives 
 The contract lives in
 [`packages/keiko-contracts/src/voice-transcript.ts`](../../packages/keiko-contracts/src/voice-transcript.ts).
 
+> **Current integration note (ADR-0154):** the contract and pure reducer remain in the tree, but the
+> productive Twin session does not use `voice-transcript-segments.ts` as its chat, memory, or
+> persistence boundary. `useRealtimeVoice` bounds and settles provider partial/final events, then
+> transfers the final text exactly once to the Chat-owned queue; canonical chat persists that ordinary
+> user message and runs retrieval and MemoriaViva. References below to full-Realtime consumers, recap,
+> or durable transcript reconstruction describe the original #500 integration plan unless a current
+> path is stated explicitly.
+
 ## 1. Scope and versioning
 
 - **In scope:** the seven-state segment lifecycle; the mapping from three wire message kinds onto seven
   states; the legal state-transition table; per-state replay and redaction classification; the
   committed-only integration boundary; the AC1/AC3 dormancy and filtering guarantees; the content-free
   observer rule.
-- **Out of scope (Issue #504 and later):** persisting transcripts in recap/memory; wiring the
-  committed-only projection into server-side consumers (#503 governed actions, #504 recap/memory).
+- **Current scope boundary:** this module defines a reusable in-memory segment projection. It does not
+  own Twin turn settlement, canonical message persistence, MemoriaViva capture, or an active recap UI.
 
 The segment lifecycle is versioned by `VOICE_TRANSCRIPT_SCHEMA_VERSION = "1"` (a string literal).
 It evolves by the same rule as other contract schemas: a breaking change introduces a **new literal
@@ -44,8 +52,9 @@ class, and whether downstream consumers may read its text (via `selectCommittedV
 - **`ephemeral`** (`partial`, `stable`): in-flight previews never replayed across reconnect. A client
   reconnect does not re-deliver ephemeral state to the reducer. Mirrors `transcript.partial` replay
   semantics.
-- **`replayable`** (all others): durable, committed lifecycle facts preserved across reconnect. A client
-  reconnect re-delivers these messages to the reducer with `seq > sinceSeq` to reconstruct local state.
+- **`replayable`** (all others): eligible for the bounded in-session control replay mechanism. This
+  classification does not mean durable database storage. The productive transport replays its complete
+  bounded buffer and the browser deduplicates sequence numbers; there is no client ACK field.
 
 ### Redaction semantics
 
@@ -287,18 +296,18 @@ The UI renders the committed projection via `snapshot().committed.text`.
 
 ### Full-realtime voice (#497)
 
-Full-realtime captures user speech through WebRTC and produces `transcript.partial` messages (if the
-provider streams partial transcripts) followed by `transcript.committed` (when the user ends their turn
-or the provider finalizes). The turn manager detects end-of-turn and signals `dictation-commit` (STT-only)
-or `user-end-of-turn` (full-realtime). In full-realtime, the `user-end-of-turn` is detected by VAD
-(voice activity detection) via `media.track.state`, not by transcript finality.
+The original #500 design expected full-Realtime wire events to feed this reducer. Current Twin instead
+handles bounded provider partial/final events inside `useRealtimeVoice`, uses VAD plus a continuation
+window to settle one final utterance, and transfers that immutable final directly to the canonical Chat
+queue. The segment reducer is not the exactly-once or persistence authority for that path.
 
 ### Recap and memory (#504)
 
-The recap layer imports `selectCommittedVoiceTranscript` from `keiko-contracts` and the committed
-projection to decide which segments to persist. The projection's structural guarantee — only committed
-and corrected segments present — ensures recap never accidentally stores uncommitted, discarded, redacted,
-or failed text.
+The #504 server contract can validate an explicitly submitted committed projection, but no current UI
+client feeds this reducer into that route. More importantly, current Twin memory capture does not wait
+for recap: the settled final is persisted as the ordinary user message, and the canonical MemoriaViva
+path processes it per turn. Partial, discarded, redacted, and failed provider state remains outside
+canonical persistence.
 
 ### Evaluation
 
@@ -307,14 +316,14 @@ model behavior analysis without retaining reviewable transcript text.
 
 ## 12. Acceptance criteria summary
 
-| AC                                   | Satisfied by                                                                                            | Evidence                                                                                          |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| AC1 No-voice no side effects         | `voiceTranscriptCaptureAllowed` gate + `active` flag + short-circuit in `apply` (before clock/observer) | `profile === "none"` or `"speech-output"` → no clock read, no mutation, no observer fired         |
-| AC2 STT preview + commit/discard     | `partial`/`stable` preview, `commit` → `committed`, `discard` → recorded `discarded` segment            | reducer fixtures for STT preview, commit, and discard-records-a-segment                           |
-| AC3 Partial without changing context | `partial`/`stable` structurally excluded from the committed projection                                  | rapid partial churn never enters `selectCommittedVoiceTranscript`; projection guard               |
-| AC4 Deterministic corrections        | Seq-based forward transitions + optional `supersedesId` replacement (no duplication)                    | correction with `seq <= existing.seq` is a no-op; superseded id excluded from the projection      |
-| AC5 Consume only committed content   | Committed-only typed selector + content-free `summarizeVoiceTranscript`; content-free observer          | projection holds only `committed`+`corrected`; observer/summary carry no transcript text          |
-| AC6 Tests cover the lifecycle        | Named fixtures: partial instability, late correction, discard, commit, provider-error                   | `voice-transcript-segments.test.ts` + `voice-transcript.test.ts` (100% statements/branches/lines) |
+| AC                                   | Satisfied by                                                                                            | Evidence                                                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| AC1 No-voice no side effects         | `voiceTranscriptCaptureAllowed` gate + `active` flag + short-circuit in `apply` (before clock/observer) | `profile === "none"` or `"speech-output"` → no clock read, no mutation, no observer fired                      |
+| AC2 STT preview + commit/discard     | `partial`/`stable` preview, `commit` → `committed`, `discard` → recorded `discarded` segment            | reducer fixtures for STT preview, commit, and discard-records-a-segment                                        |
+| AC3 Partial without changing context | `partial`/`stable` structurally excluded from the committed projection                                  | rapid partial churn never enters `selectCommittedVoiceTranscript`; projection guard                            |
+| AC4 Deterministic corrections        | Seq-based forward transitions + optional `supersedesId` replacement (no duplication)                    | correction with `seq <= existing.seq` is a no-op; superseded id excluded from the projection                   |
+| AC5 Consume only committed content   | Committed-only typed selector + content-free `summarizeVoiceTranscript`; content-free observer          | projection holds only `committed`+`corrected`; observer/summary carry no transcript text                       |
+| AC6 Tests cover the lifecycle        | Named fixtures: partial instability, late correction, discard, commit, provider-error                   | `voice-transcript-segments.test.ts` + `voice-transcript.test.ts`; exact PR-head coverage gate is authoritative |
 
 ## Related
 

@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  candidateBucketForPath,
   legacyDiscoveryPolicy,
   orderCandidatesForSearch,
+  policyOmissionReason,
   resolveSearchPolicy,
+  routeQueryTermsForSearch,
+  scoreContentForSearch,
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
 import type { DiscoveredFile } from "./types.js";
+import { selectContentPrescoreFiles } from "./repoSearchScan.js";
 
 const file = (relativePath: string): DiscoveredFile => ({ relativePath, sizeBytes: 10 });
 
@@ -154,6 +159,87 @@ describe("orderCandidatesForSearch", () => {
     expect(diagnostics.deniedByDiscovery).toBe(3);
     expect(diagnostics.filesAfterPolicy).toBe(1);
   });
+
+  it("omits case-normalized Storybook build output from workspace-root search", () => {
+    expect(
+      policyOmissionReason("only-for-internal-use/StorybookStatic/assets/iframe.js", policy),
+    ).toBe("generated");
+  });
+
+  it("does not let expanded aliases drown out an exact API route declaration", () => {
+    const routeQuery = query(
+      "Verfolge POST /api/chats/messages/grounded: vom Route-Register zum Handler und zu den Tests.",
+    );
+    const routeDeclaration =
+      '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },';
+    const genericTestProse =
+      "Tests cover grounded handler orchestration files, messages, routes, and POST behavior.";
+
+    const declarationScore = scoreContentForSearch(routeQuery, routeDeclaration, policy);
+    expect(declarationScore).toBeGreaterThan(
+      scoreContentForSearch(routeQuery, genericTestProse, policy),
+    );
+    expect(declarationScore).toBeGreaterThan(140);
+  });
+
+  it("preserves root, brace, and wildcard paths in polyglot route questions", () => {
+    expect(routeQueryTermsForSearch(query("Where is GET / defined?"))).toEqual({
+      method: "get",
+      path: "/",
+    });
+    expect(routeQueryTermsForSearch(query("Where is GET /orders/{order_id}?"))).toEqual({
+      method: "get",
+      path: "/orders/{order_id}",
+    });
+    expect(routeQueryTermsForSearch(query("Trace DELETE /files/*path to its handler"))).toEqual({
+      method: "delete",
+      path: "/files/*path",
+    });
+  });
+
+  it("ranks an exact-symbol definition above call sites without changing match semantics", () => {
+    const exactQuery: RetrievalQuery = {
+      kind: "exact-symbol",
+      text: "dispatchWorkUnit",
+      caseSensitive: false,
+      maxResults: 100,
+      emittedAtMs: 0,
+    };
+
+    expect(
+      scoreContentForSearch(
+        exactQuery,
+        "export async function dispatchWorkUnit(): Promise<void> {}",
+        policy,
+      ),
+    ).toBeGreaterThan(scoreContentForSearch(exactQuery, "await dispatchWorkUnit();", policy));
+  });
+
+  it("path-prioritizes files before applying the bounded content-prescore cap", () => {
+    const files = [file("src/noise-a.ts"), file("src/noise-b.ts"), file("src/zz-routes.ts")];
+    const selected = selectContentPrescoreFiles(
+      files,
+      query("Trace POST /api/chats/messages/grounded from route to handler"),
+      policy,
+      2,
+    );
+
+    expect(selected.map((entry) => entry.relativePath)).toContain("src/zz-routes.ts");
+  });
+
+  it("reserves a route-registration candidate when the question names only method and path", () => {
+    const files = [file("src/a.ts"), file("src/b.ts"), file("src/routes.ts")];
+    const selected = selectContentPrescoreFiles(
+      files,
+      query(
+        "Welche Produktionsdatei registriert POST /api/chats/messages/grounded und welches Handler-Symbol steht dort?",
+      ),
+      policy,
+      2,
+    );
+
+    expect(selected.map((entry) => entry.relativePath)).toContain("src/routes.ts");
+  });
 });
 
 describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
@@ -206,6 +292,28 @@ describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
     // The three generated artifacts collapse into low-value; only the hand-authored source is not.
     expect(diagnostics.candidateBuckets["low-value"]).toBe(3);
     expect(diagnostics.candidateBuckets.source).toBe(1);
+  });
+
+  it("recognizes PascalCase test suffixes without misclassifying ordinary names", () => {
+    expect(candidateBucketForPath("src/PaymentServiceTest.java")).toBe("test");
+    expect(candidateBucketForPath("src/PaymentServiceTests.cs")).toBe("test");
+    expect(candidateBucketForPath("src/Contest.java")).toBe("source");
+    expect(candidateBucketForPath("src/Latest.ts")).toBe("source");
+    expect(candidateBucketForPath("src/ApplicationContest.cs")).toBe("source");
+  });
+
+  it.each([
+    '[HttpGet("/orders/{order_id}")] public IActionResult GetOrder() {',
+    '#[get("/orders/{order_id}")] async fn get_order() {',
+    '.route("/orders/{order_id}", get(get_order))',
+  ])("boosts a polyglot route declaration: %s", (declaration) => {
+    const routeQuery = query("Trace GET /orders/{order_id} to its handler");
+    const documentation = "GET /orders/{order_id} is documented for API consumers.";
+
+    expect(scoreContentForSearch(routeQuery, declaration, metadataPolicy)).toBeGreaterThan(140);
+    expect(scoreContentForSearch(routeQuery, declaration, metadataPolicy)).toBeGreaterThan(
+      scoreContentForSearch(routeQuery, documentation, metadataPolicy),
+    );
   });
 
   it("ranks hand-authored config above source wrappers for config-key lookup", () => {

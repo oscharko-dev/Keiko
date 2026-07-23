@@ -114,6 +114,13 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly supervisor: RuntimeProcessSupervisor;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
+  /**
+   * Live question observation for the fixed session (#2386). OpenCode publishes question
+   * lifecycle events live-only — they never appear as durable history rows — so the content-free
+   * pull-client signal must originate here. The identity is the SSE frame id; no question
+   * content leaves the stream.
+   */
+  readonly onQuestionObserved?: ((identity: string) => void) | undefined;
   readonly authorityLifecycle: Pick<
     CodingRuntimeManagerDeps,
     | "revokeRuntime"
@@ -512,6 +519,7 @@ function readinessPorts(
       for await (const event of client.events({ signal: combinedSignal })) {
         const eventType = event.data.type;
         if (eventType !== "sync") {
+          observeLiveQuestion(input, event.data, fixedSessionId);
           const control = classifyOpenCodeLiveControl(event.data);
           const fixedControl = control?.sessionId === fixedSessionId ? control : undefined;
           yield {
@@ -573,6 +581,36 @@ function stageSafeActivity(
     stagedBytes += itemBytes;
   }
   if (dropped > 0) sink?.recordDrops(dropped);
+}
+
+const LIVE_QUESTION_EVENT_TYPES = new Set([
+  "question.asked",
+  "question.replied",
+  "question.rejected",
+]);
+
+/**
+ * Surfaces the fixed session's live question lifecycle as a content-free identity (#2386).
+ * Fails closed: no session binding, foreign sessions, and malformed frames observe nothing.
+ */
+function observeLiveQuestion(
+  input: OpenCodeRuntimeCompositionInput,
+  data: { readonly id?: unknown; readonly type?: unknown; readonly properties?: unknown },
+  fixedSessionId: string,
+): void {
+  if (input.onQuestionObserved === undefined || fixedSessionId.length === 0) return;
+  if (typeof data.type !== "string" || !LIVE_QUESTION_EVENT_TYPES.has(data.type)) return;
+  if (liveQuestionSession(data.properties) !== fixedSessionId) return;
+  if (typeof data.id !== "string" || data.id.length === 0) return;
+  input.onQuestionObserved(`${data.type}\u0000${data.id}`);
+}
+
+function liveQuestionSession(properties: unknown): string | undefined {
+  if (typeof properties !== "object" || properties === null || Array.isArray(properties)) {
+    return undefined;
+  }
+  const sessionId = (properties as Record<string, unknown>).sessionID;
+  return typeof sessionId === "string" ? sessionId : undefined;
 }
 
 async function createAndEchoFixedSession(

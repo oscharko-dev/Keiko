@@ -47,7 +47,6 @@ import {
 } from "./store-handlers.js";
 import { WORKSPACE_MANIFEST_ROUTE_GROUP } from "./workspace-manifest-routes.js";
 import {
-  handleAppendDesktopVoiceTurn,
   handleCreateDesktopChat,
   handleRegenerateDesktopChat,
   handleSendDesktopChat,
@@ -86,8 +85,6 @@ import {
   handlePutMemoryAutonomyPolicy,
 } from "./memory-autonomy-policy-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
-import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
-import { handleRealtimeMemoryVoiceTool } from "./voice-realtime-memory-tool.js";
 import { handleBuildVoiceRecap } from "./voice-recap.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
@@ -538,17 +535,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
   // Issue #185 — grounded repository-aware Q&A. Composes #179-#183 behind the chat-scope binding.
   { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },
-  {
-    method: "POST",
-    pattern: "/api/voice/realtime/grounded-tool",
-    handler: handleRealtimeGroundedVoiceTool,
-  },
-  // Mid-session MemoriaViva recall for the realtime voice `recall_keiko_memory` tool.
-  {
-    method: "POST",
-    pattern: "/api/voice/realtime/memory-tool",
-    handler: handleRealtimeMemoryVoiceTool,
-  },
   // User-triggered voice session recap: committed spoken transcript → proposed memory candidates.
   {
     method: "POST",
@@ -560,11 +546,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/regenerate", handler: handleRegenerateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/stream", handler: handleSendDesktopChatStream },
-  {
-    method: "POST",
-    pattern: "/api/desktop/chat/voice-turn",
-    handler: handleAppendDesktopVoiceTurn,
-  },
   // ADR-0018 — bounded permitted-command execution. PTY routes (shells/sessions/WS upgrade) and
   // the WebSocket upgrade handler in server.ts are removed; commands run via synchronous POST.
   { method: "GET", pattern: "/api/terminal/policy", handler: handleTerminalPolicy },

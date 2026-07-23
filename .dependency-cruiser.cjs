@@ -298,29 +298,28 @@ module.exports = {
       },
     },
     {
-      name: "adr-0019-direction-3l-evaluations-only-contracts-security-model-gateway-workspace-tools-harness-workflows-verification-evidence",
+      name: "adr-0019-direction-3l-evaluations-only-contracts-security-model-gateway-workspace-tools-harness-workflows-verification-evidence-local-knowledge",
       comment:
-        "ADR-0019 direction rule 3 (evaluations boundary): keiko-evaluations may depend on " +
-        "keiko-contracts, keiko-security, keiko-model-gateway, " +
-        "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, keiko-verification, and " +
-        "keiko-evidence — the full set of leaf and infrastructure dependencies the offline " +
-        "scoring pipeline composes. The evaluation harness is the highest-level policy consumer " +
-        "in the runtime graph and composes the workflow/audit/verification layers UNCHANGED; " +
-        "nothing below it imports from here, so keiko-cli, keiko-server, and keiko-ui must NOT " +
-        "appear in the allow-list. surface-parity.ts breaks the load-time cli ↔ evaluations " +
-        "cycle with a dynamic import; that runtime edge is invisible to dependency-cruiser as a " +
-        "static violation. The boundary also forbids imports into the retired root " +
-        "`src/evaluations/` shim so production callers stay on the package surface.",
+        "ADR-0019 direction rule 3 (evaluations boundary), amended by ADR-0152 D5: " +
+        "keiko-evaluations may depend on keiko-contracts, keiko-security, keiko-model-gateway, " +
+        "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, keiko-verification, " +
+        "keiko-evidence, and keiko-local-knowledge. The local-knowledge edge exists only for the " +
+        "single physical evaluation fold governed by ADR-0152; the evaluation harness remains the " +
+        "highest-level policy consumer in the runtime graph. Nothing below it imports from here, so " +
+        "keiko-cli, keiko-server, and keiko-ui must NOT appear in the allow-list. surface-parity.ts " +
+        "breaks the load-time cli ↔ evaluations cycle with a dynamic import; that runtime edge is " +
+        "invisible to dependency-cruiser as a static violation. The boundary also forbids imports " +
+        "into the retired root src/evaluations/ shim so production callers stay on package surfaces.",
       severity: "error",
       from: {
-        path: "^(packages/keiko-evaluations/src/|" + "tests/architecture/fixtures/evaluations/)",
+        path: "^(packages/keiko-evaluations/src/|tests/architecture/fixtures/evaluations/)",
         pathNot: "\\.test\\.ts$",
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|evaluations)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|evaluations)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|evaluations)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|local-knowledge|evaluations)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|local-knowledge|evaluations)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|local-knowledge|evaluations)|" +
           "src/(evaluations|gateway|workspace|tools|harness|workflows|audit|ui|verification|cli)|" +
           siblingPackageSourcePattern([
             "contracts",
@@ -332,6 +331,7 @@ module.exports = {
             "workflows",
             "verification",
             "evidence",
+            "local-knowledge",
           ]) +
           ")",
       },

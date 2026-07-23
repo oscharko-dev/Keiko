@@ -28,6 +28,13 @@ export const KEIKO_PRODUCT_VERSION = "0.2.15" as const;
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export { clampUnit } from "./numeric.js";
 
+// ─── Deterministic retrieval-evaluation primitives (ADR-0152 D5 amendment, Issue #2635) ──
+// One implementation of the retrieval `mean` and the binary nDCG@k discount formula. Every
+// evaluation harness — folded suites under `keiko-evaluations`, the gate script in `scripts/`,
+// and the server retrieval eval — imports these so the ADR-0152 D5 gate floors stay calibrated
+// against one math. `tests/architecture/eval-metrics-single-owner.test.ts` proves the invariant.
+export { binaryNdcgAtK, mean } from "./eval-metrics.js";
+
 // ─── Shared stable ordering helpers ─────────────────────────────────────────────
 export { sortedStrings } from "./stable-order.js";
 
@@ -809,6 +816,7 @@ export type {
   CodingWorkbenchActionClass,
   CodingWorkbenchApprovalRisk,
   CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchBudget,
   CodingWorkbenchBranchConstraints,
   CodingWorkbenchCommandPolicy,
@@ -849,6 +857,7 @@ export type {
 export {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
+  CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_COMMAND_POLICY_MODES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_GATES,
@@ -999,6 +1008,32 @@ export {
   validateRuntimeGovernanceOutcomeV1,
   validateRuntimeGovernanceRequestV1,
 } from "./code-task-run-control.js";
+
+// ─── Auxiliary-capability contract (Issue #2387, produced for #2388) ───────────────
+// Governed read-only research / approved skills / one-layer read-only child agents: the strictly
+// narrower companion to GovernedActionV1 — bounded scope, derived authority, content-free outcome.
+export type {
+  AuxiliaryCapability,
+  AuxiliaryCapabilityOutcomeV1,
+  AuxiliaryCapabilityPortV1,
+  AuxiliaryCapabilityRequestV1,
+  AuxiliaryCapabilityTarget,
+  AuxiliaryOutcomeStatus,
+  AuxiliaryResearchScopeV1,
+  CodeTaskChildRunId,
+  CodeTaskSkillId,
+} from "./code-task-auxiliary.js";
+export {
+  AUXILIARY_CAPABILITIES,
+  AUXILIARY_INVOCATIONS,
+  AUXILIARY_OUTCOME_STATUSES,
+  CODE_TASK_AUXILIARY_SCHEMA_VERSION,
+  isCodeTaskChildRunId,
+  isCodeTaskPublicDomain,
+  isCodeTaskSkillId,
+  validateAuxiliaryCapabilityOutcomeV1,
+  validateAuxiliaryCapabilityRequestV1,
+} from "./code-task-auxiliary.js";
 
 // ─── Atlassian connector contracts (Issue #2240, Epic #2238, ADR-0128) ─────────────
 // Governed Confluence/Jira connector lane: descriptors (opaque authRef, never a secret), bounded
@@ -1165,6 +1200,8 @@ export type {
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  CodingWorkbenchRuntimeResearchGrant,
+  CodingWorkbenchRuntimeResearchRevokeRequest,
   CodingWorkbenchRuntimeRetryRequest,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
@@ -1185,6 +1222,7 @@ export {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  parseCodingWorkbenchRuntimeResearchRevokeRequest,
   parseCodingWorkbenchRuntimeRetryRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
@@ -1220,10 +1258,25 @@ export {
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
 export type {
+  CodingWorkbenchRuntimePendingResearch,
+  CodingWorkbenchRuntimeResearchChannelPayload,
+  CodingWorkbenchRuntimeResearchSession,
+} from "./coding-workbench-runtime-research.js";
+export {
+  CODING_WORKBENCH_RESEARCH_HOST_MAX_CHARS,
+  CODING_WORKBENCH_RESEARCH_REQUEST_LINE_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_RESEARCH_SESSION_STATES,
+  unpairedCodingWorkbenchRuntimeResearchChannelPayload,
+  validateCodingWorkbenchRuntimeResearchChannelPayload,
+} from "./coding-workbench-runtime-research.js";
+export type {
   AvailableCodingSafeActivityFeed,
   CodingSafeActivityFeed,
   CodingSafeActivityMessage,
   CodingSafeActivityMessageRole,
+  CodingSafeActivityPlan,
+  CodingSafeActivityPlanStep,
+  CodingSafeActivityPlanStepState,
   CodingSafeActivityTextSegment,
   CodingSafeActivityTool,
   CodingSafeActivityToolState,
@@ -1235,6 +1288,9 @@ export {
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
@@ -1242,6 +1298,7 @@ export {
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MESSAGE_ROLES,
+  CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   CODING_SAFE_ACTIVITY_TOOL_LABEL_MAX_CHARS,
   CODING_SAFE_ACTIVITY_TOOL_STATES,
   unavailableCodingSafeActivityFeed,
@@ -1707,6 +1764,7 @@ export {
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,
   INFILLING_ALIGNMENTS,
+  MODEL_COST_RANK,
   VOICE_PROVIDER_LOCALITIES,
   VOICE_PERSONAS,
   assertValidGatewaySamplingParameters,
@@ -1726,6 +1784,10 @@ export {
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
   modelSupportsRealtimeVoice,
+  isCompleteRealtimeVoiceCapability,
+  selectRealtimeVoiceCapability,
+  selectSpeechInputCapability,
+  selectSpeechOutputCapability,
   isConfiguredVoiceProvider,
   describeVoiceProviderAvailability,
   listVoicePersonas,
@@ -1750,6 +1812,7 @@ export type {
   VoiceMediaPlaneDescriptor,
   VoiceControlMessageKind,
   VoiceDataChannelEventKind,
+  VoiceRealtimeInputDataChannelEventKind,
   VoiceSessionCloseReason,
   VoiceMediaTrackState,
   VoicePlaybackState,
@@ -1786,6 +1849,7 @@ export {
   VOICE_PLANES,
   VOICE_CONTROL_TRANSPORTS,
   VOICE_CONTROL_TRANSPORT_V1,
+  VOICE_REALTIME_CONTROL_TRANSPORT,
   VOICE_MEDIA_TRANSPORTS,
   VOICE_NEGOTIATION_MODES,
   PREFERRED_VOICE_NEGOTIATION_MODE,
@@ -1794,8 +1858,10 @@ export {
   VOICE_MESSAGE_DIRECTIONS,
   VOICE_MEDIA_TRACK_KINDS,
   VOICE_MEDIA_PLANE,
+  VOICE_REALTIME_INPUT_MEDIA_PLANE,
   VOICE_CONTROL_MESSAGE_KINDS,
   VOICE_DATA_CHANNEL_EVENT_KINDS,
+  VOICE_REALTIME_INPUT_DATA_CHANNEL_EVENT_KINDS,
   VOICE_SESSION_CLOSE_REASONS,
   VOICE_MEDIA_TRACK_STATES,
   VOICE_PLAYBACK_STATES,
@@ -1870,6 +1936,7 @@ export {
   VOICE_PLAYBACK_PHASE_REPLAY,
   VOICE_PLAYBACK_PHASE_REDACTION,
   VOICE_PLAYBACK_AUDIO_PLANE,
+  VOICE_CANONICAL_PLAYBACK_AUDIO_PLANE,
   VOICE_PLAYBACK_TRANSITIONS,
   VOICE_PLAYBACK_EFFECTS,
   isVoicePlaybackSchemaVersionSupported,
@@ -2500,6 +2567,53 @@ export {
   validateContextToolObservation,
 } from "./context-observations-validation.js";
 
+// ─── Pillar-neutral retrieval context (Issue #2570, ADR-0152 D6) ───────────────
+export type {
+  RetrievalPurpose,
+  RetrievalContextSourceKind,
+  RetrievalContextSourceTier,
+  RetrievalContextOmissionReason,
+  RetrievalContextOmission,
+  RetrievalContextCitation,
+  RetrievalContextExcerpt,
+  RetrievalContextPack,
+  RetrievalContextWirePack,
+  RetrievalContextBudget,
+  RetrievalContextScopeKind,
+  RetrievalContextRequest,
+} from "./retrieval-context.js";
+export {
+  RETRIEVAL_CONTEXT_SCHEMA_VERSION,
+  RETRIEVAL_CONTEXT_PURPOSES,
+  RETRIEVAL_CONTEXT_SOURCE_KINDS,
+  RETRIEVAL_CONTEXT_SOURCE_TIERS,
+  RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND,
+  RETRIEVAL_CONTEXT_OMISSION_REASONS,
+  RETRIEVAL_CONTEXT_BUDGETS,
+  isRetrievalContextPurpose,
+  tierForRetrievalContextSource,
+  isRetrievalContextCitation,
+  toRetrievalContextWirePack,
+} from "./retrieval-context.js";
+
+// ─── The one vector-index port (Issue #2556, ADR-0152 D1) ────────────────────
+export type {
+  VectorIndexNamespace,
+  VectorIndexQuery,
+  VectorIndexCandidateRef,
+  VectorIndexDiagnostics,
+  VectorIndexResult,
+  VectorIndexPort,
+} from "./vector-index-port.js";
+export {
+  VECTOR_INDEX_NAMESPACES,
+  embeddingIdentityKey,
+  isValidVectorIndexQuery,
+} from "./vector-index-port.js";
+
+// ─── Shared evaluation-gate shapes (Issue #2570, ADR-0152 D5) ────────────────
+export type { EvalBudget, EvalFloorResult, RegressionProbeResult } from "./evaluation-gates.js";
+
 // ─── Governed coding-context retrieval (Issue #1211 / Epic #1189, ADR-0042 D6) ──
 export type {
   CodingContextPurpose,
@@ -2596,6 +2710,7 @@ export type {
   ConnectorGraphState,
   UpdateCapsulePatch,
   CreateCapsuleSetBody,
+  SharedPodRefreshTerminal,
 } from "./local-knowledge.js";
 export {
   CAPSULE_METADATA_MAX_KEYS,
@@ -2612,6 +2727,7 @@ export {
   CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
   CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
   CONNECTOR_NODE_KINDS,
+  SHARED_POD_REFRESH_TERMINALS,
 } from "./local-knowledge.js";
 export type {
   DocumentStatus,

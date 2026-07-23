@@ -178,6 +178,7 @@ describe("coding-workbench constants", () => {
     expect(CODING_WORKBENCH_SUPERVISED_ACTION_KINDS).toEqual([
       "file-edit",
       "verification-command",
+      "research",
       "commit",
       "push",
       "pull-request",
@@ -553,6 +554,7 @@ describe("supervised coding action authority", () => {
     expect(permissionKindForSupervisedCodingAction("verification-command")).toBe(
       "command-execution",
     );
+    expect(permissionKindForSupervisedCodingAction("research")).toBe("network-egress");
     expect(permissionKindForSupervisedCodingAction("connector-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("external-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("commit")).toBe("delivery-substrate");
@@ -1466,6 +1468,153 @@ describe("validateCodingWorkbenchRuntimeEvent", () => {
         "permissionRequest.connectorScopes is only allowed for connector-access requests",
       );
     }
+  });
+});
+
+describe("validateCodingWorkbenchRuntimeEvent (#2387 auxiliary kinds)", () => {
+  function auxEvent(kind: CodingWorkbenchRuntimeEvent["kind"]): Record<string, unknown> {
+    return {
+      schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+      eventId: "evt-1",
+      runId: "run-1986",
+      occurredAt: "2026-07-07T12:00:00Z",
+      kind,
+    };
+  }
+
+  it("accepts research-performed / skill-invoked / child-run-* with content-free fields", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "accepted",
+        byteCount: 2048,
+        contentTrust: "untrusted",
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("skill-invoked"),
+        skillId: "skl_docs-search@1",
+        skillInvocation: "explicit",
+        auxiliaryOutcome: "accepted",
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("child-run-started"),
+        childRunId: "chr_child-1",
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("child-run-completed"),
+        childRunId: "chr_child-1",
+        auxiliaryOutcome: "limit-reached",
+        childResultCount: 0,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("rejects an invalid outcome, a forged skill id, and a non-child-run id", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "granted",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("skill-invoked"),
+        skillId: "rm -rf /",
+        skillInvocation: "explicit",
+        auxiliaryOutcome: "accepted",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("child-run-started"),
+        childRunId: "run-1",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("requires the outcome and ids and rejects a foreign field for the kind", () => {
+    const missing = validateCodingWorkbenchRuntimeEvent(auxEvent("child-run-completed"));
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.errors).toContain("event.childRunId is required");
+      expect(missing.errors).toContain("event.auxiliaryOutcome is required");
+      expect(missing.errors).toContain("event.childResultCount is required");
+    }
+    // A research-performed event may not carry skillId (per-kind allowlist fails closed).
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "accepted",
+        contentTrust: "untrusted",
+        skillId: "skl_x@1",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  // #2637: an accepted research read handed page text to the model, so the event has to say what
+  // that text is. The rule is what stops a research read from reaching the timeline without its
+  // trust ever being asserted, and it is bound to the accepted outcome because a denial produced
+  // no read to classify.
+  it("requires the untrusted classification on an accepted research read and rejects it elsewhere", () => {
+    // The happy path: accepted + declared is the ONLY accepted-research shape that validates.
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "accepted",
+        byteCount: 2048,
+        contentTrust: "untrusted",
+      }).ok,
+    ).toBe(true);
+    const unclassified = validateCodingWorkbenchRuntimeEvent({
+      ...auxEvent("research-performed"),
+      auxiliaryOutcome: "accepted",
+      byteCount: 2048,
+    });
+    expect(unclassified.ok).toBe(false);
+    if (!unclassified.ok) {
+      expect(unclassified.errors).toContain("event.contentTrust is required");
+    }
+    // There is no "trusted" web page, and an empty or malformed marker is not a declaration: the
+    // vocabulary is closed at one value and every other input fails closed.
+    for (const contentTrust of ["trusted", "", null, undefined, 0, {}]) {
+      expect(
+        validateCodingWorkbenchRuntimeEvent({
+          ...auxEvent("research-performed"),
+          auxiliaryOutcome: "accepted",
+          contentTrust,
+        }),
+      ).toMatchObject({ ok: false });
+    }
+    // A denial produced no read; classifying content that never arrived is a contract error.
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "denied",
+        contentTrust: "untrusted",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "denied",
+      }).ok,
+    ).toBe(true);
+    // The classification is exclusive to research reads.
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("skill-invoked"),
+        skillId: "skl_docs-search@1",
+        skillInvocation: "explicit",
+        auxiliaryOutcome: "accepted",
+        contentTrust: "untrusted",
+      }),
+    ).toMatchObject({ ok: false });
   });
 });
 

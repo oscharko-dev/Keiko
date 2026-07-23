@@ -2,11 +2,14 @@ import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 
 import {
+  APP_SESSION_GIT_COOKIE_PATH,
   APP_SESSION_COOKIE_NAME,
   clearSessionCookie,
+  clearSessionCookies,
   readSessionCookie,
   requestIsSecure,
   serializeSessionCookie,
+  serializeSessionCookies,
 } from "./sessionCookie.js";
 
 function requestWith(headers: Record<string, string>, encrypted = false): IncomingMessage {
@@ -25,9 +28,7 @@ describe("serializeSessionCookie", () => {
     expect(cookie).toContain(`${APP_SESSION_COOKIE_NAME}=sess_abc.secret`);
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Strict");
-    // ADR-0147 adds authenticated editor local-history beside coding-workbench, so `/api` is the
-    // narrow common path on which the browser must present the HttpOnly session.
-    expect(cookie).toContain("Path=/api;");
+    expect(cookie).toContain("Path=/api/coding-workbench;");
     expect(cookie).toContain("Max-Age=3600");
     expect(cookie).not.toContain("Secure");
   });
@@ -35,12 +36,38 @@ describe("serializeSessionCookie", () => {
   it("adds Secure over TLS", () => {
     expect(serializeSessionCookie("t", { secure: true, maxAgeSeconds: 10 })).toContain("Secure");
   });
+
+  it("issues the bearer only on the Coding Workbench and Git route families", () => {
+    const cookies = serializeSessionCookies("t", { secure: false, maxAgeSeconds: 10 });
+
+    expect(cookies).toHaveLength(3);
+    expect(cookies[0]).toContain("Path=/api/coding-workbench;");
+    expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
+    // The predecessor broad-path bearer is expired on issuance: a browser that paired before the
+    // narrowing holds the SAME cookie name at Path=/api and would keep sending it to unrelated
+    // /api routes until it lapsed on its own.
+    expect(cookies[2]).toContain("Path=/api;");
+    expect(cookies[2]).toContain("Max-Age=0");
+    // Only the expiring projection may carry the broad path; neither bearer does.
+    expect(cookies[0]).not.toContain("Path=/api;");
+    expect(cookies[1]).not.toContain("Path=/api;");
+  });
 });
 
 describe("clearSessionCookie", () => {
   it("expires the cookie immediately", () => {
     expect(clearSessionCookie(false)).toContain("Max-Age=0");
     expect(clearSessionCookie(false)).toContain("HttpOnly");
+  });
+
+  it("expires both route-family projections", () => {
+    const cookies = clearSessionCookies(false);
+
+    expect(cookies).toHaveLength(3);
+    expect(cookies.every((cookie) => cookie.includes("Max-Age=0"))).toBe(true);
+    expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
+    // Sign-out must also remove the predecessor broad-path bearer, not just the narrow ones.
+    expect(cookies[2]).toContain("Path=/api;");
   });
 });
 

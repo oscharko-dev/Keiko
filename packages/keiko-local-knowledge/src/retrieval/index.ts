@@ -14,14 +14,29 @@ export {
 } from "./scoped-vector-search.js";
 
 export {
+  resolveVectorIndexOptions,
   searchVectorIndex,
+  sqliteVecIndexName,
   type VectorIndexAdapter,
   type VectorIndexCandidate,
   type VectorIndexMode,
+  type VectorIndexEnvironment,
   type VectorIndexOptions,
   type VectorIndexSearchRequest,
   type VectorIndexSearchResult,
 } from "./vector-index.js";
+
+// The `knowledge`/`repo` implementations of the pillar-neutral `VectorIndexPort` (ADR-0152
+// D1/D3). Both are exported here; the server composes them into the LK retrieval path
+// through `VectorIndexOptions.adapter`.
+export {
+  createLocalKnowledgeStoreVectorIndexPort,
+  encodePartitionKey,
+  vectorIndexPortAsKnowledgeAdapter,
+  vectorIndexPortAsRepoAdapter,
+  type CreateLocalKnowledgeStoreVectorIndexPortOptions,
+  type LocalKnowledgeStoreNamespace,
+} from "./local-vector-index-port.js";
 
 export {
   assembleGroundedContext,

@@ -20,6 +20,7 @@ import {
   EMPTY_MODEL_RESPONSE_USER_MESSAGE,
   useChatSession,
   type ChatSessionApi,
+  type SendMessageOutcome,
 } from "./hooks/useChatSession";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
@@ -784,7 +785,22 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     });
 
     expect(askGroundedSpy).toHaveBeenCalledWith(
-      { chatId: groundedChat.id, content: "ground plural scope", modelId: "example-chat-model" },
+      {
+        chatId: groundedChat.id,
+        content: "ground plural scope",
+        modelId: "example-chat-model",
+        memory: {
+          enabled: true,
+          budgetTokens: 1200,
+          mode: "governed-assist",
+          context: {
+            conversationId: groundedChat.id,
+            projectId: groundedChat.projectPath,
+            workspaceId: groundedChat.projectPath,
+            userId: "local-operator",
+          },
+        },
+      },
       expect.any(AbortSignal),
     );
     expect(ungroundedSpy).not.toHaveBeenCalled();
@@ -910,7 +926,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
         elapsedMs: 1,
       },
     } satisfies Awaited<ReturnType<typeof api.askGrounded>>;
-    vi.spyOn(api, "askGrounded").mockResolvedValue(groundedResponse);
+    const askGroundedSpy = vi.spyOn(api, "askGrounded").mockResolvedValue(groundedResponse);
 
     const view = await bootHook();
     act(() => view.result.current.setDraft("ground this"));
@@ -919,6 +935,19 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     });
 
     expect(view.result.current.sendStatus).toBe("completed");
+    expect(askGroundedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memory: expect.objectContaining({
+          context: {
+            conversationId: groundedChat.id,
+            projectId: canonicalChatPath,
+            workspaceId: canonicalChatPath,
+            userId: "local-operator",
+          },
+        }),
+      }),
+      expect.any(AbortSignal),
+    );
     expect(fetchChatMessagesSpy).toHaveBeenLastCalledWith(groundedChat.id, canonicalChatPath);
     expect(fetchChatsSpy).toHaveBeenLastCalledWith(canonicalChatPath);
     expect(view.result.current.messages).toEqual(canonicalMessages);
@@ -1207,6 +1236,70 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     // No temp rows remain (id starts with "stream-").
     const tempRows = view.result.current.messages.filter((m) => m.id.startsWith("stream-"));
     expect(tempRows).toHaveLength(0);
+  });
+
+  it("reports the exact streamed assistant id and forwards the canonical client turn id", async () => {
+    let capturedHandlers: StreamHandlers | undefined;
+    let capturedInput: api.SendDesktopChatInput | undefined;
+    vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+      (input, _signal, handlers): Promise<void> => {
+        capturedInput = input;
+        capturedHandlers = handlers;
+        return new Promise<void>(() => undefined);
+      },
+    );
+    const view = await bootStreamingHook();
+    let outcome: SendMessageOutcome | undefined;
+    let sendPromise: Promise<SendMessageOutcome> | undefined;
+
+    act(() => {
+      sendPromise = view.result.current.sendMessage({
+        text: "stream this voice turn",
+        clientTurnId: "stream-voice-1",
+        reportOutcome: true,
+      });
+    });
+    await waitFor(() => expect(capturedHandlers).toBeDefined());
+    act(() => {
+      capturedHandlers?.onDone({
+        chat: streamingChat(),
+        messages: [
+          {
+            id: "stream-user-exact",
+            chatId: "chat-stream",
+            role: "user",
+            content: "stream this voice turn",
+            timestamp: 10,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "stream-assistant-exact",
+            chatId: "chat-stream",
+            role: "assistant",
+            content: "Exact streamed answer",
+            timestamp: 11,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      });
+    });
+    await act(async () => {
+      outcome = await sendPromise;
+    });
+
+    expect(capturedInput).toMatchObject({ clientTurnId: "stream-voice-1" });
+    expect(outcome).toEqual({
+      status: "completed",
+      assistantMessageId: "stream-assistant-exact",
+    });
   });
 
   // ST-L3-2 — cancel mid-stream: no partial assistant message kept (AC#3).

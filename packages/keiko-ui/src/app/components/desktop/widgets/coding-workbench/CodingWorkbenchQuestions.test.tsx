@@ -64,7 +64,7 @@ function renderQuestions(result = hookResult()): UseCodingWorkbenchQuestionsResu
       runId="run-1"
       revision={3}
       runState="paused"
-      runtimeEventCount={0}
+      runtimeEventSignal={0}
       refreshSnapshot={() => Promise.resolve()}
     />,
   );

@@ -8,7 +8,7 @@ const repoRoot = resolve(here, "..", "..");
 const workflow = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
 const config = readFileSync(resolve(repoRoot, ".github/zizmor.yml"), "utf8");
 
-const ZIZMOR_ACTION_SHA = "192e21d79ab29983730a13d1382995c2307fbcaa";
+const ZIZMOR_ACTION_SHA = "6599ee8b7a49aef6a770f63d261d214911a7ce02";
 
 describe("zizmor workflow job", () => {
   it("uses the verified zizmor-action release commit and a pinned zizmor version", () => {

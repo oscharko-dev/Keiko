@@ -45,7 +45,6 @@ export interface VoiceRtcSession {
   readonly offerSdp: string;
   applyAnswer(sdp: string): Promise<void>;
   setInputMuted?(muted: boolean): void;
-  onRemoteTrack(cb: (stream: MediaStream) => void): void;
   onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void;
   onLocalVoiceActivity?(cb: (event: VoiceActivityEvent) => void): void;
   onDataChannelEvent?(cb: (event: unknown) => void): void;
@@ -67,7 +66,8 @@ export function realtimeVoiceTransportSupported(): boolean {
     typeof navigator !== "undefined" &&
     navigator.mediaDevices !== undefined &&
     typeof navigator.mediaDevices.getUserMedia === "function" &&
-    typeof RTCPeerConnection !== "undefined"
+    typeof RTCPeerConnection !== "undefined" &&
+    typeof RTCPeerConnection.prototype.addTransceiver === "function"
   );
 }
 
@@ -92,19 +92,17 @@ function stopTracks(stream: MediaStream): void {
   }
 }
 
-// Full-duplex voice capture constraints. In a realtime dialogue the assistant's audio plays through
-// the user's speakers and would otherwise feed back into the microphone — the model then hears itself,
-// producing false barge-ins and garbled, "choppy" dialogue. Enabling the browser's echo canceller,
-// noise suppression, and auto gain control is the standard fix; mono is sufficient for speech and
-// halves the uplink. Bare `{ audio: true }` (the previous behavior) negotiates none of these.
-const FULL_DUPLEX_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+// Realtime microphone constraints. Canonical TTS may play locally while capture is active, so echo
+// cancellation prevents that playback and room noise from creating false speech onsets. Mono is
+// sufficient for speech and halves the uplink. Bare `{ audio: true }` negotiates none of these.
+const REALTIME_INPUT_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: true,
   noiseSuppression: true,
   autoGainControl: true,
   channelCount: 1,
 };
 
-// Acquire the microphone with the full-duplex constraints, falling back to the unconstrained mic only
+// Acquire the microphone with the realtime input constraints, falling back to the unconstrained mic only
 // when a device/driver cannot satisfy them (OverconstrainedError) — so a constrained-but-capable
 // device gets echo cancellation while an inflexible one still connects rather than failing the session.
 function abortError(): DOMException {
@@ -156,7 +154,7 @@ async function abortableMediaStream(
 async function acquireMicrophone(signal?: AbortSignal | undefined): Promise<MediaStream> {
   try {
     return await abortableMediaStream(
-      navigator.mediaDevices.getUserMedia({ audio: FULL_DUPLEX_AUDIO_CONSTRAINTS }),
+      navigator.mediaDevices.getUserMedia({ audio: REALTIME_INPUT_AUDIO_CONSTRAINTS }),
       signal,
     );
   } catch (error) {
@@ -172,8 +170,13 @@ async function acquireMicrophone(signal?: AbortSignal | undefined): Promise<Medi
 // never fires the event (e.g. in a headless test environment with no network interfaces).
 const ICE_GATHER_TIMEOUT_MS = 2_000;
 const MAX_QUEUED_DATA_CHANNEL_EVENTS = 50;
+// Provider data is hostile until parsed. This leaves ample room for the 256 kB transcript contract
+// plus JSON escaping while preventing ignored assistant/audio events from becoming a parse-time DoS.
+const MAX_INBOUND_DATA_CHANNEL_EVENT_BYTES = 2_000_000;
 const INPUT_MUTE_RAMP_SECONDS = 0.035;
 const APPROVED_VOICE_RTC_ICE_SERVERS: RTCIceServer[] = [];
+const DATA_CHANNEL_EVENT_ENCODER = new TextEncoder();
+const INVALID_DATA_CHANNEL_EVENT = Object.freeze({ type: "error" });
 Object.freeze(APPROVED_VOICE_RTC_ICE_SERVERS);
 
 // docs/voice/protocol.md §10 is the policy link: the browser must not introduce STUN/TURN or
@@ -181,6 +184,113 @@ Object.freeze(APPROVED_VOICE_RTC_ICE_SERVERS);
 export const APPROVED_VOICE_RTC_CONFIGURATION: RTCConfiguration = Object.freeze({
   iceServers: APPROVED_VOICE_RTC_ICE_SERVERS,
 });
+
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: JsonRecord, allowed: readonly string[]): boolean {
+  const allowedKeys = new Set(allowed);
+  return Object.keys(value).every((key) => allowedKeys.has(key));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= 0;
+}
+
+function isDisabledAutomaticResponse(value: JsonRecord): boolean {
+  return value.create_response === false && value.interrupt_response === false;
+}
+
+function isApprovedServerVad(value: JsonRecord): boolean {
+  return (
+    hasOnlyKeys(value, [
+      "type",
+      "threshold",
+      "prefix_padding_ms",
+      "silence_duration_ms",
+      "create_response",
+      "interrupt_response",
+    ]) &&
+    value.type === "server_vad" &&
+    isFiniteNumber(value.threshold) &&
+    value.threshold >= 0 &&
+    value.threshold <= 1 &&
+    isNonNegativeInteger(value.prefix_padding_ms) &&
+    isNonNegativeInteger(value.silence_duration_ms) &&
+    isDisabledAutomaticResponse(value)
+  );
+}
+
+function isApprovedSemanticVad(value: JsonRecord): boolean {
+  return (
+    hasOnlyKeys(value, ["type", "eagerness", "create_response", "interrupt_response"]) &&
+    value.type === "semantic_vad" &&
+    (value.eagerness === "low" || value.eagerness === "medium" || value.eagerness === "high") &&
+    isDisabledAutomaticResponse(value)
+  );
+}
+
+function isApprovedTurnDetection(value: unknown): boolean {
+  return isRecord(value) && (isApprovedServerVad(value) || isApprovedSemanticVad(value));
+}
+
+function isApprovedSessionUpdate(event: JsonRecord): boolean {
+  if (!hasOnlyKeys(event, ["type", "session"]) || event.type !== "session.update") {
+    return false;
+  }
+  const session = event.session;
+  if (!isRecord(session) || !hasOnlyKeys(session, ["type", "audio"])) {
+    return false;
+  }
+  if (session.type !== "realtime") {
+    return false;
+  }
+  if (session.audio === undefined) {
+    return true;
+  }
+  const audio = session.audio;
+  if (!isRecord(audio) || !hasOnlyKeys(audio, ["input"])) {
+    return false;
+  }
+  const input = audio.input;
+  return (
+    isRecord(input) &&
+    hasOnlyKeys(input, ["turn_detection"]) &&
+    isApprovedTurnDetection(input.turn_detection)
+  );
+}
+
+function serializeApprovedDataChannelEvent(event: unknown): string | undefined {
+  if (!isRecord(event)) {
+    return undefined;
+  }
+  const isCommit = hasOnlyKeys(event, ["type"]) && event.type === "input_audio_buffer.commit";
+  if (!isCommit && !isApprovedSessionUpdate(event)) {
+    return undefined;
+  }
+  return JSON.stringify(event);
+}
+
+function parseBoundedDataChannelEvent(data: unknown): unknown {
+  if (typeof data !== "string" || data.length > MAX_INBOUND_DATA_CHANNEL_EVENT_BYTES) {
+    return INVALID_DATA_CHANNEL_EVENT;
+  }
+  if (DATA_CHANNEL_EVENT_ENCODER.encode(data).byteLength > MAX_INBOUND_DATA_CHANNEL_EVENT_BYTES) {
+    return INVALID_DATA_CHANNEL_EVENT;
+  }
+  try {
+    return JSON.parse(data) as unknown;
+  } catch {
+    return INVALID_DATA_CHANNEL_EVENT;
+  }
+}
 
 type BrowserAudioContextConstructor = new (contextOptions?: AudioContextOptions) => AudioContext;
 
@@ -279,31 +389,84 @@ function createInputPipeline(stream: MediaStream): VoiceInputPipeline {
   return createGainInputPipeline(stream) ?? createFallbackInputPipeline(stream);
 }
 
-function waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
-  return new Promise<void>((resolve) => {
+function waitForIceGathering(
+  pc: RTCPeerConnection,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     if (pc.iceGatheringState === "complete") {
       resolve();
       return;
     }
     let fallback: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: DOMException): void => {
+      if (fallback !== undefined) clearTimeout(fallback);
+      pc.removeEventListener("icegatheringstatechange", onChange);
+      signal?.removeEventListener("abort", onAbort);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
     // Resolve once, removing the listener so it never outlives ICE completion (and never re-fires on a
     // later gathering transition, e.g. a network-interface change). The fallback timeout removes it too.
     const onChange = (): void => {
-      if (pc.iceGatheringState !== "complete") {
-        return;
-      }
-      if (fallback !== undefined) {
-        clearTimeout(fallback);
-      }
-      pc.removeEventListener("icegatheringstatechange", onChange);
-      resolve();
+      if (pc.iceGatheringState === "complete") finish();
     };
-    fallback = setTimeout(() => {
-      pc.removeEventListener("icegatheringstatechange", onChange);
-      resolve();
-    }, ICE_GATHER_TIMEOUT_MS);
+    const onAbort = (): void => {
+      finish(abortError());
+    };
+    fallback = setTimeout(finish, ICE_GATHER_TIMEOUT_MS);
     pc.addEventListener("icegatheringstatechange", onChange);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted === true) onAbort();
   });
+}
+
+function audioMediaSections(sdp: string): readonly string[] {
+  return sdp.split(/(?=^m=)/gmu).filter((section) => section.startsWith("m=audio "));
+}
+
+function mediaDirections(section: string): readonly RTCRtpTransceiverDirection[] {
+  const matches = section.match(/^a=(sendrecv|sendonly|recvonly|inactive)$/gmu) ?? [];
+  return matches.map((match) => match.slice(2) as RTCRtpTransceiverDirection);
+}
+
+function requireAudioDirection(
+  sdp: string,
+  direction: RTCRtpTransceiverDirection,
+  description: string,
+): void {
+  const audio = audioMediaSections(sdp);
+  const invalid = audio.some((section) => {
+    const directions = mediaDirections(section);
+    return directions.length !== 1 || directions[0] !== direction;
+  });
+  if (audio.length === 0 || invalid) {
+    throw new VoiceRtcError(
+      "negotiation-failed",
+      `${description} does not enforce media-input-only audio.`,
+    );
+  }
+}
+
+function addSendOnlyAudioTracks(pc: RTCPeerConnection, senderStream: MediaStream): void {
+  if (typeof pc.addTransceiver !== "function") {
+    throw new VoiceRtcError(
+      "unsupported",
+      "This browser cannot enforce media-input-only real-time voice.",
+    );
+  }
+  for (const track of senderStream.getTracks()) {
+    const transceiver = pc.addTransceiver(track, {
+      direction: "sendonly",
+      streams: [senderStream],
+    });
+    if (transceiver.direction !== "sendonly") {
+      throw new VoiceRtcError(
+        "negotiation-failed",
+        "The browser did not create a send-only audio transceiver.",
+      );
+    }
+  }
 }
 
 function buildSession(
@@ -318,19 +481,11 @@ function buildSession(
   }
   const offerSdp = localDescription.sdp;
 
-  let remoteTrackCb: ((stream: MediaStream) => void) | undefined;
   let connectionStateCb: ((state: RTCPeerConnectionState) => void) | undefined;
   let localVoiceActivityMonitor: VoiceActivityMonitor | undefined;
   let dataChannelEventCb: ((event: unknown) => void) | undefined;
   let dataChannelStateCb: ((state: RTCDataChannelState) => void) | undefined;
   const queuedDataChannelEvents: string[] = [];
-
-  pc.ontrack = (event) => {
-    const firstStream = event.streams[0];
-    if (remoteTrackCb !== undefined && firstStream !== undefined) {
-      remoteTrackCb(firstStream);
-    }
-  };
 
   pc.onconnectionstatechange = () => {
     if (connectionStateCb !== undefined) {
@@ -366,24 +521,20 @@ function buildSession(
     if (dataChannelEventCb === undefined) {
       return;
     }
-    const raw = typeof event.data === "string" ? event.data : String(event.data);
-    try {
-      dataChannelEventCb(JSON.parse(raw));
-    } catch {
-      dataChannelEventCb(raw);
-    }
+    dataChannelEventCb(parseBoundedDataChannelEvent(event.data));
   });
 
   return {
     offerSdp,
     async applyAnswer(sdp: string): Promise<void> {
+      // A send-only offer permits the provider to receive microphone audio, never to send an
+      // assistant media track back. Reject a permissive or directionless answer before the browser
+      // can apply it, even if a provider attempts to widen the negotiated media channel.
+      requireAudioDirection(sdp, "recvonly", "Remote SDP answer");
       await pc.setRemoteDescription({ type: "answer", sdp });
     },
     setInputMuted(muted: boolean): void {
       inputPipeline.setMuted(muted);
-    },
-    onRemoteTrack(cb: (stream: MediaStream) => void): void {
-      remoteTrackCb = cb;
     },
     onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void {
       connectionStateCb = cb;
@@ -403,10 +554,8 @@ function buildSession(
       cb(dataChannel.readyState);
     },
     sendDataChannelEvent(event: unknown): boolean {
-      let serialized: string;
-      try {
-        serialized = JSON.stringify(event);
-      } catch {
+      const serialized = serializeApprovedDataChannelEvent(event);
+      if (serialized === undefined) {
         return false;
       }
       if (dataChannel.readyState === "open") {
@@ -460,16 +609,14 @@ export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
         );
       }
 
-      let pc: RTCPeerConnection;
-      let dataChannel: RTCDataChannel;
+      let pc: RTCPeerConnection | undefined;
+      let dataChannel: RTCDataChannel | undefined;
       let inputPipeline: VoiceInputPipeline | undefined;
       try {
         throwIfAborted(signal);
         inputPipeline = createInputPipeline(stream);
         pc = new RTCPeerConnection(APPROVED_VOICE_RTC_CONFIGURATION);
-        for (const track of inputPipeline.senderStream.getTracks()) {
-          pc.addTrack(track, inputPipeline.senderStream);
-        }
+        addSendOnlyAudioTracks(pc, inputPipeline.senderStream);
         // OpenAI-compatible Realtime sideband channel. Provider lifecycle and transcript events arrive
         // here; raw audio remains exclusively on the WebRTC media tracks.
         dataChannel = pc.createDataChannel("oai-events");
@@ -477,12 +624,19 @@ export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
         throwIfAborted(signal);
         await pc.setLocalDescription(offer);
         throwIfAborted(signal);
-        await waitForIceGathering(pc);
+        await waitForIceGathering(pc, signal);
         throwIfAborted(signal);
+        requireAudioDirection(pc.localDescription?.sdp ?? "", "sendonly", "Local SDP offer");
         return buildSession(pc, stream, inputPipeline, dataChannel);
       } catch (error) {
         inputPipeline?.close();
         stopTracks(stream);
+        try {
+          dataChannel?.close();
+        } catch {
+          // Best-effort teardown of a partially-created data channel.
+        }
+        pc?.close();
         if (error instanceof VoiceRtcError) {
           throw error;
         }

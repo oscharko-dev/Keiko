@@ -248,6 +248,23 @@ describe("pure mappers", () => {
     });
   });
 
+  it("projects completion metadata to plain text and never exposes Markdown documentation", () => {
+    const fallback = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 5 };
+    const hostileItem = {
+      ...item(),
+      detail: { value: "<img src=x onerror=alert(1)>" },
+      sortText: { value: "0" },
+      documentation: { value: "**trusted**", isTrusted: true },
+    } as unknown as EditorCompletionItem;
+
+    expect(editorItemToMonacoSuggestion(hostileItem, fallback, KINDS)).toEqual({
+      label: "alpha",
+      kind: KINDS.Function,
+      insertText: "alpha()",
+      range: fallback,
+    });
+  });
+
   it("marks workspace snippet insertions with Monaco's snippet insertion rule", () => {
     const fallback = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 5 };
     const suggestion = editorItemToMonacoSuggestion(

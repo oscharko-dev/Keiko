@@ -82,6 +82,13 @@ function setupAnnouncement(
   return "";
 }
 
+function researchAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return state.run.value?.researchGrant ? t("codingWorkbench.announcement.researchActive") : "";
+}
+
 export function lifecycleAnnouncement(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
@@ -103,6 +110,7 @@ export function lifecycleAnnouncement(
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
     readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t),
     recovery,
+    researchAnnouncement(state, t),
     setupAnnouncement(state.codexSetup.status, t),
   ]
     .filter((announcement) => announcement.length > 0)
@@ -176,13 +184,41 @@ export function eventDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
-  return event.failureCode
+  const base = event.failureCode
     ? t("codingWorkbench.event.detailFailure", {
         sequence: event.sequence,
         revision: event.revision,
         failure: event.failureCode,
       })
     : t("codingWorkbench.event.detail", { sequence: event.sequence, revision: event.revision });
+  return [base, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
+    .filter((part) => part.length > 0)
+    .join(" ");
+}
+
+// #2637: an accepted research read handed quarantined public-page text to the run. The operator has
+// to be able to SEE that a turn took in third-party content, not just that a fetch succeeded — the
+// approval covered the destination, never what the page would say. Content-free: it reports the
+// trust classification the runtime asserted, never a byte of the page.
+function eventContentTrustDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (event.kind !== "runtime-event" || event.contentTrust !== "untrusted") return "";
+  return t("codingWorkbench.event.detailUntrustedContent");
+}
+
+// #2387: research-performed / skill-invoked / child-run-* frames carry a normalized outcome. It is
+// appended as a content-free sentence so an exhausted budget or a cascaded stop is never mislabeled
+// as a hard failure. Absent for every other event kind.
+function eventOutcomeDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (event.kind !== "runtime-event" || event.auxiliaryOutcome === undefined) return "";
+  return t("codingWorkbench.event.detailOutcome", {
+    outcome: t(`codingWorkbench.outcomeLabel.${event.auxiliaryOutcome}`),
+  });
 }
 
 export function visibleAlert(

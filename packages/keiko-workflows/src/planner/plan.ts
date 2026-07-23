@@ -181,16 +181,212 @@ function buildRing(
   };
 }
 
+const DIRECT_ROUTE_METHOD_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
+const DIRECT_ROUTE_PATH_RE = /\/[A-Za-z0-9:_?&=.%+*{}/-]*[A-Za-z0-9_}/*-]/u;
+const QUERY_TERM_RE = /[\p{L}\p{N}_]+/gu;
+const HISTORY_QUERY_TERMS: ReadonlySet<string> = new Set([
+  "git",
+  "history",
+  "historie",
+  "recent",
+  "recency",
+  "commit",
+  "commits",
+  "blame",
+  "evolution",
+  "introduced",
+  "added",
+  "modified",
+  "modification",
+  "modifications",
+  "renamed",
+  "removed",
+  "authored",
+  "zuletzt",
+  "changed",
+  "änderung",
+  "änderungen",
+  "geändert",
+  "eingeführt",
+  "hinzugefügt",
+  "umbenannt",
+  "entfernt",
+  "verlauf",
+]);
+const DEFINITION_LOOKUP_TERMS: ReadonlySet<string> = new Set([
+  "define",
+  "defined",
+  "defines",
+  "definition",
+  "declare",
+  "declared",
+  "declares",
+  "declaration",
+  "implement",
+  "implemented",
+  "implements",
+  "implementation",
+  "definieren",
+  "definiert",
+  "deklarieren",
+  "deklariert",
+  "implementieren",
+  "implementiert",
+]);
+const SYMBOL_RELATION_TERMS: ReadonlySet<string> = new Set([
+  "call",
+  "caller",
+  "callers",
+  "calls",
+  "called",
+  "calling",
+  "callee",
+  "callees",
+  "consumer",
+  "consumers",
+  "dependency",
+  "dependencies",
+  "dependent",
+  "dependents",
+  "depend",
+  "depends",
+  "depended",
+  "depending",
+  "import",
+  "imports",
+  "imported",
+  "importing",
+  "export",
+  "exports",
+  "exported",
+  "exporting",
+  "invoke",
+  "invokes",
+  "invoked",
+  "invoking",
+  "invocation",
+  "invocations",
+  "reference",
+  "references",
+  "referenced",
+  "referencing",
+  "referenziert",
+  "usage",
+  "usages",
+  "use",
+  "uses",
+  "used",
+  "using",
+  "verwendet",
+  "verwenden",
+  "verwendest",
+  "verwende",
+  "verwendung",
+  "nutzt",
+  "nutzen",
+  "nutzung",
+  "genutzt",
+  "aufrufer",
+  "aufgerufen",
+  "aufrufen",
+  "aufruf",
+  "aufrufe",
+  "abhängig",
+  "abhängige",
+  "abhängigen",
+  "abhängiger",
+  "abhängiges",
+  "abhängigkeit",
+  "abhängigkeiten",
+  "importiert",
+  "exportiert",
+]);
+const ROUTE_TRAVERSAL_RE = /\b(?:handlers?|trace|traces|tracing|call[- ]?paths?|aufrufpfade?)\b/iu;
+const IDENTIFIER_TOKEN_RE = /[A-Za-z_$][A-Za-z0-9_$]*/gu;
+const TEST_IDENTIFIER_SUFFIX_RE = /(?:Test|Tests|Spec|Specs)$/u;
+const DELIMITED_TEST_IDENTIFIER_SUFFIX_RE = /(?:^|[_$])(?:tests?|specs?)$/u;
+
+function hasQueryTerm(text: string, terms: ReadonlySet<string>): boolean {
+  return [...text.toLowerCase().matchAll(QUERY_TERM_RE)].some((match) => terms.has(match[0]));
+}
+
+function hasHistoryQuery(text: string): boolean {
+  return hasQueryTerm(text, HISTORY_QUERY_TERMS);
+}
+
+function hasDefinitionLookup(text: string): boolean {
+  return hasQueryTerm(text, DEFINITION_LOOKUP_TERMS);
+}
+
+function hasSymbolRelation(text: string): boolean {
+  return hasQueryTerm(text, SYMBOL_RELATION_TERMS);
+}
+
+function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
+  const sourceToken = [...text.matchAll(IDENTIFIER_TOKEN_RE)]
+    .map((match) => match[0])
+    .find((token) => token.toLowerCase() === normalizedSymbol.toLowerCase());
+  return (
+    sourceToken !== undefined &&
+    (TEST_IDENTIFIER_SUFFIX_RE.test(sourceToken) ||
+      DELIMITED_TEST_IDENTIFIER_SUFFIX_RE.test(sourceToken))
+  );
+}
+
+function isDirectRouteLookup(query: RetrievalQuery): boolean {
+  return (
+    DIRECT_ROUTE_METHOD_RE.test(query.text) &&
+    DIRECT_ROUTE_PATH_RE.test(query.text) &&
+    !hasHistoryQuery(query.text) &&
+    !hasSymbolRelation(query.text) &&
+    !ROUTE_TRAVERSAL_RE.test(query.text)
+  );
+}
+
+function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
+  return (
+    hasHistoryQuery(query.text) ||
+    hasSymbolRelation(query.text) ||
+    ROUTE_TRAVERSAL_RE.test(query.text)
+  );
+}
+
+export function directDefinitionSymbol(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+): string | undefined {
+  if (
+    !hasDefinitionLookup(query.text) ||
+    hasHistoryQuery(query.text) ||
+    hasSymbolRelation(query.text)
+  ) {
+    return undefined;
+  }
+  const identifiers = anchors.filter(
+    (anchor) => anchor.kind === "identifier" && anchor.weight >= 0.85,
+  );
+  const symbol = identifiers[0]?.term;
+  return identifiers.length === 1 && symbol !== undefined && !isTestIdentifier(query.text, symbol)
+    ? symbol
+    : undefined;
+}
+
 function composeRings(
   anchors: readonly SearchAnchor[],
   scope: SelectedScope,
+  query: RetrievalQuery,
   budget: ExplorationBudget,
 ): readonly RetrievalRing[] {
   const rings: RetrievalRing[] = [buildRing("lexical", anchors, budget)];
-  if (hasKind(anchors, "identifier") || hasKind(anchors, "path")) {
+  const directLookup =
+    isDirectRouteLookup(query) || directDefinitionSymbol(query, anchors) !== undefined;
+  if (!directLookup && (hasKind(anchors, "identifier") || hasKind(anchors, "path"))) {
     rings.push(buildRing("structural", anchors, budget));
   }
-  if (scope.relativePaths.length === 0) {
+  if (
+    !directLookup &&
+    (scope.relativePaths.length === 0 || requiresRelationshipOrHistoryRings(query))
+  ) {
     rings.push(buildRing("git-history", anchors, budget));
   }
   return rings;
@@ -235,6 +431,7 @@ function decideClarification(
   anchors: readonly SearchAnchor[],
   scope: SelectedScope,
   intent: RetrievalIntent,
+  query: RetrievalQuery,
 ): ClarificationDecision {
   if (anchors.length === 0) {
     return {
@@ -258,6 +455,9 @@ function decideClarification(
     };
   }
   if (scope.relativePaths.length === 0 && anchors.length < 2) {
+    if (scope.explicitConnection === true && directDefinitionSymbol(query, anchors) !== undefined) {
+      return { state: "ready", clarification: undefined };
+    }
     return {
       state: "clarification-needed",
       clarification: buildClarification("scope-empty", SCOPE_EMPTY_QUESTIONS, 2),
@@ -353,10 +553,15 @@ export function createExplorationPlan(
     text: input.query.text,
     maxAnchors: resolved.maxAnchors,
   });
-  const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
+  const decision = decideClarification(
+    extraction.anchors,
+    input.scope,
+    classification.intent,
+    input.query,
+  );
   const rings =
     decision.state === "ready"
-      ? composeRings(extraction.anchors, input.scope, resolved.budget)
+      ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget)
       : [];
   const seed: PlanSeed = {
     scopeId: input.scope.scopeId,

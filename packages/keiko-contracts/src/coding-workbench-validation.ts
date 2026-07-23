@@ -1,9 +1,12 @@
+import { isCodeTaskChildRunId, isCodeTaskSkillId } from "./code-task-auxiliary.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
+  CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_COMMAND_POLICY_MODES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
+  CODING_WORKBENCH_CONTENT_TRUST_VALUES,
   CODING_WORKBENCH_GATES,
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
@@ -665,6 +668,31 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
     "artifactDigest",
     "artifactBytes",
   ),
+  "research-performed": runtimeEventAllowedKeys(
+    "auxiliaryOutcome",
+    "byteCount",
+    "contentTrust",
+    "failureCode",
+    "failureSummary",
+    "retryable",
+  ),
+  "skill-invoked": runtimeEventAllowedKeys(
+    "skillId",
+    "skillInvocation",
+    "auxiliaryOutcome",
+    "failureCode",
+    "failureSummary",
+    "retryable",
+  ),
+  "child-run-started": runtimeEventAllowedKeys("childRunId", "auxiliaryOutcome"),
+  "child-run-completed": runtimeEventAllowedKeys(
+    "childRunId",
+    "childResultCount",
+    "auxiliaryOutcome",
+    "failureCode",
+    "failureSummary",
+    "retryable",
+  ),
   "failure-redacted": runtimeEventAllowedKeys("failureCode", "failureSummary", "retryable"),
 } as const satisfies Readonly<Record<CodingWorkbenchRuntimeEventKind, readonly string[]>>);
 
@@ -750,6 +778,31 @@ function validateRuntimeEventStatusFields(value: Record<string, unknown>, errors
   ) {
     errors.push("event.verificationStatus is invalid");
   }
+  validateRuntimeEventAuxiliaryFields(value, errors);
+}
+
+function validateRuntimeEventAuxiliaryFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (
+    value.auxiliaryOutcome !== undefined &&
+    !isOneOf(value.auxiliaryOutcome, CODING_WORKBENCH_AUXILIARY_STATUSES)
+  ) {
+    errors.push("event.auxiliaryOutcome is invalid");
+  }
+  if (
+    value.skillInvocation !== undefined &&
+    !isOneOf(value.skillInvocation, ["explicit", "implicit"] as const)
+  ) {
+    errors.push("event.skillInvocation is invalid");
+  }
+  if (
+    value.contentTrust !== undefined &&
+    !isOneOf(value.contentTrust, CODING_WORKBENCH_CONTENT_TRUST_VALUES)
+  ) {
+    errors.push("event.contentTrust is invalid");
+  }
 }
 
 function validateRuntimeEventEvidenceFields(
@@ -773,6 +826,19 @@ function validateRuntimeEventEvidenceFields(
   }
   if (value.failureCode !== undefined) {
     validateSafeEvidenceText(value.failureCode, "event.failureCode", errors);
+  }
+  validateRuntimeEventAuxiliaryIdFields(value, errors);
+}
+
+function validateRuntimeEventAuxiliaryIdFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (value.skillId !== undefined && !isCodeTaskSkillId(value.skillId)) {
+    errors.push("event.skillId is invalid");
+  }
+  if (value.childRunId !== undefined && !isCodeTaskChildRunId(value.childRunId)) {
+    errors.push("event.childRunId is invalid");
   }
 }
 
@@ -894,6 +960,7 @@ function validateRuntimeEventCounts(value: Record<string, unknown>, errors: stri
     "failedCount",
     "skippedCount",
     "artifactBytes",
+    "childResultCount",
   ].forEach((key) => {
     if (value[key] !== undefined && !isSafeIntegerOrZero(value[key])) {
       errors.push(`event.${key} must be a non-negative safe integer`);
@@ -1052,6 +1119,75 @@ function validateFailureRedactedEventFields(
   validateRequiredBooleanField(value, "retryable", "event", errors);
 }
 
+function requireAuxiliaryOutcome(value: Record<string, unknown>, errors: string[]): void {
+  validateRequiredEnumField(
+    value,
+    "auxiliaryOutcome",
+    CODING_WORKBENCH_AUXILIARY_STATUSES,
+    "event",
+    errors,
+  );
+}
+
+function requireChildRunId(value: Record<string, unknown>, errors: string[]): void {
+  if (value.childRunId === undefined) {
+    errors.push("event.childRunId is required");
+  } else if (!isCodeTaskChildRunId(value.childRunId)) {
+    errors.push("event.childRunId is invalid");
+  }
+}
+
+// #2637: an ACCEPTED research fetch handed page text to the model, so the event MUST declare that
+// content untrusted. The requirement is conditional on the accepted outcome because a denial never
+// produced a read at all — there is nothing to classify. Emitting an accepted research event
+// without the marker is a contract violation, not a defaulted field: the timeline would otherwise
+// show a research read whose trust the runtime never asserted.
+function validateResearchPerformedEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  requireAuxiliaryOutcome(value, errors);
+  if (value.auxiliaryOutcome === "accepted") {
+    validateRequiredEnumField(
+      value,
+      "contentTrust",
+      CODING_WORKBENCH_CONTENT_TRUST_VALUES,
+      "event",
+      errors,
+    );
+    return;
+  }
+  if (value.contentTrust !== undefined) {
+    errors.push("event.contentTrust is only admissible on an accepted research read");
+  }
+}
+
+function validateSkillInvokedEventFields(value: Record<string, unknown>, errors: string[]): void {
+  if (value.skillId === undefined) {
+    errors.push("event.skillId is required");
+  } else if (!isCodeTaskSkillId(value.skillId)) {
+    errors.push("event.skillId is invalid");
+  }
+  validateRequiredEnumField(value, "skillInvocation", ["explicit", "implicit"], "event", errors);
+  requireAuxiliaryOutcome(value, errors);
+}
+
+function validateChildRunStartedEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  requireChildRunId(value, errors);
+}
+
+function validateChildRunCompletedEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  requireChildRunId(value, errors);
+  requireAuxiliaryOutcome(value, errors);
+  validateRequiredSafeIntegerField(value, "childResultCount", "event", errors);
+}
+
 const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   Record<
     CodingWorkbenchRuntimeEventKind,
@@ -1067,6 +1203,10 @@ const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   "diff-summarized": validateDiffSummarizedEventFields,
   "verification-summarized": validateVerificationSummarizedEventFields,
   "artifact-produced": validateArtifactProducedEventFields,
+  "research-performed": validateResearchPerformedEventFields,
+  "skill-invoked": validateSkillInvokedEventFields,
+  "child-run-started": validateChildRunStartedEventFields,
+  "child-run-completed": validateChildRunCompletedEventFields,
   "failure-redacted": validateFailureRedactedEventFields,
 } as const);
 

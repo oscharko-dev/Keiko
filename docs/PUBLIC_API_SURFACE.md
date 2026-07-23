@@ -1,4 +1,4 @@
-# Public API surface — 0.2.11 baseline
+# Public API surface — 0.2.15 baseline
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only.
@@ -72,6 +72,9 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- The published 0.2.15 realtime voice/default/tool symbols remain compatibility-only exports. The
+  productive Twin pipeline requires explicit deployment aliases and never consumes those defaults,
+  provider-native tools, voices, or assistant-response configuration.
 - Internal workspace packages are private implementation details; adding, removing, renaming, or
   ceasing to expose a package-local export is not by itself a supported customer contract change
   unless the root product surface changes.
@@ -79,6 +82,7 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 ## Verification
 
-`npm run check:package-surface` (after the normal build / `prepack` prerequisites),
-`npm run check:version-consistency`, and `npm run smoke:install` enforce the packaged-surface
-baseline before publish.
+`npm run check:package-surface:assembled`, `npm run check:version-consistency`, and
+`npm run smoke:install` enforce the packaged-surface baseline before publish. The assembled surface
+command performs the build, CLI-mode preparation, static UI export, and required build-artifact and
+host-native pruning before invoking the standalone fail-closed `check:package-surface` checker.

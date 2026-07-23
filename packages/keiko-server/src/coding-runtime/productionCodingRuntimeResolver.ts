@@ -13,7 +13,10 @@ import {
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
-import { createCodingRuntimeEditorMutationLeaseCoordinator } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
+import {
+  createCodingRuntimeEditorMutationLeaseCoordinator,
+  type CodingRuntimeEditorMutationLeaseBroker,
+} from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   codingRuntimeStartConfirmationClaim,
   isConsumedRuntimeStartConfirmation,
@@ -27,7 +30,22 @@ import type {
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import {
+  createExplicitSkillInvocationTracker,
+  type ExplicitSkillInvocationTracker,
+} from "./explicitSkillInvocation.js";
+import {
+  buildResearchPermissionEvent,
+  createPendingResearchApprovals,
+  registerApprovedResearchGrant,
+  type PendingResearchApprovals,
+} from "./researchApprovalIssuance.js";
+import {
+  createResearchGrantRegistry,
+  type ResearchGrantRegistry,
+} from "./researchGrantRegistry.js";
+import {
   type ProductionCodingRuntimeResolver,
+  type CodingRuntimeTaskOutcome,
   type QualifiedProductionCodingRuntime,
 } from "./productionCodingRuntimeHost.js";
 import { createProductionRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
@@ -53,6 +71,7 @@ import {
   type CodingRuntimeMintResult,
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
+import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
 
 type MintedRuntime = Extract<CodingRuntimeMintResult, { readonly ok: true }>;
 type LaunchMaterial = Omit<
@@ -97,11 +116,55 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly verificationRunner: ProductionManagedWorktreeToolInput["verificationRunner"];
   readonly confirmationConsumer?: CodingRuntimeStartConfirmationConsumer | undefined;
   readonly authorityRegistry?: EditorAgentAuthorityRegistry | undefined;
+  readonly runtimeMutationLeaseBroker?:
+    Pick<CodingRuntimeEditorMutationLeaseBroker, "attach"> | undefined;
+  readonly gatewayEgress?: ProductionManagedWorktreeToolInput["gatewayEgress"] | undefined;
+  readonly childModelPortFactory?:
+    ProductionManagedWorktreeToolInput["childModelPortFactory"] | undefined;
+  /**
+   * The PROVIDER model id a read-only child agent runs on (#2387). Resolved per run because the
+   * coding-safe gateway profile can change while the server is up. This is deliberately NOT the
+   * run's `modelProfile.profileId`: that is a Keiko launch-profile identifier
+   * (`coding-safe-openai-compatible`), which the model gateway cannot resolve — handing it to a
+   * child session would fail every child's first model call. When no coding-safe model is
+   * configured the child port stays fail-closed rather than guessing an id.
+   */
+  readonly childModelId?: (() => string | undefined) | undefined;
+  /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
+  readonly researchFetchImpl?: ProductionManagedWorktreeToolInput["researchFetchImpl"] | undefined;
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
   readonly launch: LaunchMaterial;
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
+}
+
+/** The two server-level #2387 research stores threaded together through the run composition. */
+interface ResearchComposition {
+  readonly grants: ResearchGrantRegistry;
+  readonly pending: PendingResearchApprovals;
+}
+
+/** Wraps the manager's approval issuance with the #2387 research grant minting hook. */
+function researchIssuingApprovalAuthority(
+  manager: CodingRuntimeManager,
+  research: ResearchComposition,
+  now: () => Date,
+): QualifiedProductionCodingRuntime["approvalAuthority"] {
+  return {
+    issue: (request): ReturnType<CodingRuntimeManager["issueApproval"]> => {
+      const issued = manager.issueApproval(request);
+      if (issued.ok && request.actionKind === "research") {
+        registerApprovedResearchGrant(
+          { pending: research.pending, registry: research.grants, now },
+          request,
+          issued.approvalDigest,
+          issued.expiresAtMs,
+        );
+      }
+      return issued;
+    },
+  };
 }
 
 export function createProductionCodingRuntimeResolver(
@@ -133,17 +196,29 @@ function composeRuntime(
     input.authorityRegistry ?? editorAgentAuthorityRegistry,
   );
   const runs = new Map<string, ResolverRunRecord>();
+  // Server-level, run-bound registry of read-only research grants (#2387). Shared across the tool
+  // facade (which the egress port reads), the revoke route, and revoke-before-terminate, so a grant
+  // never outlives its run and revocation reaches the parent and every child at once.
+  const researchGrants = createResearchGrantRegistry();
+  // Transient URL retention between "the model asked for this URL" and "the operator approved it".
+  // In memory only; invalidated with the run.
+  const pendingResearch = createPendingResearchApprovals();
   let receiver: (event: CodingWorkbenchRuntimeEvent) => void = () => undefined;
   const manager = createProductionRuntimeManager(runs, authority, () => runtimeNow(input));
+  const research: ResearchComposition = { grants: researchGrants, pending: pendingResearch };
   return {
     createManager: (onRuntimeEvent): CodingRuntimeManager => {
       receiver = onRuntimeEvent;
       return manager;
     },
-    mintLaunch: launchResolver(input, authority, runs, (event): void => {
+    mintLaunch: launchResolver(input, authority, runs, research, (event): void => {
       receiver(event);
     }),
-    approvalAuthority: { issue: (request) => manager.issueApproval(request) },
+    // The approved `research` action mints its grant here — the one seam that sees both the
+    // manager's approval issuance (approval digest + expiry) and the retained approved URL.
+    approvalAuthority: researchIssuingApprovalAuthority(manager, research, () => runtimeNow(input)),
+    researchGrants,
+    pendingResearchApprovals: pendingResearch,
     taskDispatcher: createProductionRuntimeTaskDispatcher(runs),
     questionPort: createProductionRuntimeQuestionPort(runs),
     cancellationRegistry: { signalFor: (runId) => runs.get(runId)?.controller.signal },
@@ -161,6 +236,7 @@ function launchResolver(
   input: ProductionCodingRuntimeResolverInput,
   authority: CodingRuntimeAuthorityService,
   runs: Map<string, ResolverRunRecord>,
+  research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): QualifiedProductionCodingRuntime["mintLaunch"] {
   return {
@@ -186,7 +262,15 @@ function launchResolver(
       );
       if (!minted.ok) throw new Error(minted.reason);
       try {
-        const record = createRunRecord(input, request, context, minted, authority, onRuntimeEvent);
+        const record = createRunRecord(
+          input,
+          request,
+          context,
+          minted,
+          authority,
+          research,
+          onRuntimeEvent,
+        );
         runs.set(request.runId, record);
         return launchRequest(record, context, minted);
       } catch (error) {
@@ -221,24 +305,63 @@ function confirmationFacts(
   };
 }
 
-function createRunRecord(
+// The per-run governed tool surface: the invocation registry every tool call is recorded against,
+// its mutation-lease coordinator, the explicit-skill tracker seeded from this turn's intent, and the
+// managed facade the runtime actually calls. Built as one unit because the facade closes over the
+// other three.
+interface RunToolSurface {
+  readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly leases: ReturnType<typeof createLeaseCoordinator>;
+  readonly explicitSkills: ReturnType<typeof createExplicitSkillInvocationTracker>;
+  readonly toolFacade: ReturnType<typeof createManagedToolFacade>;
+}
+
+function createRunToolSurface(
   input: ProductionCodingRuntimeResolverInput,
   request: ProductionRuntimeBackendInput["request"],
   context: CodingRuntimeTrustedContext,
   minted: MintedRuntime,
   authority: CodingRuntimeAuthorityService,
+  research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
-): ResolverRunRecord {
-  const controller = new AbortController();
+): RunToolSurface {
   const invocationRegistry = createCodingToolInvocationRegistry();
   const leases = createLeaseCoordinator(invocationRegistry);
-  const toolFacade = createManagedToolFacade(
+  const skillCatalog = createServerApprovedSkillCatalog();
+  const explicitSkills = createExplicitSkillInvocationTracker(skillCatalog);
+  explicitSkills.observeTurn(request.taskIntent);
+  const toolFacade = createManagedToolFacade({
     input,
     context,
     minted,
     authority,
     invocationRegistry,
     leases,
+    research,
+    skillCatalog,
+    explicitSkills,
+    onRuntimeEvent,
+  });
+  return { invocationRegistry, leases, explicitSkills, toolFacade };
+}
+
+function createRunRecord(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+  research: ResearchComposition,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): ResolverRunRecord {
+  const controller = new AbortController();
+  const { invocationRegistry, leases, explicitSkills, toolFacade } = createRunToolSurface(
+    input,
+    request,
+    context,
+    minted,
+    authority,
+    research,
     onRuntimeEvent,
   );
   const backend = createBackendRun(
@@ -251,24 +374,75 @@ function createRunRecord(
     controller,
     invocationRegistry,
     leases,
+    research,
     onRuntimeEvent,
   );
   validateBackendLaunch(backend.launch, context);
+  const detachLease = attachRuntimeMutationLease(input, leases, invocationRegistry);
   return {
     manager: backend.manager,
     launch: backend.launch,
-    turnPort: backend.turnPort,
+    turnPort: bindExplicitSkillTurns(backend.turnPort, explicitSkills),
     controller,
     operationGuard: createProductionRuntimeOperationGuard(request.runId, () =>
       runtimeAuthorityLive(input, context, minted, authority),
     ),
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
-    dispose: async (): Promise<void> => {
-      leases.dispose();
-      invocationRegistry.dispose();
-      await backend.dispose?.();
+    dispose: createRunDisposer(detachLease, leases, invocationRegistry, backend),
+  };
+}
+
+function bindExplicitSkillTurns(
+  turnPort: ProductionRuntimeTurnPort,
+  explicitSkills: ExplicitSkillInvocationTracker,
+): ProductionRuntimeTurnPort {
+  return {
+    submitTurn: async (runId, text): Promise<boolean> => {
+      explicitSkills.observeTurn(text);
+      const accepted = await turnPort.submitTurn(runId, text);
+      if (!accepted) explicitSkills.clear();
+      return accepted;
+    },
+    abortTurn: async (runId): Promise<boolean> => {
+      explicitSkills.clear();
+      return turnPort.abortTurn(runId);
+    },
+    waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
+      try {
+        return await turnPort.waitForTerminal(runId, signal);
+      } finally {
+        explicitSkills.clear();
+      }
     },
   };
+}
+
+function createRunDisposer(
+  detachLease: (() => void) | undefined,
+  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
+  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
+  backend: QualifiedProductionRuntimeRun,
+): () => Promise<void> {
+  return async (): Promise<void> => {
+    detachLease?.();
+    leases.dispose();
+    invocationRegistry.dispose();
+    await backend.dispose?.();
+  };
+}
+
+function attachRuntimeMutationLease(
+  input: ProductionCodingRuntimeResolverInput,
+  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
+  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
+): (() => void) | undefined {
+  const broker = input.runtimeMutationLeaseBroker;
+  if (broker === undefined) return undefined;
+  const detach = broker.attach(leases.lease);
+  if (detach !== undefined) return detach;
+  leases.dispose();
+  invocationRegistry.dispose();
+  throw new Error("runtime-mutation-lease-broker-unavailable");
 }
 
 function createLeaseCoordinator(
@@ -290,6 +464,7 @@ function createBackendRun(
   controller: AbortController,
   invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
+  research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): QualifiedProductionRuntimeRun {
   return input.backend.createRun({
@@ -297,8 +472,13 @@ function createBackendRun(
     context,
     minted,
     toolFacade,
-    authorityLifecycle: authorityLifecycle(authority, controller, invocationRegistry, leases, () =>
-      runtimeNow(input),
+    authorityLifecycle: authorityLifecycle(
+      authority,
+      controller,
+      invocationRegistry,
+      leases,
+      research,
+      () => runtimeNow(input),
     ),
     onRuntimeEvent,
     workspaceIsCurrent: () =>
@@ -307,20 +487,51 @@ function createBackendRun(
   });
 }
 
-function createManagedToolFacade(
-  input: ProductionCodingRuntimeResolverInput,
-  context: CodingRuntimeTrustedContext,
-  minted: MintedRuntime,
-  authority: CodingRuntimeAuthorityService,
-  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
-  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
-  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
-): CodingToolFacade {
+/** One parameter object: the facade needs the whole run context, not an argument list to mis-order. */
+interface ManagedToolFacadeInput {
+  readonly input: ProductionCodingRuntimeResolverInput;
+  readonly context: CodingRuntimeTrustedContext;
+  readonly minted: MintedRuntime;
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
+  readonly research: ResearchComposition;
+  readonly skillCatalog: SkillCatalog;
+  readonly explicitSkills: ExplicitSkillInvocationTracker;
+  readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+}
+
+function createManagedToolFacade({
+  input,
+  context,
+  minted,
+  authority,
+  invocationRegistry,
+  leases,
+  research,
+  skillCatalog,
+  explicitSkills,
+  onRuntimeEvent,
+}: ManagedToolFacadeInput): CodingToolFacade {
   return createProductionManagedWorktreeToolFacade({
     authority,
     authorityRef: minted.authorityRef,
+    taskId: context.taskId,
+    // The child agent talks to the gateway directly, so it needs the resolved PROVIDER model id —
+    // never the run's launch-profile identifier, which the gateway cannot resolve.
+    ...(input.childModelId?.() === undefined ? {} : { modelId: input.childModelId() }),
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
+    researchGrantRegistry: research.grants,
+    gatewayEgress: input.gatewayEgress ?? ((): undefined => undefined),
+    requestResearchApproval: researchApprovalRequester(
+      input,
+      context,
+      minted.authorityRef.runId,
+      research.pending,
+      onRuntimeEvent,
+    ),
+    ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
     authorityExpiresAt: context.expiresAt,
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
@@ -328,9 +539,39 @@ function createManagedToolFacade(
     editorAgentClient: input.editorAgentClient,
     mutationLeaseCoordinator: leases,
     invocationRegistry,
+    skillCatalog,
+    explicitSkillInvocations: explicitSkills,
+    childModelPortFactory: input.childModelPortFactory,
     verificationRunner: input.verificationRunner,
     onRuntimeEvent,
   });
+}
+
+// Opens the #2387 approval loop for a research URL no grant covers: retain the URL transiently and
+// raise the content-free `network-egress` permission request. One ask per run at a time; a refused
+// or invalid ask emits nothing and the fetch stays failed closed.
+function researchApprovalRequester(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  runId: string,
+  pending: PendingResearchApprovals,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): (url: URL) => void {
+  let sequence = 0;
+  return (url: URL): void => {
+    const nowMs = runtimeNow(input).getTime();
+    const requestId = pending.request({
+      runId,
+      url,
+      taskId: context.taskId,
+      workspaceId: context.workspaceId,
+      nowMs,
+    });
+    if (requestId === undefined) return;
+    sequence += 1;
+    const event = buildResearchPermissionEvent({ runId, requestId, sequence, nowMs });
+    if (event !== undefined) onRuntimeEvent(event);
+  };
 }
 
 function runtimeAuthorityLive(
@@ -361,6 +602,7 @@ function authorityLifecycle(
   controller: AbortController,
   invocations: ReturnType<typeof createCodingToolInvocationRegistry>,
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
+  research: ResearchComposition,
   now: () => Date,
 ): ProductionRuntimeBackendInput["authorityLifecycle"] {
   return {
@@ -368,6 +610,10 @@ function authorityLifecycle(
       controller.abort();
       invocations.revokeRun(runId);
       leases.revokeRun(runId);
+      // Drop every read-only research grant AND any unanswered research ask for the run so a
+      // terminate/revoke leaves no orphaned internet reach for the parent or any child (#2387).
+      research.grants.invalidateRun(runId);
+      research.pending.invalidateRun(runId);
       return authority.revokeBeforeTerminate(runId);
     },
     abortInFlightActions: (runId) => invocations.revokeRun(runId) >= 0,

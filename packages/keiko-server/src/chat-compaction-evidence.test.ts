@@ -68,6 +68,12 @@ function captureRes(): { res: ServerResponse; writes: string[] } {
     on(): ServerResponse {
       return res as unknown as ServerResponse;
     },
+    once(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    off(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
   };
   return { res: res as unknown as ServerResponse, writes };
 }

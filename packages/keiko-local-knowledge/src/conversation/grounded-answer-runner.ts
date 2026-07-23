@@ -81,6 +81,9 @@ function buildRetrievalDependencies(deps: GroundedAnswerDependencies): Retrieval
     ...(deps.retrieval.queryTransformer !== undefined
       ? { queryTransformer: deps.retrieval.queryTransformer }
       : {}),
+    ...(deps.retrieval.vectorIndex !== undefined
+      ? { vectorIndex: deps.retrieval.vectorIndex }
+      : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
   };
 }
@@ -185,15 +188,14 @@ export async function runGroundedAnswer(
     buildRetrievalQuery(query),
   );
 
-  if (retrieval.noEvidence) {
+  if (retrieval.noEvidence && query.answerOnlyContextAvailable !== true) {
     return buildNoEvidenceAnswer(retrieval, assembleGroundedContext(retrieval.references));
   }
 
-  const { references, diagnostics: rerankerDiagnostics } = await rerankReferences(
-    deps,
-    query,
-    retrieval,
-  );
+  const answerOnly = retrieval.noEvidence;
+  const { references, diagnostics: rerankerDiagnostics } = answerOnly
+    ? { references: [] as readonly RetrievalReference[], diagnostics: undefined }
+    : await rerankReferences(deps, query, retrieval);
   const pack = assembleGroundedContext(references);
   const answerInput: AnswerGeneratorInput = {
     query,
@@ -203,5 +205,6 @@ export async function runGroundedAnswer(
   };
 
   const attached = await generateGroundedAnswerText(deps, answerInput, references);
-  return buildGroundedAnswer(attached, references, pack, retrieval, rerankerDiagnostics);
+  const answer = buildGroundedAnswer(attached, references, pack, retrieval, rerankerDiagnostics);
+  return answerOnly ? { ...answer, noEvidence: true, answerOnlyContextUsed: true } : answer;
 }

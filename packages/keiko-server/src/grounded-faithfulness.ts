@@ -19,10 +19,11 @@
 // The module deliberately depends only on contract types so it stays a leaf (no import cycle with
 // the grounded-qa ⇄ grounded-qa-hybrid pair).
 
-import type {
-  ConnectedContextPack,
-  LineRange,
-  UncertaintyMarker,
+import {
+  isValidScopePath,
+  type ConnectedContextPack,
+  type LineRange,
+  type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
 
 // Deterministic no-evidence answer used when the folder/multi-source path abstains BEFORE the
@@ -58,6 +59,7 @@ export function packsHaveUsableEvidence(packs: readonly ConnectedContextPack[]):
 
 export interface ParsedInlineCitation {
   readonly raw: string;
+  readonly sourceId?: string;
   readonly scopePath: string;
   readonly lineRange: LineRange | undefined;
 }
@@ -67,14 +69,28 @@ export interface ParsedInlineCitation {
 // This is deliberately conservative so ordinary prose brackets (`[1]`, `[TODO]`, `[a, b]`) and
 // markdown links (`[text](url)`) are NOT misread as citations.
 const BRACKET_RE = /\[([^\]\n]{1,200})\]/g;
-const PATH_TOKEN_RE = /^([\w./@+-]+?)(?::(\d+)(?:-(\d+))?)?$/;
+const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:-(\d+))?$/;
+const SOURCE_QUALIFIER_RE = /^source:(\d+)\|/u;
+const NUMERIC_CITATION_RE = /\[(\d+)\]/gu;
+
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint !== undefined && (codePoint < 32 || codePoint === 127)) return true;
+  }
+  return false;
+}
 
 function looksLikeRepoPath(candidate: string): boolean {
-  if (candidate.length === 0 || candidate.length > 180) {
+  if (
+    candidate.length === 0 ||
+    candidate.length > 180 ||
+    candidate.trim() !== candidate ||
+    hasControlCharacter(candidate)
+  ) {
     return false;
   }
-  // A markdown-link path opens with `(` — the bracket content is link text, not a citation.
-  if (candidate.includes("(") || candidate.includes(")") || candidate.includes(" ")) {
+  if (!isValidScopePath(candidate, { mustBeRelative: true })) {
     return false;
   }
   return candidate.includes("/") || /\.[A-Za-z0-9]{1,12}$/.test(candidate);
@@ -88,23 +104,46 @@ function parseCitationLineRange(
     return undefined;
   }
   const startLine = Number.parseInt(startRaw, 10);
-  if (!Number.isFinite(startLine)) {
+  if (!Number.isSafeInteger(startLine) || startLine < 1) {
     return undefined;
   }
   const endParsed = endRaw === undefined ? startLine : Number.parseInt(endRaw, 10);
-  return { startLine, endLine: Number.isFinite(endParsed) ? endParsed : startLine };
+  if (!Number.isSafeInteger(endParsed) || endParsed < startLine) {
+    return undefined;
+  }
+  return { startLine, endLine: endParsed };
+}
+
+function citationTokenSource(token: string): readonly [string | undefined, string] | undefined {
+  const qualifier = SOURCE_QUALIFIER_RE.exec(token);
+  if (qualifier === null) return [undefined, token];
+  const rawSourceId = qualifier[1];
+  if (rawSourceId === undefined) return undefined;
+  const sourceOrdinal = Number.parseInt(rawSourceId, 10);
+  if (!Number.isSafeInteger(sourceOrdinal) || sourceOrdinal < 1) return undefined;
+  return [String(sourceOrdinal), token.slice(qualifier[0].length)];
 }
 
 function parseCitationToken(token: string): ParsedInlineCitation | undefined {
-  const parsed = PATH_TOKEN_RE.exec(token);
-  if (parsed === null) {
-    return undefined;
-  }
-  const scopePath = parsed[1] ?? "";
+  const sourcedToken = citationTokenSource(token);
+  if (sourcedToken === undefined) return undefined;
+  const [sourceId, pathToken] = sourcedToken;
+  const rangeSuffix = LINE_RANGE_SUFFIX_RE.exec(pathToken);
+  const scopePath = rangeSuffix === null ? pathToken : pathToken.slice(0, rangeSuffix.index);
   if (!looksLikeRepoPath(scopePath)) {
     return undefined;
   }
-  return { raw: token, scopePath, lineRange: parseCitationLineRange(parsed[2], parsed[3]) };
+  const lineRange = parseCitationLineRange(rangeSuffix?.[1], rangeSuffix?.[2]);
+  if (rangeSuffix !== null && lineRange === undefined) {
+    return undefined;
+  }
+  return { raw: token, ...(sourceId === undefined ? {} : { sourceId }), scopePath, lineRange };
+}
+
+function isMarkdownLink(answerText: string, match: RegExpMatchArray): boolean {
+  if (match.index === undefined) return false;
+  const next = answerText.charAt(match.index + match[0].length);
+  return next === "(" || next === "[";
 }
 
 function citationDedupKey(citation: ParsedInlineCitation): string {
@@ -112,7 +151,7 @@ function citationDedupKey(citation: ParsedInlineCitation): string {
     citation.lineRange === undefined
       ? "*"
       : `${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
-  return `${citation.scopePath}@${range}`;
+  return `${citation.sourceId ?? "*"}:${citation.scopePath}@${range}`;
 }
 
 /** Parse the inline `[path:line]` / `[path:start-end]` / `[path]` markers from an answer. */
@@ -120,6 +159,9 @@ export function parseInlineCitations(answerText: string): readonly ParsedInlineC
   const out: ParsedInlineCitation[] = [];
   const seen = new Set<string>();
   for (const match of answerText.matchAll(BRACKET_RE)) {
+    if (isMarkdownLink(answerText, match)) {
+      continue;
+    }
     const inner = match[1]?.trim() ?? "";
     // A single bracket may hold several comma-separated refs: `[a.ts:1-2, b.ts:3]`.
     for (const part of inner.split(",")) {
@@ -138,49 +180,132 @@ export function parseInlineCitations(answerText: string): readonly ParsedInlineC
   return out;
 }
 
+export interface NumericCitationReconciliation {
+  readonly citedMarkers: ReadonlySet<number>;
+  readonly unsupportedMarkers: readonly number[];
+}
+
+/** Reconcile hybrid `[n]` markers against the exact selected evidence marker set. */
+export function reconcileNumericCitations(
+  answerText: string,
+  supportedMarkers: ReadonlySet<number>,
+): NumericCitationReconciliation {
+  const citedMarkers = new Set<number>();
+  const unsupportedMarkers: number[] = [];
+  const seenUnsupported = new Set<number>();
+  for (const match of answerText.matchAll(NUMERIC_CITATION_RE)) {
+    const rawMarker = match[1];
+    if (rawMarker === undefined) continue;
+    const marker = Number.parseInt(rawMarker, 10);
+    if (!Number.isSafeInteger(marker) || marker < 1) continue;
+    if (supportedMarkers.has(marker)) {
+      citedMarkers.add(marker);
+    } else if (!seenUnsupported.has(marker)) {
+      seenUnsupported.add(marker);
+      unsupportedMarkers.push(marker);
+    }
+  }
+  return { citedMarkers, unsupportedMarkers };
+}
+
 // ─── Pack index for reconciliation ────────────────────────────────────────────
 
 export interface PackCitationIndex {
   // Every scopePath present as evidence in the pack(s) that reached the model.
   readonly scopePaths: ReadonlySet<string>;
-  // Per-path list of excerpt line windows, for optional line-range validation.
-  readonly lineWindowsByPath: ReadonlyMap<string, readonly LineRange[]>;
+  // Source identities carrying each path. More than one entry makes an unqualified marker
+  // ambiguous and therefore unsupported.
+  readonly sourceIdsByPath: ReadonlyMap<string, ReadonlySet<string>>;
+  // Line windows stay partitioned by source identity. They must never be joined across roots.
+  readonly lineWindowsBySourceId: ReadonlyMap<string, ReadonlyMap<string, readonly LineRange[]>>;
 }
 
-/** Build a citation-validation index from the evidence pack(s) that were sent to the model. */
+export function citationSourceIdForIndex(index: number): string {
+  return String(index + 1);
+}
+
+function indexPackEvidence(
+  pack: ConnectedContextPack,
+  sourceId: string,
+  scopePaths: Set<string>,
+  sourceIdsByPath: Map<string, Set<string>>,
+  lineWindowsByPath: Map<string, LineRange[]>,
+): void {
+  for (const file of pack.files) {
+    if (file.excerpts.length === 0) continue;
+    scopePaths.add(file.scopePath);
+    const sourceIds = sourceIdsByPath.get(file.scopePath) ?? new Set<string>();
+    sourceIds.add(sourceId);
+    sourceIdsByPath.set(file.scopePath, sourceIds);
+    const windows = lineWindowsByPath.get(file.scopePath) ?? [];
+    for (const excerpt of file.excerpts) {
+      if (excerpt.atom.lineRange !== undefined) windows.push(excerpt.atom.lineRange);
+    }
+    lineWindowsByPath.set(file.scopePath, windows);
+  }
+}
+
+/** Build a source-partitioned citation index from the packs that were sent to the model. */
 export function buildPackCitationIndex(packs: readonly ConnectedContextPack[]): PackCitationIndex {
   const scopePaths = new Set<string>();
-  const lineWindowsByPath = new Map<string, LineRange[]>();
-  for (const pack of packs) {
-    for (const file of pack.files) {
-      if (file.excerpts.length === 0) {
-        continue;
-      }
-      scopePaths.add(file.scopePath);
-      const windows = lineWindowsByPath.get(file.scopePath) ?? [];
-      for (const excerpt of file.excerpts) {
-        if (excerpt.atom.lineRange !== undefined) {
-          windows.push(excerpt.atom.lineRange);
-        }
-      }
-      lineWindowsByPath.set(file.scopePath, windows);
-    }
+  const sourceIdsByPath = new Map<string, Set<string>>();
+  const lineWindowsBySourceId = new Map<string, Map<string, LineRange[]>>();
+  for (const [index, pack] of packs.entries()) {
+    const sourceId = citationSourceIdForIndex(index);
+    const lineWindowsByPath = new Map<string, LineRange[]>();
+    indexPackEvidence(pack, sourceId, scopePaths, sourceIdsByPath, lineWindowsByPath);
+    lineWindowsBySourceId.set(sourceId, lineWindowsByPath);
   }
-  return { scopePaths, lineWindowsByPath };
+  return { scopePaths, sourceIdsByPath, lineWindowsBySourceId };
 }
 
 function lineRangeWithinWindows(range: LineRange, windows: readonly LineRange[]): boolean {
   if (windows.length === 0) {
-    // Path is in the pack but we have no line window to validate against — accept the path-level
-    // match rather than flag a false positive.
-    return true;
+    // The path itself is evidence, but no exact line location reached the model. Accepting an
+    // arbitrary model-supplied line here would turn an unverified location into a precise source.
+    return false;
   }
-  return windows.some((w) => range.startLine <= w.endLine && range.endLine >= w.startLine);
+  let nextLine = range.startLine;
+  const ordered = [...windows].sort(
+    (left, right) => left.startLine - right.startLine || left.endLine - right.endLine,
+  );
+  for (const window of ordered) {
+    if (window.endLine < nextLine) continue;
+    if (window.startLine > nextLine) return false;
+    if (window.endLine >= range.endLine) return true;
+    nextLine = window.endLine + 1;
+  }
+  return false;
+}
+
+function resolveCitationSourceId(
+  citation: ParsedInlineCitation,
+  sourceIdsByPath: ReadonlyMap<string, ReadonlySet<string>>,
+): string | undefined {
+  const sourceIds = sourceIdsByPath.get(citation.scopePath);
+  if (sourceIds === undefined || sourceIds.size === 0) return undefined;
+  if (citation.sourceId !== undefined) {
+    return sourceIds.has(citation.sourceId) ? citation.sourceId : undefined;
+  }
+  if (sourceIds.size !== 1) return undefined;
+  return sourceIds.values().next().value;
+}
+
+/** Resolve a marker only when source identity and requested precision are supported by evidence. */
+export function resolveSupportedCitationSourceId(
+  citation: ParsedInlineCitation,
+  index: PackCitationIndex,
+): string | undefined {
+  const sourceId = resolveCitationSourceId(citation, index.sourceIdsByPath);
+  if (sourceId === undefined) return undefined;
+  if (citation.lineRange === undefined) return sourceId;
+  const windows = index.lineWindowsBySourceId.get(sourceId)?.get(citation.scopePath) ?? [];
+  return lineRangeWithinWindows(citation.lineRange, windows) ? sourceId : undefined;
 }
 
 export interface CitationReconciliation {
-  // Inline references whose path is NOT in the evidence pack, or whose line range falls entirely
-  // outside every excerpt window for an in-pack path.
+  // Inline references whose path is NOT in the evidence pack, or whose line range is not fully
+  // contained by an excerpt window for an in-pack path.
   readonly unsupported: readonly ParsedInlineCitation[];
   // Distinct pack scopePaths the answer actually cited (used to distinguish "cited" from
   // "retrieved-but-not-cited" evidence).
@@ -190,8 +315,8 @@ export interface CitationReconciliation {
 /**
  * Reconcile an answer's inline citations against the evidence pack(s) sent to the model.
  * Path-level mismatches are the strong signal (the model named a file it never received). A cited
- * line range that is wholly outside every retrieved window for an otherwise-present path is also
- * flagged, but only when the path carries at least one window (so we never over-flag).
+ * line range is also flagged unless the retrieved windows fully cover it. Bare path citations stay
+ * valid for path-level evidence; only unsupported precision fails closed.
  */
 export function reconcileInlineCitations(
   answerText: string,
@@ -200,17 +325,7 @@ export function reconcileInlineCitations(
   const unsupported: ParsedInlineCitation[] = [];
   const citedScopePaths = new Set<string>();
   for (const citation of parseInlineCitations(answerText)) {
-    if (!index.scopePaths.has(citation.scopePath)) {
-      unsupported.push(citation);
-      continue;
-    }
-    if (
-      citation.lineRange !== undefined &&
-      !lineRangeWithinWindows(
-        citation.lineRange,
-        index.lineWindowsByPath.get(citation.scopePath) ?? [],
-      )
-    ) {
+    if (resolveSupportedCitationSourceId(citation, index) === undefined) {
       unsupported.push(citation);
       continue;
     }
@@ -241,6 +356,38 @@ export function unsupportedCitationMarker(
       `retrieved evidence: ${paths.join(", ")}. Treat ${
         paths.length === 1 ? "that claim" : "those claims"
       } as unverified.`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
+/** Build a body-free marker for hybrid `[n]` citations absent from selected evidence. */
+export function unsupportedNumericCitationMarker(
+  unsupportedMarkers: readonly number[],
+  nowMs: number,
+): UncertaintyMarker | undefined {
+  if (unsupportedMarkers.length === 0) return undefined;
+  const markers = [...new Set(unsupportedMarkers)]
+    .slice(0, 8)
+    .map((marker) => `[${String(marker)}]`);
+  return {
+    kind: "unsupported-citation",
+    claim:
+      `The answer cited ${markers.length === 1 ? "an evidence marker" : "evidence markers"} ` +
+      `not present in the retrieved evidence: ${markers.join(", ")}. Treat the affected ` +
+      "claims as unverified.",
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
+/** Body-free warning for a source-backed answer that contains no supported citation at all. */
+export function missingCitationMarker(nowMs: number): UncertaintyMarker {
+  return {
+    kind: "unsupported-citation",
+    claim:
+      "The answer used retrieved evidence without a supported inline citation. Treat its " +
+      "source-backed claims as unverified.",
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -537,11 +684,27 @@ interface ExcerptTextEntry {
 }
 
 function excerptMatchesCitation(entry: ExcerptTextEntry, cited: LineRange | undefined): boolean {
-  if (cited === undefined || entry.lineRange === undefined) {
-    // A bare citation (or a window-less excerpt) matches at the path level.
-    return true;
-  }
+  if (cited === undefined) return true;
+  if (entry.lineRange === undefined) return false;
   return cited.startLine <= entry.lineRange.endLine && cited.endLine >= entry.lineRange.startLine;
+}
+
+function excerptEntriesBySource(
+  packs: readonly ConnectedContextPack[],
+): ReadonlyMap<string, ReadonlyMap<string, readonly ExcerptTextEntry[]>> {
+  const bySource = new Map<string, Map<string, ExcerptTextEntry[]>>();
+  for (const [index, pack] of packs.entries()) {
+    const byPath = new Map<string, ExcerptTextEntry[]>();
+    for (const file of pack.files) {
+      const entries = file.excerpts.map((excerpt) => ({
+        lineRange: excerpt.atom.lineRange,
+        content: excerpt.content,
+      }));
+      if (entries.length > 0) byPath.set(file.scopePath, entries);
+    }
+    bySource.set(citationSourceIdForIndex(index), byPath);
+  }
+  return bySource;
 }
 
 /**
@@ -553,24 +716,17 @@ function excerptMatchesCitation(entry: ExcerptTextEntry, cited: LineRange | unde
 export function buildPackExcerptTextResolver(
   packs: readonly ConnectedContextPack[],
 ): ExcerptTextResolver {
-  const byPath = new Map<string, ExcerptTextEntry[]>();
-  for (const pack of packs) {
-    for (const file of pack.files) {
-      for (const excerpt of file.excerpts) {
-        const entries = byPath.get(file.scopePath) ?? [];
-        entries.push({ lineRange: excerpt.atom.lineRange, content: excerpt.content });
-        byPath.set(file.scopePath, entries);
-      }
-    }
-  }
+  const citationIndex = buildPackCitationIndex(packs);
+  const bySource = excerptEntriesBySource(packs);
   return (citation: ParsedInlineCitation): string | undefined => {
-    const entries = byPath.get(citation.scopePath);
+    const sourceId = resolveCitationSourceId(citation, citationIndex.sourceIdsByPath);
+    if (sourceId === undefined) return undefined;
+    const entries = bySource.get(sourceId)?.get(citation.scopePath);
     if (entries === undefined || entries.length === 0) {
       return undefined;
     }
     const matching = entries.filter((entry) => excerptMatchesCitation(entry, citation.lineRange));
-    const chosen = matching.length > 0 ? matching : entries;
-    const text = chosen
+    const text = matching
       .map((entry) => entry.content)
       .join("\n\n")
       .trim();

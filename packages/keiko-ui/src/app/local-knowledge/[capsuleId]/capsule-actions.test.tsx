@@ -317,6 +317,114 @@ describe("CapsuleActions — connect source", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Connect source — repository mode (Epic #2556 Target Outcome 2)
+// ---------------------------------------------------------------------------
+
+describe("CapsuleActions — connect source as a repository", () => {
+  it("connects a repository scope when repository mode is enabled", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    const onActionComplete = vi.fn();
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl, onActionComplete })} />);
+
+    await user.type(screen.getByLabelText(/source path/i), "/repo/keiko");
+    await user.click(screen.getByRole("checkbox", { name: /connect as a code repository/i }));
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
+        kind: "repository",
+        repositoryRoot: "/repo/keiko",
+      });
+    });
+    expect(onActionComplete).toHaveBeenCalledOnce();
+  });
+
+  it("shows a repository summary instead of the folder/document summary", async () => {
+    const user = userEvent.setup();
+    render(<CapsuleActions {...defaultProps()} />);
+
+    await user.type(screen.getByLabelText(/source path/i), "/repo/keiko");
+    expect(screen.getByText("Selected source: /repo/keiko")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: /connect as a code repository/i }));
+    expect(screen.getByText("Selected repository: /repo/keiko")).toBeInTheDocument();
+    expect(screen.queryByText("Selected source: /repo/keiko")).toBeNull();
+  });
+
+  it("disables specific-file selection while repository mode is enabled", async () => {
+    const user = userEvent.setup();
+    render(<CapsuleActions {...defaultProps()} />);
+
+    const nativeDocumentsButton = screen.getByRole("button", { name: /^select documents$/i });
+    await waitFor(() => expect(nativeDocumentsButton).not.toBeDisabled());
+
+    await user.click(screen.getByRole("checkbox", { name: /connect as a code repository/i }));
+
+    expect(nativeDocumentsButton).toBeDisabled();
+    const specificFilesSummary = screen
+      .getByText("Index only specific documents")
+      .closest("summary");
+    expect(specificFilesSummary).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByText(
+        "Specific-file selection is unavailable in repository mode. The whole repository is connected as one code source.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("clears a pending specific-file selection when repository mode is enabled", async () => {
+    const user = userEvent.setup();
+    render(<CapsuleActions {...defaultProps()} />);
+
+    await user.click(screen.getByText("Index only specific documents"));
+    const filesTextarea = screen.getByLabelText(/relative document paths/i);
+    await user.type(filesTextarea, "src/app.ts");
+    expect(filesTextarea).toHaveValue("src/app.ts");
+
+    await user.click(screen.getByRole("checkbox", { name: /connect as a code repository/i }));
+
+    // The disclosure stays in the DOM (so a `details` re-open never needs to remount it) but is
+    // collapsed, disabled, and cleared -- it no longer contributes to the connected scope.
+    expect(filesTextarea).toHaveValue("");
+    expect(filesTextarea).toBeDisabled();
+    expect(filesTextarea).not.toBeVisible();
+  });
+
+  it("connects the ordinary folder scope, byte-identical, when repository mode stays off", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
+
+    expect(
+      screen.getByRole("checkbox", { name: /connect as a code repository/i }),
+    ).not.toBeChecked();
+
+    await user.type(screen.getByLabelText(/source path/i), "/docs/manuals");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
+        kind: "folder",
+        rootPath: "/docs/manuals",
+        recursive: true,
+      });
+    });
+  });
+
+  it("jest-axe: connect form with repository mode enabled has no violations", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<CapsuleActions {...defaultProps()} />);
+
+    await user.type(screen.getByLabelText(/source path/i), "/repo/keiko");
+    await user.click(screen.getByRole("checkbox", { name: /connect as a code repository/i }));
+
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Modal open / close
 // ---------------------------------------------------------------------------
 

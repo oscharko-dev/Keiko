@@ -4,7 +4,6 @@
 // All path validation runs in the composed layers; this module only validates wire-shape
 // inputs (chatId + content) and enforces that the chat carries a connected scope.
 
-import type { IncomingMessage } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { basename } from "node:path";
@@ -43,8 +42,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   buildGroundedAnswerContextPackSummary,
+  MAX_DESKTOP_CHAT_INPUT_BYTES,
+  MAX_DESKTOP_CHAT_INPUT_CHARS,
+  type ConversationMemoryResultWire,
   type GroundedAnswer,
-  type GroundedCitationDocumentFormat,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -78,7 +79,7 @@ import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
-import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
+import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { pathIsDenied } from "./files-deny.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
@@ -97,45 +98,59 @@ import {
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
-import { rememberGroundedTurn } from "./grounded-turn-registry.js";
+import {
+  commitGroundedTurn,
+  discardGroundedTurn,
+  rememberGroundedTurn,
+  stageGroundedTurn,
+  type GroundedTurnRecord,
+} from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
+import {
+  buildCanonicalTurnMemoryResult,
+  buildMemoryResult,
+  chatClosedResult,
+  parseClientTurnId,
+  parseExpectedGroundingScopeIdentity,
+  parseMemoryRequest,
+  runPostCommitCanonicalTurnMemorySideEffects,
+  type CanonicalTurnMemoryRequest,
+  type ParsedConversationMemoryRequest,
+} from "./chat-handlers.js";
+import {
+  canonicalChatTurnGroundingScopeIdentity,
+  canonicalChatTurnIdentityContent,
+  canonicalChatTurnMemorySemantics,
+} from "./chat-turn-identity.js";
+import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
+import { createRequestCancellation } from "./request-cancellation.js";
+import {
+  readBoundedRequestBody,
+  RequestBodyCancelledError,
+  RequestBodyTooLargeError,
+} from "./bounded-request-body.js";
+import {
+  resolveConversationMemoryContext,
+  type ConversationMemoryRuntimeContext,
+} from "./memory-conversation-context.js";
+import { renderConversationMemoryContextBlock } from "./conversation-prompt.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
+import {
+  buildAnswerCitations as projectAnswerCitations,
+  buildPackCitations,
+  documentFormatForAtom,
+} from "./grounded-citation-projection.js";
+import { persistGroundedExchange } from "./grounded-message-persistence.js";
+import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
+
+export { persistGroundedExchange } from "./grounded-message-persistence.js";
 
 // ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
 
-const MAX_BODY_BYTES = 128_000;
-const MAX_CONTENT_CHARS = 16_000;
-
-class BodyTooLargeError extends Error {
-  public constructor() {
-    super("body too large");
-    this.name = "BodyTooLargeError";
-  }
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let capped = false;
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
-        if (!capped) {
-          capped = true;
-          chunks.length = 0;
-          reject(new BodyTooLargeError());
-          req.resume();
-        }
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-  });
-}
+// Keep the grounded and plain canonical-chat admission envelope identical. JSON escaping can
+// expand a valid 256 kB transcript by up to six bytes per code unit; the content itself remains
+// authoritatively bounded by UTF-8 bytes in parseBody.
+const MAX_BODY_BYTES = 2_000_000;
 
 export function badRequest(message: string): RouteResult {
   return { status: 400, body: errorBody("BAD_REQUEST", message) };
@@ -202,7 +217,11 @@ export function isValidGroundedPack(pack: ConnectedContextPack): boolean {
 export interface AskInput {
   readonly chatId: string;
   readonly content: string;
+  readonly clientTurnId?: string | undefined;
+  readonly expectedGroundingScopeIdentity?: string | undefined;
+  readonly answerContent?: string | undefined;
   readonly modelId: string | undefined;
+  readonly memory?: ParsedConversationMemoryRequest | undefined;
 }
 
 type ParseResult<T> =
@@ -222,34 +241,74 @@ function parseJsonObject(raw: string): ParseResult<Record<string, unknown>> {
   return { kind: "ok", value: parsed as Record<string, unknown> };
 }
 
+function parseOptionalModelId(obj: Record<string, unknown>): ParseResult<string | undefined> {
+  if (!("modelId" in obj)) return { kind: "ok", value: undefined };
+  if (typeof obj.modelId !== "string" || obj.modelId.trim().length === 0) {
+    return {
+      kind: "err",
+      result: badRequest('Field "modelId" must be a non-empty string when provided.'),
+    };
+  }
+  return { kind: "ok", value: obj.modelId.trim() };
+}
+
+function parseGroundedExtras(
+  obj: Record<string, unknown>,
+): ParseResult<Pick<AskInput, "clientTurnId" | "expectedGroundingScopeIdentity" | "memory">> {
+  const memory = parseMemoryRequest(obj.memory);
+  if (isRouteResult(memory)) return { kind: "err", result: memory };
+  const clientTurnId = parseClientTurnId(obj.clientTurnId);
+  if (isRouteResult(clientTurnId)) return { kind: "err", result: clientTurnId };
+  const expectedGroundingScopeIdentity = parseExpectedGroundingScopeIdentity(
+    obj.expectedGroundingScopeIdentity,
+  );
+  if (isRouteResult(expectedGroundingScopeIdentity)) {
+    return { kind: "err", result: expectedGroundingScopeIdentity };
+  }
+  return {
+    kind: "ok",
+    value: {
+      ...(memory === undefined ? {} : { memory }),
+      ...(clientTurnId === undefined ? {} : { clientTurnId }),
+      ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
+    },
+  };
+}
+
 function parseBody(raw: string): ParseResult<AskInput> {
   const objResult = parseJsonObject(raw);
   if (objResult.kind === "err") return objResult;
   const obj = objResult.value;
   const chatId = typeof obj.chatId === "string" ? obj.chatId : "";
   const content = typeof obj.content === "string" ? obj.content.trim() : "";
-  let modelId: string | undefined;
-  if ("modelId" in obj) {
-    if (typeof obj.modelId !== "string" || obj.modelId.trim().length === 0) {
-      return {
-        kind: "err",
-        result: badRequest('Field "modelId" must be a non-empty string when provided.'),
-      };
-    }
-    modelId = obj.modelId.trim();
-  }
+  const modelIdResult = parseOptionalModelId(obj);
+  if (modelIdResult.kind === "err") return modelIdResult;
   if (chatId.length === 0) {
     return { kind: "err", result: badRequest('Field "chatId" is required.') };
   }
-  if (content.length === 0 || content.length > MAX_CONTENT_CHARS) {
+  if (
+    content.length === 0 ||
+    content.length > MAX_DESKTOP_CHAT_INPUT_CHARS ||
+    Buffer.byteLength(content, "utf8") > MAX_DESKTOP_CHAT_INPUT_BYTES
+  ) {
     return {
       kind: "err",
       result: badRequest(
-        `Field "content" must be between 1 and ${String(MAX_CONTENT_CHARS)} characters.`,
+        `Field "content" must be between 1 and ${String(MAX_DESKTOP_CHAT_INPUT_BYTES)} UTF-8 bytes.`,
       ),
     };
   }
-  return { kind: "ok", value: { chatId, content, modelId } };
+  const extras = parseGroundedExtras(obj);
+  if (extras.kind === "err") return extras;
+  return {
+    kind: "ok",
+    value: {
+      chatId,
+      content,
+      modelId: modelIdResult.value,
+      ...extras.value,
+    },
+  };
 }
 
 // ─── Scope / query construction ───────────────────────────────────────────────
@@ -406,21 +465,6 @@ function resolveGroundedModelId(
     };
   }
   return modelId;
-}
-
-function requestAbortSignal(ctx: RouteContext): AbortSignal {
-  const controller = new AbortController();
-  const abort = (): void => {
-    if (!controller.signal.aborted) {
-      controller.abort("grounded request cancelled");
-    }
-  };
-  // The req "aborted" event is deprecated since Node 17 and fires unreliably.
-  // The res "close" event is the canonical signal for a disconnected client.
-  ctx.res.on("close", () => {
-    if (!ctx.res.writableEnded) abort();
-  });
-  return controller.signal;
 }
 
 export function ensureNotCancelled(signal: AbortSignal): void {
@@ -700,27 +744,6 @@ export function packBudgetSummary(pack: ConnectedContextPack): string {
   ].join("; ");
 }
 
-// Bounded document extraction (Issue #1285): a citation derived from a `document-extract` atom
-// refers to a connected DOCX/XLSX/PDF rather than a code/text file. The format token is derived
-// from the (already-redacted) scopePath suffix so prompt framing and browser citations can label
-// document evidence distinctly without re-deriving it in the UI.
-function documentFormatForAtom(atom: EvidenceAtom): GroundedCitationDocumentFormat | undefined {
-  if (atom.provenance.kind !== "document-extract") {
-    return undefined;
-  }
-  const path = atom.scopePath.toLowerCase();
-  if (path.endsWith(".docx")) {
-    return "docx";
-  }
-  if (path.endsWith(".xlsx")) {
-    return "xlsx";
-  }
-  if (path.endsWith(".pdf")) {
-    return "pdf";
-  }
-  return undefined;
-}
-
 export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): readonly string[] {
   const lines: string[] = [];
   for (const file of pack.files) {
@@ -874,7 +897,11 @@ function defaultRunner(
         ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
         : input;
     const contextPackReranker = configuredContextPackRerankerFor(deps, budgetedInput.query, signal);
-    const repoSemanticSearchProvider = configuredRepoSemanticSearchProviderFor(deps, signal);
+    const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
+      deps,
+      signal,
+      budgetedInput.workspaceRoot,
+    );
     return runGroundedExploration(budgetedInput, {
       answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal, modelInputTokensMax),
       nowMs,
@@ -882,12 +909,16 @@ function defaultRunner(
       microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
       workspaceIndexForRoot: deps.workspaceIndexForRoot,
       ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
-      ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
+      ...(semanticLease.provider === undefined
+        ? {}
+        : { repoSemanticSearchProvider: semanticLease.provider }),
       ...(entailmentStage === undefined ? {} : { entailmentStage }),
       // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
       // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
       // the legacy no-profile path stays byte-identical (observer guard never sees a key).
       ...(contextProfile === undefined ? {} : { contextProfile }),
+    }).finally(() => {
+      semanticLease.close();
     });
   };
 }
@@ -903,21 +934,15 @@ export function buildCitations(
   pack: ConnectedContextPack,
   redactor: Redactor,
 ): readonly GroundedEvidenceCitation[] {
-  const citations: GroundedEvidenceCitation[] = [];
-  for (const file of pack.files) {
-    for (const excerpt of file.excerpts) {
-      const documentFormat = documentFormatForAtom(excerpt.atom);
-      citations.push({
-        scopePath: redactString(redactor, excerpt.atom.scopePath),
-        lineRange: excerpt.atom.lineRange,
-        score: excerpt.atom.score,
-        stableId: redactString(redactor, excerpt.atom.stableId),
-        ...(documentFormat === undefined ? {} : { documentFormat }),
-      });
-    }
-  }
-  citations.sort((a, b) => b.score - a.score);
-  return citations;
+  return buildPackCitations(pack, (value) => redactString(redactor, value));
+}
+
+export function buildAnswerCitations(
+  pack: ConnectedContextPack,
+  answerContent: string,
+  redactor: Redactor,
+): readonly GroundedEvidenceCitation[] {
+  return projectAnswerCitations(pack, answerContent, (value) => redactString(redactor, value));
 }
 
 export function buildUncertainty(
@@ -983,6 +1008,11 @@ interface AskWorkerCtx {
   readonly chat: Chat;
   readonly scope: SelectedScope;
   readonly content: string;
+  readonly answerContent: string;
+  readonly answerOnlyContextAvailable: boolean;
+  readonly clientTurnId?: string | undefined;
+  readonly commitTurnId: string;
+  readonly userMessage: ChatMessage;
   readonly modelId: string;
   readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
@@ -994,34 +1024,96 @@ interface PreparedGroundedAsk {
   readonly chat: Chat;
   readonly input: AskInput;
   readonly signal: AbortSignal;
+  readonly commitTurnId?: string | undefined;
+  readonly scopeIdentity?: string | undefined;
+  readonly turnIdentityContent?: string | undefined;
+  readonly memoryContext?: ConversationMemoryRuntimeContext | undefined;
+  readonly userMessage?: ChatMessage | undefined;
+  readonly memory?: GroundedMemoryPreparation | undefined;
 }
 
-// Atomic insert via the existing createMessages batch (wraps BEGIN/COMMIT) so a transient
-// failure on the assistant insert rolls back the user insert. Returns both rows.
-export function persistGroundedExchange(
-  deps: UiHandlerDeps,
-  chatId: string,
-  userContent: string,
-  assistantContent: string,
-): readonly [ChatMessage, ChatMessage] {
-  const now = Date.now();
-  const base = {
-    chatId,
-    timestamp: now,
-    runId: undefined,
-    workflowId: undefined,
-    workflowStatus: undefined,
-    shortResult: undefined,
-    taskType: undefined,
-  } as const;
-  const [user, assistant] = deps.store.createMessages([
-    { ...base, role: "user", content: userContent },
-    { ...base, role: "assistant", content: assistantContent },
-  ]);
-  if (user === undefined || assistant === undefined) {
-    throw new Error("createMessages returned fewer rows than expected");
+interface GroundedMemoryPreparation {
+  readonly context: ConversationMemoryRuntimeContext;
+  readonly result: ConversationMemoryResultWire;
+  readonly answerOnlyContextAvailable: boolean;
+}
+
+function hasAnswerOnlyContext(prepared: PreparedGroundedAsk): boolean {
+  return prepared.memory?.answerOnlyContextAvailable === true;
+}
+
+function admittedGroundedUser(prepared: PreparedGroundedAsk): ChatMessage {
+  if (prepared.userMessage === undefined) {
+    throw new Error("grounded ask was dispatched before its user turn was admitted");
   }
-  return [user, assistant];
+  return prepared.userMessage;
+}
+
+function groundedCommitTurnId(prepared: PreparedGroundedAsk): string {
+  if (prepared.commitTurnId === undefined) {
+    throw new Error("grounded ask was dispatched before its turn commit was admitted");
+  }
+  return prepared.commitTurnId;
+}
+
+function groundedTurnIdentityContent(
+  input: AskInput,
+  scopeIdentity: string,
+  memoryContext: ConversationMemoryRuntimeContext | undefined,
+): string {
+  if (input.modelId === undefined) {
+    throw new Error("Grounded turn identity requires a frozen model.");
+  }
+  return canonicalChatTurnIdentityContent({
+    routeKind: "grounded",
+    content: input.content,
+    modelId: input.modelId,
+    groundingScopeIdentity: input.expectedGroundingScopeIdentity ?? scopeIdentity,
+    memory: canonicalChatTurnMemorySemantics(input.memory, memoryContext),
+  });
+}
+
+function frozenGroundedTurnIdentity(prepared: PreparedGroundedAsk): string {
+  if (prepared.turnIdentityContent === undefined) {
+    throw new Error("Grounded turn identity was not frozen before admission.");
+  }
+  return prepared.turnIdentityContent;
+}
+
+function freezeGroundedTurn(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): PreparedGroundedAsk | RouteResult {
+  const scopeIdentity = deriveChatGroundingScopeIdentity(prepared.chat);
+  const input: AskInput = {
+    ...prepared.input,
+    modelId: prepared.input.modelId ?? prepared.chat.selectedModel,
+  };
+  const memoryContext =
+    input.memory === undefined
+      ? undefined
+      : resolveConversationMemoryContext(deps, prepared.chat.projectPath, prepared.chat.id);
+  if (isRouteResult(memoryContext)) return memoryContext;
+  return {
+    ...prepared,
+    input,
+    scopeIdentity,
+    memoryContext,
+    turnIdentityContent: groundedTurnIdentityContent(
+      input,
+      canonicalChatTurnGroundingScopeIdentity(prepared.chat),
+      memoryContext,
+    ),
+  };
+}
+
+function groundedScopeStillCurrent(prepared: PreparedGroundedAsk, deps: UiHandlerDeps): boolean {
+  const current = deps.store.findChatById(prepared.chat.id);
+  return (
+    current !== undefined &&
+    prepared.scopeIdentity !== undefined &&
+    deriveChatGroundingScopeIdentity(current) === prepared.scopeIdentity
+  );
 }
 
 // ADR-0056 W3: regulated EvidenceManifest.contextAssembly? producer for the grounded persist
@@ -1059,6 +1151,37 @@ export function groundedContextSummaryInput(
   return deriveGroundedContextAssembly(pack, profile);
 }
 
+export function groundedEvidenceRunId(input: {
+  readonly chatId: string;
+  readonly clientTurnId?: string | undefined;
+  readonly workspaceRoot: string;
+  readonly sourceKind: "folder";
+  readonly ordinal: number;
+}): string {
+  if (input.clientTurnId === undefined) return `grounded-${randomUUID()}`;
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([
+        "canonical-grounded-evidence-v1",
+        input.chatId,
+        input.clientTurnId,
+        input.sourceKind,
+        input.workspaceRoot,
+        input.ordinal,
+      ]),
+    )
+    .digest("hex");
+  return `grounded-${digest}`;
+}
+
+export function registerGroundedTurn(record: GroundedTurnRecord, clientTurnId?: string): void {
+  if (clientTurnId === undefined) {
+    rememberGroundedTurn(record);
+  } else {
+    stageGroundedTurn(record);
+  }
+}
+
 function persistGroundedAuditEvidence(
   workerCtx: AskWorkerCtx,
   output: OrchestratorOutput,
@@ -1066,7 +1189,13 @@ function persistGroundedAuditEvidence(
 ): string {
   const finishedAt = Date.now();
   const startedAt = Math.max(0, finishedAt - output.elapsedMs);
-  const runId = `grounded-${randomUUID()}`;
+  const runId = groundedEvidenceRunId({
+    chatId: workerCtx.chat.id,
+    clientTurnId: workerCtx.clientTurnId,
+    workspaceRoot: workerCtx.scope.workspaceRoot,
+    sourceKind: "folder",
+    ordinal: 0,
+  });
   persistConnectedContextEvidence(
     {
       runId,
@@ -1110,6 +1239,24 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   return finalizeGroundedAnswer(workerCtx, output);
 }
 
+function registerSingleGroundedTurn(
+  workerCtx: AskWorkerCtx,
+  output: OrchestratorOutput,
+  assistantMessageId: string,
+  evidenceRunId: string | undefined,
+): void {
+  registerGroundedTurn(
+    {
+      assistantMessageId,
+      chatId: workerCtx.chat.id,
+      workspaceRoot: output.pack.scope.workspaceRoot,
+      ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
+      packs: [output.pack],
+    },
+    workerCtx.commitTurnId,
+  );
+}
+
 // Persists the exchange, projects citations/uncertainty, and assembles the wire answer for a
 // single-source folder ask. Split out of runAsk to keep both under the LOC bound.
 function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOutput): RouteResult {
@@ -1120,7 +1267,9 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
   // was never called. Suppress citations and do NOT persist grounded evidence or a grounded memory
   // turn — there is nothing to ground, so no grounded-evidence manifest may be written.
   const abstained = output.noEvidence === true;
-  const citations = abstained ? [] : buildCitations(output.pack, deps.redactor);
+  const citations = abstained
+    ? []
+    : buildAnswerCitations(output.pack, output.assistantContent, deps.redactor);
   const evidenceRunId = abstained
     ? undefined
     : persistGroundedAuditEvidence(workerCtx, output, citations.length);
@@ -1129,6 +1278,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     chat.id,
     userContent,
     assistantContent,
+    workerCtx.userMessage,
   );
   const contextPack = buildGroundedAnswerContextPackSummary(
     output.pack,
@@ -1150,13 +1300,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
   };
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (!abstained) {
-    rememberGroundedTurn({
-      assistantMessageId: assistantMessage.id,
-      chatId: chat.id,
-      workspaceRoot: output.pack.scope.workspaceRoot,
-      ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
-      packs: [output.pack],
-    });
+    registerSingleGroundedTurn(workerCtx, output, assistantMessage.id, evidenceRunId);
   }
   return { status: 200, body: answer };
 }
@@ -1183,13 +1327,19 @@ async function runGroundedRunner(
   workerCtx: AskWorkerCtx,
   query: RetrievalQuery,
 ): Promise<OrchestratorOutput | RouteResult> {
-  const { scope, runner } = workerCtx;
+  const { answerContent, scope, runner } = workerCtx;
   try {
     ensureNotCancelled(workerCtx.signal);
     // Epic #532 — ground against the scope's own root (a folder that may live outside the chat's
     // project), not the chat projectPath. buildSelectedScope set scope.workspaceRoot = cs.root ??
     // chat.projectPath, so a connected external folder resolves correctly.
-    const output = await runner({ scope, query, workspaceRoot: scope.workspaceRoot });
+    const output = await runner({
+      scope,
+      query,
+      answerQuestion: answerContent,
+      answerOnlyContextAvailable: workerCtx.answerOnlyContextAvailable,
+      workspaceRoot: scope.workspaceRoot,
+    });
     ensureNotCancelled(workerCtx.signal);
     return output;
   } catch (error) {
@@ -1207,15 +1357,17 @@ async function runGroundedRunner(
 async function prepareGroundedAsk(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  signal: AbortSignal,
 ): Promise<PreparedGroundedAsk | RouteResult> {
-  const signal = requestAbortSignal(ctx);
   let raw: string;
   try {
-    raw = await readBody(ctx.req);
+    raw = await readBoundedRequestBody(ctx.req, MAX_BODY_BYTES, signal);
   } catch (error) {
-    if (error instanceof BodyTooLargeError) return payloadTooLarge();
+    if (error instanceof RequestBodyTooLargeError) return payloadTooLarge();
+    if (error instanceof RequestBodyCancelledError) return groundedCancelledResult();
     throw error;
   }
+  if (signal.aborted) return groundedCancelledResult();
   const parsed = parseBody(raw);
   if (parsed.kind === "err") return parsed.result;
   const chat = findChatById(deps, parsed.value.chatId);
@@ -1300,6 +1452,11 @@ async function dispatchMultiSourceAsk(
     chat,
     scopes,
     content: input.content,
+    answerContent: input.answerContent ?? input.content,
+    answerOnlyContextAvailable: hasAnswerOnlyContext(args),
+    ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
+    commitTurnId: groundedCommitTurnId(args),
+    userMessage: admittedGroundedUser(args),
     modelId,
     contextProfile: currentContextProfileForModel(deps, modelId),
     deps,
@@ -1380,6 +1537,11 @@ async function dispatchFolderAsk(
     chat,
     scope,
     content: input.content,
+    answerContent: input.answerContent ?? input.content,
+    answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
+    ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
+    commitTurnId: groundedCommitTurnId(prepared),
+    userMessage: admittedGroundedUser(prepared),
     modelId: resolved.modelId,
     contextProfile: resolved.contextProfile,
     deps,
@@ -1428,6 +1590,10 @@ async function dispatchHybridAsk(
   return runHybridGroundedAsk({
     chat,
     content: input.content,
+    answerContent: input.answerContent ?? input.content,
+    answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
+    ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
+    userMessage: admittedGroundedUser(prepared),
     modelId,
     contextProfile: currentContextProfileForModel(deps, modelId),
     deps,
@@ -1482,9 +1648,322 @@ async function dispatchPreparedGroundedAsk(
     );
   }
   if (effectiveFolders === 0 && connectorCount === 1) {
-    return handleLocalKnowledgeGroundedAsk(chat, prepared.input, deps, prepared.signal);
+    return handleLocalKnowledgeGroundedAsk(
+      chat,
+      {
+        ...prepared.input,
+        answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
+        userMessage: admittedGroundedUser(prepared),
+      },
+      deps,
+      prepared.signal,
+    );
   }
   return dispatchHybridAsk(preparedWithCanonicalFolders, deps, skippedFolders, hybrid);
+}
+
+function admitGroundedUser(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): PreparedGroundedAsk | RouteResult {
+  if (prepared.userMessage !== undefined) return prepared;
+  const newUserMessage = {
+    chatId: prepared.chat.id,
+    role: "user",
+    content: redactString(deps.redactor, prepared.input.content),
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  } as const;
+  const commitTurnId = prepared.input.clientTurnId ?? randomUUID();
+  const admission = deps.store.admitChatTurn(commitTurnId, newUserMessage, {
+    identityContent: frozenGroundedTurnIdentity(prepared),
+  });
+  if (admission.kind === "admitted") {
+    return { ...prepared, commitTurnId, userMessage: admission.userMessage };
+  }
+  if (admission.kind === "replay") {
+    return admission.assistantMessage.groundedAnswer === undefined
+      ? groundedTurnConflict("CHAT_TURN_IDEMPOTENCY_CONFLICT")
+      : { status: 200, body: admission.assistantMessage.groundedAnswer };
+  }
+  return groundedTurnConflict(
+    admission.kind === "in-progress" ? "CHAT_TURN_IN_PROGRESS" : "CHAT_TURN_IDEMPOTENCY_CONFLICT",
+  );
+}
+
+function groundedTurnConflict(
+  code: "CHAT_TURN_IDEMPOTENCY_CONFLICT" | "CHAT_TURN_IN_PROGRESS",
+): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      code,
+      code === "CHAT_TURN_IN_PROGRESS"
+        ? "The canonical chat turn is still in progress."
+        : "The canonical chat turn identity conflicts with this request.",
+    ),
+  };
+}
+
+function groundedAnswerContent(content: string, memory: ConversationMemoryResultWire): string {
+  const memoryText = memory.context.text.trim();
+  if (!memory.context.enabled || memoryText.length === 0) return content;
+  return ["User question:", content, "", renderConversationMemoryContextBlock(memoryText)].join(
+    "\n",
+  );
+}
+
+function groundedMemoryPreparationFailure(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  errorClass: string,
+): PreparedGroundedAsk | RouteResult {
+  recordGroundedMemoryFailure(deps, prepared.chat.id, errorClass);
+  return prepared;
+}
+
+function withPreparedGroundedMemory(
+  prepared: PreparedGroundedAsk,
+  context: ConversationMemoryRuntimeContext,
+  result: ConversationMemoryResultWire,
+): PreparedGroundedAsk {
+  return {
+    ...prepared,
+    input: {
+      ...prepared.input,
+      answerContent: groundedAnswerContent(prepared.input.content, result),
+    },
+    memory: {
+      context,
+      result,
+      answerOnlyContextAvailable:
+        result.context.enabled &&
+        result.context.memories.length > 0 &&
+        result.context.text.trim().length > 0,
+    },
+  };
+}
+
+async function prepareGroundedMemory(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): Promise<PreparedGroundedAsk | RouteResult> {
+  const memoryRequest = prepared.input.memory;
+  if (memoryRequest === undefined) return prepared;
+  const context = prepared.memoryContext;
+  if (context === undefined) {
+    return groundedMemoryPreparationFailure(prepared, deps, "GroundedMemoryContextUnavailable");
+  }
+  try {
+    const result = await buildMemoryResult(
+      {
+        chatId: prepared.chat.id,
+        projectPath: prepared.chat.projectPath,
+        content: prepared.input.content,
+        modelId: prepared.input.modelId,
+        documentContext: [],
+        attachments: [],
+        memory: memoryRequest,
+        discussionMode: undefined,
+      },
+      deps,
+      context,
+    );
+    return withPreparedGroundedMemory(prepared, context, result);
+  } catch (error) {
+    return groundedMemoryPreparationFailure(prepared, deps, contentFreeErrorClass(error));
+  }
+}
+
+function admittedGroundingScopeFailure(
+  admitted: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): RouteResult | undefined {
+  const expectedIdentity = admitted.input.expectedGroundingScopeIdentity;
+  if (
+    expectedIdentity !== undefined &&
+    expectedIdentity !== deriveChatGroundingScopeIdentity(admitted.chat)
+  ) {
+    return settleGroundedChatTurn(admitted, deps, {
+      status: 409,
+      body: errorBody(
+        "GROUNDING_SCOPE_CHANGED",
+        "The grounded source scope changed before the turn could run.",
+      ),
+    });
+  }
+  if (
+    expectedIdentity === undefined ||
+    buildConnectedScopes(admitted.chat).length > 0 ||
+    buildLocalKnowledgeScopes(admitted.chat).length > 0
+  ) {
+    return undefined;
+  }
+  return settleGroundedChatTurn(admitted, deps, {
+    status: 409,
+    body: errorBody(
+      "GROUNDING_SCOPE_CHANGED",
+      "The chat grounding mode changed before the turn could run.",
+    ),
+  });
+}
+
+async function runAdmittedGroundedAsk(
+  admitted: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  runner?: GroundedRunner,
+  multiSource?: MultiSourceSeam,
+  hybrid?: HybridSeam,
+): Promise<RouteResult> {
+  let stagedAssistantId: string | undefined;
+  try {
+    const memoryPrepared = await prepareGroundedMemory(admitted, deps);
+    ensureNotCancelled(admitted.signal);
+    if (isRouteResult(memoryPrepared)) {
+      return settleGroundedChatTurn(admitted, deps, memoryPrepared);
+    }
+    const result = await dispatchPreparedGroundedAsk(
+      memoryPrepared,
+      deps,
+      runner,
+      multiSource,
+      hybrid,
+    );
+    if (result.status === 200 && groundedAnswerBody(result.body)) {
+      stagedAssistantId = result.body.assistantMessageId;
+    }
+    ensureNotCancelled(memoryPrepared.signal);
+    const withMemory = await attachGroundedMemory(memoryPrepared, deps, result);
+    ensureNotCancelled(memoryPrepared.signal);
+    return settleGroundedChatTurn(memoryPrepared, deps, withMemory);
+  } catch (error) {
+    if (stagedAssistantId !== undefined) discardGroundedTurn(stagedAssistantId);
+    deps.store.failChatTurn(admitted.chat.id, groundedCommitTurnId(admitted));
+    if (admitted.signal.aborted) return groundedCancelledResult();
+    throw error;
+  }
+}
+
+async function executeGroundedAskInTurn(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  runner?: GroundedRunner,
+  multiSource?: MultiSourceSeam,
+  hybrid?: HybridSeam,
+): Promise<RouteResult> {
+  const admitted = admitGroundedUser(prepared, deps);
+  if (isRouteResult(admitted)) return admitted;
+  const scopeFailure = admittedGroundingScopeFailure(admitted, deps);
+  return scopeFailure ?? runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);
+}
+
+async function executeGroundedAsk(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  runner?: GroundedRunner,
+  multiSource?: MultiSourceSeam,
+  hybrid?: HybridSeam,
+): Promise<RouteResult> {
+  const result = await runSerializedChatTurn(deps, prepared.chat.id, prepared.signal, () => {
+    const chat = findChatById(deps, prepared.chat.id);
+    if (chat === undefined) return notFound("Chat not found.");
+    const frozen = freezeGroundedTurn({ ...prepared, chat }, deps);
+    if (isRouteResult(frozen)) return frozen;
+    if (frozen.input.clientTurnId !== undefined) {
+      const inspection = deps.store.inspectChatTurn(
+        chat.id,
+        frozen.input.clientTurnId,
+        frozenGroundedTurnIdentity(frozen),
+      );
+      if (inspection.kind === "replay") {
+        return inspection.assistantMessage.groundedAnswer === undefined
+          ? groundedTurnConflict("CHAT_TURN_IDEMPOTENCY_CONFLICT")
+          : { status: 200, body: inspection.assistantMessage.groundedAnswer };
+      }
+    }
+    const closed = chatClosedResult(chat);
+    if (closed !== undefined) return closed;
+    if (
+      frozen.input.expectedGroundingScopeIdentity === undefined &&
+      buildConnectedScopes(chat).length === 0 &&
+      buildLocalKnowledgeScopes(chat).length === 0
+    ) {
+      return badRequest("Chat has no connected scope.");
+    }
+    return executeGroundedAskInTurn(frozen, deps, runner, multiSource, hybrid);
+  });
+  return result === CHAT_TURN_WAIT_CANCELLED ? groundedCancelledResult() : result;
+}
+
+function groundedCancelledResult(): RouteResult {
+  return { status: 499, body: errorBody("CANCELLED", "Grounded request was cancelled.") };
+}
+
+function settleGroundedChatTurn(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  result: RouteResult,
+): RouteResult {
+  const commitTurnId = groundedCommitTurnId(prepared);
+  if (result.status !== 200 || !groundedAnswerBody(result.body)) {
+    deps.store.failChatTurn(prepared.chat.id, commitTurnId);
+    return result;
+  }
+  if (!groundedScopeStillCurrent(prepared, deps)) {
+    discardGroundedTurn(result.body.assistantMessageId);
+    deps.store.failChatTurn(prepared.chat.id, commitTurnId);
+    return {
+      status: 409,
+      body: errorBody(
+        "GROUNDING_SCOPE_CHANGED",
+        "The grounded source scope changed while the answer was in progress.",
+      ),
+    };
+  }
+  if (result.body.memory !== undefined) {
+    deps.store.attachGroundedAnswer(result.body.assistantMessageId, result.body);
+  }
+  let completion;
+  try {
+    completion = deps.store.completeChatTurn(
+      prepared.chat.id,
+      commitTurnId,
+      frozenGroundedTurnIdentity(prepared),
+      result.body.assistantMessageId,
+    );
+  } catch (error) {
+    discardGroundedTurn(result.body.assistantMessageId);
+    throw error;
+  }
+  if (completion.kind !== "completed") {
+    discardGroundedTurn(result.body.assistantMessageId);
+    deps.store.failChatTurn(prepared.chat.id, commitTurnId);
+    return internalError("Canonical grounded chat turn completion conflicted.");
+  }
+  commitGroundedTurn(result.body.assistantMessageId);
+  runGroundedPostCommitMemorySideEffects(prepared, deps, result.body);
+  return result;
+}
+
+function runGroundedPostCommitMemorySideEffects(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  answer: GroundedAnswer,
+): void {
+  if (answer.memory === undefined || prepared.memory === undefined) return;
+  runPostCommitCanonicalTurnMemorySideEffects(
+    deps,
+    groundedCanonicalMemoryRequest(prepared, answer.content),
+    prepared.memory.context,
+    prepared.input.modelId ?? prepared.chat.selectedModel,
+    answer.memory,
+    answer.content,
+    answer.assistantMessageId,
+  );
 }
 
 export async function runGroundedAskInput(
@@ -1499,13 +1978,90 @@ export async function runGroundedAskInput(
 ): Promise<RouteResult> {
   const chat = findChatById(deps, input.chatId);
   if (chat === undefined) return notFound("Chat not found.");
-  return dispatchPreparedGroundedAsk(
+  return executeGroundedAsk(
     { chat, input, signal: options.signal ?? new AbortController().signal },
     deps,
     options.runner,
     options.multiSource,
     options.hybrid,
   );
+}
+
+function groundedAnswerBody(value: unknown): value is GroundedAnswer {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "groundingKind" in value &&
+    "userMessageId" in value &&
+    "assistantMessageId" in value &&
+    "content" in value
+  );
+}
+
+function recordGroundedMemoryFailure(
+  deps: UiHandlerDeps,
+  assistantMessageId: string,
+  errorClass: string,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: assistantMessageId,
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: "grounded.memory",
+    source: "grounded-qa.attach-memory",
+    errorClass,
+    message: "grounded-memory-enrichment-failed",
+  });
+}
+
+function groundedCanonicalMemoryRequest(
+  prepared: PreparedGroundedAsk,
+  assistantContent: string,
+): CanonicalTurnMemoryRequest {
+  return {
+    chatId: prepared.chat.id,
+    projectPath: prepared.chat.projectPath,
+    messages: [
+      { role: "user", content: prepared.input.content },
+      { role: "assistant", content: assistantContent },
+    ],
+    modelId: prepared.input.modelId,
+    memory: prepared.input.memory,
+    ...(prepared.input.clientTurnId === undefined
+      ? {}
+      : { clientTurnId: prepared.input.clientTurnId }),
+  };
+}
+
+async function attachGroundedMemory(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  result: RouteResult,
+): Promise<RouteResult> {
+  const memoryRequest = prepared.input.memory;
+  if (memoryRequest === undefined || result.status !== 200 || !groundedAnswerBody(result.body)) {
+    return result;
+  }
+  const memoryPreparation = prepared.memory;
+  if (memoryPreparation === undefined) return result;
+  const chat = deps.store.findChatById(prepared.chat.id) ?? prepared.chat;
+  try {
+    const memory = await buildCanonicalTurnMemoryResult(
+      deps,
+      groundedCanonicalMemoryRequest(
+        { ...prepared, chat, input: { ...prepared.input, memory: memoryRequest } },
+        result.body.content,
+      ),
+      memoryPreparation.context,
+      {
+        retrievalContent: prepared.input.content,
+        precomputedMemory: memoryPreparation.result,
+      },
+    );
+    return memory === undefined ? result : { ...result, body: { ...result.body, memory } };
+  } catch (error) {
+    recordGroundedMemoryFailure(deps, result.body.assistantMessageId, contentFreeErrorClass(error));
+    return result;
+  }
 }
 
 export async function handleGroundedAsk(
@@ -1515,7 +2071,13 @@ export async function handleGroundedAsk(
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
-  const prepared = await prepareGroundedAsk(ctx, deps);
-  if ("status" in prepared) return prepared;
-  return dispatchPreparedGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+  const cancellation = createRequestCancellation(ctx, "grounded request cancelled");
+  try {
+    const prepared = await prepareGroundedAsk(ctx, deps, cancellation.signal);
+    if (cancellation.signal.aborted) return groundedCancelledResult();
+    if ("status" in prepared) return prepared;
+    return await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+  } finally {
+    cancellation.dispose();
+  }
 }

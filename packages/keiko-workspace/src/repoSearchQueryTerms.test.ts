@@ -12,6 +12,20 @@ describe("expandedQueryTerms", () => {
     expect(terms).toContain("service");
   });
 
+  it("does not derive test stems from identifiers that merely end in lowercase test letters", () => {
+    const terms = expandedQueryTerms("Contest Latest ApplicationContest", false);
+
+    expect(terms).not.toContain("con");
+    expect(terms).not.toContain("la");
+    expect(terms).not.toContain("applicationcon");
+  });
+
+  it("derives source identifiers from separator-delimited test suffixes", () => {
+    const terms = expandedQueryTerms("payment_service_test", false);
+
+    expect(terms).toContain("payment_service");
+  });
+
   it("derives path and symbol terms from stack-frame locations", () => {
     const terms = expandedQueryTerms(
       "TypeError at src/payments/AuthService.ts:42:13 in validateToken",
@@ -42,6 +56,35 @@ describe("expandedQueryTerms", () => {
     expect(infra).toEqual(
       expect.arrayContaining(["infrastruktur", "terraform", "kubernetes", "helm"]),
     );
+  });
+
+  it("bridges German repository-architecture vocabulary to English source text", () => {
+    const terms = expandedQueryTerms(
+      "Welche drei Autonomie-Modi sind definiert und welche Invariante gilt für Repository-Arbeit?",
+      false,
+    );
+
+    expect(terms).toEqual(
+      expect.arrayContaining([
+        "three",
+        "autonomy",
+        "mode",
+        "defined",
+        "invariant",
+        "repository",
+        "work",
+      ]),
+    );
+  });
+
+  it("keeps versioned document references atomic instead of matching every sibling record", () => {
+    const terms = expandedQueryTerms("Compare ADR-0129 with RFC-9110", false);
+
+    expect(terms).toEqual(expect.arrayContaining(["adr-0129", "rfc-9110"]));
+    expect(terms).not.toContain("adr");
+    expect(terms).not.toContain("0129");
+    expect(terms).not.toContain("rfc");
+    expect(terms).not.toContain("9110");
   });
 
   it("adds morphology and debugging-domain aliases for code questions", () => {

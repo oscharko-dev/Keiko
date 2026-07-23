@@ -157,6 +157,17 @@ export const CAPSULE_ANSWER_GROUNDING_POLICIES: readonly CapsuleAnswerGroundingP
 export const CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX = 4_096 as const;
 export const CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX = 100_000 as const;
 
+// The interrupt/failure terminals shared by every pod-refresh outcome across pod kinds. Kind
+// specific enums may add their own healthy terminals (the HTML manual pod distinguishes
+// `unchanged` from `updated`; the repository pod uses the coarser `succeeded`), but the three
+// terminals below are the FLOOR: an operator reading pod-refresh evidence sees the same words for
+// "made progress but not all", "did not complete", and "was cancelled" regardless of which pod
+// kind produced the record. Issue #2633 — Knowledge M2.12 — pins this shared vocabulary as the
+// interoperability contract so a future PR that renames one of these terminals in either enum
+// has to update the other in the same change.
+export const SHARED_POD_REFRESH_TERMINALS = ["partial", "failed", "cancelled"] as const;
+export type SharedPodRefreshTerminal = (typeof SHARED_POD_REFRESH_TERMINALS)[number];
+
 export interface CapsuleContextualRetrievalSettings {
   readonly enabled: boolean;
   readonly modelId?: string;

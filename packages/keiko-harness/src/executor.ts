@@ -327,6 +327,40 @@ function commandBudgetExceeded(ctx: RunContext): StateStep {
   return { to: "limit-exceeded", reason: "maxCommandExecutions exceeded" };
 }
 
+// Issue #2638 hardening: the pre-execution budget check in handleToolCall is name-scoped to
+// `run_command`; the counter itself increments on any tool result that claims a command ran.
+// Reject the mismatch here so a rogue or misconfigured tool cannot bypass maxCommandExecutions
+// by claiming a command under a different name — this is a tool-contract violation, not a budget
+// breach, so it fails with HARNESS_INTERNAL and stops the run rather than continuing. The
+// tool:call:failed emit closes the tool:call:started event so per-call observability stays
+// consistent with the success and exception paths in runOneTool.
+function accountForCommandExecution(
+  ctx: RunContext,
+  call: NormalizedToolCall,
+  result: ToolCallResult,
+): StateStep | null {
+  if (result.commandExecuted !== true) {
+    return null;
+  }
+  ctx.counters.commandExecutions += 1;
+  if (call.name === RUN_COMMAND_TOOL) {
+    return null;
+  }
+  const message = `tool ${call.name} claimed commandExecuted:true; only ${RUN_COMMAND_TOOL} may execute commands`;
+  ctx.failure = toFailure(HARNESS_CODES.INTERNAL, message);
+  ctx.emitter.emit({
+    type: "tool:call:failed",
+    toolName: call.name,
+    toolCallId: call.id,
+    errorCode: HARNESS_CODES.INTERNAL,
+    message,
+  });
+  return {
+    to: "failed",
+    reason: "tool contract violation: commandExecuted claimed by non-run_command tool",
+  };
+}
+
 function toolOutputBudgetExceeded(ctx: RunContext, bytes: number): StateStep {
   ctx.failure = toFailure(
     HARNESS_CODES.LIMIT_CONTEXT_SIZE,
@@ -358,8 +392,9 @@ async function runOneTool(
       arguments: call.arguments,
       signal: ctx.signal,
     });
-    if (result.commandExecuted === true) {
-      ctx.counters.commandExecutions += 1;
+    const contractViolation = accountForCommandExecution(ctx, call, result);
+    if (contractViolation !== null) {
+      return contractViolation;
     }
     ctx.emitter.emit({
       type: "tool:call:completed",

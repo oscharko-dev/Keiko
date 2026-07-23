@@ -6,6 +6,11 @@
 
 Accepted (Issue #502, Epic #491, 2026-06-25)
 
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) for Voice integration. The text-first
+contract and server prompt orchestration remain accepted. The dedicated `discussion-voice.ts`
+transcript-segment binding is not called by current Twin; a settled spoken message enters the same
+canonical chat request as typed input, so Realtime owns no parallel discussion or answer path.
+
 ## Version
 
 0.2.0

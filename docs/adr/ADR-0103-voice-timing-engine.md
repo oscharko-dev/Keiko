@@ -6,6 +6,13 @@
 
 Accepted (Issue #498, Epic #491, 2026-06-24)
 
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) as to productive integration. The
+pure timing engine remains in the tree and its `VoiceClock` seam is reused by active Voice reducers,
+but `createVoiceTimebaseEngine` is not called by the current Twin transport. Current settlement,
+continuation, deduplication, reconnect, and Chat-owned queue bounds are implemented in the ADR-0154
+session path and must be tested there; this engine's unit suite is not evidence that those live
+invariants hold.
+
 ## Version
 
 0.2.0
@@ -168,10 +175,10 @@ foundation. It adds **no** third-party timing / stream / queue package — the b
 the state machine is a switch, time is `performance.now()`. Wiring the engine into the
 `useDictation` / `useRealtimeVoice` render path is **out of scope** ("Full UI rendering"), and is
 deferred. To keep the module consumable rather than dead, the integration seams are documented exactly
-(see the implementation spec): hooks construct the engine with the resolved profile + a browser clock,
-call `ingest(message)` on each control message they already receive, optionally pass a metrics
-observer, read `snapshot()` to render, and call `catchUp({ sinceSeq })` on reconnect / visibility
-resume.
+(see the implementation spec). A future consumer would construct the engine with the resolved profile
+and a browser clock, call `ingest(message)` on each control message, optionally pass a metrics observer,
+read `snapshot()` to render, and call `catchUp({ sinceSeq })` on reconnect or visibility resume. These
+deferred seams do not describe the current ADR-0154 Twin session path.
 
 ## Consequences
 

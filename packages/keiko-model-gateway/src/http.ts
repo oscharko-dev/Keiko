@@ -961,11 +961,10 @@ async function fetchHttpsViaProxy(
 function fetchViaProxy(
   target: URL,
   init: RequestInit,
-  proxyRaw: string,
+  proxy: URL,
   egress: OutboundHttpEgressConfig | undefined,
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const proxy = parseProxyUrl(proxyRaw);
   const ca = gatewayTrustedCaCertificates(egress?.caBundlePath);
   return target.protocol === "https:"
     ? fetchHttpsViaProxy(target, init, proxy, ca, maxResponseBytes)
@@ -1034,6 +1033,43 @@ async function fetchDirectWithCaFallback(
   }
 }
 
+// How DNS participates in one gatewayFetch call. `pinForConnect` means Keiko resolves the target
+// itself and pins the vetted address set for the actual connect — possible only on the direct
+// native-fetch path, where Keiko owns the socket. Off that path there is no address binding at all.
+interface GatewayDnsPlan {
+  readonly pinForConnect: boolean;
+}
+
+function planGatewayDns(
+  usesRealTransport: boolean,
+  proxy: URL | undefined,
+  doFetch: typeof globalThis.fetch,
+): GatewayDnsPlan {
+  return { pinForConnect: usesRealTransport && proxy === undefined && doFetch === NATIVE_FETCH };
+}
+
+/**
+ * `denyLoopback` is the research-egress posture (#2387): a public research fetch must never be
+ * steered at a local service. Keiko can only guarantee that when it owns the connect and pins the
+ * vetted addresses.
+ *
+ * Through a proxy it cannot. The proxy resolves the hostname independently at connect time, so a
+ * pre-proxy lookup validates an address set that is never bound to use: a hostile name can resolve
+ * publicly during the policy check and rebind to loopback for the proxy's own connect. Treating
+ * that lookup as rebinding protection would be a guarantee the code cannot keep, so the
+ * combination fails closed instead. A deployment that needs proxied research egress must give the
+ * gateway a proxy that enforces the same address policy — that is a deliberate future contract,
+ * not something to infer here.
+ */
+function refuseUnpinnableResearchEgress(
+  proxy: URL | undefined,
+  egress: OutboundHttpEgressConfig | undefined,
+): void {
+  if (proxy !== undefined && egress?.denyLoopback === true) {
+    throw blockedTargetError("research egress cannot pin addresses through a proxy");
+  }
+}
+
 export async function gatewayFetch(
   url: string,
   options: GatewayFetchOptions = {},
@@ -1054,10 +1090,18 @@ export async function gatewayFetch(
       : { ...rest, redirect: "manual" };
   const doFetch = fetchImpl ?? globalThis.fetch;
   const target = new URL(url);
-  const proxy = fetchImpl === undefined ? proxyForTarget(target, egress) : undefined;
-  const resolveDns = fetchImpl === undefined && proxy === undefined && doFetch === NATIVE_FETCH;
-  const pinnedAddresses = await enforceOutboundTargetPolicy(target, egress, { resolveDns });
-  const redirectPolicy = { resolveDns };
+  const usesRealTransport = fetchImpl === undefined;
+  const proxyRaw = usesRealTransport ? proxyForTarget(target, egress) : undefined;
+  // Validate the configured proxy before target DNS work so malformed/credentialed proxy settings
+  // fail with their deterministic policy error rather than an unrelated target lookup failure.
+  const proxy = proxyRaw === undefined ? undefined : parseProxyUrl(proxyRaw);
+  refuseUnpinnableResearchEgress(proxy, egress);
+  const dns = planGatewayDns(usesRealTransport, proxy, doFetch);
+  const vettedAddresses = await enforceOutboundTargetPolicy(target, egress, {
+    resolveDns: dns.pinForConnect,
+  });
+  const pinnedAddresses = dns.pinForConnect ? vettedAddresses : undefined;
+  const redirectPolicy = { resolveDns: dns.pinForConnect };
   if (proxy !== undefined) {
     const response = await fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
     await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);

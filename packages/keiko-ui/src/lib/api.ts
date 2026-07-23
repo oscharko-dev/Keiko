@@ -8,12 +8,9 @@ import type {
   BffError,
   ChatConnectedScope,
   ChatLocalKnowledgeScope,
-  Chat,
-  ChatMessage,
   ChatResponse,
   ChatsResponse,
   ConversationMemoryRequestWire,
-  ConversationMemoryResultWire,
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
@@ -111,10 +108,6 @@ import type {
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
   GitCommitMessageViolationCode,
-  CodingWorkbenchCodexAuthMethod,
-  CodingWorkbenchCodexAuthSetupPlan,
-  CodingWorkbenchCodexSubscriptionProfile,
-  CodingWorkbenchSidecarGatewayResult,
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
   GitDeliveryApprovalClaim,
@@ -167,8 +160,6 @@ import {
   validateGitRepositorySummary,
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
-  validateCodingWorkbenchCodexAuthSetupPlan,
-  validateCodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -224,86 +215,6 @@ function validateBffResponse<T>(path: string, value: unknown, validator: Respons
     `BFF response for ${path} failed contract validation: ${reason}`,
     502,
   );
-}
-
-function validateCodexSubscriptionProfileResponse(value: unknown): GitRepositoryValidation {
-  const result = validateCodingWorkbenchCodexSubscriptionProfile(value);
-  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
-}
-
-function validateCodexAuthSetupPlanResponse(value: unknown): GitRepositoryValidation {
-  const result = validateCodingWorkbenchCodexAuthSetupPlan(value);
-  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
-}
-
-const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
-  "missing-config",
-  "missing-provider",
-  "missing-credentials",
-  "non-chat",
-  "no-tool-calling",
-  "non-workflow-eligible",
-  "non-coding-capable",
-  "deployment-policy-disabled",
-  "subscription-source",
-]);
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isPositiveSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-}
-
-function validateSidecarRunMetadata(value: unknown, reasons: string[]): boolean {
-  if (!isObjectRecord(value)) {
-    reasons.push("runMetadata must be an object");
-    return false;
-  }
-  for (const key of [
-    "maxPromptTokens",
-    "maxOutputTokens",
-    "maxInputMessages",
-    "maxRequestBytes",
-  ] as const) {
-    if (!isPositiveSafeInteger(value[key])) reasons.push(`runMetadata.${key} must be positive`);
-  }
-  return reasons.length === 0;
-}
-
-function validateSidecarGatewayProfileResponse(value: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
-  if (!isObjectRecord(value)) return { ok: false, reasons: ["response must be an object"] };
-  if (value.status === "unavailable") {
-    if (
-      typeof value.reason !== "string" ||
-      !CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS.has(value.reason)
-    ) {
-      reasons.push("reason is invalid");
-    }
-    return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
-  }
-  if (value.status !== "available") {
-    return { ok: false, reasons: ["status is invalid"] };
-  }
-  if (typeof value.profileId !== "string" || value.profileId.length === 0) {
-    reasons.push("profileId must be a non-empty string");
-  }
-  if (typeof value.modelAlias !== "string" || value.modelAlias.length === 0) {
-    reasons.push("modelAlias must be a non-empty string");
-  }
-  if (typeof value.localEndpointPath !== "string" || value.localEndpointPath.length === 0) {
-    reasons.push("localEndpointPath must be a non-empty string");
-  }
-  if (typeof value.supportsStreaming !== "boolean") {
-    reasons.push("supportsStreaming must be boolean");
-  }
-  if (typeof value.supportsToolCalling !== "boolean") {
-    reasons.push("supportsToolCalling must be boolean");
-  }
-  validateSidecarRunMetadata(value.runMetadata, reasons);
-  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
 // GEN-RES-FETCH-001 — reads against the loopback BFF must not hang the UI when the BFF
@@ -401,39 +312,10 @@ export async function fetchHealth(): Promise<{ status: "ok"; version: string }> 
   return fetchJson("/api/health");
 }
 
-// ---------------------------------------------------------------------------
-// Coding Workbench
-// ---------------------------------------------------------------------------
-
-export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
-  return fetchJson(
-    "/api/coding-sidecar/gateway/profile",
-    { cache: "no-store" },
-    validateSidecarGatewayProfileResponse,
-  );
-}
-
-export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<CodingWorkbenchCodexSubscriptionProfile> {
-  return fetchJson(
-    "/api/coding-workbench/codex-subscription/profile",
-    { cache: "no-store" },
-    validateCodexSubscriptionProfileResponse,
-  );
-}
-
-export async function prepareCodingWorkbenchCodexSubscriptionSetup(
-  method: CodingWorkbenchCodexAuthMethod,
-): Promise<CodingWorkbenchCodexAuthSetupPlan> {
-  return fetchJson(
-    "/api/coding-workbench/codex-subscription/setup",
-    {
-      method: "POST",
-      cache: "no-store",
-      body: JSON.stringify({ method }),
-    },
-    validateCodexAuthSetupPlanResponse,
-  );
-}
+// The Coding Workbench provider profile fetchers (sidecar gateway + Codex subscription) used
+// to live here. They moved to `./coding-workbench-provider-api` because their contract validators
+// transitively value-import from `coding-workbench` / `coding-workbench-evidence`, and this
+// module is first-load-reachable from the desktop shell — see issue #2639.
 
 // ---------------------------------------------------------------------------
 // Update preflight
@@ -569,8 +451,47 @@ export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
 // credential, or model id — so it is safe to read and display (AC4/AC5). When voice is unavailable
 // the resolution reports `available: false` with a `profile` of "none", and the UI renders no
 // voice affordance at all (AC1).
+let voiceCapabilityRequest: Promise<{ voice: VoiceCapabilityResolution }> | undefined;
+const voiceCapabilityInvalidationListeners = new Set<() => void>();
+const VOICE_CAPABILITY_INVALIDATION_ERROR = "Voice capability invalidation listener failed.";
+
+export function clearVoiceCapabilityCacheForTests(): void {
+  voiceCapabilityRequest = undefined;
+}
+
+export function subscribeVoiceCapabilityInvalidation(listener: () => void): () => void {
+  voiceCapabilityInvalidationListeners.add(listener);
+  return (): void => {
+    voiceCapabilityInvalidationListeners.delete(listener);
+  };
+}
+
+function invalidateVoiceCapability(): void {
+  voiceCapabilityRequest = undefined;
+  let listenerFailed = false;
+  const listeners = [...voiceCapabilityInvalidationListeners];
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch {
+      listenerFailed = true;
+    }
+  }
+  if (listenerFailed) window.reportError(new Error(VOICE_CAPABILITY_INVALIDATION_ERROR));
+}
+
 export async function fetchVoiceCapability(): Promise<{ voice: VoiceCapabilityResolution }> {
-  return fetchJson<{ voice: VoiceCapabilityResolution }>("/api/voice/capability");
+  if (voiceCapabilityRequest === undefined) {
+    const pending = fetchJson<{ voice: VoiceCapabilityResolution }>("/api/voice/capability");
+    const cached = pending.catch((error: unknown) => {
+      if (voiceCapabilityRequest === cached) {
+        voiceCapabilityRequest = undefined;
+      }
+      throw error;
+    });
+    voiceCapabilityRequest = cached;
+  }
+  return voiceCapabilityRequest;
 }
 
 // Issue #495, Epic #491 — controlled composer dictation. Posts one short audio clip to the local
@@ -623,7 +544,8 @@ export interface VoiceSpeechRequest {
   readonly text: string;
   // Issue #1559 — the selected product voice persona ("male" | "female" | "neutral"). Content-free: the
   // server resolves the actual voice id from this enum and the configured provider; the browser never
-  // sees or sends a voice id. Optional so existing callers keep their provider-default voice.
+  // sees or sends a voice id. Optional lets the server choose the first explicit persona mapping;
+  // synthesis fails closed when the speech-output provider maps no voice.
   readonly persona?: VoicePersona;
 }
 
@@ -691,6 +613,8 @@ export interface GatewaySetupInput {
   readonly voiceModelId?: string | undefined;
   readonly voiceSpeechToTextModelId?: string | undefined;
   readonly voiceRealtimeModelId?: string | undefined;
+  readonly voiceRealtimeTranscriptionModelId?: string | undefined;
+  readonly voiceSupportsSemanticTurnDetection?: boolean | undefined;
   readonly voiceSpeechOutputModelId?: string | undefined;
   readonly voiceOutputVoiceId?: string | undefined;
   readonly voiceProviderLocality?: string | undefined;
@@ -716,6 +640,7 @@ export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetu
   });
   clearConfigCacheForTests();
   clearModelCacheForTests();
+  invalidateVoiceCapability();
   return response;
 }
 
@@ -1051,11 +976,15 @@ export async function deleteChat(id: string): Promise<void> {
 export async function fetchChatMessages(
   chatId: string,
   projectPath: string,
+  signal?: AbortSignal,
 ): Promise<MessagesResponse> {
   const params = new URLSearchParams();
   params.set("chatId", chatId);
   params.set("projectPath", projectPath);
-  return fetchJson(`/api/chats/messages?${params.toString()}`);
+  return fetchJson(
+    `/api/chats/messages?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+  );
 }
 
 export interface CreateMessageInput {
@@ -1142,112 +1071,6 @@ export async function createDesktopChat(
 }
 
 export type SendDesktopChatInput = DesktopChatSendRequestWire;
-
-export interface AppendDesktopChatVoiceTurnMessage {
-  readonly role: "user" | "assistant";
-  readonly content: string;
-  readonly timestamp?: number | undefined;
-}
-
-export interface AppendDesktopChatVoiceTurnInput {
-  readonly chatId: string;
-  readonly projectPath: string;
-  readonly messages: readonly AppendDesktopChatVoiceTurnMessage[];
-  readonly modelId?: string | undefined;
-  readonly memory?: ConversationMemoryRequestWire;
-  readonly idempotencyKey?: string | undefined;
-}
-
-export interface AppendDesktopChatVoiceTurnResponse {
-  readonly chat: Chat;
-  readonly messages: readonly ChatMessage[];
-  readonly memory?: ConversationMemoryResultWire;
-}
-
-export async function appendDesktopChatVoiceTurn(
-  input: AppendDesktopChatVoiceTurnInput,
-): Promise<AppendDesktopChatVoiceTurnResponse> {
-  return fetchJson<AppendDesktopChatVoiceTurnResponse>("/api/desktop/chat/voice-turn", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export interface RealtimeGroundedToolInput {
-  readonly chatId: string;
-  readonly projectPath: string;
-  readonly callId: string;
-  readonly query: string;
-  readonly userTranscript?: string | undefined;
-  readonly modelId?: string | undefined;
-  readonly memory?: ConversationMemoryRequestWire | undefined;
-}
-
-export interface RealtimeGroundedToolOutput {
-  readonly status: "ok";
-  readonly answer: string;
-  readonly groundingKind: GroundedAnswer["groundingKind"];
-  readonly elapsedMs: number;
-  readonly citations: readonly {
-    readonly marker: string;
-    readonly label: string;
-    readonly source?: string | undefined;
-  }[];
-  readonly evidenceRunId?: string | undefined;
-  readonly persisted: {
-    readonly userMessageId: string;
-    readonly assistantMessageId: string;
-  };
-  readonly instruction: string;
-}
-
-export interface RealtimeGroundedToolResponse {
-  readonly chat: Chat;
-  readonly messages: readonly ChatMessage[];
-  readonly groundedAnswer: GroundedAnswer;
-  readonly toolOutput: RealtimeGroundedToolOutput;
-  readonly memory?: ConversationMemoryResultWire | undefined;
-}
-
-export async function runRealtimeGroundedTool(
-  input: RealtimeGroundedToolInput,
-  signal?: AbortSignal,
-): Promise<RealtimeGroundedToolResponse> {
-  return fetchJson<RealtimeGroundedToolResponse>("/api/voice/realtime/grounded-tool", {
-    method: "POST",
-    body: JSON.stringify(input),
-    signal: signal ?? null,
-  });
-}
-
-export interface RealtimeMemoryToolInput {
-  readonly chatId: string;
-  readonly projectPath: string;
-  readonly callId: string;
-  readonly query: string;
-  readonly budgetTokens?: number | undefined;
-}
-
-export interface RealtimeMemoryToolOutput {
-  readonly status: "ok";
-  readonly memoryCount: number;
-  readonly memoryContext: string;
-  readonly instruction: string;
-}
-
-// Mid-session MemoriaViva recall for the realtime `recall_keiko_memory` tool. Unlike the grounded
-// tool this persists nothing to the chat — the response is handed back to the realtime provider as
-// the function-call output and exists only for the current spoken turn.
-export async function runRealtimeMemoryTool(
-  input: RealtimeMemoryToolInput,
-  signal?: AbortSignal,
-): Promise<RealtimeMemoryToolOutput> {
-  return fetchJson<RealtimeMemoryToolOutput>("/api/voice/realtime/memory-tool", {
-    method: "POST",
-    body: JSON.stringify(input),
-    signal: signal ?? null,
-  });
-}
 
 // Issue #152 — accepts an optional AbortSignal so the Conversation Center can
 // cancel an in-flight ungrounded send. RequestInit.signal is `AbortSignal |
