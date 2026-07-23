@@ -197,6 +197,69 @@ describe("EditorFileHistoryPanel", () => {
   });
 });
 
+describe("EditorFileHistoryPanel failure surfaces", () => {
+  it("shows the unpaired-session projection and the load-error retry path", async () => {
+    vi.mocked(fetchEditorLocalHistory).mockResolvedValueOnce({ session: "unpaired", entries: [] });
+    renderPanel();
+    expect(await screen.findByText(/pair|session/iu)).toBeInTheDocument();
+
+    vi.mocked(fetchEditorLocalHistory).mockRejectedValueOnce(new Error("offline"));
+    vi.mocked(fetchEditorLocalHistory).mockResolvedValueOnce({
+      session: "active",
+      entries: [entry(2, "agent-apply")],
+    });
+    renderPanel();
+    const retry = await screen.findByRole("button", { name: /retry|erneut/iu });
+    fireEvent.click(retry);
+    expect(await screen.findAllByText(/agent/iu)).not.toHaveLength(0);
+  });
+
+  it("prunes a checkpoint whose read 404s and notices other read failures", async () => {
+    const { ApiError } =
+      await vi.importActual<typeof import("../../../../../lib/api")>("../../../../../lib/api");
+    vi.mocked(fetchEditorLocalHistoryEntry).mockRejectedValueOnce(
+      new ApiError("ENTRY_NOT_FOUND", "gone", 404),
+    );
+    renderPanel({ entries: [entry(5, "user-save")] });
+    const compare = await screen.findByRole("button", { name: /compare with current/iu });
+    fireEvent.click(compare);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /compare with current/iu })).toBeNull();
+    });
+
+    vi.mocked(fetchEditorLocalHistoryEntry).mockRejectedValueOnce(new Error("offline"));
+    renderPanel({ entries: [entry(6, "user-save")] });
+    const failing = await screen.findAllByRole("button", { name: /compare with current/iu });
+    fireEvent.click(failing[failing.length - 1] as HTMLElement);
+    expect((await screen.findAllByText(/could not be loaded/iu)).length).toBeGreaterThan(0);
+  });
+
+  it("reports a failed restore and a failed delete without dropping the entry", async () => {
+    renderPanel({
+      entries: [entry(7, "user-save")],
+      onRestore: vi.fn(() => Promise.resolve(false)),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /^restore$/iu }));
+    fireEvent.click(await screen.findByRole("button", { name: /restore version/iu }));
+    expect((await screen.findAllByText(/version was not restored/iu)).length).toBeGreaterThan(0);
+
+    vi.mocked(deleteEditorLocalHistory).mockRejectedValueOnce(new Error("denied"));
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/iu }));
+    fireEvent.click(await screen.findByRole("button", { name: /delete restore point/iu }));
+    expect((await screen.findAllByText(/could not be deleted/iu)).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /^delete$/iu })).toBeInTheDocument();
+  });
+
+  it("surfaces a pin failure as a notice", async () => {
+    vi.mocked(setEditorLocalHistoryPinned).mockRejectedValueOnce(new Error("denied"));
+    renderPanel({ entries: [entry(8, "user-save")] });
+    fireEvent.click(await screen.findByRole("button", { name: /pin restore point/iu }));
+    expect(
+      (await screen.findAllByText(/pinned state could not be changed/iu)).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
 describe("file-history bounded projections", () => {
   it("virtualizes a long chain with bounded overscan and honest padding", () => {
     const windowed = historyVirtualWindow(50, 148 * 30, 148 * 3);
