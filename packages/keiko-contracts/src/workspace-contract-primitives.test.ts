@@ -126,4 +126,26 @@ describe("workspace contract primitives", () => {
     expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "relative/root"])).toBe(false);
     expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "C:\\work\\app"])).toBe(true);
   });
+
+  it("rejects Win32 trailing-dot / trailing-space segment aliases that CreateFile strips (#2285)", () => {
+    // CreateFile strips a trailing `.` or space from each path segment: `C:\work\app` and
+    // `C:\work\app.` open the same directory, and so do `C:\work\app` and `C:\work\app `.
+    // A hostile manifest can otherwise pair `[C:\work\app, C:\work\app.\child]` and split
+    // trust bindings on a single filesystem directory. The validator must fail the alias
+    // before overlap checking is even consulted.
+    expect(isCanonicalWorkspaceRoot("C:\\work\\app.")).toBe(false);
+    expect(isCanonicalWorkspaceRoot("C:\\work\\app ")).toBe(false);
+    expect(isCanonicalWorkspaceRoot("C:\\work\\app.\\child")).toBe(false);
+    expect(isCanonicalWorkspaceRoot("C:\\work\\app \\child")).toBe(false);
+    expect(
+      workspaceCanonicalRootsDoNotOverlap(["C:\\work\\app", "C:\\work\\app.\\child"]),
+    ).toBe(false);
+    expect(
+      workspaceCanonicalRootsDoNotOverlap(["C:\\work\\app", "C:\\work\\app \\child"]),
+    ).toBe(false);
+    // POSIX segments containing a trailing dot remain legal — dots are meaningful there
+    // (dotfiles, hidden dirs) and no analogous alias exists in the POSIX open path.
+    expect(isCanonicalWorkspaceRoot("/work/app.")).toBe(true);
+    expect(isCanonicalWorkspaceRoot("/work/app./child")).toBe(true);
+  });
 });
