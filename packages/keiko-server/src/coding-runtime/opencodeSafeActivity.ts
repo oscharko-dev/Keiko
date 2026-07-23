@@ -193,7 +193,10 @@ function textSignal(
   if (part.ignored === true || part.synthetic === true) return undefined;
   const messageId = string(part.messageID);
   const text = string(part.text);
-  if (messageId === undefined || text === undefined || text.length === 0) return "dropped";
+  if (messageId === undefined || text === undefined) return "dropped";
+  // The real child appends a text part before any characters stream into it; the empty first
+  // frame carries nothing to project and is skipped, never counted as a validation drop (#2473).
+  if (text.length === 0) return undefined;
   return { kind: "text", messageId, text, occurredAt };
 }
 

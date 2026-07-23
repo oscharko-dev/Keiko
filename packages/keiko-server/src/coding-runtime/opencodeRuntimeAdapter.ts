@@ -849,8 +849,9 @@ function toolDescription(action: GeneratedToolAction): string {
   if (action === "read") {
     return (
       "Read a bounded repository text file through Keiko governance. " +
-      "For large files pass startLine/maxLines to page through a window; the result reports " +
-      "totalLines plus nextStartLine while the digest always covers the whole file."
+      "startLine/maxLines select the returned line window (start at 1 with a generous maxLines " +
+      "for a whole small file); the result reports totalLines plus nextStartLine while the " +
+      "digest always covers the whole file."
     );
   }
   if (action === "egress") {

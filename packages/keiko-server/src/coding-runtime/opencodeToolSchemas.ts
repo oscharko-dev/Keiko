@@ -54,18 +54,19 @@ const WORKSPACE_READ_SCHEMA = {
       type: "integer",
       minimum: 1,
       maximum: CODING_TOOL_READ_MAX_START_LINE,
-      description:
-        "Optional 1-based first line of the returned window; omit to start at the first line.",
+      description: "1-based first line of the returned window; pass 1 to start at the file head.",
     },
     maxLines: {
       type: "integer",
       minimum: 1,
       maximum: CODING_TOOL_READ_MAX_WINDOW_LINES,
       description:
-        "Optional window height in lines; omit for the whole file. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file.",
+        "Window height in lines; startLine 1 with maxLines 5000 reads a small file whole. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file.",
     },
   },
-  required: ["relativePath"],
+  // OpenCode v1.17.17 declares every custom-tool argument as required in its provider
+  // projection, so the pinned model-visible contract must require the window fields too.
+  required: ["relativePath", "startLine", "maxLines"],
 } as const;
 
 const CHANGESET_EDIT_SCHEMA = {
