@@ -1,3 +1,6 @@
+// Co-located tests: `workspace-trust-api.test.ts` in this directory covers `fetchWorkspaceTrustStatus`,
+// `mutateWorkspaceTrust`, the `WORKSPACE_TRUST_CHANGED_EVENT` broadcast contract, and the event-shape
+// guard `workspaceTrustEventProjectId`.
 import { isWorkspaceTrustStatus, type WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
 
 const TRUST_URL = "/api/editor/verification/trust";

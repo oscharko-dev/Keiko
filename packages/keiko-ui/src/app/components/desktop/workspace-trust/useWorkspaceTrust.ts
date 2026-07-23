@@ -1,5 +1,8 @@
 "use client";
 
+// Co-located tests: `useWorkspaceTrust.test.ts` in this directory covers the refresh path,
+// the grant/revoke mutation paths, `requestRef` deconfliction, event-driven refresh, and the
+// empty-project-id sentinel projection consumed by every downstream trust widget.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
 import {
