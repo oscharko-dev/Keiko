@@ -234,9 +234,9 @@ describe("editor local-history store", () => {
     expect(() => store.read(foreignScope, entry.entryRef, 1_004)).toThrow(
       expect.objectContaining({ code: "ENTRY_NOT_FOUND" }),
     );
-    expect(() => store.delete(foreignScope, entry.entryRef)).toThrow(
-      expect.objectContaining({ code: "ENTRY_NOT_FOUND" }),
-    );
+    expect(() => {
+      store.delete(foreignScope, entry.entryRef);
+    }).toThrow(expect.objectContaining({ code: "ENTRY_NOT_FOUND" }));
     expect(store.list(foreignScope, undefined, 1_005)).toEqual([]);
   });
 
