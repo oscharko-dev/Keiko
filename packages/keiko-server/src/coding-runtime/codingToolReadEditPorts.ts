@@ -9,7 +9,7 @@ import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
-import { isExactEditorAgentChangeset } from "./codingToolIpc.js";
+import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
@@ -89,10 +89,7 @@ async function executeRead(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): Promise<
-  | {
-      readonly status: "completed";
-      readonly read: { readonly text: string; readonly byteCount: number; readonly digest: string };
-    }
+  | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" }
 > {
   const binding = readPreflight(deps, request, signal, mutationGuard);
@@ -102,15 +99,61 @@ async function executeRead(
     signal,
   });
   if (!readPostflight(deps, result, binding, signal, mutationGuard)) return { status: "failed" };
-  const byteCount = Buffer.byteLength(result.text, "utf8");
-  if (byteCount > MAX_READ_BYTES) return { status: "failed" };
+  if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) return { status: "failed" };
+  const window = readWindow(result.text, request.startLine, request.maxLines);
   return {
     status: "completed",
     read: {
-      text: result.text,
-      byteCount,
+      text: window.text,
+      byteCount: Buffer.byteLength(window.text, "utf8"),
+      // The digest always covers the WHOLE file so a later changeset's expectedContentHash stays
+      // anchored to the governed read even when the model only saw a window of it.
       digest: createHash("sha256").update(result.text, "utf8").digest("hex"),
+      totalLines: window.totalLines,
+      ...(window.nextStartLine === undefined ? {} : { nextStartLine: window.nextStartLine }),
     },
+  };
+}
+
+/**
+ * Cuts the requested 1-based line window out of the full governed read. The whole file always
+ * stays server-side; only the window travels back to the model (#2473 large-file reads).
+ */
+function readWindow(
+  text: string,
+  startLine: number | undefined,
+  maxLines: number | undefined,
+): ReadWindowResult {
+  const lines = text.split("\n");
+  const trailingNewline = lines.length > 1 && lines[lines.length - 1] === "";
+  const totalLines = text.length === 0 ? 0 : trailingNewline ? lines.length - 1 : lines.length;
+  if (startLine === undefined && maxLines === undefined) return { text, totalLines };
+  const first = (startLine ?? 1) - 1;
+  if (first >= totalLines) return { text: "", totalLines };
+  return slicedWindow({ lines, trailingNewline, totalLines, first, maxLines });
+}
+
+interface ReadWindowResult {
+  readonly text: string;
+  readonly totalLines: number;
+  readonly nextStartLine?: number;
+}
+
+function slicedWindow(input: {
+  readonly lines: readonly string[];
+  readonly trailingNewline: boolean;
+  readonly totalLines: number;
+  readonly first: number;
+  readonly maxLines: number | undefined;
+}): ReadWindowResult {
+  const { lines, trailingNewline, totalLines, first, maxLines } = input;
+  const end = maxLines === undefined ? totalLines : Math.min(totalLines, first + maxLines);
+  const window = lines.slice(first, end).join("\n");
+  const keepsTrailingNewline = end < totalLines || trailingNewline;
+  return {
+    text: keepsTrailingNewline ? `${window}\n` : window,
+    totalLines,
+    ...(end < totalLines ? { nextStartLine: end + 1 } : {}),
   };
 }
 

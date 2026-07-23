@@ -341,6 +341,12 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(bundle.toolSources.keiko_changeset_edit).toContain(
       'KEIKO_CODING_MODE !== "governed-assist"',
     );
+    // #2473 large-file read window: the child-side source forwards the optional window arguments
+    // and validates the transient pagination facts the bridge returns.
+    expect(bundle.toolSources.keiko_workspace_read).toContain('"startLine"');
+    expect(bundle.toolSources.keiko_workspace_read).toContain('"maxLines"');
+    expect(bundle.toolSources.keiko_workspace_read).toContain("totalLines");
+    expect(bundle.toolSources.keiko_workspace_read).toContain("nextStartLine");
     expect(Object.values(bundle.toolSources).join("\n")).toMatch(/changeset/u);
     expect(JSON.stringify(harness.materialized)).toContain("{env:");
     expect(

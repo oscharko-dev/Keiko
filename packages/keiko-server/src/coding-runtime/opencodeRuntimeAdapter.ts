@@ -846,7 +846,13 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
 type GeneratedToolAction = "read" | "edit" | "verification" | "egress" | "skill" | "child-agent";
 
 function toolDescription(action: GeneratedToolAction): string {
-  if (action === "read") return "Read a bounded repository text file through Keiko governance.";
+  if (action === "read") {
+    return (
+      "Read a bounded repository text file through Keiko governance. " +
+      "For large files pass startLine/maxLines to page through a window; the result reports " +
+      "totalLines plus nextStartLine while the digest always covers the whole file."
+    );
+  }
   if (action === "egress") {
     return "Fetch one approved public https URL through governed read-only research (#2387).";
   }
@@ -910,7 +916,10 @@ function toolSource(
     '  if (!["completed", "failed", "denied", "invalid", "cancelled", "busy", "observed"].includes(value.status)) return false;',
     '  if ((action !== "read" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
-    '  return !!read && typeof read === "object" && !Array.isArray(read) && typeof read.text === "string" && Number.isSafeInteger(read.byteCount) && /^[a-f0-9]{64}$/.test(read.digest);',
+    '  if (!read || typeof read !== "object" || Array.isArray(read) || typeof read.text !== "string" || !Number.isSafeInteger(read.byteCount) || !/^[a-f0-9]{64}$/.test(read.digest)) return false;',
+    '  if (action !== "read") return true;',
+    "  if (!Number.isSafeInteger(read.totalLines) || read.totalLines < 0) return false;",
+    "  return read.nextStartLine === undefined || (Number.isSafeInteger(read.nextStartLine) && read.nextStartLine >= 2);",
     "}",
     "export default {",
     `  description: ${JSON.stringify(toolDescription(action))},`,

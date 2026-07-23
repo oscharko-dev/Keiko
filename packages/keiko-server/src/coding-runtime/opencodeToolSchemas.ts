@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 
+import {
+  CODING_TOOL_READ_MAX_START_LINE,
+  CODING_TOOL_READ_MAX_WINDOW_LINES,
+} from "./codingToolIpc.js";
+
 export const OPENCODE_PINNED_VERSION = "1.17.17";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
@@ -44,6 +49,20 @@ const WORKSPACE_READ_SCHEMA = {
       minLength: 1,
       maxLength: 512,
       pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+    },
+    startLine: {
+      type: "integer",
+      minimum: 1,
+      maximum: CODING_TOOL_READ_MAX_START_LINE,
+      description:
+        "Optional 1-based first line of the returned window; omit to start at the first line.",
+    },
+    maxLines: {
+      type: "integer",
+      minimum: 1,
+      maximum: CODING_TOOL_READ_MAX_WINDOW_LINES,
+      description:
+        "Optional window height in lines; omit for the whole file. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file.",
     },
   },
   required: ["relativePath"],
@@ -222,7 +241,11 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
   {
     name: "keiko_workspace_read",
     action: "read",
-    arguments: { relativePath: WORKSPACE_READ_SCHEMA.properties.relativePath },
+    arguments: {
+      relativePath: WORKSPACE_READ_SCHEMA.properties.relativePath,
+      startLine: WORKSPACE_READ_SCHEMA.properties.startLine,
+      maxLines: WORKSPACE_READ_SCHEMA.properties.maxLines,
+    },
   },
   {
     name: "keiko_changeset_edit",

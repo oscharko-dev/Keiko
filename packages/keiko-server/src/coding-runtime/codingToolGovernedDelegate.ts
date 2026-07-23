@@ -1,7 +1,11 @@
 import type { AuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts";
 
 import type { CodingToolDelegatePort, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
-import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import type {
+  CodingToolActionRequest,
+  CodingToolEgressReadResult,
+  CodingToolReadResult,
+} from "./codingToolIpc.js";
 
 export type CodingToolActionOf<Kind extends CodingToolActionRequest["action"]> = Extract<
   CodingToolActionRequest,
@@ -16,11 +20,7 @@ export interface GovernedCodingToolPort<Kind extends CodingToolActionRequest["ac
   ) => Promise<GovernedCodingToolResult>;
 }
 
-interface GovernedCodingToolRead {
-  readonly text: string;
-  readonly byteCount: number;
-  readonly digest: string;
-}
+type GovernedCodingToolRead = CodingToolReadResult | CodingToolEgressReadResult;
 type GovernedCodingToolResult =
   | {
       readonly status: "completed";

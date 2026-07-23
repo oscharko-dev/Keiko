@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -77,7 +79,66 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         text: "const value = 1;\n",
         byteCount: Buffer.byteLength("const value = 1;\n", "utf8"),
         digest: "8de5c07db8deb3b75dedd9b5bc999669936cea181ae0033c27c4e2071a6e434d",
+        totalLines: 1,
       },
+    });
+  });
+
+  it("returns the requested line window while keeping the digest anchored to the whole file (#2473)", async () => {
+    const fullText = "line one\nline two\nline three\nline four\n";
+    const wholeFileDigest = createHash("sha256").update(fullText, "utf8").digest("hex");
+    const readText = vi.fn(() => Promise.resolve({ ok: true as const, text: fullText }));
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-2332",
+        authorityRef: { runId: "run-2332", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+    });
+    const execute = (window: {
+      readonly startLine?: number;
+      readonly maxLines?: number;
+    }): ReturnType<typeof ports.repositoryRead.execute> =>
+      ports.repositoryRead.execute(
+        {
+          action: "read",
+          actionId: "read-1",
+          idempotencyKey: "read-key",
+          relativePath: "src/a.ts",
+          ...window,
+        },
+        undefined,
+        { check: (): true => true },
+      );
+
+    await expect(execute({ startLine: 2, maxLines: 2 })).resolves.toEqual({
+      status: "completed",
+      read: {
+        text: "line two\nline three\n",
+        byteCount: Buffer.byteLength("line two\nline three\n", "utf8"),
+        digest: wholeFileDigest,
+        totalLines: 4,
+        nextStartLine: 4,
+      },
+    });
+    await expect(execute({ startLine: 4 })).resolves.toEqual({
+      status: "completed",
+      read: {
+        text: "line four\n",
+        byteCount: Buffer.byteLength("line four\n", "utf8"),
+        digest: wholeFileDigest,
+        totalLines: 4,
+      },
+    });
+    // A window past the end stays an honest empty page, never a failure.
+    await expect(execute({ startLine: 5 })).resolves.toEqual({
+      status: "completed",
+      read: { text: "", byteCount: 0, digest: wholeFileDigest, totalLines: 4 },
+    });
+    await expect(execute({ maxLines: 1 })).resolves.toMatchObject({
+      read: { text: "line one\n", totalLines: 4, nextStartLine: 2 },
     });
   });
 
