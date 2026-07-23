@@ -144,4 +144,17 @@ describe("useWorkspaceTrust", () => {
     });
     expect(mutateTrust).not.toHaveBeenCalled();
   });
+
+  it("keeps status pinned when the tracked project id is the empty string", async () => {
+    // The `""` project id is the "no workspace open" sentinel: the hook must not attempt
+    // a fetch, and every consumer read (status/loading/mutating/issue) has to yield a
+    // deterministic empty projection so downstream widgets never receive a stale trust
+    // decision from a previously-open project.
+    const view = renderHook(() => useWorkspaceTrust(""));
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    expect(fetchStatus).not.toHaveBeenCalled();
+    expect(view.result.current.status).toBeUndefined();
+    expect(view.result.current.mutating).toBe(false);
+    expect(view.result.current.issue).toBeUndefined();
+  });
 });

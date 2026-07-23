@@ -120,4 +120,12 @@ describe("workspace trust API", () => {
       expect(workspaceTrustEventProjectId(event)).toBeNull();
     }
   });
+
+  it("exposes the pinned event name so useEditorVerificationRun and useWorkspaceTrust bind the same key", () => {
+    // useEditorVerificationRun.ts and useWorkspaceTrust.ts both `addEventListener` for this
+    // string; a rename in one file without the others would silently break the trust-changed
+    // refetch path M11 depends on, so pin the exact byte sequence.
+    expect(WORKSPACE_TRUST_CHANGED_EVENT).toBe("keiko:workspace-trust-changed");
+    expect(WORKSPACE_TRUST_CHANGED_EVENT.startsWith("keiko:")).toBe(true);
+  });
 });
