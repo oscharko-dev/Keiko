@@ -220,7 +220,15 @@ export function migrateLegacyProjectManifests(db: DatabaseSync): void {
     .prepare("SELECT path, name FROM projects ORDER BY last_opened_at DESC, path LIMIT 1")
     .all() as unknown as readonly ProjectRow[];
   for (const project of projects) {
-    ensureProjectWorkspaceManifest(db, project.path, project.name, 0);
+    // Per-row tolerance is the migration's own invariant, deliberately narrower than the
+    // fail-closed `createProjectRecord` path: a legacy project row whose directory no longer
+    // exists on disk must not brick the forward-only schema upgrade for the whole store. The
+    // skipped project simply stays pre-manifest, which downstream code already handles (#2613).
+    try {
+      ensureProjectWorkspaceManifest(db, project.path, project.name, 0);
+    } catch {
+      continue;
+    }
   }
   if (listWorkspaceManifestRecords(db).length > 0) {
     db.prepare("DELETE FROM workspace_trust_records").run();
