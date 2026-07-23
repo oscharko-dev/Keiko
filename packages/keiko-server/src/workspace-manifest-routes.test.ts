@@ -134,4 +134,155 @@ describe("workspace manifest routes", () => {
     const acceptedBody = (await accepted.json()) as { readonly manifest: WorkspaceManifest };
     expect(acceptedBody.manifest.roots.map((root) => root.canonicalRoot)).toEqual([rootA, rootB]);
   });
+
+  it("serves a manifest with its binding and 404s an unknown workspace id", async () => {
+    const manifest = await alphaManifest();
+    const found = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}`));
+    expect(found.status).toBe(200);
+    const foundBody = (await found.json()) as {
+      readonly manifest: WorkspaceManifest;
+      readonly binding: unknown;
+    };
+    expect(foundBody.manifest.workspaceId).toBe(manifest.workspaceId);
+    expect(foundBody.binding).toBeDefined();
+
+    const missing = await fetch(requestUrl("/api/workspaces/ws-does-not-exist"));
+    expect(missing.status).toBe(404);
+    const missingBody = (await missing.json()) as { readonly error: { readonly code: string } };
+    expect(missingBody.error.code).toBe("WORKSPACE_MANIFEST_UNAVAILABLE");
+  });
+
+  it("rejects malformed bodies without reaching the store", async () => {
+    const manifest = await alphaManifest();
+    const endpoint = requestUrl(`/api/workspaces/${manifest.workspaceId}/roots`);
+
+    const nonJson = await fetch(endpoint, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: "{not json",
+    });
+    expect(nonJson.status).toBe(400);
+
+    const arrayBody = await fetch(endpoint, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify([1, 2, 3]),
+    });
+    expect(arrayBody.status).toBe(400);
+
+    const unknownKey = await fetch(endpoint, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ projectPath: rootB, dispatch: dispatch(manifest), extra: true }),
+    });
+    expect(unknownKey.status).toBe(400);
+
+    const emptyProjectPath = await fetch(endpoint, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ projectPath: "", dispatch: dispatch(manifest) }),
+    });
+    expect(emptyProjectPath.status).toBe(400);
+
+    const dispatchForOtherWorkspace = await fetch(endpoint, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        projectPath: rootB,
+        dispatch: { ...dispatch(manifest), workspaceId: "ws-other" },
+      }),
+    });
+    expect(dispatchForOtherWorkspace.status).toBe(400);
+    expect(
+      ((await dispatchForOtherWorkspace.json()) as { readonly error: { readonly code: string } })
+        .error.code,
+    ).toBe("WORKSPACE_REQUEST_INVALID");
+  });
+
+  it("rejects an over-limit body while streaming, before parsing", async () => {
+    const manifest = await alphaManifest();
+    const oversized = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}/roots`), {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ projectPath: "x".repeat(70_000), dispatch: dispatch(manifest) }),
+    });
+    expect(oversized.status).toBe(400);
+  });
+
+  it("reorders, focuses, and removes roots through member-root dispatches", async () => {
+    const initial = await alphaManifest();
+    const added = await fetch(requestUrl(`/api/workspaces/${initial.workspaceId}/roots`), {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ projectPath: rootB, dispatch: dispatch(initial) }),
+    });
+    expect(added.status).toBe(200);
+    let manifest = ((await added.json()) as { readonly manifest: WorkspaceManifest }).manifest;
+    const [first, second] = manifest.roots;
+    if (first === undefined || second === undefined) throw new Error("expected two roots");
+
+    const reversed = await fetch(
+      requestUrl(`/api/workspaces/${manifest.workspaceId}/roots/order`),
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          dispatch: dispatch(manifest),
+          orderedRootRefs: [second.rootRef, first.rootRef],
+        }),
+      },
+    );
+    expect(reversed.status).toBe(200);
+    manifest = ((await reversed.json()) as { readonly manifest: WorkspaceManifest }).manifest;
+    expect(manifest.roots.map((root) => root.rootRef)).toEqual([second.rootRef, first.rootRef]);
+
+    const badOrder = await fetch(
+      requestUrl(`/api/workspaces/${manifest.workspaceId}/roots/order`),
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ dispatch: dispatch(manifest), orderedRootRefs: [1, 2] }),
+      },
+    );
+    expect(badOrder.status).toBe(400);
+
+    const focused = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}/focus`), {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ dispatch: dispatch(manifest), focusedRootRef: first.rootRef }),
+    });
+    expect(focused.status).toBe(200);
+    manifest = ((await focused.json()) as { readonly manifest: WorkspaceManifest }).manifest;
+    expect(manifest.focusedRootRef).toBe(first.rootRef);
+
+    const staleRemove = await fetch(
+      requestUrl(`/api/workspaces/${manifest.workspaceId}/roots/${second.rootRef}`),
+      {
+        method: "DELETE",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ dispatch: { ...dispatch(manifest), manifestRevision: 0 } }),
+      },
+    );
+    expect(staleRemove.status).toBe(409);
+
+    const removed = await fetch(
+      requestUrl(`/api/workspaces/${manifest.workspaceId}/roots/${second.rootRef}`),
+      {
+        method: "DELETE",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ dispatch: dispatch(manifest) }),
+      },
+    );
+    expect(removed.status).toBe(200);
+    manifest = ((await removed.json()) as { readonly manifest: WorkspaceManifest }).manifest;
+    expect(manifest.roots.map((root) => root.rootRef)).toEqual([first.rootRef]);
+  });
 });
+
+async function alphaManifest(): Promise<WorkspaceManifest> {
+  const listed = await fetch(requestUrl("/api/workspaces"));
+  const body = (await listed.json()) as { readonly manifests: readonly WorkspaceManifest[] };
+  const manifest = body.manifests.find((item) => item.roots[0]?.canonicalRoot === rootA);
+  if (manifest === undefined) throw new Error("missing alpha manifest");
+  return manifest;
+}
