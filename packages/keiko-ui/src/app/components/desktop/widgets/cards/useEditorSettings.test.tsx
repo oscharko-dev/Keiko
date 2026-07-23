@@ -205,6 +205,48 @@ describe("useEditorSettings M7 cross-window integration", () => {
     );
   });
 
+  it("walks the mutation branches: ok-result install, generic failure, reset, empty reset", async () => {
+    api.currentSnapshot = snapshot(0, 13);
+    const live = renderHook(() => useEditorSettings("/repo"));
+    await waitFor(() => expect(live.result.current.snapshot?.revision).toBe(0));
+
+    api.mutateEditorSettings.mockResolvedValueOnce({
+      kind: "ok",
+      snapshot: snapshot(1, 21),
+    });
+    await act(async () => {
+      await live.result.current.setValue("workspace", "fontSize", 21);
+    });
+    expect(live.result.current.applied.fontSize).toBe(21);
+    expect(live.result.current.issue).toBeUndefined();
+
+    api.mutateEditorSettings.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => {
+      await live.result.current.setValue("workspace", "fontSize", 22);
+    });
+    expect(live.result.current.issue).toBe("mutation");
+    expect(live.result.current.mutating).toBe(false);
+
+    api.mutateEditorSettings.mockResolvedValueOnce({
+      kind: "ok",
+      snapshot: snapshot(2, 13),
+    });
+    await act(async () => {
+      await live.result.current.reset("workspace", ["fontSize"]);
+    });
+    expect(live.result.current.applied.fontSize).toBe(13);
+    expect(api.mutateEditorSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: "reset", settingIds: ["fontSize"] }),
+      expect.any(String),
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
+    await act(async () => {
+      await live.result.current.reset("workspace", []);
+    });
+    expect(api.mutateEditorSettings).toHaveBeenCalledTimes(3);
+  });
+
   it("uses the root revision for root-scoped mutations", async () => {
     api.currentSnapshot = {
       ...snapshot(0, 13),

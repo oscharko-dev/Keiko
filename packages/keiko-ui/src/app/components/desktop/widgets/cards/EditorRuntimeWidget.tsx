@@ -6070,6 +6070,13 @@ function EditorRuntimeWidget({
     else announceToolbarNotice("Formatting is unavailable for this file.");
   };
 
+  const handleSaveClick = (): void => {
+    if (canSave) void persist(content);
+    else announceToolbarNotice(saveUnavailableReason());
+  };
+  const saveButtonLabel =
+    saveStatus === "saving" ? commonT("common.saving") : commonT("common.save");
+
   const renderEditorToolbar = (): ReactNode => (
     <div className="ed-toolbar-actions">
       {toolbarExtras}
@@ -6142,13 +6149,10 @@ function EditorRuntimeWidget({
         <button
           type="button"
           className="ed-save"
-          onClick={() => {
-            if (canSave) void persist(content);
-            else announceToolbarNotice(saveUnavailableReason());
-          }}
+          onClick={handleSaveClick}
           aria-disabled={saveUnavailable}
         >
-          {saveStatus === "saving" ? commonT("common.saving") : commonT("common.save")}
+          {saveButtonLabel}
         </button>
       ) : null}
     </div>
