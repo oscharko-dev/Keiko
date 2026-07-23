@@ -212,7 +212,7 @@
     "dependency-cruiser": "^18.0.0",
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^10.1.8",
-    "knip": "6.26.0",
+    "knip": "6.27.0",
     "prettier": "^3.0.0",
     "typescript-eslint": "^8.63.0",
     "vitest": "^4.1.10"
