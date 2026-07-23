@@ -337,11 +337,15 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   const editor = await openEditorWorkspace(journeyPage);
   const pane = firstPane(editor);
   await saveVersion(journeyPage, pane, VERSION_ONE);
+  // Read the oldest checkpoint's content from disk instead of hard-coding it (the sibling #2531
+  // journey established this pattern): `typeIntoActiveEditor` selects-all-and-replaces, but how
+  // much Monaco actually selects differs per platform/focus timing, so a literal expectation
+  // encodes one platform's artifact. What restore must guarantee is exactly "the file equals the
+  // oldest checkpoint" — assert that.
+  const oldestContent = readFileSync(join(harness.alpha.root, FILE), "utf8");
   await saveVersion(journeyPage, pane, VERSION_TWO);
   const historyRestoreMs = await restoreOldest(journeyPage, pane);
-  expect(readFileSync(join(harness.alpha.root, FILE), "utf8")).toBe(
-    `${INITIAL_VERSION}${VERSION_ONE}`,
-  );
+  expect(readFileSync(join(harness.alpha.root, FILE), "utf8")).toBe(oldestContent);
   expect(JSON.stringify(await journeyPage.evaluate(() => window.localStorage))).not.toContain(
     "historyValue",
   );
