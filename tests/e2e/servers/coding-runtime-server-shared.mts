@@ -228,11 +228,16 @@ function scriptedModelDeps(
   };
 }
 
-function researchResolverSeams(
-  research: CodingRuntimeResearchJourneyConfig,
-): Partial<
-  Pick<ProductionCodingRuntimeResolverInput, "researchFetchImpl" | "childModelPortFactory">
-> & { readonly researchEgressEnabled: true; readonly childModelId: string } {
+function researchResolverSeams(research: CodingRuntimeResearchJourneyConfig): {
+  readonly researchEgressEnabled: true;
+  readonly researchFetchImpl: NonNullable<
+    ProductionCodingRuntimeResolverInput["researchFetchImpl"]
+  >;
+  readonly childModelPortFactory: NonNullable<
+    ProductionCodingRuntimeResolverInput["childModelPortFactory"]
+  >;
+  readonly childModelId: string;
+} {
   const fetchImpl = research.hermeticFetch();
   return {
     researchEgressEnabled: true,
@@ -249,6 +254,32 @@ function researchResolverSeams(
   };
 }
 
+function scriptedResolver(
+  config: CodingRuntimeJourneyServerConfig,
+  stateDir: string,
+  port: number,
+  services: JourneyWorkspaceServices,
+  scripted: ScriptedOpenCodeHarness,
+): ReturnType<typeof createFunctionalRuntimeResolver> {
+  const input = {
+    portable: scriptedFunctionalPortable(stateDir),
+    runtimeStateRoot: join(stateDir, "runtime-state"),
+    gatewayUrl: `http://${UI_HOST}:${String(port)}/api/coding-sidecar/gateway`,
+    workspaceLifecycle: services.lifecycle,
+    managedTaskWorkspaceRoot: config.managedRoot(stateDir),
+    readWorkspaceHead: readProductionWorkspaceHead,
+    verificationRunner: verificationRunner(config.fixtureLabel),
+    runtimeEvidence: createCodingRuntimeEvidenceAggregator(createInMemoryEvidenceStore()),
+    createSupervisor: scripted.createSupervisor,
+  };
+  return config.research === undefined
+    ? createFunctionalRuntimeResolver(input)
+    : createFunctionalRuntimeResolver({
+        ...input,
+        ...researchResolverSeams(config.research),
+      });
+}
+
 function scriptedComposition(
   config: CodingRuntimeJourneyServerConfig,
   stateDir: string,
@@ -261,18 +292,7 @@ function scriptedComposition(
   }
   const scripted = createScriptedOpenCodeHarness();
   const script = journeyScript(config, stateDir);
-  const resolver = createFunctionalRuntimeResolver({
-    portable: scriptedFunctionalPortable(stateDir),
-    runtimeStateRoot: join(stateDir, "runtime-state"),
-    gatewayUrl: `http://${UI_HOST}:${String(port)}/api/coding-sidecar/gateway`,
-    workspaceLifecycle: services.lifecycle,
-    managedTaskWorkspaceRoot: config.managedRoot(stateDir),
-    readWorkspaceHead: readProductionWorkspaceHead,
-    verificationRunner: verificationRunner(config.fixtureLabel),
-    runtimeEvidence: createCodingRuntimeEvidenceAggregator(createInMemoryEvidenceStore()),
-    createSupervisor: scripted.createSupervisor,
-    ...(config.research === undefined ? {} : researchResolverSeams(config.research)),
-  });
+  const resolver = scriptedResolver(config, stateDir, port, services, scripted);
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
     KEIKO_STATE_DIR: join(bffStateRoot, "state"),

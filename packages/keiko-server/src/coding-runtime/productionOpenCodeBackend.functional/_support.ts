@@ -73,7 +73,7 @@ type FunctionalEditorAgentClient = ProductionCodingRuntimeResolverInput["editorA
 type FunctionalEditorAction = Parameters<FunctionalEditorAgentClient["action"]>[0];
 type FunctionalEditorActionResult = Awaited<ReturnType<FunctionalEditorAgentClient["action"]>>;
 
-export interface FunctionalRuntimeResolverInput {
+interface FunctionalRuntimeResolverBaseInput {
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
@@ -88,10 +88,48 @@ export interface FunctionalRuntimeResolverInput {
   readonly researchEgressEnabled?: boolean | undefined;
   /** #2387 hermetic research transport; tests never touch the real network. */
   readonly researchFetchImpl?: ProductionCodingRuntimeResolverInput["researchFetchImpl"];
-  /** #2387 hermetic child model; production resolves the same model through the gateway. */
-  readonly childModelPortFactory?: ProductionCodingRuntimeResolverInput["childModelPortFactory"];
-  /** Provider model id served by `childModelPortFactory`; both are required to mount the child. */
+}
+
+type FunctionalChildModelInput =
+  | {
+      readonly childModelPortFactory?: undefined;
+      readonly childModelId?: undefined;
+    }
+  | {
+      /** #2387 hermetic child model; production resolves the same model through the gateway. */
+      readonly childModelPortFactory: NonNullable<
+        ProductionCodingRuntimeResolverInput["childModelPortFactory"]
+      >;
+      /** Provider model id served by `childModelPortFactory`; both are required to mount the child. */
+      readonly childModelId: string;
+    };
+
+export type FunctionalRuntimeResolverInput = FunctionalRuntimeResolverBaseInput &
+  FunctionalChildModelInput;
+
+export interface FunctionalChildModelCandidate {
+  readonly childModelPortFactory?:
+    ProductionCodingRuntimeResolverInput["childModelPortFactory"] | undefined;
   readonly childModelId?: string | undefined;
+}
+
+type ResolvedFunctionalChildModelInput = Partial<
+  Pick<ProductionCodingRuntimeResolverInput, "childModelPortFactory" | "childModelId">
+>;
+
+/** Enforces the child-model factory/id pair even for untyped JavaScript harness callers. */
+export function resolveFunctionalChildModelInput(
+  input: FunctionalChildModelCandidate,
+): ResolvedFunctionalChildModelInput {
+  const { childModelPortFactory, childModelId } = input;
+  if (childModelPortFactory === undefined && childModelId === undefined) return {};
+  if (childModelPortFactory === undefined || childModelId === undefined) {
+    throw new Error("functional-child-model-configuration-incomplete");
+  }
+  return {
+    childModelPortFactory,
+    childModelId: (): string => childModelId,
+  };
 }
 
 /**
@@ -116,10 +154,7 @@ export function createFunctionalRuntimeResolver(
         : { researchEgressEnabled: input.researchEgressEnabled }),
     },
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
-    ...(input.childModelPortFactory ? { childModelPortFactory: input.childModelPortFactory } : {}),
-    ...(input.childModelId === undefined
-      ? {}
-      : { childModelId: (): string | undefined => input.childModelId }),
+    ...resolveFunctionalChildModelInput(input),
     backend: createProductionOpenCodeBackend({
       portable: input.portable,
       runtimeStateRoot: input.runtimeStateRoot,

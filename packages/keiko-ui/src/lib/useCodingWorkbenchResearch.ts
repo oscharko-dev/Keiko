@@ -27,6 +27,11 @@ export interface UseCodingWorkbenchResearchInput {
 }
 
 const IDLE: CodingWorkbenchResearchState = { status: "idle", ask: null, grant: null };
+const LOADING: CodingWorkbenchResearchState = { status: "loading", ask: null, grant: null };
+
+interface ScopedResearchState extends UseCodingWorkbenchResearchInput {
+  readonly value: CodingWorkbenchResearchState;
+}
 
 /**
  * Reads all model-selected research state from its one authenticated channel (#2387, #2644). The
@@ -36,23 +41,37 @@ export function useCodingWorkbenchResearch(
   input: UseCodingWorkbenchResearchInput,
 ): CodingWorkbenchResearchState {
   const { runId, revision, permissionRequestId } = input;
-  const [state, setState] = useState<CodingWorkbenchResearchState>(IDLE);
+  const [scoped, setScoped] = useState<ScopedResearchState>(() =>
+    scopeResearchState(runId, revision, permissionRequestId, inputState(input)),
+  );
 
   useEffect(() => {
     if (runId === undefined) {
-      setState(IDLE);
+      setScoped(scopeResearchState(runId, revision, permissionRequestId, IDLE));
       return;
     }
     const controller = new AbortController();
-    setState({ status: "loading", ask: null, grant: null });
+    setScoped(scopeResearchState(runId, revision, permissionRequestId, LOADING));
     void (async (): Promise<void> => {
       try {
         await codingAppSessionPairingSettled();
         if (controller.signal.aborted) return;
         const payload = await getCodingWorkbenchRuntimeResearch(runId, controller.signal);
-        if (!controller.signal.aborted) setState(projectResearchState(payload));
+        if (!controller.signal.aborted) {
+          setScoped(
+            scopeResearchState(runId, revision, permissionRequestId, projectResearchState(payload)),
+          );
+        }
       } catch {
-        if (!controller.signal.aborted) setState({ status: "unavailable", ask: null, grant: null });
+        if (!controller.signal.aborted) {
+          setScoped(
+            scopeResearchState(runId, revision, permissionRequestId, {
+              status: "unavailable",
+              ask: null,
+              grant: null,
+            }),
+          );
+        }
       }
     })();
     return () => {
@@ -60,7 +79,36 @@ export function useCodingWorkbenchResearch(
     };
   }, [runId, revision, permissionRequestId]);
 
-  return state;
+  return sameResearchInput(scoped, input) ? scoped.value : inputState(input);
+}
+
+function inputState(input: UseCodingWorkbenchResearchInput): CodingWorkbenchResearchState {
+  return input.runId === undefined ? IDLE : LOADING;
+}
+
+function scopeResearchState(
+  runId: string | undefined,
+  revision: number | undefined,
+  permissionRequestId: string | undefined,
+  value: CodingWorkbenchResearchState,
+): ScopedResearchState {
+  return {
+    runId,
+    revision,
+    permissionRequestId,
+    value,
+  };
+}
+
+function sameResearchInput(
+  left: UseCodingWorkbenchResearchInput,
+  right: UseCodingWorkbenchResearchInput,
+): boolean {
+  return (
+    left.runId === right.runId &&
+    left.revision === right.revision &&
+    left.permissionRequestId === right.permissionRequestId
+  );
 }
 
 function projectResearchState(

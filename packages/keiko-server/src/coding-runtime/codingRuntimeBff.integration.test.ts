@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Integration fixtures are contextually typed. */
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -48,23 +47,19 @@ afterEach(async () => {
 
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
-  return (server.address() as AddressInfo).port;
-}
-
-async function close(server: Server): Promise<void> {
-  await new Promise<void>((resolve) =>
-    server.close(() => {
-      resolve();
-    }),
-  );
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("server did not bind TCP");
+  return address.port;
 }
 
 async function startServer(staticRoot: string, handlerDeps: UiHandlerDeps): Promise<number> {
-  const probe = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps });
-  const port = await listen(probe);
-  await close(probe);
-  const server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  const serverDeps = { staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps };
+  const server = createUiServer(serverDeps);
+  const port = await listen(server);
+  // The real listener binds once and atomically. Before any request can be issued, align the
+  // test-owned authority descriptor with Node's selected port so the production Host/Origin guard
+  // still validates the exact bound endpoint rather than a probe or a synthetic authority.
+  serverDeps.port = port;
   servers.push(server);
   return port;
 }
@@ -120,19 +115,17 @@ describe("production coding runtime BFF", () => {
       modelSource: "keiko-model-gateway",
     };
     let grantVisible = false;
+    const grant = {
+      grantId: "grant-route-canary",
+      domains: [host],
+      expiresAt: "2026-07-23T00:05:00.000Z",
+    };
     const orchestrator = {
       status: (): CodingWorkbenchRuntimeSnapshot => snapshot,
       getSnapshot: (runId: string): CodingWorkbenchRuntimeSnapshot | undefined =>
         runId === "run-1" ? snapshot : undefined,
       pendingResearchAsk: () => undefined,
-      researchGrant: () =>
-        grantVisible
-          ? {
-              grantId: "grant-route-canary",
-              domains: [host],
-              expiresAt: "2026-07-23T00:05:00.000Z",
-            }
-          : undefined,
+      researchGrant: () => (grantVisible ? grant : undefined),
     };
     const port = await startServer(staticRoot, {
       codingRuntimeOrchestrator: orchestrator,
@@ -156,14 +149,12 @@ describe("production coding runtime BFF", () => {
     );
 
     expect(bodies[1]).toEqual(bodies[0]);
+    expect(bodies[2]).toEqual(bodies[0]);
     expect(bodies[3]).toEqual({ session: "unpaired" });
-    expect(bodies[4]).toMatchObject({
+    expect(bodies[4]).toEqual({
       session: "active",
-      grant: { grantId: "grant-route-canary", domains: [host] },
+      grant,
     });
-    expect(
-      bodies.map((body) => JSON.stringify(body)).filter((body) => body.includes(host)),
-    ).toHaveLength(1);
   });
 
   it("keeps authority server-owned and dispatches transient intent through a qualified host", async () => {

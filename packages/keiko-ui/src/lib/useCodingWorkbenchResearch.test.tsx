@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts";
 
@@ -8,9 +8,10 @@ import {
 } from "./useCodingWorkbenchResearch";
 
 const getResearchMock = vi.hoisted(() => vi.fn());
+const pairingSettledMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./coding-app-session-client", () => ({
-  codingAppSessionPairingSettled: vi.fn(() => Promise.resolve(false)),
+  codingAppSessionPairingSettled: pairingSettledMock,
 }));
 
 vi.mock("./coding-workbench-runtime-api", () => ({
@@ -42,9 +43,24 @@ const RUN: UseCodingWorkbenchResearchInput = {
   permissionRequestId: "research-approval-1",
 };
 
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve = (_value: T): void => undefined;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 describe("useCodingWorkbenchResearch", () => {
   beforeEach(() => {
     getResearchMock.mockReset();
+    pairingSettledMock.mockReset();
+    pairingSettledMock.mockResolvedValue(false);
   });
 
   it("reads pending and approved state from the one authenticated channel", async () => {
@@ -105,11 +121,18 @@ describe("useCodingWorkbenchResearch", () => {
       expect(result.current.status).toBe("ready");
     });
 
-    getResearchMock.mockResolvedValue({
-      session: "active",
-      pending: { ...PENDING, requestId: "research-approval-2", host: "other.example.org" },
-    });
+    const replacement = deferred<CodingWorkbenchRuntimeResearchChannelPayload>();
+    getResearchMock.mockReturnValue(replacement.promise);
     rerender({ ...RUN, revision: 5, permissionRequestId: "research-approval-2" });
+
+    expect(result.current).toEqual({ status: "loading", ask: null, grant: null });
+    await act(async () => {
+      replacement.resolve({
+        session: "active",
+        pending: { ...PENDING, requestId: "research-approval-2", host: "other.example.org" },
+      });
+      await replacement.promise;
+    });
 
     await waitFor(() => {
       expect(result.current.ask?.host).toBe("other.example.org");
@@ -117,24 +140,58 @@ describe("useCodingWorkbenchResearch", () => {
     expect(getResearchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("aborts the in-flight read when the run disappears", async () => {
+  it("keeps stale completion idle after the in-flight read is aborted", async () => {
+    const pairing = deferred<boolean>();
+    const inFlight = deferred<CodingWorkbenchRuntimeResearchChannelPayload>();
     let observed: AbortSignal | undefined;
-    getResearchMock.mockImplementation((_runId: string, signal?: AbortSignal): Promise<never> => {
+    pairingSettledMock.mockReturnValue(pairing.promise);
+    getResearchMock.mockImplementation((_runId: string, signal?: AbortSignal) => {
       observed = signal;
-      return new Promise<never>(() => undefined);
+      return inFlight.promise;
     });
 
-    const { rerender } = renderHook(
+    const { result, rerender } = renderHook(
       (props: UseCodingWorkbenchResearchInput) => useCodingWorkbenchResearch(props),
-      {
-        initialProps: RUN,
-      },
+      { initialProps: RUN },
     );
+    await act(async () => {
+      pairing.resolve(false);
+      await pairing.promise;
+    });
     await waitFor(() => {
       expect(observed).toBeDefined();
     });
-    rerender({ ...RUN, runId: undefined });
 
+    rerender({ ...RUN, runId: undefined });
+    expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
     expect(observed?.aborted).toBe(true);
+
+    await act(async () => {
+      inFlight.resolve(active());
+      await inFlight.promise;
+    });
+    expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
+  });
+
+  it("does not start a read when pairing settles after the run disappears", async () => {
+    const pairing = deferred<boolean>();
+    pairingSettledMock.mockReturnValue(pairing.promise);
+    getResearchMock.mockResolvedValue({
+      session: "active",
+      pending: PENDING,
+    });
+
+    const { result, rerender } = renderHook(
+      (props: UseCodingWorkbenchResearchInput) => useCodingWorkbenchResearch(props),
+      { initialProps: RUN },
+    );
+    rerender({ ...RUN, runId: undefined });
+    await act(async () => {
+      pairing.resolve(false);
+      await pairing.promise;
+    });
+
+    expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
+    expect(getResearchMock).not.toHaveBeenCalled();
   });
 });

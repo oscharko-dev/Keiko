@@ -302,7 +302,7 @@ test("#2387 research: the grant chip is live server truth, never a static render
         schemaVersion: "1",
         state: "running",
         revision: 4,
-        updatedAt: new Date().toISOString(),
+        updatedAt: "2026-07-20T00:00:00.000Z",
         runId: "run-1",
       }),
     }),
