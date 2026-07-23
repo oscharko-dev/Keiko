@@ -257,6 +257,17 @@ export function projectOpenCodePermissionRequestId(requestId: string): string | 
   return `permission-${BigInt(`0x${digest}`).toString(10)}`;
 }
 
+/** A SHA-256 rendered as decimal never exceeds 78 digits. */
+const PROJECTED_PERMISSION_REQUEST_ID = /^permission-\d{1,78}$/u;
+
+/**
+ * True only for ids `projectOpenCodePermissionRequestId` can have produced. Server-originated
+ * asks (e.g. `research-approval-<n>`) never match: they have no child-side permission to settle.
+ */
+export function isProjectedOpenCodePermissionRequestId(requestId: string): boolean {
+  return PROJECTED_PERMISSION_REQUEST_ID.test(requestId);
+}
+
 function governedPermissionProperties(
   value: unknown,
   fixedSessionId: string,

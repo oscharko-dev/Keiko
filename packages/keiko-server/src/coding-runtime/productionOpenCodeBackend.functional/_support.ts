@@ -503,10 +503,14 @@ function researchScriptedResponse(
   transcript: string,
   script: ScriptState,
 ): NormalizedResponse {
-  if (step === 0 || step === 2 || step === 7) {
+  if (step === 0 || step === 2 || step === 6) {
     return tool("keiko_research_fetch", { target: RESEARCH_JOURNEY_URL });
   }
-  if (step === 1 || step === 6) return tool("question", question());
+  // The causal-terminal contract settles the run on the first `stop` completion, so every phase
+  // boundary the journey still needs (revoke, follow-up, deny) is held open by a blocking
+  // question instead of a bare text turn: step 5 keeps the run alive for the revoke phase, and
+  // step 7 keeps it awaiting the operator's deny after the revoked re-ask.
+  if (step === 1 || step === 5 || step === 7) return tool("question", question());
   // #2637: step 3 is the decision the granted page tried to steer. Only a fenced directive lets the
   // journey continue to its skill invocation.
   if (step === 3) return researchPostFetchResponse(transcript, script);

@@ -120,22 +120,6 @@ async function expectResearchApprovalPrompt(page: Page): Promise<void> {
   ).toBeVisible();
 }
 
-// The composer only offers "Send follow-up" while the run is paused (#2386 sticky-pause design):
-// pause, admit the follow-up turn, and resume so the scripted model takes its next turn.
-async function sendFollowUpTurn(page: Page, instructions: string): Promise<void> {
-  await page.getByRole("button", { name: "Pause run" }).click();
-  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
-  const submitted = page
-    .getByRole("list", { name: "Coding run event timeline" })
-    .getByText("Task submitted", { exact: true });
-  const before = await submitted.count();
-  await page.getByLabel("Task instructions").fill(instructions);
-  await page.getByRole("button", { name: "Send follow-up" }).click();
-  await expect(submitted).toHaveCount(before + 1, { timeout: 90_000 });
-  await page.getByRole("button", { name: "Resume run" }).click();
-  await expect(workbench(page)).toHaveAttribute("data-state", "running");
-}
-
 // The scripted blocking question halts the agent loop server-side until the browser answers it —
 // the halt point that keeps the following governed fetch inside a RUNNING run (a paused run's
 // sticky ingest guard would drop its events). The single scripted option is labelled "Approve".
@@ -273,9 +257,11 @@ test("#2387 research: approval mints the grant, the governed fetch runs, revoke 
   await expect(chip).toHaveCount(0);
   expect((await currentResearch(page, runId)).grant).toBeUndefined();
 
-  // Revoked means revoked: the model's next ask needs a FRESH human approval — the runtime halts
-  // again instead of silently reaching the internet. Deny settles the run failed/revoked.
-  await sendFollowUpTurn(page, "Fetch the guide again");
+  // Revoked means revoked: the agent's very next fetch inside the SAME task (released by
+  // answering its blocking question) needs a FRESH human approval — the runtime halts again
+  // instead of silently reaching the internet. Deny settles the run failed/revoked. The paused
+  // follow-up mechanics stay covered by the #2386 authority lane; under the causal-terminal
+  // contract a read-only run has no pending mutation to hold a settled turn open for one here.
   await answerBlockingQuestion(page);
   await expectResearchApprovalPrompt(page);
   await page.getByRole("button", { name: "Deny" }).click();
