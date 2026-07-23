@@ -11,6 +11,7 @@ import {
   editorAgentAuthorityRegistry,
 } from "../editor/agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
+import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import {
@@ -49,6 +50,7 @@ import {
   type QualifiedProductionCodingRuntime,
 } from "./productionCodingRuntimeHost.js";
 import { createProductionRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
+import { createProductionRuntimePermissionPort } from "./productionCodingRuntimePermissionPort.js";
 import {
   createProductionRuntimeOperationGuard,
   createProductionRuntimeManager,
@@ -100,6 +102,7 @@ export interface QualifiedProductionRuntimeRun {
   readonly launch: LaunchMaterial;
   readonly turnPort: ProductionRuntimeTurnPort;
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
+  readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly dispose?: (() => void | Promise<void>) | undefined;
 }
 
@@ -137,6 +140,7 @@ export interface ProductionCodingRuntimeResolverInput {
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
   readonly launch: LaunchMaterial;
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
+  readonly permissionPort?: CodingRuntimePermissionPort | undefined;
 }
 
 /** The two server-level #2387 research stores threaded together through the run composition. */
@@ -221,6 +225,7 @@ function composeRuntime(
     pendingResearchApprovals: pendingResearch,
     taskDispatcher: createProductionRuntimeTaskDispatcher(runs),
     questionPort: createProductionRuntimeQuestionPort(runs),
+    permissionPort: createProductionRuntimePermissionPort(runs),
     cancellationRegistry: { signalFor: (runId) => runs.get(runId)?.controller.signal },
     runtimeCapabilityAuthenticator: {
       authenticate: (capability, audience) =>
@@ -387,7 +392,9 @@ function createRunRecord(
     operationGuard: createProductionRuntimeOperationGuard(request.runId, () =>
       runtimeAuthorityLive(input, context, minted, authority),
     ),
+    waitForPendingMutations: (signal) => leases.waitForIdle(signal),
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
+    ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
     dispose: createRunDisposer(detachLease, leases, invocationRegistry, backend),
   };
 }
@@ -513,13 +520,14 @@ function createManagedToolFacade({
   explicitSkills,
   onRuntimeEvent,
 }: ManagedToolFacadeInput): CodingToolFacade {
+  const childModelId = input.childModelId?.();
   return createProductionManagedWorktreeToolFacade({
     authority,
     authorityRef: minted.authorityRef,
     taskId: context.taskId,
     // The child agent talks to the gateway directly, so it needs the resolved PROVIDER model id —
     // never the run's launch-profile identifier, which the gateway cannot resolve.
-    ...(input.childModelId?.() === undefined ? {} : { modelId: input.childModelId() }),
+    ...(childModelId === undefined ? {} : { modelId: childModelId }),
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
     researchGrantRegistry: research.grants,
@@ -533,6 +541,7 @@ function createManagedToolFacade({
     ),
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
     authorityExpiresAt: context.expiresAt,
+    effectiveMode: minted.effectiveMode,
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,

@@ -14,7 +14,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import {
   DEFAULT_CONTEXT_PROFILE,
@@ -55,7 +54,8 @@ import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryUiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
 import { buildCspHeader } from "./csp.js";
-import { createUiServer, UI_HOST } from "./server.js";
+import { UI_HOST } from "./server.js";
+import { startUiTestServer } from "./ui-test-server/_support.js";
 import type { DapProductionProvisioning } from "./editor/dap/dapProductionService.js";
 
 const tmpDirs: string[] = [];
@@ -346,26 +346,12 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     });
 
     const snapshot = await deps.editorSettingsControl?.read(root);
-    let server = createUiServer({
+    const started = await startUiTestServer({
       staticRoot: root,
       csp: buildCspHeader([]),
-      port: 0,
       handlerDeps: deps,
     });
-    await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
-    const port = (server.address() as AddressInfo).port;
-    await new Promise<void>((resolve) =>
-      server.close(() => {
-        resolve();
-      }),
-    );
-    server = createUiServer({
-      staticRoot: root,
-      csp: buildCspHeader([]),
-      port,
-      handlerDeps: deps,
-    });
-    await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+    const { port, server } = started;
     const response = await fetch(
       `http://${UI_HOST}:${String(port)}/api/editor/settings?root=${encodeURIComponent(root)}`,
     );

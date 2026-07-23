@@ -6,7 +6,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -21,11 +20,12 @@ import type {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createUiServer, UI_HOST } from "../server.js";
+import { UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
+import { startUiTestServer } from "../ui-test-server/_support.js";
 import { handlePromptEnhancement } from "./routes.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
@@ -124,21 +124,14 @@ async function closeServer(): Promise<void> {
   });
 }
 
-// Two-phase bind so the DNS-rebinding Host check (isAllowedHost) sees a request authority on the same
-// port the server is configured with: discover a free port via an ephemeral bind, then recreate the
-// server bound to that exact port. Mirrors store-handlers.test.ts.
 async function startBound(overrides: Partial<UiHandlerDeps> = {}): Promise<void> {
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
-  await new Promise<void>((res) => server.listen(0, UI_HOST, res));
-  port = (server.address() as AddressInfo).port;
-  await closeServer();
-  server = createUiServer({
+  const started = await startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port,
     handlerDeps: deps(overrides),
   });
-  await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+  server = started.server;
+  port = started.port;
 }
 
 async function post(

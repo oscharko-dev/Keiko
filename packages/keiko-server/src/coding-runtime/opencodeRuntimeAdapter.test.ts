@@ -47,7 +47,14 @@ interface GovernedEvent {
   readonly aggregateId: string;
   readonly sequence: number;
   readonly digest: string;
-  readonly kind: "observation" | "permission" | "question" | "tool" | "terminal";
+  readonly kind:
+    | "observation"
+    | "permission"
+    | "question"
+    | "tool"
+    | "terminal"
+    | "terminal-control"
+    | "terminal-failure";
 }
 
 type OpenCodeSyncHint =
@@ -290,7 +297,8 @@ describe("OpenCode runtime adapter readiness", () => {
       cost: { input: 0, output: 0 },
     });
     expect(options.baseURL).toBe("{env:KEIKO_MODEL_GATEWAY_URL}");
-    expect(Object.keys(options)).toEqual(["baseURL", "headers"]);
+    expect(options.chunkTimeout).toBe(30 * 60_000);
+    expect(Object.keys(options)).toEqual(["baseURL", "chunkTimeout", "headers"]);
     expect(headers.Authorization).toBe("Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}");
     expect(bundle.config.tools).toMatchObject({
       question: true,
@@ -309,6 +317,7 @@ describe("OpenCode runtime adapter readiness", () => {
     ).toEqual([...MODEL_VISIBLE_TOOLS].sort());
     expect(bundle.config.permission).toMatchObject({
       "*": "deny",
+      keiko_governed_action: "ask",
       question: "allow",
       todowrite: "allow",
       keiko_workspace_read: "allow",
@@ -321,11 +330,23 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(JSON.stringify(bundle.toolSources)).not.toMatch(/\b(?:import|require)\b/u);
     expect(JSON.stringify(bundle.toolSources)).not.toContain(SECRET);
     for (const source of Object.values(bundle.toolSources)) {
+      expect(source).toContain("const TIMEOUT_MS = 35000;");
       expect(source).toContain('redirect: "manual"');
       expect(source).toContain("signal:");
       expect(source).toMatch(/timeout|AbortController/u);
       expect(source).toMatch(/TextDecoder|utf-8/u);
+      expect(source).toContain("askForGovernedPermission");
     }
+    expect(bundle.toolSources.keiko_changeset_edit).toContain("context.ask");
+    expect(bundle.toolSources.keiko_changeset_edit).toContain(
+      'KEIKO_CODING_MODE !== "governed-assist"',
+    );
+    // #2473 large-file read window: the child-side source forwards the optional window arguments
+    // and validates the transient pagination facts the bridge returns.
+    expect(bundle.toolSources.keiko_workspace_read).toContain('"startLine"');
+    expect(bundle.toolSources.keiko_workspace_read).toContain('"maxLines"');
+    expect(bundle.toolSources.keiko_workspace_read).toContain("totalLines");
+    expect(bundle.toolSources.keiko_workspace_read).toContain("nextStartLine");
     expect(Object.values(bundle.toolSources).join("\n")).toMatch(/changeset/u);
     expect(JSON.stringify(harness.materialized)).toContain("{env:");
     expect(
@@ -483,7 +504,7 @@ describe("OpenCode runtime adapter readiness", () => {
       [],
       ...churnPages,
       [recent],
-      [event(1, "terminal")],
+      [event(1, "observation"), event(2, "terminal")],
     ];
     const returnedPages: (readonly GovernedEvent[])[] = [];
     const historyCheckpoints: Readonly<Record<string, number>>[] = [];
@@ -518,6 +539,7 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(terminalResume?.ses_1).toBe(0);
 
     const effectsBeforeOverflow = harness.effects.length;
+    const overflowHistoryStart = historyCheckpoints.length;
     for (let attempt = 0; attempt < 1_000; attempt += 1) {
       await expect(adapter.reconcile()).resolves.toEqual({
         ok: false,
@@ -535,9 +557,9 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(historyCheckpoints.every((checkpoints) => Object.keys(checkpoints).length <= 256)).toBe(
       true,
     );
-    const overflowSnapshots = historyCheckpoints.slice(setupPages.length);
+    const overflowSnapshots = historyCheckpoints.slice(overflowHistoryStart);
     expect(overflowSnapshots).toHaveLength(1_000);
-    expect(overflowSnapshots.every((checkpoints) => checkpoints.ses_1 === 1)).toBe(true);
+    expect(overflowSnapshots.every((checkpoints) => checkpoints.ses_1 === 2)).toBe(true);
     expect(overflowSnapshots.every((checkpoints) => Object.keys(checkpoints).length === 256)).toBe(
       true,
     );
@@ -695,24 +717,39 @@ describe("OpenCode runtime adapter readiness", () => {
 
   it("arms before live activity and accepts terminal only after matching-session activity", async () => {
     const harness = readinessPorts();
-    harness.ports.readiness.subscribe = (_signal): AsyncIterable<OpenCodeSyncHint> =>
-      finiteHints([
-        { requiresHistoryIdentity: false },
-        {
-          requiresHistoryIdentity: false,
-          control: { sessionId: "ses_other", state: "terminal" },
-        },
-        {
-          requiresHistoryIdentity: false,
-          control: { sessionId: "ses_1", state: "activity" },
-        },
-        {
-          requiresHistoryIdentity: false,
-          control: { sessionId: "ses_1", state: "terminal" },
-        },
-      ]);
+    let postArmHistory = false;
+    harness.ports.readiness.history = (checkpoints): Promise<readonly GovernedEvent[]> =>
+      Promise.resolve(
+        checkpoints.ses_1 === undefined
+          ? [event(0, "terminal")]
+          : postArmHistory && checkpoints.ses_1 === 0
+            ? [event(1, "observation"), event(2, "terminal")]
+            : [],
+      );
+    let subscriptions = 0;
+    harness.ports.readiness.subscribe = (signal): AsyncIterable<OpenCodeSyncHint> => {
+      subscriptions += 1;
+      return subscriptions === 1
+        ? finiteHints([
+            { requiresHistoryIdentity: false },
+            {
+              requiresHistoryIdentity: false,
+              control: { sessionId: "ses_other", state: "terminal" },
+            },
+            {
+              requiresHistoryIdentity: false,
+              control: { sessionId: "ses_1", state: "activity" },
+            },
+            {
+              requiresHistoryIdentity: false,
+              control: { sessionId: "ses_1", state: "terminal" },
+            },
+          ])
+        : hints([{ requiresHistoryIdentity: false }], signal);
+    };
     const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
     await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    postArmHistory = true;
     expect(adapter.armTurn()).toBe(true);
     const dispose = adapter.monitor(() => undefined);
     await expect(adapter.waitForTerminal(new AbortController().signal)).resolves.toBe(true);
@@ -742,7 +779,7 @@ describe("OpenCode runtime adapter readiness", () => {
     await adapter.close();
   });
 
-  it("accepts a fresh post-arm terminal history event when live busy and idle were missed", async () => {
+  it("accepts causally ordered post-arm evidence and terminal history when live status was missed", async () => {
     const harness = readinessPorts();
     harness.ports.readiness.history = (checkpoints): Promise<readonly GovernedEvent[]> =>
       Promise.resolve(
@@ -751,8 +788,10 @@ describe("OpenCode runtime adapter readiness", () => {
           : checkpoints.ses_1 === 0
             ? [event(1, "terminal")]
             : checkpoints.ses_1 === 1
-              ? [event(2, "terminal")]
-              : [],
+              ? [event(2, "observation")]
+              : checkpoints.ses_1 === 2
+                ? [event(3, "terminal"), event(4, "observation")]
+                : [],
       );
     harness.ports.control.status = (): Promise<"terminal"> => Promise.resolve("terminal");
     const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
@@ -763,16 +802,60 @@ describe("OpenCode runtime adapter readiness", () => {
     await adapter.close();
   });
 
+  it("returns failure for a causally ordered failed assistant completion", async () => {
+    const harness = readinessPorts();
+    let postArmHistory = false;
+    harness.ports.readiness.history = (checkpoints): Promise<readonly GovernedEvent[]> =>
+      Promise.resolve(
+        checkpoints.ses_1 === undefined
+          ? [event(0, "terminal")]
+          : postArmHistory && checkpoints.ses_1 === 0
+            ? [event(1, "observation"), event(2, "terminal-failure")]
+            : [],
+      );
+    harness.ports.control.status = (): Promise<"terminal"> => Promise.resolve("terminal");
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    postArmHistory = true;
+    expect(adapter.armTurn()).toBe(true);
+    await expect(adapter.waitForTerminal(AbortSignal.timeout(750))).resolves.toBe(false);
+    await adapter.close();
+  });
+
+  it("keeps history reconciliation live across terminal-control and terminal-failure events (#2644)", async () => {
+    const harness = readinessPorts();
+    let postReady = false;
+    harness.ports.readiness.history = (checkpoints): Promise<readonly GovernedEvent[]> =>
+      Promise.resolve(
+        checkpoints.ses_1 === undefined
+          ? [event(0, "terminal")]
+          : postReady && checkpoints.ses_1 === 0
+            ? [event(1, "terminal-control"), event(2, "terminal-failure"), event(3, "observation")]
+            : [],
+      );
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    postReady = true;
+    // The classifier emits session.idle as terminal-control and a non-stop assistant completion
+    // as terminal-failure; both must reconcile as history, not collapse the whole plan.
+    await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
+    expect(harness.effects).toEqual(expect.arrayContaining(["evt_1", "evt_2", "evt_3"]));
+    await adapter.close();
+  });
+
   it("waits for terminal status after fresh post-arm completion arrives while status is busy", async () => {
     vi.useFakeTimers();
     try {
       const harness = readinessPorts();
+      let postArmHistory = false;
       harness.ports.readiness.history = (checkpoints): Promise<readonly GovernedEvent[]> =>
         Promise.resolve(
           checkpoints.ses_1 === undefined
             ? [event(0)]
-            : checkpoints.ses_1 === 0
-              ? [event(1, "terminal")]
+            : postArmHistory && checkpoints.ses_1 === 0
+              ? [event(1, "observation")]
               : checkpoints.ses_1 === 1
                 ? [event(2, "terminal")]
                 : [],
@@ -785,6 +868,7 @@ describe("OpenCode runtime adapter readiness", () => {
       const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
 
       await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+      postArmHistory = true;
       expect(adapter.armTurn()).toBe(true);
       await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
       let settled: boolean | undefined;
@@ -811,12 +895,13 @@ describe("OpenCode runtime adapter readiness", () => {
     try {
       const harness = readinessPorts();
       let freshAvailable = false;
+      let postArmHistory = false;
       harness.ports.readiness.history = (checkpoints): Promise<readonly GovernedEvent[]> =>
         Promise.resolve(
           checkpoints.ses_1 === undefined
             ? [event(0)]
-            : checkpoints.ses_1 === 0
-              ? [event(1, "terminal")]
+            : postArmHistory && checkpoints.ses_1 === 0
+              ? [event(1, "observation")]
               : freshAvailable && checkpoints.ses_1 === 1
                 ? [event(2, "terminal")]
                 : [],
@@ -829,6 +914,7 @@ describe("OpenCode runtime adapter readiness", () => {
       const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
 
       await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+      postArmHistory = true;
       expect(adapter.armTurn()).toBe(true);
       let settled: boolean | undefined;
       const waiting = adapter.waitForTerminal(new AbortController().signal).then((result) => {

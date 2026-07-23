@@ -27,6 +27,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useActiveWorkspace, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
+import { useOptionalChatSessionCatalog } from "./context/ChatSessionContext";
 import { Icons } from "./Icons";
 
 type FormSubmitEvent = { preventDefault: () => void };
@@ -584,6 +585,7 @@ function TaskWorkspacePanel(props: {
 function TaskWorkspaceSwitcherImpl(): ReactNode {
   const t = useTranslate();
   const api = useActiveWorkspace();
+  const catalog = useOptionalChatSessionCatalog();
   const [open, setOpen] = useState(false);
   const [taskId, setTaskId] = useState("");
   const [baseBranch, setBaseBranch] = useState("");
@@ -603,7 +605,9 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
   const triggerLabel = computeTriggerLabel(active, t);
 
   const repositoryRoot =
-    api.activeInstance?.repositoryRoot ?? api.instances[0]?.repositoryRoot ?? null;
+    api.activeInstance?.repositoryRoot ??
+    api.instances[0]?.repositoryRoot ??
+    (catalog?.activeProject?.available === true ? catalog.activeProject.path : null);
   const createDisabled =
     api.switching || repositoryRoot === null || taskId.trim() === "" || baseBranch.trim() === "";
 

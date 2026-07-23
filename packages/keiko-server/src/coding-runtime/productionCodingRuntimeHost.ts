@@ -57,7 +57,7 @@ export function createProductionCodingRuntimeHost(
     launchResolver: runtime.mintLaunch,
     approvalAuthority: runtime.approvalAuthority,
     taskDispatcher: runtime.taskDispatcher,
-    ...(runtime.questionPort ? { questionPort: runtime.questionPort } : {}),
+    ...runtimeInteractionPorts(runtime),
     ...(runtime.safeActivityProjection
       ? { safeActivityProjection: runtime.safeActivityProjection }
       : {}),
@@ -72,5 +72,14 @@ export function createProductionCodingRuntimeHost(
     ...(runtime.openCodeGatewayReadinessRegistry
       ? { openCodeGatewayReadinessRegistry: runtime.openCodeGatewayReadinessRegistry }
       : {}),
+  };
+}
+
+function runtimeInteractionPorts(
+  runtime: QualifiedProductionCodingRuntime,
+): Pick<ProductionCodingRuntimeHost, "permissionPort" | "questionPort"> {
+  return {
+    ...(runtime.questionPort ? { questionPort: runtime.questionPort } : {}),
+    ...(runtime.permissionPort ? { permissionPort: runtime.permissionPort } : {}),
   };
 }

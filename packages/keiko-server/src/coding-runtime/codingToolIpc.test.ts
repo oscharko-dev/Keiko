@@ -20,6 +20,37 @@ describe("coding tool IPC exact changesets", () => {
   });
 });
 
+describe("coding tool IPC read windows (#2473)", () => {
+  const read = {
+    action: "read",
+    actionId: "read-1",
+    idempotencyKey: "read-key",
+    relativePath: "src/a.ts",
+  };
+
+  it("admits a windowless read and bounded optional window parameters unchanged", () => {
+    expect(parseCodingToolRequest(JSON.stringify(read), 262_144)).toEqual(read);
+    const windowed = { ...read, startLine: 120, maxLines: 200 };
+    expect(parseCodingToolRequest(JSON.stringify(windowed), 262_144)).toEqual(windowed);
+  });
+
+  it.each([
+    ["a Windows drive-qualified path", { relativePath: "C:/Users/evil.txt" }],
+    ["an NTFS alternate-data-stream path", { relativePath: "note.txt:ads" }],
+    ["a zero startLine", { startLine: 0 }],
+    ["a negative startLine", { startLine: -3 }],
+    ["a fractional startLine", { startLine: 1.5 }],
+    ["a string startLine", { startLine: "2" }],
+    ["an oversized startLine", { startLine: 1_000_001 }],
+    ["a zero maxLines", { maxLines: 0 }],
+    ["an oversized maxLines", { maxLines: 5_001 }],
+    ["a null maxLines", { maxLines: null }],
+    ["an unknown window key", { endLine: 9 }],
+  ])("rejects %s instead of silently widening the read", (_name, extra) => {
+    expect(parseCodingToolRequest(JSON.stringify({ ...read, ...extra }), 262_144)).toBeUndefined();
+  });
+});
+
 describe("coding tool IPC auxiliary requests", () => {
   it("admits only model-safe skill fields", () => {
     const body = {

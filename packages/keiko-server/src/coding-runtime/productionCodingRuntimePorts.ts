@@ -27,6 +27,7 @@ export interface ProductionRuntimeRunRecord {
   readonly turnPort: ProductionRuntimeTurnPort;
   readonly controller: AbortController;
   readonly operationGuard: ProductionRuntimeOperationGuard;
+  readonly waitForPendingMutations?: ((signal: AbortSignal) => Promise<boolean>) | undefined;
   readonly dispose?: (() => void | Promise<void>) | undefined;
 }
 
@@ -115,45 +116,87 @@ export function createProductionRuntimeManager(
   authority: CodingRuntimeAuthorityService,
   now: () => Date = () => new Date(),
 ): CodingRuntimeManager {
-  let activeRunId: string | undefined;
-  const active = (): CodingRuntimeManager | undefined =>
-    activeRunId === undefined ? undefined : runs.get(activeRunId)?.manager;
+  const slot = createProductionRuntimeSlot(runs);
   const settle = async (
     runId: string,
     action: "stop" | "takeover" | "reconcile",
   ): ReturnType<CodingRuntimeManager["stop"]> => {
-    const manager = active();
-    if (manager === undefined || activeRunId !== runId) return stoppedRun();
+    const manager = slot.manager();
+    if (manager === undefined || !slot.matches(runId)) return stoppedRun();
     const result = await manager[action](runId);
-    if (result.ok) {
-      await cleanupRun(runs, runId);
-      activeRunId = undefined;
-    }
+    if (result.ok) await slot.cleanup(runId);
     return result;
   };
   return {
     start: async (request): Promise<CodingRuntimeStartResult> => {
+      await slot.cleanupIfStopped();
       const record = runs.get(request.runId);
-      if (record?.manager === undefined || activeRunId !== undefined) return startMismatch();
-      activeRunId = request.runId;
+      if (record?.manager === undefined || !slot.claim(request.runId)) return startMismatch();
       const result = await record.manager.start(request);
       if (result.ok) {
         authority.transition(request.runId, "ready", now().toISOString());
         authority.transition(request.runId, "running", now().toISOString());
       } else if (record.manager.health().status === "stopped") {
         authority.abandonUnlaunched(request.runId, now().toISOString());
-        await cleanupRun(runs, request.runId);
-        activeRunId = undefined;
+        await slot.cleanup(request.runId);
       }
       return result;
     },
-    issueApproval: (request) => active()?.issueApproval(request) ?? stoppedApprovalIssue(),
-    pause: (runId) => active()?.pause(runId) ?? pauseRunMismatch(),
-    resume: (runId) => active()?.resume(runId) ?? pauseRunMismatch(),
+    issueApproval: (request) => slot.manager()?.issueApproval(request) ?? stoppedApprovalIssue(),
+    pause: (runId) => slot.manager()?.pause(runId) ?? pauseRunMismatch(),
+    resume: (runId) => slot.manager()?.resume(runId) ?? pauseRunMismatch(),
     stop: (runId) => settle(runId, "stop"),
     takeover: (runId) => settle(runId, "takeover"),
     reconcile: (runId) => settle(runId, "reconcile"),
-    health: () => active()?.health() ?? { status: "stopped" },
+    health: () => slot.manager()?.health() ?? { status: "stopped" },
+  };
+}
+
+interface ProductionRuntimeSlot {
+  readonly manager: () => CodingRuntimeManager | undefined;
+  readonly matches: (runId: string) => boolean;
+  readonly claim: (runId: string) => boolean;
+  readonly cleanup: (runId: string) => Promise<void>;
+  readonly cleanupIfStopped: () => Promise<void>;
+}
+
+function createProductionRuntimeSlot(
+  runs: Map<string, ProductionRuntimeRunRecord>,
+): ProductionRuntimeSlot {
+  let activeRunId: string | undefined;
+  let activeCleanup: { readonly runId: string; readonly completion: Promise<void> } | undefined;
+  const manager = (): CodingRuntimeManager | undefined =>
+    activeRunId === undefined ? undefined : runs.get(activeRunId)?.manager;
+  const cleanup = async (runId: string): Promise<void> => {
+    const pending = activeCleanup;
+    if (pending?.runId === runId) {
+      await pending.completion;
+      return;
+    }
+    const completion = cleanupRun(runs, runId).then((): void => {
+      if (activeRunId === runId) activeRunId = undefined;
+    });
+    activeCleanup = { runId, completion };
+    try {
+      await completion;
+    } finally {
+      activeCleanup = undefined;
+    }
+  };
+  return {
+    manager,
+    matches: (runId): boolean => activeRunId === runId,
+    claim: (runId): boolean => {
+      if (activeRunId !== undefined) return false;
+      activeRunId = runId;
+      return true;
+    },
+    cleanup,
+    cleanupIfStopped: async (): Promise<void> => {
+      const runId = activeRunId;
+      if (runId === undefined || manager()?.health().status !== "stopped") return;
+      await cleanup(runId);
+    },
   };
 }
 
@@ -325,7 +368,11 @@ async function terminalCompletion(
   runId: string,
 ): Promise<CodingRuntimeTaskOutcome> {
   try {
-    return await record.turnPort.waitForTerminal(runId, record.controller.signal);
+    const outcome = await record.turnPort.waitForTerminal(runId, record.controller.signal);
+    if (outcome !== "succeeded" || record.waitForPendingMutations === undefined) return outcome;
+    const settled = await record.waitForPendingMutations(record.controller.signal);
+    if (settled) return "succeeded";
+    return record.controller.signal.aborted ? "cancelled" : "failed";
   } catch {
     // Consumers treat an unprovable terminal outcome as a failed turn; never leave it unhandled.
     return "failed";

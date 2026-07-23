@@ -12,6 +12,7 @@ class FakeEventSource {
   readonly listeners = new Map<string, Set<EventListener>>();
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  closed = false;
 
   constructor(url: string) {
     this.url = url;
@@ -32,7 +33,7 @@ class FakeEventSource {
   }
 
   close(): void {
-    // test double
+    this.closed = true;
   }
 }
 
@@ -55,6 +56,20 @@ describe("subscribeSharedEventSource", () => {
 
     expect(FakeEventSource.instances.map((source) => source.url)).toEqual(["/api/commands/events"]);
     unsubscribe();
+  });
+
+  it("keeps the shared stream alive when one subscriber's cleanup runs twice", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const first = subscribeSharedEventSource("/api/commands/events", ["command:run"], () => {});
+    subscribeSharedEventSource("/api/commands/events", ["command:run"], () => {});
+
+    // React effect cleanups can run more than once; a non-idempotent unsubscribe used to
+    // underflow the ref counts and tear down the stream under the remaining subscriber.
+    first();
+    first();
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(FakeEventSource.instances[0]?.closed).toBe(false);
   });
 
   it("rejects off-origin stream URLs before constructing EventSource", () => {
@@ -176,5 +191,37 @@ describe("subscribeSharedEventSource", () => {
     unsubscribeFirst();
     unsubscribeSecond();
     vi.useRealTimers();
+  });
+
+  it("yields recoverable background streams while interactive capacity is reserved", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const { reserveInteractiveBrowserStreamCapacity } =
+      await import("../../../../../lib/browser-stream-capacity");
+    const unsubscribeBackground = subscribeSharedEventSource(
+      "/api/editor/settings/events",
+      ["editor-settings:changed"],
+      () => {},
+      { priority: "background" },
+    );
+    const unsubscribeEssential = subscribeSharedEventSource(
+      "/api/editor/workspace-watch/events",
+      ["editor-watch:changed"],
+      () => {},
+    );
+    const background = FakeEventSource.instances[0];
+    const essential = FakeEventSource.instances[1];
+    const release = reserveInteractiveBrowserStreamCapacity();
+
+    expect(background?.closed).toBe(true);
+    expect(essential?.closed).toBe(false);
+
+    release();
+    expect(FakeEventSource.instances.map((source) => source.url)).toEqual([
+      "/api/editor/settings/events",
+      "/api/editor/workspace-watch/events",
+      "/api/editor/settings/events",
+    ]);
+    unsubscribeBackground();
+    unsubscribeEssential();
   });
 });

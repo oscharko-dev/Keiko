@@ -194,6 +194,9 @@ function isNormalizedRelativePath(value: string): boolean {
     value.length === 0 ||
     Buffer.byteLength(value, "utf8") > SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES ||
     value.includes("\0") ||
+    // Drive-qualified (`C:/…`) and NTFS alternate-data-stream (`file:stream`) forms are never
+    // workspace-relative; rejecting the colon keeps win32 resolution inside the workspace.
+    value.includes(":") ||
     value.startsWith("/") ||
     value.startsWith("\\")
   )

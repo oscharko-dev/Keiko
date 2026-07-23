@@ -5,12 +5,14 @@ import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js
 import { createFixedOpenCodeConfig } from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
+  OPEN_CODE_EVENT_KINDS,
   type OpenCodeReconciliationEvent,
   type OpenCodeReconciliationPreparation,
   type OpenCodeReconciler,
 } from "./opencodeReconciler.js";
 import type { OpenCodeLiveControl } from "./opencodeProtocol.js";
 import {
+  OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_PINNED_VERSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
 } from "./opencodeToolSchemas.js";
@@ -24,6 +26,8 @@ const MAX_AGGREGATE_CHECKPOINTS = 256;
 const MAX_RECENT_IDENTITIES = 2_048;
 const MAX_HISTORY_CATCH_UP_ATTEMPTS = 4;
 const MAX_STREAM_RECONNECTS = 3;
+// The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
+const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
 export const OPEN_CODE_MAX_TURN_WAIT_MS = 30 * 60_000;
 
 export type OpenCodeGovernedSinkReceipt = "applied" | "duplicate";
@@ -129,7 +133,9 @@ export interface OpenCodeRuntimeAdapter {
 
 interface ReconciliationState {
   readonly checkpoints: Map<string, number>;
+  readonly evidenceCheckpoints: Map<string, number>;
   readonly terminalCheckpoints: Map<string, number>;
+  readonly terminalFailureCheckpoints: Map<string, number>;
   readonly recent: Map<string, string>;
   readonly observedIds: Map<string, true>;
   readonly reconciler: OpenCodeReconciler;
@@ -142,7 +148,9 @@ export function createOpenCodeRuntimeAdapter(
 ): OpenCodeRuntimeAdapter {
   const state: ReconciliationState = {
     checkpoints: new Map(),
+    evidenceCheckpoints: new Map(),
     terminalCheckpoints: new Map(),
+    terminalFailureCheckpoints: new Map(),
     recent: new Map(),
     observedIds: new Map(),
     reconciler: createOpenCodeReconciler(),
@@ -161,6 +169,7 @@ export function createOpenCodeRuntimeAdapter(
   let turnStatusTerminal = false;
   let turnBaselineSequence: number | undefined;
   let turnSettledGeneration: number | undefined;
+  let turnSettledOutcome: boolean | undefined;
   const turnNotifications = new Set<() => void>();
 
   const fail = (phase: OpenCodeReadinessPhase): OpenCodeAdapterFailure => {
@@ -264,6 +273,7 @@ export function createOpenCodeRuntimeAdapter(
       turnStatusTerminal = false;
       turnBaselineSequence = baselineSequence;
       turnSettledGeneration = undefined;
+      turnSettledOutcome = undefined;
       return true;
     },
     cancelTurn,
@@ -277,15 +287,17 @@ export function createOpenCodeRuntimeAdapter(
     turnStatusTerminal = false;
     turnBaselineSequence = undefined;
     turnSettledGeneration = undefined;
+    turnSettledOutcome = undefined;
     notifyTurn();
   }
 
-  function settleTurn(generation: number): void {
+  function settleTurn(generation: number, outcome: boolean): void {
     turnArmed = false;
     turnActive = false;
     turnStatusTerminal = false;
     turnBaselineSequence = undefined;
     turnSettledGeneration = generation;
+    turnSettledOutcome = outcome;
     notifyTurn();
   }
 
@@ -312,7 +324,7 @@ export function createOpenCodeRuntimeAdapter(
   /** Active/terminal, caller, deadline, stop, and polling gates fail independently. */
   async function waitForTerminal(callerSignal: AbortSignal): Promise<boolean> {
     const generation = turnGeneration;
-    if (turnSettled(generation) && !callerSignal.aborted) return true;
+    if (turnSettled(generation) && !callerSignal.aborted) return turnSettledOutcome ?? false;
     if (!turnArmed || ready === undefined || closed || callerSignal.aborted) return false;
     const deadline = new AbortController();
     const timer = setTimeout(() => {
@@ -333,12 +345,13 @@ export function createOpenCodeRuntimeAdapter(
     sessionId: string,
   ): Promise<boolean> {
     while (turnCurrent(generation, signal)) {
-      if (settleIfCompleted(generation, signal)) return true;
+      const settled = settleIfCompleted(generation, signal);
+      if (settled !== undefined) return settled;
       const outcome = await pollTurnOnce(generation, signal, sessionId);
       if (outcome !== undefined) return outcome;
       await waitForTurnChange(signal, generation);
     }
-    return turnSettled(generation);
+    return turnSettled(generation) ? (turnSettledOutcome ?? false) : false;
   }
 
   /** Returns the settled wait outcome, or undefined when polling must continue. */
@@ -350,21 +363,26 @@ export function createOpenCodeRuntimeAdapter(
     try {
       const status = await ports.control.status(sessionId, signal);
       if (status !== undefined) observeControl({ sessionId, state: status });
-      if (settleIfCompleted(generation, signal) || turnSettled(generation)) return true;
-      if (status === "terminal") {
-        await reconcileHistory(ports, state, signal);
-        if (settleIfCompleted(generation, signal) || turnSettled(generation)) return true;
-      }
-      return undefined;
+      const observed = observedTurnOutcome(generation, signal);
+      if (observed !== undefined || status !== "terminal") return observed;
+      await reconcileHistory(ports, state, signal);
+      return observedTurnOutcome(generation, signal);
     } catch {
       return turnCurrent(generation, signal) ? undefined : false;
     }
   }
 
-  function settleIfCompleted(generation: number, signal: AbortSignal): boolean {
-    if (!turnCompleted(generation, signal)) return false;
-    settleTurn(generation);
-    return true;
+  function settleIfCompleted(generation: number, signal: AbortSignal): boolean | undefined {
+    const outcome = turnOutcome(generation, signal);
+    if (outcome === undefined) return undefined;
+    settleTurn(generation, outcome);
+    return outcome;
+  }
+
+  function observedTurnOutcome(generation: number, signal: AbortSignal): boolean | undefined {
+    const settled = settleIfCompleted(generation, signal);
+    if (settled !== undefined) return settled;
+    return turnSettled(generation) ? (turnSettledOutcome ?? false) : undefined;
   }
 
   function turnCurrent(generation: number, signal: AbortSignal): boolean {
@@ -375,13 +393,20 @@ export function createOpenCodeRuntimeAdapter(
     return !closed && generation === turnGeneration && generation === turnSettledGeneration;
   }
 
-  function turnCompleted(generation: number, signal: AbortSignal): boolean {
-    if (!turnCurrent(generation, signal)) return false;
-    if (!turnStatusTerminal) return false;
-    if (turnActive) return true;
-    if (ready === undefined || turnBaselineSequence === undefined) return false;
-    const terminalSequence = state.terminalCheckpoints.get(ready.sessionId);
-    return terminalSequence !== undefined && terminalSequence > turnBaselineSequence;
+  function turnOutcome(generation: number, signal: AbortSignal): boolean | undefined {
+    if (!turnCurrent(generation, signal)) return undefined;
+    if (!turnStatusTerminal) return undefined;
+    if (ready === undefined || turnBaselineSequence === undefined) return undefined;
+    return causalHistoryOutcome(ready.sessionId, turnBaselineSequence);
+  }
+
+  function causalHistoryOutcome(sessionId: string, baselineSequence: number): boolean | undefined {
+    const evidenceSequence = state.evidenceCheckpoints.get(sessionId);
+    if (evidenceSequence === undefined || evidenceSequence <= baselineSequence) return undefined;
+    const failureSequence = state.terminalFailureCheckpoints.get(sessionId);
+    if (failureSequence !== undefined && failureSequence > baselineSequence) return false;
+    const terminalSequence = state.terminalCheckpoints.get(sessionId);
+    return terminalSequence !== undefined && terminalSequence > baselineSequence ? true : undefined;
   }
 
   function waitForTurnChange(signal: AbortSignal, generation: number): Promise<void> {
@@ -579,7 +604,9 @@ async function applyHistoryPlan(
   }
   if (!prepared.commit()) throw new Error("reconciler-commit-conflict");
   replaceMap(state.checkpoints, planned.checkpoints);
+  replaceMap(state.evidenceCheckpoints, planned.evidenceCheckpoints);
   replaceMap(state.terminalCheckpoints, planned.terminalCheckpoints);
+  replaceMap(state.terminalFailureCheckpoints, planned.terminalFailureCheckpoints);
   replaceMap(state.recent, planned.recent);
   replaceMap(state.observedIds, planned.observedIds);
   for (const signal of activity) {
@@ -601,7 +628,9 @@ function takeSafeActivity(
 
 interface HistoryPlanDraft {
   readonly checkpoints: Map<string, number>;
+  readonly evidenceCheckpoints: Map<string, number>;
   readonly terminalCheckpoints: Map<string, number>;
+  readonly terminalFailureCheckpoints: Map<string, number>;
   readonly recent: Map<string, string>;
   readonly observedIds: Map<string, true>;
   readonly fresh: OpenCodeReconciliationEvent[];
@@ -615,7 +644,9 @@ function planHistory(
   | {
       readonly events: readonly OpenCodeReconciliationEvent[];
       readonly checkpoints: ReadonlyMap<string, number>;
+      readonly evidenceCheckpoints: ReadonlyMap<string, number>;
       readonly terminalCheckpoints: ReadonlyMap<string, number>;
+      readonly terminalFailureCheckpoints: ReadonlyMap<string, number>;
       readonly recent: ReadonlyMap<string, string>;
       readonly observedIds: ReadonlyMap<string, true>;
     }
@@ -623,7 +654,9 @@ function planHistory(
   if (!validHistoryWindow(events, state)) return undefined;
   const draft: HistoryPlanDraft = {
     checkpoints: new Map(state.checkpoints),
+    evidenceCheckpoints: new Map(state.evidenceCheckpoints),
     terminalCheckpoints: new Map(state.terminalCheckpoints),
+    terminalFailureCheckpoints: new Map(state.terminalFailureCheckpoints),
     recent: new Map(state.recent),
     observedIds: new Map(state.observedIds),
     fresh: [],
@@ -634,7 +667,9 @@ function planHistory(
   return {
     events: draft.fresh,
     checkpoints: draft.checkpoints,
+    evidenceCheckpoints: draft.evidenceCheckpoints,
     terminalCheckpoints: draft.terminalCheckpoints,
+    terminalFailureCheckpoints: draft.terminalFailureCheckpoints,
     recent: draft.recent,
     observedIds: draft.observedIds,
   };
@@ -663,15 +698,22 @@ function planFreshHistoryEvent(
   const expected = checkpoint === undefined ? 0 : checkpoint + 1;
   if (event.sequence !== expected) return false;
   if (!setCheckpoint(draft.checkpoints, event.aggregateId, event.sequence)) return false;
-  if (
-    event.kind === "terminal" &&
-    !setCheckpoint(draft.terminalCheckpoints, event.aggregateId, event.sequence)
-  )
-    return false;
+  if (!setKindCheckpoint(draft, event)) return false;
   touch(draft.recent, key, event.digest);
   touchObserved(draft.observedIds, event.id);
   draft.fresh.push(event);
   return true;
+}
+
+function setKindCheckpoint(draft: HistoryPlanDraft, event: OpenCodeReconciliationEvent): boolean {
+  if (event.kind === "terminal") {
+    return setCheckpoint(draft.terminalCheckpoints, event.aggregateId, event.sequence);
+  }
+  if (event.kind === "terminal-failure") {
+    return setCheckpoint(draft.terminalFailureCheckpoints, event.aggregateId, event.sequence);
+  }
+  if (event.kind === "terminal-control") return true;
+  return setCheckpoint(draft.evidenceCheckpoints, event.aggregateId, event.sequence);
 }
 
 function validHistoryWindow(
@@ -682,7 +724,9 @@ function validHistoryWindow(
     events.length <= MAX_HISTORY_EVENTS &&
     Buffer.byteLength(JSON.stringify(events), "utf8") <= MAX_HISTORY_BYTES &&
     state.checkpoints.size <= MAX_AGGREGATE_CHECKPOINTS &&
-    state.terminalCheckpoints.size <= MAX_AGGREGATE_CHECKPOINTS
+    state.evidenceCheckpoints.size <= MAX_AGGREGATE_CHECKPOINTS &&
+    state.terminalCheckpoints.size <= MAX_AGGREGATE_CHECKPOINTS &&
+    state.terminalFailureCheckpoints.size <= MAX_AGGREGATE_CHECKPOINTS
   );
 }
 
@@ -729,7 +773,7 @@ function validEvent(event: OpenCodeReconciliationEvent): boolean {
     Number.isSafeInteger(event.sequence) &&
     event.sequence >= 0 &&
     DIGEST.test(event.digest) &&
-    ["observation", "permission", "question", "tool", "terminal"].includes(event.kind)
+    OPEN_CODE_EVENT_KINDS.includes(event.kind)
   );
 }
 
@@ -802,7 +846,14 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
 type GeneratedToolAction = "read" | "edit" | "verification" | "egress" | "skill" | "child-agent";
 
 function toolDescription(action: GeneratedToolAction): string {
-  if (action === "read") return "Read a bounded repository text file through Keiko governance.";
+  if (action === "read") {
+    return (
+      "Read a bounded repository text file through Keiko governance. " +
+      "startLine/maxLines select the returned line window (start at 1 with a generous maxLines " +
+      "for a whole small file); the result reports totalLines plus nextStartLine while the " +
+      "digest always covers the whole file."
+    );
+  }
   if (action === "egress") {
     return "Fetch one approved public https URL through governed read-only research (#2387).";
   }
@@ -814,6 +865,41 @@ function toolDescription(action: GeneratedToolAction): string {
   return "Submit a bounded changeset through Keiko governance.";
 }
 
+function governedPermissionSource(): readonly string[] {
+  return [
+    `const governedPermission = ${JSON.stringify(OPENCODE_GOVERNED_ACTION_PERMISSION)};`,
+    "function editPermission(args) {",
+    "  const files = Array.isArray(args.changeset?.files) ? args.changeset.files : [];",
+    '  const patterns = files.map((file) => file?.file).filter((file) => typeof file === "string");',
+    '  if (patterns.length !== files.length || patterns.length === 0) throw new Error("keiko-tool-invalid");',
+    '  const patch = typeof args.changeset?.patch === "string" ? args.changeset.patch : "";',
+    String.raw`  const addedLines = patch.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;`,
+    String.raw`  const deletedLines = patch.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---")).length;`,
+    "  return {",
+    "    patterns,",
+    '    metadata: { kind: "workspace-write", actionClass: "workspace-write", reasonCode: "approval-required", actionKind: "file-edit", scopeLabel: "workspace-scope", risk: "medium", policyReason: "approval-required", targetPath: patterns[0], allowedRelativePaths: patterns, fileCount: patterns.length, addedLines, deletedLines },',
+    "  };",
+    "}",
+    "function verificationPermission(args) {",
+    '  if (typeof args.verifierId !== "string") throw new Error("keiko-tool-invalid");',
+    "  return {",
+    '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "verification", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId },',
+    "  };",
+    "}",
+    "async function askForGovernedPermission(args, context) {",
+    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist") return;',
+    '  const request = action === "edit" ? editPermission(args) : action === "verification" ? verificationPermission(args) : undefined;',
+    "  if (!request) return;",
+    "  await context.ask({",
+    "    permission: governedPermission,",
+    "    patterns: request.patterns,",
+    "    always: [],",
+    "    metadata: { ...request.metadata, expiresAt: new Date(Date.now() + 300000).toISOString() },",
+    "  });",
+    "}",
+  ];
+}
+
 // eslint-disable-next-line max-lines-per-function -- emitted dependency-free tool source keeps all transport gates visible.
 function toolSource(
   action: GeneratedToolAction,
@@ -822,7 +908,7 @@ function toolSource(
   const argumentNames = Object.keys(schemas);
   return [
     "const MAX_RESPONSE_BYTES = 262144;",
-    "const TIMEOUT_MS = 10000;",
+    `const TIMEOUT_MS = ${String(OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS)};`,
     `const action = ${JSON.stringify(action)};`,
     `const argumentNames = ${JSON.stringify(argumentNames)};`,
     `const inputSchemas = ${JSON.stringify(schemas)};`,
@@ -831,7 +917,10 @@ function toolSource(
     '  if (!["completed", "failed", "denied", "invalid", "cancelled", "busy", "observed"].includes(value.status)) return false;',
     '  if ((action !== "read" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
-    '  return !!read && typeof read === "object" && !Array.isArray(read) && typeof read.text === "string" && Number.isSafeInteger(read.byteCount) && /^[a-f0-9]{64}$/.test(read.digest);',
+    '  if (!read || typeof read !== "object" || Array.isArray(read) || typeof read.text !== "string" || !Number.isSafeInteger(read.byteCount) || !/^[a-f0-9]{64}$/.test(read.digest)) return false;',
+    '  if (action !== "read") return true;',
+    "  if (!Number.isSafeInteger(read.totalLines) || read.totalLines < 0) return false;",
+    "  return read.nextStartLine === undefined || (Number.isSafeInteger(read.nextStartLine) && read.nextStartLine >= 2);",
     "}",
     "export default {",
     `  description: ${JSON.stringify(toolDescription(action))},`,
@@ -843,6 +932,7 @@ function toolSource(
     "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
     "    const request = { action, actionId: identity, idempotencyKey: identity };",
     "    for (const name of argumentNames) request[name] = args[name];",
+    "    await askForGovernedPermission(args, context);",
     "    const body = JSON.stringify(request);",
     "    const controller = new AbortController();",
     "    const abort = () => controller.abort();",
@@ -874,5 +964,6 @@ function toolSource(
     "    }",
     "  },",
     "};",
+    ...governedPermissionSource(),
   ].join("\n");
 }

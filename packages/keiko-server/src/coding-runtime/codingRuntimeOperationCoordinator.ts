@@ -8,7 +8,10 @@ import {
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
-import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
+import type {
+  CodingRuntimeTaskDispatcher,
+  CodingRuntimeTaskOutcome,
+} from "./productionCodingRuntimeHost.js";
 import type {
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
@@ -25,6 +28,7 @@ interface RuntimeOperationCoordinatorDeps {
     current: CodingRuntimeSnapshot,
   ) => Extract<CodingRuntimeOrchestratorResult, { readonly ok: true }>["snapshot"];
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
+  readonly settleTask: (runId: string, outcome: CodingRuntimeTaskOutcome) => void;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly manager: CodingRuntimeManager;
 }
@@ -75,7 +79,7 @@ export class CodingRuntimeOperationCoordinator {
         return failure("authority-resolution-failed");
       }
       operation.reservation.commit();
-      void dispatched.completion.catch(() => undefined);
+      this.observeTaskCompletion(runId, dispatched.completion);
       return this.deps.advanceRevision(operation.current, "task-submitted");
     });
   }
@@ -128,7 +132,7 @@ export class CodingRuntimeOperationCoordinator {
     }
     if (dispatched.ok) {
       reservation.commit();
-      void dispatched.completion.catch(() => undefined);
+      this.observeTaskCompletion(input.runId, dispatched.completion);
       return "accepted";
     }
     reservation.release();
@@ -142,6 +146,20 @@ export class CodingRuntimeOperationCoordinator {
 
   public clear(runId: string): void {
     this.replay.clear(runId);
+  }
+
+  private observeTaskCompletion(
+    runId: string,
+    completion: Promise<CodingRuntimeTaskOutcome>,
+  ): void {
+    void completion.then(
+      (outcome): void => {
+        this.deps.settleTask(runId, outcome);
+      },
+      (): void => {
+        this.deps.settleTask(runId, "failed");
+      },
+    );
   }
 
   private mutateQuestion(

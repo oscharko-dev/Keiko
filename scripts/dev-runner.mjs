@@ -437,6 +437,43 @@ export function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
   return safe;
 }
 
+function createProxyLifecycle(req, res) {
+  let upstream;
+  let upstreamResponse;
+  let settled = false;
+  const detach = () => {
+    req.off("aborted", abort);
+    res.off("close", downstreamClosed);
+  };
+  const settle = () => {
+    if (settled) return false;
+    settled = true;
+    detach();
+    return true;
+  };
+  const abort = () => {
+    if (!settle()) return;
+    upstreamResponse?.destroy();
+    upstream?.destroy();
+  };
+  const downstreamClosed = () => {
+    if (!res.writableEnded) abort();
+  };
+  req.once("aborted", abort);
+  res.once("close", downstreamClosed);
+  return {
+    bindRequest: (value) => {
+      upstream = value;
+    },
+    bindResponse: (value) => {
+      upstreamResponse = value;
+      value.once("end", settle);
+      value.once("aborted", abort);
+    },
+    settle,
+  };
+}
+
 export function proxyHttp(req, res, targetPort) {
   const path = req.url;
   if (typeof path !== "string" || !/^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@/%?-]*$/u.test(path)) {
@@ -445,6 +482,7 @@ export function proxyHttp(req, res, targetPort) {
     return;
   }
   const headers = proxiedHeaders(req, targetPort);
+  const lifecycle = createProxyLifecycle(req, res);
   const upstream = request(
     {
       hostname: host,
@@ -454,6 +492,7 @@ export function proxyHttp(req, res, targetPort) {
       headers,
     },
     (upstreamRes) => {
+      lifecycle.bindResponse(upstreamRes);
       res.writeHead(
         upstreamRes.statusCode ?? 502,
         forwardedUpstreamHeaders(upstreamRes.headers, targetPort),
@@ -461,7 +500,9 @@ export function proxyHttp(req, res, targetPort) {
       upstreamRes.pipe(res);
     },
   );
+  lifecycle.bindRequest(upstream);
   upstream.on("error", () => {
+    if (!lifecycle.settle()) return;
     if (!res.headersSent) {
       res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
     }

@@ -433,20 +433,25 @@ async function proveLiveActivityTimeline(
 }
 
 async function settleRealBinaryRun(page: Page, runId: string): Promise<void> {
+  // Causal-terminal contract: once the applied changeset releases the pending-mutation hold, the
+  // child's own `stop` completion settles the run succeeded — no operator stop is involved. The
+  // settled outcome must land in the durable per-run snapshot the runs route serves.
+  await expect
+    .poll(
+      async () => {
+        const snapshot = await page.request.get(`/api/coding-workbench/runtime/runs/${runId}`);
+        if (!snapshot.ok()) return "unavailable";
+        return ((await snapshot.json()) as { readonly state?: string }).state ?? "unknown";
+      },
+      { timeout: 120_000 },
+    )
+    .toBe("succeeded");
   const codingWindow = page.locator('section[data-window-id="coding"]');
   await codingWindow
     .getByRole("group", { name: "Coding Workbench window controls" })
     .getByRole("button", { name: "Close Coding Workbench window" })
     .click();
   await expect(codingWindow).toHaveCount(0);
-  const stopped = await page.request.post(`/api/coding-workbench/runtime/runs/${runId}/stop`, {
-    headers: { "x-keiko-csrf": "1" },
-    data: { requestId: runId },
-  });
-  expect(stopped.ok()).toBe(true);
-  expect((await stopped.json()) as { readonly state?: string }).toMatchObject({
-    state: "cancelled",
-  });
 }
 
 // Runs FIRST: this readiness probe asserts the #2476 AC4 setup surface, which only renders while

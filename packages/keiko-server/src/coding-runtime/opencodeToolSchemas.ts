@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 
+import {
+  CODING_TOOL_READ_MAX_START_LINE,
+  CODING_TOOL_READ_MAX_WINDOW_LINES,
+} from "./codingToolIpc.js";
+
 export const OPENCODE_PINNED_VERSION = "1.17.17";
+export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
 const QUESTION_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -44,8 +50,23 @@ const WORKSPACE_READ_SCHEMA = {
       maxLength: 512,
       pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
     },
+    startLine: {
+      type: "integer",
+      minimum: 1,
+      maximum: CODING_TOOL_READ_MAX_START_LINE,
+      description: "1-based first line of the returned window; pass 1 to start at the file head.",
+    },
+    maxLines: {
+      type: "integer",
+      minimum: 1,
+      maximum: CODING_TOOL_READ_MAX_WINDOW_LINES,
+      description:
+        "Window height in lines; startLine 1 with maxLines 5000 reads a small file whole. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file.",
+    },
   },
-  required: ["relativePath"],
+  // OpenCode v1.17.17 declares every custom-tool argument as required in its provider
+  // projection, so the pinned model-visible contract must require the window fields too.
+  required: ["relativePath", "startLine", "maxLines"],
 } as const;
 
 const CHANGESET_EDIT_SCHEMA = {
@@ -55,11 +76,53 @@ const CHANGESET_EDIT_SCHEMA = {
       type: "object",
       additionalProperties: false,
       properties: {
-        patch: { type: "string", maxLength: 262_144 },
-        files: { type: "array", maxItems: 256 },
-        selectedFiles: { type: "array", maxItems: 256 },
-        prepared: { type: "object" },
+        patch: {
+          type: "string",
+          minLength: 1,
+          maxLength: 65_536,
+          pattern: String.raw`^(?:(?:(?:diff --git [^\r\n]+ [^\r\n]+\r?\n)(?:index [^\r\n]+\r?\n)?)?--- (?:a/|/dev/null)|:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M [^\r\n]+\r?\n@@ )`,
+          description:
+            "Strict unified diff for every listed file. Start each file with `--- a/<path>` and `+++ b/<path>` (or `/dev/null`), followed by one or more `@@ -old +new @@` hunks. A single-file `:100644 ... M <path>` raw-index header is accepted only as a compatibility fallback and is normalized before validation.",
+        },
+        files: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              file: {
+                type: "string",
+                minLength: 1,
+                maxLength: 512,
+                pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+              },
+              expectedContentHash: {
+                type: "string",
+                pattern: "^[a-f0-9]{64}$",
+                description: "SHA-256 digest returned by keiko_workspace_read.",
+              },
+            },
+            required: ["file", "expectedContentHash"],
+          },
+          description: "Every file changed by patch, bound to its last governed read digest.",
+        },
+        selectedFiles: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          uniqueItems: true,
+          items: {
+            type: "string",
+            minLength: 1,
+            maxLength: 512,
+            pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+          },
+          description: "Optional subset of files to apply; each entry must occur in files.",
+        },
       },
+      required: ["patch", "files"],
     },
   },
   required: ["changeset"],
@@ -179,7 +242,11 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
   {
     name: "keiko_workspace_read",
     action: "read",
-    arguments: { relativePath: WORKSPACE_READ_SCHEMA.properties.relativePath },
+    arguments: {
+      relativePath: WORKSPACE_READ_SCHEMA.properties.relativePath,
+      startLine: WORKSPACE_READ_SCHEMA.properties.startLine,
+      maxLines: WORKSPACE_READ_SCHEMA.properties.maxLines,
+    },
   },
   {
     name: "keiko_changeset_edit",

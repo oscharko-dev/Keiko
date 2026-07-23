@@ -116,6 +116,7 @@ Minimal example for the gateway configuration (Settings → Models, or the gatew
       "baseUrl": "https://your-openai-compatible-endpoint/v1",
       "apiKey": "<stored-by-keiko-config>",
       "endpointStyle": "openai-compatible",
+      "outputTokenParameter": "max_completion_tokens",
       "timeoutMs": 60000,
       "maxRetries": 2,
       "retryBaseDelayMs": 250,
@@ -145,6 +146,10 @@ Minimal example for the gateway configuration (Settings → Models, or the gatew
 
 Provider credentials never reach the OpenCode child; the child talks only to the loopback
 gateway with a run-bound capability token.
+
+`outputTokenParameter` selects the provider wire name for Keiko's bounded output budget. GPT-5 and
+o1/o3/o4 model IDs infer `max_completion_tokens`; set the field explicitly when a gateway exposes
+one of those models through an opaque alias, or requires the legacy `max_tokens` parameter.
 
 ## Kill switch
 

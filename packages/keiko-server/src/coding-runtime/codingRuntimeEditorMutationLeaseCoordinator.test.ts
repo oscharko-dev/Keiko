@@ -60,6 +60,7 @@ function registration(mutationGuard: () => boolean = (): boolean => true): {
   readonly workspaceRootDigest: string;
   readonly actionId: string;
   readonly idempotencyKey: string;
+  readonly requiresReview: boolean;
   readonly mutationGuard: () => boolean;
 } {
   return {
@@ -68,6 +69,7 @@ function registration(mutationGuard: () => boolean = (): boolean => true): {
     workspaceRootDigest: ROOT_DIGEST,
     actionId: "edit-1",
     idempotencyKey: "edit-key-1",
+    requiresReview: true,
     mutationGuard,
   };
 }
@@ -88,7 +90,7 @@ function request(overrides: Partial<ReturnType<typeof registration>> = {}): {
 }
 
 describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () => {
-  it("registers a content-free lease with exact identity matching and a one-use final claim", () => {
+  it("registers a content-free lease with review policy and waits for its one-use claim", async () => {
     const invocationRegistry = createCodingToolInvocationRegistry();
     const cancelPendingByAuthorityRun = vi.fn((): number => 0);
     const mutationGuard = vi.fn((): boolean => true);
@@ -106,6 +108,7 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     expect(coordinator.register(contentFreeRegistration)).toBe(true);
     expect(coordinator.register({ ...registration(), workspaceId: "other-workspace" })).toBe(false);
     expect(coordinator.lease.matches(request())).toBe(true);
+    expect(coordinator.lease.requiresReview(request())).toBe(true);
     expect(coordinator.lease.matches(request({ actionId: "other-action" }))).toBe(false);
     expect(coordinator.lease.matches(request({ idempotencyKey: "other-key" }))).toBe(false);
     expect(
@@ -122,11 +125,33 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
       false,
     );
 
+    const idle = coordinator.waitForIdle(new AbortController().signal);
     expect(coordinator.lease.claim(request())).toBe(true);
+    expect(coordinator.lease.matches(request())).toBe(true);
+    expect(coordinator.lease.complete(request(), true)).toBe(true);
+    await expect(idle).resolves.toBe(true);
     expect(mutationGuard).toHaveBeenCalledTimes(1);
     expect(coordinator.lease.claim(request())).toBe(false);
     expect(mutationGuard).toHaveBeenCalledTimes(1);
     expect(cancelPendingByAuthorityRun).not.toHaveBeenCalled();
+  });
+
+  it("releases terminal waiters on rejection and cancellation without claiming mutation", async () => {
+    const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      cancelPendingByAuthorityRun: (): number => 0,
+    });
+    expect(coordinator.register(registration())).toBe(true);
+    const rejected = coordinator.waitForIdle(new AbortController().signal);
+    expect(coordinator.lease.discard(request())).toBe(true);
+    await expect(rejected).resolves.toBe(false);
+
+    expect(coordinator.register(registration())).toBe(true);
+    const controller = new AbortController();
+    const cancelled = coordinator.waitForIdle(controller.signal);
+    controller.abort();
+    await expect(cancelled).resolves.toBe(false);
+    expect(coordinator.lease.matches(request())).toBe(true);
   });
 
   it("revokes a run atomically: it closes staging, aborts raw reads, cancels pending browser work, and rejects a late result", () => {
@@ -192,6 +217,7 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     ).toEqual({ kind: "revoked" });
     expect(payload.equals(Buffer.alloc(payload.length))).toBe(true);
     expect(coordinator.lease.matches(request())).toBe(false);
+    expect(coordinator.lease.requiresReview(request())).toBeUndefined();
     expect(coordinator.lease.claim(request())).toBe(false);
   });
 
@@ -236,17 +262,33 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
 describe("coding-runtime editor mutation lease broker (Issue #2483)", () => {
   it("routes one exact active match and detaches it with the run lifecycle", () => {
     const claim = vi.fn((): boolean => true);
+    const complete = vi.fn((): boolean => true);
+    const discard = vi.fn((): boolean => true);
     const broker = createCodingRuntimeEditorMutationLeaseBroker();
-    const detach = broker.attach({ matches: () => true, claim });
+    const detach = broker.attach({
+      matches: () => true,
+      requiresReview: () => false,
+      claim,
+      complete,
+      discard,
+    });
     if (detach === undefined) throw new Error("expected attached runtime lease");
 
     expect(broker.matches(request())).toBe(true);
+    expect(broker.requiresReview(request())).toBe(false);
     expect(broker.claim(request())).toBe(true);
+    expect(broker.complete(request(), true)).toBe(true);
+    expect(broker.discard(request())).toBe(true);
     expect(claim).toHaveBeenCalledExactlyOnceWith(request());
+    expect(complete).toHaveBeenCalledExactlyOnceWith(request(), true);
+    expect(discard).toHaveBeenCalledExactlyOnceWith(request());
 
     detach();
     expect(broker.matches(request())).toBe(false);
+    expect(broker.requiresReview(request())).toBeUndefined();
     expect(broker.claim(request())).toBe(false);
+    expect(broker.complete(request(), true)).toBe(false);
+    expect(broker.discard(request())).toBe(false);
     expect(claim).toHaveBeenCalledTimes(1);
   });
 
@@ -254,10 +296,23 @@ describe("coding-runtime editor mutation lease broker (Issue #2483)", () => {
     const firstClaim = vi.fn((): boolean => true);
     const secondClaim = vi.fn((): boolean => true);
     const broker = createCodingRuntimeEditorMutationLeaseBroker();
-    broker.attach({ matches: () => true, claim: firstClaim });
-    broker.attach({ matches: () => true, claim: secondClaim });
+    broker.attach({
+      matches: () => true,
+      requiresReview: () => true,
+      claim: firstClaim,
+      complete: firstClaim,
+      discard: firstClaim,
+    });
+    broker.attach({
+      matches: () => true,
+      requiresReview: () => false,
+      claim: secondClaim,
+      complete: secondClaim,
+      discard: secondClaim,
+    });
 
     expect(broker.matches(request())).toBe(false);
+    expect(broker.requiresReview(request())).toBeUndefined();
     expect(broker.claim(request())).toBe(false);
     expect(firstClaim).not.toHaveBeenCalled();
     expect(secondClaim).not.toHaveBeenCalled();
@@ -270,19 +325,39 @@ describe("coding-runtime editor mutation lease broker (Issue #2483)", () => {
       claim: (): never => {
         throw new Error("unavailable");
       },
+      complete: (): never => {
+        throw new Error("unavailable");
+      },
+      requiresReview: (): never => {
+        throw new Error("unavailable");
+      },
+      discard: (): never => {
+        throw new Error("unavailable");
+      },
     });
     expect(throwing.matches(request())).toBe(false);
+    expect(throwing.requiresReview(request())).toBeUndefined();
     expect(throwing.claim(request())).toBe(false);
   });
 
   it("invalidates every attached lease and rejects new attachments after disposal", () => {
     const broker = createCodingRuntimeEditorMutationLeaseBroker();
-    expect(broker.attach({ matches: () => true, claim: () => true })).toBeTypeOf("function");
+    const port = {
+      matches: (): boolean => true,
+      requiresReview: (): boolean => true,
+      claim: (): boolean => true,
+      complete: (): boolean => true,
+      discard: (): boolean => true,
+    };
+    expect(broker.attach(port)).toBeTypeOf("function");
 
     broker.dispose();
 
     expect(broker.matches(request())).toBe(false);
+    expect(broker.requiresReview(request())).toBeUndefined();
     expect(broker.claim(request())).toBe(false);
-    expect(broker.attach({ matches: () => true, claim: () => true })).toBeUndefined();
+    expect(broker.complete(request(), true)).toBe(false);
+    expect(broker.discard(request())).toBe(false);
+    expect(broker.attach(port)).toBeUndefined();
   });
 });

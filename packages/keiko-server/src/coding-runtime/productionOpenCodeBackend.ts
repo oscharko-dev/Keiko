@@ -26,6 +26,7 @@ import {
   type OpenCodeRuntimeCompositionInput,
 } from "./opencodeRuntimeComposition.js";
 import { createOpenCodeRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
+import { createOpenCodeRuntimePermissionPort } from "./productionCodingRuntimePermissionPort.js";
 import { createOpenCodeRuntimeTurnPort } from "./productionCodingRuntimePorts.js";
 import type {
   ProductionRuntimeBackendInput,
@@ -110,12 +111,14 @@ function createOpenCodeRun(
     const launch = openCodeLaunchMaterial(input, run);
     const turnPort = createOpenCodeRuntimeTurnPort(composition.runPort);
     const questionPort = createOpenCodeRuntimeQuestionPort(composition.runPort);
+    const permissionPort = createOpenCodeRuntimePermissionPort(composition.runPort);
     openSafeActivity(run, safeActivityProjection);
     return {
       manager: composition.manager,
       launch,
       turnPort,
       questionPort,
+      permissionPort,
       dispose: (): void => {
         safeActivity.clear();
         safeActivityProjection.purge(run.minted.authorityRef.runId, "stop");

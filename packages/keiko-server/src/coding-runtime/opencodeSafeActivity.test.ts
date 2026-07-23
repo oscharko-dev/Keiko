@@ -332,18 +332,7 @@ describe("OpenCode safe-activity normalization", () => {
         sessionID: "ses_safe",
         info: { id: "msg_bad", role: "assistant", time: { created: -1 } },
       }),
-      row(2, "message.part.updated.1", {
-        sessionID: "ses_safe",
-        part: {
-          id: "prt_empty",
-          sessionID: "ses_safe",
-          messageID: "msg_user",
-          type: "text",
-          text: "",
-        },
-        time: 2,
-      }),
-      row(3, "session.next.tool.called", {
+      row(2, "session.next.tool.called", {
         timestamp: "not-a-time",
         sessionID: "ses_safe",
         assistantMessageID: "msg_assistant",
@@ -352,6 +341,25 @@ describe("OpenCode safe-activity normalization", () => {
         provider: "keiko",
       }),
     ]);
-    expect(normalized).toEqual({ signals: [], dropped: 3 });
+    expect(normalized).toEqual({ signals: [], dropped: 2 });
+  });
+
+  it("skips the empty first frame of a streamed text part instead of counting a drop (#2473)", () => {
+    // The real child appends the text part before any characters stream into it; there is nothing
+    // to project yet and later frames carry the accumulated text, so this is not a rejection.
+    const normalized = normalizeOpenCodeSafeActivityHistory([
+      row(1, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: {
+          id: "prt_empty",
+          sessionID: "ses_safe",
+          messageID: "msg_assistant",
+          type: "text",
+          text: "",
+        },
+        time: 2,
+      }),
+    ]);
+    expect(normalized).toEqual({ signals: [], dropped: 0 });
   });
 });

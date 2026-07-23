@@ -164,7 +164,11 @@ export function handleCreateCodingRuntimeRun(
   return mutation(ctx, deps, undefined, (runtime, body) => runtime.start(body));
 }
 
-export function handleCodingRuntimeStatus(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  // The status request has no input surface. Rejecting every query parameter both makes the
+  // transport contract exact and ensures this handler cannot silently grow a caller-controlled
+  // selector that turns the otherwise content-free projection into an existence oracle (#2644).
+  if (ctx.url.searchParams.size !== 0) return failureResult("invalid-intent");
   const required = requireRuntime(deps);
   return isRouteResult(required) ? required : { status: 200, body: required.orchestrator.status() };
 }
@@ -390,16 +394,12 @@ export function handleCodingRuntimeQuestionList(
 }
 
 /**
- * The #2387 operator-review projection of a pending research ask: the public host and the sanitized
- * request line the grant would bind. Content-bearing, so it enforces the same app-session read
- * authority as the question routes (ADR-0141 D2, #2478) and answers an unpaired caller with the one
- * constant content-free payload — never a distinct auth error and never a different answer for an
- * unknown run, so it is not an existence oracle (ADR-0141 D6).
+ * The authenticated research projection: the pending ask an operator reviews and the active grant
+ * it creates. Both contain model-selected hosts, so neither may ride a general runtime snapshot
+ * (#2644). An unpaired caller receives the one constant content-free payload before run resolution
+ * — never a distinct auth error or an existence oracle (ADR-0141 D6).
  */
-export function handleCodingRuntimeResearchAsk(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
+export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
     return { status: 200, body: unpairedCodingWorkbenchRuntimeResearchChannelPayload() };
   }
@@ -409,9 +409,11 @@ export function handleCodingRuntimeResearchAsk(
   if (isRouteResult(required)) return required;
   if (!required.orchestrator.getSnapshot(runId)) return notFound();
   const pending = required.orchestrator.pendingResearchAsk(runId);
+  const grant = required.orchestrator.researchGrant(runId);
   const payload: CodingWorkbenchRuntimeResearchChannelPayload = {
     session: "active",
     ...(pending === undefined ? {} : { pending }),
+    ...(grant === undefined ? {} : { grant }),
   };
   return { status: 200, body: payload };
 }
@@ -493,7 +495,7 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
   {
     method: "GET",
     pattern: "/api/coding-workbench/runtime/runs/:runId/research",
-    handler: handleCodingRuntimeResearchAsk,
+    handler: handleCodingRuntimeResearch,
   },
   {
     method: "POST",

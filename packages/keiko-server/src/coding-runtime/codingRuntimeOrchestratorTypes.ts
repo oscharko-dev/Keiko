@@ -14,6 +14,7 @@ import type {
 } from "./codingRuntimeManager.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
+import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -52,12 +53,13 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly launchResolver: CodingRuntimeLaunchResolver;
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
   readonly questionPort: CodingRuntimeQuestionPort;
+  readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   readonly serverPrincipal: () => string | undefined;
   /**
-   * Server-level read-only research grant registry (#2387). When present, the snapshot projection
-   * carries the run's live grant and the revoke operation drops it; when absent (no qualified
-   * runtime host), the snapshot never shows a grant and revoke fails closed.
+   * Server-level read-only research grant registry (#2387). The grant is exposed only through the
+   * authenticated research channel and the revoke operation drops it; when the registry is absent
+   * (no qualified runtime host), that channel has no grant and revoke fails closed.
    */
   readonly researchGrants?: ResearchGrantRegistry | undefined;
   /**

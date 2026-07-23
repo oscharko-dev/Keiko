@@ -9,7 +9,7 @@ import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
-import { isExactEditorAgentChangeset } from "./codingToolIpc.js";
+import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
@@ -18,6 +18,8 @@ import type {
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 const MAX_READ_BYTES = 65_536;
+const RAW_SINGLE_FILE_PATCH =
+  /^:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M ([^\r\n]+)\r?\n(@@ [\s\S]+)$/u;
 
 type RepositoryReadRequest = CodingToolActionOf<"read">;
 type EditorChangesetRequest = CodingToolActionOf<"edit">;
@@ -25,7 +27,9 @@ type EditorChangesetRequest = CodingToolActionOf<"edit">;
 type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action"> &
   Partial<Pick<EditorAgentHttpClient, "listSessions">>;
 
-const EDITOR_SESSION_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
+// The delays total 11.75 s. Together with seven worst-case 2 s session-list calls this remains
+// below the production tool bridge's 30 s deadline, leaving the generated client its outer margin.
+const EDITOR_SESSION_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 3_000, 5_000] as const;
 
 export interface CodingToolReadEditPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
@@ -37,6 +41,7 @@ export interface CodingToolReadEditPortDeps {
   readonly editorAgentClient: EditorAgentActionClient;
   readonly resolveEditorActionContext: () => EditorActionContext;
   readonly resolveRepositoryReadContext?: (() => RuntimeProducerBinding) | undefined;
+  readonly requiresEditorReview?: (() => boolean) | undefined;
   readonly mutationLeaseCoordinator?:
     Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard"> | undefined;
 }
@@ -84,10 +89,7 @@ async function executeRead(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): Promise<
-  | {
-      readonly status: "completed";
-      readonly read: { readonly text: string; readonly byteCount: number; readonly digest: string };
-    }
+  | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" }
 > {
   const binding = readPreflight(deps, request, signal, mutationGuard);
@@ -97,15 +99,62 @@ async function executeRead(
     signal,
   });
   if (!readPostflight(deps, result, binding, signal, mutationGuard)) return { status: "failed" };
-  const byteCount = Buffer.byteLength(result.text, "utf8");
-  if (byteCount > MAX_READ_BYTES) return { status: "failed" };
+  if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) return { status: "failed" };
+  const window = readWindow(result.text, request.startLine, request.maxLines);
   return {
     status: "completed",
     read: {
-      text: result.text,
-      byteCount,
+      text: window.text,
+      byteCount: Buffer.byteLength(window.text, "utf8"),
+      // The digest always covers the WHOLE file so a later changeset's expectedContentHash stays
+      // anchored to the governed read even when the model only saw a window of it.
       digest: createHash("sha256").update(result.text, "utf8").digest("hex"),
+      totalLines: window.totalLines,
+      ...(window.nextStartLine === undefined ? {} : { nextStartLine: window.nextStartLine }),
     },
+  };
+}
+
+/**
+ * Cuts the requested 1-based line window out of the full governed read. The whole file always
+ * stays server-side; only the window travels back to the model (#2473 large-file reads).
+ */
+function readWindow(
+  text: string,
+  startLine: number | undefined,
+  maxLines: number | undefined,
+): ReadWindowResult {
+  const lines = text.split("\n");
+  const trailingNewline = lines.length > 1 && lines.at(-1) === "";
+  let totalLines = trailingNewline ? lines.length - 1 : lines.length;
+  if (text.length === 0) totalLines = 0;
+  if (startLine === undefined && maxLines === undefined) return { text, totalLines };
+  const first = (startLine ?? 1) - 1;
+  if (first >= totalLines) return { text: "", totalLines };
+  return slicedWindow({ lines, trailingNewline, totalLines, first, maxLines });
+}
+
+interface ReadWindowResult {
+  readonly text: string;
+  readonly totalLines: number;
+  readonly nextStartLine?: number;
+}
+
+function slicedWindow(input: {
+  readonly lines: readonly string[];
+  readonly trailingNewline: boolean;
+  readonly totalLines: number;
+  readonly first: number;
+  readonly maxLines: number | undefined;
+}): ReadWindowResult {
+  const { lines, trailingNewline, totalLines, first, maxLines } = input;
+  const end = maxLines === undefined ? totalLines : Math.min(totalLines, first + maxLines);
+  const window = lines.slice(first, end).join("\n");
+  const keepsTrailingNewline = end < totalLines || trailingNewline;
+  return {
+    text: keepsTrailingNewline ? `${window}\n` : window,
+    totalLines,
+    ...(end < totalLines ? { nextStartLine: end + 1 } : {}),
   };
 }
 
@@ -242,7 +291,22 @@ function validatedChangeset(
   if (isAborted(signal) || !checkGuard(mutationGuard) || !("changeset" in request)) {
     return undefined;
   }
-  return isExactEditorAgentChangeset(request.changeset) ? request.changeset : undefined;
+  if (!isExactEditorAgentChangeset(request.changeset)) return undefined;
+  return normalizeRawSingleFilePatch(request.changeset);
+}
+
+function normalizeRawSingleFilePatch(
+  changeset: EditorAgentChangeset,
+): EditorAgentChangeset | undefined {
+  if (!changeset.patch.startsWith(":")) return changeset;
+  const file = changeset.files[0]?.file;
+  if (changeset.files.length !== 1 || file === undefined) return undefined;
+  const match = RAW_SINGLE_FILE_PATCH.exec(changeset.patch);
+  if (match?.[1] !== file || match[2] === undefined) return undefined;
+  return {
+    ...changeset,
+    patch: `--- a/${file}\n+++ b/${file}\n${match[2]}`,
+  };
 }
 
 function editorStatusCompleted(status: string): boolean {
@@ -277,9 +341,18 @@ function registerMutationLease(
     workspaceRootDigest: binding.workspaceRootDigest,
     actionId: action.actionId,
     idempotencyKey: action.idempotencyKey,
+    requiresReview: resolveReviewRequirement(deps),
     mutationGuard: (): boolean => checkGuard(mutationGuard),
   });
   return registered ? request : undefined;
+}
+
+function resolveReviewRequirement(deps: CodingToolReadEditPortDeps): boolean {
+  try {
+    return deps.requiresEditorReview?.() ?? true;
+  } catch {
+    return true;
+  }
 }
 
 function leaseRequest(

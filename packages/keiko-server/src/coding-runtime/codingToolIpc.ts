@@ -11,6 +11,10 @@ import { isDenied } from "@oscharko-dev/keiko-workspace";
 export const CODING_TOOL_MAX_BODY_BYTES = 262_144;
 export const CODING_TOOL_MAX_IN_FLIGHT = 8;
 export const CODING_TOOL_MAX_READ_BYTES = 65_536;
+/** Highest 1-based line a read window may start at; bounds the model-visible schema too. */
+export const CODING_TOOL_READ_MAX_START_LINE = 1_000_000;
+/** Largest read-window height; bounds the model-visible schema too. */
+export const CODING_TOOL_READ_MAX_WINDOW_LINES = 5_000;
 
 export type CodingToolAction =
   | "read"
@@ -30,7 +34,14 @@ export interface CodingToolRequestIdentity {
 }
 
 export type CodingToolActionRequest =
-  | (CodingToolRequestIdentity & { readonly action: "read"; readonly relativePath: string })
+  | (CodingToolRequestIdentity & {
+      readonly action: "read";
+      readonly relativePath: string;
+      /** Optional 1-based first line of the returned window (#2473 large-file reads). */
+      readonly startLine?: number;
+      /** Optional maximum number of lines in the returned window. */
+      readonly maxLines?: number;
+    })
   | (CodingToolRequestIdentity & {
       readonly action: "edit";
       readonly changeset: EditorAgentChangeset;
@@ -55,7 +66,7 @@ export type CodingToolResult =
   | {
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
-      readonly read: CodingToolReadResult;
+      readonly read: CodingToolReadResult | CodingToolEgressReadResult;
     }
   | { readonly status: "completed" | "failed"; readonly evidence: readonly CodingToolEvidence[] }
   | {
@@ -68,10 +79,22 @@ export type CodingToolResult =
       readonly evidence: readonly [];
     };
 
-export interface CodingToolReadResult {
+/** A research page read (#2387): digest and byte count cover exactly the returned bytes. */
+export interface CodingToolEgressReadResult {
   readonly text: string;
   readonly byteCount: number;
   readonly digest: string;
+}
+
+/**
+ * A repository read: `text` is the returned window — the whole file unless the request narrowed
+ * it — while `digest` covers the WHOLE file so edit optimistic concurrency stays anchored (#2473).
+ */
+export interface CodingToolReadResult extends CodingToolEgressReadResult {
+  /** Total number of lines in the whole file. */
+  readonly totalLines: number;
+  /** 1-based first line after the window; absent when the window reached the end of the file. */
+  readonly nextStartLine?: number;
 }
 
 export interface CodingToolEvidence {
@@ -181,12 +204,40 @@ function childAgentRequest(value: Record<string, unknown>): CodingToolActionRequ
 
 function readRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
+  const startLine = readWindowParameter(value, "startLine", CODING_TOOL_READ_MAX_START_LINE);
+  const maxLines = readWindowParameter(value, "maxLines", CODING_TOOL_READ_MAX_WINDOW_LINES);
   return identity !== undefined &&
-    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "relativePath"]) &&
+    hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      "relativePath",
+      "startLine",
+      "maxLines",
+    ]) &&
     normalizedRelativePath(value.relativePath) &&
-    !isDenied(value.relativePath)
-    ? { ...identity, action: "read", relativePath: value.relativePath }
+    !isDenied(value.relativePath) &&
+    startLine !== "invalid" &&
+    maxLines !== "invalid"
+    ? {
+        ...identity,
+        action: "read",
+        relativePath: value.relativePath,
+        ...(startLine === undefined ? {} : { startLine }),
+        ...(maxLines === undefined ? {} : { maxLines }),
+      }
     : undefined;
+}
+
+/** Absent stays absent; anything present must be a bounded positive integer or the request dies. */
+function readWindowParameter(
+  value: Record<string, unknown>,
+  key: "startLine" | "maxLines",
+  maximum: number,
+): number | undefined | "invalid" {
+  if (!Object.hasOwn(value, key)) return undefined;
+  const candidate = value[key];
+  return positiveBoundedInteger(candidate, maximum) ? candidate : "invalid";
 }
 
 function editRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
@@ -303,6 +354,9 @@ function normalizedRelativePath(value: unknown): value is string {
   return (
     nonEmpty(value) &&
     !value.includes("\0") &&
+    // Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
+    // `file.txt:stream` names an NTFS alternate data stream — neither is workspace-relative.
+    !value.includes(":") &&
     !value.startsWith("/") &&
     !value.startsWith("\\") &&
     value

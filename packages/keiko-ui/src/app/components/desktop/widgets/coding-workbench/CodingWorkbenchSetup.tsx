@@ -13,11 +13,7 @@
 // reconciliation cannot verify is NEVER activated, so the run stays unstartable (#2476 AC3).
 
 import { useState, type ReactNode } from "react";
-import {
-  provisionTaskWorkspace,
-  reconcileTaskWorkspaces,
-  setActiveTaskWorkspace,
-} from "@/lib/task-workspace-api";
+import { bindVerifiedTaskWorkspace } from "@/lib/verified-task-workspace-binding";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -76,33 +72,6 @@ export function codingWorkbenchSetupTaskId(targetBranch: string): string {
   return slug.length === 0 ? "coding-workbench" : `coding-workbench-${slug}`;
 }
 
-// Reconcile the freshly provisioned workspace and report whether it verified healthy. A non-healthy
-// classification (dirty / foreign / drifted root) OR a failed reconciliation call both resolve false,
-// so the caller never activates an unverifiable binding and the run stays unstartable (#2476 AC3).
-async function verifyBoundWorkspace(root: string, workspaceId: string): Promise<boolean> {
-  try {
-    const report = await reconcileTaskWorkspaces({ root });
-    return report.entries.find((entry) => entry.workspaceId === workspaceId)?.status === "healthy";
-  } catch {
-    return false;
-  }
-}
-
-// Set the verified workspace active and refresh the shared context. Failures stay content-free.
-async function activateBinding(
-  workspaceId: string,
-  root: string,
-  refreshWorkspace: (root: string) => Promise<void>,
-): Promise<boolean> {
-  try {
-    await setActiveTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR });
-    await refreshWorkspace(root);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // Drive provision → reconcile → activate as one operator action. `onPhase` advances the surfaced
 // pending phase from binding to verifying; every server error maps to a bounded, content-free outcome.
 async function executeBind(input: {
@@ -111,22 +80,20 @@ async function executeBind(input: {
   readonly refreshWorkspace: (root: string) => Promise<void>;
   readonly onPhase: (phase: SetupPhase) => void;
 }): Promise<BindOutcome> {
-  const provisioned = await provisionTaskWorkspace({
+  const result = await bindVerifiedTaskWorkspace({
     root: input.root,
     taskId: codingWorkbenchSetupTaskId(input.baseBranch),
     baseBranch: input.baseBranch,
     requestedBy: STUDIO_OPERATOR,
-  }).catch(() => null);
-  if (provisioned === null) return "bind-failed";
-  input.onPhase("verifying");
-  const verified = await verifyBoundWorkspace(input.root, provisioned.instance.workspaceId);
-  if (!verified) return "verify-failed";
-  const activated = await activateBinding(
-    provisioned.instance.workspaceId,
-    input.root,
-    input.refreshWorkspace,
-  );
-  return activated ? "ok" : "bind-failed";
+    onProvisioned: () => input.onPhase("verifying"),
+  });
+  if (!result.ok) return result.stage === "verify" ? "verify-failed" : "bind-failed";
+  try {
+    await input.refreshWorkspace(input.root);
+    return "ok";
+  } catch {
+    return "bind-failed";
+  }
 }
 
 function createBindSubmitHandler(params: {

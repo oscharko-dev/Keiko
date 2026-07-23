@@ -1,7 +1,14 @@
 import { createHash } from "node:crypto";
 
+import {
+  parseCodingSidecarEventLine,
+  type SidecarPermissionEvent,
+} from "./codingSidecarEventParser.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
-import { OPENCODE_TOOL_SOURCE_DEFINITIONS } from "./opencodeToolSchemas.js";
+import {
+  OPENCODE_GOVERNED_ACTION_PERMISSION,
+  OPENCODE_TOOL_SOURCE_DEFINITIONS,
+} from "./opencodeToolSchemas.js";
 
 /** The only OpenCode HTTP surface admitted by the v1.17.17 adapter. */
 export const OPENCODE_APPROVED_ENDPOINTS = Object.freeze([
@@ -55,6 +62,7 @@ const MAX_HISTORY_INFO_BYTES = 64 * 1024;
 const MAX_HISTORY_INFO_DEPTH = 8;
 const MAX_JSON_DEPTH = 64;
 const ID = /^(?:evt_|ses_|per|que)[A-Za-z0-9_-]+$/u;
+const PERMISSION_ID = /^per_[A-Za-z0-9_-]+$/u;
 const MESSAGE_ID = /^msg_[A-Za-z0-9_-]+$/u;
 const PART_ID = /^prt_[A-Za-z0-9_-]+$/u;
 const REVIEWED_FINISH_REASONS = new Set([
@@ -65,7 +73,7 @@ const REVIEWED_FINISH_REASONS = new Set([
   "error",
   "unknown",
 ]);
-const TERMINAL_FINISH_REASONS = new Set(["stop", "length", "content-filter", "error"]);
+const FAILED_TERMINAL_FINISH_REASONS = new Set(["length", "content-filter", "error", "unknown"]);
 const APPROVED_PRODUCTIVE_TOOLS = new Set<string>(
   OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => name),
 );
@@ -190,6 +198,210 @@ export function classifyOpenCodeLiveControl(value: unknown): OpenCodeLiveControl
   return undefined;
 }
 
+const GOVERNED_EDIT_METADATA_KEYS = [
+  "kind",
+  "actionClass",
+  "reasonCode",
+  "expiresAt",
+  "actionKind",
+  "scopeLabel",
+  "risk",
+  "policyReason",
+  "targetPath",
+  "allowedRelativePaths",
+  "fileCount",
+  "addedLines",
+  "deletedLines",
+] as const;
+const GOVERNED_VERIFICATION_METADATA_KEYS = [
+  "kind",
+  "actionClass",
+  "reasonCode",
+  "expiresAt",
+  "actionKind",
+  "scopeLabel",
+  "risk",
+  "policyReason",
+  "commandLabel",
+] as const;
+const GOVERNED_VERIFIERS = new Set(["test", "targeted-test", "typecheck", "lint", "build"]);
+// Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
+// `file.txt:stream` names an NTFS alternate data stream — neither is a workspace-relative path.
+const GOVERNED_PATH = /^(?![\\/])(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\\)(?!.*:).+$/u;
+
+/**
+ * Converts only Keiko's exact custom-tool permission into the existing sidecar permission
+ * contract. OpenCode routing/tool fields and arbitrary metadata are discarded at this boundary.
+ */
+export function projectOpenCodePermissionEvent(
+  value: unknown,
+  fixedSessionId: string,
+): SidecarPermissionEvent | undefined {
+  const properties = governedPermissionProperties(value, fixedSessionId);
+  if (properties === undefined || !isRecord(properties.metadata)) return undefined;
+  const projected = projectGovernedPermissionByKind(properties, properties.metadata);
+  if (projected === undefined) return undefined;
+  const parsed = parseCodingSidecarEventLine(JSON.stringify(projected));
+  return parsed.status === "parsed" && parsed.event.type === "permission-request"
+    ? parsed.event
+    : undefined;
+}
+
+/**
+ * Projects an upstream permission id into the content-free evidence vocabulary used by Keiko's
+ * public runtime contract. The full SHA-256 value is rendered as decimal so no upstream identifier
+ * bytes or unapproved evidence tokens cross the boundary. Callers reverse the alias only by
+ * matching it against the bounded live permission list; collisions therefore fail closed.
+ */
+export function projectOpenCodePermissionRequestId(requestId: string): string | undefined {
+  if (!PERMISSION_ID.test(requestId)) return undefined;
+  const digest = createHash("sha256").update(requestId, "utf8").digest("hex");
+  return `permission-${BigInt("0x" + digest).toString(10)}`;
+}
+
+/** A SHA-256 rendered as decimal never exceeds 78 digits. */
+const PROJECTED_PERMISSION_REQUEST_ID = /^permission-\d{1,78}$/u;
+
+/**
+ * True only for ids `projectOpenCodePermissionRequestId` can have produced. Server-originated
+ * asks (e.g. `research-approval-<n>`) never match: they have no child-side permission to settle.
+ */
+export function isProjectedOpenCodePermissionRequestId(requestId: string): boolean {
+  return PROJECTED_PERMISSION_REQUEST_ID.test(requestId);
+}
+
+function governedPermissionProperties(
+  value: unknown,
+  fixedSessionId: string,
+): Record<string, unknown> | undefined {
+  if (!exactRecord(value, ["id", "type", "properties"])) return undefined;
+  if (value.type !== "permission.asked" || !isRecord(value.properties)) return undefined;
+  const properties = value.properties;
+  return permissionAsked(properties) &&
+    properties.sessionID === fixedSessionId &&
+    properties.permission === OPENCODE_GOVERNED_ACTION_PERMISSION
+    ? properties
+    : undefined;
+}
+
+function projectGovernedPermissionByKind(
+  properties: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (metadata.actionKind === "file-edit") {
+    return projectGovernedEditPermission(properties, metadata);
+  }
+  if (metadata.actionKind === "verification-command") {
+    return projectGovernedVerificationPermission(properties, metadata);
+  }
+  return undefined;
+}
+
+function projectGovernedEditPermission(
+  properties: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (
+    !exactRecord(metadata, GOVERNED_EDIT_METADATA_KEYS) ||
+    !fixedPermissionMetadata(metadata, "workspace-write", "workspace-write", "file-edit", "medium")
+  ) {
+    return undefined;
+  }
+  const paths = governedPaths(metadata.allowedRelativePaths);
+  if (
+    paths === undefined ||
+    !sameStrings(properties.patterns, paths) ||
+    metadata.targetPath !== paths[0] ||
+    metadata.fileCount !== paths.length ||
+    !boundedCount(metadata.addedLines) ||
+    !boundedCount(metadata.deletedLines)
+  ) {
+    return undefined;
+  }
+  const requestId = projectOpenCodePermissionRequestId(String(properties.id));
+  if (requestId === undefined) return undefined;
+  return {
+    type: "permission-request",
+    requestId,
+    ...metadata,
+    allowedRelativePaths: paths,
+  };
+}
+
+function projectGovernedVerificationPermission(
+  properties: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (
+    !exactRecord(metadata, GOVERNED_VERIFICATION_METADATA_KEYS) ||
+    !fixedPermissionMetadata(
+      metadata,
+      "command-execution",
+      "verification",
+      "verification-command",
+      "low",
+    ) ||
+    typeof metadata.commandLabel !== "string" ||
+    !GOVERNED_VERIFIERS.has(metadata.commandLabel) ||
+    !sameStrings(properties.patterns, [metadata.commandLabel])
+  ) {
+    return undefined;
+  }
+  const requestId = projectOpenCodePermissionRequestId(String(properties.id));
+  return requestId === undefined
+    ? undefined
+    : { type: "permission-request", requestId, ...metadata };
+}
+
+function fixedPermissionMetadata(
+  metadata: Record<string, unknown>,
+  kind: string,
+  actionClass: string,
+  actionKind: string,
+  risk: string,
+): boolean {
+  return (
+    metadata.kind === kind &&
+    metadata.actionClass === actionClass &&
+    metadata.reasonCode === "approval-required" &&
+    metadata.actionKind === actionKind &&
+    metadata.scopeLabel === "workspace-scope" &&
+    metadata.risk === risk &&
+    metadata.policyReason === "approval-required" &&
+    typeof metadata.expiresAt === "string" &&
+    metadata.expiresAt.length <= 64 &&
+    Number.isFinite(Date.parse(metadata.expiresAt))
+  );
+}
+
+function governedPaths(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const paths: readonly unknown[] = value;
+  if (
+    paths.length < 1 ||
+    paths.length > 50 ||
+    !paths.every(
+      (path) => typeof path === "string" && path.length <= 512 && GOVERNED_PATH.test(path),
+    ) ||
+    new Set(paths).size !== paths.length
+  ) {
+    return undefined;
+  }
+  return paths.filter((path): path is string => typeof path === "string");
+}
+
+function sameStrings(left: unknown, right: readonly string[]): boolean {
+  return (
+    Array.isArray(left) &&
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function boundedCount(value: unknown): boolean {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 1_000_000;
+}
+
 function validRetryStatus(value: unknown): boolean {
   return (
     (exactRecord(value, ["type", "attempt", "message", "next"]) ||
@@ -231,6 +443,8 @@ function normalizedGlobalEvent(
     return undefined;
   const payload = envelope.payload;
   if (isRecord(payload) && payload.type === "sync") return normalizedSyncPayload(payload);
+  const legacyPermission = normalizedLegacyPermissionPayload(payload);
+  if (legacyPermission !== undefined) return legacyPermission;
   if (
     !exactRecord(payload, ["id", "type", "properties"]) ||
     typeof payload.id !== "string" ||
@@ -240,6 +454,28 @@ function normalizedGlobalEvent(
   )
     return undefined;
   return { id: payload.id, type: payload.type, properties: payload.properties };
+}
+
+/**
+ * OpenCode 1.17.17's custom-tool `context.ask` emits the reviewed legacy permission event without
+ * the newer outer event id. The permission request itself still carries the stable `per…` id.
+ * Admit only that exact legacy shape and derive a content-free transport identity from it; every
+ * other id-less live event remains rejected.
+ */
+function normalizedLegacyPermissionPayload(payload: unknown): NormalizedSseData | undefined {
+  if (
+    !exactRecord(payload, ["type", "properties"]) ||
+    payload.type !== "permission.asked" ||
+    !isRecord(payload.properties) ||
+    !permissionAsked(payload.properties)
+  ) {
+    return undefined;
+  }
+  return {
+    id: `evt_${String(payload.properties.id)}`,
+    type: payload.type,
+    properties: payload.properties,
+  };
 }
 
 // eslint-disable-next-line complexity -- every reviewed sync bridge identity and schema gate is explicit.
@@ -357,7 +593,7 @@ function classifiedSessionEvent(
   if (type === "session.created.1" && sequence === 0 && sessionCreated(data, aggregateId))
     return "observation";
   if (type === "session.updated.1" && sessionUpdated(data, aggregateId)) return "observation";
-  if (type === "session.idle" && sessionIdleEvent(data)) return "terminal";
+  if (type === "session.idle" && sessionIdleEvent(data)) return "terminal-control";
   if (type === "session.status" && sessionStatusEvent(data)) return "observation";
   return undefined;
 }
@@ -492,8 +728,10 @@ function messageUpdated(
   if (data.info.role === "user") return userMessage(data.info) ? "observation" : undefined;
   if (!assistantMessage(data.info)) return undefined;
   const completed = isRecord(data.info.time) && nonNegativeNumber(data.info.time.completed);
-  return completed && TERMINAL_FINISH_REASONS.has(String(data.info.finish))
-    ? "terminal"
+  if (!completed) return "observation";
+  if (data.info.finish === "stop") return "terminal";
+  return FAILED_TERMINAL_FINISH_REASONS.has(String(data.info.finish))
+    ? "terminal-failure"
     : "observation";
 }
 
@@ -526,6 +764,7 @@ function assistantMessage(info: Record<string, unknown>): boolean {
       "cost",
       "tokens",
       "finish",
+      "summary",
     ]) ||
     ![
       "id",
@@ -554,6 +793,7 @@ function assistantMessage(info: Record<string, unknown>): boolean {
     tokenCounts(info.tokens) &&
     (info.finish === undefined ||
       (nonEmpty(info.finish) && REVIEWED_FINISH_REASONS.has(info.finish))) &&
+    (info.summary === undefined || typeof info.summary === "boolean") &&
     boundedLifecycle(info)
   );
 }
@@ -611,10 +851,26 @@ function messagePartUpdated(data: Record<string, unknown>, aggregateId: string):
       tokenCounts(part.tokens)
     );
   }
+  if (part.type === "compaction") {
+    return (
+      allowedRecord(part, [
+        "id",
+        "sessionID",
+        "messageID",
+        "type",
+        "auto",
+        "overflow",
+        "tail_start_id",
+      ]) &&
+      typeof part.auto === "boolean" &&
+      typeof part.overflow === "boolean" &&
+      (part.tail_start_id === undefined ||
+        (typeof part.tail_start_id === "string" && MESSAGE_ID.test(part.tail_start_id)))
+    );
+  }
   return part.type === "tool" && toolPart(part);
 }
 
-// eslint-disable-next-line complexity -- each pinned tool-state shape fails closed independently.
 function toolPart(part: Record<string, unknown>): boolean {
   if (
     !allowedRecord(part, [
@@ -634,7 +890,11 @@ function toolPart(part: Record<string, unknown>): boolean {
     !isRecord(part.state)
   )
     return false;
-  const state = part.state;
+  return toolState(part.state);
+}
+
+// eslint-disable-next-line complexity -- each pinned tool-state shape fails closed independently.
+function toolState(state: Record<string, unknown>): boolean {
   if (state.status === "pending") {
     return (
       exactRecord(state, ["status", "input", "raw"]) &&
@@ -662,6 +922,14 @@ function toolPart(part: Record<string, unknown>): boolean {
       exactStartEndTime(state.time)
     );
   }
+  if (state.status === "error") {
+    return (
+      exactRecord(state, ["status", "input", "error", "time"]) &&
+      isRecord(state.input) &&
+      nonEmpty(state.error) &&
+      exactStartEndTime(state.time)
+    );
+  }
   return false;
 }
 
@@ -683,21 +951,32 @@ function boundedLifecycle(value: unknown): boolean {
 }
 
 /**
- * A message text part may legitimately carry a full assistant response, which routinely exceeds the
- * uniform 4096-character per-string bound. The text stays capped by the 64 KiB part byte budget
- * (the DoS guard), every other field keeps the tight per-string bound, and the safe-activity
- * projection clips the displayed text to its own segment limit — the reconciliation path never
- * reads part text content. Non-text parts are bounded exactly as before.
+ * A message text part or completed governed-tool output may legitimately carry file/model content
+ * beyond the uniform 4096-character metadata bound. That body stays capped by the 64 KiB part byte
+ * budget (the DoS guard), every other field keeps the tight per-string bound, and the reconciliation
+ * projection never carries the admitted body. Non-body fields and all other variants stay bounded
+ * exactly as before.
  *
  * A part this size only ever arrives through the `POST /sync/history` HTTP body (which shares this
  * 64 KiB row budget), never as a single live SSE frame: the live path yields content-free pull
  * triggers only, so the independent `MAX_FRAME_BYTES` SSE limit is not a cross-budget constraint.
  */
 function boundedPartLifecycle(part: Record<string, unknown>): boolean {
-  if (part.type !== "text") return boundedLifecycle(part);
+  if (part.type === "text") return boundedPartBody(part, "text", "", part.text);
+  const state = isRecord(part.state) ? part.state : undefined;
+  if (part.type !== "tool" || state?.status !== "completed") return boundedLifecycle(part);
+  return boundedPartBody(part, "state", { ...state, output: "" }, state.output);
+}
+
+function boundedPartBody(
+  part: Record<string, unknown>,
+  key: "text" | "state",
+  boundedValue: unknown,
+  body: unknown = boundedValue,
+): boolean {
   return (
-    typeof part.text === "string" &&
-    boundedLifecycle({ ...part, text: "" }) &&
+    typeof body === "string" &&
+    boundedLifecycle({ ...part, [key]: boundedValue }) &&
     bytes(JSON.stringify(part)) <= MAX_HISTORY_INFO_BYTES
   );
 }
@@ -850,13 +1129,33 @@ function contentFreePart(part: Record<string, unknown>): Record<string, string> 
 
 function permissionAsked(data: Record<string, unknown>): boolean {
   return (
-    exactRecord(data, ["id", "sessionID", "permission", "patterns", "metadata", "always"]) &&
+    (exactRecord(data, ["id", "sessionID", "permission", "patterns", "metadata", "always"]) ||
+      exactRecord(data, [
+        "id",
+        "sessionID",
+        "permission",
+        "patterns",
+        "metadata",
+        "always",
+        "tool",
+      ])) &&
     id(data.id, "per") &&
     id(data.sessionID, "ses_") &&
     nonEmpty(data.permission) &&
     stringArray(data.patterns) &&
     isRecord(data.metadata) &&
-    stringArray(data.always)
+    stringArray(data.always) &&
+    (data.tool === undefined || validPermissionTool(data.tool))
+  );
+}
+
+function validPermissionTool(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    exactRecord(value, ["messageID", "callID"]) &&
+    typeof value.messageID === "string" &&
+    MESSAGE_ID.test(value.messageID) &&
+    nonEmpty(value.callID)
   );
 }
 function questionAsked(data: Record<string, unknown>): boolean {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type {
   CodeTaskGrantId,
+  CodingWorkbenchMode,
   CodingWorkbenchRuntimeAuthorityFacts,
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
@@ -51,6 +52,7 @@ describe("production managed worktree tools", () => {
       authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
       workspaceRoot: "/managed/worktree",
       authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "supervised-coding",
       deploymentCeiling: "supervised-coding",
       liveFacts: () => FACTS,
       secureWorkspaceTextRead: { readText },
@@ -83,6 +85,72 @@ describe("production managed worktree tools", () => {
     expect(readText).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["governed-assist", true],
+    ["supervised-coding", true],
+    ["autonomous-delivery", false],
+  ] as const)(
+    "derives editor review policy for %s (requiresReview=%s)",
+    async (effectiveMode: CodingWorkbenchMode, requiresReview: boolean) => {
+      const register = vi.fn((): boolean => true);
+      const facade = createProductionManagedWorktreeToolFacade({
+        authority: {
+          revalidateCapabilityForMutation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(),
+          }),
+          resolveCapabilityForDelegation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(),
+          }),
+        },
+        authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+        workspaceRoot: "/managed/worktree",
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        effectiveMode,
+        deploymentCeiling: "autonomous-delivery",
+        liveFacts: () => FACTS,
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: (action) =>
+            Promise.resolve({
+              ok: true as const,
+              value: {
+                result: {
+                  schemaVersion: "1" as const,
+                  actionId: action.actionId,
+                  sessionId: action.sessionId,
+                  status: "queued" as const,
+                },
+              },
+            }),
+        },
+        mutationLeaseCoordinator: { register, discard: vi.fn((): boolean => true) },
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        verificationRunner: { runToReport: vi.fn() },
+        onRuntimeEvent: vi.fn(),
+      });
+
+      await expect(
+        facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "edit",
+            actionId: "edit-1",
+            idempotencyKey: "edit-key-1",
+            changeset: {
+              patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+              files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+            },
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "completed" });
+      expect(register).toHaveBeenCalledWith(expect.objectContaining({ requiresReview }));
+    },
+  );
+
   it("threads live proxy and CA settings into the governed research transport", async () => {
     const registry = createResearchGrantRegistry();
     const now = Date.now();
@@ -113,6 +181,7 @@ describe("production managed worktree tools", () => {
       authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
       workspaceRoot: "/managed/worktree",
       authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "supervised-coding",
       deploymentCeiling: "supervised-coding",
       liveFacts: () => ({ ...FACTS, actionClasses: [...FACTS.actionClasses, "network-egress"] }),
       secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },

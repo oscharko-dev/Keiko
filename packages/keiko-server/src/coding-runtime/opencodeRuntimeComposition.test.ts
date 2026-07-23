@@ -224,6 +224,11 @@ interface OpenCodeRuntimeComposition {
       answers: readonly (readonly string[])[],
     ) => Promise<boolean>;
     readonly rejectQuestion: (runId: string, requestId: string) => Promise<boolean>;
+    readonly replyPermission: (
+      runId: string,
+      requestId: string,
+      reply: "once" | "reject",
+    ) => Promise<boolean>;
   };
 }
 
@@ -276,6 +281,7 @@ interface OpenCodeRuntimeCompositionModule {
         readonly occurredAt: string;
       }) => void;
     };
+    readonly onRuntimeEvent?: (event: Readonly<Record<string, unknown>>) => void;
     readonly gatewayReadiness: {
       readonly waitForObservedRequest: () => Promise<boolean>;
       readonly clear: () => void;
@@ -432,20 +438,30 @@ type FixtureSafeActivity = NonNullable<
 interface StartBridgeControl {
   readonly startTimeoutMs?: number;
   readonly historyResponse?: Promise<Response>;
+  readonly historyResponseFactory?: () => Promise<Response>;
   readonly expectedStart?: Readonly<Record<string, unknown>>;
   readonly onSseCancel?: () => void;
+  readonly onSseStart?: (controller: ReadableStreamDefaultController<Uint8Array>) => void;
   readonly sseFrame?: string;
   readonly historyCalls?: Readonly<Record<string, number>>[];
   readonly governedEvents?: Readonly<Record<string, unknown>>[];
   readonly questionObservations?: string[];
   readonly safeActivity?: FixtureSafeActivity;
   readonly diagnostics?: ServerDiagnosticSink;
+  readonly runtimeEvents?: Readonly<Record<string, unknown>>[];
+  readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
   readonly runControl?: {
     readonly promptBodies: string[];
     readonly abortSessions: string[];
     readonly statusResponses: unknown[];
     readonly questionResponses?: unknown[];
+    readonly permissionResponses?: unknown[];
     readonly questionRequests?: {
+      readonly method: string;
+      readonly path: string;
+      readonly body?: string;
+    }[];
+    readonly permissionRequests?: {
       readonly method: string;
       readonly path: string;
       readonly body?: string;
@@ -480,6 +496,25 @@ function optionalDiagnostics(control: StartBridgeControl | undefined): {
   readonly diagnostics?: ServerDiagnosticSink;
 } {
   return control?.diagnostics === undefined ? {} : { diagnostics: control.diagnostics };
+}
+
+function optionalRuntimeEvents(control: StartBridgeControl | undefined): {
+  readonly onRuntimeEvent?: (event: Readonly<Record<string, unknown>>) => void;
+} {
+  const sink = control?.runtimeEvents;
+  return sink === undefined
+    ? {}
+    : {
+        onRuntimeEvent: (event): void => {
+          sink.push(event);
+        },
+      };
+}
+
+function runtimeMode(
+  control: StartBridgeControl | undefined,
+): NonNullable<StartBridgeControl["mode"]> {
+  return control?.mode ?? "supervised-coding";
 }
 
 async function startBridgeFixture(
@@ -544,8 +579,9 @@ async function startBridgeFixture(
     if (path === "/global/event")
       return Promise.resolve(
         new Response(
-          new ReadableStream({
+          new ReadableStream<Uint8Array>({
             start(controller): void {
+              control?.onSseStart?.(controller);
               controller.enqueue(sseFrame);
             },
             cancel(): void {
@@ -558,6 +594,9 @@ async function startBridgeFixture(
     if (path === "/sync/history") {
       if (control?.historyCalls !== undefined && typeof init?.body === "string") {
         control.historyCalls.push(JSON.parse(init.body) as Readonly<Record<string, number>>);
+      }
+      if (control?.historyResponseFactory !== undefined) {
+        return control.historyResponseFactory();
       }
       return (
         control?.historyResponse ??
@@ -620,6 +659,25 @@ async function startBridgeFixture(
         new Response("true", { headers: { "content-type": "application/json" } }),
       );
     }
+    if (path === "/permission") {
+      const responses = control?.runControl?.permissionResponses;
+      const value = responses?.length === 1 ? responses[0] : responses?.shift();
+      return Promise.resolve(
+        new Response(JSON.stringify(value ?? []), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }
+    if (path.startsWith("/permission/")) {
+      control?.runControl?.permissionRequests?.push({
+        method: init?.method ?? "GET",
+        path,
+        ...(typeof init?.body === "string" ? { body: init.body } : {}),
+      });
+      return Promise.resolve(
+        new Response("true", { headers: { "content-type": "application/json" } }),
+      );
+    }
     if (path === "/session" && init?.method === "POST")
       return Promise.resolve(
         new Response('{"id":"ses_tool"}', { headers: { "content-type": "application/json" } }),
@@ -654,6 +712,7 @@ async function startBridgeFixture(
     ...optionalSafeActivity(control),
     ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
+    ...optionalRuntimeEvents(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
       clear: (): void => undefined,
@@ -667,6 +726,7 @@ async function startBridgeFixture(
       releaseRuntimeAfterReap: (): true => true,
     },
   });
+  const mode = runtimeMode(control);
   const started = await Promise.resolve(
     runtime.manager.start({
       runId: FIXTURE_RUN_ID,
@@ -676,8 +736,8 @@ async function startBridgeFixture(
       adapterKind: "opencode-compatible",
       runtimeSource: "keiko-sidecar",
       modelSource: "keiko-model-gateway",
-      requestedMode: "supervised-coding",
-      effectiveMode: "supervised-coding",
+      requestedMode: mode,
+      effectiveMode: mode,
       executablePath: portable.executablePath,
       managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
       gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
@@ -704,6 +764,66 @@ async function startBridgeFixture(
       await runtime.manager.stop(FIXTURE_RUN_ID);
     },
   };
+}
+
+function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
+  const tokens = {
+    total: 0,
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cache: { read: 0, write: 0 },
+  };
+  return [
+    {
+      id: "evt_created",
+      aggregate_id: "ses_tool",
+      seq: 0,
+      type: "session.created.1",
+      data: { sessionID: "ses_tool", info: { id: "ses_tool", title: "private" } },
+    },
+    {
+      id: "evt_user",
+      aggregate_id: "ses_tool",
+      seq: 1,
+      type: "message.updated.1",
+      data: {
+        sessionID: "ses_tool",
+        info: {
+          id: "msg_user",
+          sessionID: "ses_tool",
+          role: "user",
+          time: { created: 1 },
+          agent: "build",
+          model: { providerID: "keiko-runtime", modelID: "coding" },
+        },
+      },
+    },
+    {
+      id: "evt_assistant",
+      aggregate_id: "ses_tool",
+      seq: 2,
+      type: "message.updated.1",
+      data: {
+        sessionID: "ses_tool",
+        info: {
+          id: "msg_assistant",
+          sessionID: "ses_tool",
+          role: "assistant",
+          time: { created: 1, completed: 2 },
+          parentID: "msg_user",
+          modelID: "coding",
+          providerID: "keiko-runtime",
+          mode: "build",
+          agent: "build",
+          path: { cwd: "/private/workspace", root: "/" },
+          cost: 0,
+          tokens,
+          finish: "stop",
+        },
+      },
+    },
+  ];
 }
 
 afterEach(() => {
@@ -1147,18 +1267,115 @@ describe("private OpenCode run control", () => {
     }
   });
 
-  it("ignores status omission before activity, then completes on busy followed by omission", async () => {
+  it("aliases live permission ids and resolves only the run-owned upstream request", async () => {
+    const runtimeEvents: Readonly<Record<string, unknown>>[] = [];
+    const permissionRequests: {
+      readonly method: string;
+      readonly path: string;
+      readonly body?: string;
+    }[] = [];
+    let sseController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const upstreamPermission = {
+      id: "per_upstream_1",
+      sessionID: "ses_tool",
+      permission: "keiko_governed_action",
+      patterns: ["src/example.ts"],
+      always: [],
+      tool: { messageID: "msg_1", callID: "call_1" },
+      metadata: {
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        expiresAt: "2099-07-23T14:05:00.000Z",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "approval-required",
+        targetPath: "src/example.ts",
+        allowedRelativePaths: ["src/example.ts"],
+        fileCount: 1,
+        addedLines: 1,
+        deletedLines: 1,
+      },
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      onSseStart: (controller): void => {
+        sseController = controller;
+      },
+      runControl: {
+        promptBodies: [],
+        abortSessions: [],
+        statusResponses: [],
+        permissionResponses: [[upstreamPermission]],
+        permissionRequests,
+      },
+    });
+    try {
+      if (sseController === undefined) throw new Error("expected live event controller");
+      sseController.enqueue(
+        new TextEncoder().encode(
+          `data: ${JSON.stringify({
+            payload: {
+              id: "evt_permission",
+              type: "permission.asked",
+              properties: upstreamPermission,
+            },
+          })}\n\n`,
+        ),
+      );
+      await vi.waitFor(() => {
+        expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(true);
+      });
+      const event = runtimeEvents.find((candidate) => candidate.kind === "permission-requested");
+      const permission = event?.permissionRequest;
+      if (typeof permission !== "object" || permission === null || Array.isArray(permission)) {
+        throw new Error("expected public permission request");
+      }
+      const requestId = (permission as Record<string, unknown>).requestId;
+      expect(requestId).toMatch(/^permission-[0-9]+$/u);
+      expect(requestId).not.toBe(upstreamPermission.id);
+      expect(permission).toMatchObject({ scopeLabel: "workspace-scope" });
+      await expect(
+        fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, upstreamPermission.id, "reject"),
+      ).resolves.toBe(false);
+      expect(permissionRequests).toEqual([]);
+      if (typeof requestId !== "string") throw new Error("expected permission alias");
+      await expect(
+        fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, requestId, "reject"),
+      ).resolves.toBe(true);
+      expect(permissionRequests).toEqual([
+        {
+          method: "POST",
+          path: "/permission/per_upstream_1/reply",
+          body: '{"reply":"reject"}',
+        },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("accepts status omission only when causal terminal history exists", async () => {
     const prompt = "SENTINEL_PRIVATE_RUN_PROMPT";
     const governedEvents: Readonly<Record<string, unknown>>[] = [];
+    let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
     const runControl = {
       promptBodies: [] as string[],
       abortSessions: [] as string[],
-      statusResponses: [{}, {}, { ses_tool: { type: "busy" } }, {}] as unknown[],
+      statusResponses: [{}, {}] as unknown[],
     };
     let runRoot = "";
     const fixture = await startBridgeFixture(facade, undefined, {
       governedEvents,
       runControl,
+      historyResponseFactory: () =>
+        Promise.resolve(
+          new Response(JSON.stringify(history), {
+            headers: { "content-type": "application/json" },
+          }),
+        ),
       afterStart: (_runtime, root): void => {
         runRoot = root;
       },
@@ -1166,10 +1383,11 @@ describe("private OpenCode run control", () => {
 
     await expect(fixture.runtime.runPort.submitTask("unknown-run", prompt)).resolves.toBe(false);
     await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, prompt)).resolves.toBe(true);
+    history = completedTurnHistory();
     const terminalWait = new AbortController();
     const terminalDeadline = setTimeout(() => {
       terminalWait.abort();
-    }, 1_000);
+    }, 2_000);
     await expect(
       fixture.runtime.runPort.waitForTerminal(FIXTURE_RUN_ID, terminalWait.signal),
     ).resolves.toBe(true);
@@ -1201,13 +1419,42 @@ describe("private OpenCode run control", () => {
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(false);
   });
 
+  it("synchronizes durable history before arming and submitting each productive turn", async () => {
+    const historyCalls: Readonly<Record<string, number>>[] = [];
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { historyCalls, runControl });
+    try {
+      const readinessCalls = historyCalls.length;
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded productive task"),
+      ).resolves.toBe(true);
+      expect(historyCalls.length).toBeGreaterThan(readinessCalls);
+      expect(runControl.promptBodies).toHaveLength(1);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("settles abort only after HTTP success and authoritative terminal control", async () => {
+    let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
     const runControl = {
       promptBodies: [] as string[],
       abortSessions: [] as string[],
       statusResponses: [{}, { ses_tool: { type: "busy" } }] as unknown[],
     };
-    const fixture = await startBridgeFixture(facade, undefined, { runControl });
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl,
+      historyResponseFactory: () =>
+        Promise.resolve(
+          new Response(JSON.stringify(history), {
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+    });
     try {
       await expect(
         fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded abort task"),
@@ -1224,7 +1471,8 @@ describe("private OpenCode run control", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(runControl.abortSessions).toEqual(["ses_tool"]);
       expect(abortSettled).toBe(false);
-      runControl.statusResponses.splice(0, 1, {});
+      history = completedTurnHistory();
+      runControl.statusResponses.push({ ses_tool: { type: "idle" } });
       await expect(aborting).resolves.toBe(true);
       await expect(terminal).resolves.toBe(true);
     } finally {

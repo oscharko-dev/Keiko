@@ -1679,7 +1679,11 @@ function runtimeMutationLeaseDeniedResult(action: EditorAgentAction): EditorAgen
 
 type RuntimeMutationClassification =
   | { readonly kind: "local" }
-  | { readonly kind: "runtime"; readonly request: CodingRuntimeEditorMutationLeaseRequest }
+  | {
+      readonly kind: "runtime";
+      readonly request: CodingRuntimeEditorMutationLeaseRequest;
+      readonly requiresReview?: boolean | undefined;
+    }
   | { readonly kind: "denied" };
 
 function classifyRuntimeMutation(
@@ -1712,7 +1716,9 @@ function matchesRuntimeMutationLease(
   request: Extract<RuntimeMutationClassification, { readonly kind: "runtime" }>,
 ): RuntimeMutationClassification {
   try {
-    return lease.matches(request.request) ? request : { kind: "local" };
+    if (!lease.matches(request.request)) return { kind: "local" };
+    const requiresReview = lease.requiresReview(request.request);
+    return requiresReview === undefined ? { kind: "denied" } : { ...request, requiresReview };
   } catch {
     return { kind: "denied" };
   }
@@ -1843,6 +1849,7 @@ function finishRuntimeChangeset(
   runtimeMutation: RuntimeMutationClassification,
   decision = decideActionPolicy(action, snapshot, deps, runtimeMutation),
 ): RouteResult {
+  completeRuntimeMutation(action, runtimeMutation, deps, result.status === "succeeded");
   return finishChangesetResult(
     action,
     snapshot,
@@ -1851,6 +1858,25 @@ function finishRuntimeChangeset(
     decision,
     runtimeMutation.kind !== "local",
   );
+}
+
+function completeRuntimeMutation(
+  action: EditorAgentAction,
+  classification: RuntimeMutationClassification,
+  deps: EditorAgentRouteDeps | undefined,
+  succeeded: boolean,
+): void {
+  if (classification.kind !== "runtime" || deps?.runtimeMutationLease === undefined) return;
+  try {
+    deps.runtimeMutationLease.complete(classification.request, succeeded);
+  } catch (error) {
+    emitChangesetDiagnostic(
+      action,
+      "editor.agent.completeRuntimeMutation",
+      error,
+      "The runtime mutation lease could not be settled.",
+    );
+  }
 }
 
 type ResultLeaseValidation =
@@ -3198,9 +3224,9 @@ function queueAndEmitAction(
 ): RouteResult {
   const boundAction = snapshot === undefined ? action : bindActiveBufferTarget(action, snapshot);
   const requiresReview =
-    runtimeMutation.kind === "runtime" ||
-    decision.disposition === "review-required" ||
-    boundAction.requiresReview === true;
+    runtimeMutation.kind === "runtime"
+      ? (runtimeMutation.requiresReview ?? true)
+      : decision.disposition === "review-required" || boundAction.requiresReview === true;
   const emitAction =
     snapshot === undefined
       ? null

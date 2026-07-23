@@ -28,6 +28,8 @@ const DEFAULT_EVENT_IDLE_TIMEOUT_MS = 10_000;
 const MAX_PROMPT_TEXT_BYTES = 65_536;
 const MAX_SESSION_STATUSES = 256;
 const MAX_QUESTION_REQUESTS = 256;
+const MAX_PERMISSION_REQUESTS = 256;
+const MAX_PERMISSION_PATTERNS = 50;
 const MAX_QUESTIONS_PER_REQUEST = 32;
 const MAX_OPTIONS_PER_QUESTION = 32;
 const MAX_ANSWERS = 32;
@@ -35,6 +37,7 @@ const MAX_SELECTED_ANSWERS = 32;
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const QUESTION_ID = /^que_[A-Za-z0-9_-]{1,251}$/u;
+const PERMISSION_ID = /^per[A-Za-z0-9_-]{1,253}$/u;
 const MESSAGE_ID = /^msg_[A-Za-z0-9_-]{1,251}$/u;
 
 export interface OpenCodeQuestionRequest {
@@ -42,6 +45,11 @@ export interface OpenCodeQuestionRequest {
   readonly sessionID: string;
   readonly questions: readonly OpenCodeQuestion[];
   readonly tool?: { readonly messageID: string; readonly callID: string } | undefined;
+}
+
+export interface OpenCodePermissionRequest {
+  readonly id: string;
+  readonly sessionID: string;
 }
 
 export interface OpenCodeQuestion {
@@ -90,6 +98,14 @@ export interface OpenCodeHttpClient {
   listQuestions(
     requestOptions?: OpenCodeHttpRequestOptions,
   ): Promise<readonly OpenCodeQuestionRequest[]>;
+  listPermissions(
+    requestOptions?: OpenCodeHttpRequestOptions,
+  ): Promise<readonly OpenCodePermissionRequest[]>;
+  replyPermission(
+    requestId: string,
+    reply: "once" | "reject",
+    requestOptions?: OpenCodeHttpRequestOptions,
+  ): Promise<boolean>;
   answerQuestion(
     requestId: string,
     answers: readonly (readonly string[])[],
@@ -206,11 +222,59 @@ export function createOpenCodeHttpClient(options: OpenCodeHttpClientOptions): Op
     sessionStatuses: (requestOptions = {}) =>
       sessionStatuses(options, parsed, auth, requestOptions),
     listQuestions: (requestOptions = {}) => listQuestions(options, parsed, auth, requestOptions),
+    listPermissions: (requestOptions = {}) =>
+      listPermissions(options, parsed, auth, requestOptions),
+    replyPermission: (requestId, reply, requestOptions = {}) =>
+      replyPermission(options, parsed, auth, requestId, reply, requestOptions),
     answerQuestion: (requestId, answers, requestOptions = {}) =>
       answerQuestion(options, parsed, auth, requestId, answers, requestOptions),
     rejectQuestion: (requestId, requestOptions = {}) =>
       rejectQuestion(options, parsed, auth, requestId, requestOptions),
   };
+}
+
+async function listPermissions(
+  options: OpenCodeHttpClientOptions,
+  endpoint: URL | undefined,
+  auth: string,
+  requestOptions: OpenCodeHttpRequestOptions,
+): Promise<readonly OpenCodePermissionRequest[]> {
+  const value = await jsonArray({
+    options,
+    endpoint,
+    auth,
+    method: "GET",
+    path: "/permission",
+    body: undefined,
+    requestOptions,
+    responseName: "permission",
+  });
+  if (value.length > MAX_PERMISSION_REQUESTS || !value.every(validPermissionRequest)) {
+    throw new Error("opencode-permission-invalid");
+  }
+  return value.map((request) => ({
+    id: String(request.id),
+    sessionID: String(request.sessionID),
+  }));
+}
+
+async function replyPermission(
+  options: OpenCodeHttpClientOptions,
+  endpoint: URL | undefined,
+  auth: string,
+  requestId: string,
+  reply: "once" | "reject",
+  requestOptions: OpenCodeHttpRequestOptions,
+): Promise<boolean> {
+  if (!PERMISSION_ID.test(requestId)) throw new Error("opencode-permission-invalid");
+  return booleanResponse(
+    options,
+    endpoint,
+    auth,
+    `/permission/${requestId}/reply`,
+    { reply },
+    requestOptions,
+  );
 }
 
 async function listQuestions(
@@ -439,6 +503,40 @@ function validQuestionRequest(value: Record<string, unknown>): boolean {
   )
     return false;
   return value.tool === undefined || validQuestionTool(value.tool);
+}
+
+function validPermissionRequest(value: Record<string, unknown>): boolean {
+  if (
+    !(
+      exactRecord(value, ["id", "sessionID", "permission", "patterns", "metadata", "always"]) ||
+      exactRecord(value, [
+        "id",
+        "sessionID",
+        "permission",
+        "patterns",
+        "metadata",
+        "always",
+        "tool",
+      ])
+    ) ||
+    !PERMISSION_ID.test(String(value.id)) ||
+    !SESSION_ID.test(String(value.sessionID)) ||
+    !boundedString(value.permission, 128) ||
+    !validBoundedStrings(value.patterns, MAX_PERMISSION_PATTERNS, 512) ||
+    !validBoundedStrings(value.always, MAX_PERMISSION_PATTERNS, 512) ||
+    !isRecord(value.metadata)
+  ) {
+    return false;
+  }
+  return value.tool === undefined || validQuestionTool(value.tool);
+}
+
+function validBoundedStrings(value: unknown, maxItems: number, maxLength: number): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= maxItems &&
+    value.every((item) => boundedString(item, maxLength))
+  );
 }
 
 function validQuestion(value: unknown): boolean {

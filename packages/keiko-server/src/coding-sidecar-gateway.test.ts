@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
+  ProviderError,
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayConfig,
   type GatewayRequest,
@@ -210,8 +211,22 @@ const WORKSPACE_READ_SCHEMA = {
       maxLength: 512,
       pattern: "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
     },
+    startLine: {
+      type: "integer",
+      minimum: 1,
+      maximum: 1_000_000,
+      description: "1-based first line of the returned window; pass 1 to start at the file head.",
+    },
+    maxLines: {
+      type: "integer",
+      minimum: 1,
+      maximum: 5_000,
+      description:
+        "Window height in lines; startLine 1 with maxLines 5000 reads a small file whole. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file.",
+    },
   },
-  required: ["relativePath"],
+  // OpenCode v1.17.17 declares every custom-tool argument as required in its provider projection.
+  required: ["relativePath", "startLine", "maxLines"],
 } as const;
 
 const CHANGESET_EDIT_SCHEMA = {
@@ -221,11 +236,54 @@ const CHANGESET_EDIT_SCHEMA = {
       type: "object",
       additionalProperties: false,
       properties: {
-        patch: { type: "string", maxLength: 262_144 },
-        files: { type: "array", maxItems: 256 },
-        selectedFiles: { type: "array", maxItems: 256 },
-        prepared: { type: "object" },
+        patch: {
+          type: "string",
+          minLength: 1,
+          maxLength: 65_536,
+          pattern:
+            "^(?:(?:(?:diff --git [^\\r\\n]+ [^\\r\\n]+\\r?\\n)(?:index [^\\r\\n]+\\r?\\n)?)?--- (?:a/|/dev/null)|:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M [^\\r\\n]+\\r?\\n@@ )",
+          description:
+            "Strict unified diff for every listed file. Start each file with `--- a/<path>` and `+++ b/<path>` (or `/dev/null`), followed by one or more `@@ -old +new @@` hunks. A single-file `:100644 ... M <path>` raw-index header is accepted only as a compatibility fallback and is normalized before validation.",
+        },
+        files: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              file: {
+                type: "string",
+                minLength: 1,
+                maxLength: 512,
+                pattern: "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
+              },
+              expectedContentHash: {
+                type: "string",
+                pattern: "^[a-f0-9]{64}$",
+                description: "SHA-256 digest returned by keiko_workspace_read.",
+              },
+            },
+            required: ["file", "expectedContentHash"],
+          },
+          description: "Every file changed by patch, bound to its last governed read digest.",
+        },
+        selectedFiles: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          uniqueItems: true,
+          items: {
+            type: "string",
+            minLength: 1,
+            maxLength: 512,
+            pattern: "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
+          },
+          description: "Optional subset of files to apply; each entry must occur in files.",
+        },
       },
+      required: ["patch", "files"],
     },
   },
   required: ["changeset"],
@@ -423,8 +481,8 @@ describe("coding-sidecar gateway", () => {
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([
       ["question", "4f618d23c27d7147ab8564c3ec1050c508762a19b9a4858951a9cd3089b52df3"],
-      ["keiko_workspace_read", "a5d6f6b96c5e0c5906ce1c9bad5b7f13fc4763b762f4aa5d019d6fc2d194ada3"],
-      ["keiko_changeset_edit", "720fa492da7b2ff3cb0f6c3c19e1cf68d714d850207d1c614c37c8b6499c0089"],
+      ["keiko_workspace_read", "56d2649a7a308efdc47db2899922c9889822a17b9d9bd081ee0c099a066411ac"],
+      ["keiko_changeset_edit", "59902a2dd9af28ed8b97d1108215c6e88bbe0fba017a4756a99e833b9af48952"],
       ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
       ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
       ["keiko_skill", "c3a50e828f78a32481ce662f8cd92e04dd6375af8df916f3c588b0628ff2de2d"],
@@ -600,6 +658,84 @@ describe("coding-sidecar gateway", () => {
     await expect(crossPending).resolves.toBe(false);
   });
 
+  it("emits only a closed reason when the authenticated runtime tool contract is rejected", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = {
+      ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-1" } })),
+      diagnostics,
+    };
+
+    for (const [tools, code] of [
+      [undefined, "CODING_GATEWAY_TOOL_CONTRACT_MISSING"],
+      [[], "CODING_GATEWAY_TOOL_CONTRACT_EMPTY"],
+      [modelVisibleTools().slice(0, 2), "CODING_GATEWAY_TOOL_CONTRACT_DRIFT"],
+    ] as const) {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "private runtime content" }],
+          ...(tools === undefined ? {} : { tools }),
+        }),
+        deps,
+      );
+      expect(result).toMatchObject({ status: 403 });
+      expect(diagnostics.record).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          source: "coding-sidecar-gateway.tool-contract",
+          errorClass: "CodingSidecarGatewayToolContractRejection",
+          message: "coding-sidecar-gateway-tool-contract-rejected",
+          code,
+        }),
+      );
+    }
+    expect(diagnostics.record).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private runtime content");
+  });
+
+  it("admits tool-free compaction only after the exact runtime handshake and before disposal", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry();
+    const controller = new AbortController();
+    const observed = readiness.waitForObservedRequest("run-1", controller.signal);
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-1" } }),
+      () => chat,
+      readiness,
+    );
+    const request = (tools?: readonly ModelVisibleRequestTool[]): RouteContext =>
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "bounded private runtime content" }],
+        ...(tools === undefined ? {} : { tools }),
+      });
+
+    expect(await handleCodingSidecarGatewayChatCompletions(request(), deps)).toMatchObject({
+      status: 403,
+    });
+    expect(readiness.isVerified("run-1")).toBe(false);
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(request(modelVisibleTools()), deps),
+    ).toMatchObject({ status: 200 });
+    await expect(observed).resolves.toBe(true);
+    expect(readiness.isVerified("run-1")).toBe(true);
+    readiness.clear("run-1", true);
+
+    expect(await handleCodingSidecarGatewayChatCompletions(request(), deps)).toMatchObject({
+      status: 200,
+    });
+    expect(chat).toHaveBeenCalledOnce();
+    expect(await handleCodingSidecarGatewayChatCompletions(request([]), deps)).toMatchObject({
+      status: 403,
+    });
+
+    readiness.clear("run-1");
+    expect(readiness.isVerified("run-1")).toBe(false);
+    expect(await handleCodingSidecarGatewayChatCompletions(request(), deps)).toMatchObject({
+      status: 403,
+    });
+    expect(chat).toHaveBeenCalledOnce();
+  });
+
   it("canonicalizes key order but denies empty, drifted, unknown, and productive built-in tools", async () => {
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const acceptedWithReorderedKeys = await handleCodingSidecarGatewayChatCompletions(
@@ -611,7 +747,7 @@ describe("coding-sidecar gateway", () => {
           {
             name: "keiko_workspace_read",
             parameters: {
-              required: ["relativePath"],
+              required: ["relativePath", "startLine", "maxLines"],
               properties: { ...WORKSPACE_READ_SCHEMA.properties },
               type: "object",
             },
@@ -852,9 +988,6 @@ describe("coding-sidecar gateway", () => {
         () => ({ ok: true, binding: { runId: "run-1" } }),
         (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
           Promise.resolve(normalized),
-        createOpenCodeGatewayReadinessRegistry(),
-        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
-          streamedResponse(normalized),
       ),
     );
 
@@ -863,6 +996,51 @@ describe("coding-sidecar gateway", () => {
     expect(response.body()).toContain('"tool_calls"');
     expect(response.body()).toContain('"finish_reason":"tool_calls"');
     expect(response.body()).toContain("data: [DONE]");
+  });
+
+  it("commits the buffered SSE handshake before waiting for the provider", async () => {
+    vi.useFakeTimers();
+    let resolveProvider: ((response: NormalizedResponse) => void) | undefined;
+    const provider = new Promise<NormalizedResponse>((resolve) => {
+      resolveProvider = resolve;
+    });
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "wait for a tool" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const pending = handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-buffered-handshake" } }),
+        (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> => provider,
+      ),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(response.body()).toContain('"role":"assistant"');
+      expect(response.body()).not.toContain(": keep-alive");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(response.body()).toContain(": keep-alive\n\n");
+
+      resolveProvider?.(assistantResponse("azure-coding-model"));
+      await expect(pending).resolves.toBe(STREAMING);
+      const settledBody = response.body();
+      expect(settledBody).toContain("data: [DONE]");
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(response.body()).toBe(settledBody);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aborts a buffered provider call on response close and run stop", async () => {
@@ -2026,12 +2204,14 @@ describe("coding-sidecar gateway", () => {
     const record = vi.fn();
     const hostileMessage =
       "tool call '/Users/customer/private-repo/secret-tool' has non-JSON arguments";
+    const gatewayError = new ProviderError(hostileMessage, 400);
+    gatewayError.requestId = "gateway-request-1";
     const deps = depsValue(
       configValue(provider(), capability()),
       (): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
         return (request: GatewayRequest): Promise<NormalizedResponse> => {
           void request;
-          return Promise.reject(new Error(hostileMessage));
+          return Promise.reject(gatewayError);
         };
       },
       {},
@@ -2081,8 +2261,10 @@ describe("coding-sidecar gateway", () => {
     expect(diagnostics.record).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "coding-sidecar-gateway.chat",
-        errorClass: "CodingSidecarGatewayFailure",
-        message: "sidecar-gateway-failed",
+        errorClass: "ProviderError",
+        code: "GATEWAY_PROVIDER_ERROR",
+        gatewayRequestId: "gateway-request-1",
+        message: "server-operation-failed",
       }),
     );
     expect(JSON.stringify(capturedDiagnostic)).not.toContain(hostileMessage);

@@ -10,10 +10,9 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createUiServer, UI_HOST } from "./server.js";
+import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import {
   buildRedactor,
@@ -40,6 +39,7 @@ import {
   deriveTaskBranchName,
   deriveWorkspaceId,
 } from "./task-workspace/naming.js";
+import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(here, "..", "..", "..", "tests", "fixtures", "unit-tests", "target-project");
@@ -120,21 +120,13 @@ async function start(model: ModelPort, options: HandlerDepsOptions = {}): Promis
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-runs-"));
   registry = createRunRegistry();
   evidenceStore = createInMemoryEvidenceStore();
-  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
-  await new Promise<void>((res) => server.listen(0, UI_HOST, res));
-  port = (server.address() as AddressInfo).port;
-  await new Promise<void>((res) =>
-    server.close(() => {
-      res();
-    }),
-  );
-  server = createUiServer({
+  const started = await startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port,
     handlerDeps: handlerDeps(model, options),
   });
-  await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+  server = started.server;
+  port = started.port;
 }
 
 function base(): string {
@@ -199,21 +191,14 @@ describe("POST /api/runs", () => {
 
   it("rejects a missing model with 400 NO_MODEL", async () => {
     await start(fakeModel("noop"));
-    server.close();
-    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
-    // Rebuild with a factory that yields no model.
-    await new Promise<void>((res) =>
-      server.close(() => {
-        res();
-      }),
-    );
-    server = createUiServer({
+    await closeUiTestServer(server);
+    const started = await startUiTestServer({
       staticRoot,
       csp: buildCspHeader([]),
-      port,
       handlerDeps: { ...handlerDeps(fakeModel("noop")), modelPortFactory: () => undefined },
     });
-    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+    server = started.server;
+    port = started.port;
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
@@ -933,17 +918,12 @@ describe("GAP-E — workspace detection failure returns 400 not 500 (run launch 
     // Re-register the no-marker workspace so the allowlist check passes but detectWorkspace fails.
     const store = createInMemoryUiStore();
     store.createProject(noMarkerWorkspace);
-    await new Promise<void>((res) =>
-      server.close(() => {
-        res();
-      }),
-    );
+    await closeUiTestServer(server);
     registry = createRunRegistry();
     evidenceStore = createInMemoryEvidenceStore();
-    server = createUiServer({
+    const started = await startUiTestServer({
       staticRoot,
       csp: buildCspHeader([]),
-      port,
       handlerDeps: {
         config: undefined,
         configPresent: false,
@@ -955,7 +935,8 @@ describe("GAP-E — workspace detection failure returns 400 not 500 (run launch 
         store,
       },
     });
-    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+    server = started.server;
+    port = started.port;
 
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",

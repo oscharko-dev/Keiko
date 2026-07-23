@@ -1,5 +1,6 @@
 import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+  codingWorkbenchPolicyEffectFor,
   validateCodingWorkbenchRuntimeEvent,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeAdapterKind,
@@ -49,6 +50,7 @@ export interface ProductionManagedWorktreeToolInput {
   readonly adapterKind?: CodingWorkbenchRuntimeAdapterKind | undefined;
   readonly workspaceRoot: string;
   readonly authorityExpiresAt: string;
+  readonly effectiveMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly liveFacts: () => CodingWorkbenchRuntimeAuthorityFacts;
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
@@ -116,6 +118,9 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
       workspaceRootDigest: input.liveFacts().binding.workspaceRootDigest,
       expiresAt: input.authorityExpiresAt,
     }),
+    requiresEditorReview: () =>
+      codingWorkbenchPolicyEffectFor(input.effectiveMode, "workspace-contained", "high") !==
+      "allowed",
     ...(input.mutationLeaseCoordinator
       ? { mutationLeaseCoordinator: input.mutationLeaseCoordinator }
       : {}),
