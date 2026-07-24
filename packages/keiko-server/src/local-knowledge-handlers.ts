@@ -1275,18 +1275,28 @@ function requestEmbeddingImpl(
   return deps.localKnowledgeEmbeddingRequest ?? requestOpenAIEmbedding;
 }
 
-const LOCAL_KNOWLEDGE_EMBEDDING_ADAPTERS = new WeakMap<
+const LOCAL_KNOWLEDGE_EMBEDDING_PREFLIGHT_SCOPES = new WeakMap<
   UiHandlerDeps,
-  WeakMap<ModelProviderConfig, OpenAIEmbeddingAdapter>
+  WeakMap<ModelProviderConfig, object>
 >();
 
-function embeddingAdapterCacheFor(
-  deps: UiHandlerDeps,
-): WeakMap<ModelProviderConfig, OpenAIEmbeddingAdapter> {
-  const existing = LOCAL_KNOWLEDGE_EMBEDDING_ADAPTERS.get(deps);
+function embeddingPreflightScopesFor(deps: UiHandlerDeps): WeakMap<ModelProviderConfig, object> {
+  const existing = LOCAL_KNOWLEDGE_EMBEDDING_PREFLIGHT_SCOPES.get(deps);
   if (existing !== undefined) return existing;
-  const created = new WeakMap<ModelProviderConfig, OpenAIEmbeddingAdapter>();
-  LOCAL_KNOWLEDGE_EMBEDDING_ADAPTERS.set(deps, created);
+  const created = new WeakMap<ModelProviderConfig, object>();
+  LOCAL_KNOWLEDGE_EMBEDDING_PREFLIGHT_SCOPES.set(deps, created);
+  return created;
+}
+
+function embeddingPreflightCacheScopeForProvider(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+): object {
+  const scopes = embeddingPreflightScopesFor(deps);
+  const existing = scopes.get(provider);
+  if (existing !== undefined) return existing;
+  const created = Object.freeze({});
+  scopes.set(provider, created);
   return created;
 }
 
@@ -1296,17 +1306,12 @@ export function localKnowledgeEmbeddingAdapterForProvider(
   deps: UiHandlerDeps,
   provider: ModelProviderConfig,
 ): OpenAIEmbeddingAdapter {
-  const cache = embeddingAdapterCacheFor(deps);
-  const existing = cache.get(provider);
-  if (existing !== undefined) return existing;
-  const created = createEmbeddingAdapter(
+  return createEmbeddingAdapter(
     provider,
     requestEmbeddingImpl(deps),
     requestEmbeddingBatchImpl(deps),
     currentGatewayEgressConfig(deps),
   );
-  cache.set(provider, created);
-  return created;
 }
 
 // #189 GRD-004: returns the array-batch impl, or undefined to fall back to per-chunk scalar
@@ -1933,6 +1938,7 @@ function buildIndexingOptions(
   store: ReturnType<typeof openKnowledgeStore>,
   capsule: KnowledgeCapsule,
   adapter: OpenAIEmbeddingAdapter,
+  embeddingPreflightCacheScope: object,
   options: RunCapsuleIndexingJobOptions,
   sourceSelection: IndexingSourceSelection,
   ocrAdapter: OcrAdapter,
@@ -1948,6 +1954,7 @@ function buildIndexingOptions(
     parserRegistry: createDefaultParserRegistry({ ocrAdapter }),
     workspaceFs: nodeWorkspaceFs,
     embeddingAdapter: adapter,
+    embeddingPreflightCacheScope,
     auditSink: createSqliteAuditSink(store),
     store,
     force: options.force,
@@ -1984,6 +1991,7 @@ async function runRepositoryPodIndexingJob(
   capsule: KnowledgeCapsule,
   sourceId: KnowledgeSourceId,
   adapter: OpenAIEmbeddingAdapter,
+  embeddingPreflightCacheScope: object,
   ocrAdapter: OcrAdapter,
   signal: AbortSignal,
 ): Promise<IndexingTerminal | undefined> {
@@ -1998,6 +2006,7 @@ async function runRepositoryPodIndexingJob(
     sourceId,
     parserRegistry: createDefaultParserRegistry({ ocrAdapter }),
     embeddingAdapter: adapter,
+    embeddingPreflightCacheScope,
     workspaceFs: nodeWorkspaceFs,
     auditSink: createSqliteAuditSink(store),
     signal,
@@ -2050,6 +2059,7 @@ async function runCapsuleIndexingJob(
   }
   canonicalizeCapsuleSourceRoots(store, capsule);
   const adapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
+  const embeddingPreflightCacheScope = embeddingPreflightCacheScopeForProvider(deps, provider);
   const sourceSelection = resolveIndexingSourceSelection(store, capsule, options.mode);
   if (!sourceSelection.shouldRun) {
     return undefined;
@@ -2058,7 +2068,16 @@ async function runCapsuleIndexingJob(
   const controller = localKnowledgeIndexingRegistry.start(String(capsule.id));
   try {
     return await dispatchCapsuleIndexingJob(
-      { deps, store, capsule, options, sourceSelection, adapter, ocrAdapter },
+      {
+        deps,
+        store,
+        capsule,
+        options,
+        sourceSelection,
+        adapter,
+        embeddingPreflightCacheScope,
+        ocrAdapter,
+      },
       controller.signal,
     );
   } finally {
@@ -2073,6 +2092,7 @@ interface CapsuleIndexingDispatch {
   readonly options: RunCapsuleIndexingJobOptions;
   readonly sourceSelection: IndexingSourceSelection;
   readonly adapter: OpenAIEmbeddingAdapter;
+  readonly embeddingPreflightCacheScope: object;
   readonly ocrAdapter: OcrAdapter;
 }
 
@@ -2080,7 +2100,16 @@ async function dispatchCapsuleIndexingJob(
   input: CapsuleIndexingDispatch,
   signal: AbortSignal,
 ): Promise<IndexingTerminal | undefined> {
-  const { deps, store, capsule, options, sourceSelection, adapter, ocrAdapter } = input;
+  const {
+    deps,
+    store,
+    capsule,
+    options,
+    sourceSelection,
+    adapter,
+    embeddingPreflightCacheScope,
+    ocrAdapter,
+  } = input;
   const podSourceId = repositoryPodSourceId(store, capsule);
   if (podSourceId !== undefined) {
     return await runRepositoryPodIndexingJob(
@@ -2089,6 +2118,7 @@ async function dispatchCapsuleIndexingJob(
       capsule,
       podSourceId,
       adapter,
+      embeddingPreflightCacheScope,
       ocrAdapter,
       signal,
     );
@@ -2102,6 +2132,7 @@ async function dispatchCapsuleIndexingJob(
         store,
         capsule,
         adapter,
+        embeddingPreflightCacheScope,
         options,
         sourceSelection,
         ocrAdapter,

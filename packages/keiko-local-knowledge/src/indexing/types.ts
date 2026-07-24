@@ -76,6 +76,10 @@ export interface IndexingOptions {
   readonly parserRegistry: ParserRegistry;
   readonly workspaceFs: WorkspaceFs;
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
+  // Optional non-sensitive identity token for sharing successful capability preflights across
+  // short-lived adapter instances. The caller owns the token and MUST NOT place credentials,
+  // endpoints, or other sensitive provider configuration inside it.
+  readonly embeddingPreflightCacheScope?: object;
   readonly store: KnowledgeStore;
   readonly signal?: AbortSignal;
   // Optional progress sink. The orchestrator emits AsyncIterable<IndexingEvent>; this
