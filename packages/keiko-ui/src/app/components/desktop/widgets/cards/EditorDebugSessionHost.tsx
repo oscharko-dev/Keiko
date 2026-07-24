@@ -355,19 +355,26 @@ export function EditorDebugSessionHost({
         : (snapshot.scopesByFrame.get(pausedFrame.frameRef)?.scopes ?? []),
     [pausedFrame, snapshot.scopesByFrame],
   );
-  // Flips false -> true exactly once per pause, the moment every scope's variables (if any) have
-  // arrived — not on each individual variable page. `host` depends on this boolean (not on
-  // `snapshot`/`pausedScopes` themselves) so the Monaco inline-value refresh it drives (keyed on the
-  // `debug` prop's identity in KeikoCodeEditor's useDebugRefresh) still reliably fires once the full
-  // paused-value set is resolvable, without re-notifying the parent on every one of the up-to-32
-  // intermediate loadVariables pages that caused the #2695 regression.
-  const variablesSettled = useMemo(
-    () =>
-      pausedScopes.every(
-        (scope) => scope.variableCount === 0 || snapshot.variablesByParent.has(scope.scopeRef),
-      ),
-    [pausedScopes, snapshot.variablesByParent],
-  );
+  // Advances 0 (nothing loaded) -> 1 (some scope loaded) -> 2 (every scope loaded) at most once
+  // each per pause. `host` depends on this milestone rather than on `snapshot`/`pausedScopes`
+  // themselves, so the Monaco inline-value refresh it drives (keyed on the `debug` prop's identity
+  // in KeikoCodeEditor's useDebugRefresh) fires a BOUNDED number of times per pause instead of once
+  // per individual loadVariables page — the up-to-32 pages of the D12 cap fixture are what caused
+  // the #2695 regression.
+  //
+  // The intermediate "1" step is load-bearing, not cosmetic: a scope whose variables never publish
+  // (parse failure, abort, or a pause-identity mismatch) is never retried — `loadVariables` returns
+  // early once an entry exists and its effect deps do not change on failure. Without the "some"
+  // step, one such scope would hold an all-or-nothing "settled" flag false forever and starve the
+  // refresh, so the editor would show NO inline values for the whole pause even for the scopes that
+  // did load. Two steps keep every successfully loaded scope reachable while staying O(1).
+  const pausedValuesMilestone = useMemo(() => {
+    const pending = pausedScopes.filter((scope) => scope.variableCount !== 0);
+    if (pending.length === 0) return 2;
+    const loaded = pending.filter((scope) => snapshot.variablesByParent.has(scope.scopeRef)).length;
+    if (loaded === 0) return 0;
+    return loaded === pending.length ? 2 : 1;
+  }, [pausedScopes, snapshot.variablesByParent]);
   useEffect(() => {
     if (pausedSession !== null) void loadStack(pausedSession).catch(() => setActionError(true));
   }, [loadStack, pausedSession]);
@@ -425,10 +432,6 @@ export function EditorDebugSessionHost({
   );
   const host = useMemo<EditorSurfaceProps["debug"]>(() => {
     if (!enabled || fileId === undefined || activationRevision === undefined) return undefined;
-    // Deliberate recompute trigger, not a value this memo needs: see the note above
-    // `variablesSettled`. Referencing it here (rather than only in the deps array) keeps that
-    // intent honest for react-hooks/exhaustive-deps instead of suppressing the lint rule.
-    void variablesSettled;
     return {
       gutter: {
         ...(pausedFrame?.sourceFileId === fileId ? { pausedLine: pausedFrame.line } : {}),
@@ -501,6 +504,7 @@ export function EditorDebugSessionHost({
       resolvePausedValues: (mountedDocumentUri) =>
         derivePausedDebugValues(snapshotRef.current, fileId, mountedDocumentUri, t("pausedValues")),
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-EDITOR-009: pausedValuesMilestone is the intentional invalidation signal, not a value this projection reads. resolvePausedValues reads snapshotRef, so without it the host would never re-notify and keiko-editor's useDebugRefresh (keyed on this object's identity) would never re-pull newly loaded inline values.
   }, [
     activationRevision,
     beginTextPrompt,
@@ -511,13 +515,13 @@ export function EditorDebugSessionHost({
     labels,
     onOpenDebugPanel,
     pausedFrame,
+    pausedValuesMilestone,
     perform,
     root,
     saveBreakpoint,
     session,
     start,
     t,
-    variablesSettled,
   ]);
 
   useEffect(() => {
