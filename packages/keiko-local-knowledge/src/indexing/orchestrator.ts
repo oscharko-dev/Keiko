@@ -32,6 +32,7 @@ import type {
   CheckpointFingerprint,
   ChunkId,
   DocumentId,
+  EmbeddingModelIdentity,
   ExtractionCheckpointRecord,
   IndexingJobError,
   KnowledgeCapsule,
@@ -50,6 +51,7 @@ import {
   verifyEmbeddingCapability,
   type EmbeddingCapabilityCheck,
   type EmbeddingProbeOptions,
+  type OpenAIEmbeddingAdapter,
 } from "@oscharko-dev/keiko-model-gateway";
 
 import { chunkDocument } from "../chunking/chunker-runner.js";
@@ -65,7 +67,11 @@ import {
   type ChunkingOptions,
   type LocalKnowledgeTokenizer,
 } from "../chunking/index.js";
-import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
+import {
+  getCapsule,
+  updateCapsuleEmbeddingModelIdentity,
+  updateCapsuleState,
+} from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
 import {
   DEFAULT_DISCOVERY_OPTIONS,
@@ -215,7 +221,7 @@ function resolveSources(
 // ─── Mutable run state ────────────────────────────────────────────────────────
 interface RunState {
   readonly jobId: string;
-  readonly capsule: KnowledgeCapsule;
+  capsule: KnowledgeCapsule;
   readonly options: IndexingOptions;
   readonly batchSize: number;
   readonly concurrency: number;
@@ -2048,11 +2054,13 @@ function buildResult(
 
 function embeddingPreflightOptions(state: RunState): EmbeddingProbeOptions {
   const identity = state.capsule.embeddingModelIdentity;
+  const provisional =
+    state.capsule.lifecycleState === "draft" && identity.embeddingSpaceFingerprint === undefined;
   return {
     modelId: identity.modelId,
     provider: identity.provider,
     vectorMetric: identity.vectorMetric,
-    expectedDimensions: identity.vectorDimensions,
+    ...(!provisional ? { expectedDimensions: identity.vectorDimensions } : {}),
     ...(identity.dimensionsParam !== undefined
       ? { dimensionsParam: identity.dimensionsParam }
       : {}),
@@ -2060,9 +2068,65 @@ function embeddingPreflightOptions(state: RunState): EmbeddingProbeOptions {
     ...(identity.instructionVersion !== undefined
       ? { instructionVersion: identity.instructionVersion }
       : {}),
-    includeSpaceFingerprint: identity.embeddingSpaceFingerprint !== undefined,
+    includeSpaceFingerprint: provisional || identity.embeddingSpaceFingerprint !== undefined,
     ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
   };
+}
+
+function isProvisionalDraft(state: RunState): boolean {
+  return (
+    state.capsule.lifecycleState === "draft" &&
+    state.capsule.embeddingModelIdentity.embeddingSpaceFingerprint === undefined
+  );
+}
+
+interface EmbeddingPreflightCacheEntry {
+  readonly result: Extract<EmbeddingCapabilityCheck, { readonly ok: true }>;
+  readonly expiresAt: number;
+}
+
+const EMBEDDING_PREFLIGHT_CACHES = new WeakMap<
+  OpenAIEmbeddingAdapter,
+  Map<string, EmbeddingPreflightCacheEntry>
+>();
+const EMBEDDING_PREFLIGHT_TTL_MS = 10 * 60 * 1000;
+const EMBEDDING_PREFLIGHT_CACHE_MAX = 64;
+
+function embeddingPreflightCacheKey(options: EmbeddingProbeOptions): string {
+  return [
+    options.provider,
+    options.modelId,
+    options.vectorMetric,
+    options.dimensionsParam ?? "",
+    options.normalization ?? "",
+    options.instructionVersion ?? "",
+    options.includeSpaceFingerprint === true ? "fingerprinted" : "structural",
+  ].join("\u0000");
+}
+
+function embeddingPreflightCacheFor(
+  adapter: OpenAIEmbeddingAdapter,
+): Map<string, EmbeddingPreflightCacheEntry> {
+  const existing = EMBEDDING_PREFLIGHT_CACHES.get(adapter);
+  if (existing !== undefined) return existing;
+  const created = new Map<string, EmbeddingPreflightCacheEntry>();
+  EMBEDDING_PREFLIGHT_CACHES.set(adapter, created);
+  return created;
+}
+
+async function verifyEmbeddingPreflightCapability(
+  adapter: OpenAIEmbeddingAdapter,
+  options: EmbeddingProbeOptions,
+): Promise<EmbeddingCapabilityCheck> {
+  const cache = embeddingPreflightCacheFor(adapter);
+  const key = embeddingPreflightCacheKey(options);
+  const cached = cache.get(key);
+  if (cached !== undefined && cached.expiresAt > Date.now()) return cached.result;
+  const result = await verifyEmbeddingCapability(adapter, options);
+  if (!result.ok) return result;
+  if (cache.size >= EMBEDDING_PREFLIGHT_CACHE_MAX) cache.clear();
+  cache.set(key, { result, expiresAt: Date.now() + EMBEDDING_PREFLIGHT_TTL_MS });
+  return result;
 }
 
 function embeddingPreflightFailure(
@@ -2070,15 +2134,32 @@ function embeddingPreflightFailure(
   result: EmbeddingCapabilityCheck,
 ): IndexingJobError | undefined {
   if (result.ok) {
+    if (isProvisionalDraft(state)) {
+      state.capsule = updateCapsuleEmbeddingModelIdentity(
+        state.options.store,
+        state.capsule.id,
+        result.identity,
+      );
+      return undefined;
+    }
     const compatibility = assertCompatibleEmbeddingIdentity(
       state.capsule.embeddingModelIdentity,
       result.identity,
     );
-    if (compatibility.ok) return undefined;
-    return {
-      code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
-      message: compatibility.safeMessage,
-    };
+    if (!compatibility.ok) {
+      return {
+        code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
+        message: compatibility.safeMessage,
+      };
+    }
+    if (embeddingIdentityChanged(state.capsule.embeddingModelIdentity, compatibility.identity)) {
+      state.capsule = updateCapsuleEmbeddingModelIdentity(
+        state.options.store,
+        state.capsule.id,
+        compatibility.identity,
+      );
+    }
+    return undefined;
   }
   return {
     code:
@@ -2089,9 +2170,26 @@ function embeddingPreflightFailure(
   };
 }
 
+function embeddingIdentityChanged(
+  stored: EmbeddingModelIdentity,
+  current: EmbeddingModelIdentity,
+): boolean {
+  return (
+    stored.provider !== current.provider ||
+    stored.modelId !== current.modelId ||
+    stored.modelRevision !== current.modelRevision ||
+    stored.vectorDimensions !== current.vectorDimensions ||
+    stored.vectorMetric !== current.vectorMetric ||
+    stored.normalization !== current.normalization ||
+    stored.instructionVersion !== current.instructionVersion ||
+    stored.embeddingSpaceFingerprint !== current.embeddingSpaceFingerprint ||
+    stored.dimensionsParam !== current.dimensionsParam
+  );
+}
+
 async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobError | undefined> {
   try {
-    const result = await verifyEmbeddingCapability(
+    const result = await verifyEmbeddingPreflightCapability(
       state.options.embeddingAdapter,
       embeddingPreflightOptions(state),
     );

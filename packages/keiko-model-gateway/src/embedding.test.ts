@@ -311,6 +311,39 @@ describe("verifyEmbeddingCapability", () => {
     expect(seen).toHaveLength(4);
   });
 
+  it("verifies dimensions and the embedding-space fingerprint in one batch request", async () => {
+    let scalarCalls = 0;
+    const batches: string[][] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request: () => {
+        scalarCalls += 1;
+        return Promise.resolve(successOutcome(4));
+      },
+      requestBatch: (input) => {
+        batches.push([...input.inputs]);
+        return Promise.resolve({
+          ok: true,
+          value: input.inputs.map((_, index) => ({
+            vector: new Float32Array([index + 1, index + 2, index + 3, index + 4]),
+            modelId: PROBE.modelId,
+          })),
+        });
+      },
+    };
+
+    const result = await verifyEmbeddingCapability(adapter, {
+      ...PROBE,
+      includeSpaceFingerprint: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(scalarCalls).toBe(0);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(4);
+  });
+
   it("ensures the probe input is never echoed into any failure safeMessage", async () => {
     const kinds = [
       "wrong-header",
