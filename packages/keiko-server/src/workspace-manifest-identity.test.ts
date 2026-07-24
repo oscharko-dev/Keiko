@@ -34,12 +34,14 @@ afterEach((): void => {
 });
 
 describe("inspectWorkspaceRootDescriptor", () => {
-  it("returns the on-disk canonical casing regardless of caller casing on case-insensitive filesystems (#2615)", (): void => {
+  it("returns the on-disk canonical casing regardless of caller casing on case-insensitive filesystems (#2615)", (ctx): void => {
     if (!isFilesystemCaseInsensitive(dirname(root))) {
       // Case-sensitive filesystem — the caller-typed casing would not resolve at all, so there
       // is no defect to prove here. The macOS local lane and case-insensitive Linux mounts
       // exercise this row; the CI/Linux lane confirms the code path still returns a canonical
-      // descriptor via the sibling tests.
+      // descriptor via the sibling tests. Marking the test skipped keeps the reporter honest
+      // (Sonar S8968: bare `return` reports as PASSED and hides the fact the row never ran).
+      ctx.skip();
       return;
     }
     const childName = "MixedCaseDir";

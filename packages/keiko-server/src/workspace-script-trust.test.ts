@@ -6,7 +6,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import {
+  detectWorkspaceAt,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createCommandRunnerManager } from "./command-runner.js";
 import { createVerificationRunnerManager } from "./editor/verificationRunner.js";
@@ -353,6 +357,57 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     expect(trust.isTrusted(root, workspace)).toBe(false);
     trust.grant(root);
     expect(trust.isTrusted(root, workspace)).toBe(true);
+  });
+
+  it("preserves the originating fs cause on coded errors and omits the property when absent (#2615)", () => {
+    // Line 81 branch coverage for `Object.defineProperty(this, "cause", ...)`. The cause is
+    // non-enumerable and reaches only redacted operator diagnostics, never the client-facing
+    // coded message. The catch sites at resolveCanonicalRoot and currentTrustBinding forward it.
+    const cause = new Error("ENOENT: no such file or directory");
+    const withCause = new WorkspaceScriptTrustError("PROJECT_NOT_FOUND", "x", cause);
+    const withoutCause = new WorkspaceScriptTrustError("WORKSPACE_STATE_UNAVAILABLE", "x");
+    expect((withCause as { cause?: unknown }).cause).toBe(cause);
+    expect((withoutCause as { cause?: unknown }).cause).toBeUndefined();
+    expect(Object.propertyIsEnumerable.call(withCause, "cause")).toBe(false);
+  });
+
+  it("throws state-unavailable when the live root identity fails after resolveCanonicalRoot succeeds (#2615)", () => {
+    // Line 210 coverage — the ADR-0147 D9 state-unavailable path introduced by this PR. After a
+    // grant, replace the directory with a regular file at the same path and supply the workspace
+    // so detectWorkspaceAt is bypassed. resolveCanonicalRoot then succeeds (the path exists as a
+    // file), but inspectWorkspaceRootIdentity's isDirectory check inside currentTrustBinding
+    // throws WORKSPACE_ROOT_INVALID → the local catch converts it to the coded error carrying the
+    // fs cause. status() maps that to unavailableStatus rather than throwing on read.
+    const trust = createWorkspaceScriptTrustService({ store });
+    trust.grant(root);
+    rmSync(root, { recursive: true, force: true });
+    writeFileSync(root, "not a directory", "utf8");
+    const status = trust.status(root);
+    expect(status.trust).toBe("restricted");
+    expect(status.reason).toBe("state-unavailable");
+  });
+
+  it("throws PROJECT_NOT_FOUND with a preserved cause when .native canonicalization fails (#2615)", () => {
+    // Line 255 coverage — the .native snap catch inside resolveCanonicalRoot. Stub the
+    // WorkspaceFs.realPath to return a valid-looking canonical string for a path that does not
+    // exist on the real filesystem, then supply the same path as workspace to bypass the
+    // detectWorkspaceAt step. realpathSync.native (the real node:fs call) then fails with
+    // ENOENT, the catch converts it to the coded error carrying the fs cause, and isTrusted's
+    // outer try returns false without leaking the throw.
+    const fakeRoot = join(tmpdir(), "keiko-scripttrust-native-snap-does-not-exist-xyz");
+    const stubFs: WorkspaceFs = { ...nodeWorkspaceFs, realPath: (): string => fakeRoot };
+    const workspace: WorkspaceInfo = {
+      root: fakeRoot,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    };
+    const trust = createWorkspaceScriptTrustService({ store, fs: stubFs });
+    expect(trust.isTrusted(root, workspace)).toBe(false);
   });
 });
 
