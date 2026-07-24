@@ -82,7 +82,10 @@ describe("serializeSessionCookie", () => {
       const [name, ...valueParts] = nameValue.split("=");
       const value = valueParts.join("=");
       const pathAttribute = /(?:^|; )Path=([^;]+)/u.exec(cookie)?.[1];
-      const maxAgeValues = Array.from(cookie.matchAll(/(?:^|; )Max-Age=(\d+)/gu), (m) => m[1]);
+      const maxAgeValues = Array.from(
+        cookie.matchAll(/(?:^|; )Max-Age=(\d+)/gu),
+        (match): string => match[1] ?? "",
+      );
       expect(name).toBe(APP_SESSION_COOKIE_NAME);
       // Exactly one Max-Age attribute per cookie header (no shadowed/conflicting values).
       expect(maxAgeValues).toHaveLength(1);
