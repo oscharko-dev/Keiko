@@ -729,39 +729,52 @@ describe("coding-sidecar gateway", () => {
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private runtime content");
   });
 
-  it("emits the tool-adoption-gap diagnostic for a long governed history without keiko_* calls", async () => {
+  it("emits the tool-adoption-gap diagnostic once per run for keiko_*-free governed histories", async () => {
     // #2680 live-probe fingerprint: many model requests, zero keiko_* facade calls. The
-    // diagnostic is observability only — the request must keep flowing to the model.
+    // diagnostic is observability only — the request must keep flowing to the model — and a
+    // persisting gap must not flood the operator log with one record per request.
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const readiness = createOpenCodeGatewayReadinessRegistry();
     const deps = {
       ...runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-1" } }),
         () => chat,
+        readiness,
       ),
       diagnostics,
     };
-    const result = await handleCodingSidecarGatewayChatCompletions(
-      authenticatedContext({
-        model: "coding",
-        messages: adoptionGapMessages(3),
-        tools: modelVisibleTools(),
-      }),
-      deps,
-    );
+    const send = async (): Promise<void> => {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: adoptionGapMessages(3),
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      expect(result).toMatchObject({ status: 200 });
+    };
+    const adoptionRecords = (): readonly ServerDiagnosticRecord[] =>
+      diagnostics.record.mock.calls
+        .map(([record]) => record)
+        .filter((record) => record.code === "CODING_GATEWAY_TOOL_ADOPTION_GAP");
 
-    expect(result).toMatchObject({ status: 200 });
-    expect(chat).toHaveBeenCalledOnce();
-    const adoptionRecords = diagnostics.record.mock.calls.filter(
-      ([record]) => record.code === "CODING_GATEWAY_TOOL_ADOPTION_GAP",
-    );
-    expect(adoptionRecords).toHaveLength(1);
-    expect(adoptionRecords[0]?.[0]).toMatchObject({
+    await send();
+    await send();
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(adoptionRecords()).toHaveLength(1);
+    expect(adoptionRecords()[0]).toMatchObject({
       source: "coding-sidecar-gateway.tool-adoption",
       errorClass: "CodingSidecarGatewayToolAdoptionGap",
       message: "coding-sidecar-gateway-tool-adoption-gap",
     });
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private");
+
+    // A disposed run releases the mark; the next run's gap is diagnosable again.
+    readiness.clear("run-1");
+    await send();
+    expect(adoptionRecords()).toHaveLength(2);
   });
 
   it("keeps planning-only todowrite loops inside the tool-adoption-gap fingerprint", async () => {

@@ -131,6 +131,9 @@ describe("OpenCode launch profile", () => {
       expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain(builtIn);
     }
     expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("must never be called");
+    // The pinned built-in "skill" collides with the governed keiko_skill by name; the prompt must
+    // disambiguate instead of leaving the built-in unmentioned.
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("skills run only through keiko_skill");
     expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("expectedContentHash");
     for (const verifier of ["test", "targeted-test", "typecheck", "lint", "build"]) {
       expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain(verifier);

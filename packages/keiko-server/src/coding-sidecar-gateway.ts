@@ -41,12 +41,15 @@ export interface OpenCodeGatewayReadinessRegistry {
   readonly claim: (runId: string) => boolean;
   readonly isVerified: (runId: string) => boolean;
   readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+  /** True only on the first call per run — bounds the adoption-gap diagnostic to one per run. */
+  readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
   readonly clear: (runId: string, preserveVerification?: boolean) => void;
 }
 
 export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadinessRegistry {
   const observed = new Set<string>();
   const armed = new Set<string>();
+  const adoptionGapDiagnosed = new Set<string>();
   const waiters = new Map<string, (result: boolean) => void>();
   return {
     claim: (runId): boolean => {
@@ -75,9 +78,15 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
         signal.addEventListener("abort", abort, { once: true });
       });
     },
+    noteAdoptionGapDiagnosed: (runId): boolean => {
+      if (adoptionGapDiagnosed.has(runId)) return false;
+      adoptionGapDiagnosed.add(runId);
+      return true;
+    },
     clear: (runId, preserveVerification = false): void => {
       if (!preserveVerification) observed.delete(runId);
       armed.delete(runId);
+      adoptionGapDiagnosed.delete(runId);
       waiters.get(runId)?.(false);
     },
   };
@@ -710,13 +719,19 @@ function hasToolAdoptionGapFingerprint(
   );
 }
 
-/** Diagnostic only — the request keeps flowing; fixed labels only, never message content. */
+/**
+ * Diagnostic only — the request keeps flowing; fixed labels only, never message content. One
+ * record per run: a stuck planning loop keeps matching the fingerprint on every request, and the
+ * registry mark keeps that from flooding the operator log (a missing registry never suppresses).
+ */
 function noteToolAdoptionGap(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  runId: string,
   messages: readonly CodingSidecarGatewayChatMessage[],
 ): void {
   if (!hasToolAdoptionGapFingerprint(messages)) return;
+  if (gatewayReadinessRegistry(deps)?.noteAdoptionGapDiagnosed(runId) === false) return;
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: ctx.correlationId ?? "unknown",
     timestamp: new Date(Date.now()).toISOString(),
@@ -1302,7 +1317,7 @@ export async function handleCodingSidecarGatewayChatCompletions(
     if (isExactManagedToolSet(parsed.tools) && registry?.claim(authentication.runId) === true) {
       return fixedReadinessResponse(ctx, resolved.result.modelAlias, parsed.stream === true);
     }
-    noteToolAdoptionGap(ctx, deps, parsed.messages);
+    noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
   }
   return executeGatewayChat(ctx, deps, resolved.config, parsed, authentication.runId, {
     modelAlias: resolved.result.modelAlias,
