@@ -832,6 +832,42 @@ describe("coding-sidecar gateway", () => {
     expect(chat).toHaveBeenCalledTimes(2);
   });
 
+  it("never fingerprints an empty or threshold-minus-one history", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+      diagnostics,
+    };
+    // The gap fires at TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD (9) messages; the builder only yields
+    // odd counts, so the exact 8-message boundary is constructed inline alongside the empty case.
+    const thresholdMinusOne: readonly unknown[] = [
+      { role: "system", content: "governed prompt" },
+      { role: "system", content: "environment" },
+      { role: "user", content: "private task content" },
+      { role: "assistant", content: "private analysis 0" },
+      { role: "user", content: "next" },
+      { role: "assistant", content: "private analysis 1" },
+      { role: "user", content: "next" },
+      { role: "assistant", content: "private analysis 2" },
+    ];
+    expect(thresholdMinusOne).toHaveLength(8);
+    for (const messages of [[] as readonly unknown[], thresholdMinusOne]) {
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({ model: "coding", messages, tools: modelVisibleTools() }),
+        deps,
+      );
+    }
+    expect(
+      diagnostics.record.mock.calls.some(
+        ([record]) => record.code === "CODING_GATEWAY_TOOL_ADOPTION_GAP",
+      ),
+    ).toBe(false);
+  });
+
   it("admits tool-free compaction only after the exact runtime handshake and before disposal", async () => {
     const readiness = createOpenCodeGatewayReadinessRegistry();
     const controller = new AbortController();
