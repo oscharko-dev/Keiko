@@ -160,6 +160,12 @@ describe("managed task-workspace Files authorization", (): void => {
     expect(aliased).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
   });
 
+  it("denies an ordinary root that encloses the managed workspace boundary", async (): Promise<void> => {
+    const result = await handleFilesTree(route(treePath(fixtureRoot)), dependencies);
+
+    expect(result).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
+  });
+
   it("fails closed when managed-root containment cannot be canonicalized", async (): Promise<void> => {
     dependencies = {
       ...dependencies,

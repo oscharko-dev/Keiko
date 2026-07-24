@@ -222,6 +222,20 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it("classifies an ancestor root as managed overlap before executing Git", async () => {
+    const runner = vi.fn<GitProcessRunner>();
+    const result = await handleGitStatus(
+      route(`/api/git/status?root=${encodeURIComponent(root)}`),
+      deps(runner),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { available: false, changes: [], stagedCount: 0, unstagedCount: 0 },
+    });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   // Regression harness for issue #2640. The runner dispatches on the git subcommand rather than
   // positional call order so behavior-preserving refactors of handleGitSummary's internal call
   // sequence do not silently break these tests, and it throws on any unexpected argument list so

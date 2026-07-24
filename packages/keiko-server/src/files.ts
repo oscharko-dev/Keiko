@@ -208,14 +208,20 @@ export interface ResolveRequestRootOptions {
 function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): boolean {
   const managedRoot = deps.managedTaskWorkspaceRoot;
   if (managedRoot === undefined || rootInput === null || !isAbsolute(rootInput)) return false;
-  return containsPath(resolve(managedRoot), resolve(rootInput));
+  const resolvedManagedRoot = resolve(managedRoot);
+  const resolvedInput = resolve(rootInput);
+  return (
+    containsPath(resolvedManagedRoot, resolvedInput) ||
+    containsPath(resolvedInput, resolvedManagedRoot)
+  );
 }
 
 async function resolvesInsideManagedRoot(deps: UiHandlerDeps, realRoot: string): Promise<boolean> {
   const managedRoot = deps.managedTaskWorkspaceRoot;
   if (managedRoot === undefined) return false;
   try {
-    return containsPath(await realpath(managedRoot), realRoot);
+    const realManagedRoot = await realpath(managedRoot);
+    return containsPath(realManagedRoot, realRoot) || containsPath(realRoot, realManagedRoot);
   } catch {
     // This check separates ordinary roots from Keiko-owned managed worktrees. An unreadable or
     // missing managed root is therefore an unknown authorization state, never proof that the

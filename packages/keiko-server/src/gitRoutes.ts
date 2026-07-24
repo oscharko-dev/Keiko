@@ -169,7 +169,10 @@ async function isResolvedManagedRoot(
 ): Promise<boolean> {
   if (managedRoot === undefined) return false;
   const resolvedManagedRoot = await realpath(managedRoot).catch(() => resolve(managedRoot));
-  return containsPath(resolvedManagedRoot, resolvedTarget);
+  return (
+    containsPath(resolvedManagedRoot, resolvedTarget) ||
+    containsPath(resolvedTarget, resolvedManagedRoot)
+  );
 }
 
 async function lacksManagedRootReadAuthority(
