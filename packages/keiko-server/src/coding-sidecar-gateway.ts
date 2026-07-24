@@ -30,6 +30,12 @@ const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
 const BUFFERED_STREAM_HEARTBEAT_MS = 5_000;
 const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
+// The #2680 live-probe fingerprint (many model requests, zero keiko_* facade calls) becomes
+// judgeable once the replayed history holds the two system messages, the task prompt, and three
+// assistant/user rounds without one governed tool call; legitimate coding turns read a file
+// within their first rounds.
+const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
+const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
 
 export interface OpenCodeGatewayReadinessRegistry {
   readonly claim: (runId: string) => boolean;
@@ -689,6 +695,39 @@ function emitGatewayToolContractDiagnostic(
   });
 }
 
+/**
+ * True when a long managed-tool-set history never invoked one governed keiko_* tool: the model is
+ * burning turns without adopting the projected suite. Question/todowrite calls do not count as
+ * adoption — a planning-only loop is the same operator-facing gap.
+ */
+function hasToolAdoptionGapFingerprint(
+  messages: readonly CodingSidecarGatewayChatMessage[],
+): boolean {
+  if (messages.length < TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD) return false;
+  return !messages.some(
+    (message) =>
+      message.toolCalls?.some((call) => call.name.startsWith(GOVERNED_TOOL_NAME_PREFIX)) === true,
+  );
+}
+
+/** Diagnostic only — the request keeps flowing; fixed labels only, never message content. */
+function noteToolAdoptionGap(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  messages: readonly CodingSidecarGatewayChatMessage[],
+): void {
+  if (!hasToolAdoptionGapFingerprint(messages)) return;
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: ctx.correlationId ?? "unknown",
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    source: "coding-sidecar-gateway.tool-adoption",
+    errorClass: "CodingSidecarGatewayToolAdoptionGap",
+    message: "coding-sidecar-gateway-tool-adoption-gap",
+    code: "CODING_GATEWAY_TOOL_ADOPTION_GAP",
+  });
+}
+
 function forbiddenGatewayRequest(): RouteResult {
   return { status: 403, body: errorBody("FORBIDDEN", "Coding sidecar gateway request is denied.") };
 }
@@ -1263,6 +1302,7 @@ export async function handleCodingSidecarGatewayChatCompletions(
     if (isExactManagedToolSet(parsed.tools) && registry?.claim(authentication.runId) === true) {
       return fixedReadinessResponse(ctx, resolved.result.modelAlias, parsed.stream === true);
     }
+    noteToolAdoptionGap(ctx, deps, parsed.messages);
   }
   return executeGatewayChat(ctx, deps, resolved.config, parsed, authentication.runId, {
     modelAlias: resolved.result.modelAlias,

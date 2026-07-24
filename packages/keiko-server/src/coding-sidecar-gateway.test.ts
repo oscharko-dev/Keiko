@@ -408,6 +408,43 @@ function modelVisibleTools(
   }));
 }
 
+/**
+ * Replayed child history for the adoption-gap fingerprint: two system messages, the private task
+ * prompt, then `rounds` assistant/user pairs. With `toolCallName` the final round carries one
+ * settled tool call so adoption (keiko_*) and planning-only loops (todowrite) stay distinguishable.
+ */
+function adoptionGapMessages(rounds: number, toolCallName?: string): readonly unknown[] {
+  const messages: unknown[] = [
+    { role: "system", content: "governed prompt" },
+    { role: "system", content: "environment" },
+    { role: "user", content: "private task content" },
+  ];
+  for (let round = 0; round < rounds; round += 1) {
+    const withToolCall = toolCallName !== undefined && round === rounds - 1;
+    messages.push(
+      withToolCall
+        ? {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: `call-${String(round)}`,
+                type: "function",
+                function: { name: toolCallName, arguments: "{}" },
+              },
+            ],
+          }
+        : { role: "assistant", content: `private analysis ${String(round)}` },
+    );
+    messages.push(
+      withToolCall
+        ? { role: "tool", content: "private tool result", tool_call_id: `call-${String(round)}` }
+        : { role: "user", content: "continue" },
+    );
+  }
+  return messages;
+}
+
 function assertRouteResult(result: RouteResult | typeof STREAMING): asserts result is RouteResult {
   expect(result).not.toBe(STREAMING);
   if (result === STREAMING) throw new Error("Expected a buffered route result.");
@@ -690,6 +727,96 @@ describe("coding-sidecar gateway", () => {
     }
     expect(diagnostics.record).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private runtime content");
+  });
+
+  it("emits the tool-adoption-gap diagnostic for a long governed history without keiko_* calls", async () => {
+    // #2680 live-probe fingerprint: many model requests, zero keiko_* facade calls. The
+    // diagnostic is observability only — the request must keep flowing to the model.
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+      diagnostics,
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: adoptionGapMessages(3),
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledOnce();
+    const adoptionRecords = diagnostics.record.mock.calls.filter(
+      ([record]) => record.code === "CODING_GATEWAY_TOOL_ADOPTION_GAP",
+    );
+    expect(adoptionRecords).toHaveLength(1);
+    expect(adoptionRecords[0]?.[0]).toMatchObject({
+      source: "coding-sidecar-gateway.tool-adoption",
+      errorClass: "CodingSidecarGatewayToolAdoptionGap",
+      message: "coding-sidecar-gateway-tool-adoption-gap",
+    });
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private");
+  });
+
+  it("keeps planning-only todowrite loops inside the tool-adoption-gap fingerprint", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+      diagnostics,
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: adoptionGapMessages(3, "todowrite"),
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(
+      diagnostics.record.mock.calls.some(
+        ([record]) => record.code === "CODING_GATEWAY_TOOL_ADOPTION_GAP",
+      ),
+    ).toBe(true);
+  });
+
+  it("stays silent below the adoption threshold and once one keiko_* call is in the history", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+      diagnostics,
+    };
+    for (const messages of [
+      adoptionGapMessages(1),
+      adoptionGapMessages(3, "keiko_workspace_read"),
+    ]) {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({ model: "coding", messages, tools: modelVisibleTools() }),
+        deps,
+      );
+      expect(result).toMatchObject({ status: 200 });
+    }
+    expect(
+      diagnostics.record.mock.calls.some(
+        ([record]) => record.code === "CODING_GATEWAY_TOOL_ADOPTION_GAP",
+      ),
+    ).toBe(false);
+    expect(chat).toHaveBeenCalledTimes(2);
   });
 
   it("admits tool-free compaction only after the exact runtime handshake and before disposal", async () => {

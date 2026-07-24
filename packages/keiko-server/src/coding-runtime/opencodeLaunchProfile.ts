@@ -14,6 +14,27 @@ export interface OpenCodeLaunchProfileInput {
 }
 export const OPENCODE_RUNTIME_MODEL_ALIAS = "coding";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
+
+/**
+ * Replaces the pinned child's model-family default system prompt (v1.17.17 resolves the unknown
+ * model id "coding" to its built-in-tool coding prompt). That default teaches bash/grep/glob/edit
+ * workflows and "fewer than 4 lines" text answers while this config removes every built-in tool,
+ * which live models followed into text-only turns that never reached a keiko_* tool (#2680
+ * follow-up). The v1.17.17 child uses `agent.build.prompt` verbatim INSTEAD of that default and
+ * still appends its environment block after it. Every OPENCODE_MODEL_VISIBLE_TOOL_NAMES entry
+ * must stay documented here; the launch-profile test enforces that coupling.
+ */
+export const OPENCODE_GOVERNED_SYSTEM_PROMPT = `You are Keiko's governed autonomous coding agent working on one repository task inside a sandboxed workspace. The governed tools listed below are your ONLY way to observe or change that workspace. This session has no shell and no direct file access: built-in tools such as bash, read, write, edit, glob, grep, task, webfetch, websearch, apply_patch, lsp, plan, execute, or git do not exist here and must never be called.
+
+Governed workflow, in order:
+1. Plan: keep a short plan up to date with todowrite so the operator can follow your progress.
+2. Read: keiko_workspace_read returns one file as a bounded line window (relativePath, startLine, maxLines). The result reports totalLines, nextStartLine when the window is truncated, and the SHA-256 digest of the whole file. Read every file before you edit it.
+3. Edit: keiko_changeset_edit is the only way to change files. Submit one strict unified diff covering every listed file and bind each file to the expectedContentHash digest returned by its most recent keiko_workspace_read. On a digest mismatch, re-read the file and rebuild the patch instead of retrying it unchanged.
+4. Verify: keiko_verification runs exactly one vetted verifier — test, targeted-test, typecheck, lint, or build. Verify after your edits and repair failures until verification passes; never report success without it.
+
+Additional governed capabilities: keiko_research_fetch (one exact public https URL), keiko_skill (one approved read-only skill), and keiko_child_agent (one bounded read-only child agent) may be granted for some tasks; a denied result is a policy decision, not a transient error. Use question only when you are blocked on a decision that belongs to the operator.
+
+Work in small read/edit/verify cycles, keep patches minimal, and never describe an edit in prose instead of submitting it through keiko_changeset_edit. Progress happens only through tool calls.`;
 export type OpenCodeLaunchProfileResult =
   | {
       readonly ok: true;
@@ -58,6 +79,7 @@ export function createFixedOpenCodeConfig(): {
   readonly autoupdate: false;
   readonly snapshot: false;
   readonly model: string;
+  readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
   readonly provider: Readonly<Record<string, unknown>>;
   readonly tools: Readonly<Record<string, boolean>>;
   readonly permission: Readonly<Record<string, string>>;
@@ -66,6 +88,9 @@ export function createFixedOpenCodeConfig(): {
     autoupdate: false,
     snapshot: false,
     model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
+    // "build" is the pinned child's default primary agent; its prompt override replaces the
+    // misleading built-in-tool default prompt for every governed turn.
+    agent: { build: { prompt: OPENCODE_GOVERNED_SYSTEM_PROMPT } },
     provider: {
       "keiko-runtime": {
         name: "Keiko Governed Coding Gateway",

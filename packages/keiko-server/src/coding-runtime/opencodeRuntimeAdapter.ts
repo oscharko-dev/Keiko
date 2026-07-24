@@ -65,6 +65,7 @@ export interface GeneratedOpenCodeBundle {
   readonly config: {
     readonly snapshot: false;
     readonly model: string;
+    readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
@@ -848,10 +849,11 @@ type GeneratedToolAction = "read" | "edit" | "verification" | "egress" | "skill"
 function toolDescription(action: GeneratedToolAction): string {
   if (action === "read") {
     return (
-      "Read a bounded repository text file through Keiko governance. " +
-      "startLine/maxLines select the returned line window (start at 1 with a generous maxLines " +
-      "for a whole small file); the result reports totalLines plus nextStartLine while the " +
-      "digest always covers the whole file."
+      "Read one repository text file through Keiko governance — the only way to observe " +
+      "workspace content. startLine/maxLines select the returned line window (start at 1 with " +
+      "a generous maxLines for a whole small file); the result reports totalLines plus " +
+      "nextStartLine when truncated, and the whole-file SHA-256 digest that " +
+      "keiko_changeset_edit requires as expectedContentHash."
     );
   }
   if (action === "egress") {
@@ -860,9 +862,18 @@ function toolDescription(action: GeneratedToolAction): string {
   if (action === "skill") return "Invoke one exact server-approved read-only skill.";
   if (action === "child-agent") return "Run one bounded, one-layer read-only child agent.";
   if (action === "verification") {
-    return "Run one vetted repository verification through Keiko governance.";
+    return (
+      "Run one vetted repository verification through Keiko governance — the only way to " +
+      "execute checks (there is no shell). Pick exactly one verifierId: test, targeted-test, " +
+      "typecheck, lint, or build."
+    );
   }
-  return "Submit a bounded changeset through Keiko governance.";
+  return (
+    "Submit a bounded changeset through Keiko governance — the only way to modify workspace " +
+    "files. Provide one strict unified diff and, for every listed file, the " +
+    "expectedContentHash digest returned by its most recent keiko_workspace_read; on a digest " +
+    "mismatch re-read the file and rebuild the patch."
+  );
 }
 
 function governedPermissionSource(): readonly string[] {
