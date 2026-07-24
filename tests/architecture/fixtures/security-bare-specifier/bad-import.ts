@@ -36,8 +36,10 @@
  *
  * The resolved target file MUST exist on disk for this fixture to fire - the whole
  * point is that `@oscharko-dev/keiko-harness` resolves through the package `exports`
- * map to `packages/keiko-harness/dist/index.js`. Run `npm run build:packages` before
- * `arch:check:negative` locally; CI already builds packages ahead of both arch gates.
+ * map to `packages/keiko-harness/dist/index.js`. `scripts/arch-check-negative.mjs`
+ * enforces this prerequisite via `REQUIRED_DIST_ENTRYPOINTS`: it refuses to run and
+ * emits a clear "run `npm run build:packages` first" error when dist is missing,
+ * turning the harness's implicit ordering requirement into an explicit preflight.
  */
 
 // eslint-disable-next-line import-x/no-extraneous-dependencies

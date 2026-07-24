@@ -337,19 +337,27 @@ export async function openEditorWorkspace(
     //   - the verification-catalog response settles without the dialog rendering => the
     //     workspace is pre-trusted (or trust prompting is suppressed) and there is nothing
     //     to dismiss.
-    // Both waits inherit Playwright's per-lane action timeout — no literal wall-clock
-    // survives in the primary path. The short post-race settle window bounds the "trust
-    // resolved as restricted; React has not committed yet" microtask gap on the second
-    // branch without leaking a heuristic into the first.
+    // Both primary waits inherit Playwright's per-lane action timeout — no literal
+    // wall-clock survives on the restricted path. The catalog request carries a `?projectId=`
+    // query string, so match the response by parsed pathname (a bare `endsWith` misses the
+    // query and would silently fall through to the primary timeout). The 2 s settle window
+    // AFTER the catalog wins the race is not a heuristic budget but a bounded React-commit
+    // window: `waitForResponse` resolves at the network layer, whereas `dialog.isVisible()`
+    // needs the app to receive the response body, run the fetch `.then` chain, and land the
+    // resulting React re-render into the DOM — that microtask gap must be absorbed
+    // explicitly or the restricted path races the snapshot check.
     const dialog = page.getByRole("alertdialog", { name: /Trust this workspace/iu });
-    const dialogVisible = dialog
+    const dialogVisible: Promise<"dialog" | "gone"> = dialog
       .waitFor({ state: "visible" })
-      .then(() => "dialog" as const)
-      .catch(() => "gone" as const);
-    const catalogSettled = page
-      .waitForResponse((response) => response.url().endsWith("/api/editor/verification/catalog"))
-      .then(() => "catalog" as const)
-      .catch(() => "catalog" as const);
+      .then((): "dialog" => "dialog")
+      .catch((): "gone" => "gone");
+    const catalogSettled: Promise<"catalog"> = page
+      .waitForResponse(
+        (response): boolean =>
+          new URL(response.url()).pathname === "/api/editor/verification/catalog",
+      )
+      .then((): "catalog" => "catalog")
+      .catch((): "catalog" => "catalog");
     const outcome = await Promise.race([dialogVisible, catalogSettled]);
     if (outcome === "catalog" && !(await dialog.isVisible())) {
       await dialog.waitFor({ state: "visible", timeout: 2_000 }).catch(() => undefined);

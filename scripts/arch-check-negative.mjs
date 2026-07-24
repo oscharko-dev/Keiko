@@ -17,6 +17,7 @@
 // still resolves the import to a `packages/...` path that stays inside the scan.
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -26,6 +27,14 @@ import {
 
 const RULES_FILE = ".dependency-cruiser.cjs";
 const FIXTURE_PATH = "tests/architecture/fixtures";
+// Fixtures that resolve their forbidden edge through the workspace `exports` map (into
+// `packages/keiko-<name>/dist/index.js`) require the target dist file to exist on disk. The
+// canonical example is `tests/architecture/fixtures/security-bare-specifier/` (Wave-2 audit
+// #2627) which imports `@oscharko-dev/keiko-harness` by its package name; without dist the
+// specifier resolves to nothing and rule 2 loses its bare-specifier variant firing. Enforce
+// the prerequisite here rather than in the fixture's JSDoc so the harness fails loudly with
+// an actionable message instead of quietly under-firing.
+const REQUIRED_DIST_ENTRYPOINTS = ["packages/keiko-harness/dist/index.js"];
 // Superset of the production `includeOnly`: fixtures + relative-path targets + src +
 // packages/<name>/(src|dist). The `dist` suffix landed with Wave-2 audit #2627 so the
 // bare-specifier variant fixture (which resolves through the workspace `exports` map into
@@ -90,6 +99,23 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0128-connectors-no-direct-egress": 1,
   "adr-0112-provider-runtime-no-internal-bypass": 3,
 };
+
+// Fail loudly if a required dist entrypoint is missing. Fixture edges that resolve through
+// the workspace `exports` map (bare-specifier variant, #2627) need the build output to exist
+// or dep-cruiser sees a broken import and the corresponding rule under-fires. Running
+// `npm run build:packages` produces every dist target enumerated above.
+const missingDist = REQUIRED_DIST_ENTRYPOINTS.filter(
+  (entrypoint) => !existsSync(join(process.cwd(), entrypoint)),
+);
+if (missingDist.length > 0) {
+  console.error(
+    "arch-check-negative: FAIL — required dist entrypoint(s) missing; run `npm run build:packages` first.",
+  );
+  for (const entrypoint of missingDist) {
+    console.error(`  - ${entrypoint}`);
+  }
+  process.exit(1);
+}
 
 // Calling the dependency-cruiser bin through Node keeps the gate hermetic without
 // going through platform-specific npm/npx shell shims.

@@ -981,10 +981,13 @@ module.exports = {
       conditionNames: ["import", "node"],
     },
     // Includes `packages/<name>/dist` so cross-package bare-specifier imports resolved through
-    // package `exports` map to a graph node the direction rules can see (Wave-2 audit #2627).
-    // Rule `from.path` regexes remain scoped to `src/**`; dist entries only supply destinations,
-    // never new firings from production code. scripts/check-package-graph.mjs still owns the
-    // manifest-level allowlist governance.
+    // the package `exports` map (into `packages/<name>/dist/index.js`) map to a graph node the
+    // direction rules can see (Wave-2 audit #2627). Rule `from.path` regexes remain scoped to
+    // `src/**`; dist entries only supply destinations, never new firings from production code.
+    // `package.json` scopes the `arch:check` scan roots to `src 'packages/*/src'` so the widened
+    // filter does not turn every dist file into an entry module — dist is a permitted
+    // resolution destination, not an entry-point scan target. scripts/check-package-graph.mjs
+    // still owns the manifest-level allowlist governance.
     includeOnly: "^(src|packages/[^/]+/(src|dist))",
   },
 };
