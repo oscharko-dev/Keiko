@@ -94,6 +94,11 @@ export interface WorkspaceScriptTrustService {
   readonly isTrusted: (projectId: string, workspace: WorkspaceInfo) => boolean;
   readonly trustLevelForRoot: (root: string) => WorkspaceTrustLevel;
   readonly recomputeForRoots?: (roots: readonly string[]) => readonly WorkspaceTrustLevel[];
+  // #2628 — additive listener registration so composition-time consumers (buildPeripherals
+  // wires managed-LSP restriction propagation this way) receive every persisted restriction
+  // regardless of whether the service was constructed here or supplied through injection.
+  // Returns a disposer that removes just this listener.
+  readonly subscribeOnRestricted?: (listener: (canonicalRoot: string) => void) => () => void;
 }
 
 export interface WorkspaceScriptTrustServiceOptions {
@@ -398,12 +403,21 @@ function invalidatedTrustedRecord(
 class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
-  private readonly onRestricted: ((canonicalRoot: string) => void) | undefined;
+  // #2628 — restriction listeners are held as a set so both the options.onRestricted seat
+  // (kept for callers that construct the service directly) and subscribeOnRestricted callers
+  // deliver the same notification without either path silently dropping the other.
+  private readonly restrictionListeners = new Set<(canonicalRoot: string) => void>();
 
   public constructor(options: WorkspaceScriptTrustServiceOptions) {
     this.store = options.store;
     this.fs = options.fs ?? nodeWorkspaceFs;
-    this.onRestricted = options.onRestricted;
+    if (options.onRestricted !== undefined) {
+      this.restrictionListeners.add(options.onRestricted);
+    }
+  }
+
+  private notifyRestricted(canonicalRoot: string): void {
+    for (const listener of this.restrictionListeners) listener(canonicalRoot);
   }
 
   public readonly grant = (projectId: string): WorkspaceScriptTrustSnapshot => {
@@ -440,7 +454,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       "human-revocation",
       nextRevision(this.store, binding.rootRef),
     );
-    this.onRestricted?.(canonicalRoot);
+    this.notifyRestricted(canonicalRoot);
     return { trusted: false };
   };
 
@@ -487,7 +501,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
           invalidationReason(invalidated.binding, expected),
           invalidated.revision + 1,
         );
-        this.onRestricted?.(canonicalRoot);
+        this.notifyRestricted(canonicalRoot);
       }
       return projectedTrusted;
     } catch {
@@ -509,12 +523,32 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     }
   };
 
+  // #2628 — listeners are contracted to receive the CANONICAL root (revoke and the
+  // isTrusted invalidation path both notify with canonicalRoot). Passing the caller's
+  // raw root here would let a symlink or alias reach managed-LSP restriction with a
+  // non-real identity and miss the pool entry keyed on the canonical path. Canonicalize
+  // via the same resolver trustLevelForRoot uses, and skip the notification when the
+  // path cannot be canonicalized (the trust decision already fails closed to
+  // "restricted", so nothing is left silently open — only the notification is dropped
+  // because there is no canonical identity to notify with).
   public readonly recomputeForRoots = (roots: readonly string[]): readonly WorkspaceTrustLevel[] =>
     roots.map((root): WorkspaceTrustLevel => {
       const level = this.trustLevelForRoot(root);
-      if (level === "restricted") this.onRestricted?.(root);
+      if (level === "restricted") {
+        const canonicalRoot = realPathOrUndefined(this.fs, root);
+        if (canonicalRoot !== undefined) this.notifyRestricted(canonicalRoot);
+      }
       return level;
     });
+
+  public readonly subscribeOnRestricted = (
+    listener: (canonicalRoot: string) => void,
+  ): (() => void) => {
+    this.restrictionListeners.add(listener);
+    return (): void => {
+      this.restrictionListeners.delete(listener);
+    };
+  };
 }
 
 function statusProjection(projectId: string, record: WorkspaceTrustRecord): WorkspaceTrustStatus {

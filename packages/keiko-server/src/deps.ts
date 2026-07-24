@@ -1786,6 +1786,9 @@ interface PeripheralManagers {
   readonly commandRunner: CommandRunnerManager;
   readonly verificationRunner: VerificationRunnerManager;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  // #2628 — invoked from createUiHandlerDispose so the injected-trust-service listener
+  // (registered by resolveTrustAndManagedLspControl) is removed at teardown.
+  readonly disposeTrustLspBridge: () => void;
   readonly updateSession: UpdateSessionManager;
   readonly updatePreflight: UiHandlerDeps["updatePreflight"];
   readonly updateLocalState: UpdateLocalStateManager;
@@ -2258,6 +2261,41 @@ async function disposeActiveDebugSession(
   if (sessionId !== undefined) await service.manager.revoke(sessionId);
 }
 
+// #2628 — resolve the trust service and managed-LSP control together, then unconditionally
+// wire the revoke-to-restrict propagation. Registering AFTER both are resolved is the only
+// way the injection path (BuildHandlerDepsOptions.workspaceScriptTrust) receives the same
+// propagation the fallback path always did. Legacy trust-service test doubles that do not
+// implement subscribeOnRestricted keep their previous behavior. The returned disposer is
+// threaded through PeripheralManagers so createUiHandlerDispose can drop the listener
+// during teardown — necessary when an injected trust service outlives this assembly
+// (e.g. a shared test double across multiple buildUiHandlerDeps calls) so a later revoke
+// cannot fire into an already-disposed managedLspControl or redactor closure.
+function resolveTrustAndManagedLspControl(args: BuildPeripheralsArgs): {
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly managedLspControl: ManagedLspControlService;
+  readonly disposeTrustLspBridge: () => void;
+} {
+  const workspaceScriptTrust =
+    args.options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: args.uiStore });
+  const managedLspControl =
+    args.options.managedLspControl ??
+    createNodeManagedLspControl({
+      stateDir: args.runtimeStateDir,
+      processEnv: args.options.env,
+      redact: args.liveRedactor,
+      evidenceStore: args.evidenceStore,
+      workspaceTrust: (realRoot): "trusted" | "restricted" =>
+        workspaceScriptTrust.trustLevelForRoot(realRoot),
+    });
+  const unsubscribe = workspaceScriptTrust.subscribeOnRestricted?.((canonicalRoot): void => {
+    propagateManagedLspRestriction(managedLspControl, canonicalRoot, args.liveRedactor);
+  });
+  const disposeTrustLspBridge = (): void => {
+    unsubscribe?.();
+  };
+  return { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge };
+}
+
 // eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
 function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const updateLocalState = args.options.updateLocalState ?? buildUpdateLocalState(args.options.env);
@@ -2269,23 +2307,8 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
   });
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
-  let managedLspControl = args.options.managedLspControl;
-  const workspaceScriptTrust =
-    args.options.workspaceScriptTrust ??
-    createWorkspaceScriptTrustService({
-      store: args.uiStore,
-      onRestricted: (canonicalRoot): void => {
-        propagateManagedLspRestriction(managedLspControl, canonicalRoot, args.liveRedactor);
-      },
-    });
-  managedLspControl ??= createNodeManagedLspControl({
-    stateDir: args.runtimeStateDir,
-    processEnv: args.options.env,
-    redact: args.liveRedactor,
-    evidenceStore: args.evidenceStore,
-    workspaceTrust: (realRoot): "trusted" | "restricted" =>
-      workspaceScriptTrust.trustLevelForRoot(realRoot),
-  });
+  const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
+    resolveTrustAndManagedLspControl(args);
   const debugActivationControl = buildDebugActivationControl(args);
   return {
     terminal: buildTerminalManager({
@@ -2308,6 +2331,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       workspaceScriptTrust,
     }),
     workspaceScriptTrust,
+    disposeTrustLspBridge,
     updateSession: buildUpdateSession({
       injected: args.options.updateSession,
       env: args.options.env,
@@ -3191,6 +3215,7 @@ function createUiHandlerDispose(
       services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
       await shutdownHostLspPool();
       await services.dapProduction?.dispose();
+      services.peripherals.disposeTrustLspBridge();
       services.peripherals.debugActivationControl.dispose();
       services.peripherals.workspaceWatchService.disposeAll();
       args.bundle.dispose?.();
