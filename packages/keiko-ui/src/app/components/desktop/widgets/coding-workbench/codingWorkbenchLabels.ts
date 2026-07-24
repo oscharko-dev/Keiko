@@ -224,6 +224,12 @@ export function visibleAlert(
   t: CodingWorkbenchTranslate,
 ): string | null {
   if (state.mutation.error) return t("codingWorkbench.alert.actionFailed");
+  // A confirmed-unavailable runtime blocks every start. Without the bootstrap setup section on
+  // screen — which happens as soon as a workspace is bound — nothing else names that reason, so the
+  // operator would face a disabled control with no explanation (#2644).
+  if (state.runtime.status === "ready" && state.runtime.value?.runtimeAvailable === false) {
+    return t("codingWorkbench.setup.runtimeUnavailable");
+  }
   for (const [resource, value] of [
     ["authentication", state.profile],
     ["authenticationSetup", state.codexSetup],

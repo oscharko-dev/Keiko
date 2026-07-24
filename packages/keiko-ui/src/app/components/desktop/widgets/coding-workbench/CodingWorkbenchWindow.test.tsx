@@ -234,6 +234,30 @@ describe("CodingWorkbenchWindow", () => {
     expect(document.querySelector("[data-mode]")).toBeNull();
   });
 
+  it("names the blocking reason when a bound workspace meets an unqualified runtime", (): void => {
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "governed-assist",
+            deploymentCeiling: "supervised-coding",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: false,
+            runtimeUnavailableReason: "runtime-unqualified",
+          },
+        },
+      }),
+    );
+
+    // The bootstrap setup section is absent once a workspace is bound, so this is the only place
+    // left that can explain why the start control is disabled.
+    expect(screen.getByRole("alert")).toHaveTextContent(/until the coding runtime is active/u);
+  });
+
   it("keeps a drifted worktree visible in the session context", (): void => {
     renderWorkbench(
       liveState({

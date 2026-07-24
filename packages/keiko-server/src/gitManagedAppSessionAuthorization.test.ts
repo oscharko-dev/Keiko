@@ -236,6 +236,27 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  // The shipped layout puts Keiko's own state inside the selected project (`<project>/.keiko/...`),
+  // so the managed root is routinely an already-denied descendant of the workspace the operator is
+  // working in. Files keeps that ancestor browsable; Git must not answer the operator's own
+  // repository with the content-free unavailable projection meant for Keiko-owned worktrees.
+  it("keeps a project root readable when the managed root sits in its denied .keiko subtree", async (): Promise<void> => {
+    const stateManagedRoot = join(root, ".keiko", "ui", "task-workspaces");
+    await mkdir(stateManagedRoot, { recursive: true });
+    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const dependencies = { ...deps(runner), managedTaskWorkspaceRoot: stateManagedRoot };
+
+    const result = await handleGitStatus(
+      route(`/api/git/status?root=${encodeURIComponent(root)}`),
+      dependencies,
+    );
+
+    // Reaching real membership detection is the point: the route must consult Git about the
+    // ordinary root instead of refusing it as a managed overlap.
+    expect(runner).toHaveBeenCalled();
+    expect(result.status).toBe(200);
+  });
+
   // Regression harness for issue #2640. The runner dispatches on the git subcommand rather than
   // positional call order so behavior-preserving refactors of handleGitSummary's internal call
   // sequence do not silently break these tests, and it throws on any unexpected argument list so

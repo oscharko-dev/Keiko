@@ -205,7 +205,12 @@ export interface ResolveRequestRootOptions {
   readonly managedRootAuthority?: "authorize" | "defer-to-caller";
 }
 
-function requiresManagedRootAuthority(managedRoot: string, candidateRoot: string): boolean {
+/**
+ * Decides whether a candidate root may only be served under managed-workspace authority. Exported
+ * so Git classifies identically to Files: two copies of this rule drifted once already (#2473), and
+ * the divergence made the operator's own repository look unavailable while Files served it.
+ */
+export function requiresManagedRootAuthority(managedRoot: string, candidateRoot: string): boolean {
   if (containsPath(managedRoot, candidateRoot)) return true;
   if (!containsPath(candidateRoot, managedRoot)) return false;
   // Production state may live below the selected workspace only inside its already-denied `.keiko`

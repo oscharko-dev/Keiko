@@ -34,7 +34,12 @@ import {
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
-import { FilesError, resolveRequestRoot, runFilesHandler } from "./files.js";
+import {
+  FilesError,
+  requiresManagedRootAuthority,
+  resolveRequestRoot,
+  runFilesHandler,
+} from "./files.js";
 import { parseGitBlamePorcelain } from "./gitBlameParser.js";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
 
@@ -169,10 +174,7 @@ async function isResolvedManagedRoot(
 ): Promise<boolean> {
   if (managedRoot === undefined) return false;
   const resolvedManagedRoot = await realpath(managedRoot).catch(() => resolve(managedRoot));
-  return (
-    containsPath(resolvedManagedRoot, resolvedTarget) ||
-    containsPath(resolvedTarget, resolvedManagedRoot)
-  );
+  return requiresManagedRootAuthority(resolvedManagedRoot, resolvedTarget);
 }
 
 async function lacksManagedRootReadAuthority(
