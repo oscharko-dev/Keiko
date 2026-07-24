@@ -42,6 +42,7 @@ import type {
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
+import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
   deriveWorkspaceRootRef,
   deriveWorkspaceTrustBinding,
@@ -177,16 +178,35 @@ function manifestForCanonicalRoot(store: UiStore, canonicalRoot: string): Worksp
   return manifest;
 }
 
+/**
+ * ADR-0147 D1 binds trust to "root reference and current filesystem identity digest". Reading the
+ * digest from the persisted manifest satisfies neither half on the decision path: the manifest is
+ * a snapshot, so replacing the directory under the same path leaves the stored digest — and the
+ * derived binding — unchanged, and a granted record silently keeps projecting `trusted` against a
+ * different filesystem object. Re-inspecting the live root here rebuilds the "current" half from
+ * source before every decision; if the digest no longer matches the persisted record,
+ * `invalidatedTrustedRecord` demotes the row deterministically. #2615.
+ */
 function currentTrustBinding(
   store: UiStore,
   canonicalRoot: string,
   basis: WorkspaceFact<WorkspaceTrustBasisDigest>,
 ): WorkspaceTrustBinding {
-  return deriveWorkspaceTrustBinding(
-    canonicalRoot,
-    basis,
-    manifestForCanonicalRoot(store, canonicalRoot),
-  );
+  const manifest = manifestForCanonicalRoot(store, canonicalRoot);
+  let liveIdentityDigest: WorkspaceTrustBinding["rootIdentityDigest"];
+  try {
+    liveIdentityDigest = inspectWorkspaceRootIdentity(canonicalRoot).identityDigest;
+  } catch {
+    // The path was resolvable at resolveCanonicalRoot() but the live identity cannot be read now
+    // (removed, replaced with a non-directory, or an alias appeared). This is state-unavailable
+    // (ADR-0147 D9): the coded error maps to a typed 503 in mutation flows and, via the outer
+    // try in isTrusted, to fail-closed restricted in the decision flow.
+    throw new WorkspaceScriptTrustError(
+      "WORKSPACE_STATE_UNAVAILABLE",
+      "The workspace state for this project is unavailable.",
+    );
+  }
+  return deriveWorkspaceTrustBinding(canonicalRoot, basis, manifest, liveIdentityDigest);
 }
 
 // Preserves the pre-#2521 canonicalization and single-root assertion exactly: the project must be

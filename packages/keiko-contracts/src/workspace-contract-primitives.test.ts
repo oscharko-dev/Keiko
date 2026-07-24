@@ -127,6 +127,24 @@ describe("workspace contract primitives", () => {
     expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "C:\\work\\app"])).toBe(true);
   });
 
+  it("folds POSIX case in overlap comparison so one directory cannot split trust bindings (#2615)", () => {
+    // macOS APFS/HFS+ and case-insensitive Linux mounts open one filesystem directory under many
+    // case variants. Without case folding here a manifest could list `[/Users/Alice/proj,
+    // /users/alice/proj]` as distinct canonical roots and mint two independent trust states over
+    // the same directory. Case-sensitive Linux paths that legitimately differ only in case lose
+    // nothing by being rejected as overlapping — the failure closes trust.
+    expect(workspaceCanonicalRootsDoNotOverlap(["/Users/Alice/proj", "/users/alice/proj"])).toBe(
+      false,
+    );
+    expect(
+      workspaceCanonicalRootsDoNotOverlap(["/Users/Alice/proj", "/USERS/ALICE/PROJ/child"]),
+    ).toBe(false);
+    expect(workspaceCanonicalRootsDoNotOverlap(["/work/App", "/work/app/child"])).toBe(false);
+    // Distinct paths that only share a case-fold on a proper prefix are still allowed: one root
+    // ends the prefix at a segment boundary, the other does not.
+    expect(workspaceCanonicalRootsDoNotOverlap(["/work/App", "/work/application"])).toBe(true);
+  });
+
   it("rejects Win32 trailing-dot / trailing-space segment aliases that CreateFile strips (#2285)", () => {
     // CreateFile strips a trailing `.` or space from each path segment: `C:\work\app` and
     // `C:\work\app.` open the same directory, and so do `C:\work\app` and `C:\work\app `.

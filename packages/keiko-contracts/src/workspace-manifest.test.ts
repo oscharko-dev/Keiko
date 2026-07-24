@@ -113,6 +113,23 @@ describe("workspace manifest", () => {
     ).toBe(false);
   });
 
+  it("rejects alias-equivalent POSIX canonical roots differing only in case (#2615)", () => {
+    // The M11 security review claims that alias-equivalent identity is rejected
+    // (row CROSS-ROOT-OVERLAP). Case-fold overlap detection in the contract-primitives layer
+    // enforces this at the manifest boundary: two spellings of one directory cannot appear as
+    // distinct roots.
+    const roots = validManifest().roots;
+    expect(
+      validateWorkspaceManifest({
+        ...validManifest(),
+        roots: [
+          { ...roots[0], canonicalRoot: "/Users/Alice/proj" },
+          { ...roots[1], canonicalRoot: "/users/alice/proj/child" },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
   it("enforces root count, display-name, source-fact, and schema bounds", () => {
     const roots = Array.from({ length: WORKSPACE_MANIFEST_MAX_ROOTS + 1 }, (_, position) =>
       rootAt(position),

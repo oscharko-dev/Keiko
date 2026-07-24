@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -282,6 +282,31 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     trust.grant(root);
     rmSync(root, { recursive: true, force: true });
     expect(trust.isTrusted(root, workspace)).toBe(false);
+  });
+
+  it("invalidates the grant when the root directory is replaced at the same path (#2615)", () => {
+    // ADR-0147 D1 binds trust to "root reference and current filesystem identity digest". The
+    // decision path used to derive the binding from the persisted manifest, which is a snapshot;
+    // replacing the directory under the same path left the stored digest unchanged and the grant
+    // silently kept projecting `trusted` against a different filesystem object. The fix
+    // re-inspects the live root identity on every decision, so a swap fails closed with a
+    // content-free `identity-changed` reason.
+    const trust = createWorkspaceScriptTrustService({ store });
+    trust.grant(root);
+    expect(typecheckTrustState(trust)).toBe("trusted");
+    const originalInode = statSync(root).ino;
+
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
+    // Prove the same path really is a different filesystem object.
+    expect(statSync(root).ino).not.toBe(originalInode);
+
+    expect(typecheckTrustState(trust)).toBe("approval-required");
+    const row = store.readWorkspaceTrustRecord(rootReference());
+    expect(row?.trust).toBe("restricted");
+    const record = JSON.parse(row?.recordJson ?? "{}") as { reason?: string };
+    expect(record.reason).toBe("identity-changed");
   });
 
   it("persists a content-free restricted invalidation when the manifest digest changes", () => {

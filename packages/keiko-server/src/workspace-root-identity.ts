@@ -55,7 +55,11 @@ export function workspaceRootIdentityDigestFor(
 export function inspectWorkspaceRootIdentity(path: string): WorkspaceRootIdentity {
   const supplied = lstatSync(path);
   if (supplied.isSymbolicLink()) throw new Error("WORKSPACE_ROOT_ALIAS_DENIED");
-  const canonicalRoot = realpathSync(path);
+  // `.native` (#2615) returns the on-disk canonical spelling on case-insensitive filesystems.
+  // Otherwise the caller's casing survives realpath, and the same directory keyed as
+  // `/Users/Alice/proj` and `/users/alice/proj` produces distinct identity digests and root
+  // references — two independent trust states over one filesystem object.
+  const canonicalRoot = realpathSync.native(path);
   const stat = lstatSync(canonicalRoot);
   if (!stat.isDirectory()) throw new Error("WORKSPACE_ROOT_INVALID");
   const identityDigest = framedDigest("keiko.m11.root-identity.fs.v1", [
