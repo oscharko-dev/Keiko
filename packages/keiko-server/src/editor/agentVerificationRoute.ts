@@ -25,10 +25,12 @@ import {
   toRedactedVerificationReport,
   type CodingWorkbenchMode,
   type EditorAgentAction,
+  type EditorAgentActionDenyReason,
   type EditorAgentActionPolicyDecision,
   type EditorAgentActionStatus,
   type EditorAgentSessionSnapshot,
   type EditorAgentVerificationRunRequest,
+  type WorkspaceTrustLevel,
 } from "@oscharko-dev/keiko-contracts";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { recordEditorAgentActionAudit } from "./agentActionAudit.js";
@@ -39,6 +41,11 @@ import type { VerificationRunInput, VerificationRunnerManager } from "./verifica
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { readJsonObject } from "../files.js";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  editorAgentPathBoundaryReason,
+  resolveEditorAgentActionRoot,
+  type EditorAgentRootBoundaryReason,
+} from "./agentRootBoundary.js";
 
 const MAX_AGENT_VERIFICATION_BODY_BYTES = 8_000;
 
@@ -53,6 +60,10 @@ interface RequestLifecycle {
   readonly signal: AbortSignal;
   readonly dispose: () => void;
 }
+
+type RootedVerificationRequest =
+  | { readonly ok: true; readonly request: EditorAgentVerificationRunRequest }
+  | { readonly ok: false; readonly reason: EditorAgentRootBoundaryReason };
 
 // readJsonObject returns a RouteResult (an error response) or the parsed object; mirror the file-local
 // guard used by files.ts/agentRoutes.ts (neither exports it) to narrow without a shared dependency.
@@ -89,6 +100,7 @@ function syntheticVerificationAction(
     actionId,
     idempotencyKey: actionId,
     sessionId: request.sessionId,
+    ...(request.rootBinding === undefined ? {} : { rootBinding: request.rootBinding }),
     type: "requestVerification",
     authorityRef: request.authorityRef,
     ...(request.targetPath === undefined ? {} : { target: { file: request.targetPath } }),
@@ -97,7 +109,7 @@ function syntheticVerificationAction(
 
 function denyByAuthority(
   baseline: EditorAgentActionPolicyDecision,
-  reason: "authority-invalid" | "authority-expired" | "authority-budget-exceeded",
+  reason: EditorAgentActionDenyReason,
 ): EditorAgentActionPolicyDecision {
   return {
     disposition: "denied",
@@ -105,6 +117,19 @@ function denyByAuthority(
     origin: baseline.origin,
     denyReason: reason,
   };
+}
+
+function verificationWorkspaceTrust(
+  deps: UiHandlerDeps,
+  workspaceRoot: string,
+): WorkspaceTrustLevel {
+  try {
+    return deps.workspaceScriptTrust?.trustLevelForRoot(workspaceRoot) === "trusted"
+      ? "trusted"
+      : "restricted";
+  } catch {
+    return "restricted";
+  }
 }
 
 // classify → (resolve envelope) → compose, in the exact order decideActionPolicy uses. "execution" is
@@ -144,6 +169,7 @@ function decideVerificationPolicy(
     baseline,
     resolution.envelope,
     EDITOR_AGENT_ACTION_APPROVAL_RISK.requestVerification,
+    verificationWorkspaceTrust(deps, snapshot.workspaceRoot),
   );
 }
 
@@ -185,6 +211,14 @@ function auditVerification(
       sessionId: request.sessionId,
       actionId: syntheticVerificationAction(request).actionId,
       actionType: "requestVerification",
+      ...(request.rootBinding === undefined
+        ? {}
+        : {
+            rootAttribution: {
+              rootRef: request.rootBinding.rootRef,
+              rootIdentityDigest: request.rootBinding.rootIdentityDigest,
+            },
+          }),
       decision,
       outcome,
       ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
@@ -269,8 +303,11 @@ async function admitAndRun(
   lifecycle: RequestLifecycle,
   ports: AgentVerificationRoutePorts,
 ): Promise<RouteResult> {
-  const decision = (ports.decide ?? decideVerificationPolicy)(request, snapshot, deps);
+  const rooted = bindVerificationRoot(request, snapshot, deps.store);
   const audit = ports.audit ?? recordEditorAgentActionAudit;
+  if (!rooted.ok) return rejectVerificationRoot(request, snapshot, rooted.reason, audit);
+  request = rooted.request;
+  const decision = (ports.decide ?? decideVerificationPolicy)(request, snapshot, deps);
   if (decision.disposition !== "allowed") {
     return auditVerification(request, decision, "conflict", audit)
       ? notRunResult(decision)
@@ -282,11 +319,63 @@ async function admitAndRun(
       ? notRunResult(denied)
       : auditFailure();
   }
+  const finalRoot = bindVerificationRoot(request, snapshot, deps.store);
+  if (!finalRoot.ok) {
+    rollbackVerificationReservation(request);
+    return rejectVerificationRoot(request, snapshot, finalRoot.reason, audit);
+  }
+  request = finalRoot.request;
   if (!auditVerification(request, decision, "queued", audit)) {
     rollbackVerificationReservation(request);
     return auditFailure();
   }
   return runAndRespond(runner, request, snapshot, lifecycle.signal);
+}
+
+function bindVerificationRoot(
+  request: EditorAgentVerificationRunRequest,
+  snapshot: EditorAgentSessionSnapshot,
+  store: UiHandlerDeps["store"],
+): RootedVerificationRequest {
+  const root = resolveEditorAgentActionRoot(snapshot, request.rootBinding, store);
+  if (!root.ok) return root;
+  const reason = editorAgentPathBoundaryReason(
+    root.root,
+    request.targetPath === undefined ? [] : [request.targetPath],
+  );
+  if (reason !== null) return { ok: false, reason };
+  return {
+    ok: true,
+    request:
+      root.root.binding === undefined ? request : { ...request, rootBinding: root.root.binding },
+  };
+}
+
+function rejectVerificationRoot(
+  request: EditorAgentVerificationRunRequest,
+  snapshot: EditorAgentSessionSnapshot,
+  reason: EditorAgentRootBoundaryReason,
+  audit: AuditWriter,
+): RouteResult {
+  const denied = verificationRootDenial(request, reason);
+  const attributed =
+    snapshot.rootBinding === undefined
+      ? request
+      : { ...request, rootBinding: snapshot.rootBinding };
+  return auditVerification(attributed, denied, "conflict", audit)
+    ? notRunResult(denied)
+    : auditFailure();
+}
+
+function verificationRootDenial(
+  request: EditorAgentVerificationRunRequest,
+  reason: EditorAgentRootBoundaryReason,
+): EditorAgentActionPolicyDecision {
+  const target = verificationActionTarget(request.targetPath);
+  return denyByAuthority(
+    classifyEditorAgentAction("requestVerification", { ...target, origin: "agent" }),
+    reason,
+  );
 }
 
 async function handleWithLifecycle(

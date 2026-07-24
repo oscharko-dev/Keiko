@@ -20,6 +20,8 @@ import {
   type DebugCapsuleLayer2Input,
   type DebugCapsuleLayer2Validator,
 } from "./debugCapsulePlan.js";
+import { inspectDebugWorkspaceIdentity } from "./debugLaunchContext.js";
+import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 import {
   assertDebugTargetCandidate,
   assertDebugLaunchEnvironment,
@@ -175,19 +177,9 @@ function fixture(): {
   const context: DebugLaunchRuntimeContext = {
     workspaceRoot,
     canonicalWorkspaceRoot: workspaceRoot,
-    workspaceIdentity: ((): DebugLaunchRuntimeContext["workspaceIdentity"] => {
-      const stat = lstatSync(workspaceRoot);
-      return {
-        realPath: workspaceRoot,
-        identityDigest: createHash("sha256")
-          .update(JSON.stringify([workspaceRoot, stat.dev, stat.ino, stat.mode, stat.uid]))
-          .digest("hex"),
-        device: stat.dev,
-        inode: stat.ino,
-        mode: stat.mode,
-        ownerUid: stat.uid,
-      };
-    })(),
+    // Built by the production producer, never re-derived here: a hand-rolled digest in this
+    // fixture is exactly what hid the producer/validator drift that broke the #2348 journey.
+    workspaceIdentity: inspectDebugWorkspaceIdentity(workspaceRoot),
     workspaceTrusted: true,
     projectId: "partition_a",
     fs: nodeWorkspaceFs,
@@ -790,6 +782,33 @@ describe("stateless debug launch Layer-2 planning", () => {
     }
     writeFileSync(closurePath, "runtime-library-drift", "utf8");
     await expectDenied(closedContext, input);
+  });
+
+  it("accepts the workspace identity emitted by the production producer", () => {
+    // Regression: the M11 root-identity migration moved the producer to the shared framed digest
+    // while the validator kept re-deriving the legacy sha256(JSON.stringify([...])) form. Every
+    // real launch then failed INVALID_CAPSULE_PLAN even though the workspace was untampered.
+    const { context, input } = fixture();
+    const produced = inspectDebugWorkspaceIdentity(context.canonicalWorkspaceRoot);
+    expect(produced.identityDigest).toBe(
+      inspectWorkspaceRootIdentity(context.canonicalWorkspaceRoot).identityDigest,
+    );
+    expect(() => {
+      validateDebugLaunchContext(input, { ...context, workspaceIdentity: produced });
+    }).not.toThrow();
+    expect(produced.identityDigest).not.toBe(
+      createHash("sha256")
+        .update(
+          JSON.stringify([
+            produced.realPath,
+            produced.device,
+            produced.inode,
+            produced.mode,
+            produced.ownerUid,
+          ]),
+        )
+        .digest("hex"),
+    );
   });
 
   it("rejects each independent runtime and workspace identity drift", async () => {

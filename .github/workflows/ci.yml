@@ -14,6 +14,7 @@ on:
       - feat/keiko-isolated-task-workspaces
       - feat/keiko-colleague-like-voice-dialogue-mode
       - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - "release/**"
@@ -30,6 +31,7 @@ on:
       - feat/keiko-isolated-task-workspaces
       - feat/keiko-colleague-like-voice-dialogue-mode
       - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - "release/**"
@@ -51,7 +53,7 @@ jobs:
       - name: Confirm dev branch gate
         run: |
           case "${GITHUB_REF}:${GITHUB_BASE_REF}" in
-            refs/heads/dev: | refs/heads/feat/dev: | refs/heads/feat/epic-open-code-engine-in-keiko-2473: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/feat/epic-memoria-viva-2538: | refs/heads/epic/coding-workbench-opencode-codex: | refs/heads/release/*: | *:dev | *:feat/dev | *:feat/epic-open-code-engine-in-keiko-2473 | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:feat/epic-memoria-viva-2538 | *:epic/coding-workbench-opencode-codex | *:release/*)
+            refs/heads/dev: | refs/heads/feat/dev: | refs/heads/feat/epic-open-code-engine-in-keiko-2473: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/feat/epic-built-in-editor-2285-M11: | refs/heads/feat/epic-memoria-viva-2538: | refs/heads/epic/coding-workbench-opencode-codex: | refs/heads/release/*: | *:dev | *:feat/dev | *:feat/epic-open-code-engine-in-keiko-2473 | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:feat/epic-built-in-editor-2285-M11 | *:feat/epic-memoria-viva-2538 | *:epic/coding-workbench-opencode-codex | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
             *)
@@ -631,6 +633,9 @@ jobs:
       - name: Governed editor debugging E2E (#2348)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-debugging-2348
+      - name: M11 mixed-trust multi-root closeout E2E (#2533)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:e2e:editor-m11-closeout-2533
       - name: Refresh workspace performance evidence
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: |

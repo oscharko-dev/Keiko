@@ -140,6 +140,7 @@ import {
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_SCHEMA_VERSION,
   type EditorAgentDiagnosticsDetail,
+  type EditorAgentRootBinding,
   isEditorAgentActiveBufferActionType,
 } from "@oscharko-dev/keiko-contracts/editor-agent";
 import conflictStyles from "./EditorConflicts.module.css";
@@ -206,6 +207,7 @@ import type {
 } from "../../../../../lib/types";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
+
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import {
   useRegisterWorkspaceReplaceBuffer,
@@ -233,6 +235,7 @@ import {
 } from "./editorAgentBridge";
 import { buildEditorAgentChangesetPatch } from "./editorAgentChangeset";
 import EditorDiffSurface from "./EditorDiffSurface";
+import type { EditorFileHistoryPanelProps } from "./EditorFileHistoryPanel";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import {
   createEditorSemanticTokensHost,
@@ -274,6 +277,8 @@ import {
   safeDomIdSegment,
 } from "./editorDocumentUri";
 
+const RestoreIcon = Icons.restore;
+
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
   ssr: false,
   loading: () => <div className="ed-host-loading" aria-hidden="true" />,
@@ -284,6 +289,11 @@ const EditorDebugSessionHost = dynamic<
 >(() => import("./EditorDebugSessionHost").then((mod) => mod.EditorDebugSessionHost), {
   ssr: false,
 });
+
+const EditorFileHistoryPanel = dynamic<EditorFileHistoryPanelProps>(
+  () => import("./EditorFileHistoryPanel").then((module) => module.EditorFileHistoryPanel),
+  { ssr: false },
+);
 
 const EDITOR_REVIEW_SURFACE_STYLE: CSSProperties = {
   display: "flex",
@@ -587,10 +597,13 @@ interface EditorTabInsertTarget {
 
 export interface EditorRuntimeWidgetProps {
   readonly windowId?: string | undefined;
+  /** Keeps runtime state while omitting the inactive root's Monaco surface. */
+  readonly sessionActive?: boolean | undefined;
   readonly paneId?: string | undefined;
   readonly activePaneId?: string | undefined;
   readonly layoutPanes?: readonly EditorAgentPaneSnapshot[] | undefined;
   readonly root?: string;
+  readonly agentRootBinding?: EditorAgentRootBinding | undefined;
   readonly file?: string;
   readonly openFiles?: readonly string[] | undefined;
   readonly revealLineStart?: number | undefined;
@@ -638,6 +651,8 @@ export interface EditorRuntimeWidgetProps {
   readonly onOutlineStateChange?:
     ((paneId: string, snapshot: EditorOutlineSnapshot) => void) | undefined;
   readonly outlineRevealRequest?: EditorOutlineRevealRequest | undefined;
+  /** Monotonic palette request for opening this pane's active file history. */
+  readonly fileHistoryRequestNonce?: number | undefined;
   /** Opens the transient bounded debug projection for this editor's resolved workspace. */
   readonly onOpenDebugPanel?: (() => void) | undefined;
 }
@@ -1428,6 +1443,14 @@ function agentReviewDecisionRequest(
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       actionId: action.actionId,
       sessionId: action.sessionId,
+      ...(action.rootBinding === undefined
+        ? {}
+        : {
+            rootAttribution: {
+              rootRef: action.rootBinding.rootRef,
+              rootIdentityDigest: action.rootBinding.rootIdentityDigest,
+            },
+          }),
       status,
       ...(message === undefined ? {} : { message }),
     },
@@ -1671,6 +1694,15 @@ function recoverySnapshotChanged(
   );
 }
 
+function tabAriaLabel(
+  path: string,
+  conflictCount: number,
+  sourceControlT: ReturnType<typeof useEditorSourceControlTranslate>,
+): string {
+  if (conflictCount === 0) return path;
+  return `${path}, ${sourceControlT("conflicts.statusAria", { count: conflictCount })}`;
+}
+
 function whenEnabled<T>(enabled: boolean, value: T): T | undefined {
   return enabled ? value : undefined;
 }
@@ -1709,10 +1741,12 @@ function editorLoadErrorMessage(hasTarget: boolean, state: KeikoEditorLoadState)
 
 function EditorRuntimeWidget({
   windowId,
+  sessionActive = true,
   paneId,
   activePaneId,
   layoutPanes,
   root,
+  agentRootBinding,
   file,
   revealLineStart,
   revealLineEnd,
@@ -1742,7 +1776,9 @@ function EditorRuntimeWidget({
   linkedCapsuleSetIds,
   onOutlineStateChange,
   outlineRevealRequest,
+  fileHistoryRequestNonce,
   onOpenDebugPanel,
+  heldTabFile,
 }: EditorRuntimeWidgetProps): ReactNode {
   const commonT = useTranslate();
   const sourceControlT = useEditorSourceControlTranslate();
@@ -1786,7 +1822,12 @@ function EditorRuntimeWidget({
     return () => {
       liveEditorRuntimeInstances -= 1;
       if (liveEditorRuntimeInstances === 0) {
-        disposeAllUnattachedEditorModels("shutdown");
+        // A multi-root focus switch unmounts the inactive Monaco child and mounts the next root in
+        // one React commit. Defer final-window cleanup until after that commit's effects so the
+        // transient zero does not destroy retained dirty models between sibling root sessions.
+        queueMicrotask(() => {
+          if (liveEditorRuntimeInstances === 0) disposeAllUnattachedEditorModels("shutdown");
+        });
       }
     };
   }, []);
@@ -1966,6 +2007,11 @@ function EditorRuntimeWidget({
   );
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
+  const [fileHistoryOpen, setFileHistoryOpen] = useState(false);
+  useEffect(() => {
+    if (fileHistoryRequestNonce !== undefined) setFileHistoryOpen(true);
+  }, [fileHistoryRequestNonce]);
+  useEffect(() => setFileHistoryOpen(false), [file, root]);
   const [formatRequestNonce, setFormatRequestNonce] = useState(0);
   const [gitGutterRefreshNonce, setGitGutterRefreshNonce] = useState(0);
   const [gitGutterPeek, setGitGutterPeek] = useState<EditorGitGutterPeek | null>(null);
@@ -2725,7 +2771,7 @@ function EditorRuntimeWidget({
   );
 
   const persist = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (text: string, historyOrigin?: "pre-restore"): Promise<boolean> => {
       if (!hasTarget || savingRef.current) return false;
       const saveSessionKey = documentSessionKey(root, file);
       const textChangedBeforeReactCommitted = text !== contentRef.current;
@@ -2747,6 +2793,7 @@ function EditorRuntimeWidget({
           content: textToSave,
           // Version-aware token (Issue #1197); supersedes the coarser mtime-only check.
           baseVersion: versionRef.current ?? undefined,
+          ...(historyOrigin === undefined ? {} : { historyOrigin }),
         });
         recentLocalWriteRef.current = {
           sessionKey: saveSessionKey,
@@ -2782,6 +2829,20 @@ function EditorRuntimeWidget({
       settleActiveSave,
       settleInactiveSave,
     ],
+  );
+
+  const restoreHistoryContent = useCallback(
+    async (checkpointContent: string): Promise<boolean> => {
+      if (dirtyRef.current) {
+        setAgentConflict({
+          code: "DIRTY",
+          message: commonT("editor.fileHistory.dirtyConflict"),
+        });
+        return false;
+      }
+      return persist(checkpointContent, "pre-restore");
+    },
+    [commonT, persist],
   );
 
   const onContentChange = useCallback(
@@ -4336,6 +4397,7 @@ function EditorRuntimeWidget({
         sessionId: agentSessionId,
         windowId: windowId ?? "editor",
         workspaceRoot: root,
+        ...(agentRootBinding === undefined ? {} : { rootBinding: agentRootBinding }),
         activePaneId: effectiveAgentPaneId,
         panes: layoutPanes ?? [
           {
@@ -4398,6 +4460,7 @@ function EditorRuntimeWidget({
     },
     [
       activeContentHash,
+      agentRootBinding,
       agentSessionId,
       currentSelection,
       cursor,
@@ -5821,8 +5884,48 @@ function EditorRuntimeWidget({
   const workspaceWatchNeedsAttention =
     workspaceWatch.health !== "healthy" || workspaceWatch.snapshotRequired;
 
+  const renderSummaryTabItem = (path: string): ReactNode => {
+    const tabDirty = effectiveDirtyFiles.has(path);
+    const tabHandle = renderTabHandle?.(path, false, tabDirty, {
+      onDragModeStart: () => setSummaryMenuOpen(false),
+    });
+    return (
+      <button
+        type="button"
+        key={path}
+        className="ed-tab-summary-item"
+        draggable={tabHandle?.draggable}
+        data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+        data-tab-held={tabHandle?.["data-tab-held"]}
+        onClickCapture={tabHandle?.onClickCapture}
+        onDragStart={tabHandle?.onDragStart}
+        onDragEnd={tabHandle?.onDragEnd}
+        onPointerDown={tabHandle?.onPointerDown}
+        onKeyDown={tabHandle?.onKeyDown}
+        onClick={() => handleChooseSummaryTab(path)}
+      >
+        <FileIcon name={path} />
+        <span className="ed-tab-summary-label">{path}</span>
+        {tabDirty ? (
+          <span className="ed-dirty" aria-hidden="true">
+            ●
+          </span>
+        ) : null}
+      </button>
+    );
+  };
+
   const renderOpenDocumentTabs = (): ReactNode => (
-    <div className="ed-tablist" ref={tablistRef} role="tablist" aria-label="Open documents">
+    <div
+      className="ed-tablist"
+      ref={tablistRef}
+      role="tablist"
+      aria-label="Open documents"
+      // GEN-PERF-EDITOR-003: the held-file scalar exists to trip React.memo for the one pane whose
+      // tab visual must repaint; surfacing it as a DOM marker is its one real read and gives the
+      // drag e2e a stable observation point.
+      data-held-tab-file={heldTabFile}
+    >
       {visibleTabs.length > 0 ? (
         visibleTabs.map((path) => {
           const active = path === file;
@@ -5863,11 +5966,7 @@ function EditorRuntimeWidget({
                 data-merge-conflicts={
                   tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)
                 }
-                aria-label={
-                  tabConflictCount > 0
-                    ? `${path}, ${sourceControlT("conflicts.statusAria", { count: tabConflictCount })}`
-                    : path
-                }
+                aria-label={tabAriaLabel(path, tabConflictCount, sourceControlT)}
                 onClickCapture={tabHandle?.onClickCapture}
                 onDragStart={tabHandle?.onDragStart}
                 onDragEnd={tabHandle?.onDragEnd}
@@ -5947,41 +6046,36 @@ function EditorRuntimeWidget({
             id={summaryMenuId}
             aria-label="Hidden open documents"
           >
-            {summaryTabs.map((path) => {
-              const tabDirty = effectiveDirtyFiles.has(path);
-              const tabHandle = renderTabHandle?.(path, false, tabDirty, {
-                onDragModeStart: () => setSummaryMenuOpen(false),
-              });
-              return (
-                <button
-                  type="button"
-                  key={path}
-                  className="ed-tab-summary-item"
-                  draggable={tabHandle?.draggable}
-                  data-tab-draggable={tabHandle?.["data-tab-draggable"]}
-                  data-tab-held={tabHandle?.["data-tab-held"]}
-                  onClickCapture={tabHandle?.onClickCapture}
-                  onDragStart={tabHandle?.onDragStart}
-                  onDragEnd={tabHandle?.onDragEnd}
-                  onPointerDown={tabHandle?.onPointerDown}
-                  onKeyDown={tabHandle?.onKeyDown}
-                  onClick={() => handleChooseSummaryTab(path)}
-                >
-                  <FileIcon name={path} />
-                  <span className="ed-tab-summary-label">{path}</span>
-                  {tabDirty ? (
-                    <span className="ed-dirty" aria-hidden="true">
-                      ●
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+            {summaryTabs.map((path) => renderSummaryTabItem(path))}
           </div>
         </details>
       ) : null}
     </div>
   );
+
+  const handleGenerateTestsClick = (): void => {
+    if (canGenerateTests) {
+      runTestGeneration();
+      return;
+    }
+    announceToolbarNotice(
+      testGenBusy
+        ? "Test generation is already running."
+        : "Test generation is unavailable for this file.",
+    );
+  };
+
+  const handleFormatClick = (): void => {
+    if (canFormat) setFormatRequestNonce((value) => value + 1);
+    else announceToolbarNotice("Formatting is unavailable for this file.");
+  };
+
+  const handleSaveClick = (): void => {
+    if (canSave) void persist(content);
+    else announceToolbarNotice(saveUnavailableReason());
+  };
+  const saveButtonLabel =
+    saveStatus === "saving" ? commonT("common.saving") : commonT("common.save");
 
   const renderEditorToolbar = (): ReactNode => (
     <div className="ed-toolbar-actions">
@@ -5994,6 +6088,18 @@ function EditorRuntimeWidget({
           aria-label={sourceControlT("gitDiff.openLabel")}
         >
           {sourceControlT("gitDiff.open")}
+        </button>
+      ) : null}
+      {hasTarget ? (
+        <button
+          type="button"
+          className="ed-reload"
+          aria-label={commonT("editor.fileHistory.open")}
+          aria-expanded={fileHistoryOpen}
+          onClick={() => setFileHistoryOpen((open) => !open)}
+        >
+          <RestoreIcon size={13} />
+          {commonT("editor.fileHistory.title")}
         </button>
       ) : null}
       {hasTarget ? (
@@ -6013,15 +6119,7 @@ function EditorRuntimeWidget({
         <button
           type="button"
           className="ed-save ed-generate-tests"
-          onClick={() => {
-            if (canGenerateTests) runTestGeneration();
-            else
-              announceToolbarNotice(
-                testGenBusy
-                  ? "Test generation is already running."
-                  : "Test generation is unavailable for this file.",
-              );
-          }}
+          onClick={handleGenerateTestsClick}
           aria-disabled={canGenerateTests ? "false" : "true"}
         >
           Tests
@@ -6036,10 +6134,7 @@ function EditorRuntimeWidget({
         <button
           type="button"
           className="ed-save"
-          onClick={() => {
-            if (canFormat) setFormatRequestNonce((value) => value + 1);
-            else announceToolbarNotice("Formatting is unavailable for this file.");
-          }}
+          onClick={handleFormatClick}
           aria-disabled={canFormat ? "false" : "true"}
         >
           Format
@@ -6054,13 +6149,10 @@ function EditorRuntimeWidget({
         <button
           type="button"
           className="ed-save"
-          onClick={() => {
-            if (canSave) void persist(content);
-            else announceToolbarNotice(saveUnavailableReason());
-          }}
+          onClick={handleSaveClick}
           aria-disabled={saveUnavailable}
         >
-          {saveStatus === "saving" ? commonT("common.saving") : commonT("common.save")}
+          {saveButtonLabel}
         </button>
       ) : null}
     </div>
@@ -6250,6 +6342,16 @@ function EditorRuntimeWidget({
       ) : null}
       <div className="ed-host" id={tabpanelId} role="tabpanel" aria-labelledby={tabId}>
         {panel}
+        {fileHistoryOpen && root !== undefined && file !== undefined ? (
+          <EditorFileHistoryPanel
+            root={root}
+            file={file}
+            currentContent={content}
+            dirty={dirty}
+            onClose={() => setFileHistoryOpen(false)}
+            onRestore={restoreHistoryContent}
+          />
+        ) : null}
       </div>
       {showUnifiedStatusBar && statusBarViewModel !== null ? (
         <EditorStatusBar viewModel={statusBarViewModel} />
@@ -6257,7 +6359,7 @@ function EditorRuntimeWidget({
     </div>
   );
 
-  return renderEditorChrome();
+  return sessionActive ? renderEditorChrome() : null;
 }
 
 /**

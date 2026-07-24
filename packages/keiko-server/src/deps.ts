@@ -51,7 +51,11 @@ import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
-import type { ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -105,6 +109,10 @@ import {
   createMemoryAuditHandler,
 } from "./memory-audit-handler.js";
 import { createEditorHotExitStore, type EditorHotExitStore } from "./editor/hotExitStore.js";
+import {
+  createEditorLocalHistoryStore,
+  type EditorLocalHistoryStore,
+} from "./editor/localHistory/localHistoryStore.js";
 import {
   createConsolidationJobRegistry,
   type ConsolidationJobRegistry,
@@ -509,6 +517,9 @@ export interface UiHandlerDeps {
   // Server-owned encrypted editor recovery storage. The browser stores only metadata and an opaque
   // reference in IndexedDB.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
+  // ADR-0147 D7 — server-owned encrypted, bounded file checkpoints. This is intentionally
+  // independent from hot-exit recovery and from Code-task history.
+  readonly editorLocalHistoryStore?: EditorLocalHistoryStore | undefined;
   // Server-authoritative identity and scope bounds for privacy-critical MemoriaViva mutations.
   // Loopback production wiring resolves this from the single local operator; hosted/auth-aware
   // deployments must inject the authenticated principal's reviewer id and authorized scopes.
@@ -755,6 +766,9 @@ export interface BuildHandlerDepsOptions {
   // Optional injected editor hot-exit store (tests); production creates an encrypted local vault
   // under the UI state directory.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
+  // Optional injected editor local-history store (tests); production creates one dedicated vault
+  // namespace under the runtime state directory.
+  readonly editorLocalHistoryStore?: EditorLocalHistoryStore | undefined;
   // Optional published DAP service. Activation only uses this bounded revocation seam; it never
   // reaches into adapter transport or launch internals.
   readonly dapDebug?: DapDebugRouteService | undefined;
@@ -1334,6 +1348,30 @@ function buildVerificationRunner(options: {
   });
 }
 
+function propagateManagedLspRestriction(
+  control: ManagedLspControlService | undefined,
+  canonicalRoot: string,
+  redact: Redactor,
+): void {
+  const pending = control?.restrict(canonicalRoot);
+  if (pending === undefined) return;
+  void pending.catch((error: unknown): void => {
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: "managed-lsp-trust-restriction",
+        operation: "managed-lsp.trust.restrict",
+        source: "managed-lsp-control",
+        error,
+        redact: (message): string => {
+          const redacted = redact(message);
+          return typeof redacted === "string" ? redacted : "[REDACTED]";
+        },
+      }),
+    );
+  });
+}
+
 function buildUpdateSession(options: {
   readonly injected?: UpdateSessionManager | undefined;
   readonly env: EnvSource;
@@ -1755,6 +1793,7 @@ interface PeripheralManagers {
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
   readonly editorHotExitStore: EditorHotExitStore;
+  readonly editorLocalHistoryStore: EditorLocalHistoryStore;
   readonly managedLspControl: ManagedLspControlService;
   readonly debugActivationControl: DebugActivationControlService;
   readonly editorSettingsControl: EditorSettingsControlService;
@@ -2229,16 +2268,23 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
   });
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
+  let managedLspControl = args.options.managedLspControl;
   const workspaceScriptTrust =
-    args.options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: args.uiStore });
-  const managedLspControl =
-    args.options.managedLspControl ??
-    createNodeManagedLspControl({
-      stateDir: args.runtimeStateDir,
-      processEnv: args.options.env,
-      redact: args.liveRedactor,
-      evidenceStore: args.evidenceStore,
+    args.options.workspaceScriptTrust ??
+    createWorkspaceScriptTrustService({
+      store: args.uiStore,
+      onRestricted: (canonicalRoot): void => {
+        propagateManagedLspRestriction(managedLspControl, canonicalRoot, args.liveRedactor);
+      },
     });
+  managedLspControl ??= createNodeManagedLspControl({
+    stateDir: args.runtimeStateDir,
+    processEnv: args.options.env,
+    redact: args.liveRedactor,
+    evidenceStore: args.evidenceStore,
+    workspaceTrust: (realRoot): "trusted" | "restricted" =>
+      workspaceScriptTrust.trustLevelForRoot(realRoot),
+  });
   const debugActivationControl = buildDebugActivationControl(args);
   return {
     terminal: buildTerminalManager({
@@ -2287,6 +2333,12 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     editorHotExitStore:
       args.options.editorHotExitStore ??
       createEditorHotExitStore({
+        stateDir: args.runtimeStateDir,
+        env: args.options.env,
+      }),
+    editorLocalHistoryStore:
+      args.options.editorLocalHistoryStore ??
+      createEditorLocalHistoryStore({
         stateDir: args.runtimeStateDir,
         env: args.options.env,
       }),

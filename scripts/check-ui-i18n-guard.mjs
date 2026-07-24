@@ -98,15 +98,37 @@ const FEATURE_CATALOG_DE_PATTERN = /-i18n\.de\.ts$/u;
 // never reads. The requirement is unchanged — English and German must land together — so a
 // single-file catalog satisfies it only when both maps are present AND expose identical keys, which
 // `singleFileCatalogParityProblems` enforces exactly as the split-file parity check does.
+//
+// A third convention shares the `-i18n.ts` suffix without being a catalog: a key-mapping HELPER
+// (e.g. `managed-language-i18n.ts`, `problems-i18n.ts`) that declares no language map of its own
+// and types its values against the shared catalog's `MessageKey` — its strings live in
+// `i18n-messages.en/de.ts`, which carry their own update and parity requirements. Such a helper is
+// classified by content, not filename: zero `_EN_MESSAGES`/`_DE_MESSAGES` declarations plus a
+// `MessageKey` reference. It neither satisfies the catalog-update requirement (its keys land in the
+// shared catalogs, so those must change) nor gets the local parity check (there is nothing local to
+// compare). A `-i18n.ts` file with exactly one map keeps failing closed as an incomplete catalog.
 const FEATURE_CATALOG_SINGLE_SUFFIX = "-i18n.ts";
 const CATALOG_LANGUAGE_MAP_PATTERN = /_(EN|DE)_MESSAGES\b/gu;
 
-export function changedSingleFileFeatureCatalogs(changedFileSet) {
+function isSharedCatalogKeyHelper(repoRoot, file) {
+  let source;
+  try {
+    source = readText(repoRoot, file);
+  } catch {
+    // A deleted `-i18n.ts` cannot need local parity; classify it out of the catalog set.
+    return true;
+  }
+  const declaredMaps = [...source.matchAll(CATALOG_LANGUAGE_MAP_PATTERN)];
+  return declaredMaps.length === 0 && source.includes("MessageKey");
+}
+
+export function changedSingleFileFeatureCatalogs(changedFileSet, repoRoot) {
   return [...changedFileSet]
     .filter(
       (file) =>
         file.startsWith("packages/keiko-ui/src/") && file.endsWith(FEATURE_CATALOG_SINGLE_SUFFIX),
     )
+    .filter((file) => repoRoot === undefined || !isSharedCatalogKeyHelper(repoRoot, file))
     .sort((left, right) => left.localeCompare(right));
 }
 
@@ -140,9 +162,9 @@ export function unpairedFeatureCatalogs(changedFileSet) {
 // Feature-scoped catalog pairs (e.g. the dynamically loaded Coding Workbench boundary from
 // #2257) satisfy the catalog-update requirement exactly like the shared catalogs, as long as
 // the English and German halves change together.
-function catalogUpdateProblems(changedFileSet) {
+function catalogUpdateProblems(changedFileSet, repoRoot) {
   const featureCatalogPairs = changedFeatureCatalogPairs(changedFileSet);
-  const singleFileCatalogs = changedSingleFileFeatureCatalogs(changedFileSet);
+  const singleFileCatalogs = changedSingleFileFeatureCatalogs(changedFileSet, repoRoot);
   const sharedCatalogsTouched = changedFileSet.has(EN_CATALOG) && changedFileSet.has(DE_CATALOG);
   const problems = [];
   if (sharedCatalogsTouched || featureCatalogPairs.length > 0 || singleFileCatalogs.length > 0) {
@@ -593,7 +615,7 @@ export function checkUiI18nGuard({
     };
   }
 
-  const catalogRequirement = catalogUpdateProblems(changedFileSet);
+  const catalogRequirement = catalogUpdateProblems(changedFileSet, repoRoot);
   problems.push(...catalogRequirement.problems);
 
   const nonCompliantFiles = nonCompliantUiFiles(repoRoot, i18nRelevantFiles);

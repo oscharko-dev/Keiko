@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { WorkspaceSearchResponse } from "@oscharko-dev/keiko-contracts";
+import {
+  WORKSPACE_SEARCH_MAX_RESULTS,
+  type WorkspaceSearchResponse,
+} from "@oscharko-dev/keiko-contracts";
 import {
   applyWorkspaceReplace,
   fetchFilesContent,
@@ -509,5 +512,90 @@ describe("SearchPanel", () => {
       lineStart: 7,
       lineEnd: 7,
     });
+  });
+
+  it("merges ordered root results with attribution, a total cap, and isolated root errors", async () => {
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    const matches = (prefix: string, count: number): WorkspaceSearchResponse => ({
+      results: Array.from({ length: count }, (_, index) => ({
+        path: index === 0 ? "src/shared.ts" : `src/${prefix}-${String(index)}.ts`,
+        lineRange: { startLine: index + 1, endLine: index + 1 },
+        snippet: `${prefix} needle ${String(index)}`,
+        score: index,
+      })),
+      truncated: false,
+      filesScanned: count,
+      elapsedMs: prefix === "a" ? 4 : 7,
+    });
+    fetchWorkspaceSearchMock.mockImplementation((request) => {
+      if (request.root === "/repo/a") return Promise.resolve(matches("a", 120));
+      if (request.root === "/repo/b") return Promise.resolve(matches("b", 120));
+      return Promise.reject(new Error("Root C is unreadable."));
+    });
+    render(
+      <SearchPanel
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+          { id: "c", root: "/repo/c", label: "Root C" },
+        ]}
+        openEditorFile={openEditorFile}
+      />,
+    );
+
+    await searchFor("needle");
+    const options = await screen.findAllByRole("option");
+
+    expect(options).toHaveLength(WORKSPACE_SEARCH_MAX_RESULTS);
+    expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Results were capped");
+    expect(screen.getByRole("alert")).toHaveTextContent("Root C: Root C is unreadable.");
+    expect(screen.getByRole("group", { name: "Root A: src/shared.ts" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Root B: src/shared.ts" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("b needle 0"));
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/repo/b",
+      path: "src/shared.ts",
+      lineStart: 1,
+      lineEnd: 1,
+    });
+    expect(fetchWorkspaceSearchMock).toHaveBeenCalledTimes(3);
+    expect(fetchWorkspaceSearchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ root: "/repo/b", maxResults: WORKSPACE_SEARCH_MAX_RESULTS }),
+      expect.anything(),
+    );
+  });
+
+  it("previews and confirms cross-root replacement one root at a time", async () => {
+    render(
+      <SearchPanel
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+      />,
+    );
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+
+    await screen.findByRole("button", { name: "Apply reviewed replace in Root A" });
+    expect(fetchWorkspaceReplacePreviewMock.mock.calls.map(([request]) => request.root)).toEqual([
+      "/repo/a",
+      "/repo/b",
+    ]);
+    expect(applyWorkspaceReplaceMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed replace in Root A" }));
+    await waitFor(() => expect(applyWorkspaceReplaceMock).toHaveBeenCalledTimes(1));
+    expect(applyWorkspaceReplaceMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ root: "/repo/a" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed replace in Root B" }));
+    await waitFor(() => expect(applyWorkspaceReplaceMock).toHaveBeenCalledTimes(2));
+    expect(applyWorkspaceReplaceMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ root: "/repo/b" }),
+    );
   });
 });

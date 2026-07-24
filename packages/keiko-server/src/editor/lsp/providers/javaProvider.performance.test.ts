@@ -121,6 +121,7 @@ function runOp(
     spawn,
     prepareSpawn: (input) => ({ ...input, executable: "/usr/bin/true" }),
     activationAuthorized: true,
+    activationStillAuthorized: (): boolean => true,
     protocolConfiguration: { revision: 1, settings: {}, initializationOptions: {} },
   });
 }

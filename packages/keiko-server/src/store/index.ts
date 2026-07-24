@@ -20,6 +20,11 @@ export type {
   UpdateChatPatch,
   UpdateProjectPatch,
   WorkflowStatus,
+  WorkspaceManifestMutationInput,
+  WorkspaceManifestRecordRow,
+  WorkspaceManifestRootProject,
+  WorkspaceTrustRecordRow,
+  WorkspaceTrustRecordRowInput,
 } from "./types.js";
 export {
   UiStoreError,
@@ -43,7 +48,7 @@ export {
   UI_DB_FILENAME,
   UI_DB_DIRNAME,
 } from "./paths.js";
-export { runMigrations, SCHEMA_VERSION } from "./schema.js";
+export { runMigrations, SCHEMA_VERSION, UiStoreSchemaVersionError } from "./schema.js";
 export {
   buildUiStoreOverDatabase,
   createInMemoryUiStore,

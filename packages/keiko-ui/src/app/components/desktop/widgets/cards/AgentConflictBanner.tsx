@@ -9,9 +9,10 @@
  *
  * - DIRTY: Save + Dismiss (the user saves the dirty buffer so the agent can re-try)
  * - VERSION_MISMATCH / CONTENT_HASH_MISMATCH: Reload + Dismiss (stale token — reload refreshes it)
- * - INVALID_EDITS / OUT_OF_SCOPE / PRECONDITION_REQUIRED / POLICY_DENIED / APPROVAL_REQUIRED /
- *   NO_ACTIVE_SESSION / NO_ACTIVE_BRIDGE: Dismiss only (the producer must re-issue the action after
- *   satisfying the reported structural, policy, approval, or bridge condition)
+ * - INVALID_EDITS / OUT_OF_SCOPE / DECOMPOSE_PER_ROOT / PRECONDITION_REQUIRED / POLICY_DENIED /
+ *   APPROVAL_REQUIRED / NO_ACTIVE_SESSION / NO_ACTIVE_BRIDGE: Dismiss only (the producer must
+ *   re-issue the action after satisfying the reported structural, policy, approval, or bridge
+ *   condition)
  *
  * Uses the existing `.ai-danger` / `.ai-danger-h` / `.ai-danger-act` classes; no new CSS classes.
  */
@@ -42,6 +43,7 @@ function conflictTitle(code: AgentConflictCode, t: EditorAgentTranslate): string
     case "INVALID_EDITS":
       return t("conflict.title.invalidEdits");
     case "OUT_OF_SCOPE":
+    case "DECOMPOSE_PER_ROOT":
       return t("conflict.title.outOfScope");
     case "NO_ACTIVE_SESSION":
       return t("conflict.title.noActiveSession");

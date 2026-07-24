@@ -31,6 +31,29 @@ vi.mock("@/lib/api", async (importOriginal) => {
   };
 });
 
+vi.mock("../../workspace-trust/useWorkspaceTrust", () => ({
+  useWorkspaceTrust: (projectId: string | undefined) => ({
+    status:
+      projectId === undefined
+        ? undefined
+        : {
+            kind: "workspace-trust-status",
+            schemaVersion: 1,
+            projectId,
+            trust: "trusted",
+            decidedBy: "server",
+            reason: "human-grant",
+            revision: 1,
+          },
+    loading: false,
+    mutating: false,
+    issue: undefined,
+    refresh: async () => undefined,
+    grant: async () => true,
+    revoke: async () => true,
+  }),
+}));
+
 function status(
   state: ManagedLspEffectiveState,
   reasonCode: ManagedLspActivationReasonCode,
@@ -227,6 +250,18 @@ describe("ManagedLanguageSettings", () => {
     await screen.findByText("Disabled by policy");
     expect(screen.queryByRole("button", { name: "Enable Python" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
+    expect(mutateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("explains Restricted Mode without offering an activation bypass", async () => {
+    fetchSettingsMock.mockResolvedValue(snapshot("disabledByPolicy", "WORKSPACE_UNTRUSTED"));
+    renderSettings();
+    expect(
+      await screen.findByText(
+        "Restricted Mode prevents this workspace from starting managed language servers.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enable Python" })).toBeNull();
     expect(mutateSettingsMock).not.toHaveBeenCalled();
   });
 

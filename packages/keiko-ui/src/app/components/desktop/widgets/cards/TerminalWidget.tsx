@@ -188,6 +188,11 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
   const [cwdSuggestions, setCwdSuggestions] = useState<readonly TerminalDirectoryEntry[]>([]);
 
   useEffect(() => {
+    setProjectInput(props.projectPath ?? "");
+    setCwdInput(props.cwd ?? "");
+  }, [props.cwd, props.projectPath]);
+
+  useEffect(() => {
     let cancelled = false;
     void fetchTerminalPolicy()
       .then((p) => {

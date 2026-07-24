@@ -40,6 +40,16 @@ jobs:
           - test:e2e:editor-run-verification-2215
           - test:e2e:git-changes-1575
           - test:e2e:local-knowledge
+          # Epic #2285 (Editor M11). Only the #2533 closeout journey runs per pull request; these
+          # seven per-child journeys shipped with npm scripts and no lane at all, which is the exact
+          # silent-rot this workflow exists to prevent. All seven pass locally against the real BFF.
+          - test:e2e:workspace-trust-2523
+          - test:e2e:multi-root-editor-2525
+          - test:e2e:multi-root-search-2526
+          - test:e2e:per-root-settings-2527
+          - test:e2e:editor-profiles-2528
+          - test:e2e:profile-portability-2529
+          - test:e2e:file-history-2531
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

@@ -8,7 +8,10 @@ import {
 } from "./quickAccessRegistry";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
 import { EDITOR_PALETTE_COMMANDS } from "./widgets/cards/editorCommands";
-import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
+  WORKSPACE_TRUST_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts";
 
 function appCommand(id: string): Command {
   return {
@@ -33,6 +36,15 @@ function host(): EditorPaletteHost {
     verificationCatalog: {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       projectId: "/repo",
+      workspaceTrust: {
+        kind: "workspace-trust-status",
+        schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+        projectId: "/repo",
+        trust: "trusted",
+        decidedBy: "server",
+        reason: "human-grant",
+        revision: 1,
+      },
       kinds: [{ kind: "targeted-test", available: true, trustState: "trusted" }],
     },
     splitActive: vi.fn(),
@@ -48,6 +60,7 @@ function host(): EditorPaletteHost {
     trustWorkspaceScripts: vi.fn(),
     revokeWorkspaceScriptTrust: vi.fn(),
     openProblems: vi.fn(),
+    openFileHistory: vi.fn(),
   };
 }
 
@@ -69,12 +82,14 @@ describe("quick access registry", () => {
       EDITOR_PALETTE_COMMANDS.filter(
         (command) =>
           command.id === "editor.openProblems" ||
+          command.id === "editor.openFileHistory" ||
           command.id.startsWith("run.") ||
           command.id.startsWith("verification."),
       ).map((command) => [command.id, command.titleKey]),
     );
 
     expect(titleKeys).toEqual({
+      "editor.openFileHistory": "editor.command.openFileHistory",
       "editor.openProblems": "editor.command.openProblems",
       "run.build": "editor.command.runBuild",
       "run.cancel": "editor.command.cancelVerification",

@@ -21,6 +21,24 @@
 // (validateWorkspaceActivation / WORKSPACE_ACTIVATION_ALLOWED_KEYS) — so a downstream persistence
 // layer that trusts `.ok` cannot store smuggled content through any shape.
 
+import {
+  hasOnlyWorkspaceKeys,
+  isCanonicalWorkspaceRoot,
+  isWorkspaceManifestDigest,
+  isWorkspaceManifestRef,
+  isWorkspaceRecord,
+  isWorkspaceRootIdentityDigest,
+  isWorkspaceRootRef,
+  workspaceCanonicalRootsDoNotOverlap,
+} from "./workspace-contract-primitives.js";
+import type {
+  WorkspaceManifestDigest,
+  WorkspaceManifestRef,
+  WorkspaceRootIdentityDigest,
+  WorkspaceRootRef,
+} from "./workspace-contract-primitives.js";
+import { WORKSPACE_MANIFEST_MAX_ROOTS } from "./workspace-manifest.js";
+
 export const TASK_WORKSPACE_SCHEMA_VERSION = "1" as const;
 
 // ─── Local type guards (copied per leaf convention; see git-repository.ts) ──────
@@ -708,6 +726,33 @@ export interface WorkspaceBinding {
   readonly editorProjectRoot: string;
 }
 
+/** Explicit compatibility name. `WorkspaceBinding` remains the byte-identical V1 public type. */
+export type WorkspaceBindingV1 = WorkspaceBinding;
+
+export const WORKSPACE_BINDING_V2_SCHEMA_VERSION = "2" as const;
+
+export interface WorkspaceBoundRootV2 {
+  readonly rootRef: WorkspaceRootRef;
+  readonly rootIdentityDigest: WorkspaceRootIdentityDigest;
+  readonly rootPath: string;
+  readonly boundSurfaces: readonly WorkspaceSurface[];
+  readonly gitDeliveryRoot: string;
+  readonly editorProjectRoot: string;
+}
+
+export interface WorkspaceBindingV2 {
+  readonly schemaVersion: typeof WORKSPACE_BINDING_V2_SCHEMA_VERSION;
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly manifestRef: WorkspaceManifestRef;
+  readonly manifestRevision: number;
+  readonly manifestDigest: WorkspaceManifestDigest;
+  readonly roots: readonly WorkspaceBoundRootV2[];
+  readonly focusedRootRef: WorkspaceRootRef;
+}
+
+export type VersionedWorkspaceBinding = WorkspaceBindingV1 | WorkspaceBindingV2;
+
 // The closed set of keys a WorkspaceBinding may carry (content-free, SC3).
 export const WORKSPACE_BINDING_ALLOWED_KEYS: readonly string[] = [
   "schemaVersion",
@@ -719,9 +764,29 @@ export const WORKSPACE_BINDING_ALLOWED_KEYS: readonly string[] = [
   "editorProjectRoot",
 ] as const;
 
-// eslint-disable-next-line complexity
-export function validateWorkspaceBinding(input: unknown): TaskWorkspaceValidation {
-  if (!isRecord(input)) return { ok: false, reasons: ["binding must be an object"] };
+export const WORKSPACE_BOUND_ROOT_V2_ALLOWED_KEYS: readonly string[] = [
+  "rootRef",
+  "rootIdentityDigest",
+  "rootPath",
+  "boundSurfaces",
+  "gitDeliveryRoot",
+  "editorProjectRoot",
+] as const;
+
+export const WORKSPACE_BINDING_V2_ALLOWED_KEYS: readonly string[] = [
+  "schemaVersion",
+  "workspaceId",
+  "taskId",
+  "manifestRef",
+  "manifestRevision",
+  "manifestDigest",
+  "roots",
+  "focusedRootRef",
+] as const;
+
+function validateWorkspaceBindingV1(
+  input: Readonly<Record<string, unknown>>,
+): TaskWorkspaceValidation {
   const reasons: string[] = unknownKeyReasons(input, WORKSPACE_BINDING_ALLOWED_KEYS);
   if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   for (const key of [
@@ -746,6 +811,108 @@ export function validateWorkspaceBinding(input: unknown): TaskWorkspaceValidatio
     }
   }
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
+
+function hasUniqueBoundSurfaces(surfaces: readonly WorkspaceSurface[]): boolean {
+  return new Set(surfaces).size === surfaces.length;
+}
+
+function isWorkspaceBoundRootV2(input: unknown): input is WorkspaceBoundRootV2 {
+  return (
+    isWorkspaceRecord(input) &&
+    hasOnlyWorkspaceKeys(input, WORKSPACE_BOUND_ROOT_V2_ALLOWED_KEYS) &&
+    isWorkspaceRootRef(input.rootRef) &&
+    isWorkspaceRootIdentityDigest(input.rootIdentityDigest) &&
+    isCanonicalWorkspaceRoot(input.rootPath) &&
+    Array.isArray(input.boundSurfaces) &&
+    input.boundSurfaces.every(isWorkspaceSurface) &&
+    hasUniqueBoundSurfaces(input.boundSurfaces) &&
+    input.gitDeliveryRoot === input.rootPath &&
+    input.editorProjectRoot === input.rootPath
+  );
+}
+
+function boundRootsAreValid(input: unknown): input is readonly WorkspaceBoundRootV2[] {
+  if (
+    !Array.isArray(input) ||
+    input.length === 0 ||
+    input.length > WORKSPACE_MANIFEST_MAX_ROOTS ||
+    !input.every(isWorkspaceBoundRootV2)
+  ) {
+    return false;
+  }
+  const refs = new Set(input.map((root): WorkspaceRootRef => root.rootRef));
+  const digests = new Set(
+    input.map((root): WorkspaceRootIdentityDigest => root.rootIdentityDigest),
+  );
+  const paths = new Set(input.map((root): string => root.rootPath));
+  return (
+    refs.size === input.length &&
+    digests.size === input.length &&
+    paths.size === input.length &&
+    workspaceCanonicalRootsDoNotOverlap(input.map((root): string => root.rootPath))
+  );
+}
+
+export function validateWorkspaceBoundRootV2(input: unknown): TaskWorkspaceValidation {
+  try {
+    return isWorkspaceBoundRootV2(input)
+      ? { ok: true }
+      : { ok: false, reasons: ["bound root invalid"] };
+  } catch {
+    return { ok: false, reasons: ["bound root invalid"] };
+  }
+}
+
+function isWorkspaceBindingV2(input: unknown): input is WorkspaceBindingV2 {
+  if (
+    !isWorkspaceRecord(input) ||
+    !hasOnlyWorkspaceKeys(input, WORKSPACE_BINDING_V2_ALLOWED_KEYS)
+  ) {
+    return false;
+  }
+  const fieldsValid = [
+    input.schemaVersion === WORKSPACE_BINDING_V2_SCHEMA_VERSION,
+    typeof input.workspaceId === "string" && input.workspaceId.length > 0,
+    typeof input.taskId === "string" && input.taskId.length > 0,
+    isWorkspaceManifestRef(input.manifestRef),
+    Number.isSafeInteger(input.manifestRevision) && (input.manifestRevision as number) >= 0,
+    isWorkspaceManifestDigest(input.manifestDigest),
+    boundRootsAreValid(input.roots),
+    isWorkspaceRootRef(input.focusedRootRef),
+  ].every(Boolean);
+  if (
+    !fieldsValid ||
+    !boundRootsAreValid(input.roots) ||
+    !isWorkspaceRootRef(input.focusedRootRef)
+  ) {
+    return false;
+  }
+  return input.roots.some((root): boolean => root.rootRef === input.focusedRootRef);
+}
+
+export function validateWorkspaceBindingV2(input: unknown): TaskWorkspaceValidation {
+  try {
+    return isWorkspaceBindingV2(input)
+      ? { ok: true }
+      : { ok: false, reasons: ["multi-root binding invalid"] };
+  } catch {
+    return { ok: false, reasons: ["multi-root binding invalid"] };
+  }
+}
+
+export function validateWorkspaceBinding(input: unknown): TaskWorkspaceValidation {
+  if (!isRecord(input)) return { ok: false, reasons: ["binding must be an object"] };
+  try {
+    return input.schemaVersion === WORKSPACE_BINDING_V2_SCHEMA_VERSION
+      ? validateWorkspaceBindingV2(input)
+      : validateWorkspaceBindingV1(input);
+  } catch {
+    // Fail closed on a hostile `schemaVersion` accessor (Proxy or defineProperty
+    // getter): mirror the try/catch in `validateWorkspaceBindingV2` and match
+    // the throw-free guarantee proved in workspace-manifest.test.ts:138-145.
+    return { ok: false, reasons: ["binding must be an object"] };
+  }
 }
 
 // ─── WorkspaceActivation (mutating server-action intent) ────────────────────────────

@@ -3,10 +3,10 @@ import {
   EDITOR_M7_SCHEMA_VERSION,
   parseEditorM7SettingPatch,
   type EditorM7SettingId,
-  type EditorM7SettingScope,
   type EditorM7SettingValue,
   type EditorM7SettingsMutationAction,
-  type EditorM7SettingsMutationResult,
+  type EditorM11SettingScope,
+  type EditorM11SettingsMutationResult,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../../deps.js";
@@ -20,7 +20,7 @@ import {
 } from "../../routes.js";
 import { SSE_HEADERS, startSseHeartbeat } from "../../sse.js";
 import type { EditorSettingsControlMutation } from "./editorSettingsControl.js";
-import { editorSettingsWorkspaceFingerprint } from "./editorSettingsStore.js";
+import { editorSettingsRootToken, parseEditorSettingsEtag } from "./editorSettingsStore.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_ROOT_CHARS = 4_096;
@@ -32,7 +32,7 @@ interface ParsedMutationBody {
   readonly action: EditorM7SettingsMutationAction;
   readonly expectedRevision: number;
   readonly root?: string | undefined;
-  readonly scope: EditorM7SettingScope;
+  readonly scope: EditorM11SettingScope;
   readonly values?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
   readonly settingIds?: readonly EditorM7SettingId[] | undefined;
 }
@@ -41,6 +41,7 @@ interface ParsedRevisionPrecondition {
   readonly rootToken: string;
   readonly userRevision: number;
   readonly workspaceRevision: number;
+  readonly rootRevision: number;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -55,8 +56,8 @@ function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean 
   return Object.keys(value).every((key) => allowed.includes(key));
 }
 
-function parseScope(value: unknown): EditorM7SettingScope | undefined {
-  return value === "user" || value === "workspace" ? value : undefined;
+function parseScope(value: unknown): EditorM11SettingScope | undefined {
+  return value === "user" || value === "workspace" || value === "root" ? value : undefined;
 }
 
 function parseAction(value: unknown): EditorM7SettingsMutationAction | undefined {
@@ -77,14 +78,14 @@ function parseSettingIds(value: unknown): readonly EditorM7SettingId[] | undefin
 }
 
 function parseValues(
-  scope: EditorM7SettingScope,
+  scope: EditorM11SettingScope,
   value: unknown,
 ): Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined {
-  const parsed = parseEditorM7SettingPatch(scope, value);
+  const parsed = parseEditorM7SettingPatch(scope === "root" ? "workspace" : scope, value);
   return parsed.ok ? parsed.value.values : undefined;
 }
 
-function validRoot(value: unknown, scope: EditorM7SettingScope): string | undefined | null {
+function validRoot(value: unknown, scope: EditorM11SettingScope): string | undefined | null {
   if (scope === "user" && value === undefined) return undefined;
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_ROOT_CHARS) return null;
   return value;
@@ -114,7 +115,7 @@ function validRevision(value: unknown): value is number {
 
 function parseSetBody(
   value: UnknownRecord,
-  scope: EditorM7SettingScope,
+  scope: EditorM11SettingScope,
   action: "set",
   root: string | undefined,
 ): ParsedMutationBody | undefined {
@@ -127,7 +128,7 @@ function parseSetBody(
 
 function parseResetBody(
   value: UnknownRecord,
-  scope: EditorM7SettingScope,
+  scope: EditorM11SettingScope,
   action: "reset",
   root: string | undefined,
 ): ParsedMutationBody | undefined {
@@ -161,20 +162,25 @@ function idempotencyKey(ctx: RouteContext): string | undefined {
 }
 
 function parseRevisionPrecondition(ctx: RouteContext): ParsedRevisionPrecondition | undefined {
-  const value = singleHeader(ctx, "if-match");
-  const match =
-    value === undefined ? null : /^"edm7-(\d+)-(\d+)-([A-Za-z0-9_-]{4,64})"$/u.exec(value);
-  if (match === null) return undefined;
-  const userRevision = Number(match[1]);
-  const workspaceRevision = Number(match[2]);
-  if (!validRevision(userRevision) || !validRevision(workspaceRevision)) return undefined;
-  return { rootToken: match[3] ?? "", userRevision, workspaceRevision };
+  const parsed = parseEditorSettingsEtag(singleHeader(ctx, "if-match"));
+  if (parsed === undefined) return undefined;
+  if (
+    !validRevision(parsed.userRevision) ||
+    !validRevision(parsed.workspaceRevision) ||
+    !validRevision(parsed.rootRevision)
+  ) {
+    return undefined;
+  }
+  return {
+    rootToken: parsed.rootToken,
+    userRevision: parsed.userRevision,
+    workspaceRevision: parsed.workspaceRevision,
+    rootRevision: parsed.rootRevision,
+  };
 }
 
 function expectedRootToken(realRoot: string | undefined): string {
-  return realRoot === undefined
-    ? "user"
-    : editorSettingsWorkspaceFingerprint(realRoot).slice(0, 24);
+  return editorSettingsRootToken(realRoot);
 }
 
 function hasRevisionPrecondition(
@@ -182,8 +188,9 @@ function hasRevisionPrecondition(
   body: ParsedMutationBody,
   realRoot: string | undefined,
 ): boolean {
-  const revision =
-    body.scope === "user" ? precondition.userRevision : precondition.workspaceRevision;
+  let revision = precondition.rootRevision;
+  if (body.scope === "user") revision = precondition.userRevision;
+  else if (body.scope === "workspace") revision = precondition.workspaceRevision;
   return (
     revision === body.expectedRevision && precondition.rootToken === expectedRootToken(realRoot)
   );
@@ -196,7 +203,7 @@ function invalidEditorSettingsRequest(): RouteResult {
   };
 }
 
-function resultToRoute(result: EditorM7SettingsMutationResult): RouteResult {
+function resultToRoute(result: EditorM11SettingsMutationResult): RouteResult {
   if (result.kind === "ok") {
     return {
       status: 200,

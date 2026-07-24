@@ -87,6 +87,8 @@ export interface HostLanguageOperationOptions {
   readonly prepareSpawn?: LspProcessManagerDeps["prepareSpawn"] | undefined;
   readonly privateRuntimeStateRoot?: string | undefined;
   readonly activationAuthorized?: boolean | undefined;
+  /** Server-owned final trust recheck immediately before a managed pool entry can be acquired. */
+  readonly activationStillAuthorized?: (() => boolean) | undefined;
   readonly protocolConfiguration?:
     | {
         readonly revision: number;
@@ -308,6 +310,7 @@ function matchingAvailableProvider(
   options: HostLanguageOperationOptions,
 ): boolean {
   if (options.activationAuthorized === true) {
+    if (options.activationStillAuthorized?.() !== true) return false;
     return isHostLanguageProviderProvisioned(spec.languages[0] ?? "", {
       workspace: options.workspace,
       processEnv: options.processEnv,

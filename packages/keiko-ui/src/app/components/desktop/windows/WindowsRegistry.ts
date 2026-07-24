@@ -32,6 +32,7 @@ export type WindowType =
   | "integ"
   | "keiko"
   | "settings"
+  | "workspaceTrust"
   // Issue #1696 — governed package-update window. Opened only from Settings/startup notification,
   // not from the rail or command palette.
   | "updates"
@@ -111,6 +112,7 @@ interface EditorWindowCfg extends WindowCfgRecord {
   readonly file?: string;
   readonly openFiles?: readonly string[];
   readonly layoutJson?: string;
+  readonly rootSessionsJson?: string;
 }
 
 interface FigmaSourceWindowCfg extends WindowCfgRecord {
@@ -541,6 +543,17 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
+  workspaceTrust: {
+    title: "Workspace Trust",
+    icon: "settings",
+    desc: "Manage Restricted Mode per workspace",
+    w: 620,
+    h: 560,
+    min: { w: 320, h: 360 },
+    tiny: { w: 300, h: 250 },
+    tool: true,
+    singleton: true,
+  },
   updates: {
     title: "Updates",
     icon: "activity",
@@ -935,4 +948,5 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "notifications",
   "resources",
   "settings",
+  "workspaceTrust",
 ];

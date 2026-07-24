@@ -79,6 +79,14 @@ import {
   verifyUpdateRestart,
   ApiError,
   type StreamHandlers,
+  fetchEditorLocalHistory,
+  fetchEditorLocalHistoryEntry,
+  setEditorLocalHistoryPinned,
+  deleteEditorLocalHistory,
+  mutateEditorProfile,
+  exportEditorProfile,
+  previewEditorProfileImport,
+  applyEditorProfileImport,
 } from "./api";
 import {
   MANAGED_LSP_TEST_LANGUAGES,
@@ -2712,5 +2720,76 @@ describe("GEN-RES-FETCH-001 — default read deadline", () => {
     // The combined signal must follow the CALLER abort (deadline alone is not enough).
     caller.abort();
     expect(init.signal?.aborted).toBe(true);
+  });
+});
+
+describe("M11 local-history and profile API wrappers", () => {
+  function jsonOk(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("addresses every local-history endpoint with an encoded ref and root query", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(jsonOk({ session: "active", entries: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchEditorLocalHistory("/repo a", "src/app.ts");
+    await fetchEditorLocalHistoryEntry("/repo a", "hist/one");
+    await setEditorLocalHistoryPinned("/repo a", "hist/one", true);
+    await deleteEditorLocalHistory("/repo a", "hist/one");
+
+    const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(urls[0]).toBe("/api/editor/local-history?root=%2Frepo+a&path=src%2Fapp.ts");
+    expect(urls[1]).toBe("/api/editor/local-history/hist%2Fone?root=%2Frepo+a");
+    expect(urls[2]).toBe(urls[1]);
+    expect(urls[3]).toBe(urls[1]);
+    const methods = fetchMock.mock.calls.map(
+      (call) => (call[1] as RequestInit | undefined)?.method,
+    );
+    expect(methods).toEqual([undefined, undefined, "PATCH", "DELETE"]);
+    expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      pinned: true,
+    });
+  });
+
+  it("carries If-Match and Idempotency-Key on every profile mutation surface", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonOk({ kind: "ok" })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mutateEditorProfile(
+      { schemaVersion: "1", action: "switch", expectedRevision: 1 } as never,
+      '"edp-1"',
+      "switch-key",
+    );
+    await exportEditorProfile("profile-focus");
+    await previewEditorProfileImport("{}", '"edp-1"');
+    await applyEditorProfileImport({} as never, '"edp-1"', "apply-key");
+
+    const headerSets = fetchMock.mock.calls.map(
+      (call) => ((call[1] as RequestInit | undefined)?.headers ?? {}) as Record<string, string>,
+    );
+    expect(headerSets[0]).toMatchObject({ "If-Match": '"edp-1"', "Idempotency-Key": "switch-key" });
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      "/api/editor/settings/profiles/export?profileRef=profile-focus",
+    );
+    expect(headerSets[2]).toMatchObject({ "If-Match": '"edp-1"' });
+    expect(headerSets[3]).toMatchObject({ "If-Match": '"edp-1"', "Idempotency-Key": "apply-key" });
+  });
+
+  it("propagates caller signals through the local-history readers", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(jsonOk({ session: "active", entries: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    await fetchEditorLocalHistory("/repo", "src/app.ts", controller.signal);
+    await fetchEditorLocalHistoryEntry("/repo", "hist_1", controller.signal);
+    for (const call of fetchMock.mock.calls) {
+      expect((call[1] as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
+    }
   });
 });

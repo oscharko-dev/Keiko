@@ -14,6 +14,7 @@ import {
 } from "./debugCapsulePlan.js";
 import { DapProcessManagerError, type DebugCapsuleLauncher } from "./dapProcessManager.js";
 import type { QualifiedDebugCapsuleHandle } from "./dapCapsuleSupervisor.js";
+import { workspaceRootIdentityDigestFor } from "../../workspace-root-identity.js";
 
 export interface DebugCapsuleLauncherDeps {
   readonly now: () => number;
@@ -139,7 +140,16 @@ function workspaceUnchanged(envelope: DebugSpawnEnvelope): boolean {
     const identity = envelope.workspaceIdentity;
     const realPath = realpathSync(identity.realPath);
     const stat = lstatSync(realPath);
-    const digest = hash([realPath, stat.dev, stat.ino, stat.mode, stat.uid]);
+    // Producer (`inspectDebugWorkspaceIdentity` -> `inspectWorkspaceRootIdentity`) derives
+    // `identityDigest` via the shared framed digest since #2520. Re-derive with the same helper
+    // instead of the pre-#2520 JSON-stringify hash so a re-observed unchanged directory verifies
+    // as unchanged on Linux.
+    const digest = workspaceRootIdentityDigestFor(realPath, {
+      dev: stat.dev,
+      ino: stat.ino,
+      mode: stat.mode,
+      uid: stat.uid,
+    });
     return [
       realPath === identity.realPath,
       stat.isDirectory(),

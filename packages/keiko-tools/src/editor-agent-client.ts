@@ -1,11 +1,16 @@
 import {
+  EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentActionResult,
+  isEditorAgentRootAttribution,
   parseEditorAgentQueryGitData,
   isEditorAgentSessionSnapshot,
   parseEditorAgentVerificationResult,
   type EditorAgentAction,
   type EditorAgentActionQueuedResponse,
   type EditorAgentActionResult,
+  type EditorAgentGovernedAuthorityReference,
+  type EditorAgentRootBinding,
+  type EditorAgentSessionsRequest,
   type EditorAgentSessionsResponse,
   type EditorAgentSnapshotRequest,
   type EditorAgentSnapshotResponse,
@@ -170,6 +175,7 @@ function redactActionResult(result: EditorAgentActionResult): EditorAgentActionR
     schemaVersion: result.schemaVersion,
     actionId: result.actionId,
     sessionId: result.sessionId,
+    ...(result.rootAttribution === undefined ? {} : { rootAttribution: result.rootAttribution }),
     status: result.status,
     ...(result.message === undefined ? {} : { message: REDACTED_ROUTE_MESSAGE }),
     ...(result.conflict === undefined ? {} : { conflict: redactConflict(result.conflict) }),
@@ -212,6 +218,9 @@ function redactUnknownActionResult(value: unknown): unknown {
     schemaVersion: value.schemaVersion,
     actionId: value.actionId,
     sessionId: value.sessionId,
+    ...(isEditorAgentRootAttribution(value.rootAttribution)
+      ? { rootAttribution: value.rootAttribution }
+      : {}),
     status: value.status,
     ...(value.message === undefined
       ? {}
@@ -340,6 +349,23 @@ export function createFetchEditorAgentHttpTransport(
   };
 }
 
+function editorAgentSessionsScope(
+  rootBinding: EditorAgentRootBinding | undefined,
+  authorityRef: EditorAgentGovernedAuthorityReference | undefined,
+): EditorAgentSessionsRequest | undefined {
+  if (authorityRef === undefined) {
+    if (rootBinding !== undefined) {
+      throw new Error("Editor agent session discovery authority is required for a root binding.");
+    }
+    return undefined;
+  }
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    authorityRef,
+    ...(rootBinding === undefined ? {} : { rootBinding }),
+  };
+}
+
 export class EditorAgentHttpClient {
   private readonly origin: URL;
   private readonly transport: EditorAgentHttpTransport;
@@ -376,11 +402,16 @@ export class EditorAgentHttpClient {
     }
   }
 
-  listSessions(signal: AbortSignal): Promise<EditorAgentClientResult<EditorAgentSessionsResponse>> {
+  listSessions(
+    signal: AbortSignal,
+    rootBinding?: EditorAgentRootBinding,
+    authorityRef?: EditorAgentGovernedAuthorityReference,
+  ): Promise<EditorAgentClientResult<EditorAgentSessionsResponse>> {
+    const scope = editorAgentSessionsScope(rootBinding, authorityRef);
     return this.request(
       "/api/editor/agent/sessions",
-      "GET",
-      undefined,
+      scope === undefined ? "GET" : "POST",
+      scope,
       signal,
       [200],
       parseSessions,

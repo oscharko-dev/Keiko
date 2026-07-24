@@ -16,6 +16,7 @@ import {
   type EditorAgentActionType,
   type EditorAgentConflictCode,
   type EditorAgentFailureCode,
+  type EditorAgentRootAttribution,
 } from "@oscharko-dev/keiko-contracts";
 import { deepRedactStrings, redact } from "@oscharko-dev/keiko-security";
 
@@ -28,6 +29,7 @@ export interface EditorAgentAuditInput {
   readonly sessionId: string;
   readonly actionId: string;
   readonly actionType: EditorAgentActionType;
+  readonly rootAttribution?: EditorAgentRootAttribution | undefined;
   readonly decision: EditorAgentActionPolicyDecision;
   readonly outcome: EditorAgentActionStatus;
   readonly conflictCode?: EditorAgentConflictCode | undefined;
@@ -96,6 +98,7 @@ export function recordEditorAgentActionAudit(
       sessionId: input.sessionId,
       actionId: input.actionId,
       actionType: input.actionType,
+      rootAttribution: input.rootAttribution,
       decision: input.decision,
       outcome: input.outcome,
       conflictCode: input.conflictCode,

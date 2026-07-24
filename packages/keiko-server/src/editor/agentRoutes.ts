@@ -37,6 +37,7 @@ import {
   isEditorAgentActionResult,
   isEditorAgentActiveBufferActionType,
   isEditorAgentBridgeDecisionCapability,
+  isEditorAgentSessionsRequest,
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
@@ -75,15 +76,20 @@ import {
   type GitRepositoryStatusResponse,
   type EditorAgentFailureCode,
   type EditorAgentSessionSnapshot,
+  type EditorAgentRootAttribution,
+  type EditorAgentSessionsRequest,
+  type EditorAgentSnapshotRequest,
   type EditorAgentSnapshotTextMode,
   type CodingWorkbenchMode,
   type LanguageRange,
+  type WorkspaceTrustLevel,
 } from "@oscharko-dev/keiko-contracts";
 import {
   PatchApplyError,
   PatchValidationError,
   applyPatch,
   inspectPatch,
+  parseUnifiedDiff,
   projectValidatedPatch,
   validatePatch,
   type PatchInspection,
@@ -129,11 +135,20 @@ import {
   listEditorAgentActionAudit,
   recordEditorAgentActionAudit,
 } from "./agentActionAudit.js";
+import {
+  editorAgentPathBoundaryReason,
+  resolveEditorAgentActionRoot,
+  resolveEditorAgentSessionRoot,
+  type EditorAgentRootBoundaryReason,
+} from "./agentRootBoundary.js";
 
 type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
-  "autonomousDeliveryApprovalStore" | "autonomousDeliveryDeploymentCeiling" | "runtimeMutationLease"
->;
+  | "autonomousDeliveryApprovalStore"
+  | "autonomousDeliveryDeploymentCeiling"
+  | "runtimeMutationLease"
+  | "workspaceScriptTrust"
+> & { readonly store?: UiHandlerDeps["store"] | undefined };
 
 type EditorAgentActionRouteDeps = UiHandlerDeps;
 
@@ -1089,10 +1104,51 @@ function preflight(
   return { ok: true, inspection };
 }
 
+function sessionMatchesDiscoveryScope(
+  snapshot: EditorAgentSessionSnapshot,
+  request: EditorAgentSessionsRequest,
+  deps: EditorAgentRouteDeps | undefined,
+): boolean {
+  const rooted =
+    request.rootBinding === undefined
+      ? resolveEditorAgentSessionRoot(snapshot, deps?.store)
+      : resolveEditorAgentActionRoot(snapshot, request.rootBinding, deps?.store);
+  if (!rooted.ok) return false;
+  if (
+    request.rootBinding === undefined &&
+    (rooted.root.explicitBindingRequired || snapshot.rootBinding !== undefined)
+  ) {
+    return false;
+  }
+  return editorAgentAuthorityRegistry.resolve(
+    request.authorityRef,
+    rooted.root.workspaceRoot,
+    editorAgentDeploymentCeiling(deps),
+    new Date().toISOString(),
+  ).ok;
+}
+
 export function handleEditorAgentSessions(): RouteResult {
   const sessions = editorAgentRegistry
     .listSessions()
     .filter((snapshot) => editorAgentRegistry.hasLiveBridge(snapshot.sessionId))
+    .map((snapshot) => shapeSnapshot(snapshot, "none", 0));
+  return { status: 200, body: { sessions } };
+}
+
+export async function handleEditorAgentScopedSessions(
+  ctx: RouteContext,
+  deps?: EditorAgentRouteDeps,
+): Promise<RouteResult> {
+  const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
+  if (isRouteResult(body)) return body;
+  if (!isEditorAgentSessionsRequest(body)) {
+    return { status: 400, body: errorBody("INVALID_REQUEST", "Session scope is invalid.") };
+  }
+  const sessions = editorAgentRegistry
+    .listSessions()
+    .filter((snapshot) => editorAgentRegistry.hasLiveBridge(snapshot.sessionId))
+    .filter((snapshot) => sessionMatchesDiscoveryScope(snapshot, body, deps))
     .map((snapshot) => shapeSnapshot(snapshot, "none", 0));
   return { status: 200, body: { sessions } };
 }
@@ -1107,28 +1163,114 @@ function bridgeCapabilityError(): RouteResult {
   };
 }
 
-function registerBridgeSnapshot(request: EditorAgentBridgeSnapshotRequest): RouteResult {
-  const existing = editorAgentRegistry.snapshotFor(request.snapshot.sessionId);
+function snapshotRootPaths(snapshot: EditorAgentSessionSnapshot): readonly string[] {
+  return [
+    ...(snapshot.activeFile === null ? [] : [snapshot.activeFile]),
+    ...snapshot.dirtyFiles,
+    ...snapshot.panes.flatMap((pane) => [
+      ...(pane.activeFile === null ? [] : [pane.activeFile]),
+      ...pane.openFiles,
+    ]),
+  ];
+}
+
+function rootBoundaryError(reason: EditorAgentRootBoundaryReason): RouteResult {
+  let code = "EDITOR_AGENT_ROOT_BINDING_INVALID";
+  if (reason === "root-binding-required") code = "EDITOR_AGENT_ROOT_BINDING_REQUIRED";
+  else if (reason === "decompose-per-root") code = "EDITOR_AGENT_DECOMPOSE_PER_ROOT";
+  return {
+    status: 403,
+    body: errorBody(code, "The editor agent request is not authorized for this workspace root."),
+  };
+}
+
+function registerBridgeSnapshot(
+  request: EditorAgentBridgeSnapshotRequest,
+  deps?: EditorAgentRouteDeps,
+): RouteResult {
+  const root = resolveEditorAgentSessionRoot(request.snapshot, deps?.store);
+  if (!root.ok) return rootBoundaryError(root.reason);
+  const pathReason = editorAgentPathBoundaryReason(root.root, snapshotRootPaths(request.snapshot));
+  if (pathReason !== null) return rootBoundaryError(pathReason);
+  const snapshot =
+    root.root.workspaceRoot === request.snapshot.workspaceRoot
+      ? request.snapshot
+      : { ...request.snapshot, workspaceRoot: root.root.workspaceRoot };
+  const existing = editorAgentRegistry.snapshotFor(snapshot.sessionId);
   const supplied = request.bridgeDecisionCapability;
   if (
     existing !== undefined &&
     supplied !== undefined &&
-    editorAgentRegistry.refreshSnapshot(request.snapshot, bridgeCapabilityDigest(supplied))
+    editorAgentRegistry.refreshSnapshot(snapshot, bridgeCapabilityDigest(supplied))
   ) {
-    return { status: 200, body: { snapshot: request.snapshot } };
+    return { status: 200, body: { snapshot } };
   }
   const capability = issueBridgeDecisionCapability();
   const digest = bridgeCapabilityDigest(capability);
   const registered =
     existing === undefined
-      ? editorAgentRegistry.registerSnapshot(request.snapshot, digest)
-      : editorAgentRegistry.rotateSnapshotCapability(request.snapshot, digest);
+      ? editorAgentRegistry.registerSnapshot(snapshot, digest)
+      : editorAgentRegistry.rotateSnapshotCapability(snapshot, digest);
   return registered
-    ? { status: 200, body: { snapshot: request.snapshot, bridgeDecisionCapability: capability } }
+    ? { status: 200, body: { snapshot, bridgeDecisionCapability: capability } }
     : bridgeCapabilityError();
 }
 
-export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<RouteResult> {
+function snapshotReadAction(request: EditorAgentSnapshotRequest): EditorAgentAction {
+  const identity = createHash("sha256")
+    .update(`${request.sessionId ?? "selected"}:${request.textMode}`, "utf8")
+    .digest("hex");
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: `snapshot-${identity}`,
+    idempotencyKey: `snapshot-${identity}`,
+    sessionId: request.sessionId ?? "selected",
+    type: "searchWorkspace",
+    ...(request.rootBinding === undefined ? {} : { rootBinding: request.rootBinding }),
+    ...(request.authorityRef === undefined ? {} : { authorityRef: request.authorityRef }),
+    searchWorkspace: { mode: "text", query: "editor-agent-snapshot", maxResults: 1 },
+  };
+}
+
+function authorizeSnapshotRead(
+  request: EditorAgentSnapshotRequest,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentRouteDeps | undefined,
+): RouteResult | null {
+  // Whether an explicit binding is required is a property of the live manifest, never of the
+  // snapshot. Deciding it from the snapshot let a session that was registered while the workspace
+  // still had one root keep reading after a second root arrived, skipping both the root boundary
+  // and the authority reservation.
+  const session = resolveEditorAgentSessionRoot(snapshot, deps?.store);
+  if (!session.ok) return rootBoundaryError(session.reason);
+  if (!session.root.explicitBindingRequired && snapshot.rootBinding === undefined) return null;
+  const rooted = resolveEditorAgentActionRoot(snapshot, request.rootBinding, deps?.store);
+  if (!rooted.ok) return rootBoundaryError(rooted.reason);
+  const action = { ...snapshotReadAction(request), sessionId: snapshot.sessionId };
+  const decision = decideActionPolicy(action, snapshot, deps);
+  const policyConflict = policyAdmissionConflict(action, decision);
+  if (policyConflict !== null) {
+    return { status: 403, body: { result: resultForAction(policyConflict, snapshot) } };
+  }
+  // Non-consuming validation: bound-session snapshot reads must not increment
+  // the authority envelope's toolCalls counter, or repeated polls silently
+  // burn maxToolCalls before the first real edit ever runs.
+  const authorityRejection = validateActionAuthority(action, snapshot, decision, deps);
+  return authorityRejection === null
+    ? null
+    : {
+        status: 403,
+        body: errorBody(
+          "EDITOR_AGENT_SNAPSHOT_AUTHORITY_INVALID",
+          "Snapshot context is not authorized for this workspace root.",
+        ),
+      };
+}
+
+export async function handleEditorAgentSnapshot(
+  ctx: RouteContext,
+  deps?: EditorAgentRouteDeps,
+): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
   if (isRouteResult(body)) return body;
   const parsed = parseEditorAgentSnapshotRequest(body);
@@ -1136,10 +1278,12 @@ export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<Rout
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
   if ("kind" in parsed.value) {
-    return registerBridgeSnapshot(parsed.value);
+    return registerBridgeSnapshot(parsed.value, deps);
   }
   const selected = editorAgentRegistry.selectSnapshot(parsed.value.sessionId);
   if (selected === undefined) return { status: 200, body: { snapshot: null } };
+  const readRejection = authorizeSnapshotRead(parsed.value, selected, deps);
+  if (readRejection !== null) return readRejection;
   const maxBytes = parsed.value.maxBytes ?? DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES;
   return {
     status: 200,
@@ -1397,6 +1541,19 @@ function authorityDenyReason(
     : "authority-invalid";
 }
 
+function editorWorkspaceTrust(
+  deps: EditorAgentRouteDeps | undefined,
+  workspaceRoot: string,
+): WorkspaceTrustLevel {
+  try {
+    return deps?.workspaceScriptTrust?.trustLevelForRoot(workspaceRoot) === "trusted"
+      ? "trusted"
+      : "restricted";
+  } catch {
+    return "restricted";
+  }
+}
+
 // Deterministic policy classification (AC2). Containment reuses the contract guard; sensitivity reuses
 // the always-on workspace deny-list (a keiko-workspace concern the leaf classifier cannot reach, so
 // the boolean is resolved here). Pure browser navigation/layout remains exempt; server-resolved
@@ -1435,6 +1592,7 @@ function decideActionPolicy(
     baseline,
     resolution.envelope,
     EDITOR_AGENT_ACTION_APPROVAL_RISK[action.type],
+    editorWorkspaceTrust(deps, snapshot.workspaceRoot),
   );
 }
 
@@ -1449,6 +1607,10 @@ function reserveActionAuthority(
   if (action.authorityRef === undefined) {
     return denyByAuthority(decision, "authority-missing");
   }
+  const rooted = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
+  if (!rooted.ok) return denyByAuthority(decision, rooted.reason);
+  const pathReason = editorAgentPathBoundaryReason(rooted.root, actionRootPaths(action, snapshot));
+  if (pathReason !== null) return denyByAuthority(decision, pathReason);
   const reservation = editorAgentAuthorityRegistry.reserveForAction(
     action.authorityRef,
     action,
@@ -1458,6 +1620,40 @@ function reserveActionAuthority(
     new Date().toISOString(),
   );
   return reservation.ok ? null : denyByAuthority(decision, authorityDenyReason(reservation));
+}
+
+// Non-consuming twin of `reserveActionAuthority`: mirrors every guard but
+// calls `resolveForAction` instead of `reserveForAction`, so a bound-session
+// poll (snapshot read) validates its authority without incrementing the
+// `toolCalls` usage counter. Without this a governed session that polls N
+// times before its first real edit burns N of maxToolCalls and then hits
+// budget-exceeded on the very first mutation.
+function validateActionAuthority(
+  action: EditorAgentAction,
+  // Bound-session snapshot reads (the only caller — `authorizeSnapshotRead`)
+  // always have a resolved snapshot, so the parameter narrows from the
+  // `reserveActionAuthority` shape here and the snapshot-undefined guard
+  // becomes provably unreachable and is removed.
+  snapshot: EditorAgentSessionSnapshot,
+  decision: EditorAgentActionPolicyDecision,
+  deps?: EditorAgentRouteDeps,
+): EditorAgentActionPolicyDecision | null {
+  if (EDITOR_AGENT_WORKBENCH_ACTION_CLASS[decision.effectClass] === null) return null;
+  if (action.authorityRef === undefined) {
+    return denyByAuthority(decision, "authority-missing");
+  }
+  const rooted = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
+  if (!rooted.ok) return denyByAuthority(decision, rooted.reason);
+  const pathReason = editorAgentPathBoundaryReason(rooted.root, actionRootPaths(action, snapshot));
+  if (pathReason !== null) return denyByAuthority(decision, pathReason);
+  const resolution = editorAgentAuthorityRegistry.resolveForAction(
+    action.authorityRef,
+    action,
+    snapshot.workspaceRoot,
+    editorAgentDeploymentCeiling(deps),
+    new Date().toISOString(),
+  );
+  return resolution.ok ? null : denyByAuthority(decision, authorityDenyReason(resolution));
 }
 
 // Issue #1395 (AC1) — record one content-free audit entry for this action at its admission decision.
@@ -1480,19 +1676,35 @@ function auditAction(
     sessionId: action.sessionId,
     actionId: action.actionId,
     actionType: action.type,
+    ...auditRootAttribution(snapshot),
     decision,
     outcome: result.status,
     conflictCode: result.conflict?.code,
     failureCode: result.failure?.code,
-    ...auditTargetFields(action, snapshot, queryPath, metadataRedactor, runtimeOrigin),
+    ...auditTargetFields(action, snapshot, decision, queryPath, metadataRedactor, runtimeOrigin),
     editCount: action.type === "applyTextEdits" ? action.textEdits?.length : undefined,
     patchByteLength: actionPatchByteLength(action),
   });
 }
 
+function auditRootAttribution(snapshot: EditorAgentSessionSnapshot | undefined): {
+  readonly rootAttribution?: EditorAgentRootAttribution | undefined;
+} {
+  const binding = snapshot?.rootBinding;
+  return binding === undefined
+    ? {}
+    : {
+        rootAttribution: {
+          rootRef: binding.rootRef,
+          rootIdentityDigest: binding.rootIdentityDigest,
+        },
+      };
+}
+
 function auditTargetFields(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
   queryPath: string | undefined,
   metadataRedactor: EditorAgentActionRouteDeps["redactor"] | undefined,
   runtimeOrigin: boolean,
@@ -1501,6 +1713,7 @@ function auditTargetFields(
   | { readonly targetBasename: string; readonly targetPathHash: string }
   | Record<never, never> {
   if (runtimeOrigin) return {};
+  if (isRootBoundaryDenial(decision.denyReason)) return {};
   if (queryPath !== undefined) {
     return {
       targetBasename: redactedQueryGitBasename(queryPath, metadataRedactor),
@@ -1508,6 +1721,15 @@ function auditTargetFields(
     };
   }
   return { targetPath: governedActionTarget(action, snapshot).targetPath };
+}
+
+function isRootBoundaryDenial(reason: EditorAgentActionDenyReason | undefined): boolean {
+  return (
+    reason === "root-binding-required" ||
+    reason === "root-binding-invalid" ||
+    reason === "decompose-per-root" ||
+    reason === "workspace-boundary-escape"
+  );
 }
 
 function redactedQueryGitBasename(
@@ -1764,9 +1986,10 @@ function finishChangesetResult(
   decision = decideActionPolicy(action, snapshot, deps),
   runtimeOrigin = false,
 ): RouteResult {
-  auditAction(action, snapshot, decision, result, undefined, runtimeOrigin);
-  editorAgentRegistry.reportResult(result);
-  return { status: 200, body: { result } };
+  const attributed = resultForAction(result, snapshot);
+  auditAction(action, snapshot, decision, attributed, undefined, runtimeOrigin);
+  editorAgentRegistry.reportResult(attributed);
+  return { status: 200, body: { result: attributed } };
 }
 
 function handleChangesetResult(
@@ -1794,12 +2017,40 @@ function handleChangesetResult(
   return handleApprovedChangesetResult(action, snapshot, deps, runtimeMutation);
 }
 
+type ApprovedChangesetRoot =
+  | { readonly ok: true; readonly action: EditorAgentAction }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function approvedChangesetRoot(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentRouteDeps | undefined,
+  runtimeMutation: RuntimeMutationClassification,
+): ApprovedChangesetRoot {
+  const rooted = bindActionRoot(action, snapshot, deps);
+  if (rooted.ok) return rooted;
+  return {
+    ok: false,
+    response: finishRuntimeChangeset(
+      action,
+      snapshot,
+      rooted.result,
+      deps,
+      runtimeMutation,
+      rooted.decision,
+    ),
+  };
+}
+
 function handleApprovedChangesetResult(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentRouteDeps | undefined,
   runtimeMutation: RuntimeMutationClassification,
 ): RouteResult {
+  const rooted = approvedChangesetRoot(action, snapshot, deps, runtimeMutation);
+  if (!rooted.ok) return rooted.response;
+  action = rooted.action;
   const decision = decideActionPolicy(action, snapshot, deps, runtimeMutation);
   const policyConflict = policyAdmissionConflict(action, decision);
   if (policyConflict !== null) {
@@ -1907,9 +2158,22 @@ function validateResultLease(request: EditorAgentActionResultRequest): ResultLea
   return { ok: true, capabilityDigest };
 }
 
-function finishBrowserActionResult(result: EditorAgentActionResult): RouteResult {
-  editorAgentRegistry.reportResult(result);
-  return { status: 200, body: { result } };
+function resultForAction(
+  result: EditorAgentActionResult,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+): EditorAgentActionResult {
+  const rootAttribution = auditRootAttribution(snapshot).rootAttribution;
+  if (rootAttribution !== undefined) return { ...result, rootAttribution };
+  return result.rootAttribution === undefined ? result : { ...result, rootAttribution: undefined };
+}
+
+function finishBrowserActionResult(
+  action: EditorAgentAction,
+  result: EditorAgentActionResult,
+): RouteResult {
+  const attributed = resultForAction(result, editorAgentRegistry.snapshotFor(action.sessionId));
+  editorAgentRegistry.reportResult(attributed);
+  return { status: 200, body: { result: attributed } };
 }
 
 function handlePatchResult(
@@ -1917,13 +2181,18 @@ function handlePatchResult(
   reported: EditorAgentActionResult,
   deps?: EditorAgentRouteDeps,
 ): RouteResult {
-  if (reported.status !== "succeeded") return finishBrowserActionResult(reported);
+  if (reported.status !== "succeeded") return finishBrowserActionResult(action, reported);
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  if (snapshot !== undefined) {
+    const rooted = bindActionRoot(action, snapshot, deps);
+    if (!rooted.ok) return finishBrowserActionResult(action, rooted.result);
+    action = rooted.action;
+  }
   const decision = decideActionPolicy(action, snapshot, deps);
   const policyConflict = policyAdmissionConflict(action, decision);
-  if (policyConflict !== null) return finishBrowserActionResult(policyConflict);
+  if (policyConflict !== null) return finishBrowserActionResult(action, policyConflict);
   const admission = preflight(action, snapshot);
-  return finishBrowserActionResult(admission.ok ? reported : admission.result);
+  return finishBrowserActionResult(action, admission.ok ? reported : admission.result);
 }
 
 function handleReportedActionResult(
@@ -1955,7 +2224,7 @@ function handleReportedActionResult(
   }
   if (action.type === "applyChangeset") return handleChangesetResult(action, result, deps);
   if (action.type === "applyPatch") return handlePatchResult(action, result, deps);
-  return finishBrowserActionResult(result);
+  return finishBrowserActionResult(action, result);
 }
 
 function actionHasBrowserReview(type: EditorAgentAction["type"]): boolean {
@@ -1983,10 +2252,11 @@ function rejectActionRequest(
   requestHash: string,
   status: 403 | 409,
 ): RouteResult {
-  rememberIdempotency(action.idempotencyKey, requestHash, result);
-  auditAction(action, snapshot, decision, result);
-  editorAgentRegistry.reportResult(result);
-  return { status, body: { result } };
+  const attributed = resultForAction(result, snapshot);
+  rememberIdempotency(action.idempotencyKey, requestHash, attributed);
+  auditAction(action, snapshot, decision, attributed);
+  editorAgentRegistry.reportResult(attributed);
+  return { status, body: { result: attributed } };
 }
 
 type BridgeActionLease =
@@ -2115,6 +2385,21 @@ function rejectServerResolvedReplay(
 ): RouteResult | null {
   if (!isServerResolvedAction(action)) return null;
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  if (snapshot !== undefined) {
+    const rooted = bindActionRoot(action, snapshot, deps);
+    if (!rooted.ok) {
+      return serverResolvedFailure(
+        action,
+        snapshot,
+        rooted.decision,
+        rooted.result,
+        requestHash,
+        403,
+        deps?.redactor,
+      );
+    }
+    action = rooted.action;
+  }
   const decision = decideActionPolicy(action, snapshot, deps);
   const policyConflict = policyAdmissionConflict(action, decision);
   if (policyConflict !== null) {
@@ -2172,10 +2457,11 @@ function serverResolvedFailure(
   status: 200 | 403 | 409,
   metadataRedactor?: EditorAgentActionRouteDeps["redactor"],
 ): RouteResult {
-  rememberIdempotency(action.idempotencyKey, requestHash, result);
-  auditAction(action, snapshot, decision, result, metadataRedactor);
-  editorAgentRegistry.reportResult(result);
-  return { status, body: { result } };
+  const attributed = resultForAction(result, snapshot);
+  rememberIdempotency(action.idempotencyKey, requestHash, attributed);
+  auditAction(action, snapshot, decision, attributed, metadataRedactor);
+  editorAgentRegistry.reportResult(attributed);
+  return { status, body: { result: attributed } };
 }
 
 async function runNavigateSymbolAction(
@@ -3100,28 +3386,95 @@ function rejectServerResolvedLiveness(
       );
 }
 
-async function admitEditorAction(
+type RootBoundAction =
+  | { readonly ok: true; readonly action: EditorAgentAction }
+  | {
+      readonly ok: false;
+      readonly decision: EditorAgentActionPolicyDecision;
+      readonly result: EditorAgentActionResult;
+    };
+
+function actionRootPaths(
   action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): readonly string[] {
+  const paths = [
+    ...resolveActionTargetPaths(action, snapshot),
+    ...serverResolvedActionPaths(action).filter((path): path is string => path !== undefined),
+    ...patchRootPaths(action),
+  ];
+  return [...new Set(paths)];
+}
+
+function patchRootPaths(action: EditorAgentAction): readonly string[] {
+  const patch = action.type === "applyChangeset" ? action.changeset?.patch : action.patch;
+  if (patch === undefined) return [];
+  try {
+    return parseUnifiedDiff(patch).files.map((file) => file.path);
+  } catch {
+    return [];
+  }
+}
+
+function rootBoundaryDecision(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  reason: EditorAgentRootBoundaryReason,
+): EditorAgentActionPolicyDecision {
+  const target = governedActionTarget(action, snapshot);
+  return denyByAuthority(
+    classifyEditorAgentAction(action.type, { ...target, origin: action.origin }),
+    reason,
+  );
+}
+
+function bindActionRoot(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps | EditorAgentRouteDeps | undefined,
+): RootBoundAction {
+  const resolution = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
+  if (!resolution.ok) {
+    return {
+      ok: false,
+      decision: rootBoundaryDecision(action, snapshot, resolution.reason),
+      result: conflict(
+        action,
+        resolution.reason === "decompose-per-root" ? "DECOMPOSE_PER_ROOT" : "POLICY_DENIED",
+        "The editor action must be authorized and decomposed for one workspace root.",
+      ),
+    };
+  }
+  const pathReason = editorAgentPathBoundaryReason(
+    resolution.root,
+    actionRootPaths(action, snapshot),
+  );
+  if (pathReason !== null) {
+    return {
+      ok: false,
+      decision: rootBoundaryDecision(action, snapshot, pathReason),
+      result: conflict(
+        action,
+        pathReason === "decompose-per-root" ? "DECOMPOSE_PER_ROOT" : "OUT_OF_SCOPE",
+        "The editor action target is outside its bound workspace root.",
+      ),
+    };
+  }
+  const binding = resolution.root.binding;
+  return {
+    ok: true,
+    action: binding === undefined ? action : { ...action, rootBinding: binding },
+  };
+}
+
+function admitAndReserveAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  runtimeMutation: RuntimeMutationClassification,
   requestHash: string,
   deps: EditorAgentActionRouteDeps | undefined,
-  signal: AbortSignal,
-): Promise<RouteResult> {
-  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
-  const runtimeMutation = classifyRuntimeMutation(action, snapshot, deps);
-  const decision = decideActionPolicy(action, snapshot, deps, runtimeMutation);
-  if (isServerResolvedAction(action)) {
-    if (deps === undefined) {
-      return serverResolvedFailure(
-        action,
-        snapshot,
-        decision,
-        failedResult(action, "The server-resolved editor operation is unavailable."),
-        requestHash,
-        200,
-      );
-    }
-    return resolveServerAction(action, requestHash, snapshot, decision, deps, signal);
-  }
+): { readonly ok: true; readonly inspection: AdmissionInspection } | RouteResult {
   const admission = preflight(action, snapshot);
   if (!admission.ok) {
     return rejectActionRequest(action, snapshot, decision, admission.result, requestHash, 409);
@@ -3138,12 +3491,65 @@ async function admitEditorAction(
     const result = conflict(action, "POLICY_DENIED", "The action authority budget is exhausted.");
     return rejectActionRequest(action, snapshot, reservationDenial, result, requestHash, 403);
   }
+  return { ok: true, inspection: admission.inspection };
+}
+
+async function resolveOrRejectServerAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps | undefined,
+  signal: AbortSignal,
+): Promise<RouteResult> {
+  if (deps === undefined) {
+    return serverResolvedFailure(
+      action,
+      snapshot,
+      decision,
+      failedResult(action, "The server-resolved editor operation is unavailable."),
+      requestHash,
+      200,
+    );
+  }
+  return resolveServerAction(action, requestHash, snapshot, decision, deps, signal);
+}
+
+async function admitEditorAction(
+  action: EditorAgentAction,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps | undefined,
+  signal: AbortSignal,
+): Promise<RouteResult> {
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  if (snapshot !== undefined) {
+    const rooted = bindActionRoot(action, snapshot, deps);
+    if (!rooted.ok) {
+      const { decision: d, result: r } = rooted;
+      return rejectActionRequest(action, snapshot, d, r, requestHash, 403);
+    }
+    action = rooted.action;
+  }
+  const runtimeMutation = classifyRuntimeMutation(action, snapshot, deps);
+  const decision = decideActionPolicy(action, snapshot, deps, runtimeMutation);
+  if (isServerResolvedAction(action)) {
+    return resolveOrRejectServerAction(action, snapshot, decision, requestHash, deps, signal);
+  }
+  const admitted = admitAndReserveAction(
+    action,
+    snapshot,
+    decision,
+    runtimeMutation,
+    requestHash,
+    deps,
+  );
+  if ("status" in admitted) return admitted;
   return queueAndEmitAction(
     action,
     requestHash,
     snapshot,
     decision,
-    admission.inspection,
+    admitted.inspection,
     runtimeMutation,
   );
 }
@@ -3187,7 +3593,7 @@ export async function handleEditorAgentActions(
 function fullEditorActionDeps(
   deps: EditorAgentActionRouteDeps | EditorAgentRouteDeps | undefined,
 ): EditorAgentActionRouteDeps | undefined {
-  return deps !== undefined && "store" in deps ? deps : undefined;
+  return deps !== undefined && "redactor" in deps && "env" in deps ? deps : undefined;
 }
 
 function queryGitAbortDeps(

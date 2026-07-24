@@ -740,6 +740,7 @@ function buildAction(
   const base = {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     sessionId: session.sessionId,
+    ...(session.rootBinding === undefined ? {} : { rootBinding: session.rootBinding }),
     actionId: identity.actionId,
     idempotencyKey: identity.idempotencyKey,
     origin: "chat" as const,

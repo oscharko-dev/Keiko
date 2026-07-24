@@ -23,6 +23,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DebugCapsuleLayer2Input, DebugSpawnEnvelope } from "./debugCapsulePlan.js";
 import type { ApprovedDebugArtifact } from "./debugLaunchPlan.js";
+import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 import {
   createProductionDebugLaunchContextResolver,
   createProductionDebugTargetRevalidator,
@@ -288,19 +289,12 @@ describe("production debug launch context resolution", () => {
       hostSocketPath: join(runtime, "dap.sock"),
       capsuleRuntimeDirectory: "/run/keiko-debug",
       capsuleSocketPath: "/run/keiko-debug/dap.sock",
+      // The workspace digest comes from the shared M11 root-identity function, not from a
+      // formula restated here: re-deriving it locally is what let the producer and the launch
+      // validator drift onto two different digests without a single test noticing.
       workspaceIdentity: {
         realPath: workspace,
-        identityDigest: createHash("sha256")
-          .update(
-            JSON.stringify([
-              workspace,
-              workspaceStat.dev,
-              workspaceStat.ino,
-              workspaceStat.mode,
-              workspaceStat.uid,
-            ]),
-          )
-          .digest("hex"),
+        identityDigest: inspectWorkspaceRootIdentity(workspace).identityDigest,
         device: workspaceStat.dev,
         inode: workspaceStat.ino,
         mode: workspaceStat.mode,

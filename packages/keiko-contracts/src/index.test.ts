@@ -650,7 +650,8 @@ describe("keiko-contracts package surface", () => {
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
-    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(10);
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("DECOMPOSE_PER_ROOT");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toHaveLength(11);
     // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
     expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual([
       "CANCELLED",
@@ -690,6 +691,10 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.isEditorAgentGovernedAuthorityReference).toBe("function");
     expect(typeof mod.isEditorAgentOneUseApprovalReference).toBe("function");
     expect(typeof mod.isEditorAgentPreparedChangeset).toBe("function");
+    expect(typeof mod.isEditorAgentRootAttribution).toBe("function");
+    expect(typeof mod.isEditorAgentRootBinding).toBe("function");
+    expect(typeof mod.isEditorAgentSessionsRequest).toBe("function");
+    expect(typeof mod.editorAgentRootBindingDenyReason).toBe("function");
   });
 
   it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {
@@ -706,6 +711,9 @@ describe("keiko-contracts package surface", () => {
     type _DiagnosticsDetail = import("./index.js").EditorAgentDiagnosticsDetail;
     type _Snapshot = import("./index.js").EditorAgentSessionSnapshot;
     type _Request = import("./index.js").EditorAgentSnapshotRequest;
+    type _RootAttribution = import("./index.js").EditorAgentRootAttribution;
+    type _RootBinding = import("./index.js").EditorAgentRootBinding;
+    type _SessionsRequest = import("./index.js").EditorAgentSessionsRequest;
     // Issue #2114 (ADR-0125 D3): changeset / prepared-changeset / conflict / file-result types.
     type _Changeset = import("./index.js").EditorAgentChangeset;
     type _ChangesetFile = import("./index.js").EditorAgentChangesetFile;
@@ -726,6 +734,9 @@ describe("keiko-contracts package surface", () => {
     pin<_DiagnosticsDetail>();
     pin<_Snapshot>();
     pin<_Request>();
+    pin<_RootAttribution>();
+    pin<_RootBinding>();
+    pin<_SessionsRequest>();
     pin<_Changeset>();
     pin<_ChangesetFile>();
     pin<_PreparedChangeset>();
@@ -966,7 +977,8 @@ describe("keiko-contracts package surface", () => {
     expect(m.MANAGED_LSP_LANGUAGES).toEqual(["python", "go", "shell", "java", "rust"]);
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
     expect(m.MANAGED_LSP_EFFECTIVE_STATES).toHaveLength(9);
-    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES).toHaveLength(16);
+    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES).toHaveLength(17);
+    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES).toContain("WORKSPACE_UNTRUSTED");
     expect(typeof m.parseManagedLspActivationInput).toBe("function");
     expect(typeof m.parseManagedLspActivationStatus).toBe("function");
     expect(typeof m.resolveManagedLspActivation).toBe("function");
@@ -1252,6 +1264,45 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").HtmlManualPodJobRemediation>();
     pin<import("./index.js").HtmlManualPodRefreshRequest>();
     pin<import("./index.js").HtmlManualPodCreateRequest>();
+  });
+
+  it("M11 workspace foundation contracts are reachable through the barrel (#2520)", async (): Promise<void> => {
+    const m = await import("./index.js");
+    expect(m.WORKSPACE_CONTRACT_SCHEMA_VERSION).toBe(1);
+    expect(m.WORKSPACE_BINDING_V2_SCHEMA_VERSION).toBe("2");
+    expect(m.WORKSPACE_TRUST_LEVELS).toEqual(["trusted", "restricted"]);
+    expect(m.EDITOR_LOCAL_HISTORY_MAX_ENTRIES).toBe(512);
+    expect(typeof m.validateWorkspaceManifest).toBe("function");
+    expect(typeof m.validateWorkspaceRootDispatch).toBe("function");
+    expect(typeof m.validateWorkspaceTrustRecord).toBe("function");
+    expect(typeof m.resolveEditorM11Settings).toBe("function");
+    expect(typeof m.validateWorkspaceProfileManifest).toBe("function");
+    expect(m.EDITOR_M11_DEFAULT_PROFILE_REF).toBe("profile-default");
+    expect(typeof m.isWorkspaceProfileDisplayName).toBe("function");
+    expect(typeof m.planEditorLocalHistoryRetention).toBe("function");
+    expect(typeof m.validateWorkspaceBindingV2).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").WorkspaceRootRef>();
+    pin<import("./index.js").WorkspaceManifest>();
+    pin<import("./index.js").WorkspaceRootDispatch>();
+    pin<import("./index.js").WorkspaceTrustRecord>();
+    pin<import("./index.js").WorkspaceTrustAssessment>();
+    pin<import("./index.js").EditorM11ProfileSettingsLayer>();
+    pin<import("./index.js").EditorM11RootSettingsLayer>();
+    pin<import("./index.js").EditorM11ResolvedSetting>();
+    pin<import("./index.js").EditorM11ProfilesSnapshot>();
+    pin<import("./index.js").EditorM11ProfileMutation>();
+    pin<import("./index.js").EditorM11ProfileMutationResult>();
+    pin<import("./index.js").WorkspaceProfileManifest>();
+    pin<import("./index.js").WorkspaceProfileExportResult>();
+    pin<import("./index.js").WorkspaceProfileImportPreview>();
+    pin<import("./index.js").WorkspaceProfileImportApply>();
+    pin<import("./index.js").EditorLocalHistoryEntry>();
+    pin<import("./index.js").EditorLocalHistoryIndex>();
+    pin<import("./index.js").WorkspaceBindingV1>();
+    pin<import("./index.js").WorkspaceBindingV2>();
+    pin<import("./index.js").VersionedWorkspaceBinding>();
   });
 
   it("the one vector-index port is reachable + fails closed through the barrel (#2556, ADR-0152 D1)", async () => {

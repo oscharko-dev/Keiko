@@ -1136,7 +1136,9 @@ describe("EditorWidget — edit and save", () => {
 
     view.unmount();
 
-    expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+    await waitFor(() => {
+      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+    });
   });
 
   it("releases only the previous root's inactive models while a sibling pane stays mounted", async () => {
@@ -1198,7 +1200,9 @@ describe("EditorWidget — edit and save", () => {
     expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
 
     second.unmount();
-    expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+    await waitFor(() => {
+      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+    });
   });
 
   it("compares a dirty external disk edit and keeps the local buffer without overwriting it", async () => {
@@ -4302,6 +4306,15 @@ describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
             Promise.resolve({
               schemaVersion: "1",
               projectId: "/repo",
+              workspaceTrust: {
+                kind: "workspace-trust-status",
+                schemaVersion: 1,
+                projectId: "/repo",
+                trust: "trusted",
+                decidedBy: "server",
+                reason: "human-grant",
+                revision: 1,
+              },
               kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
                 kind,
                 available: true,

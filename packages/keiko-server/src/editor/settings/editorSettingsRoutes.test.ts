@@ -191,7 +191,7 @@ describe("editor settings control routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("etag")).toMatch(/^"edm7-0-0-/u);
+    expect(response.headers.get("etag")).toMatch(/^"edm7-0-0-0-/u);
     expect(body.storeState).toBe("absent");
     expect(body.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
       value: 13,
@@ -220,7 +220,7 @@ describe("editor settings control routes", () => {
     );
 
     expect(changed.status).toBe(200);
-    expect(changedBody.etag).toMatch(/^"edm7-0-1-/u);
+    expect(changedBody.etag).toMatch(/^"edm7-0-1-0-/u);
     expect(reset.status).toBe(200);
     expect(await reset.json()).toMatchObject({ kind: "ok", changed: true });
   });
@@ -273,6 +273,56 @@ describe("editor settings control routes", () => {
     expect(await reused.json()).toMatchObject({ error: { code: "IDEMPOTENCY_KEY_REUSED" } });
   });
 
+  it("guards root-scoped writes with their own revision and idempotency history", async () => {
+    const initial = await snapshot();
+    const body = {
+      schemaVersion: "1",
+      root: workspaceRoot,
+      scope: "root",
+      action: "set",
+      expectedRevision: 0,
+      values: { fontSize: 19 },
+    };
+    const first = await mutation(body, {
+      "If-Match": initial.headers.get("etag") ?? "",
+      "Idempotency-Key": "root-font-once",
+    });
+    const stale = await mutation(body, {
+      "If-Match": initial.headers.get("etag") ?? "",
+      "Idempotency-Key": "root-font-stale",
+    });
+    const reused = await mutation(
+      { ...body, values: { fontSize: 20 } },
+      {
+        "If-Match": initial.headers.get("etag") ?? "",
+        "Idempotency-Key": "root-font-once",
+      },
+    );
+
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      readonly etag: string;
+      readonly snapshot: {
+        readonly rootRevision: number;
+        readonly settings: readonly {
+          readonly id: string;
+          readonly source: string;
+          readonly value: unknown;
+        }[];
+      };
+    };
+    expect(firstBody.etag).toMatch(/^"edm7-0-0-1-/u);
+    expect(firstBody.snapshot.rootRevision).toBe(1);
+    expect(firstBody.snapshot.settings.find((setting) => setting.id === "fontSize")).toMatchObject({
+      value: 19,
+      source: "root",
+    });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ error: { code: "STALE_REVISION" } });
+    expect(reused.status).toBe(409);
+    expect(await reused.json()).toMatchObject({ error: { code: "IDEMPOTENCY_KEY_REUSED" } });
+  });
+
   it("rejects a workspace mutation guarded by an etag from a different root", async () => {
     const otherRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-editor-settings-other-")));
     try {
@@ -286,7 +336,7 @@ describe("editor settings control routes", () => {
       expect(otherSnapshot.status).toBe(200);
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
-      expect(unchanged.headers.get("etag")).toMatch(/^"edm7-0-0-/u);
+      expect(unchanged.headers.get("etag")).toMatch(/^"edm7-0-0-0-/u);
     } finally {
       await rm(otherRoot, { recursive: true, force: true });
     }
@@ -330,7 +380,7 @@ describe("editor settings control routes", () => {
   });
 });
 
-const USER_ETAG_REVISION_ZERO = '"edm7-0-0-user"';
+const USER_ETAG_REVISION_ZERO = '"edm7-0-0-0-user"';
 
 function userSetBody(): Record<string, unknown> {
   return {

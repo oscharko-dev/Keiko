@@ -57,6 +57,12 @@ import { type EditorPaletteHost } from "./editorCommands";
 import { useEditorVerificationRun } from "./useEditorVerificationRun";
 import { useEditorSettings } from "./useEditorSettings";
 import {
+  WorkspaceTrustBanner,
+  WorkspaceTrustDecisionDialog,
+  type WorkspaceTrustDecision,
+} from "../../workspace-trust/WorkspaceTrustSurfaces";
+import trustStyles from "../../workspace-trust/WorkspaceTrust.module.css";
+import {
   bindingFromKeyboardEvent,
   resolveEffectiveKeyboardShortcuts,
   type EffectiveKeyboardShortcutRegistry,
@@ -111,6 +117,7 @@ export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
   readonly layoutJson?: string | undefined;
   readonly onWorkspaceChange?: ((patch: EditorWidgetWorkspacePatch) => void) | undefined;
   readonly onOpenProblems?: ((projectPath: string) => void) | undefined;
+  readonly onOpenWorkspaceTrust?: (() => void) | undefined;
 }
 
 interface PendingDirtyClose {
@@ -374,6 +381,10 @@ interface PaneBinding {
   readonly renderTabHandle: NonNullable<EditorRuntimeWidgetProps["renderTabHandle"]>;
 }
 
+function nonEmptyRoot(value: string): string | undefined {
+  return value.length > 0 ? value : undefined;
+}
+
 export function EditorWidget({
   root,
   file,
@@ -381,7 +392,9 @@ export function EditorWidget({
   layoutJson,
   onWorkspaceChange,
   onOpenProblems,
+  onOpenWorkspaceTrust,
   onOpenDebugPanel,
+  sessionActive = true,
   windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
@@ -399,7 +412,7 @@ export function EditorWidget({
     layoutJson,
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
-  const editorSettings = useEditorSettings(workspaceRoot.length > 0 ? workspaceRoot : undefined);
+  const editorSettings = useEditorSettings(nonEmptyRoot(workspaceRoot));
   const editorShortcutRegistry = useMemo(
     () => resolveEffectiveKeyboardShortcuts(editorSettings.applied.keybindingOverrides),
     [editorSettings.applied.keybindingOverrides],
@@ -423,6 +436,18 @@ export function EditorWidget({
   layoutRef.current = layout;
   const [dirtyByPane, setDirtyByPane] = useState<EditorDirtyByPane>({});
   const [pendingClose, setPendingClose] = useState<PendingDirtyClose | null>(null);
+  // The dialog stamps the root it was opened for so a root switch that races
+  // the user's Confirm click cannot silently mutate trust on the new root
+  // (M11 CWE-863; the confirm handler closes over a `verification` bound to
+  // the live root).
+  const [trustDecision, setTrustDecision] = useState<{
+    readonly action: WorkspaceTrustDecision;
+    readonly initialPrompt: boolean;
+    readonly root: string;
+  } | null>(null);
+  const [trustMutationIssue, setTrustMutationIssue] = useState<"update">();
+  const [trustMutationPending, setTrustMutationPending] = useState(false);
+  const promptedTrustRootRef = useRef<string | null>(null);
   const [heldTab, setHeldTab] = useState<DraggedTab | null>(null);
   // GEN-PERF-EDITOR-003 — the tab-drag "held" visual is read from a ref inside the memoized
   // per-pane renderTabHandle closure, so that closure stays referentially stable (it no
@@ -436,6 +461,11 @@ export function EditorWidget({
   const [tabDropTargetPaneId, setTabDropTargetPaneId] = useState<string | null>(null);
   const [tabInsertTarget, setTabInsertTargetState] = useState<TabInsertTarget | null>(null);
   const [saveRequest, setSaveRequest] = useState<EditorExternalSaveRequest | null>(null);
+  const [fileHistoryRequest, setFileHistoryRequest] = useState<{
+    readonly paneId: string;
+    readonly nonce: number;
+  } | null>(null);
+  const fileHistoryRequestSeqRef = useRef(0);
   const [agentReconciliationQueues, setAgentReconciliationQueues] =
     useState<EditorAgentReconciliationQueues>({});
   const saveSeqRef = useRef(0);
@@ -505,6 +535,13 @@ export function EditorWidget({
       setOutlineByPane({});
       setOutlineRevealByPane({});
       setAgentReconciliationQueues({});
+      // A trust dialog opened for the previous root must not survive the
+      // switch: `verification` is re-derived from the live root each render,
+      // so confirming the stale dialog after a switch would grant/revoke on
+      // the new root. Fail closed by dismissing everything trust-scoped.
+      setTrustDecision(null);
+      setTrustMutationIssue(undefined);
+      promptedTrustRootRef.current = null;
     }
     if (nextRoot.length === 0 || onWorkspaceChange === undefined) return;
     const normalizedFileChanged = (file?.trim() ?? "") !== nextActivePane.activeFile;
@@ -1347,11 +1384,57 @@ export function EditorWidget({
   const nextTab = useCallback((): void => cycleActiveTab(1), [cycleActiveTab]);
   const prevTab = useCallback((): void => cycleActiveTab(-1), [cycleActiveTab]);
 
+  const openActiveFileHistory = useCallback((): void => {
+    const pane = activeEditorPane(layoutRef.current);
+    if (pane.activeFile.length === 0) return;
+    fileHistoryRequestSeqRef.current += 1;
+    setFileHistoryRequest({ paneId: pane.id, nonce: fileHistoryRequestSeqRef.current });
+  }, []);
+
   // Issue #2212 (ADR-0126) — run-affordance state + actions through the governed verification route.
   const verification = useEditorVerificationRun({
     root: workspaceRoot,
     activeFile: activeFile.length > 0 ? activeFile : null,
   });
+
+  useEffect(() => {
+    const status = verification.catalog?.workspaceTrust;
+    if (
+      workspaceRoot.length > 0 &&
+      status?.trust === "restricted" &&
+      promptedTrustRootRef.current !== workspaceRoot
+    ) {
+      promptedTrustRootRef.current = workspaceRoot;
+      setTrustDecision({ action: "grant", initialPrompt: true, root: workspaceRoot });
+    }
+  }, [verification.catalog?.workspaceTrust, workspaceRoot]);
+
+  const confirmTrustDecision = useCallback(async (): Promise<boolean> => {
+    if (trustDecision === null || trustMutationPending) return false;
+    // Root-drift guard: if a root switch raced this confirm handler, the
+    // dialog was opened for a different root than `verification` now targets.
+    // Refuse and fail closed rather than mutate trust on the wrong root.
+    if (trustDecision.root !== workspaceRoot) {
+      setTrustDecision(null);
+      setTrustMutationIssue(undefined);
+      return false;
+    }
+    setTrustMutationPending(true);
+    try {
+      const confirmed = await (trustDecision.action === "grant"
+        ? verification.trustWorkspaceScripts()
+        : verification.revokeWorkspaceScriptTrust());
+      if (confirmed) {
+        setTrustDecision(null);
+        setTrustMutationIssue(undefined);
+      } else {
+        setTrustMutationIssue("update");
+      }
+      return confirmed;
+    } finally {
+      setTrustMutationPending(false);
+    }
+  }, [trustDecision, trustMutationPending, verification, workspaceRoot]);
 
   // Content-free host snapshot consumed by the palette + keybinding layer. Memoized so the command
   // palette does not receive a new object on unrelated editor chrome renders.
@@ -1376,9 +1459,12 @@ export function EditorWidget({
       runFileTests: verification.runFileTests,
       runWorkspaceVerification: verification.runWorkspaceVerification,
       cancelVerification: verification.cancelVerification,
-      trustWorkspaceScripts: verification.trustWorkspaceScripts,
-      revokeWorkspaceScriptTrust: verification.revokeWorkspaceScriptTrust,
+      trustWorkspaceScripts: () =>
+        setTrustDecision({ action: "grant", initialPrompt: false, root: workspaceRoot }),
+      revokeWorkspaceScriptTrust: () =>
+        setTrustDecision({ action: "revoke", initialPrompt: false, root: workspaceRoot }),
       openProblems: () => onOpenProblems?.(workspaceRoot),
+      openFileHistory: openActiveFileHistory,
       openDebugPanel: () => onOpenDebugPanel?.(),
     }),
     [
@@ -1390,16 +1476,15 @@ export function EditorWidget({
       nextTab,
       onOpenProblems,
       onOpenDebugPanel,
+      openActiveFileHistory,
       prevTab,
       reopenClosedTab,
       saveAllDirty,
       splitActivePane,
       verification.cancelVerification,
       verification.catalog,
-      verification.revokeWorkspaceScriptTrust,
       verification.runFileTests,
       verification.runWorkspaceVerification,
-      verification.trustWorkspaceScripts,
       verification.verifiableTarget,
       verification.verificationRunning,
       workspaceRoot,
@@ -1531,6 +1616,7 @@ export function EditorWidget({
     if (binding === undefined) return null;
     const runtimeProps: EditorRuntimeWidgetProps = {
       ...props,
+      sessionActive,
       root: workspaceRoot,
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
       openFiles: pane.openFiles,
@@ -1559,6 +1645,8 @@ export function EditorWidget({
       onOpenDebugPanel,
       onOutlineStateChange: handleOutlineStateChange,
       outlineRevealRequest: outlineRevealByPane[pane.id],
+      fileHistoryRequestNonce:
+        fileHistoryRequest?.paneId === pane.id ? fileHistoryRequest.nonce : undefined,
       // GEN-PERF-EDITOR-003 — a per-pane scalar that changes only for the pane whose tab is
       // held, so a hold-state change re-renders just that pane (its stable renderTabHandle
       // re-reads the held flag) while other panes stay memo-bailed.
@@ -1724,8 +1812,19 @@ export function EditorWidget({
           />
         </>
       )}
-      <div className="ed-main">
-        <div className={`ed-panes ed-panes-root${singlePane ? " single" : ""}`}>
+      <div className={`ed-main ${trustStyles.cmpEditorMain}`}>
+        <WorkspaceTrustBanner
+          status={verification.catalog?.workspaceTrust}
+          issue={trustMutationIssue ?? (verification.catalog === null ? "load" : undefined)}
+          surface="editor"
+          onManage={onOpenWorkspaceTrust}
+          editor
+        />
+        <div
+          className={`ed-panes ed-panes-root ${trustStyles.cmpEditorPanes}${
+            singlePane ? " single" : ""
+          }`}
+        >
           {renderNode(layout.tree)}
         </div>
       </div>
@@ -1755,6 +1854,15 @@ export function EditorWidget({
           onSave={savePendingClose}
           onDiscard={discardPendingClose}
           onCancel={cancelPendingClose}
+        />
+      ) : null}
+      {trustDecision !== null && pendingClose === null ? (
+        <WorkspaceTrustDecisionDialog
+          action={trustDecision.action}
+          initialPrompt={trustDecision.initialPrompt}
+          mutating={trustMutationPending}
+          onCancel={() => setTrustDecision(null)}
+          onConfirm={confirmTrustDecision}
         />
       ) : null}
     </div>

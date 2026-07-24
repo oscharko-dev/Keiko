@@ -2,6 +2,7 @@ import type {
   EvidenceStore,
   ManagedLspLanguage,
   WorkspaceInfo,
+  WorkspaceTrustLevel,
 } from "@oscharko-dev/keiko-contracts";
 
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
@@ -32,6 +33,7 @@ export interface NodeManagedLspControlOptions {
   readonly processEnv: Readonly<Record<string, string | undefined>>;
   readonly redact: (value: unknown) => unknown;
   readonly evidenceStore: EvidenceStore;
+  readonly workspaceTrust?: ((realRoot: string) => WorkspaceTrustLevel) | undefined;
   readonly diagnosticSink?: ServerDiagnosticSink | undefined;
 }
 
@@ -80,6 +82,7 @@ export function createNodeManagedLspControl(
         commandRules,
       }),
     disposePoolEntry: disposeHostLspPoolEntry,
+    workspaceTrust: options.workspaceTrust,
     runtimeApproved: (language, runtimeId) => {
       const spec = HOST_LANGUAGE_PROVIDER_SPECS.find((candidate) =>
         candidate.languages.includes(language),

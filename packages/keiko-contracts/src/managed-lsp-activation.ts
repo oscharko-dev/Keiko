@@ -2,6 +2,8 @@
 // contracts leaf owns only closed state, precedence, and content-free status vocabulary. Runtime
 // process supervision remains owned by ADR-0069 and keiko-server.
 
+import type { WorkspaceTrustLevel } from "./workspace-trust.js";
+
 export const MANAGED_LSP_ACTIVATION_SCHEMA_VERSION = "1" as const;
 
 export type ManagedLspLanguage = "python" | "go" | "shell" | "java" | "rust";
@@ -42,6 +44,7 @@ export const MANAGED_LSP_EFFECTIVE_STATES: readonly ManagedLspEffectiveState[] =
 export type ManagedLspActivationReasonCode =
   | "PRODUCT_UNSUPPORTED"
   | "POLICY_DENIED"
+  | "WORKSPACE_UNTRUSTED"
   | "LEGACY_ENV_DISABLED"
   | "NOT_PROVISIONED"
   | "WORKSPACE_DISABLED"
@@ -61,6 +64,7 @@ export const MANAGED_LSP_ACTIVATION_REASON_CODES: readonly ManagedLspActivationR
   Object.freeze([
     "PRODUCT_UNSUPPORTED",
     "POLICY_DENIED",
+    "WORKSPACE_UNTRUSTED",
     "LEGACY_ENV_DISABLED",
     "NOT_PROVISIONED",
     "WORKSPACE_DISABLED",
@@ -101,6 +105,7 @@ export interface ManagedLspActivationInput {
   readonly negotiation: ManagedLspNegotiation;
   readonly runtimeHealth: ManagedLspRuntimeHealth;
   readonly restartRequired: boolean;
+  readonly workspaceTrust?: WorkspaceTrustLevel | undefined;
 }
 
 export interface ManagedLspActivationStatus {
@@ -192,7 +197,7 @@ const REASONS_BY_STATE: Readonly<
     "WORKSPACE_ACTIVATION_UNSET",
     "STATE_UNAVAILABLE",
   ),
-  disabledByPolicy: frozenReasons("POLICY_DENIED", "LEGACY_ENV_DISABLED"),
+  disabledByPolicy: frozenReasons("POLICY_DENIED", "LEGACY_ENV_DISABLED", "WORKSPACE_UNTRUSTED"),
   notProvisioned: frozenReasons("NOT_PROVISIONED"),
   available: frozenReasons("AVAILABLE"),
   starting: frozenReasons("STARTING"),
@@ -211,7 +216,8 @@ function isDeniedReason(reason: ManagedLspActivationReasonCode): boolean {
     reason === "PRODUCT_UNSUPPORTED" ||
     reason === "STATE_UNAVAILABLE" ||
     reason === "POLICY_DENIED" ||
-    reason === "LEGACY_ENV_DISABLED"
+    reason === "LEGACY_ENV_DISABLED" ||
+    reason === "WORKSPACE_UNTRUSTED"
   );
 }
 
@@ -253,6 +259,9 @@ function canonicalActivationInput(value: UnknownRecord): ManagedLspActivationInp
     negotiation: value.negotiation as ManagedLspNegotiation,
     runtimeHealth: value.runtimeHealth as ManagedLspRuntimeHealth,
     restartRequired: value.restartRequired as boolean,
+    ...(value.workspaceTrust !== undefined
+      ? { workspaceTrust: value.workspaceTrust as WorkspaceTrustLevel }
+      : {}),
     ...(value.canonicalState !== undefined
       ? { canonicalState: value.canonicalState as ManagedLspCanonicalState }
       : {}),
@@ -276,6 +285,7 @@ function parseActivationInputUnsafe(
     "negotiation",
     "runtimeHealth",
     "restartRequired",
+    "workspaceTrust",
   ];
   const valid = [
     hasOnlyKeys(value, keys),
@@ -291,6 +301,7 @@ function parseActivationInputUnsafe(
     memberOf(value.negotiation, NEGOTIATION_STATES),
     memberOf(value.runtimeHealth, RUNTIME_HEALTH_STATES),
     typeof value.restartRequired === "boolean",
+    value.workspaceTrust === undefined || memberOf(value.workspaceTrust, ["trusted", "restricted"]),
   ].every(Boolean);
   return valid
     ? { ok: true, value: canonicalActivationInput(value) }
@@ -313,7 +324,8 @@ function status(
     input.canonicalState === "unavailable" ||
     input.canonicalState === "rejected" ||
     input.deploymentPolicy === "denied" ||
-    input.legacyEnvironment === "disabled"
+    input.legacyEnvironment === "disabled" ||
+    input.workspaceTrust !== "trusted"
       ? "denied"
       : "allowed";
   return {
@@ -354,6 +366,11 @@ const ACTIVATION_RULES: readonly ActivationRule[] = Object.freeze([
     matches: (input) => input.legacyEnvironment === "disabled",
     state: "disabledByPolicy",
     reason: "LEGACY_ENV_DISABLED",
+  },
+  {
+    matches: (input) => input.workspaceTrust !== "trusted",
+    state: "disabledByPolicy",
+    reason: "WORKSPACE_UNTRUSTED",
   },
   {
     matches: (input) => input.provisioning === "notProvisioned",

@@ -25,6 +25,11 @@ import {
   type VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
+import {
+  mutateWorkspaceTrust,
+  WORKSPACE_TRUST_CHANGED_EVENT,
+  workspaceTrustEventProjectId,
+} from "../../../../../lib/workspace-trust-api";
 import { resolveVerificationTarget } from "./editorCommands";
 import {
   getEditorProblemsSourceHealth,
@@ -36,7 +41,6 @@ import {
 const RUNS_URL = "/api/editor/verification/runs";
 const EVENTS_URL = "/api/editor/verification/events";
 const CATALOG_URL = "/api/editor/verification/catalog";
-const TRUST_URL = "/api/editor/verification/trust";
 const MUTATION_HEADERS = {
   "content-type": "application/json",
   "X-Keiko-CSRF": "1",
@@ -56,8 +60,8 @@ export interface EditorVerificationRunControls {
   readonly runFileTests: (forFile?: string) => void;
   readonly runWorkspaceVerification: (kind: VerificationKind) => void;
   readonly cancelVerification: () => void;
-  readonly trustWorkspaceScripts: () => void;
-  readonly revokeWorkspaceScriptTrust: () => void;
+  readonly trustWorkspaceScripts: () => Promise<boolean>;
+  readonly revokeWorkspaceScriptTrust: () => Promise<boolean>;
 }
 
 export interface UseEditorVerificationRunOptions {
@@ -666,19 +670,18 @@ function explainUnavailable(
 
 async function updateWorkspaceTrust(
   root: string,
-  method: "POST" | "DELETE",
-  onCatalog: (catalog: EditorVerificationCatalog) => void,
-): Promise<void> {
+  action: "grant" | "revoke",
+  resetCatalog: () => void,
+): Promise<boolean> {
   try {
-    const response = await fetch(TRUST_URL, {
-      method,
-      headers: MUTATION_HEADERS,
-      body: JSON.stringify({ projectId: root }),
-    });
-    if (!response.ok) throw new Error("workspace trust update rejected");
-    onCatalog(await fetchVerificationCatalog(root));
+    await mutateWorkspaceTrust(root, action);
+    // The mutation response confirms only the trust decision. Keep every execution affordance
+    // closed until the change event below has refreshed the complete server-owned catalog.
+    resetCatalog();
+    return true;
   } catch {
     showTransientStatus(root, "Verification: workspace trust update failed");
+    return false;
   }
 }
 
@@ -702,6 +705,30 @@ export function useEditorVerificationRun(
         if (!controller.signal.aborted) setCatalog(null);
       });
     return () => controller.abort();
+  }, [root]);
+
+  useEffect(() => {
+    if (root.length === 0) return undefined;
+    // Same staleness guard as the neighboring effect (698): a root switch
+    // during an in-flight trust refetch must not let the OLD root's catalog
+    // overwrite the NEW root's already-fetched one — the parent widget can
+    // self-dispatch this event via trust/revoke immediately before switching.
+    const controller = new AbortController();
+    const onTrustChanged = (event: Event): void => {
+      if (workspaceTrustEventProjectId(event) !== root) return;
+      void fetchVerificationCatalog(root, controller.signal)
+        .then((next) => {
+          if (!controller.signal.aborted) setCatalog(next);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setCatalog(null);
+        });
+    };
+    window.addEventListener(WORKSPACE_TRUST_CHANGED_EVENT, onTrustChanged);
+    return () => {
+      controller.abort();
+      window.removeEventListener(WORKSPACE_TRUST_CHANGED_EVENT, onTrustChanged);
+    };
   }, [root]);
 
   const runKind = useCallback(
@@ -735,12 +762,12 @@ export function useEditorVerificationRun(
     cancelRun(root);
   }, [root]);
 
-  const trustWorkspaceScripts = useCallback((): void => {
-    if (root.length > 0) void updateWorkspaceTrust(root, "POST", setCatalog);
+  const trustWorkspaceScripts = useCallback(async (): Promise<boolean> => {
+    return root.length > 0 ? updateWorkspaceTrust(root, "grant", () => setCatalog(null)) : false;
   }, [root]);
 
-  const revokeWorkspaceScriptTrust = useCallback((): void => {
-    if (root.length > 0) void updateWorkspaceTrust(root, "DELETE", setCatalog);
+  const revokeWorkspaceScriptTrust = useCallback(async (): Promise<boolean> => {
+    return root.length > 0 ? updateWorkspaceTrust(root, "revoke", () => setCatalog(null)) : false;
   }, [root]);
 
   const statusBarRun = useMemo<EditorVerificationStatusRun | null>(

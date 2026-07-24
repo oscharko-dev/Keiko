@@ -85,6 +85,7 @@ function options(spawn: LspSpawnFn): HostLanguageOperationOptions {
     },
     privateRuntimeStateRoot: runtimeStateRoot,
     activationAuthorized: true,
+    activationStillAuthorized: (): boolean => true,
     protocolConfiguration: { revision: 1, settings: {}, initializationOptions: {} },
   };
 }

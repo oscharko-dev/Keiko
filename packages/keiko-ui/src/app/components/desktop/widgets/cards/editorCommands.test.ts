@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
+  WORKSPACE_TRUST_SCHEMA_VERSION,
+  type WorkspaceTrustStatus,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_PALETTE_COMMANDS,
   availablePaletteCommands,
@@ -8,6 +12,18 @@ import {
   type EditorPaletteCommand,
   type EditorPaletteHost,
 } from "./editorCommands";
+
+function trustStatus(trust: "trusted" | "restricted"): WorkspaceTrustStatus {
+  return {
+    kind: "workspace-trust-status",
+    schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+    projectId: "/repo",
+    trust,
+    decidedBy: "server",
+    reason: trust === "trusted" ? "human-grant" : "state-unavailable",
+    revision: trust === "trusted" ? 1 : null,
+  };
+}
 
 function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost {
   return {
@@ -22,6 +38,7 @@ function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost
     verificationCatalog: {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       projectId: "/repo",
+      workspaceTrust: trustStatus("trusted"),
       kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
         kind: kind as "test" | "targeted-test" | "typecheck" | "lint" | "build",
         available: true,
@@ -41,6 +58,7 @@ function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost
     trustWorkspaceScripts: vi.fn(),
     revokeWorkspaceScriptTrust: vi.fn(),
     openProblems: vi.fn(),
+    openFileHistory: vi.fn(),
     ...overrides,
   };
 }
@@ -85,6 +103,7 @@ describe("editor command registry", () => {
       "tab.reopenClosed",
       "files.saveAll",
       "editor.openProblems",
+      "editor.openFileHistory",
       "run.fileTests",
       "run.typecheck",
       "run.lint",
@@ -105,6 +124,7 @@ describe("editor command registry", () => {
     commandById("tab.reopenClosed").run(host);
     commandById("files.saveAll").run(host);
     commandById("editor.openProblems").run(host);
+    commandById("editor.openFileHistory").run(host);
 
     expect(host.splitActive).toHaveBeenNthCalledWith(1, "row");
     expect(host.splitActive).toHaveBeenNthCalledWith(2, "column");
@@ -115,6 +135,7 @@ describe("editor command registry", () => {
     expect(host.reopenClosed).toHaveBeenCalledTimes(1);
     expect(host.saveAll).toHaveBeenCalledTimes(1);
     expect(host.openProblems).toHaveBeenCalledTimes(1);
+    expect(host.openFileHistory).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -169,6 +190,7 @@ describe("run affordances (Issue #2212, ADR-0126)", () => {
       verificationCatalog: {
         schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
         projectId: "/repo",
+        workspaceTrust: trustStatus("restricted"),
         kinds: [
           { kind: "targeted-test", available: true, trustState: "trusted" },
           { kind: "typecheck", available: true, trustState: "approval-required" },

@@ -4,10 +4,12 @@ import {
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_VERIFICATION_SCHEMA_VERSION,
   isEditorAgentAction,
+  isEditorAgentRootBinding,
   isVerificationKind,
   type EditorAgentAction,
   type EditorAgentActionQueuedResponse,
   type EditorAgentNavigateSymbolOperation,
+  type EditorAgentRootBinding,
   type EditorAgentSessionsResponse,
   type EditorAgentSearchWorkspaceMode,
   type EditorAgentGitAspect,
@@ -263,6 +265,16 @@ function validateAuthority(value: AuthorityReference): AuthorityReference {
   return authority;
 }
 
+function validateRootBinding(
+  value: EditorAgentRootBinding | undefined,
+): EditorAgentRootBinding | undefined {
+  if (value === undefined) return undefined;
+  if (!isEditorAgentRootBinding(value)) {
+    throw new Error("Editor agent root binding is invalid.");
+  }
+  return Object.freeze({ ...value });
+}
+
 function generatedId(source: () => string, label: string): string {
   const value = source();
   if (value.length === 0) throw new Error(`Editor agent ${label} source returned an empty value.`);
@@ -449,17 +461,20 @@ function parseQueryGitArguments(args: Record<string, unknown>): ParsedQueryGitAr
 export class EditorAgentToolHost implements ToolPort {
   private readonly client: EditorAgentHttpClient;
   private readonly authorityRef: AuthorityReference;
+  private readonly rootBinding: EditorAgentRootBinding | undefined;
   private readonly nextActionId: () => string;
   private readonly now: () => number;
 
   constructor(deps: {
     readonly client: EditorAgentHttpClient;
     readonly authorityRef: AuthorityReference;
+    readonly rootBinding?: EditorAgentRootBinding | undefined;
     readonly nextActionId: () => string;
     readonly now?: (() => number) | undefined;
   }) {
     this.client = deps.client;
     this.authorityRef = validateAuthority(deps.authorityRef);
+    this.rootBinding = validateRootBinding(deps.rootBinding);
     this.nextActionId = deps.nextActionId;
     this.now = deps.now ?? Date.now;
   }
@@ -535,6 +550,7 @@ export class EditorAgentToolHost implements ToolPort {
     const body: EditorAgentVerificationRunRequest = {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       sessionId: requireString(args, "sessionId"),
+      ...(this.rootBinding === undefined ? {} : { rootBinding: this.rootBinding }),
       kind,
       ...(targetPath === undefined ? {} : { targetPath }),
       authorityRef: this.authorityRef,
@@ -546,7 +562,11 @@ export class EditorAgentToolHost implements ToolPort {
 
   private async listSessions(request: ToolCallRequest): Promise<EditorAgentToolOutput> {
     expectOnly(request.arguments, []);
-    const result = await this.client.listSessions(request.signal);
+    const result = await this.client.listSessions(
+      request.signal,
+      this.rootBinding,
+      this.authorityRef,
+    );
     if (!result.ok) return { ok: false, error: result.error };
     return { ok: true, kind: "sessions", sessions: result.value.sessions };
   }
@@ -559,6 +579,8 @@ export class EditorAgentToolHost implements ToolPort {
     const result = await this.client.snapshot(
       {
         schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        ...(this.rootBinding === undefined ? {} : { rootBinding: this.rootBinding }),
+        authorityRef: this.authorityRef,
         textMode: snapshotTextMode(args.textMode),
         ...(sessionId === undefined ? {} : { sessionId }),
         ...(maxBytes === undefined ? {} : { maxBytes }),
@@ -712,6 +734,7 @@ export class EditorAgentToolHost implements ToolPort {
       idempotencyKey,
       sessionId,
       type,
+      ...(this.rootBinding === undefined ? {} : { rootBinding: this.rootBinding }),
       authorityRef: this.authorityRef,
     };
   }

@@ -238,7 +238,7 @@ export async function handleEditorLanguageSemanticTokens(
       now: options.now,
       lspProcessConfig: options.hostLanguageProcessConfig,
       ...(options.hostLanguageSpawn === undefined ? {} : { spawn: options.hostLanguageSpawn }),
-      ...managedHostOptions(authorization, root.realRoot),
+      ...managedHostOptions(authorization, root.realRoot, deps),
     });
     const response: ManagedLspSemanticTokenResponse =
       result === undefined
@@ -289,7 +289,7 @@ export async function runEditorLanguageOperation(
     now: options.now,
     lspProcessConfig: options.hostLanguageProcessConfig,
     ...(options.hostLanguageSpawn !== undefined ? { spawn: options.hostLanguageSpawn } : {}),
-    ...managedHostOptions(authorization, realRoot),
+    ...managedHostOptions(authorization, realRoot, deps),
   });
   if (hostOutcome !== undefined) {
     return hostOutcome;
@@ -370,9 +370,13 @@ interface ManagedActivationAuthorization {
 function managedHostOptions(
   authorization: ManagedActivationAuthorization | undefined,
   realRoot: string,
+  deps: UiHandlerDeps,
 ): Pick<
   HostLanguageOperationOptions,
-  "activationAuthorized" | "privateRuntimeStateRoot" | "protocolConfiguration"
+  | "activationAuthorized"
+  | "activationStillAuthorized"
+  | "privateRuntimeStateRoot"
+  | "protocolConfiguration"
 > {
   if (authorization?.authorized !== true) return {};
   const revision = authorization.configuration?.revision ?? authorization.revision ?? 0;
@@ -382,6 +386,13 @@ function managedHostOptions(
       : managedProviderProtocolConfiguration(authorization.configuration, realRoot);
   return {
     activationAuthorized: true,
+    activationStillAuthorized: (): boolean => {
+      try {
+        return deps.workspaceScriptTrust?.trustLevelForRoot(realRoot) === "trusted";
+      } catch {
+        return false;
+      }
+    },
     privateRuntimeStateRoot: authorization.privateRuntimeStateRoot,
     protocolConfiguration: configuration,
   };
@@ -478,6 +489,7 @@ function initializationOptions(
         ...(configuration === undefined ? {} : { configuration }),
       },
       realRoot,
+      deps,
     ),
   };
 }

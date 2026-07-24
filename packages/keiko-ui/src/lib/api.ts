@@ -134,10 +134,17 @@ import type {
   ManagedLspControlResponse,
   ManagedLspControlSuccessResult,
   ManagedLspSemanticTokenResponse,
-  EditorM7SettingsMutation,
-  EditorM7SettingsMutationOk,
-  EditorM7SettingsMutationResult,
-  EditorM7SettingsSnapshot,
+  EditorM11SettingsMutation,
+  EditorM11SettingsMutationOk,
+  EditorM11SettingsMutationResult,
+  EditorM11SettingsSnapshot,
+  EditorM11ProfileMutation,
+  EditorM11ProfileMutationResult,
+  EditorM11ProfilesSnapshot,
+  EditorLocalHistoryEntry,
+  WorkspaceProfileExportResult,
+  WorkspaceProfileImportApply,
+  WorkspaceProfileImportPreview,
   EditorM7WorkspaceSnippetMutation,
   EditorM7WorkspaceSnippetMutationResult,
   EditorM7WorkspaceSnippetSnapshot,
@@ -1393,11 +1400,69 @@ export async function saveFilesContent(input: {
   readonly expectedModifiedAt?: number | undefined;
   // Issue #1197: version-aware optimistic-concurrency token. Supersedes expectedModifiedAt.
   readonly baseVersion?: EditorDocumentVersion | undefined;
+  /** ADR-0147 D7: restore saves checkpoint the previous on-disk state before writing. */
+  readonly historyOrigin?: "pre-restore" | undefined;
 }): Promise<FilesContentResponse> {
   return fetchJson("/api/files/content", {
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+
+export interface EditorLocalHistoryListResponse {
+  readonly session: "active" | "unpaired";
+  readonly entries: readonly EditorLocalHistoryEntry[];
+}
+
+export interface EditorLocalHistoryReadResponse {
+  readonly entry: EditorLocalHistoryEntry;
+  readonly content: string;
+}
+
+export async function fetchEditorLocalHistory(
+  root: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<EditorLocalHistoryListResponse> {
+  const params = new URLSearchParams({ root, path });
+  return fetchJson(`/api/editor/local-history?${params.toString()}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchEditorLocalHistoryEntry(
+  root: string,
+  entryRef: string,
+  signal?: AbortSignal,
+): Promise<EditorLocalHistoryReadResponse> {
+  const params = new URLSearchParams({ root });
+  return fetchJson(
+    `/api/editor/local-history/${encodeURIComponent(entryRef)}?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+  );
+}
+
+export async function setEditorLocalHistoryPinned(
+  root: string,
+  entryRef: string,
+  pinned: boolean,
+): Promise<{ readonly entry: EditorLocalHistoryEntry }> {
+  const params = new URLSearchParams({ root });
+  return fetchJson(
+    `/api/editor/local-history/${encodeURIComponent(entryRef)}?${params.toString()}`,
+    { method: "PATCH", body: JSON.stringify({ pinned }) },
+  );
+}
+
+export async function deleteEditorLocalHistory(
+  root: string,
+  entryRef: string,
+): Promise<{ readonly deleted: true }> {
+  const params = new URLSearchParams({ root });
+  return fetchJson(
+    `/api/editor/local-history/${encodeURIComponent(entryRef)}?${params.toString()}`,
+    { method: "DELETE" },
+  );
 }
 
 export interface EditorHotExitWriteResponse {
@@ -1853,7 +1918,7 @@ export async function mutateManagedLspSettings(
 export function fetchEditorSettings(
   root?: string | undefined,
   signal?: AbortSignal,
-): Promise<EditorM7SettingsSnapshot> {
+): Promise<EditorM11SettingsSnapshot> {
   const query = root === undefined || root.length === 0 ? "" : `?root=${encodeURIComponent(root)}`;
   return fetchJson(`/api/editor/settings${query}`, {
     ...(signal === undefined ? {} : { signal }),
@@ -1861,13 +1926,70 @@ export function fetchEditorSettings(
 }
 
 export function mutateEditorSettings(
-  input: EditorM7SettingsMutation,
+  input: EditorM11SettingsMutation,
   etag: string,
   idempotencyKey: string,
   signal?: AbortSignal,
-): Promise<EditorM7SettingsMutationResult> {
+): Promise<EditorM11SettingsMutationResult> {
   return fetchJson("/api/editor/settings", {
     method: "PATCH",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function fetchEditorProfiles(signal?: AbortSignal): Promise<EditorM11ProfilesSnapshot> {
+  return fetchJson("/api/editor/settings/profiles", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function mutateEditorProfile(
+  input: EditorM11ProfileMutation,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM11ProfileMutationResult> {
+  return fetchJson("/api/editor/settings/profiles", {
+    method: "PATCH",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function exportEditorProfile(
+  profileRef: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceProfileExportResult> {
+  return fetchJson(
+    `/api/editor/settings/profiles/export?profileRef=${encodeURIComponent(profileRef)}`,
+    signal === undefined ? undefined : { signal },
+  );
+}
+
+export function previewEditorProfileImport(
+  serializedManifest: string,
+  etag: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceProfileImportPreview> {
+  return fetchJson("/api/editor/settings/profiles/import/preview", {
+    method: "POST",
+    headers: { "If-Match": etag },
+    body: serializedManifest,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function applyEditorProfileImport(
+  input: WorkspaceProfileImportApply,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM11ProfileMutationResult> {
+  return fetchJson("/api/editor/settings/profiles/import/apply", {
+    method: "POST",
     headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),
@@ -1887,7 +2009,7 @@ export function mutateDebugActivation(
   etag: string,
   idempotencyKey: string,
   signal?: AbortSignal,
-): Promise<EditorM7SettingsMutationOk> {
+): Promise<EditorM11SettingsMutationOk> {
   return fetchJson(`/api/editor/settings/debug/${action}`, {
     method: "POST",
     headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },

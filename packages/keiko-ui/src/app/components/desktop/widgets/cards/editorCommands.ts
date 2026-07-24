@@ -38,6 +38,7 @@ export interface EditorPaletteHost {
   trustWorkspaceScripts(): void;
   revokeWorkspaceScriptTrust(): void;
   openProblems(): void;
+  openFileHistory(): void;
   readonly openDebugPanel?: (() => void) | undefined;
 }
 
@@ -114,6 +115,13 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
     titleKey: "editor.command.openProblems",
     run: (host) => host.openProblems(),
     isAvailable: (host) => host.root.length > 0,
+  },
+  {
+    id: "editor.openFileHistory",
+    title: "Open File History",
+    titleKey: "editor.command.openFileHistory",
+    run: (host) => host.openFileHistory(),
+    isAvailable: (host) => host.root.length > 0 && host.activeFile !== null,
   },
   {
     id: "editor.openDebugPanel",

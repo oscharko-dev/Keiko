@@ -82,6 +82,7 @@ describe("gopls provider fake-protocol conformance", () => {
         signal: new AbortController().signal,
         spawn,
         activationAuthorized: true,
+        activationStillAuthorized: (): boolean => true,
         protocolConfiguration: {
           revision: 4,
           initializationOptions: { pullDiagnostics: true },
@@ -167,6 +168,7 @@ describe("gopls provider fake-protocol conformance", () => {
         signal: new AbortController().signal,
         spawn,
         activationAuthorized: true,
+        activationStillAuthorized: (): boolean => true,
         protocolConfiguration: {
           revision: 4,
           initializationOptions: { pullDiagnostics: true },

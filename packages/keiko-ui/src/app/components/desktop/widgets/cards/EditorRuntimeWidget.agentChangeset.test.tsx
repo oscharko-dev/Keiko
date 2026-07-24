@@ -354,6 +354,15 @@ const verificationFetchMock = vi.fn((url: string, init?: RequestInit) => {
         Promise.resolve({
           schemaVersion: "1",
           projectId: "/repo",
+          workspaceTrust: {
+            kind: "workspace-trust-status",
+            schemaVersion: 1,
+            projectId: "/repo",
+            trust: "trusted",
+            decidedBy: "server",
+            reason: "human-grant",
+            revision: 1,
+          },
           kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
             kind,
             available: true,

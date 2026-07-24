@@ -45,6 +45,7 @@ import {
   handleCreateRunSummaryPair,
   handleUpdateMessage,
 } from "./store-handlers.js";
+import { WORKSPACE_MANIFEST_ROUTE_GROUP } from "./workspace-manifest-routes.js";
 import {
   handleCreateDesktopChat,
   handleRegenerateDesktopChat,
@@ -128,6 +129,7 @@ import {
 import {
   handleCreateVerificationRun,
   handleDeleteVerificationRun,
+  handleGetWorkspaceScriptTrust,
   handleGrantWorkspaceScriptTrust,
   handleRevokeWorkspaceScriptTrust,
   handleVerificationCatalog,
@@ -203,6 +205,13 @@ import {
   handlePatchEditorSettings,
 } from "./editor/settings/editorSettingsRoutes.js";
 import {
+  handleApplyEditorProfileImport,
+  handleExportEditorProfile,
+  handleGetEditorProfiles,
+  handlePatchEditorProfiles,
+  handlePreviewEditorProfileImport,
+} from "./editor/settings/editorProfilesRoutes.js";
+import {
   handleGetWorkspaceSnippets,
   handleMutateWorkspaceSnippets,
   handlePreviewWorkspaceSnippet,
@@ -237,10 +246,12 @@ import {
   handleEditorHotExitRead,
   handleEditorHotExitWrite,
 } from "./editor/hotExitRoutes.js";
+import { EDITOR_LOCAL_HISTORY_ROUTE_GROUP } from "./editor/localHistory/localHistoryRoutes.js";
 import {
   handleEditorAgentActions,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
+  handleEditorAgentScopedSessions,
   handleEditorAgentSessions,
   handleEditorAgentSnapshot,
 } from "./editor/agentRoutes.js";
@@ -416,6 +427,8 @@ function health(): RouteResult {
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
+  ...WORKSPACE_MANIFEST_ROUTE_GROUP,
+  ...EDITOR_LOCAL_HISTORY_ROUTE_GROUP,
   ...DAP_DEBUG_ROUTE_GROUP,
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },
@@ -435,6 +448,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-sidecar/gateway/profile",
     handler: handleCodingSidecarGatewayProfile,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/verification/trust",
+    handler: handleGetWorkspaceScriptTrust,
   },
   {
     method: "POST",
@@ -825,6 +843,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   {
     method: "POST",
+    pattern: "/api/editor/agent/sessions",
+    handler: handleEditorAgentScopedSessions,
+  },
+  {
+    method: "POST",
     pattern: "/api/editor/agent/snapshot",
     handler: handleEditorAgentSnapshot,
   },
@@ -899,6 +922,31 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "PATCH",
     pattern: "/api/editor/settings",
     handler: handlePatchEditorSettings,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/settings/profiles",
+    handler: handleGetEditorProfiles,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/editor/settings/profiles",
+    handler: handlePatchEditorProfiles,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/settings/profiles/export",
+    handler: handleExportEditorProfile,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/settings/profiles/import/preview",
+    handler: handlePreviewEditorProfileImport,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/settings/profiles/import/apply",
+    handler: handleApplyEditorProfileImport,
   },
   // ADR-0136 D7 — the only dedicated activation routes. They mutate the canonical M7
   // debuggingEnabled setting and synchronously revoke a live session when it narrows.

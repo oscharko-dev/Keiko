@@ -170,6 +170,10 @@ function modelDisposed(model: RetainedEditorModel): boolean {
   return model.isDisposed?.() === true;
 }
 
+function expectedEditorDetachCancellation(error: unknown): boolean {
+  return error instanceof Error && error.name === "Canceled" && error.message === "Canceled";
+}
+
 function protectedEntry(entry: RegistryEntry): boolean {
   return (
     entry.attachmentCount > 0 ||
@@ -249,9 +253,13 @@ export class EditorModelRegistry {
     this.enforceBudgets();
   }
 
-  disposeRoot(rootKey: string, reason: EditorModelDisposalReason = "root-disposed"): void {
+  disposeRoot(
+    rootKey: string,
+    reason: EditorModelDisposalReason = "root-disposed",
+    force = false,
+  ): void {
     for (const entry of this.entries.values()) {
-      if (entry.rootKey === rootKey && !protectedEntry(entry)) {
+      if (entry.rootKey === rootKey && (force || !protectedEntry(entry))) {
         this.disposeEntry(entry, reason);
       }
     }
@@ -380,7 +388,11 @@ export class EditorModelRegistry {
     if (stillBound) {
       const viewState = editor.saveViewState();
       if (viewState !== null) entry.viewStates.set(viewStateKey, viewState);
-      editor.setModel?.(null);
+      try {
+        editor.setModel?.(null);
+      } catch (error: unknown) {
+        if (!expectedEditorDetachCancellation(error)) throw error;
+      }
     }
     entry.attachmentCount = Math.max(0, entry.attachmentCount - 1);
     entry.protection = { ...entry.protection, active: entry.attachmentCount > 0 };
@@ -469,8 +481,9 @@ export function configureEditorModelRegistry(options: Partial<EditorModelRegistr
 export function disposeEditorModelRegistryRoot(
   rootKey: string,
   reason: EditorModelDisposalReason = "root-disposed",
+  force = false,
 ): void {
-  sharedRegistry.disposeRoot(rootKey, reason);
+  sharedRegistry.disposeRoot(rootKey, reason, force);
 }
 
 // Releases every currently unattached model regardless of root at final editor-window shutdown.

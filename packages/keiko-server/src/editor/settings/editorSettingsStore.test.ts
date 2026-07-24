@@ -7,9 +7,11 @@ import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 
 import {
   createEditorSettingsStore,
+  editorSettingsRootRecordPath,
   editorSettingsUserRecordPath,
   editorSettingsWorkspaceRecordPath,
   emptyEditorSettingsUserRecord,
+  emptyEditorSettingsRootRecord,
   emptyEditorSettingsWorkspaceRecord,
 } from "./editorSettingsStore.js";
 
@@ -114,5 +116,33 @@ describe("editor settings store — direct coverage", () => {
     expect(() => {
       store.commitWorkspace(root, record);
     }).toThrow(/state directory must remain outside the workspace/u);
+  });
+
+  it("persists root records independently from legacy workspace records", () => {
+    const stateDir = temporaryDirectory("editor-settings-store-root-state");
+    const root = temporaryDirectory("editor-settings-store-root");
+    const store = createEditorSettingsStore({ stateDir });
+    store.commitWorkspace(root, {
+      ...emptyEditorSettingsWorkspaceRecord(root),
+      revision: 2,
+      values: { fontSize: 14 },
+    });
+    store.commitRoot(root, {
+      ...emptyEditorSettingsRootRecord(root),
+      revision: 3,
+      values: { fontSize: 18 },
+    });
+
+    expect(store.loadWorkspace(root)).toMatchObject({
+      state: "ready",
+      record: { revision: 2, values: { fontSize: 14 } },
+    });
+    expect(store.loadRoot(root)).toMatchObject({
+      state: "ready",
+      record: { revision: 3, values: { fontSize: 18 } },
+    });
+    expect(editorSettingsRootRecordPath(stateDir, root)).not.toBe(
+      editorSettingsWorkspaceRecordPath(stateDir, root),
+    );
   });
 });

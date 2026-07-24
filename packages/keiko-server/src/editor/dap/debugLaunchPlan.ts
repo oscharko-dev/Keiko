@@ -30,6 +30,7 @@ import {
   type DebugLaunchTarget,
 } from "./debugLaunchCatalog.js";
 import { isSafeDapSocketBasename, isSha256Digest } from "./debugLaunchSecurityPredicates.js";
+import { workspaceRootIdentityDigestFor } from "../../workspace-root-identity.js";
 
 const CAPSULE_ROOT = "/keiko-execution-root" as const;
 const CAPSULE_RUNTIME_ROOT = "/run/keiko-debug" as const;
@@ -255,6 +256,11 @@ function validateEndpoint(context: DebugLaunchRuntimeContext): void {
 }
 
 function validateWorkspaceIdentity(context: DebugLaunchRuntimeContext): void {
+  // The recorded identity must still describe the live directory. The digest is re-derived through
+  // the shared M11 helper so producer and validator stay on one formula — deriving it locally is
+  // what let the two drift apart once the producer was migrated. The alias rejection is
+  // deliberately not repeated here: the root was already resolved and alias-checked upstream, and
+  // re-imposing it rejects a canonical root reached through a symlinked parent.
   const workspaceStat = lstatSync(context.canonicalWorkspaceRoot);
   const workspaceIdentity = context.workspaceIdentity;
   const observed = [workspaceStat.dev, workspaceStat.ino, workspaceStat.mode, workspaceStat.uid];
@@ -264,20 +270,14 @@ function validateWorkspaceIdentity(context: DebugLaunchRuntimeContext): void {
     workspaceIdentity.mode,
     workspaceIdentity.ownerUid,
   ];
-  const valid =
+  const invalid =
     !context.workspaceTrusted ||
     context.fs.realPath(context.workspaceRoot) !== context.canonicalWorkspaceRoot ||
     workspaceIdentity.realPath !== context.canonicalWorkspaceRoot ||
     observed.some((value, index) => value !== expected[index]) ||
     workspaceIdentity.identityDigest !==
-      hash([
-        workspaceIdentity.realPath,
-        workspaceStat.dev,
-        workspaceStat.ino,
-        workspaceStat.mode,
-        workspaceStat.uid,
-      ]);
-  if (valid) throw new DebugCapsulePlanError();
+      workspaceRootIdentityDigestFor(context.canonicalWorkspaceRoot, workspaceStat);
+  if (invalid) throw new DebugCapsulePlanError();
 }
 
 function validateArtifacts(context: DebugLaunchRuntimeContext): void {

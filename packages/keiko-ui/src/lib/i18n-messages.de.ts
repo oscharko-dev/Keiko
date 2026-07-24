@@ -27,6 +27,47 @@ export const DE_MESSAGES = {
   "editor.verification.run": "Verifizierung ausführen",
   "editor.verification.runReviewedChangeLabel": "Verifizierung für die geprüfte Änderung ausführen",
   "editor.command.openProblems": "Probleme öffnen",
+  "editor.command.openFileHistory": "Dateiverlauf öffnen",
+  "editor.fileHistory.title": "Dateiverlauf",
+  "editor.fileHistory.open": "Dateiverlauf öffnen",
+  "editor.fileHistory.close": "Dateiverlauf schließen",
+  "editor.fileHistory.listLabel": "Wiederherstellungspunkte der Datei",
+  "editor.fileHistory.loading": "Dateiverlauf wird geladen…",
+  "editor.fileHistory.empty": "Für diese Datei sind noch keine Wiederherstellungspunkte vorhanden.",
+  "editor.fileHistory.unpaired":
+    "Koppeln Sie die lokale App-Sitzung, um den Dateiverlauf zu lesen.",
+  "editor.fileHistory.loadFailed": "Der Dateiverlauf konnte nicht geladen werden.",
+  "editor.fileHistory.retry": "Erneut versuchen",
+  "editor.fileHistory.pruned": "Dieser Wiederherstellungspunkt ist nicht mehr verfügbar.",
+  "editor.fileHistory.origin.userSave": "Benutzerspeicherung",
+  "editor.fileHistory.origin.agentApply": "Agentenänderung",
+  "editor.fileHistory.origin.restore": "Wiederherstellung",
+  "editor.fileHistory.pinned": "Angeheftet",
+  "editor.fileHistory.pin": "Wiederherstellungspunkt anheften",
+  "editor.fileHistory.unpin": "Wiederherstellungspunkt lösen",
+  "editor.fileHistory.compareCurrent": "Mit aktueller Version vergleichen",
+  "editor.fileHistory.selectCompare": "Für Vergleich auswählen",
+  "editor.fileHistory.compareSelected": "Mit Auswahl vergleichen",
+  "editor.fileHistory.compareTitle": "Dateiverlauf vergleichen",
+  "editor.fileHistory.closeCompare": "Zurück zum Dateiverlauf",
+  "editor.fileHistory.restore": "Wiederherstellen",
+  "editor.fileHistory.delete": "Löschen",
+  "editor.fileHistory.restoreTitle": "Diese Version wiederherstellen?",
+  "editor.fileHistory.restoreBody":
+    "Die aktuelle Datei wird als Wiederherstellungspunkt gesichert, bevor diese Version mit den normalen Konfliktprüfungen gespeichert wird.",
+  "editor.fileHistory.deleteTitle": "Diesen Wiederherstellungspunkt löschen?",
+  "editor.fileHistory.deleteBody":
+    "Dieser verschlüsselte Wiederherstellungspunkt kann nach dem Löschen nicht wiederhergestellt werden.",
+  "editor.fileHistory.confirmRestore": "Version wiederherstellen",
+  "editor.fileHistory.confirmDelete": "Wiederherstellungspunkt löschen",
+  "editor.fileHistory.cancel": "Abbrechen",
+  "editor.fileHistory.dirtyConflict":
+    "Nicht gespeicherte Änderungen verhindern die Wiederherstellung. Speichern oder verwerfen Sie den aktuellen Puffer zuerst.",
+  "editor.fileHistory.restoreFailed": "Die Version wurde nicht wiederhergestellt.",
+  "editor.fileHistory.pinFailed": "Der Anheftungsstatus konnte nicht geändert werden.",
+  "editor.fileHistory.deleteFailed": "Der Wiederherstellungspunkt konnte nicht gelöscht werden.",
+  "editor.fileHistory.sizeDelta": "Größenänderung: {delta}",
+  "editor.fileHistory.entryLabel": "Wiederherstellungspunkt {sequence}, {origin}, {timestamp}",
   "editor.command.runFileTests": "Tests für Datei ausführen",
   "editor.command.runTypecheck": "Typprüfung ausführen",
   "editor.command.runLint": "Lint-Prüfung ausführen",
@@ -34,6 +75,82 @@ export const DE_MESSAGES = {
   "editor.command.cancelVerification": "Verifizierung abbrechen",
   "editor.command.trustWorkspaceScripts": "Arbeitsbereichsskripten vertrauen",
   "editor.command.revokeWorkspaceScriptTrust": "Vertrauen in Arbeitsbereichsskripte widerrufen",
+  "settings.profiles.reset": "Auf Standard zurücksetzen",
+  "settings.profiles.portabilityTitle": "Profilübertragung",
+  "settings.profiles.portabilityDescription":
+    "Exportiere ein serverseitig bereinigtes Profil oder prüfe jede Einstellung vor dem Import als neues Profil.",
+  "settings.profiles.export": "Ausgewähltes Profil exportieren",
+  "settings.profiles.importFile": "Profildatei importieren",
+  "settings.profiles.switchAfterImport": "Nach Import wechseln",
+  "settings.profiles.proposedName": "Neues Profil: {name}",
+  "settings.profiles.setting": "Einstellung",
+  "settings.profiles.disposition": "Änderung",
+  "settings.profiles.value": "Wert oder Grund",
+  "settings.profiles.disposition.add": "Hinzufügen",
+  "settings.profiles.disposition.change": "Ändern",
+  "settings.profiles.disposition.noOp": "Keine Änderung",
+  "settings.profiles.disposition.rejected": "Abgelehnt",
+  "settings.profiles.applyImport": "Import anwenden",
+  "settings.profiles.exported": "Profil exportiert.",
+  "settings.profiles.exportedRedacted":
+    "Profil mit {count} entfernten unsicheren Werten exportiert.",
+  "settings.profiles.imported": "Profil als neues Profil importiert.",
+  "settings.profiles.fileTooLarge": "Die Profildatei überschreitet das Importlimit von 64 KiB.",
+  "settings.profiles.invalid": "Der Profilimport konnte nicht validiert oder angewendet werden.",
+  "settings.profiles.stale": "Profile wurden nach der Vorschau geändert. Prüfe die Datei erneut.",
+  "workspaceTrust.title": "Arbeitsbereichsvertrauen",
+  "workspaceTrust.restrictedMode": "Eingeschränkter Modus",
+  "workspaceTrust.trustedMode": "Vertrauenswürdiger Arbeitsbereich",
+  "workspaceTrust.manage": "Arbeitsbereichsvertrauen verwalten",
+  "workspaceTrust.loading": "Serverseitigen Vertrauensstatus laden…",
+  "workspaceTrust.retry": "Erneut versuchen",
+  "workspaceTrust.loadFailed":
+    "Das Arbeitsbereichsvertrauen konnte nicht sicher gelesen werden. Dieser Arbeitsbereich bleibt eingeschränkt.",
+  "workspaceTrust.updateFailed":
+    "Der Server hat die Vertrauensänderung nicht bestätigt. Dieser Arbeitsbereich bleibt eingeschränkt.",
+  "workspaceTrust.banner.editor":
+    "Arbeitsbereichsskripte, Sprachserver und Agentenausführung bleiben für diese Wurzel nicht verfügbar.",
+  "workspaceTrust.banner.commands":
+    "Vom Repository definierte Befehle bleiben deaktiviert, bis dieser Wurzel vertraut wird.",
+  "workspaceTrust.banner.languages":
+    "Verwaltete Sprachserver bleiben deaktiviert, bis dieser Wurzel vertraut wird.",
+  "workspaceTrust.reason.humanGrant":
+    "Das Vertrauen wurde ausdrücklich für den aktuellen Arbeitsbereich erteilt.",
+  "workspaceTrust.reason.humanRevocation":
+    "Das Vertrauen wurde ausdrücklich für diesen Arbeitsbereich widerrufen.",
+  "workspaceTrust.reason.identityChanged":
+    "Das Vertrauen ist abgelaufen, weil sich die Arbeitsbereichsidentität geändert hat.",
+  "workspaceTrust.reason.manifestChanged":
+    "Das Vertrauen ist abgelaufen, weil sich das Arbeitsbereichsmanifest geändert hat.",
+  "workspaceTrust.reason.trustBasisChanged":
+    "Das Vertrauen ist abgelaufen, weil sich das Arbeitsbereichsmanifest geändert hat.",
+  "workspaceTrust.reason.policy":
+    "Die Bereitstellungsrichtlinie verlangt, dass dieser Arbeitsbereich eingeschränkt bleibt.",
+  "workspaceTrust.reason.stateUnavailable":
+    "Für diesen Arbeitsbereich ist keine aktuelle servervalidierte Vertrauensfreigabe verfügbar.",
+  "workspaceTrust.dialog.grantTitle": "Diesem Arbeitsbereich vertrauen?",
+  "workspaceTrust.dialog.grantBody":
+    "Vertrauen erlaubt Arbeitsbereichsskripte, Sprachserver und Agentenausführung für diese Wurzel. Vom Repository definierter Code kann mit der von der Richtlinie erlaubten Berechtigung ausgeführt werden.",
+  "workspaceTrust.dialog.revokeTitle": "Vertrauen für diesen Arbeitsbereich widerrufen?",
+  "workspaceTrust.dialog.revokeBody":
+    "Der Widerruf stoppt oder deaktiviert Arbeitsbereichsskripte, Sprachserver und Agentenausführung für diese Wurzel.",
+  "workspaceTrust.dialog.serverConfirmed":
+    "Keiko ändert Funktionen erst, nachdem der Server die Entscheidung bestätigt hat.",
+  "workspaceTrust.dialog.stayRestricted": "Eingeschränkt bleiben",
+  "workspaceTrust.dialog.cancel": "Abbrechen",
+  "workspaceTrust.dialog.trust": "Arbeitsbereich vertrauen",
+  "workspaceTrust.dialog.revoke": "Vertrauen widerrufen",
+  "workspaceTrust.dialog.waiting": "Auf Server warten…",
+  "workspaceTrust.action.trust": "Vertrauen",
+  "workspaceTrust.action.revoke": "Widerrufen",
+  "workspaceTrust.management.description":
+    "Prüfen Sie jede registrierte Wurzel und treffen Sie eine ausdrückliche Vertrauensentscheidung. Vertrauensentscheidungen werden vom lokalen Server gespeichert und durchgesetzt.",
+  "workspaceTrust.management.digestHelp":
+    "Eine Freigabe ist an die aktuelle Arbeitsbereichsidentität und das Manifest gebunden. Keiko kehrt in den eingeschränkten Modus zurück, wenn sich eines davon ändert.",
+  "workspaceTrust.management.empty": "Keine registrierten Arbeitsbereichswurzeln verfügbar.",
+  "workspaceTrust.settings.description":
+    "Prüfen oder widerrufen Sie das Ausführungsvertrauen registrierter Arbeitsbereichswurzeln.",
+  "workspaceTrust.settings.open": "Arbeitsbereichsvertrauen öffnen",
   "rail.figma": "Figma-Snapshot",
   "rail.lightMode": "Heller Modus",
   "rail.darkMode": "Dunkler Modus",
@@ -1285,6 +1402,8 @@ export const DE_MESSAGES = {
     "Diese Sprache wird von diesem Keiko-Build nicht unterstützt.",
   "managedLanguage.reasonPolicyDenied":
     "Die Bereitstellungsrichtlinie hat die Aktivierung abgelehnt.",
+  "managedLanguage.reasonWorkspaceUntrusted":
+    "Der eingeschränkte Modus verhindert, dass dieser Workspace verwaltete Sprachserver startet.",
   "managedLanguage.reasonLegacyDisabled":
     "Die Kompatibilitäts-Umgebungsrichtlinie hat diesen Provider deaktiviert.",
   "managedLanguage.reasonNotProvisioned": "Der freigegebene Sprachserver ist nicht bereitgestellt.",
@@ -1511,6 +1630,23 @@ export const DE_MESSAGES = {
   "filesWidget.deleteDialog.deleting": "Lösche…",
   "filesWidget.deleteDialog.delete": "Löschen",
   "filesWidget.deleteDialog.cancel": "Abbrechen",
+  "filesWidget.multiRoot.label": "Arbeitsbereichswurzeln",
+  "filesWidget.multiRoot.manage": "Arbeitsbereichswurzeln verwalten",
+  "filesWidget.multiRoot.project": "Hinzuzufügendes Projekt",
+  "filesWidget.multiRoot.chooseProject": "Registriertes Projekt auswählen",
+  "filesWidget.multiRoot.add": "Wurzel hinzufügen",
+  "filesWidget.multiRoot.focus": "Wurzel fokussieren: {name}",
+  "filesWidget.multiRoot.focused": "Fokussiert",
+  "filesWidget.multiRoot.focusAction": "Fokussieren",
+  "filesWidget.multiRoot.moveUp": "Wurzel nach oben verschieben: {name}",
+  "filesWidget.multiRoot.moveDown": "Wurzel nach unten verschieben: {name}",
+  "filesWidget.multiRoot.remove": "Wurzel entfernen: {name}",
+  "filesWidget.multiRoot.error":
+    "Arbeitsbereichswurzeln konnten nicht aktualisiert werden. Bitte aktualisieren und erneut versuchen.",
+  "editor.multiRoot.label": "Mehrwurzel-Editor",
+  "editor.multiRoot.switcher": "Editor-Arbeitsbereichswurzeln",
+  "editor.multiRoot.error":
+    "Die fokussierte Arbeitsbereichswurzel konnte nicht aktualisiert werden.",
   "pdfCitationPreviewWindow.anchorQuality.approximate": "In der Nähe der zitierten Textstelle",
   "pdfCitationPreviewWindow.anchorQuality.unavailable": "Verifizierte Seite nicht verfügbar",
   "pdfCitationPreviewWindow.anchorQuality.pageOnly": "Nur verifizierte Seite",

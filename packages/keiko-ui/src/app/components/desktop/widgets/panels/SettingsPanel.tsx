@@ -4,7 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
-import { LOCALE_LABELS, useLocale, useSetLocale } from "@/lib/i18n";
+import {
+  LOCALE_LABELS,
+  useLocale,
+  useSetLocale,
+  useTranslate as useGlobalTranslate,
+} from "@/lib/i18n";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
 import { DebuggingSettings } from "./DebuggingSettings";
 import { EditorSettingsPanel } from "./EditorSettingsPanel";
@@ -25,6 +30,7 @@ import {
   isConversationEligibleModel,
 } from "@/lib/types";
 import { Icons } from "../../Icons";
+
 import KeikoSelect from "../../KeikoSelect";
 import { personaLabel } from "../../VoiceDialogMode";
 import {
@@ -63,6 +69,8 @@ import {
   readWorkspaceCameraSmoothness,
   readWorkspaceGridStrength,
 } from "../../workspace-appearance";
+
+const SettingsIcon = Icons.settings;
 
 function kindLabel(kind: ModelCapability["kind"]): string {
   if (kind === "ocr-vision") return "OCR";
@@ -1150,12 +1158,15 @@ function ModelsTabContent({
 
 export function SettingsPanel({
   openUpdatesWindow,
+  openWorkspaceTrust,
   root,
 }: {
   readonly openUpdatesWindow?: (() => void) | undefined;
+  readonly openWorkspaceTrust?: (() => void) | undefined;
   readonly root?: string | undefined;
 } = {}): ReactNode {
   const t = useTranslate();
+  const workspaceT = useGlobalTranslate();
   const [tab, setTab] = useState<Tab>("models");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
   const [config, setConfig] = useState<SafeGatewayConfig | null>(null);
@@ -1276,10 +1287,28 @@ export function SettingsPanel({
           <GeneralPrefs voicePersonas={voicePersonas} openUpdatesWindow={openUpdatesWindow} />
         )}
         {tab === "editor" && <EditorSettingsPanel root={root} />}
-        {tab === "languages" && <ManagedLanguageSettings root={root} />}
+        {tab === "languages" && (
+          <ManagedLanguageSettings root={root} onOpenWorkspaceTrust={openWorkspaceTrust} />
+        )}
         {tab === "debugging" && <DebuggingSettings root={root} />}
         {tab === "security" && (
-          <div className="set-placeholder">{t("settings.security.placeholder")}</div>
+          <div>
+            <div className="set-sec-h">
+              <div>
+                <div className="set-sec-t">{workspaceT("workspaceTrust.title")}</div>
+                <div className="set-sec-d">{workspaceT("workspaceTrust.settings.description")}</div>
+              </div>
+              <button
+                type="button"
+                className="set-add"
+                disabled={openWorkspaceTrust === undefined}
+                onClick={openWorkspaceTrust}
+              >
+                <SettingsIcon size={14} />
+                {workspaceT("workspaceTrust.settings.open")}
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>

@@ -1,0 +1,266 @@
+.cmpEditorMain {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.cmpBanner,
+.cmpButton,
+.cmpBadge,
+.cmpPanel,
+.cmpCard,
+.cmpDialog {
+  box-sizing: border-box;
+}
+
+.cmpBadge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  background: var(--card-2, var(--card));
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.cmpBadge[data-trust="trusted"] {
+  border-color: color-mix(in oklch, var(--accent) 55%, var(--line));
+  color: var(--fg);
+}
+
+.cmpBadge[data-trust="restricted"] {
+  border-color: color-mix(in oklch, var(--warning, #d88919) 55%, var(--line));
+}
+
+.cmpBanner,
+.cmpPanel,
+.cmpDialog {
+  white-space: normal;
+}
+
+.cmpEditorPanes {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.cmpBanner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in oklch, var(--warning, #d88919) 55%, var(--line));
+  border-radius: var(--radius-control, 8px);
+  color: var(--fg);
+  background: color-mix(in oklch, var(--warning, #d88919) 12%, var(--card));
+}
+
+.cmpEditorBanner {
+  margin: 7px;
+}
+
+.cmpBannerCopy,
+.cmpCardCopy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cmpBannerTitle,
+.cmpCardTitle {
+  font-weight: 700;
+}
+
+.cmpBannerReason,
+.cmpCardReason,
+.cmpIntro,
+.cmpHelp,
+.cmpPath {
+  margin: 3px 0 0;
+  color: var(--fg-muted);
+  line-height: 1.45;
+}
+
+.cmpButton {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control, 7px);
+  color: var(--fg);
+  background: var(--card-2, var(--card));
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.cmpButton:hover:not(:disabled) {
+  border-color: var(--border-accent, var(--accent));
+}
+
+.cmpButton:focus-visible,
+.cmpDialog:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmpButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.cmpPrimary {
+  border-color: var(--accent);
+  color: var(--accent-contrast, #fff);
+  background: var(--accent);
+}
+
+.cmpDanger {
+  border-color: var(--danger, #c64141);
+  color: var(--danger, #c64141);
+}
+
+.cmpPanel {
+  height: 100%;
+  min-width: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+.cmpPanelHeader {
+  margin-bottom: 16px;
+}
+
+.cmpPanelTitle,
+.cmpDialogTitle {
+  margin: 0;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.cmpList {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cmpList > li {
+  min-width: 0;
+}
+
+.cmpCard {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card, 10px);
+  background: var(--card);
+}
+
+.cmpState {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cmpState[data-trust="trusted"] {
+  color: var(--fg);
+}
+
+.cmpState[data-trust="restricted"] {
+  color: var(--fg);
+}
+
+.cmpAlert,
+.cmpEmpty {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control, 8px);
+  color: var(--fg-muted);
+}
+
+.cmpDialogBackdrop {
+  position: fixed;
+  z-index: var(--z-modal, 1000);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in oklch, #000 58%, transparent);
+}
+
+.cmpDialog {
+  width: min(520px, 100%);
+  max-height: min(640px, calc(100dvh - 32px));
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card, 12px);
+  background: var(--card);
+  box-shadow: var(--shadow-popover, 0 18px 45px rgb(0 0 0 / 35%));
+}
+
+.cmpDialogActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+@media (max-width: 420px) {
+  .cmpBanner,
+  .cmpCard {
+    flex-direction: column;
+  }
+
+  .cmpButton {
+    width: 100%;
+  }
+}
+
+@media (max-width: 320px) {
+  .cmpPanel {
+    padding: 10px;
+  }
+
+  .cmpDialogActions {
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmpButton {
+    scroll-behavior: auto;
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .cmpBanner,
+  .cmpCard,
+  .cmpDialog,
+  .cmpButton {
+    border-color: CanvasText;
+  }
+
+  .cmpPrimary {
+    color: HighlightText;
+    background: Highlight;
+  }
+}

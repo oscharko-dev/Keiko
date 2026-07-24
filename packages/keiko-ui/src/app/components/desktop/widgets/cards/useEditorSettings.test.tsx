@@ -4,17 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
+  EDITOR_M11_DEFAULT_PROFILE_REF,
   resolveEditorM7Settings,
-  type EditorM7SettingsSnapshot,
+  resolveEditorM11Settings,
+  type EditorM11ProfileSettingsLayer,
+  type EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 
 import { resetSharedEventSourcesForTests } from "./sharedEventSource";
 import { useEditorSettings } from "./useEditorSettings";
 
 const api = vi.hoisted(() => ({
-  currentSnapshot: undefined as EditorM7SettingsSnapshot | undefined,
+  currentSnapshot: undefined as EditorM11SettingsSnapshot | undefined,
   fetchEditorSettings: vi.fn(),
   mutateEditorSettings: vi.fn(),
+  mutateEditorProfile: vi.fn(),
   ApiError: class ApiError extends Error {
     constructor(
       readonly code: string,
@@ -31,6 +35,7 @@ vi.mock("../../../../../lib/api", () => {
   return {
     ApiError: api.ApiError,
     fetchEditorSettings: api.fetchEditorSettings,
+    mutateEditorProfile: api.mutateEditorProfile,
     mutateEditorSettings: api.mutateEditorSettings,
   };
 });
@@ -60,14 +65,15 @@ class FakeEventSource {
   }
 }
 
-function snapshot(revision: number, fontSize: number): EditorM7SettingsSnapshot {
+function snapshot(revision: number, fontSize: number): EditorM11SettingsSnapshot {
   return {
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     storeState: "ready",
     userRevision: 0,
     workspaceRevision: revision,
+    rootRevision: 0,
     revision,
-    etag: `"edm7-0-${revision.toString()}-test"`,
+    etag: `"edm7-0-${revision.toString()}-0-test"`,
     root: "/repo",
     definitions: EDITOR_M7_SETTING_REGISTRY,
     settings: resolveEditorM7Settings({
@@ -91,12 +97,48 @@ function settingsEvent(sequence: number, settingIds = ["fontSize"]): Record<stri
   };
 }
 
+function withFocusProfile(
+  base: EditorM11SettingsSnapshot,
+  active = true,
+): EditorM11SettingsSnapshot {
+  const profileRef = "profile-focus" as EditorM11ProfileSettingsLayer["profileRef"];
+  const profile: EditorM11ProfileSettingsLayer = {
+    kind: "editor-profile-settings",
+    schemaVersion: 1,
+    profileRef,
+    revision: 1,
+    values: { fontSize: 18 },
+  };
+  return {
+    ...base,
+    settings: active ? resolveEditorM11Settings({ profile }) : base.settings,
+    profiles: {
+      schemaVersion: 1,
+      storeState: "ready",
+      revision: 2,
+      etag: '"edp-2"',
+      activeProfileRef: active ? profileRef : EDITOR_M11_DEFAULT_PROFILE_REF,
+      profiles: [
+        {
+          profileRef: EDITOR_M11_DEFAULT_PROFILE_REF,
+          displayName: "Default",
+          revision: 0,
+          settingCount: 0,
+          builtIn: true,
+        },
+        { profileRef, displayName: "Focus", revision: 1, settingCount: 1, builtIn: false },
+      ],
+    },
+  };
+}
+
 beforeEach(() => {
   FakeEventSource.instances = [];
   vi.stubGlobal("EventSource", FakeEventSource);
   api.currentSnapshot = snapshot(0, 13);
   api.fetchEditorSettings.mockImplementation(() => Promise.resolve(api.currentSnapshot));
   api.mutateEditorSettings.mockReset();
+  api.mutateEditorProfile.mockReset();
 });
 
 afterEach(() => {
@@ -157,7 +199,73 @@ describe("useEditorSettings M7 cross-window integration", () => {
         expectedRevision: 0,
         values: { fontSize: 19 },
       }),
-      '"edm7-0-0-test"',
+      '"edm7-0-0-0-test"',
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("walks the mutation branches: ok-result install, generic failure, reset, empty reset", async () => {
+    api.currentSnapshot = snapshot(0, 13);
+    const live = renderHook(() => useEditorSettings("/repo"));
+    await waitFor(() => expect(live.result.current.snapshot?.revision).toBe(0));
+
+    api.mutateEditorSettings.mockResolvedValueOnce({
+      kind: "ok",
+      snapshot: snapshot(1, 21),
+    });
+    await act(async () => {
+      await live.result.current.setValue("workspace", "fontSize", 21);
+    });
+    expect(live.result.current.applied.fontSize).toBe(21);
+    expect(live.result.current.issue).toBeUndefined();
+
+    api.mutateEditorSettings.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => {
+      await live.result.current.setValue("workspace", "fontSize", 22);
+    });
+    expect(live.result.current.issue).toBe("mutation");
+    expect(live.result.current.mutating).toBe(false);
+
+    api.mutateEditorSettings.mockResolvedValueOnce({
+      kind: "ok",
+      snapshot: snapshot(2, 13),
+    });
+    await act(async () => {
+      await live.result.current.reset("workspace", ["fontSize"]);
+    });
+    expect(live.result.current.applied.fontSize).toBe(13);
+    expect(api.mutateEditorSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: "reset", settingIds: ["fontSize"] }),
+      expect.any(String),
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
+    await act(async () => {
+      await live.result.current.reset("workspace", []);
+    });
+    expect(api.mutateEditorSettings).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses the root revision for root-scoped mutations", async () => {
+    api.currentSnapshot = {
+      ...snapshot(0, 13),
+      rootRevision: 3,
+      etag: '"edm7-0-0-3-test"',
+    };
+    api.mutateEditorSettings.mockRejectedValue(new Error("sentinel"));
+    const { result } = renderHook(() => useEditorSettings("/repo"));
+
+    await waitFor(() => {
+      expect(result.current.snapshot?.rootRevision).toBe(3);
+    });
+    await act(async () => {
+      await result.current.setValue("root", "fontSize", 17);
+    });
+
+    expect(api.mutateEditorSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "root", expectedRevision: 3 }),
+      '"edm7-0-0-3-test"',
       expect.any(String),
       expect.any(AbortSignal),
     );
@@ -179,5 +287,89 @@ describe("useEditorSettings M7 cross-window integration", () => {
       expect(result.current.applied.modelRetentionCount).toBe(5);
       expect(result.current.applied.modelRetentionBytes).toBe(8 * 1024 * 1024);
     });
+  });
+
+  it("writes active-profile settings through the profile etag", async () => {
+    api.currentSnapshot = withFocusProfile(snapshot(0, 13));
+    api.mutateEditorProfile.mockRejectedValue(new Error("sentinel"));
+    const { result } = renderHook(() => useEditorSettings("/repo"));
+
+    await waitFor(() => expect(result.current.snapshot?.profiles?.revision).toBe(2));
+    await act(async () => {
+      await result.current.setValue("profile", "fontSize", 19);
+    });
+
+    expect(api.mutateEditorProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "set",
+        expectedRevision: 2,
+        profileRef: "profile-focus",
+        values: { fontSize: 19 },
+      }),
+      '"edp-2"',
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("installs a switched profile snapshot without reloading the page", async () => {
+    const inactive = withFocusProfile(snapshot(0, 13), false);
+    const active = withFocusProfile(snapshot(0, 13));
+    api.currentSnapshot = inactive;
+    api.mutateEditorProfile.mockResolvedValue({
+      kind: "ok",
+      changed: true,
+      profileRef: "profile-focus",
+      revision: 2,
+      etag: '"edp-2"',
+      profiles: active.profiles,
+      settings: active,
+    });
+    const { result } = renderHook(() => useEditorSettings("/repo"));
+
+    // Gate on the installed snapshot, not on `applied.fontSize === 13`: the fixture's 13 is
+    // byte-identical to DEFAULT_APPLIED_EDITOR_SETTINGS.fontSize, so the old gate passed on the
+    // very first synchronous poll while `snapshot` was still undefined. On a loaded CI worker
+    // `switchProfile` then closed over that pre-fetch render and `executeProfileMutation`
+    // silently no-opped on `profiles === undefined` — fontSize stayed 13 with exactly one fetch,
+    // which is precisely the flake signature this replaces.
+    await waitFor(() => expect(result.current.snapshot?.profiles).toBeDefined());
+    expect(result.current.applied.fontSize).toBe(13);
+    await act(async () => {
+      await result.current.switchProfile(
+        "profile-focus" as EditorM11ProfileSettingsLayer["profileRef"],
+      );
+    });
+
+    expect(result.current.applied.fontSize).toBe(18);
+    expect(result.current.snapshot?.profiles?.activeProfileRef).toBe("profile-focus");
+    expect(api.fetchEditorSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets every profile-admissible setting without sending workspace-only ids", async () => {
+    api.currentSnapshot = withFocusProfile(snapshot(0, 13));
+    api.mutateEditorProfile.mockRejectedValue(new Error("sentinel"));
+    const { result } = renderHook(() => useEditorSettings("/repo"));
+
+    await waitFor(() => expect(result.current.snapshot?.profiles?.revision).toBe(2));
+    await act(async () => {
+      await result.current.resetProfile(
+        "profile-focus" as EditorM11ProfileSettingsLayer["profileRef"],
+      );
+    });
+
+    expect(api.mutateEditorProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "reset",
+        expectedRevision: 2,
+        profileRef: "profile-focus",
+        settingIds: expect.arrayContaining(["fontSize", "keybindingOverrides"]),
+      }),
+      '"edp-2"',
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
+    const body = api.mutateEditorProfile.mock.calls[0]?.[0];
+    expect(body?.settingIds).not.toContain("debuggingEnabled");
   });
 });

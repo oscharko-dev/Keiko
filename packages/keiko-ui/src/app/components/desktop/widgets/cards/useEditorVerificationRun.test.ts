@@ -1,6 +1,9 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
+  WORKSPACE_TRUST_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts";
 import {
   resetEditorVerificationRunStateForTests,
   useEditorVerificationRun,
@@ -74,11 +77,24 @@ function catalog(projectId = "/ws"): Record<string, unknown> {
   return {
     schemaVersion: V,
     projectId,
+    workspaceTrust: trustStatus(projectId, "trusted"),
     kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
       kind,
       available: true,
       trustState: "trusted",
     })),
+  };
+}
+
+function trustStatus(projectId: string, trust: "trusted" | "restricted"): Record<string, unknown> {
+  return {
+    kind: "workspace-trust-status",
+    schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+    projectId,
+    trust,
+    decidedBy: "server",
+    reason: trust === "trusted" ? "human-grant" : "human-revocation",
+    revision: 1,
   };
 }
 
@@ -94,7 +110,11 @@ beforeEach(() => {
       const projectId = decodeURIComponent(url.split("projectId=")[1] ?? "");
       return Promise.resolve(response(catalog(projectId)));
     }
-    if (url === "/api/editor/verification/trust") return Promise.resolve(response({ ok: true }));
+    if (url === "/api/editor/verification/trust") {
+      return Promise.resolve(
+        response(trustStatus("/ws", init?.method === "POST" ? "trusted" : "restricted")),
+      );
+    }
     if (init?.method === "DELETE") return Promise.resolve(response({ ok: true }));
     const request = JSON.parse(String(init?.body)) as {
       readonly projectId: string;
@@ -981,10 +1001,12 @@ describe("useEditorVerificationRun", () => {
   it("uses exact trust mutation requests and refreshes the guarded catalog", async () => {
     const { result } = render();
     await tick();
-    act(() => result.current.trustWorkspaceScripts());
-    await tick();
-    act(() => result.current.revokeWorkspaceScriptTrust());
-    await tick();
+    await act(async () => {
+      await result.current.trustWorkspaceScripts();
+    });
+    await act(async () => {
+      await result.current.revokeWorkspaceScriptTrust();
+    });
     const trustCalls = fetchMock.mock.calls.filter(
       ([url]) => url === "/api/editor/verification/trust",
     );

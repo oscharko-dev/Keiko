@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { EditorM7SettingsSnapshot } from "@oscharko-dev/keiko-contracts";
+import type { EditorM11SettingsSnapshot } from "@oscharko-dev/keiko-contracts";
 
 function eventsUrl(root: string | undefined): string {
   return root === undefined || root.length === 0
@@ -9,7 +9,7 @@ function eventsUrl(root: string | undefined): string {
     : `/api/editor/settings/events?root=${encodeURIComponent(root)}`;
 }
 
-function keybindingOverrides(snapshot: EditorM7SettingsSnapshot): readonly string[] {
+function keybindingOverrides(snapshot: EditorM11SettingsSnapshot): readonly string[] {
   const value = snapshot.settings.find((setting) => setting.id === "keybindingOverrides")?.value;
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")

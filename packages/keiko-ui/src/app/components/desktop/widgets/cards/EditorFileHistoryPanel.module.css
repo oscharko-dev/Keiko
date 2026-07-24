@@ -1,0 +1,296 @@
+.panel {
+  position: absolute;
+  z-index: 18;
+  inset-block: 0;
+  inset-inline-end: 0;
+  display: flex;
+  width: min(520px, 100%);
+  min-width: 0;
+  flex-direction: column;
+  border-inline-start: 1px solid color-mix(in oklch, var(--ed-fg) 22%, transparent);
+  background: var(--ed-bg);
+  box-shadow: -8px 0 24px color-mix(in oklch, #000 22%, transparent);
+  color: var(--ed-fg);
+}
+
+.panel:focus-visible {
+  outline: 2px solid var(--ed-focus);
+  outline-offset: -2px;
+}
+
+.header,
+.comparisonHeader,
+.rowTitle,
+.notice,
+.confirmActions {
+  display: flex;
+  align-items: center;
+}
+
+.header {
+  min-height: 48px;
+  gap: 8px;
+  padding: 8px 10px;
+  border-block-end: 1px solid color-mix(in oklch, var(--ed-fg) 16%, transparent);
+}
+
+.headingGroup {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 2px;
+}
+
+.heading {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.file,
+.comparisonDescription,
+.rowSummary time,
+.rowSummary > span:last-child {
+  overflow: hidden;
+  color: var(--ed-gutter-fg-active);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iconButton,
+.actionButton,
+.actions button,
+.comparisonHeader button,
+.confirm button,
+.notice button {
+  border: 1px solid color-mix(in oklch, var(--ed-fg) 22%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--ed-bg) 84%, var(--ed-fg) 4%);
+  color: var(--ed-fg);
+  font: inherit;
+}
+
+.iconButton,
+.notice button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.iconButton:hover,
+.iconButton:focus-visible,
+.actionButton:hover,
+.actionButton:focus-visible,
+.actions button:hover,
+.actions button:focus-visible,
+.comparisonHeader button:hover,
+.comparisonHeader button:focus-visible,
+.confirm button:hover,
+.confirm button:focus-visible,
+.notice button:hover,
+.notice button:focus-visible,
+.rowSummary:hover,
+.rowSummary:focus-visible {
+  outline: 2px solid var(--ed-focus);
+  outline-offset: -2px;
+  background: var(--ed-line-active);
+}
+
+.notice {
+  gap: 8px;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-block-end: 1px solid color-mix(in oklch, var(--ed-warning) 38%, transparent);
+  background: color-mix(in oklch, var(--ed-warning) 13%, var(--ed-bg));
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.state {
+  margin: auto;
+  padding: 24px;
+  color: var(--ed-gutter-fg-active);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.state p {
+  margin: 0 0 12px;
+}
+
+.actionButton,
+.comparisonHeader button,
+.confirm button {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.listViewport {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.list {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  height: 148px;
+  grid-template-rows: 74px 1fr;
+  gap: 6px;
+  padding: 6px;
+  border-block-end: 1px solid color-mix(in oklch, var(--ed-fg) 13%, transparent);
+}
+
+.rowSummary {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ed-fg);
+  font: inherit;
+  text-align: start;
+}
+
+.rowSummary[aria-pressed="true"] {
+  background: var(--ed-selection);
+}
+
+.rowTitle {
+  min-width: 0;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.pinnedBadge {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--ed-accent) 18%, transparent);
+  color: var(--ed-fg);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  min-width: 0;
+  align-content: flex-start;
+  gap: 4px;
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+.actions button {
+  min-height: 27px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.comparison {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.comparisonHeader {
+  min-height: 42px;
+  gap: 8px;
+  padding: 6px 8px;
+  border-block-end: 1px solid color-mix(in oklch, var(--ed-fg) 16%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.comparisonDescription {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-weight: 400;
+}
+
+.diff {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.diffLoading {
+  width: 100%;
+  height: 100%;
+  background: var(--ed-bg);
+}
+
+.confirmBackdrop {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in oklch, #000 52%, transparent);
+}
+
+.confirm {
+  width: min(390px, 100%);
+  padding: 16px;
+  border: 1px solid color-mix(in oklch, var(--ed-fg) 25%, transparent);
+  border-radius: 10px;
+  background: var(--ed-bg);
+  box-shadow: 0 14px 40px color-mix(in oklch, #000 35%, transparent);
+}
+
+.confirm h3,
+.confirm p {
+  margin-block-start: 0;
+}
+
+.confirm h3 {
+  font-size: 15px;
+}
+
+.confirm p {
+  color: var(--ed-gutter-fg-active);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.confirmActions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 420px) {
+  .panel {
+    width: 100%;
+    border-inline-start: 0;
+  }
+
+  .comparisonHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  .confirmBackdrop {
+    scroll-behavior: auto;
+  }
+}

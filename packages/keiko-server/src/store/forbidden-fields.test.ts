@@ -98,6 +98,17 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   "recovery_handle",
 ]);
 
+// V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque
+// derived reference, a revision, a closed trust enum, the contract-validated record JSON, and a
+// timestamp. No paths, no manifest bytes, no credential-class fields.
+const ALLOWED_WORKSPACE_TRUST_COLUMNS = new Set([
+  "root_ref",
+  "revision",
+  "trust",
+  "record_json",
+  "updated_at",
+]);
+
 // ── Forbidden substring patterns (case-insensitive) ─────────────────────────
 // Any column whose name contains one of these substrings leaks a credential-class
 // field into the UI DB in violation of ADR-0013 D8.
@@ -224,6 +235,31 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
         "argv",
         "env",
         "approval",
+      ]) {
+        expect(lower).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("workspace trust records are content-free and carry no path, manifest, or credential fields", () => {
+    const dbPath = join(tmpDir, "trust.db");
+    const store = createNodeUiStore(dbPath);
+    store.close();
+    const inspector = new DatabaseSync(dbPath, { readOnly: true });
+    const cols = columnNames(inspector, "workspace_trust_records");
+    inspector.close();
+    expect(new Set(cols)).toEqual(ALLOWED_WORKSPACE_TRUST_COLUMNS);
+    for (const col of cols) {
+      const lower = col.toLowerCase();
+      for (const forbidden of [
+        ...FORBIDDEN_SUBSTRINGS,
+        "prompt",
+        "output",
+        "diff",
+        "manifest",
+        "package",
+        "argv",
+        "env",
       ]) {
         expect(lower).not.toContain(forbidden);
       }

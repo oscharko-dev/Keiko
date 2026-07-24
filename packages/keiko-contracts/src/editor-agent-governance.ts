@@ -19,12 +19,15 @@
 import {
   isContainedAgentPath,
   isEditorAgentActionOrigin,
+  isEditorAgentRootAttribution,
   resolveEditorAgentActionOrigin,
   type EditorAgentActionOrigin,
   type EditorAgentActionStatus,
   type EditorAgentActionType,
   type EditorAgentConflictCode,
   type EditorAgentFailureCode,
+  type EditorAgentRootAttribution,
+  type EditorAgentRootBinding,
 } from "./editor-agent.js";
 import {
   codingWorkbenchPolicyEffectFor,
@@ -36,6 +39,8 @@ import {
   type CodingWorkbenchPolicyEffect,
   type CodingWorkbenchPolicyResourceScope,
 } from "./coding-workbench.js";
+import { workspaceTrustLevelPolicyEffect } from "./workspace-trust.js";
+import type { WorkspaceTrustLevel, WorkspaceTrustOperationClass } from "./workspace-trust.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -165,6 +170,10 @@ export type EditorAgentActionDenyReason =
   | "unsupported-action"
   | "secret-exfiltration"
   | "platform-restricted"
+  | "workspace-restricted"
+  | "root-binding-required"
+  | "root-binding-invalid"
+  | "decompose-per-root"
   | "mode-policy-denied";
 
 export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyReason[] = [
@@ -180,6 +189,10 @@ export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyRea
   "unsupported-action",
   "secret-exfiltration",
   "platform-restricted",
+  "workspace-restricted",
+  "root-binding-required",
+  "root-binding-invalid",
+  "decompose-per-root",
   "mode-policy-denied",
 ] as const;
 
@@ -188,6 +201,7 @@ export type EditorAgentActionReviewReason =
   | "external-effect-requires-review"
   | "mode-approval-required"
   | "deterministic-risk-approval-required"
+  | "workspace-restricted"
   | "delivery-human-approval-required";
 
 export const EDITOR_AGENT_ACTION_REVIEW_REASONS: readonly EditorAgentActionReviewReason[] = [
@@ -195,6 +209,7 @@ export const EDITOR_AGENT_ACTION_REVIEW_REASONS: readonly EditorAgentActionRevie
   "external-effect-requires-review",
   "mode-approval-required",
   "deterministic-risk-approval-required",
+  "workspace-restricted",
   "delivery-human-approval-required",
 ] as const;
 
@@ -228,6 +243,65 @@ export interface EditorAgentActionPolicyContext {
   readonly targetSensitive: boolean;
   // Optional for schema-v1 compatibility. Omission is the agent/harness producer.
   readonly origin?: EditorAgentActionOrigin | undefined;
+}
+
+function rootBindingsEqual(left: EditorAgentRootBinding, right: EditorAgentRootBinding): boolean {
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.manifestRef === right.manifestRef &&
+    left.manifestRevision === right.manifestRevision &&
+    left.manifestDigest === right.manifestDigest &&
+    left.rootRef === right.rootRef &&
+    left.rootIdentityDigest === right.rootIdentityDigest
+  );
+}
+
+type RootBindingPresence =
+  | {
+      readonly sessionBinding: EditorAgentRootBinding;
+      readonly actionBinding: EditorAgentRootBinding;
+    }
+  | "root-binding-required"
+  | "root-binding-invalid"
+  | null;
+
+function rootBindingPresence(
+  sessionBinding: EditorAgentRootBinding | undefined,
+  actionBinding: EditorAgentRootBinding | undefined,
+  explicitBindingRequired: boolean,
+): RootBindingPresence {
+  if (sessionBinding === undefined && actionBinding === undefined) {
+    return explicitBindingRequired ? "root-binding-required" : null;
+  }
+  if (sessionBinding === undefined || actionBinding === undefined) {
+    return explicitBindingRequired ? "root-binding-required" : "root-binding-invalid";
+  }
+  return { sessionBinding, actionBinding };
+}
+
+/**
+ * Pure root-binding composition. Multi-root requests must name a root on both the session and the
+ * action; disagreement between roots is the typed instruction to decompose the intent per root.
+ */
+export function editorAgentRootBindingDenyReason(
+  sessionBinding: EditorAgentRootBinding | undefined,
+  actionBinding: EditorAgentRootBinding | undefined,
+  explicitBindingRequired: boolean,
+): Extract<
+  EditorAgentActionDenyReason,
+  "root-binding-required" | "root-binding-invalid" | "decompose-per-root"
+> | null {
+  const presence = rootBindingPresence(sessionBinding, actionBinding, explicitBindingRequired);
+  if (presence === null || typeof presence === "string") return presence;
+  if (presence.sessionBinding.rootRef !== presence.actionBinding.rootRef) {
+    return "decompose-per-root";
+  }
+  if (presence.sessionBinding.rootIdentityDigest !== presence.actionBinding.rootIdentityDigest) {
+    return "root-binding-invalid";
+  }
+  return rootBindingsEqual(presence.sessionBinding, presence.actionBinding)
+    ? null
+    : "root-binding-invalid";
 }
 
 export type EditorAgentAuthorityPolicy = Pick<
@@ -363,37 +437,82 @@ function envelopeModeEffect(
   );
 }
 
+function workspaceTrustOperationForEffectClass(
+  effectClass: EditorAgentActionEffectClass,
+): WorkspaceTrustOperationClass {
+  switch (effectClass) {
+    case "navigation":
+    case "layout":
+    case "workspace-read":
+      return "read";
+    case "content-mutation":
+      return "mutate";
+    case "execution":
+    case "external-effect":
+      return "execute";
+  }
+}
+
+function authorityEffect(
+  decision: EditorAgentActionPolicyDecision,
+  authority: EditorAgentAuthorityPolicy,
+  risk: CodingWorkbenchApprovalRisk,
+): CodingWorkbenchPolicyEffect | undefined {
+  const actionClass = EDITOR_AGENT_WORKBENCH_ACTION_CLASS[decision.effectClass];
+  const resourceScope = EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE[decision.effectClass];
+  if (actionClass === null || resourceScope === null) return undefined;
+  const classEffect = authority.actionClasses.includes(actionClass) ? "allowed" : "denied";
+  return strictestCodingWorkbenchPolicyEffect(
+    classEffect,
+    envelopeModeEffect(authority.requestedMode, actionClass, resourceScope, risk),
+    envelopeModeEffect(authority.deploymentCeiling, actionClass, resourceScope, risk),
+    envelopeModeEffect(authority.effectiveMode, actionClass, resourceScope, risk),
+  );
+}
+
+function decisionForComposedEffect(
+  decision: EditorAgentActionPolicyDecision,
+  risk: CodingWorkbenchApprovalRisk,
+  withoutTrust: CodingWorkbenchPolicyEffect,
+  trustEffect: CodingWorkbenchPolicyEffect,
+): EditorAgentActionPolicyDecision {
+  const effective = strictestCodingWorkbenchPolicyEffect(withoutTrust, trustEffect);
+  if (effective === EDITOR_AGENT_POLICY_EFFECT_BY_DISPOSITION[decision.disposition])
+    return decision;
+  const origin = decision.origin ?? "agent";
+  if (effective === "denied") {
+    const reason =
+      trustEffect === "denied" && withoutTrust !== "denied"
+        ? "workspace-restricted"
+        : "mode-policy-denied";
+    return denyDecision(decision.effectClass, reason, origin);
+  }
+  const reviewReason =
+    trustEffect === "approval-required" && withoutTrust === "allowed"
+      ? "workspace-restricted"
+      : reviewReasonForEnvelope(decision.effectClass, risk);
+  return reviewDecision(decision.effectClass, reviewReason, origin);
+}
+
 // Compose immutable editor security posture with the shared Authority Envelope mode ceiling. The
 // most restrictive effect always wins; an envelope can never loosen a boundary/sensitivity denial.
 export function composeEditorAgentActionPolicyDecision(
   decision: EditorAgentActionPolicyDecision,
   authority: EditorAgentAuthorityPolicy,
   risk: CodingWorkbenchApprovalRisk,
+  workspaceTrust?: WorkspaceTrustLevel,
 ): EditorAgentActionPolicyDecision {
-  const actionClass = EDITOR_AGENT_WORKBENCH_ACTION_CLASS[decision.effectClass];
-  const resourceScope = EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE[decision.effectClass];
-  if (actionClass === null || resourceScope === null) return decision;
-  const classEffect = authority.actionClasses.includes(actionClass) ? "allowed" : "denied";
-  const envelopeEffect = strictestCodingWorkbenchPolicyEffect(
-    classEffect,
-    envelopeModeEffect(authority.requestedMode, actionClass, resourceScope, risk),
-    envelopeModeEffect(authority.deploymentCeiling, actionClass, resourceScope, risk),
-    envelopeModeEffect(authority.effectiveMode, actionClass, resourceScope, risk),
-  );
-  const effective = strictestCodingWorkbenchPolicyEffect(
+  const envelopeEffect = authorityEffect(decision, authority, risk);
+  if (envelopeEffect === undefined) return decision;
+  const withoutTrust = strictestCodingWorkbenchPolicyEffect(
     EDITOR_AGENT_POLICY_EFFECT_BY_DISPOSITION[decision.disposition],
     envelopeEffect,
   );
-  if (effective === EDITOR_AGENT_POLICY_EFFECT_BY_DISPOSITION[decision.disposition])
-    return decision;
-  if (effective === "denied") {
-    return denyDecision(decision.effectClass, "mode-policy-denied", decision.origin ?? "agent");
-  }
-  return reviewDecision(
-    decision.effectClass,
-    reviewReasonForEnvelope(decision.effectClass, risk),
-    decision.origin ?? "agent",
+  const trustEffect = workspaceTrustLevelPolicyEffect(
+    workspaceTrust,
+    workspaceTrustOperationForEffectClass(decision.effectClass),
   );
+  return decisionForComposedEffect(decision, risk, withoutTrust, trustEffect);
 }
 
 // ─── Bounded audit record (AC1, AC3) ──────────────────────────────────────────
@@ -406,6 +525,7 @@ export interface EditorAgentActionAuditRecord {
   readonly sessionId: string;
   readonly actionId: string;
   readonly actionType: EditorAgentActionType;
+  readonly rootAttribution?: EditorAgentRootAttribution | undefined;
   readonly origin?: EditorAgentActionOrigin | undefined;
   readonly effectClass: EditorAgentActionEffectClass;
   readonly mutating: boolean;
@@ -437,6 +557,7 @@ export interface EditorAgentActionAuditInput {
   readonly sessionId: string;
   readonly actionId: string;
   readonly actionType: EditorAgentActionType;
+  readonly rootAttribution?: EditorAgentRootAttribution | undefined;
   readonly decision: EditorAgentActionPolicyDecision;
   readonly outcome: EditorAgentActionStatus;
   readonly conflictCode?: EditorAgentConflictCode | undefined;
@@ -559,6 +680,7 @@ export function buildEditorAgentActionAuditRecord(
     sessionId: input.sessionId,
     actionId: input.actionId,
     actionType: input.actionType,
+    ...(input.rootAttribution === undefined ? {} : { rootAttribution: input.rootAttribution }),
     origin: resolveEditorAgentActionOrigin(input.decision.origin),
     effectClass: input.decision.effectClass,
     mutating: isMutatingEditorAgentAction(input.actionType),
@@ -623,6 +745,7 @@ export function isEditorAgentActionAuditRecord(
     typeof value.occurredAt === "number" && Number.isFinite(value.occurredAt),
     typeof value.sessionId === "string" && value.sessionId.length > 0,
     typeof value.actionId === "string" && value.actionId.length > 0,
+    value.rootAttribution === undefined || isEditorAgentRootAttribution(value.rootAttribution),
     value.origin === undefined || isEditorAgentActionOrigin(value.origin),
     hasMatchingActionEffect(value.actionType, value.effectClass, value.mutating),
     isEditorAgentActionDisposition(value.disposition),

@@ -20,6 +20,7 @@ import type {
   DebugWorkspaceIdentity,
 } from "./debugCapsulePlan.js";
 import type { DebugLaunchCatalogDeps } from "./debugLaunchCatalog.js";
+import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 import { deriveCatalogDebugTarget, deriveFileDebugTarget } from "./debugLaunchCatalog.js";
 import {
   type ApprovedDebugArtifact,
@@ -314,17 +315,19 @@ function inspectRuntime(path: string): DebugRuntimeMountInspection {
 }
 
 export function inspectDebugWorkspaceIdentity(path: string): DebugWorkspaceIdentity {
-  const realPath = realpathSync(path);
-  const stat = lstatSync(realPath);
-  if (!stat.isDirectory()) throw new Error("INVALID_DEBUG_WORKSPACE");
-  const values = [realPath, stat.dev, stat.ino, stat.mode, stat.uid];
+  let inspected: ReturnType<typeof inspectWorkspaceRootIdentity>;
+  try {
+    inspected = inspectWorkspaceRootIdentity(realpathSync(path));
+  } catch {
+    throw new Error("INVALID_DEBUG_WORKSPACE");
+  }
   return Object.freeze({
-    realPath,
-    identityDigest: createHash("sha256").update(JSON.stringify(values)).digest("hex"),
-    device: stat.dev,
-    inode: stat.ino,
-    mode: stat.mode,
-    ownerUid: stat.uid,
+    realPath: inspected.canonicalRoot,
+    identityDigest: inspected.identityDigest,
+    device: inspected.device,
+    inode: inspected.inode,
+    mode: inspected.mode,
+    ownerUid: inspected.ownerUid,
   });
 }
 

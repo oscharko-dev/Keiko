@@ -1069,11 +1069,11 @@ describe("active workspace binding override (Issue #446)", () => {
     expect(await screen.findByTestId("terminal-widget")).toHaveTextContent("/wt/active:/wt/active");
   });
 
-  it("editor renderer targets the active root and remounts (key changes) on a switch", async () => {
+  it("editor renderer targets the active root through a stable session host", async () => {
     render(<>{WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>);
     expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/wt/active:");
-    // The remount key is the activeRoot — a switch to a different workspace changes it (drops the
-    // stale Monaco model), and unbound mode collapses to a stable "unbound" key.
+    // The outer session host stays stable so V2 can retain sibling roots. Its inner V1 editor keeps
+    // the root-keyed remount guarantee, while the V2 host owns one keyed state container per root.
     const a = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/a")) as {
       key: string | null;
     };
@@ -1083,10 +1083,9 @@ describe("active workspace binding override (Issue #446)", () => {
     const unbound = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx(null)) as {
       key: string | null;
     };
-    expect(a.key).toBe("/wt/a");
-    expect(b.key).toBe("/wt/b");
-    expect(a.key).not.toBe(b.key);
-    expect(unbound.key).toBe("unbound");
+    expect(a.key).toBeNull();
+    expect(b.key).toBeNull();
+    expect(unbound.key).toBeNull();
   });
 
   it("search renderer uses the active root before linked or active-project fallbacks", async () => {

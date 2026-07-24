@@ -1,4 +1,4 @@
-// Issue #2211 — four /api/editor/verification/* BFF route handlers for the editor verification runner.
+// Issue #2211/#2523 — governed /api/editor/verification/* BFF route handlers.
 // CSRF is enforced by the server's state-changing-request gate (POST/DELETE flow through it); GET
 // routes are read-only and exempt. SSE framing mirrors /api/commands/*/events exactly, reusing the
 // SAME shared primitives (SSE_HEADERS, readyMessage, startSseHeartbeat, writeOrDestroy,
@@ -151,18 +151,34 @@ function trustProjectId(body: Record<string, unknown>): string {
   return body.projectId;
 }
 
-// POST/DELETE /api/editor/verification/trust — explicit human grant/revoke. The client names
+// GET/POST/DELETE /api/editor/verification/trust — status plus explicit human grant/revoke. The client names
 // only a registered project; the server resolves its canonical roots and current manifest digest.
+export async function handleGetWorkspaceScriptTrust(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireTrustService(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(() => {
+    const projectId = ctx.url.searchParams.get("projectId");
+    if (projectId === null || projectId.length === 0) {
+      throw new VerificationRunnerError("BAD_REQUEST", "Query parameter 'projectId' is required.");
+    }
+    return { status: 200, body: guard.status(projectId) };
+  });
+}
+
 export async function handleGrantWorkspaceScriptTrust(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const guard = requireTrustService(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(async () => ({
-    status: 200,
-    body: guard.grant(trustProjectId(await readJsonObject(ctx.req))),
-  }));
+  return runHandler(async () => {
+    const projectId = trustProjectId(await readJsonObject(ctx.req));
+    guard.grant(projectId);
+    return { status: 200, body: guard.status(projectId) };
+  });
 }
 
 export async function handleRevokeWorkspaceScriptTrust(
@@ -171,10 +187,11 @@ export async function handleRevokeWorkspaceScriptTrust(
 ): Promise<RouteResult> {
   const guard = requireTrustService(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(async () => ({
-    status: 200,
-    body: guard.revoke(trustProjectId(await readJsonObject(ctx.req))),
-  }));
+  return runHandler(async () => {
+    const projectId = trustProjectId(await readJsonObject(ctx.req));
+    guard.revoke(projectId);
+    return { status: 200, body: guard.status(projectId) };
+  });
 }
 
 // GET /api/editor/verification/catalog — the detected kind catalog + server-owned trust state for a
@@ -190,7 +207,12 @@ export async function handleVerificationCatalog(
     if (projectId === null || projectId.length === 0) {
       throw new VerificationRunnerError("BAD_REQUEST", "Query parameter 'projectId' is required.");
     }
-    return { status: 200, body: guard.discover(projectId) };
+    const trust = requireTrustService(deps);
+    if (isRouteResult(trust)) return trust;
+    return {
+      status: 200,
+      body: { ...guard.discover(projectId), workspaceTrust: trust.status(projectId) },
+    };
   });
 }
 

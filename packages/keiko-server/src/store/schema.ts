@@ -3,12 +3,27 @@
 // runner applies migrations whose 1-based index > current user_version.
 
 import type { DatabaseSync } from "node:sqlite";
+import { migrateLegacyProjectManifests } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 15;
 
 interface Migration {
   readonly version: number;
   readonly sql: string;
+  readonly apply?: (db: DatabaseSync) => void;
+}
+
+export class UiStoreSchemaVersionError extends Error {
+  public readonly code = "UI_STORE_SCHEMA_NEWER" as const;
+
+  public constructor(actual: number, supported: number) {
+    super(
+      `UI store schema version ${String(actual)} is newer than this binary supports (${String(
+        supported,
+      )}).`,
+    );
+    this.name = "UiStoreSchemaVersionError";
+  }
 }
 
 const V1_SQL = `
@@ -368,6 +383,81 @@ const V13_SQL = `
 ALTER TABLE chat_messages ADD COLUMN client_turn_content_digest TEXT;
 `;
 
+// V14 (issue #2521, epic #2285, ADR-0147 D3/D8) — persisted canonical workspace-trust records.
+// ADR-0147 D8 mandates uiDb (one transaction domain) so a future root-removal (#2524) and trust
+// invalidation commit atomically; JSON-beside-SQLite was explicitly rejected. Content-free by
+// construction: `root_ref` is an opaque derived reference, `record_json` is the validated
+// WorkspaceTrustRecord (opaque digests, closed enums, revisions — never paths or manifest bytes).
+// The authoritative payload is `record_json`, re-validated through the contract validator on read.
+// The denormalized columns are written from that same record and are never used as authority:
+// `revision` backs monotonic revision reads, `updated_at` orders deterministic bounded pruning, and
+// the `trust` enum is DB-layer enum enforcement plus cheap content-free inspection.
+const V14_SQL = `
+CREATE TABLE workspace_trust_records (
+  root_ref     TEXT NOT NULL PRIMARY KEY,
+  revision     INTEGER NOT NULL,
+  trust        TEXT NOT NULL,
+  record_json  TEXT NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  CHECK (
+    revision >= 0
+    AND trust IN ('trusted','restricted')
+    AND length(root_ref) BETWEEN 3 AND 96
+    AND length(record_json) BETWEEN 1 AND 8192
+    AND updated_at >= 0
+  )
+) STRICT;
+
+CREATE INDEX idx_workspace_trust_updated ON workspace_trust_records(updated_at, root_ref);
+`;
+
+// V15 (issue #2524, epic #2285, ADR-0147 D1/D8/D9) — server-owned ordered workspace manifests.
+// Root rows reference, rather than replace, the existing projects registry. `record_json` is the
+// authoritative closed WorkspaceManifest contract; relational columns enforce unique membership,
+// stable order, and the one-transaction root-removal/trust-invalidation boundary.
+const V15_SQL = `
+CREATE TABLE workspace_manifests (
+  workspace_id       TEXT NOT NULL PRIMARY KEY,
+  schema_version     INTEGER NOT NULL,
+  manifest_ref       TEXT NOT NULL UNIQUE,
+  revision           INTEGER NOT NULL,
+  manifest_digest    TEXT NOT NULL,
+  focused_root_ref   TEXT NOT NULL,
+  record_json        TEXT NOT NULL,
+  updated_at         INTEGER NOT NULL,
+  CHECK (
+    schema_version = 1
+    AND revision >= 0
+    AND length(workspace_id) BETWEEN 1 AND 128
+    AND length(manifest_ref) BETWEEN 3 AND 96
+    AND length(manifest_digest) = 64
+    AND length(focused_root_ref) BETWEEN 3 AND 96
+    AND length(record_json) BETWEEN 1 AND 262144
+    AND updated_at >= 0
+  )
+) STRICT;
+
+CREATE TABLE workspace_manifest_roots (
+  workspace_id    TEXT NOT NULL REFERENCES workspace_manifests(workspace_id) ON DELETE CASCADE,
+  root_ref        TEXT NOT NULL UNIQUE,
+  position        INTEGER NOT NULL,
+  project_path    TEXT NOT NULL UNIQUE REFERENCES projects(path) ON DELETE RESTRICT,
+  canonical_root  TEXT NOT NULL UNIQUE,
+  identity_digest TEXT NOT NULL UNIQUE,
+  PRIMARY KEY (workspace_id, root_ref),
+  UNIQUE (workspace_id, position),
+  CHECK (
+    position BETWEEN 0 AND 31
+    AND length(root_ref) BETWEEN 3 AND 96
+    AND length(canonical_root) BETWEEN 1 AND 4096
+    AND length(identity_digest) = 64
+  )
+) STRICT;
+
+CREATE INDEX idx_workspace_manifest_roots_workspace
+  ON workspace_manifest_roots(workspace_id, position);
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -382,6 +472,8 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 11, sql: V11_SQL },
   { version: 12, sql: V12_SQL },
   { version: 13, sql: V13_SQL },
+  { version: 14, sql: V14_SQL },
+  { version: 15, sql: V15_SQL, apply: migrateLegacyProjectManifests },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {
@@ -398,11 +490,7 @@ function setUserVersion(db: DatabaseSync, v: number): void {
 export function runMigrations(db: DatabaseSync): void {
   const start = currentUserVersion(db);
   if (start > SCHEMA_VERSION) {
-    throw new Error(
-      `UI store schema version ${String(start)} is newer than this binary supports (${String(
-        SCHEMA_VERSION,
-      )}).`,
-    );
+    throw new UiStoreSchemaVersionError(start, SCHEMA_VERSION);
   }
   const pending = MIGRATIONS.filter((m) => m.version > start);
   if (pending.length === 0) return;
@@ -410,6 +498,7 @@ export function runMigrations(db: DatabaseSync): void {
   try {
     for (const m of pending) {
       db.exec(m.sql);
+      m.apply?.(db);
       setUserVersion(db, m.version);
     }
     db.exec("COMMIT");

@@ -1,0 +1,157 @@
+.cmpRootExplorer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--card);
+}
+
+.cmpToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.cmpSelect {
+  flex: 1 1 150px;
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control, 7px);
+  color: var(--fg);
+  background: var(--card-2, var(--card));
+  font: inherit;
+}
+
+.cmpAction {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control, 7px);
+  color: var(--fg);
+  background: var(--card-2, var(--card));
+  font: inherit;
+  cursor: pointer;
+}
+
+.cmpAction:hover:not(:disabled),
+.cmpAction:focus-visible,
+.cmpSelect:focus-visible,
+.cmpRootToggle:focus-visible {
+  border-color: var(--border-accent, var(--accent));
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.cmpAction:disabled,
+.cmpSelect:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.cmpIssue {
+  margin: 0;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+  color: var(--danger, #c64141);
+  overflow-wrap: anywhere;
+}
+
+.cmpRootList {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cmpRootGroup {
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.cmpRootHeader {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 6px 7px;
+  background: var(--card-2, var(--card));
+}
+
+.cmpRootHeader[data-focused="true"] {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.cmpRootToggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control, 7px);
+  color: var(--fg);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cmpCaret {
+  flex: 0 0 auto;
+  transition: transform 120ms ease;
+}
+
+.cmpCaret[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.cmpRootName {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmpRootPath {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmpRootTree {
+  min-width: 0;
+  min-height: 120px;
+  overflow-x: hidden;
+}
+
+@media (max-width: 320px) {
+  .cmpRootHeader {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .cmpRootToggle {
+    flex-basis: 100%;
+  }
+
+  .cmpAction {
+    min-height: 34px;
+  }
+
+  .cmpRootTree :global(.fpv-bar) {
+    flex-wrap: wrap;
+  }
+}

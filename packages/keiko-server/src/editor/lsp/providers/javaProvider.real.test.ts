@@ -61,6 +61,7 @@ describe.skipIf(!provisioned)(suite, () => {
         signal: new AbortController().signal,
         privateRuntimeStateRoot: runtimeStateRoot,
         activationAuthorized: true,
+        activationStillAuthorized: (): boolean => true,
         protocolConfiguration: { revision: 1, settings: {}, initializationOptions: {} },
       });
       expect(outcome, request.operation).toMatchObject({ kind: request.operation });

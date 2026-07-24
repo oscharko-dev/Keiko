@@ -27,6 +27,7 @@ import type {
 import type {
   CodingWorkbenchMode,
   StoredPdfCitationPreviewCitation,
+  WorkspaceManifest,
 } from "@oscharko-dev/keiko-contracts";
 export type {
   Project,
@@ -136,7 +137,69 @@ export interface UiStore {
   readonly getMemoryAutonomyMode: () => CodingWorkbenchMode | undefined;
   readonly setMemoryAutonomyMode: (mode: CodingWorkbenchMode) => void;
 
+  // Canonical workspace-trust persistence (issue #2521, ADR-0147 D3/D8). The store persists opaque,
+  // content-free rows; all trust semantics (derivation, validation, projection) live above the port.
+  readonly readWorkspaceTrustRecord: (rootRef: string) => WorkspaceTrustRecordRow | undefined;
+  readonly writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput) => void;
+  readonly pruneWorkspaceTrustRecords: (max: number) => void;
+
+  // M11 multi-root workspace manifests (issue #2524, ADR-0147 D1/D8). The projects table remains
+  // the root registry; these methods persist ordered membership and atomically invalidate trust.
+  readonly listWorkspaceManifestRecords: () => readonly WorkspaceManifestRecordRow[];
+  readonly readWorkspaceManifestRecord: (
+    workspaceId: string,
+  ) => WorkspaceManifestRecordRow | undefined;
+  readonly findWorkspaceManifestRecordByRoot: (
+    rootRef: string,
+  ) => WorkspaceManifestRecordRow | undefined;
+  readonly findWorkspaceManifestRecordByProject: (
+    projectPath: string,
+  ) => WorkspaceManifestRecordRow | undefined;
+  readonly replaceWorkspaceManifest: (input: WorkspaceManifestMutationInput) => boolean;
+
   readonly close: () => void;
+}
+
+// A persisted workspace-trust row. `recordJson` is the authoritative, contract-validated
+// WorkspaceTrustRecord payload; `trust`/`revision` are denormalized for monotonic revision reads and
+// deterministic bounded pruning. All fields are content-free (opaque reference, closed enum,
+// revision, digest-bearing JSON — never paths or manifest bytes).
+export interface WorkspaceTrustRecordRow {
+  readonly rootRef: string;
+  readonly revision: number;
+  readonly trust: string;
+  readonly recordJson: string;
+  readonly updatedAt: number;
+}
+
+export interface WorkspaceTrustRecordRowInput {
+  readonly rootRef: string;
+  readonly revision: number;
+  readonly trust: "trusted" | "restricted";
+  readonly recordJson: string;
+}
+
+export interface WorkspaceManifestRecordRow {
+  readonly workspaceId: string;
+  readonly schemaVersion: number;
+  readonly manifestRef: string;
+  readonly revision: number;
+  readonly manifestDigest: string;
+  readonly recordJson: string;
+  readonly updatedAt: number;
+  readonly rootProjects: readonly WorkspaceManifestRootProject[];
+}
+
+export interface WorkspaceManifestMutationInput {
+  readonly manifest: WorkspaceManifest;
+  readonly expectedRevision: number;
+  readonly absorbedWorkspaceIds: readonly string[];
+  readonly rootProjects: readonly WorkspaceManifestRootProject[];
+}
+
+export interface WorkspaceManifestRootProject {
+  readonly rootRef: string;
+  readonly projectPath: string;
 }
 
 export interface UpdateChatOptions {

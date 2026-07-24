@@ -3,11 +3,10 @@
 // plan) is driven with a tool surface scoped to the four retrofit editor-agent tools
 // (navigateSymbol, searchWorkspace, queryGit, requestVerification). Every tool call this turn makes
 // still dispatches through the SAME EditorAgentHttpClient -> agentRoutes.ts / agentVerificationRoute.ts
-// path a human-driven browser-bridge action takes; this file adds no new governance, dispatch, or
-// authority logic of its own -- it composes the existing harness loop with the existing tool host.
-// Reuse Gate: no second tool host, no parallel schema, no bespoke HTTP transport. The caller-supplied
-// authorityRef is never trusted here -- it is validated the same way any other EditorAgentAction's
-// authorityRef is validated, downstream in agentRoutes.ts/agentVerificationRoute.ts.
+// path a human-driven browser-bridge action takes. Before the model turn, this route reuses the M11
+// root resolver, trust store, and authority registry to bind the producer itself to one current root;
+// every tool call then repeats the normal downstream admission. Reuse Gate: no second tool host, no
+// parallel schema, no bespoke HTTP transport.
 
 import { randomUUID } from "node:crypto";
 import {
@@ -24,11 +23,17 @@ import {
   EditorAgentHttpClient,
   EditorAgentToolHost,
 } from "@oscharko-dev/keiko-tools";
-import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  isEditorAgentGovernedAuthorityReference,
+  type EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 import { readJsonObject } from "../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
+import { editorAgentAuthorityRegistry } from "./agentAuthorityRegistry.js";
+import { resolveEditorAgentActionRoot } from "./agentRootBoundary.js";
 
 // Scope IN (#2489): the first Keiko-native producer is restricted to the four tools whose
 // dispatch is server-resolved (navigateSymbol/searchWorkspace/queryGit) or synchronously governed
@@ -126,9 +131,7 @@ interface ParsedProducerTurnRequest {
 function isAuthorityRefShape(
   value: unknown,
 ): value is { readonly runId: string; readonly envelopeDigest: string } {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return typeof record.runId === "string" && typeof record.envelopeDigest === "string";
+  return isEditorAgentGovernedAuthorityReference(value);
 }
 
 function parseProducerTurnRequest(
@@ -184,6 +187,7 @@ type BuildToolHostOutcome =
 function buildProducerToolHost(
   ctx: RouteContext,
   authorityRef: ParsedProducerTurnRequest["authorityRef"],
+  rootBinding: NonNullable<ReturnType<typeof editorAgentRegistry.snapshotFor>>["rootBinding"],
 ): BuildToolHostOutcome {
   const origin = selfOrigin(ctx);
   if (origin === undefined) {
@@ -207,6 +211,7 @@ function buildProducerToolHost(
           transport: createFetchEditorAgentHttpTransport(),
         }),
         authorityRef,
+        rootBinding,
         nextActionId: randomUUID,
       }),
     };
@@ -245,6 +250,65 @@ async function runProducerTurn(
   };
 }
 
+type ProducerAdmission =
+  | { readonly ok: true; readonly snapshot: EditorAgentSessionSnapshot }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function producerAdmission(
+  request: ParsedProducerTurnRequest,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: UiHandlerDeps,
+): ProducerAdmission {
+  const rooted = resolveEditorAgentActionRoot(snapshot, snapshot.rootBinding, deps.store);
+  if (!rooted.ok) {
+    return {
+      ok: false,
+      response: {
+        status: 403,
+        body: errorBody(
+          rooted.reason === "decompose-per-root"
+            ? "EDITOR_AGENT_DECOMPOSE_PER_ROOT"
+            : "EDITOR_AGENT_ROOT_BINDING_INVALID",
+          "The producer turn is not authorized for this workspace root.",
+        ),
+      },
+    };
+  }
+  const authority = editorAgentAuthorityRegistry.resolve(
+    request.authorityRef,
+    rooted.root.workspaceRoot,
+    deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist",
+    new Date().toISOString(),
+  );
+  if (!authority.ok) return producerAdmissionDenied("AUTHORITY_INVALID");
+  try {
+    if (deps.workspaceScriptTrust?.trustLevelForRoot(rooted.root.workspaceRoot) !== "trusted") {
+      return producerAdmissionDenied("WORKSPACE_RESTRICTED");
+    }
+  } catch {
+    return producerAdmissionDenied("WORKSPACE_RESTRICTED");
+  }
+  return {
+    ok: true,
+    snapshot:
+      rooted.root.workspaceRoot === snapshot.workspaceRoot
+        ? snapshot
+        : { ...snapshot, workspaceRoot: rooted.root.workspaceRoot },
+  };
+}
+
+function producerAdmissionDenied(
+  code: "AUTHORITY_INVALID" | "WORKSPACE_RESTRICTED",
+): Extract<ProducerAdmission, { readonly ok: false }> {
+  return {
+    ok: false,
+    response: {
+      status: 403,
+      body: errorBody(code, "The producer turn is not authorized for this workspace root."),
+    },
+  };
+}
+
 export async function handleEditorAgentProducerTurn(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -253,15 +317,24 @@ export async function handleEditorAgentProducerTurn(
   if (isRouteResult(body)) return body;
   const request = parseProducerTurnRequest(body);
   if (request === undefined) {
+    if (body.authorityRef !== undefined && !isAuthorityRefShape(body.authorityRef)) {
+      return {
+        status: 400,
+        body: errorBody("AUTHORITY_INVALID", "The supplied authority reference is malformed."),
+      };
+    }
     return { status: 400, body: errorBody("INVALID_REQUEST", "Producer turn request is invalid.") };
   }
   const snapshot = editorAgentRegistry.snapshotFor(request.sessionId);
-  if (snapshot === undefined) {
+  if (snapshot === undefined || !editorAgentRegistry.hasLiveBridge(request.sessionId)) {
     return {
       status: 404,
       body: errorBody("SESSION_NOT_FOUND", "No live editor session for the given sessionId."),
     };
   }
+  const admission = producerAdmission(request, snapshot, deps);
+  if (!admission.ok) return admission.response;
+  const rootedSnapshot = admission.snapshot;
   const model = deps.modelPortFactory(request.modelId);
   if (model === undefined) {
     return {
@@ -269,8 +342,13 @@ export async function handleEditorAgentProducerTurn(
       body: errorBody("MODEL_UNAVAILABLE", "No model is configured for the producer turn."),
     };
   }
-  const hostOutcome = buildProducerToolHost(ctx, request.authorityRef);
+  const hostOutcome = buildProducerToolHost(ctx, request.authorityRef, rootedSnapshot.rootBinding);
   if (!hostOutcome.ok) return hostOutcome.response;
-  const summary = await runProducerTurn(request, snapshot.workspaceRoot, model, hostOutcome.host);
+  const summary = await runProducerTurn(
+    request,
+    rootedSnapshot.workspaceRoot,
+    model,
+    hostOutcome.host,
+  );
   return { status: 200, body: summary };
 }

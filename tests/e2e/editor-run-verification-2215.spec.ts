@@ -144,6 +144,7 @@ async function trustWorkspaceScripts(page: Page): Promise<void> {
       response.url().includes("/api/editor/verification/catalog?projectId="),
   );
   await runPaletteCommand(page, "Trust Workspace Scripts");
+  await page.getByRole("button", { name: "Trust workspace" }).click();
   expect((await trustResponse).status()).toBe(200);
   expect((await catalogRefresh).status()).toBe(200);
 }

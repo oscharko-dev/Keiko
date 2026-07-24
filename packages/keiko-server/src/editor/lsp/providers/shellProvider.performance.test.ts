@@ -125,6 +125,7 @@ function runOp(
     signal: new AbortController().signal,
     spawn,
     activationAuthorized: true,
+    activationStillAuthorized: (): boolean => true,
   });
 }
 

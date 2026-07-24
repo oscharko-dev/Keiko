@@ -16,6 +16,8 @@ import { useTranslate } from "@/lib/i18n";
 import styles from "./ManagedLanguageSettings.module.css";
 import { managedLanguageTranslate, type ManagedLanguageTranslate } from "./managed-language-i18n";
 import { useManagedLanguageSettings } from "./useManagedLanguageSettings";
+import { useWorkspaceTrust } from "../../workspace-trust/useWorkspaceTrust";
+import { WorkspaceTrustBanner } from "../../workspace-trust/WorkspaceTrustSurfaces";
 
 const MAX_CAPABILITIES = 12;
 const JAVA_LANGUAGE_LEVELS = ["8", "11", "17", "21", "25"] as const;
@@ -28,11 +30,14 @@ interface Confirmation {
 
 export function ManagedLanguageSettings({
   root,
+  onOpenWorkspaceTrust,
 }: {
   readonly root?: string | undefined;
+  readonly onOpenWorkspaceTrust?: (() => void) | undefined;
 }): ReactNode {
   const t = managedLanguageTranslate(useTranslate());
   const view = useManagedLanguageSettings(root);
+  const trust = useWorkspaceTrust(root);
   const [confirmation, setConfirmation] = useState<Confirmation | undefined>();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef<HTMLButtonElement | undefined>(undefined);
@@ -92,6 +97,14 @@ export function ManagedLanguageSettings({
         </h3>
         <p className={styles.description}>{t("description")}</p>
       </header>
+      {root === undefined ? null : (
+        <WorkspaceTrustBanner
+          status={trust.status}
+          issue={trust.issue}
+          surface="languages"
+          onManage={onOpenWorkspaceTrust}
+        />
+      )}
       <output className={styles.srOnly} aria-live="polite" aria-atomic="true">
         {announcement(view.announcement, t)}
         {view.mutating ? t("applying") : ""}
@@ -825,6 +838,7 @@ function reasonLabel(reason: ManagedLspActivationReasonCode, t: ManagedLanguageT
   const keys: Readonly<Record<ManagedLspActivationReasonCode, Parameters<typeof t>[0]>> = {
     PRODUCT_UNSUPPORTED: "reasonProductUnsupported",
     POLICY_DENIED: "reasonPolicyDenied",
+    WORKSPACE_UNTRUSTED: "reasonWorkspaceUntrusted",
     LEGACY_ENV_DISABLED: "reasonLegacyDisabled",
     NOT_PROVISIONED: "reasonNotProvisioned",
     WORKSPACE_DISABLED: "reasonWorkspaceDisabled",

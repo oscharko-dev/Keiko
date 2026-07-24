@@ -12,7 +12,10 @@ import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../
 import { createRunRegistry } from "../../runs.js";
 import { createUiServer, UI_HOST } from "../../server.js";
 import { createEditorSettingsControlService } from "../settings/editorSettingsControl.js";
-import { createEditorSettingsStore } from "../settings/editorSettingsStore.js";
+import {
+  createEditorSettingsStore,
+  formatEditorSettingsEtag,
+} from "../settings/editorSettingsStore.js";
 import { createDebugActivationControlService } from "./debugActivationControl.js";
 
 let server: Server;
@@ -122,6 +125,23 @@ async function mutate(
 }
 
 describe("debug activation routes", () => {
+  it("accepts a precondition ETag that carries an active profile revision", async () => {
+    // Regression: #2528 added the `-p<n>` profile segment to the settings ETag, but this route
+    // kept a private pattern without it. Every debug activation failed with 400 as soon as any
+    // editor profile was active, while the settings route accepted the very same token.
+    const withProfile = formatEditorSettingsEtag(await realpath(workspaceRoot), {
+      userRevision: 0,
+      workspaceRevision: 0,
+      rootRevision: 0,
+      profileRevision: 3,
+    });
+    expect(withProfile).toContain("-p3-");
+
+    const response = await mutate("activate", withProfile);
+
+    expect(response.status).toBe(200);
+  });
+
   it("activates through the canonical workspace setting and returns the derived summary", async () => {
     const initial = await settings();
     const response = await mutate("activate", initial.headers.get("etag") ?? "");

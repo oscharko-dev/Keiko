@@ -135,6 +135,8 @@ export {
   type UpdateChatPatch,
   type UpdateProjectPatch,
   type WorkflowStatus,
+  type WorkspaceTrustRecordRow,
+  type WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
 export {
   handleListProjects,
