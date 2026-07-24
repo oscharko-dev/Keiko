@@ -95,6 +95,12 @@ describe("Sonar analysis scope", () => {
     expect(coverageDisposition("packages/keiko-ui/public/worker.js", nativeSources)).toBe(
       "browser-smoke",
     );
+    // arch-check-negative.mjs is a spawnSync-only orchestration script; its testable logic
+    // is extracted into scripts/lib/bare-specifier-visibility-probe.mjs and covered by its own
+    // pod. The orchestration itself is exercised end-to-end by `npm run arch:check:negative`.
+    expect(coverageDisposition("scripts/arch-check-negative.mjs", nativeSources)).toBe(
+      "static-analysis",
+    );
     expect(coverageDisposition("docs/qa/gate.md", nativeSources)).toBe("static-analysis");
     expect(coverageDisposition("tests/gate.test.ts", nativeSources)).toBeUndefined();
   });

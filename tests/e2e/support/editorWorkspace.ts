@@ -330,12 +330,29 @@ export async function openEditorWorkspace(
   const workspace = page.locator(EDITOR_SELECTORS.workspace).first();
   await expect(workspace.locator(EDITOR_SELECTORS.tablist).first()).toBeVisible();
   if (options.dismissTrustPrompt ?? true) {
-    const safeChoice = page.getByRole("button", { name: "Stay restricted" });
-    const promptAppeared = await safeChoice
-      .waitFor({ state: "visible", timeout: 1_500 })
-      .then(() => true)
-      .catch(() => false);
-    if (promptAppeared) await safeChoice.click();
+    // Bounded, self-contained trust-dialog dismiss. The initial-prompt dialog is rendered in
+    // the same React commit that resolves the workspace-trust status carried in the
+    // verification catalog — so on the restricted path it appears within the app's own
+    // sub-second post-mount window. Wait for it with an EXPLICIT timeout (Playwright's
+    // default `locator.waitFor` timeout is `0` = indefinite; leaving it unbounded let a
+    // broken UI hang the helper for the whole test-lane timeout, which is what the E2E
+    // editor lanes on this PR first tripped over). The 5 s ceiling comfortably outruns the
+    // restricted-path React-commit latency, and returns cleanly on the pre-trusted path
+    // where no dialog will ever render. The earlier iteration raced this wait against a
+    // `page.waitForResponse` on the trust catalog; the loser of that race left a
+    // ~10-15 s locator poll running against the DOM after the helper returned, which
+    // introduced background long-task pressure that showed up in the D12 stopped-projection
+    // p75 measurement. Sequencing the wait — with a single bounded `waitFor` and no
+    // lingering promise — keeps the helper's footprint invisible to the D12 harness.
+    const dialog = page.getByRole("alertdialog", { name: /Trust this workspace/iu });
+    const dialogAppeared: boolean = await dialog
+      .waitFor({ state: "visible", timeout: 5_000 })
+      .then((): true => true)
+      .catch((): false => false);
+    if (dialogAppeared) {
+      await dialog.getByRole("button", { name: "Stay restricted" }).click();
+      await expect(dialog).toBeHidden();
+    }
   }
   return workspace;
 }

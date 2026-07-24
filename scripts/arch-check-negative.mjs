@@ -17,16 +17,37 @@
 // still resolves the import to a `packages/...` path that stays inside the scan.
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
   checkArchitectureImportPolicy,
   countImportPolicyViolationsByRule,
 } from "./check-import-policy.mjs";
+import { runBareSpecifierVisibilityProbe } from "./lib/bare-specifier-visibility-probe.mjs";
 
 const RULES_FILE = ".dependency-cruiser.cjs";
 const FIXTURE_PATH = "tests/architecture/fixtures";
-const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|packages/[^/]+/src)";
+// The bare-specifier visibility probe (Wave-2 audit #2627) writes a temporary source file
+// under a `keiko-security` src path, imports `@oscharko-dev/keiko-harness` by its workspace
+// package name, runs dependency-cruiser, verifies rule 2 fires against
+// `packages/keiko-harness/dist/index.js`, and unconditionally cleans up. This proves the
+// production `includeOnly` regex sees cross-package bare-specifier resolutions through the
+// workspace `exports` map — the exact class of edge the audit found the previous gate blind
+// to — without introducing a persistent test fixture whose lifecycle depends on an external
+// build step. The dist file MUST exist for the resolver to reach it, so a preflight below
+// fails loudly with `run \`npm run build:packages\` first` when the target is missing.
+const PROBE_HOST_PACKAGE_SRC = "packages/keiko-security/src";
+const PROBE_FILE_BASENAME = "__arch_check_negative_bare_specifier_probe__.ts";
+const PROBE_TARGET_SPECIFIER = "@oscharko-dev/keiko-harness";
+const PROBE_EXPECTED_RULE = "adr-0019-direction-2-security-only-contracts";
+const PROBE_EXPECTED_RESOLVED = "packages/keiko-harness/dist/index.js";
+const REQUIRED_DIST_ENTRYPOINTS = [PROBE_EXPECTED_RESOLVED];
+// Superset of the production `includeOnly`: fixtures + relative-path targets + src +
+// packages/<name>/(src|dist). The `dist` suffix mirrors the production widening from
+// Wave-2 audit #2627 so the bare-specifier visibility probe (run separately below) has
+// the same graph shape available to the fixture scan.
+const INCLUDE_ONLY_OVERRIDE = String.raw`^(tests/architecture/fixtures|\.\./|src|packages/[^/]+/(src|dist))`;
 
 // One expected rule per physically-extracted package boundary. Most rules should fire exactly once
 // against their dedicated fixture subdir; workflows intentionally fires twice because it pins both
@@ -82,6 +103,47 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0128-connectors-no-direct-egress": 1,
   "adr-0112-provider-runtime-no-internal-bypass": 3,
 };
+
+// Fail loudly if a required dist entrypoint is missing. The bare-specifier visibility probe
+// (Wave-2 audit #2627) needs the workspace `exports` map to resolve `@oscharko-dev/keiko-*`
+// specifiers into `packages/keiko-<name>/dist/index.js`; without dist the resolver drops the
+// edge and the probe assertion silently under-fires. Running `npm run build:packages` produces
+// every dist target enumerated above.
+const missingDist = REQUIRED_DIST_ENTRYPOINTS.filter(
+  (entrypoint) => !existsSync(join(process.cwd(), entrypoint)),
+);
+if (missingDist.length > 0) {
+  console.error(
+    "arch-check-negative: FAIL — required dist entrypoint(s) missing; run `npm run build:packages` first.",
+  );
+  for (const entrypoint of missingDist) {
+    console.error(`  - ${entrypoint}`);
+  }
+  process.exit(1);
+}
+
+const probeOutcome = runBareSpecifierVisibilityProbe({
+  repoRoot: process.cwd(),
+  rulesFile: RULES_FILE,
+  hostPackageSrc: PROBE_HOST_PACKAGE_SRC,
+  probeFileBasename: PROBE_FILE_BASENAME,
+  targetSpecifier: PROBE_TARGET_SPECIFIER,
+  expectedRule: PROBE_EXPECTED_RULE,
+  expectedResolved: PROBE_EXPECTED_RESOLVED,
+});
+if (!probeOutcome.ok) {
+  // Redacted diagnostics per AGENTS.md §7: emit only a bounded reason label
+  // (and, when the subprocess ran, its numeric exit status). Raw dep-cruiser
+  // stdout/stderr is intentionally not surfaced so path fragments and other
+  // subprocess text never leak into the gate log. Reproducing the failure
+  // locally is one `npm run arch:check:negative` away.
+  const suffix =
+    typeof probeOutcome.exitStatus === "number" ? ` (exit ${String(probeOutcome.exitStatus)})` : "";
+  console.error(
+    `arch-check-negative: FAIL — bare-specifier visibility probe reason=${probeOutcome.reason}${suffix}`,
+  );
+  process.exit(1);
+}
 
 // Calling the dependency-cruiser bin through Node keeps the gate hermetic without
 // going through platform-specific npm/npx shell shims.

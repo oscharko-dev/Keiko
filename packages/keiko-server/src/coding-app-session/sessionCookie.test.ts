@@ -59,6 +59,48 @@ describe("serializeSessionCookie", () => {
     expect(cookies[1]).not.toContain("Path=/api;");
     expect(cookies[2]).not.toContain("Path=/api;");
   });
+
+  // Structural pin (#2627 W2-15): the by-index assertions above catch the four cookies this
+  // release ships, but a future edit that reorders indices — or that adds a FIFTH projection at
+  // `Path=/api` with a live Max-Age — could re-widen the bearer scope while every index assertion
+  // still passed. The Wave-2 pre-merge audit flagged a prior iteration of this very pin that had
+  // been rewritten to accept a `Path=/api` widening under a false ADR-0147 D7 attribution; the
+  // reversion landed in commit fa178cd1 before the epic merged to dev, but the class of edit
+  // remains the highest-consequence artifact this file can produce. Assert the invariant
+  // structurally by parsing each cookie header's attributes: any `Path=/api` projection MUST
+  // be a Max-Age=0 expiration with an empty value, and every other projection MUST be scoped
+  // narrower than `/api` (i.e. `/api/<something>`). Substring checks alone would accept
+  // conflicting attributes (a second `Max-Age=3600` appended after `Max-Age=0` would still
+  // pass `toContain("Max-Age=0")`), so the parse asserts the exact effective value set.
+  it("never issues a live bearer on Path=/api; any Path=/api projection is expired on issuance", (): void => {
+    const cookies = serializeSessionCookies("session_secret.value", {
+      secure: false,
+      maxAgeSeconds: 3_600,
+    });
+    for (const cookie of cookies) {
+      const [nameValue = ""] = cookie.split(";", 1);
+      const [name, ...valueParts] = nameValue.split("=");
+      const value = valueParts.join("=");
+      const pathAttribute = /(?:^|; )Path=([^;]+)/u.exec(cookie)?.[1];
+      const maxAgeValues = Array.from(
+        cookie.matchAll(/(?:^|; )Max-Age=(\d+)/gu),
+        (match): string => match[1] ?? "",
+      );
+      expect(name).toBe(APP_SESSION_COOKIE_NAME);
+      // Exactly one Max-Age attribute per cookie header (no shadowed/conflicting values).
+      expect(maxAgeValues).toHaveLength(1);
+      if (pathAttribute === "/api") {
+        // Legacy broad-path projection: MUST be an expiration (Max-Age=0) with an empty
+        // cookie value; never a live bearer.
+        expect(maxAgeValues[0]).toBe("0");
+        expect(value).toBe("");
+      } else {
+        // Every live/non-legacy projection MUST be scoped narrower than `/api` so a future
+        // edit that widens the scope trips this pin regardless of projection order.
+        expect(pathAttribute).toMatch(/^\/api\/[^/]/u);
+      }
+    }
+  });
 });
 
 describe("clearSessionCookie", () => {

@@ -11,6 +11,13 @@ const packageCoverageGateScripts = [
   "scripts/check-sonar-pr-quality-gate.mjs",
   "scripts/sonar-analysis-scope.mjs",
   "scripts/sonar-quality-gate-contract.mjs",
+  // Wave-2 audit #2627: arch-check-negative.mjs is a top-level orchestration script that runs
+  // dep-cruiser and the import-policy checker via `spawnSync`; v8 coverage never crosses the
+  // subprocess boundary, so a unit-test harness cannot exercise its lines directly. Its testable
+  // logic (the bare-specifier visibility probe) is extracted into
+  // `scripts/lib/bare-specifier-visibility-probe.mjs` and exercised by its own pod. The
+  // remaining orchestration is exercised end-to-end by `npm run arch:check:negative` in CI.
+  "scripts/arch-check-negative.mjs",
 ];
 
 export default defineConfig({
