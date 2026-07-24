@@ -332,37 +332,42 @@ export async function openEditorWorkspace(
   if (options.dismissTrustPrompt ?? true) {
     // Deterministic settlement: the initial-prompt trust dialog is rendered in the same
     // React commit that resolves the workspace-trust status carried in the verification
-    // catalog. Race the two decisive outcomes rather than guessing at a wall-clock budget:
-    //   - the dialog becomes visible => trust is restricted, dismiss it.
-    //   - the verification-catalog response settles without the dialog rendering => the
-    //     workspace is pre-trusted (or trust prompting is suppressed) and there is nothing
-    //     to dismiss.
-    // Both primary waits inherit Playwright's per-lane action timeout — no literal
-    // wall-clock survives on the restricted path. The catalog request carries a `?projectId=`
-    // query string, so match the response by parsed pathname (a bare `endsWith` misses the
-    // query and would silently fall through to the primary timeout). The 2 s settle window
-    // AFTER the catalog wins the race is not a heuristic budget but a bounded React-commit
-    // window: `waitForResponse` resolves at the network layer, whereas `dialog.isVisible()`
-    // needs the app to receive the response body, run the fetch `.then` chain, and land the
-    // resulting React re-render into the DOM — that microtask gap must be absorbed
-    // explicitly or the restricted path races the snapshot check.
+    // catalog. Race two bounded decisive outcomes rather than guessing at a wall-clock budget:
+    //   - the dialog becomes visible within `settleTimeoutMs` => trust is restricted, dismiss.
+    //   - the verification-catalog response settles within `settleTimeoutMs` without the
+    //     dialog rendering => the workspace is pre-trusted (or trust prompting is suppressed)
+    //     and there is nothing to dismiss.
+    // Both waits carry EXPLICIT timeouts because Playwright's default `locator.waitFor`
+    // timeout is 0 (indefinite) — an unbounded wait here would let a broken UI hang the
+    // helper for the entire test-lane timeout, which is what the E2E editor lanes on
+    // 2026-07-24 tripped over on this PR. The 15 s ceiling comfortably outruns the restricted
+    // path's actual React-commit latency (sub-second in every observed run) while still
+    // returning fast on the pre-trusted path. The catalog request carries a `?projectId=`
+    // query string, so the response is matched by parsed pathname (a bare `endsWith` misses
+    // the query). The 2 s settle window AFTER the catalog wins the race is not a heuristic
+    // budget but a bounded React-commit window: `waitForResponse` resolves at the network
+    // layer, whereas `dialog.isVisible()` needs the app to receive the response body, run
+    // the fetch `.then` chain, and land the resulting React re-render into the DOM.
     const dialog = page.getByRole("alertdialog", { name: /Trust this workspace/iu });
+    const settleTimeoutMs = 15_000;
     const dialogVisible: Promise<"dialog" | "gone"> = dialog
-      .waitFor({ state: "visible" })
+      .waitFor({ state: "visible", timeout: settleTimeoutMs })
       .then((): "dialog" => "dialog")
       .catch((): "gone" => "gone");
     const catalogSettled: Promise<"catalog"> = page
       .waitForResponse(
         (response): boolean =>
           new URL(response.url()).pathname === "/api/editor/verification/catalog",
+        { timeout: settleTimeoutMs },
       )
       .then((): "catalog" => "catalog")
       .catch((): "catalog" => "catalog");
     const outcome = await Promise.race([dialogVisible, catalogSettled]);
-    if (outcome === "catalog" && !(await dialog.isVisible())) {
-      await dialog.waitFor({ state: "visible", timeout: 2_000 }).catch(() => undefined);
+    if (outcome === "catalog") {
+      await dialog.waitFor({ state: "visible", timeout: 2_000 }).catch((): void => undefined);
     }
-    if (await dialog.isVisible()) {
+    const dialogPresent = await dialog.isVisible().catch((): false => false);
+    if (dialogPresent) {
       await dialog.getByRole("button", { name: "Stay restricted" }).click();
       await expect(dialog).toBeHidden();
     }
