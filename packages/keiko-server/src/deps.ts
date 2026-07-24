@@ -2258,6 +2258,33 @@ async function disposeActiveDebugSession(
   if (sessionId !== undefined) await service.manager.revoke(sessionId);
 }
 
+// #2628 — resolve the trust service and managed-LSP control together, then unconditionally
+// wire the revoke-to-restrict propagation. Registering AFTER both are resolved is the only
+// way the injection path (BuildHandlerDepsOptions.workspaceScriptTrust) receives the same
+// propagation the fallback path always did. Legacy trust-service test doubles that do not
+// implement subscribeOnRestricted keep their previous behavior.
+function resolveTrustAndManagedLspControl(args: BuildPeripheralsArgs): {
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly managedLspControl: ManagedLspControlService;
+} {
+  const workspaceScriptTrust =
+    args.options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: args.uiStore });
+  const managedLspControl =
+    args.options.managedLspControl ??
+    createNodeManagedLspControl({
+      stateDir: args.runtimeStateDir,
+      processEnv: args.options.env,
+      redact: args.liveRedactor,
+      evidenceStore: args.evidenceStore,
+      workspaceTrust: (realRoot): "trusted" | "restricted" =>
+        workspaceScriptTrust.trustLevelForRoot(realRoot),
+    });
+  workspaceScriptTrust.subscribeOnRestricted?.((canonicalRoot): void => {
+    propagateManagedLspRestriction(managedLspControl, canonicalRoot, args.liveRedactor);
+  });
+  return { workspaceScriptTrust, managedLspControl };
+}
+
 // eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
 function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const updateLocalState = args.options.updateLocalState ?? buildUpdateLocalState(args.options.env);
@@ -2269,23 +2296,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
   });
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
-  let managedLspControl = args.options.managedLspControl;
-  const workspaceScriptTrust =
-    args.options.workspaceScriptTrust ??
-    createWorkspaceScriptTrustService({
-      store: args.uiStore,
-      onRestricted: (canonicalRoot): void => {
-        propagateManagedLspRestriction(managedLspControl, canonicalRoot, args.liveRedactor);
-      },
-    });
-  managedLspControl ??= createNodeManagedLspControl({
-    stateDir: args.runtimeStateDir,
-    processEnv: args.options.env,
-    redact: args.liveRedactor,
-    evidenceStore: args.evidenceStore,
-    workspaceTrust: (realRoot): "trusted" | "restricted" =>
-      workspaceScriptTrust.trustLevelForRoot(realRoot),
-  });
+  const { workspaceScriptTrust, managedLspControl } = resolveTrustAndManagedLspControl(args);
   const debugActivationControl = buildDebugActivationControl(args);
   return {
     terminal: buildTerminalManager({
