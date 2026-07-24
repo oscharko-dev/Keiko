@@ -9,7 +9,11 @@ import { join } from "node:path";
  * `@oscharko-dev/keiko-harness` by its workspace package name, invokes
  * dependency-cruiser against the probe file, and verifies rule 2 fires with the
  * exact resolved target `packages/keiko-harness/dist/index.js`. The probe file
- * is unconditionally removed in a `finally` block so it never survives a run.
+ * is unconditionally removed in a `finally` block so it never survives a run,
+ * even when the writer itself throws mid-write. Diagnostics are redacted per
+ * AGENTS.md §7 — only a `reason` code and dep-cruiser's numeric exit status
+ * are returned; raw stdout/stderr is not surfaced so path fragments and
+ * subprocess text cannot leak into gate logs.
  *
  * The probe is pure enough to unit-test: the only side effects are the
  * short-lived probe file and one subprocess invocation. Callers inject the
@@ -34,10 +38,11 @@ import { join } from "node:path";
  *   Injected file writer (defaults to `writeFileSync` when omitted).
  * @param {(path: string) => void} [options.removeProbeFile]
  *   Injected file remover (defaults to `rmSync` when omitted).
- * @returns {{ok: true} | {ok: false, reason: string, stdout?: string, stderr?: string}}
+ * @returns {{ok: true} | {ok: false, reason: string, exitStatus?: number | null}}
  *   `{ok: true}` when the expected rule fired against the expected resolved edge.
- *   `{ok: false, reason}` otherwise; `reason` names the failure mode and `stdout`/`stderr`
- *   carry dep-cruiser's raw output when spawn succeeded.
+ *   `{ok: false, reason}` otherwise; `reason` names the failure mode
+ *   (`"spawn-failed"`, `"rule-not-fired"`, or `"writer-failed"`) and, on
+ *   subprocess failures, `exitStatus` carries the numeric exit status only.
  */
 export function runBareSpecifierVisibilityProbe({
   repoRoot,
@@ -59,8 +64,11 @@ export function runBareSpecifierVisibilityProbe({
     "// `npm run arch:check:negative` to reproduce the failure.\n" +
     `import { violationTarget } from "${targetSpecifier}";\n` +
     "export const bareSpecifierVisibilityProbe: unknown = violationTarget;\n";
-  writeProbeFile(probePath, probeSource);
   try {
+    // The write MUST live inside the try boundary: a writer that opened/created
+    // the probe file before throwing (partial-write, disk full, permissions race)
+    // would otherwise leak an orphan file into the working tree.
+    writeProbeFile(probePath, probeSource);
     const result = runDepcruise(
       process.execPath,
       [
@@ -77,12 +85,7 @@ export function runBareSpecifierVisibilityProbe({
     const relativeProbePath = probePath.slice(repoRoot.length + 1);
     const expectedSubstring = `${expectedRule}: ${relativeProbePath} → ${expectedResolved}`;
     if (result.status === 0 || !result.stdout.includes(expectedSubstring)) {
-      return {
-        ok: false,
-        reason: "rule-not-fired",
-        stdout: result.stdout,
-        stderr: result.stderr,
-      };
+      return { ok: false, reason: "rule-not-fired", exitStatus: result.status };
     }
     return { ok: true };
   } finally {

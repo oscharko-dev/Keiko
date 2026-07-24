@@ -69,9 +69,12 @@ describe("runBareSpecifierVisibilityProbe", () => {
         removeProbeFile: () => undefined,
       }),
     );
-    expect(outcome.ok).toBe(false);
-    expect(outcome.reason).toBe("rule-not-fired");
-    expect(outcome.stdout).toBe("no violations");
+    // Redacted contract (Wave-2 audit #2627): the failure result carries only a
+    // bounded reason and the numeric exit status. Raw subprocess text MUST NOT
+    // leak into the returned outcome so gate logs stay path-free.
+    expect(outcome).toEqual({ ok: false, reason: "rule-not-fired", exitStatus: 0 });
+    expect(outcome).not.toHaveProperty("stdout");
+    expect(outcome).not.toHaveProperty("stderr");
   });
 
   it("returns rule-not-fired when the expected substring is absent from stdout", () => {
@@ -86,12 +89,9 @@ describe("runBareSpecifierVisibilityProbe", () => {
         removeProbeFile: () => undefined,
       }),
     );
-    expect(outcome).toEqual({
-      ok: false,
-      reason: "rule-not-fired",
-      stdout: "some other rule fired",
-      stderr: "warnings",
-    });
+    expect(outcome).toEqual({ ok: false, reason: "rule-not-fired", exitStatus: 1 });
+    expect(outcome).not.toHaveProperty("stdout");
+    expect(outcome).not.toHaveProperty("stderr");
   });
 
   it("removes the probe file even when the assertion fails", () => {
@@ -120,5 +120,30 @@ describe("runBareSpecifierVisibilityProbe", () => {
       ),
     ).toThrow("boom");
     expect(removeProbeFile).toHaveBeenCalledOnce();
+  });
+
+  // The writer must live inside the same try boundary as the runner: a writer
+  // that partially creates the probe (opens the file, writes some bytes, then
+  // throws — disk full, permissions race, filesystem gone) would otherwise
+  // leak an orphan probe into the working tree.
+  it("removes the probe file even when the writer creates it and then throws", () => {
+    const removeProbeFile = vi.fn();
+    let writeInvoked = false;
+    const writeProbeFile = vi.fn(() => {
+      writeInvoked = true;
+      throw new Error("disk full after partial write");
+    });
+    expect(() =>
+      runBareSpecifierVisibilityProbe(
+        baseOptions({
+          runDepcruise: () => ({ status: 0, stdout: "", stderr: "" }),
+          writeProbeFile,
+          removeProbeFile,
+        }),
+      ),
+    ).toThrow("disk full after partial write");
+    expect(writeInvoked).toBe(true);
+    expect(removeProbeFile).toHaveBeenCalledOnce();
+    expect(removeProbeFile).toHaveBeenCalledWith("/repo/packages/keiko-security/src/__probe.ts");
   });
 });

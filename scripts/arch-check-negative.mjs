@@ -132,21 +132,16 @@ const probeOutcome = runBareSpecifierVisibilityProbe({
   expectedResolved: PROBE_EXPECTED_RESOLVED,
 });
 if (!probeOutcome.ok) {
-  if (probeOutcome.reason === "spawn-failed") {
-    console.error("arch-check-negative: FAIL — bare-specifier probe failed to spawn depcruise.");
-  } else {
-    console.error(
-      "arch-check-negative: FAIL — bare-specifier visibility probe did not fire the expected rule.",
-    );
-    if (probeOutcome.stdout !== undefined) {
-      console.error("  Stdout:");
-      console.error(probeOutcome.stdout);
-    }
-    if (probeOutcome.stderr !== undefined) {
-      console.error("  Stderr:");
-      console.error(probeOutcome.stderr);
-    }
-  }
+  // Redacted diagnostics per AGENTS.md §7: emit only a bounded reason label
+  // (and, when the subprocess ran, its numeric exit status). Raw dep-cruiser
+  // stdout/stderr is intentionally not surfaced so path fragments and other
+  // subprocess text never leak into the gate log. Reproducing the failure
+  // locally is one `npm run arch:check:negative` away.
+  const suffix =
+    typeof probeOutcome.exitStatus === "number" ? ` (exit ${String(probeOutcome.exitStatus)})` : "";
+  console.error(
+    `arch-check-negative: FAIL — bare-specifier visibility probe reason=${probeOutcome.reason}${suffix}`,
+  );
   process.exit(1);
 }
 
