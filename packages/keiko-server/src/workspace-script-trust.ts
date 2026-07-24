@@ -11,6 +11,7 @@
 // lives in ./workspaceTrust/canonicalTrustIdentity.ts; the row persistence lives in the UiStore.
 
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
   CodedHttpError,
@@ -42,6 +43,7 @@ import type {
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
+import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
   deriveWorkspaceRootRef,
   deriveWorkspaceTrustBinding,
@@ -72,9 +74,12 @@ const STATUS_MAP: Readonly<Record<WorkspaceScriptTrustErrorCode, number>> = {
 export class WorkspaceScriptTrustError extends CodedHttpError {
   public readonly code: WorkspaceScriptTrustErrorCode;
 
-  public constructor(code: WorkspaceScriptTrustErrorCode, message: string) {
+  public constructor(code: WorkspaceScriptTrustErrorCode, message: string, cause?: unknown) {
     super(message, httpStatusFor(STATUS_MAP, code));
     this.code = code;
+    if (cause !== undefined) {
+      Object.defineProperty(this, "cause", { value: cause, enumerable: false });
+    }
   }
 }
 
@@ -177,16 +182,38 @@ function manifestForCanonicalRoot(store: UiStore, canonicalRoot: string): Worksp
   return manifest;
 }
 
+/**
+ * ADR-0147 D1 binds trust to "root reference and current filesystem identity digest". Reading the
+ * digest from the persisted manifest satisfies neither half on the decision path: the manifest is
+ * a snapshot, so replacing the directory under the same path leaves the stored digest — and the
+ * derived binding — unchanged, and a granted record silently keeps projecting `trusted` against a
+ * different filesystem object. Re-inspecting the live root here rebuilds the "current" half from
+ * source before every decision; if the digest no longer matches the persisted record,
+ * `invalidatedTrustedRecord` demotes the row deterministically. #2615.
+ */
 function currentTrustBinding(
   store: UiStore,
   canonicalRoot: string,
   basis: WorkspaceFact<WorkspaceTrustBasisDigest>,
 ): WorkspaceTrustBinding {
-  return deriveWorkspaceTrustBinding(
-    canonicalRoot,
-    basis,
-    manifestForCanonicalRoot(store, canonicalRoot),
-  );
+  const manifest = manifestForCanonicalRoot(store, canonicalRoot);
+  let liveIdentityDigest: WorkspaceTrustBinding["rootIdentityDigest"];
+  try {
+    liveIdentityDigest = inspectWorkspaceRootIdentity(canonicalRoot).identityDigest;
+  } catch (cause) {
+    // The path was resolvable at resolveCanonicalRoot() but the live identity cannot be read now
+    // (removed, replaced with a non-directory, or an alias appeared). This is state-unavailable
+    // (ADR-0147 D9): the coded error maps to a typed 503 in mutation flows and, via the outer
+    // try in isTrusted, to fail-closed restricted in the decision flow. The originating fs
+    // error is preserved as `cause` for redacted operator diagnostics; it is never surfaced to
+    // the client because CodedHttpError carries only the generic message.
+    throw new WorkspaceScriptTrustError(
+      "WORKSPACE_STATE_UNAVAILABLE",
+      "The workspace state for this project is unavailable.",
+      cause,
+    );
+  }
+  return deriveWorkspaceTrustBinding(canonicalRoot, basis, manifest, liveIdentityDigest);
 }
 
 // Preserves the pre-#2521 canonicalization and single-root assertion exactly: the project must be
@@ -217,7 +244,20 @@ function resolveCanonicalRoot(
   if (canonicalWorkspaceRoot !== canonicalProjectRoot) {
     throw new WorkspaceScriptTrustError("PROJECT_NOT_FOUND", "Project workspace does not match.");
   }
-  return canonicalProjectRoot;
+  // Snap the caller-cased canonical root to the on-disk canonical spelling (#2615). The stored
+  // manifest was written with realpathSync.native, so downstream rootRef derivation and manifest
+  // lookup must match that same on-disk casing on case-insensitive filesystems; without this
+  // snap, a caller passing `/Users/alice/proj` while the manifest holds `/Users/Alice/proj`
+  // fails closed as state-unavailable for an otherwise valid workspace.
+  try {
+    return realpathSync.native(canonicalProjectRoot);
+  } catch (cause) {
+    throw new WorkspaceScriptTrustError(
+      "PROJECT_NOT_FOUND",
+      "Project root path could not be resolved.",
+      cause,
+    );
+  }
 }
 
 // The capability-specific trust basis (ADR-0147 D3): the exact package.json digest. This is the old

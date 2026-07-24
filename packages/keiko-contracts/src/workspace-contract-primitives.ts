@@ -175,11 +175,14 @@ function canonicalWorkspaceRootSeparator(style: CanonicalWorkspaceRootStyle): "/
   return style === "posix" ? "/" : "\\";
 }
 
-function normalizedCanonicalWorkspaceRoot(
-  value: string,
-  style: CanonicalWorkspaceRootStyle,
-): string {
-  return style === "windows" ? value.toLowerCase() : value;
+// Overlap comparison folds case on both POSIX and Windows (#2615). macOS APFS/HFS+ and
+// case-insensitive Linux mounts open one filesystem directory under many case variants; without
+// case folding here, a hostile or accidentally-typed manifest can list `[/Users/Alice/proj,
+// /users/alice/proj]` and split trust bindings across a single directory. Case-sensitive Linux
+// paths that legitimately differ only in case are exceedingly rare and lose nothing by being
+// rejected as overlapping — the failure closes trust rather than widening it.
+function normalizedCanonicalWorkspaceRoot(value: string): string {
+  return value.toLowerCase();
 }
 
 function canonicalWorkspaceRootBodySegmentIsValid(
@@ -236,8 +239,8 @@ function canonicalRootContains(parent: string, candidate: string): boolean {
     return false;
   }
   const separator = canonicalWorkspaceRootSeparator(parentStyle);
-  const normalizedParent = normalizedCanonicalWorkspaceRoot(parent, parentStyle);
-  const normalizedCandidate = normalizedCanonicalWorkspaceRoot(candidate, candidateStyle);
+  const normalizedParent = normalizedCanonicalWorkspaceRoot(parent);
+  const normalizedCandidate = normalizedCanonicalWorkspaceRoot(candidate);
   const prefix = normalizedParent.endsWith(separator)
     ? normalizedParent
     : `${normalizedParent}${separator}`;

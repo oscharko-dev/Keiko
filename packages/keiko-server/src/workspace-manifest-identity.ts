@@ -83,7 +83,13 @@ export function inspectWorkspaceRootDescriptor(
   path: string,
   displayName: string,
 ): WorkspaceRootDescriptor {
-  const identity = inspectWorkspaceRootIdentity(realpathSync(path));
+  // `realpathSync.native` (#2615) asks the OS for the on-disk canonical spelling: on macOS
+  // APFS/HFS+ and case-insensitive Linux mounts it returns the actual stored casing rather than
+  // preserving whatever casing the caller typed. Without it, the same directory reached through
+  // two case variants produces two distinct canonical roots and therefore two independent trust
+  // states (ADR-0155 root-scoped binding). The redundant realpath below the identity call becomes
+  // a no-op once the input is already canonical.
+  const identity = inspectWorkspaceRootIdentity(realpathSync.native(path));
   return {
     rootRef: identity.rootRef,
     canonicalRoot: identity.canonicalRoot,

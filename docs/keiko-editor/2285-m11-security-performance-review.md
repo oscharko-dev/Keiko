@@ -48,7 +48,10 @@ behavioral assertions.
 
 No case-folded spelling, junction, symlink, focused root, or caller-supplied path is itself
 authority. The current server manifest and filesystem identity must match immediately before an
-effect.
+effect. Two closures land with #2615: the trust decision re-inspects the live root identity on
+every call (a directory swapped under the same path now demotes the grant with reason
+`identity-changed`), and canonical-root overlap folds case on POSIX as well as Windows so a
+case-alias of a granted root cannot mint a second trust state over the same directory.
 
 ## Supplemental performance measurement
 

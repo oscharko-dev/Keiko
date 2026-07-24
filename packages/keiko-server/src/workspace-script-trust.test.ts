@@ -6,10 +6,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import {
+  detectWorkspaceAt,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createCommandRunnerManager } from "./command-runner.js";
 import { createVerificationRunnerManager } from "./editor/verificationRunner.js";
+import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import { deriveWorkspaceRootRef } from "./workspaceTrust/canonicalTrustIdentity.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import {
@@ -36,17 +41,56 @@ interface MutatedBinding {
 let root: string;
 let store: UiStore;
 
-beforeEach(() => {
+beforeEach((): void => {
   root = mkdtempSync(join(tmpdir(), "keiko-script-trust-"));
   writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
   store = createInMemoryUiStore();
   store.createProject(root, "fixture");
 });
 
-afterEach(() => {
+afterEach((): void => {
   store.close();
   rmSync(root, { recursive: true, force: true });
 });
+
+// Runtime-validated readers over the persisted trust-record JSON. The store row is untrusted
+// input at the test boundary; casting a JSON.parse result directly to a field-shaped type hides
+// invalid states and violates the repo rule against type assertions that discard structure.
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseTrustRecord(recordJson: string | undefined): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(recordJson ?? "{}");
+  return isRecord(parsed) ? parsed : {};
+}
+function readReasonFrom(recordJson: string | undefined): string | undefined {
+  const value = parseTrustRecord(recordJson).reason;
+  return typeof value === "string" ? value : undefined;
+}
+function readTrustFrom(recordJson: string | undefined): string | undefined {
+  const value = parseTrustRecord(recordJson).trust;
+  return typeof value === "string" ? value : undefined;
+}
+// Field-level guard for the persisted trust-record binding shape. Used only by the tampering
+// helper below to narrow before mutation — the SUT's own contract validators (invoked at every
+// store read) remain the authority for the closed shape at trust-decision time.
+function isMutatedBinding(value: unknown): value is MutatedBinding {
+  return (
+    isRecord(value) &&
+    typeof value.rootIdentityDigest === "string" &&
+    typeof value.manifestDigest === "string" &&
+    typeof value.manifestRef === "string" &&
+    typeof value.manifestRevision === "number"
+  );
+}
+// Wrap the two-step realpath+inspect chain so the intermediate `string` type is explicit at the
+// call site. Even though nodeWorkspaceFs.realPath is typed by @oscharko-dev/keiko-workspace,
+// type-aware ESLint's no-unsafe-* rules can surface `error`-typed views of an isolated call —
+// the local binding pins the type and keeps the callers unambiguous.
+function identityDigestFor(fsPath: string): string {
+  const canonical: string = nodeWorkspaceFs.realPath(fsPath);
+  return inspectWorkspaceRootIdentity(canonical).identityDigest;
+}
 
 function successfulSpawn(): SpawnFn {
   return vi.fn(() => {
@@ -284,6 +328,33 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     expect(trust.isTrusted(root, workspace)).toBe(false);
   });
 
+  it("invalidates the grant when the root directory is replaced at the same path (#2615)", () => {
+    // ADR-0147 D1 binds trust to "root reference and current filesystem identity digest". The
+    // decision path used to derive the binding from the persisted manifest, which is a snapshot;
+    // replacing the directory under the same path left the stored digest unchanged and the grant
+    // silently kept projecting `trusted` against a different filesystem object. The fix
+    // re-inspects the live root identity on every decision, so a swap fails closed with a
+    // content-free `identity-changed` reason.
+    const trust = createWorkspaceScriptTrustService({ store });
+    trust.grant(root);
+    expect(typecheckTrustState(trust)).toBe("trusted");
+    // Use the SUT's own identity digest as the proof-of-swap. Inode comparison is unreliable on
+    // ext4 (recycled after rmSync+mkdirSync), while identityDigest is the same key the trust
+    // decision compares — if it changes, the SUT is guaranteed to observe a different object.
+    const originalIdentityDigest = identityDigestFor(root);
+
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
+    const newIdentityDigest = identityDigestFor(root);
+    expect(newIdentityDigest).not.toBe(originalIdentityDigest);
+
+    expect(typecheckTrustState(trust)).toBe("approval-required");
+    const row = store.readWorkspaceTrustRecord(rootReference());
+    expect(row?.trust).toBe("restricted");
+    expect(readReasonFrom(row?.recordJson)).toBe("identity-changed");
+  });
+
   it("persists a content-free restricted invalidation when the manifest digest changes", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     trust.grant(root);
@@ -293,8 +364,7 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const row = store.readWorkspaceTrustRecord(rootReference());
     expect(row?.trust).toBe("restricted");
     expect(row?.revision).toBe(1);
-    const record = JSON.parse(row?.recordJson ?? "{}") as { reason?: string };
-    expect(record.reason).toBe("trust-basis-changed");
+    expect(readReasonFrom(row?.recordJson)).toBe("trust-basis-changed");
   });
 
   it("requires an explicit grant call — wire input cannot mint trust", () => {
@@ -303,6 +373,62 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     expect(trust.isTrusted(root, workspace)).toBe(false);
     trust.grant(root);
     expect(trust.isTrusted(root, workspace)).toBe(true);
+  });
+
+  it("preserves the originating fs cause on coded errors and omits the property when absent (#2615)", () => {
+    // Line 81 branch coverage for `Object.defineProperty(this, "cause", ...)`. The cause is
+    // non-enumerable and reaches only redacted operator diagnostics, never the client-facing
+    // coded message. The catch sites at resolveCanonicalRoot and currentTrustBinding forward it.
+    const cause = new Error("ENOENT: no such file or directory");
+    const withCause = new WorkspaceScriptTrustError("PROJECT_NOT_FOUND", "x", cause);
+    const withoutCause = new WorkspaceScriptTrustError("WORKSPACE_STATE_UNAVAILABLE", "x");
+    expect((withCause as { cause?: unknown }).cause).toBe(cause);
+    expect((withoutCause as { cause?: unknown }).cause).toBeUndefined();
+    expect(Object.propertyIsEnumerable.call(withCause, "cause")).toBe(false);
+  });
+
+  it("throws state-unavailable when the live root identity fails after resolveCanonicalRoot succeeds (#2615)", () => {
+    // Line 210 coverage — the ADR-0147 D9 state-unavailable path introduced by this PR. After a
+    // grant, replace the directory with a regular file at the same path and supply the workspace
+    // so detectWorkspaceAt is bypassed. resolveCanonicalRoot then succeeds (the path exists as a
+    // file), but inspectWorkspaceRootIdentity's isDirectory check inside currentTrustBinding
+    // throws WORKSPACE_ROOT_INVALID → the local catch converts it to the coded error carrying the
+    // fs cause. status() maps that to unavailableStatus rather than throwing on read.
+    const trust = createWorkspaceScriptTrustService({ store });
+    trust.grant(root);
+    rmSync(root, { recursive: true, force: true });
+    writeFileSync(root, "not a directory", "utf8");
+    const status = trust.status(root);
+    expect(status.trust).toBe("restricted");
+    expect(status.reason).toBe("state-unavailable");
+  });
+
+  it("throws PROJECT_NOT_FOUND with a preserved cause when .native canonicalization fails (#2615)", () => {
+    // Line 255 coverage — the .native snap catch inside resolveCanonicalRoot. Stub the
+    // WorkspaceFs.realPath to return a valid-looking canonical string for a path that does not
+    // exist on the real filesystem, then supply the same path as workspace to bypass the
+    // detectWorkspaceAt step. realpathSync.native (the real node:fs call) then fails with
+    // ENOENT, the catch converts it to the coded error carrying the fs cause, and isTrusted's
+    // outer try returns false without leaking the throw.
+    // Use a mkdtempSync-derived unique path and remove it before the assertion so the ENOENT
+    // branch cannot collide with a stale artifact from a prior run or a parallel worker on the
+    // same host tmpdir.
+    const scratch = mkdtempSync(join(tmpdir(), "keiko-scripttrust-native-snap-"));
+    rmSync(scratch, { recursive: true, force: true });
+    const fakeRoot = scratch;
+    const stubFs: WorkspaceFs = { ...nodeWorkspaceFs, realPath: (): string => fakeRoot };
+    const workspace: WorkspaceInfo = {
+      root: fakeRoot,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    };
+    const trust = createWorkspaceScriptTrustService({ store, fs: stubFs });
+    expect(trust.isTrusted(root, workspace)).toBe(false);
   });
 });
 
@@ -360,7 +486,7 @@ describe("WorkspaceScriptTrust package-manifest basis edge cases", () => {
     const row = store.readWorkspaceTrustRecord(
       deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(root)),
     );
-    expect((JSON.parse(row?.recordJson ?? "{}") as { trust?: string }).trust).toBe("trusted");
+    expect(readTrustFrom(row?.recordJson)).toBe("trusted");
     writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
     expect(trust.isTrusted(root, workspace)).toBe(true);
   });
@@ -375,28 +501,22 @@ describe("WorkspaceScriptTrust invalidation reasons", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     trust.grant(root);
     const rootRef = deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(root));
-    const record = JSON.parse(store.readWorkspaceTrustRecord(rootRef)?.recordJson ?? "{}") as {
-      binding: MutatedBinding;
-      revision: number;
-    };
-    mutate(record.binding);
+    const parsed = parseTrustRecord(store.readWorkspaceTrustRecord(rootRef)?.recordJson);
+    if (!isMutatedBinding(parsed.binding)) {
+      throw new Error("granted record binding does not match MutatedBinding shape");
+    }
+    mutate(parsed.binding);
     // Supersede the grant (revision 0) at a higher revision so the monotonic store guard admits the
     // injected stale record; the resulting invalidation then lands at revision 2.
-    record.revision = 1;
+    parsed.revision = 1;
     store.writeWorkspaceTrustRecord({
       rootRef,
       revision: 1,
       trust: "trusted",
-      recordJson: JSON.stringify(record),
+      recordJson: JSON.stringify(parsed),
     });
     trust.isTrusted(root, ws());
-    return (
-      (
-        JSON.parse(store.readWorkspaceTrustRecord(rootRef)?.recordJson ?? "{}") as {
-          reason?: string;
-        }
-      ).reason ?? ""
-    );
+    return readReasonFrom(store.readWorkspaceTrustRecord(rootRef)?.recordJson) ?? "";
   }
 
   it("records identity-changed when the stored root identity digest no longer matches", () => {
