@@ -8,12 +8,17 @@ is now reachable from the product, and this is how you confirm that on your own 
 
 ## Why a local model mock
 
-Local Knowledge refuses to create a capsule without an embedding-capable model — by design, since a
-capsule pins its embedding identity at creation. Rather than require a provider account to verify
-the pod, point the gateway at the loopback mock the repository already ships for its end-to-end
-suite (`tests/e2e/support/model-mock-server.mjs`). It speaks the OpenAI-compatible chat and
-embeddings contracts and returns byte-reproducible values, so the whole path — capsule, connect,
-index, refresh, retrieve — runs through the real model gateway with a repeatable result.
+Local Knowledge requires an embedding-capable model configuration before it creates a capsule, but
+creating an interactive Draft performs no provider I/O. The Draft records a provisional,
+content-safe identity from that configuration. Immediately before the first indexing job, Keiko
+probes the provider, pins the verified dimensions and embedding-space fingerprint, and only then
+writes vectors. This keeps Draft creation local and responsive while indexing still fails closed.
+
+To verify the complete indexing path without a provider account, point the gateway at the loopback
+mock the repository already ships for its end-to-end suite
+(`tests/e2e/support/model-mock-server.mjs`). It speaks the OpenAI-compatible chat and embeddings
+contracts and returns byte-reproducible values, so the whole path — capsule, connect, index,
+refresh, retrieve — runs through the real model gateway with a repeatable result.
 
 The mock is a verification aid, not a product component. It proves the wiring and the incremental
 behavior; it says nothing about answer quality, which needs a real model.

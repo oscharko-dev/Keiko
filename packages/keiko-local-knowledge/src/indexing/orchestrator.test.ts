@@ -1633,6 +1633,33 @@ describe("runIndexingJob — embedding capability preflight", () => {
     }
   });
 
+  it("reuses a recent successful preflight for the same adapter and embedding lane", async () => {
+    let requestCount = 0;
+    const adapter = scriptedAdapter({
+      responder: (request) => {
+        requestCount += 1;
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(request.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const first = await drain(runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })));
+    const requestsAfterFirstRun = requestCount;
+    const second = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })),
+    );
+
+    expect(first.at(-1)?.kind).toBe("job-completed");
+    expect(second.at(-1)?.kind).toBe("job-completed");
+    expect(requestsAfterFirstRun).toBeGreaterThan(0);
+    expect(requestCount).toBe(requestsAfterFirstRun);
+  });
+
   it("persists a fixed safe message when embedding preflight throws", async () => {
     const adapter = {
       endpoint: "https://private-gateway.internal/v1",

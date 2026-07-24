@@ -54,6 +54,7 @@ import {
   handleReindexLocalKnowledgeCapsule,
   handleRebindLocalKnowledgeCapsuleSource,
   handleStartLocalKnowledgeCapsuleIndexing,
+  resolveNewCapsuleEmbeddingIdentity,
   selectEmbeddingModelId,
   stripTrailingSlashes,
 } from "./local-knowledge-handlers.js";
@@ -1340,6 +1341,87 @@ describe("local-knowledge handlers", () => {
     });
   });
 
+  it("creates a draft without waiting for the embedding provider", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const embeddingRequest = vi.fn((): Promise<OpenAIEmbeddingOutcome> =>
+      Promise.resolve({ ok: false as const, kind: "timeout" as const }),
+    );
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp),
+      localKnowledgeEmbeddingRequest: embeddingRequest,
+    };
+
+    const result = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "Provider Independent Draft" }),
+      deps,
+    );
+
+    expect(result.status).toBe(201);
+    expect(result.body).toMatchObject({
+      capsule: {
+        displayName: "Provider Independent Draft",
+        lifecycleState: "draft",
+      },
+    });
+    expect(embeddingRequest).not.toHaveBeenCalled();
+  });
+
+  it("persists the indexing job before awaiting embedding preflight", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot);
+    writeFileSync(join(docsRoot, "small.md"), "# Small\n\nOne document.\n", "utf8");
+    const embeddingStarted = deferred<undefined>();
+    const embeddingResult = deferred<OpenAIEmbeddingOutcome>();
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp),
+      localKnowledgeEmbeddingRequest: vi.fn(() => {
+        embeddingStarted.resolve(undefined);
+        return embeddingResult.promise;
+      }),
+    };
+    const created = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "Visible Index Start" }),
+      deps,
+    );
+    const body = created.body as { readonly capsule: { readonly id: KnowledgeCapsuleId } };
+    const store = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    addSourceToCapsule(store, body.capsule.id, {
+      id: "src-visible-index-start" as KnowledgeSourceId,
+      displayName: "Small",
+      tags: [],
+      scope: { kind: "files", rootPath: docsRoot, files: ["small.md"] },
+    });
+    store.close();
+
+    const indexing = handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: body.capsule.id } },
+      deps,
+    );
+    await embeddingStarted.promise;
+    const duringPreflight = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const jobs = duringPreflight._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c")
+      .get({ c: body.capsule.id }) as { readonly n: number };
+    duringPreflight.close();
+    embeddingResult.resolve({
+      ok: true,
+      value: {
+        vector: new Float32Array(1536).fill(0.5),
+        modelId: "text-embedding-3-small",
+      },
+    });
+    await indexing;
+
+    expect(jobs.n).toBe(1);
+  });
+
   it("blocks capsule creation when no embedding-capable model is configured", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -2538,6 +2620,62 @@ describe("local-knowledge handlers", () => {
     ).toBe(true);
   });
 
+  it("reuses the verified provider adapter across immediate indexing requests", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "policy.md"), "# Policy\n\nConnected source.\n", "utf8");
+    let embeddingRequests = 0;
+    const localKnowledgeEmbeddingRequest = vi.fn<
+      (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>
+    >((request) => {
+      embeddingRequests += 1;
+      return Promise.resolve({
+        ok: true as const,
+        value: {
+          vector: Float32Array.from(
+            { length: embeddingDimensionsForTestModel(request.modelId) },
+            (_, index) => index / 1000,
+          ),
+          modelId: request.modelId,
+        },
+      });
+    });
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp),
+      localKnowledgeEmbeddingRequest,
+    };
+    const created = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "Cached Preflight" }),
+      deps,
+    );
+    const body = created.body as { readonly capsule: { readonly id: KnowledgeCapsuleId } };
+    const store = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    addSourceToCapsule(store, body.capsule.id, {
+      id: "src-cached-preflight" as KnowledgeSourceId,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+    const context = (): RouteContext => ({
+      ...baseCtx(tmp, "POST", { confirm: true }),
+      params: { capsuleId: String(body.capsule.id) },
+    });
+
+    const first = await handleStartLocalKnowledgeCapsuleIndexing(context(), deps);
+    const requestsAfterFirstRun = embeddingRequests;
+    const second = await handleStartLocalKnowledgeCapsuleIndexing(context(), deps);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(requestsAfterFirstRun).toBeGreaterThan(0);
+    expect(embeddingRequests).toBe(requestsAfterFirstRun);
+  });
+
   it("rejects capsule indexing before any source is attached", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -3321,22 +3459,61 @@ describe("local-knowledge handlers", () => {
       expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
     });
 
-    it("records probed dimensions for an unknown OpenAI-compatible embedding model", async () => {
+    it("verifies provisional dimensions before indexing an unknown embedding model", async () => {
       const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
       tempDirs.push(tmp);
+      const docsRoot = join(tmp, "docs");
+      mkdirSync(docsRoot);
+      writeFileSync(join(docsRoot, "policy.md"), "# Policy\n\nVerified before indexing.\n", "utf8");
+      const deps = depsFor(tmp, "my-custom-embedding-v1");
 
       const result = await handleCreateLocalKnowledgeCapsule(
         baseCtx(tmp, "POST", { displayName: "Unknown Embed" }),
-        depsFor(tmp, "my-custom-embedding-v1"),
+        deps,
       );
 
       expect(result.status).toBe(201);
       const body = result.body as {
         readonly capsule: {
-          readonly embeddingModelIdentity: { readonly vectorDimensions: number };
+          readonly id: KnowledgeCapsuleId;
+          readonly embeddingModelIdentity: {
+            readonly vectorDimensions: number;
+            readonly embeddingSpaceFingerprint?: string;
+          };
         };
       };
-      expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(768);
+      expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
+      expect(body.capsule.embeddingModelIdentity.embeddingSpaceFingerprint).toBeUndefined();
+
+      const store = openKnowledgeStore({
+        dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+      });
+      addSourceToCapsule(store, body.capsule.id, {
+        id: "src-custom-embedding" as KnowledgeSourceId,
+        displayName: "Policies",
+        tags: [],
+        scope: { kind: "files", rootPath: docsRoot, files: ["policy.md"] },
+      });
+      store.close();
+
+      const indexed = await handleStartLocalKnowledgeCapsuleIndexing(
+        {
+          ...baseCtx(tmp, "POST", {}),
+          params: { capsuleId: body.capsule.id },
+        },
+        deps,
+      );
+
+      expect(indexed.status, JSON.stringify(indexed.body)).toBe(200);
+      const verify = openKnowledgeStore({
+        dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+      });
+      const verified = getCapsule(verify, body.capsule.id);
+      verify.close();
+      expect(verified?.embeddingModelIdentity.vectorDimensions).toBe(768);
+      expect(verified?.embeddingModelIdentity.embeddingSpaceFingerprint).toMatch(
+        /^keiko-embedding-space-fingerprint-v1:/u,
+      );
     });
 
     it("passes shared gateway egress to embedding probes when the provider has no override", async () => {
@@ -3364,12 +3541,9 @@ describe("local-knowledge handlers", () => {
         ),
       };
 
-      const result = await handleCreateLocalKnowledgeCapsule(
-        baseCtx(tmp, "POST", { displayName: "Egress Bound" }),
-        deps,
-      );
+      const result = await resolveNewCapsuleEmbeddingIdentity(deps);
 
-      expect(result.status, JSON.stringify(result.body)).toBe(201);
+      expect(result.ok).toBe(true);
       expect(seen.length).toBeGreaterThan(0);
       expect(seen.every((request) => request.egress === egress)).toBe(true);
       deps.store.close();
@@ -3537,12 +3711,9 @@ describe("local-knowledge handlers", () => {
       ),
     };
 
-    const result = await handleCreateLocalKnowledgeCapsule(
-      baseCtx(tmp, "POST", { displayName: "LiteLLM Fallback Capsule" }),
-      deps,
-    );
+    const result = await resolveNewCapsuleEmbeddingIdentity(deps);
 
-    expect(result.status).toBe(201);
+    expect(result.ok).toBe(true);
     expect(seenModelIds[0]).toBe(unhealthyModelId);
     expect(seenModelIds.slice(1)).toEqual([
       healthyModelId,
@@ -3550,16 +3721,9 @@ describe("local-knowledge handlers", () => {
       healthyModelId,
       healthyModelId,
     ]);
-    const body = result.body as {
-      readonly capsule: {
-        readonly embeddingModelIdentity: {
-          readonly modelId: string;
-          readonly vectorDimensions: number;
-        };
-      };
-    };
-    expect(body.capsule.embeddingModelIdentity.modelId).toBe(healthyModelId);
-    expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
+    if (!result.ok) throw new Error("expected a verified embedding identity");
+    expect(result.identity.modelId).toBe(healthyModelId);
+    expect(result.identity.vectorDimensions).toBe(1536);
   });
 
   it("repairs a LiteLLM upstream embedding alias before indexing an existing capsule", async () => {
