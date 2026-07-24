@@ -54,6 +54,7 @@ import {
   handleReindexLocalKnowledgeCapsule,
   handleRebindLocalKnowledgeCapsuleSource,
   handleStartLocalKnowledgeCapsuleIndexing,
+  localKnowledgeEmbeddingAdapterForProvider,
   resolveNewCapsuleEmbeddingIdentity,
   selectEmbeddingModelId,
   stripTrailingSlashes,
@@ -2620,7 +2621,7 @@ describe("local-knowledge handlers", () => {
     ).toBe(true);
   });
 
-  it("reuses the verified provider adapter across immediate indexing requests", async () => {
+  it("reuses a verified preflight without caching credential-bearing adapters", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
     const docsRoot = join(tmp, "docs");
@@ -2642,10 +2643,17 @@ describe("local-knowledge handlers", () => {
         },
       });
     });
+    const config = gatewayConfig("text-embedding-3-small");
     const deps: UiHandlerDeps = {
-      ...depsFor(tmp),
+      ...depsFor(tmp, config),
       localKnowledgeEmbeddingRequest,
     };
+    const provider = config.providers[0];
+    expect(provider).toBeDefined();
+    if (provider === undefined) throw new Error("embedding provider fixture is missing");
+    expect(localKnowledgeEmbeddingAdapterForProvider(deps, provider)).not.toBe(
+      localKnowledgeEmbeddingAdapterForProvider(deps, provider),
+    );
     const created = await handleCreateLocalKnowledgeCapsule(
       baseCtx(tmp, "POST", { displayName: "Cached Preflight" }),
       deps,

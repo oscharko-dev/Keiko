@@ -2085,10 +2085,7 @@ interface EmbeddingPreflightCacheEntry {
   readonly expiresAt: number;
 }
 
-const EMBEDDING_PREFLIGHT_CACHES = new WeakMap<
-  OpenAIEmbeddingAdapter,
-  Map<string, EmbeddingPreflightCacheEntry>
->();
+const EMBEDDING_PREFLIGHT_CACHES = new WeakMap<object, Map<string, EmbeddingPreflightCacheEntry>>();
 const EMBEDDING_PREFLIGHT_TTL_MS = 10 * 60 * 1000;
 const EMBEDDING_PREFLIGHT_CACHE_MAX = 64;
 
@@ -2097,6 +2094,7 @@ function embeddingPreflightCacheKey(options: EmbeddingProbeOptions): string {
     options.provider,
     options.modelId,
     options.vectorMetric,
+    options.expectedDimensions ?? "any",
     options.dimensionsParam ?? "",
     options.normalization ?? "",
     options.instructionVersion ?? "",
@@ -2104,28 +2102,47 @@ function embeddingPreflightCacheKey(options: EmbeddingProbeOptions): string {
   ].join("\u0000");
 }
 
-function embeddingPreflightCacheFor(
-  adapter: OpenAIEmbeddingAdapter,
-): Map<string, EmbeddingPreflightCacheEntry> {
-  const existing = EMBEDDING_PREFLIGHT_CACHES.get(adapter);
+function embeddingPreflightCacheFor(cacheScope: object): Map<string, EmbeddingPreflightCacheEntry> {
+  const existing = EMBEDDING_PREFLIGHT_CACHES.get(cacheScope);
   if (existing !== undefined) return existing;
   const created = new Map<string, EmbeddingPreflightCacheEntry>();
-  EMBEDDING_PREFLIGHT_CACHES.set(adapter, created);
+  EMBEDDING_PREFLIGHT_CACHES.set(cacheScope, created);
   return created;
+}
+
+function cacheSuccessfulEmbeddingPreflight(
+  cache: Map<string, EmbeddingPreflightCacheEntry>,
+  options: EmbeddingProbeOptions,
+  result: Extract<EmbeddingCapabilityCheck, { readonly ok: true }>,
+  expiresAt: number,
+): void {
+  const keys = new Set([embeddingPreflightCacheKey(options)]);
+  if (options.expectedDimensions === undefined) {
+    keys.add(
+      embeddingPreflightCacheKey({
+        ...options,
+        expectedDimensions: result.identity.vectorDimensions,
+      }),
+    );
+  }
+  if (cache.size + keys.size > EMBEDDING_PREFLIGHT_CACHE_MAX) cache.clear();
+  for (const key of keys) cache.set(key, { result, expiresAt });
 }
 
 async function verifyEmbeddingPreflightCapability(
   adapter: OpenAIEmbeddingAdapter,
   options: EmbeddingProbeOptions,
+  cacheScope: object | undefined,
+  now: () => number,
 ): Promise<EmbeddingCapabilityCheck> {
-  const cache = embeddingPreflightCacheFor(adapter);
+  if (cacheScope === undefined) return await verifyEmbeddingCapability(adapter, options);
+  const cache = embeddingPreflightCacheFor(cacheScope);
   const key = embeddingPreflightCacheKey(options);
   const cached = cache.get(key);
-  if (cached !== undefined && cached.expiresAt > Date.now()) return cached.result;
+  if (cached !== undefined && cached.expiresAt > now()) return cached.result;
   const result = await verifyEmbeddingCapability(adapter, options);
   if (!result.ok) return result;
-  if (cache.size >= EMBEDDING_PREFLIGHT_CACHE_MAX) cache.clear();
-  cache.set(key, { result, expiresAt: Date.now() + EMBEDDING_PREFLIGHT_TTL_MS });
+  cacheSuccessfulEmbeddingPreflight(cache, options, result, now() + EMBEDDING_PREFLIGHT_TTL_MS);
   return result;
 }
 
@@ -2192,6 +2209,8 @@ async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobErr
     const result = await verifyEmbeddingPreflightCapability(
       state.options.embeddingAdapter,
       embeddingPreflightOptions(state),
+      state.options.embeddingPreflightCacheScope,
+      state.now,
     );
     return embeddingPreflightFailure(state, result);
   } catch (cause) {
