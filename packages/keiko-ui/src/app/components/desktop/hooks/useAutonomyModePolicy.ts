@@ -31,12 +31,12 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
   const [deploymentCeiling, setDeploymentCeiling] = useState<CodingWorkbenchMode | null>(null);
   const sequence = useRef(0);
 
-  useEffect(() => {
+  useEffect((): (() => void) => {
     let active = true;
     const request = ++sequence.current;
     const modeAtStart = currentConversationMemoryMode();
     void load()
-      .then((policy) => {
+      .then((policy): void => {
         if (!active || request !== sequence.current) return;
         if (currentConversationMemoryMode() === modeAtStart) {
           setMemoryMode(policy.requestedMode);
@@ -45,13 +45,13 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
         setDeploymentCeiling(policy.deploymentCeiling);
         setError(null);
       })
-      .catch(() => {
+      .catch((): void => {
         if (active && request === sequence.current) setError("hydrate");
       })
-      .finally(() => {
+      .finally((): void => {
         if (active && request === sequence.current) setPending(false);
       });
-    return () => {
+    return (): void => {
       active = false;
     };
   }, [load, setMemoryMode]);
@@ -62,16 +62,16 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
       setPending(true);
       setError(null);
       void persist(mode)
-        .then((policy) => {
+        .then((policy): void => {
           if (request !== sequence.current) return;
           setMemoryMode(policy.requestedMode);
           setEffectiveMode(policy.effectiveMode);
           setDeploymentCeiling(policy.deploymentCeiling);
         })
-        .catch(() => {
+        .catch((): void => {
           if (request === sequence.current) setError("persist");
         })
-        .finally(() => {
+        .finally((): void => {
           if (request === sequence.current) setPending(false);
         });
     },

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
@@ -93,7 +93,7 @@ function contentPath(path: string): string {
 
 beforeEach(async () => {
   fixtureRoot = await mkdtemp(join(tmpdir(), "keiko-files-managed-auth-"));
-  managedRoot = join(fixtureRoot, ".keiko", "dev", "ui", "task-workspaces");
+  managedRoot = join(fixtureRoot, "managed", "task-workspaces");
   managedWorktree = deriveManagedWorktreePath({
     managedRoot,
     repositoryId: REPOSITORY_ID,
@@ -147,6 +147,17 @@ describe("managed task-workspace Files authorization", () => {
     expect(existing).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
     expect(absent).toEqual(existing);
     expect(getInstance).not.toHaveBeenCalled();
+  });
+
+  it("denies an unpaired symlink alias that resolves into a managed workspace", async () => {
+    const aliasRoot = join(fixtureRoot, "managed-workspace-alias");
+    await symlink(managedWorktree, aliasRoot, "dir");
+
+    const direct = await handleFilesTree(route(treePath(managedWorktree)), dependencies);
+    const aliased = await handleFilesTree(route(treePath(aliasRoot)), dependencies);
+
+    expect(aliased).toEqual(direct);
+    expect(aliased).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
   });
 
   it("allows a paired session to browse and read only its persisted managed workspace", async () => {

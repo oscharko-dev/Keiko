@@ -203,6 +203,16 @@ function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): bo
   return containsPath(resolve(managedRoot), resolve(rootInput));
 }
 
+async function resolvesInsideManagedRoot(deps: UiHandlerDeps, realRoot: string): Promise<boolean> {
+  const managedRoot = deps.managedTaskWorkspaceRoot;
+  if (managedRoot === undefined) return false;
+  try {
+    return containsPath(await realpath(managedRoot), realRoot);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Resolves a request-bound workspace root. Ordinary roots retain the Files surface's established
  * project/arbitrary-folder rules. A path inside Keiko's private managed-task-workspace root is
@@ -215,7 +225,11 @@ export async function resolveRequestRoot(
   rootInput: string | null,
 ): Promise<ResolvedProjectRoot> {
   if (!requestedManagedRoot(deps, rootInput)) {
-    return resolveRoot(deps.store, rootInput, deps.redactor);
+    const root = await resolveRoot(deps.store, rootInput, deps.redactor);
+    if (!(await resolvesInsideManagedRoot(deps, root.realRoot))) return root;
+    // An external symlink or registered-project alias must not turn a managed worktree into an
+    // ordinary root. Only the canonical derived path can be re-proven against persisted identity.
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);

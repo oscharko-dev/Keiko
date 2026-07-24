@@ -93,6 +93,21 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       });
       expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
       expect(JSON.stringify(result)).not.toContain("ignored");
+
+      const all = await ports.repositoryDiscover.execute(
+        {
+          action: "discover",
+          actionId: "discover-all",
+          idempotencyKey: "discover-all-key",
+          query: "*",
+          maxResults: 10,
+        },
+        undefined,
+        { check: (): true => true },
+      );
+      expect(all).toMatchObject({ status: "completed" });
+      expect(JSON.stringify(all)).not.toContain(".env");
+      expect(JSON.stringify(all)).not.toContain("ignored");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

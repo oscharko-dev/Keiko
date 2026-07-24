@@ -121,7 +121,7 @@ function executeDiscoverSync(
       applyGitignore: true,
     });
     const text = discoveredPathText(
-      discovered.files.map(({ relativePath }) => relativePath),
+      discovered.files.map(({ relativePath }): string => relativePath),
       request.query,
       request.maxResults,
     );
@@ -136,14 +136,11 @@ function executeDiscoverSync(
 
 function discoveredPathText(paths: readonly string[], query: string, maxResults: number): string {
   const terms = discoveryTerms(query);
-  const matches = paths.filter((path) => {
-    const candidate = path.toLowerCase();
-    return terms.every((term) => candidate.includes(term));
-  });
   const selected: string[] = [];
   let bytes = 0;
-  for (const path of matches) {
+  for (const path of paths) {
     if (selected.length >= maxResults) break;
+    if (isDenied(path) || !matchesDiscoveryTerms(path, terms)) continue;
     const lineBytes = Buffer.byteLength(`${path}\n`, "utf8");
     if (bytes + lineBytes > MAX_READ_BYTES) break;
     selected.push(path);
@@ -152,13 +149,23 @@ function discoveredPathText(paths: readonly string[], query: string, maxResults:
   return selected.length === 0 ? "" : `${selected.join("\n")}\n`;
 }
 
+function matchesDiscoveryTerms(path: string, terms: readonly string[]): boolean {
+  const candidate = path.toLowerCase();
+  for (const term of terms) {
+    if (!candidate.includes(term)) return false;
+  }
+  return true;
+}
+
 function discoveryTerms(query: string): readonly string[] {
   if (query.trim() === "*") return [];
-  return query
-    .toLowerCase()
-    .split(/[\s/_.-]+/u)
-    .filter((term) => term.length > 0)
-    .slice(0, 8);
+  const terms: string[] = [];
+  for (const term of query.toLowerCase().split(/[\s/_.-]+/u)) {
+    if (term.length === 0) continue;
+    terms.push(term);
+    if (terms.length === 8) break;
+  }
+  return terms;
 }
 
 function discoveryReadResult(text: string): CodingToolReadResult {

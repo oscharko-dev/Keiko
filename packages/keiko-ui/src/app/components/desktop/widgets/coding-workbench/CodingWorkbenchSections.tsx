@@ -74,7 +74,7 @@ export function TaskStartSection({
     else if (runState === "paused") actions.onSend();
     else actions.onStart();
   };
-  useEffect(() => {
+  useEffect((): void => {
     const textarea = textareaRef.current;
     if (textarea === null) return;
     textarea.style.height = "auto";
@@ -84,7 +84,7 @@ export function TaskStartSection({
     <form
       className="composer"
       aria-labelledby="coding-workbench-task-title"
-      onSubmit={(event) => {
+      onSubmit={(event): void => {
         event.preventDefault();
         submit();
       }}
@@ -107,8 +107,8 @@ export function TaskStartSection({
               maxLength={65_536}
               disabled={mutationPending}
               placeholder={t("codingWorkbench.task.placeholder")}
-              onChange={(event) => onTaskIntentChange(event.target.value)}
-              onKeyDown={(event) => handleComposerKeyDown(event, submit, submitBlocked)}
+              onChange={(event): void => onTaskIntentChange(event.target.value)}
+              onKeyDown={(event): void => handleComposerKeyDown(event, submit, submitBlocked)}
             />
           </div>
         </div>
