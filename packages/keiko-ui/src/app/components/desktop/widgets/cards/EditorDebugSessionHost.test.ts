@@ -334,6 +334,206 @@ describe("EditorDebugSessionHost", () => {
     expect(actions.loadVariables).not.toHaveBeenCalledWith(expect.anything(), "scope-2");
   });
 
+  it("re-notifies the host exactly once the moment every scope's variables have settled, and not again for later unrelated pages (#2695)", async () => {
+    // The store publishes a brand-new top-level snapshot object on every stack/scope/variable page
+    // that lands during one pause-settle sequence (dozens for a large paused frame), but `session`
+    // itself keeps the same reference throughout since none of these pages touch it. A host that
+    // recomputes (and re-notifies its parent) on every one of those pages forces the parent editor
+    // pane to fully re-render dozens of times per pause — the structural cost behind the D12
+    // stopped-projection p75 regression.
+    //
+    // Simply freezing `host` across every publish would be a correctness bug of its own: the Monaco
+    // inline-value refresh (packages/keiko-editor's useDebugRefresh) is keyed on this exact `host`
+    // reference, so it would never re-pull the paused values once the debugger stops. The fix must
+    // recompute `host` a small, BOUNDED number of times per pause -- not on every one of the up to
+    // ~32 individual variable pages -- while still making every loaded scope reachable.
+    //
+    // Hence the milestone has an intermediate "some scope loaded" step, and this test pins it: a
+    // scope whose variables never publish (parse failure, abort, pause-identity mismatch) is never
+    // retried, so an all-or-nothing "settled" flag would stay false forever and starve the refresh,
+    // hiding the scopes that DID load for the entire pause.
+    const onOpenDebugPanel = vi.fn();
+    const onHostChange = vi.fn();
+    const onSessionStateChange = vi.fn();
+    const base = snapshot();
+    const frame = base.stack?.frames[0];
+    const scopes = base.scopesByFrame.get("frame-1");
+    if (frame === undefined || scopes === undefined) throw new Error("Expected scope fixture");
+    const scopesWithCounts = {
+      ...scopes,
+      scopes: scopes.scopes.map((scope) => ({ ...scope, variableCount: 1 })),
+    };
+    const scopeOneVariables = base.variablesByParent.get("scope-1");
+    const scopeTwoVariables = base.variablesByParent.get("scope-2");
+    if (scopeOneVariables === undefined || scopeTwoVariables === undefined) {
+      throw new Error("Expected variable fixture");
+    }
+    const notSettled: DebugSessionSnapshot = {
+      ...base,
+      scopesByFrame: new Map([["frame-1", scopesWithCounts]]),
+      variablesByParent: new Map(),
+    };
+
+    // Production `useDebugSession()` returns a brand-new `actions` object identity on every
+    // publish too (the same object-per-render pattern as `snapshot`) -- spread here instead of
+    // reusing the module-level `actions` object so this test cannot pass merely because the mock
+    // held a stable `actions` reference the real hook would not (Qodo finding on this PR).
+    vi.mocked(useDebugSession).mockReturnValue({ snapshot: notSettled, actions: { ...actions } });
+    const { rerender } = render(
+      createElement(EditorDebugSessionHost, {
+        root: "/workspace",
+        workspaceId: "workspace-1",
+        activationRevision: 1,
+        enabled: true,
+        fileId: "src/program.ts",
+        onOpenDebugPanel,
+        onHostChange,
+        onSessionStateChange,
+      }),
+    );
+    await waitFor(() => expect(onHostChange).toHaveBeenCalled());
+    const callsBeforeSettling = onHostChange.mock.calls.length;
+    const hostBeforeSettling = onHostChange.mock.calls.at(-1)?.[0] as NonNullable<
+      EditorSurfaceProps["debug"]
+    >;
+
+    const rerenderWith = (next: DebugSessionSnapshot): void => {
+      vi.mocked(useDebugSession).mockReturnValue({ snapshot: next, actions: { ...actions } });
+      rerender(
+        createElement(EditorDebugSessionHost, {
+          root: "/workspace",
+          workspaceId: "workspace-1",
+          activationRevision: 1,
+          enabled: true,
+          fileId: "src/program.ts",
+          onOpenDebugPanel,
+          onHostChange,
+          onSessionStateChange,
+        }),
+      );
+    };
+
+    // Scope 1's variables arrive; scope 2's are still outstanding. The host MUST re-notify here --
+    // if scope 2 never publishes (it is never retried), this is the only chance scope 1's values
+    // ever get rendered.
+    const partiallyLoaded: DebugSessionSnapshot = {
+      ...notSettled,
+      sequence: notSettled.sequence + 1,
+      variablesByParent: new Map([["scope-1", scopeOneVariables]]),
+    };
+    rerenderWith(partiallyLoaded);
+    expect(onHostChange).toHaveBeenCalledTimes(callsBeforeSettling + 1);
+    const hostAfterFirstScope = onHostChange.mock.calls.at(-1)?.[0];
+    expect(hostAfterFirstScope).not.toBe(hostBeforeSettling);
+    expect(hostAfterFirstScope?.resolvePausedValues("keiko://program").values).toContainEqual(
+      expect.objectContaining({ value: "Local: count: 2" }),
+    );
+
+    // Scope 2's variables land too. The milestone advances "some" -> "all", so the host re-notifies
+    // exactly once more, now with the complete projected values.
+    const fullyLoaded: DebugSessionSnapshot = {
+      ...partiallyLoaded,
+      sequence: partiallyLoaded.sequence + 1,
+      variablesByParent: new Map([
+        ["scope-1", scopeOneVariables],
+        ["scope-2", scopeTwoVariables],
+      ]),
+    };
+    rerenderWith(fullyLoaded);
+    expect(onHostChange).toHaveBeenCalledTimes(callsBeforeSettling + 2);
+    const hostAfterSettling = onHostChange.mock.calls.at(-1)?.[0];
+    expect(hostAfterSettling).not.toBe(hostAfterFirstScope);
+    const settledValues = hostAfterSettling?.resolvePausedValues("keiko://program").values;
+    expect(settledValues).toContainEqual(expect.objectContaining({ value: "Local: count: 2" }));
+    expect(settledValues).toContainEqual(expect.objectContaining({ value: "Arguments: input: x" }));
+
+    // Further unrelated churn after settling (e.g. a watch/console page) must not re-notify again --
+    // this is the original #2695 amplification this fix must still prevent.
+    const laterUnrelatedPage: DebugSessionSnapshot = {
+      ...fullyLoaded,
+      sequence: fullyLoaded.sequence + 1,
+    };
+    rerenderWith(laterUnrelatedPage);
+    expect(onHostChange).toHaveBeenCalledTimes(callsBeforeSettling + 2);
+    expect(onHostChange.mock.calls.at(-1)?.[0]).toBe(hostAfterSettling);
+  });
+
+  it("keeps host re-notifications bounded when many scopes load one page at a time (#2695)", async () => {
+    // The D12 cap fixture pauses on a frame with 32 scopes, each loaded by its own request. A
+    // per-scope invalidation signal (e.g. a monotone settled-scope COUNT) would re-notify once per
+    // scope and reproduce the very amplification this issue is about, so the milestone must stay
+    // O(1) in the scope count: at most one "some loaded" and one "all loaded" notification.
+    const onHostChange = vi.fn();
+    // Hoisted: these are host dependencies, so a fresh vi.fn() per rerender would invalidate the
+    // projection for a reason that has nothing to do with variable loading and mask the real count.
+    const onOpenDebugPanel = vi.fn();
+    const onSessionStateChange = vi.fn();
+    const base = snapshot();
+    const scopes = base.scopesByFrame.get("frame-1");
+    const template = base.variablesByParent.get("scope-1");
+    if (scopes === undefined || template === undefined) throw new Error("Expected fixture");
+    const scopeRefs = Array.from({ length: 32 }, (_, index) => `cap-scope-${String(index)}`);
+    const manyScopes = {
+      ...scopes,
+      scopes: scopeRefs.map((scopeRef) => ({
+        ...scopes.scopes[0],
+        scopeRef,
+        variableCount: 1,
+      })),
+    } as typeof scopes;
+    const withLoadedScopes = (count: number): DebugSessionSnapshot => ({
+      ...base,
+      sequence: base.sequence + count,
+      scopesByFrame: new Map([["frame-1", manyScopes]]),
+      variablesByParent: new Map(
+        scopeRefs
+          .slice(0, count)
+          .map((scopeRef) => [scopeRef, { ...template, parentRef: scopeRef }]),
+      ),
+    });
+
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: withLoadedScopes(0),
+      actions: { ...actions },
+    });
+    const { rerender } = render(
+      createElement(EditorDebugSessionHost, {
+        root: "/workspace",
+        workspaceId: "workspace-1",
+        activationRevision: 1,
+        enabled: true,
+        fileId: "src/program.ts",
+        onOpenDebugPanel,
+        onHostChange,
+        onSessionStateChange,
+      }),
+    );
+    await waitFor(() => expect(onHostChange).toHaveBeenCalled());
+    const callsAfterMount = onHostChange.mock.calls.length;
+
+    for (let loaded = 1; loaded <= scopeRefs.length; loaded += 1) {
+      vi.mocked(useDebugSession).mockReturnValue({
+        snapshot: withLoadedScopes(loaded),
+        actions: { ...actions },
+      });
+      rerender(
+        createElement(EditorDebugSessionHost, {
+          root: "/workspace",
+          workspaceId: "workspace-1",
+          activationRevision: 1,
+          enabled: true,
+          fileId: "src/program.ts",
+          onOpenDebugPanel,
+          onHostChange,
+          onSessionStateChange,
+        }),
+      );
+    }
+
+    // 32 individual variable pages must cost exactly two notifications, not 32.
+    expect(onHostChange).toHaveBeenCalledTimes(callsAfterMount + 2);
+  });
+
   it("sends only paused-state controls and blocks Pause while already paused", async () => {
     const rendered = renderHost();
     await waitFor(() => expect(rendered.host()).toBeDefined());
