@@ -8,7 +8,8 @@ export interface RequestCancellation {
 
 function requestAlreadyClosed(ctx: RouteContext): boolean {
   const responseClosed = ctx.res.destroyed || (ctx.res.closed && !ctx.res.writableEnded);
-  return ctx.req.destroyed || responseClosed;
+  const requestAborted = ctx.req.destroyed && !ctx.req.complete;
+  return requestAborted || responseClosed;
 }
 
 export function createRequestCancellation(ctx: RouteContext, reason: string): RequestCancellation {
