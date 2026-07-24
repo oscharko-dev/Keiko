@@ -13,8 +13,14 @@ async function nextFrame(): Promise<void> {
 }
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import {
+  EDITOR_VERIFICATION_KINDS,
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
+  WORKSPACE_TRUST_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import { EditorWidget } from "./EditorWidget";
+import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
 import { EditorQuickAccessTriggerProvider } from "../../EditorQuickAccessTriggerContext";
 
 const probeState = vi.hoisted(() => ({
@@ -1945,5 +1951,159 @@ describe("EditorWidget — Issue #1375 layout regression hardening", () => {
       "aria-valuenow",
       "52",
     );
+  });
+});
+
+// ─── Issue #2696 — deterministic post-trust readiness signal on the workspace root ───────────────
+// `data-trust-settled` is the attribute browser regression harnesses settle on instead of racing
+// the initial trust prompt with a timeout. `fetch` is stubbed PER TEST and unstubbed in a `finally`
+// so the suite's other cases keep running against the unstubbed environment.
+
+type CatalogOutcome = "trusted" | "restricted" | "unavailable";
+
+const CATALOG_URL = "/api/editor/verification/catalog";
+
+function catalogPayload(trust: "trusted" | "restricted"): Record<string, unknown> {
+  return {
+    schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+    projectId: "/repo",
+    workspaceTrust: {
+      kind: "workspace-trust-status",
+      schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+      projectId: "/repo",
+      trust,
+      decidedBy: "server",
+      reason: trust === "trusted" ? "human-grant" : "human-revocation",
+      revision: 1,
+    },
+    kinds: EDITOR_VERIFICATION_KINDS.map((kind) => ({
+      kind,
+      available: trust === "trusted",
+      trustState: trust === "trusted" ? "trusted" : "approval-required",
+    })),
+  };
+}
+
+function jsonResponse(ok: boolean, body: Record<string, unknown>): Response {
+  return { ok, status: ok ? 200 : 500, json: () => Promise.resolve(body) } as Response;
+}
+
+function stubVerificationFetch(outcome: CatalogOutcome): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (!url.startsWith(CATALOG_URL)) return Promise.resolve(jsonResponse(false, {}));
+      if (outcome === "unavailable") return Promise.resolve(jsonResponse(false, {}));
+      return Promise.resolve(jsonResponse(true, catalogPayload(outcome)));
+    }),
+  );
+}
+
+function workspaceRootOf(container: HTMLElement): Element {
+  const workspace = container.querySelector(".editor-workspace");
+  if (workspace === null) throw new Error("editor workspace root was not rendered");
+  return workspace;
+}
+
+interface SettledObservation {
+  readonly settled: string | null;
+  readonly promptMounted: boolean;
+}
+
+// Records the DOM as it stood immediately after each `data-trust-settled` change, so the test can
+// prove the attribute never reported "true" in a commit that had not yet mounted the prompt.
+function observeSettledTransitions(
+  workspace: Element,
+  log: SettledObservation[],
+): MutationObserver {
+  const observer = new MutationObserver(() => {
+    log.push({
+      settled: workspace.getAttribute("data-trust-settled"),
+      promptMounted: document.querySelector("[role='alertdialog']") !== null,
+    });
+  });
+  observer.observe(workspace, { attributes: true, attributeFilter: ["data-trust-settled"] });
+  return observer;
+}
+
+describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
+  it("reports settled only in the commit that has already mounted the initial trust prompt", async () => {
+    stubVerificationFetch("restricted");
+    try {
+      const { container } = render(<EditorWidget root="/repo" file="src/a.ts" />);
+      const workspace = workspaceRootOf(container);
+      // Before the trust status resolves the signal is explicitly "not settled" — never absent,
+      // never optimistically true.
+      expect(workspace).toHaveAttribute("data-trust-settled", "false");
+
+      const observations: SettledObservation[] = [];
+      const observer = observeSettledTransitions(workspace, observations);
+      try {
+        await waitFor(() => {
+          expect(workspace).toHaveAttribute("data-trust-settled", "true");
+        });
+      } finally {
+        observer.disconnect();
+      }
+
+      // The whole point of the signal: once it reads "true" the prompt is ALREADY in the DOM, so a
+      // SYNCHRONOUS read resolves it. A `findBy*` here would re-introduce the race it removes.
+      expect(
+        screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
+      ).toBeInTheDocument();
+      expect(observations.some((entry) => entry.settled === "true")).toBe(true);
+      expect(
+        observations
+          .filter((entry) => entry.settled === "true")
+          .every((entry) => entry.promptMounted),
+      ).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("settles without ever raising a trust prompt for an already-trusted workspace", async () => {
+    stubVerificationFetch("trusted");
+    try {
+      const { container } = render(<EditorWidget root="/repo" file="src/a.ts" />);
+      const workspace = workspaceRootOf(container);
+
+      await waitFor(() => {
+        expect(workspace).toHaveAttribute("data-trust-settled", "true");
+      });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("settles when the verification catalog is unavailable so an observer never waits forever", async () => {
+    // An unregistered project makes the catalog request fail. No trust prompt can ever follow, so
+    // a rejected catalog is a SETTLED outcome — treating it as pending would hang every observer.
+    stubVerificationFetch("unavailable");
+    try {
+      const { container } = render(<EditorWidget root="/repo" file="src/a.ts" />);
+      const workspace = workspaceRootOf(container);
+
+      await waitFor(() => {
+        expect(workspace).toHaveAttribute("data-trust-settled", "true");
+      });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
   });
 });
