@@ -1495,6 +1495,37 @@ describe("buildUiHandlerDeps — workspace-trust revocation stops managed langua
     }
   }, 15000);
 
+  it("unsubscribes the injected trust service on dispose so a later revoke cannot reach a disposed managedLspControl (#2628)", async () => {
+    // Guards the Qodo finding on PR #2688: resolveTrustAndManagedLspControl subscribes a
+    // listener that captures the assembly-scoped managedLspControl closure; if the
+    // injected trust service outlives the deps (test doubles reused across assemblies),
+    // dispose() must remove the listener so a subsequent revoke does not fire into a
+    // disposed dependency graph.
+    const store = createInMemoryUiStore();
+    const { root, canonicalRoot } = seedTrustFixture("keiko-trust-lsp-unsub-");
+    store.createProject(root);
+    const injectedTrust = createWorkspaceScriptTrustService({ store });
+    const firstLsp = recordingManagedLspControl();
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("keiko-trust-lsp-unsub-ev-"),
+      env: {},
+      store,
+      uiDbPath: join(tmp("keiko-trust-lsp-unsub-state-"), "keiko-ui.db"),
+      workspaceScriptTrust: injectedTrust,
+      managedLspControl: firstLsp.control,
+    });
+    injectedTrust.grant(root);
+    injectedTrust.revoke(root);
+    expect(firstLsp.restricted).toEqual([canonicalRoot]);
+    await deps.dispose?.();
+    firstLsp.restricted.length = 0;
+    // Re-grant then revoke; the disposed deps' listener must not re-fire.
+    injectedTrust.grant(root);
+    injectedTrust.revoke(root);
+    expect(firstLsp.restricted).toEqual([]);
+  }, 15000);
+
   it("propagates revoke to the managed-LSP control when the trust service is INJECTED (failure-first, #2628)", async () => {
     // Before the fix, this call sequence produces `lsp.restricted === []` because
     // buildPeripherals only wires propagateManagedLspRestriction into the fallback
