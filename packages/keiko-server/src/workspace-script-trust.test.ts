@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createCommandRunnerManager } from "./command-runner.js";
 import { createVerificationRunnerManager } from "./editor/verificationRunner.js";
+import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import { deriveWorkspaceRootRef } from "./workspaceTrust/canonicalTrustIdentity.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import {
@@ -36,17 +37,36 @@ interface MutatedBinding {
 let root: string;
 let store: UiStore;
 
-beforeEach(() => {
+beforeEach((): void => {
   root = mkdtempSync(join(tmpdir(), "keiko-script-trust-"));
   writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
   store = createInMemoryUiStore();
   store.createProject(root, "fixture");
 });
 
-afterEach(() => {
+afterEach((): void => {
   store.close();
   rmSync(root, { recursive: true, force: true });
 });
+
+// Runtime-validated readers over the persisted trust-record JSON. The store row is untrusted
+// input at the test boundary; casting a JSON.parse result directly to a field-shaped type hides
+// invalid states and violates the repo rule against type assertions that discard structure.
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseTrustRecord(recordJson: string | undefined): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(recordJson ?? "{}");
+  return isRecord(parsed) ? parsed : {};
+}
+function readReasonFrom(recordJson: string | undefined): string | undefined {
+  const value = parseTrustRecord(recordJson).reason;
+  return typeof value === "string" ? value : undefined;
+}
+function readTrustFrom(recordJson: string | undefined): string | undefined {
+  const value = parseTrustRecord(recordJson).trust;
+  return typeof value === "string" ? value : undefined;
+}
 
 function successfulSpawn(): SpawnFn {
   return vi.fn(() => {
@@ -294,19 +314,25 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     trust.grant(root);
     expect(typecheckTrustState(trust)).toBe("trusted");
-    const originalInode = statSync(root).ino;
+    // Use the SUT's own identity digest as the proof-of-swap. Inode comparison is unreliable on
+    // ext4 (recycled after rmSync+mkdirSync), while identityDigest is the same key the trust
+    // decision compares — if it changes, the SUT is guaranteed to observe a different object.
+    const originalIdentityDigest = inspectWorkspaceRootIdentity(
+      nodeWorkspaceFs.realPath(root),
+    ).identityDigest;
 
     rmSync(root, { recursive: true, force: true });
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
-    // Prove the same path really is a different filesystem object.
-    expect(statSync(root).ino).not.toBe(originalInode);
+    const newIdentityDigest = inspectWorkspaceRootIdentity(
+      nodeWorkspaceFs.realPath(root),
+    ).identityDigest;
+    expect(newIdentityDigest).not.toBe(originalIdentityDigest);
 
     expect(typecheckTrustState(trust)).toBe("approval-required");
     const row = store.readWorkspaceTrustRecord(rootReference());
     expect(row?.trust).toBe("restricted");
-    const record = JSON.parse(row?.recordJson ?? "{}") as { reason?: string };
-    expect(record.reason).toBe("identity-changed");
+    expect(readReasonFrom(row?.recordJson)).toBe("identity-changed");
   });
 
   it("persists a content-free restricted invalidation when the manifest digest changes", () => {
@@ -318,8 +344,7 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const row = store.readWorkspaceTrustRecord(rootReference());
     expect(row?.trust).toBe("restricted");
     expect(row?.revision).toBe(1);
-    const record = JSON.parse(row?.recordJson ?? "{}") as { reason?: string };
-    expect(record.reason).toBe("trust-basis-changed");
+    expect(readReasonFrom(row?.recordJson)).toBe("trust-basis-changed");
   });
 
   it("requires an explicit grant call — wire input cannot mint trust", () => {
@@ -385,7 +410,7 @@ describe("WorkspaceScriptTrust package-manifest basis edge cases", () => {
     const row = store.readWorkspaceTrustRecord(
       deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(root)),
     );
-    expect((JSON.parse(row?.recordJson ?? "{}") as { trust?: string }).trust).toBe("trusted");
+    expect(readTrustFrom(row?.recordJson)).toBe("trusted");
     writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
     expect(trust.isTrusted(root, workspace)).toBe(true);
   });
@@ -400,28 +425,22 @@ describe("WorkspaceScriptTrust invalidation reasons", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     trust.grant(root);
     const rootRef = deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(root));
-    const record = JSON.parse(store.readWorkspaceTrustRecord(rootRef)?.recordJson ?? "{}") as {
-      binding: MutatedBinding;
-      revision: number;
-    };
-    mutate(record.binding);
+    const parsed = parseTrustRecord(store.readWorkspaceTrustRecord(rootRef)?.recordJson);
+    if (!isRecord(parsed.binding)) throw new Error("granted record missing binding");
+    // The persisted binding shape is stable at grant time; a plain reader adapter isolates the
+    // cast to this test-only mutation seam rather than the read boundary.
+    mutate(parsed.binding as unknown as MutatedBinding);
     // Supersede the grant (revision 0) at a higher revision so the monotonic store guard admits the
     // injected stale record; the resulting invalidation then lands at revision 2.
-    record.revision = 1;
+    parsed.revision = 1;
     store.writeWorkspaceTrustRecord({
       rootRef,
       revision: 1,
       trust: "trusted",
-      recordJson: JSON.stringify(record),
+      recordJson: JSON.stringify(parsed),
     });
     trust.isTrusted(root, ws());
-    return (
-      (
-        JSON.parse(store.readWorkspaceTrustRecord(rootRef)?.recordJson ?? "{}") as {
-          reason?: string;
-        }
-      ).reason ?? ""
-    );
+    return readReasonFrom(store.readWorkspaceTrustRecord(rootRef)?.recordJson) ?? "";
   }
 
   it("records identity-changed when the stored root identity digest no longer matches", () => {

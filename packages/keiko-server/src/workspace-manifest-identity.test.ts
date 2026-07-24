@@ -25,16 +25,16 @@ function isFilesystemCaseInsensitive(directory: string): boolean {
 
 let root: string;
 
-beforeEach(() => {
+beforeEach((): void => {
   root = mkdtempSync(join(tmpdir(), "keiko-manifest-identity-"));
 });
 
-afterEach(() => {
+afterEach((): void => {
   rmSync(root, { recursive: true, force: true });
 });
 
 describe("inspectWorkspaceRootDescriptor", () => {
-  it("returns the on-disk canonical casing regardless of caller casing on case-insensitive filesystems (#2615)", () => {
+  it("returns the on-disk canonical casing regardless of caller casing on case-insensitive filesystems (#2615)", (): void => {
     if (!isFilesystemCaseInsensitive(dirname(root))) {
       // Case-sensitive filesystem — the caller-typed casing would not resolve at all, so there
       // is no defect to prove here. The macOS local lane and case-insensitive Linux mounts
@@ -58,7 +58,7 @@ describe("inspectWorkspaceRootDescriptor", () => {
     expect(upperDescriptor.identityDigest).toBe(lowerDescriptor.identityDigest);
   });
 
-  it("returns a stable canonical descriptor for a plain directory", () => {
+  it("returns a stable canonical descriptor for a plain directory", (): void => {
     // Cross-platform sanity: the caller can inspect an existing directory and receive a valid,
     // deterministic descriptor. Covers case-sensitive filesystems where the alias test above skips.
     const descriptor = inspectWorkspaceRootDescriptor(root, "fixture");

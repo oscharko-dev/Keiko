@@ -127,7 +127,7 @@ describe("workspace contract primitives", () => {
     expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "C:\\work\\app"])).toBe(true);
   });
 
-  it("folds POSIX case in overlap comparison so one directory cannot split trust bindings (#2615)", () => {
+  it("folds POSIX case in overlap comparison so one directory cannot split trust bindings (#2615)", (): void => {
     // macOS APFS/HFS+ and case-insensitive Linux mounts open one filesystem directory under many
     // case variants. Without case folding here a manifest could list `[/Users/Alice/proj,
     // /users/alice/proj]` as distinct canonical roots and mint two independent trust states over
