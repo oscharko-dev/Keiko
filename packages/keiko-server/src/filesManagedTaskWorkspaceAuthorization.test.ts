@@ -166,6 +166,19 @@ describe("managed task-workspace Files authorization", (): void => {
     expect(result).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
   });
 
+  it("keeps a workspace ancestor browsable when its managed subtree is already denied", async (): Promise<void> => {
+    const deniedManagedRoot = join(fixtureRoot, ".keiko", "ui", "task-workspaces");
+    await mkdir(deniedManagedRoot, { recursive: true });
+    dependencies = { ...dependencies, managedTaskWorkspaceRoot: deniedManagedRoot };
+
+    const result = await handleFilesTree(route(treePath(fixtureRoot)), dependencies);
+
+    expect(result.status).toBe(200);
+    expect((result.body as FilesTreeResponse).entries.map((entry) => entry.name)).not.toContain(
+      ".keiko",
+    );
+  });
+
   it("fails closed when managed-root containment cannot be canonicalized", async (): Promise<void> => {
     dependencies = {
       ...dependencies,

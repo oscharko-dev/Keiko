@@ -205,15 +205,19 @@ export interface ResolveRequestRootOptions {
   readonly managedRootAuthority?: "authorize" | "defer-to-caller";
 }
 
+function requiresManagedRootAuthority(managedRoot: string, candidateRoot: string): boolean {
+  if (containsPath(managedRoot, candidateRoot)) return true;
+  if (!containsPath(candidateRoot, managedRoot)) return false;
+  // Production state may live below the selected workspace only inside its already-denied `.keiko`
+  // subtree. Keep that ancestor browsable while the Files deny layer excludes the complete managed
+  // subtree from tree/search and rejects every direct target or mutation before filesystem access.
+  return !pathIsDenied(rootRelativePosixPath(candidateRoot, managedRoot));
+}
+
 function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): boolean {
   const managedRoot = deps.managedTaskWorkspaceRoot;
   if (managedRoot === undefined || rootInput === null || !isAbsolute(rootInput)) return false;
-  const resolvedManagedRoot = resolve(managedRoot);
-  const resolvedInput = resolve(rootInput);
-  return (
-    containsPath(resolvedManagedRoot, resolvedInput) ||
-    containsPath(resolvedInput, resolvedManagedRoot)
-  );
+  return requiresManagedRootAuthority(resolve(managedRoot), resolve(rootInput));
 }
 
 async function resolvesInsideManagedRoot(deps: UiHandlerDeps, realRoot: string): Promise<boolean> {
@@ -221,7 +225,7 @@ async function resolvesInsideManagedRoot(deps: UiHandlerDeps, realRoot: string):
   if (managedRoot === undefined) return false;
   try {
     const realManagedRoot = await realpath(managedRoot);
-    return containsPath(realManagedRoot, realRoot) || containsPath(realRoot, realManagedRoot);
+    return requiresManagedRootAuthority(realManagedRoot, realRoot);
   } catch {
     // This check separates ordinary roots from Keiko-owned managed worktrees. An unreadable or
     // missing managed root is therefore an unknown authorization state, never proof that the

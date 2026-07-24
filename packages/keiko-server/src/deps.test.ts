@@ -344,9 +344,26 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       uiDbPath: join(stateDir, "keiko-ui.db"),
     });
 
-    expect(deps.managedTaskWorkspaceRoot).toBe(join(stateDir, "task-workspaces"));
-    expect(existsSync(join(stateDir, "task-workspaces"))).toBe(true);
-    await deps.dispose?.();
+    try {
+      expect(deps.managedTaskWorkspaceRoot).toBe(join(stateDir, "task-workspaces"));
+      expect(statSync(join(stateDir, "task-workspaces")).isDirectory()).toBe(true);
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
+  it("fails startup when the managed workspace boundary cannot be materialized", () => {
+    const stateDir = tmp("managed-root-failure-");
+    writeFileSync(join(stateDir, "task-workspaces"), "occupied");
+
+    expect(() =>
+      buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp("managed-root-failure-evidence-"),
+        env: {},
+        uiDbPath: join(stateDir, "keiko-ui.db"),
+      }),
+    ).toThrow("Managed task-workspace boundary initialization failed.");
   });
 
   it("constructs and composes the real fail-closed debug activation control (#2347)", async () => {

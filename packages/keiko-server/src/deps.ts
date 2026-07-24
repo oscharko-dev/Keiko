@@ -1584,7 +1584,9 @@ function composedManagedWorktreeRoot(
   // Canonical managed-root classification is a shared Files/Git trust boundary even before the
   // first Coding run. Materialize the directory with the persistence services so an idle/fresh
   // installation can classify ordinary roots without treating an absent boundary as authority.
-  materializedManagedRoot(managedRoot);
+  if (!materializedManagedRoot(managedRoot)) {
+    throw new Error("Managed task-workspace boundary initialization failed.");
+  }
   return managedRoot;
 }
 
@@ -2598,6 +2600,12 @@ function buildPersistenceBundle(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
 ): PersistenceBundle {
+  const persistence = composePersistence(
+    options.store,
+    resolvedUiDbPath,
+    redactString,
+    options.env,
+  );
   const {
     store,
     dispose,
@@ -2605,28 +2613,33 @@ function buildPersistenceBundle(
     workspaceInstanceStore,
     activeWorkspacePointerStore,
     codingRuntimeSnapshotStore,
-  } = composePersistence(options.store, resolvedUiDbPath, redactString, options.env);
-  const services = composeTaskWorkspaceServices(
-    options,
-    workspaceInstanceStore,
-    activeWorkspacePointerStore,
-    resolvedUiDbPath,
-    evidenceStore,
-    redactString,
-  );
-  const managedTaskWorkspaceRoot = composedManagedWorktreeRoot(
-    services.workspaceProvisioning,
-    resolvedUiDbPath,
-  );
-  return {
-    uiStore: store,
-    dispose,
-    relationship,
-    codingRuntimeSnapshotStore,
-    ...services,
-    managedTaskWorkspaceRoot,
-    preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
-  };
+  } = persistence;
+  try {
+    const services = composeTaskWorkspaceServices(
+      options,
+      workspaceInstanceStore,
+      activeWorkspacePointerStore,
+      resolvedUiDbPath,
+      evidenceStore,
+      redactString,
+    );
+    const managedTaskWorkspaceRoot = composedManagedWorktreeRoot(
+      services.workspaceProvisioning,
+      resolvedUiDbPath,
+    );
+    return {
+      uiStore: store,
+      dispose,
+      relationship,
+      codingRuntimeSnapshotStore,
+      ...services,
+      managedTaskWorkspaceRoot,
+      preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
+    };
+  } catch (error) {
+    dispose?.();
+    throw error;
+  }
 }
 
 // The optional persistence services (relationship engine + the #445/#446/#447 task-workspace
