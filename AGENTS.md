@@ -256,6 +256,16 @@ sent back.
 - **A behavioural change is documented where decisions live.** If it changes an architectural
   decision, add or update an ADR (and the index). If it's release-impacting, update the
   release-impact catalog / issue metadata.
+- **A regression pin may be relocated or strengthened, never relaxed.** A pin is a test that
+  encodes a specific past incident — the very thing it must never accept again. If a change
+  makes an existing pin fail, treat the pin as authoritative: understand what invariant it
+  captures (usually named in a comment or an ADR reference), then either preserve the
+  invariant, move the pin to the layer that now owns it, or add a tighter pin around the new
+  shape. Do NOT edit the pin's assertion so the current change passes, and never re-attribute
+  the pin to a decision record that does not actually sanction the relaxation. A pin rewritten
+  to bless the behaviour it was written to prevent — especially under a false ADR attribution
+  — is the highest-consequence artifact this repository can produce; the Wave-2 pre-merge
+  audit of epic #2285 (#2627) caught this exact class of edit.
 
 ---
 

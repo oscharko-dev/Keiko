@@ -59,6 +59,32 @@ describe("serializeSessionCookie", () => {
     expect(cookies[1]).not.toContain("Path=/api;");
     expect(cookies[2]).not.toContain("Path=/api;");
   });
+
+  // Structural pin (#2627 W2-15): the by-index assertions above catch the four cookies this
+  // release ships, but a future edit that reorders indices — or that adds a FIFTH projection at
+  // `Path=/api` with a live Max-Age — could re-widen the bearer scope while every index assertion
+  // still passed. The Wave-2 pre-merge audit flagged a prior iteration of this very pin that had
+  // been rewritten to accept a `Path=/api` widening under a false ADR-0147 D7 attribution; the
+  // reversion landed in commit fa178cd1 before the epic merged to dev, but the class of edit
+  // remains the highest-consequence artifact this file can produce. Assert the invariant
+  // structurally — no bearer may carry `Path=/api;` and any cookie that does must be expired —
+  // so any future edit that widens the scope trips this pin no matter how the projection list
+  // is reordered.
+  it("never issues a live bearer on Path=/api; any Path=/api projection is expired on issuance", () => {
+    const cookies = serializeSessionCookies("session_secret.value", {
+      secure: false,
+      maxAgeSeconds: 3_600,
+    });
+    for (const cookie of cookies) {
+      if (cookie.includes("Path=/api;")) {
+        expect(cookie).toContain("Max-Age=0");
+        expect(cookie).toContain(`${APP_SESSION_COOKIE_NAME}=;`);
+      } else {
+        // Every non-legacy projection is a live bearer that must be scoped narrower than /api.
+        expect(cookie).not.toContain("Path=/api;");
+      }
+    }
+  });
 });
 
 describe("clearSessionCookie", () => {

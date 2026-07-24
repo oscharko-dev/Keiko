@@ -26,7 +26,12 @@ import {
 
 const RULES_FILE = ".dependency-cruiser.cjs";
 const FIXTURE_PATH = "tests/architecture/fixtures";
-const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|packages/[^/]+/src)";
+// Superset of the production `includeOnly`: fixtures + relative-path targets + src +
+// packages/<name>/(src|dist). The `dist` suffix landed with Wave-2 audit #2627 so the
+// bare-specifier variant fixture (which resolves through the workspace `exports` map into
+// `packages/keiko-<name>/dist/index.js`) stays visible to the fixture scan.
+const INCLUDE_ONLY_OVERRIDE =
+  "^(tests/architecture/fixtures|\\.\\./|src|packages/[^/]+/(src|dist))";
 
 // One expected rule per physically-extracted package boundary. Most rules should fire exactly once
 // against their dedicated fixture subdir; workflows intentionally fires twice because it pins both
@@ -42,7 +47,10 @@ const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|package
 const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0128-connectors-only-contracts-security": 1,
   "adr-0019-direction-1-contracts-leaf": 1,
-  "adr-0019-direction-2-security-only-contracts": 1,
+  // Two fires: the original relative-path fixture and the bare-specifier variant that
+  // proves cross-package `@oscharko-dev/keiko-<name>` imports are visible to the graph
+  // through `packages/<name>/dist/index.js` (Wave-2 audit #2627).
+  "adr-0019-direction-2-security-only-contracts": 2,
   "adr-0019-direction-3a-model-gateway-only-contracts-security": 1,
   "adr-0019-direction-3b-workspace-only-contracts-security": 1,
   "adr-0019-direction-3c-tools-only-contracts-security-workspace": 1,

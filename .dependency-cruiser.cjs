@@ -13,11 +13,16 @@
 //   - The root product retains only `src/index.ts` and `src/cli/index.ts` (the installed `keiko`
 //     bin entrypoint). Every other former root `src/<domain>/` shim is a retired path that must
 //     stay unreachable from production package source.
-//   - `includeOnly` intentionally scans source paths, not `packages/*/dist`. Workspace package-name
-//     imports can resolve through package exports into `dist` and therefore are not the source of
-//     truth for package dependency direction in this gate. `scripts/check-package-graph.mjs` owns
-//     the package-name governance with an explicit ADR-0019 allowlist; this file owns source graph
-//     topology and direct package-source bypasses.
+//   - `includeOnly` covers `packages/<name>/src` AND `packages/<name>/dist` so a cross-package
+//     bare-specifier import (`import from "@oscharko-dev/keiko-tools"`) is visible to the graph
+//     even though the workspace package `exports` field resolves the specifier to
+//     `packages/<name>/dist/index.js`. Scoping to `src` alone was a Wave-2 audit finding
+//     (#2627): every ADR-0019 direction rule only fired on the negative-fixture relative-path
+//     imports, and a real production `import from "@oscharko-dev/keiko-<other>"` bypassed the
+//     gate because its resolved destination sat outside the scan. `dist` remains excluded from
+//     rule `from.path` regexes — production code lives under `src`, so dist-to-dist edges add
+//     graph nodes but never new firings. `scripts/check-package-graph.mjs` still owns the
+//     manifest-level allowlist governance; this file owns source graph topology.
 //   - The fixtures under `tests/architecture/fixtures/<name>/` are targeted by the negative test
 //     (`scripts/arch-check-negative.mjs`). They are excluded from root tsconfig/build and ESLint.
 
@@ -64,12 +69,19 @@ module.exports = {
       name: "adr-0019-direction-2-security-only-contracts",
       comment:
         "ADR-0019 direction rule 2: keiko-security may only depend on keiko-contracts. Imports " +
-        "from any other @oscharko-dev/keiko-* package are forbidden. Also fires on the negative-" +
-        "test fixture under tests/architecture/fixtures/security/ so the gate can be proven live " +
-        "by scripts/arch-check-negative.mjs.",
+        "from any other @oscharko-dev/keiko-* package are forbidden. Also fires on two negative-" +
+        "test fixtures: `tests/architecture/fixtures/security/` proves the relative-path " +
+        "variant, `tests/architecture/fixtures/security-bare-specifier/` proves the bare-" +
+        "specifier variant that resolves through the workspace `exports` map into " +
+        "`packages/keiko-<name>/dist/index.js` (Wave-2 audit #2627: the includeOnly regex " +
+        "used to drop that destination and made real production bare-specifier violations " +
+        "invisible).",
       severity: "error",
       from: {
-        path: "^(packages/keiko-security/src/|" + "tests/architecture/fixtures/security/)",
+        path:
+          "^(packages/keiko-security/src/|" +
+          "tests/architecture/fixtures/security/|" +
+          "tests/architecture/fixtures/security-bare-specifier/)",
       },
       to: {
         path:
@@ -662,10 +674,16 @@ module.exports = {
         "the rule truthful with the source. local-knowledge added by Epic #423 audit: the " +
         "server hosts local-knowledge BFF routes " +
         "(packages/keiko-server/src/local-knowledge-handlers.ts) and declares the " +
-        "dependency in its package.json.",
+        "dependency in its package.json. from.pathNot exempts .test files, consistent with " +
+        "the sibling direction rules (evidence/workspace/tools/etc.): server integration " +
+        "tests may reach into the browser-tier editor package for parity assertions (the " +
+        "gate for browser-tier value imports lives in the ADR-0042 rule, on the editor " +
+        "package's from.path, not here). Added under Wave-2 audit #2627 alongside the " +
+        "includeOnly widening that surfaces these edges for the first time.",
       severity: "error",
       from: {
         path: "^(packages/keiko-server/src/|tests/architecture/fixtures/server/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
@@ -681,13 +699,18 @@ module.exports = {
         "ADR-0019 direction rule 6: domain packages (contracts, security, model-gateway, " +
         "workspace, tools, harness, workflows, evidence, quality-intelligence) must not " +
         "import from keiko-server. quality-intelligence added by issue #272 (ADR-0023 D14). " +
-        "connectors added by issue #2241 (ADR-0128 D1: keiko-server is its composition root).",
+        "connectors added by issue #2241 (ADR-0128 D1: keiko-server is its composition root). " +
+        "from.pathNot exempts .test files consistent with the sibling direction rules: the " +
+        "evaluations surface-parity tests intentionally cross-import server + cli entrypoints " +
+        "to prove they publish the same governed surface. Added under Wave-2 audit #2627 " +
+        "alongside the includeOnly widening that first surfaces these edges.",
       severity: "error",
       from: {
         path:
           "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors)/src/|" +
           "tests/architecture/fixtures/domain-not-server/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path: "^(packages/keiko-server/|node_modules/@oscharko-dev/keiko-server)",
@@ -698,13 +721,18 @@ module.exports = {
       comment:
         "ADR-0019 direction rule 7: domain packages must not import from keiko-cli. CLI may " +
         "depend on domain packages, never the reverse. quality-intelligence added to from.path " +
-        "by issue #272 (ADR-0023 D14). connectors added by issue #2241 (ADR-0128 D1).",
+        "by issue #272 (ADR-0023 D14). connectors added by issue #2241 (ADR-0128 D1). " +
+        "from.pathNot exempts .test files consistent with the sibling direction rules: the " +
+        "evaluations surface-parity tests intentionally cross-import server + cli entrypoints " +
+        "to prove they publish the same governed surface. Added under Wave-2 audit #2627 " +
+        "alongside the includeOnly widening that first surfaces these edges.",
       severity: "error",
       from: {
         path:
           "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors)/src/|" +
           "tests/architecture/fixtures/domain-not-cli/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path: "^(packages/keiko-cli/|node_modules/@oscharko-dev/keiko-cli|src/cli/)",
@@ -716,21 +744,26 @@ module.exports = {
         "ADR-0019 direction rule 7 (cli boundary): keiko-cli and the src/cli/ bin shim " +
         "may depend on keiko-contracts, keiko-security, keiko-model-gateway, keiko-workspace, " +
         "keiko-tools, keiko-harness, keiko-workflows, keiko-evaluations, keiko-evidence, " +
-        "keiko-sdk, keiko-server, and keiko-verification only, and must reach those allowed dependencies " +
-        "through their public package surfaces (`@oscharko-dev/keiko-<name>`). The to.path therefore forbids both " +
+        "keiko-sdk, keiko-server, keiko-memory-vault, and keiko-verification only, and must reach " +
+        "those allowed dependencies through their public package surfaces " +
+        "(`@oscharko-dev/keiko-<name>`). The to.path therefore forbids both " +
         "the non-allow-listed siblings (browser-tier `keiko-ui`) AND the allow-listed " +
         "siblings' retired root src shim paths (`gateway|workspace|tools|harness|workflows|" +
         "audit|ui|verification|evaluations`); the latter group appears in the package allow-list " +
-        "above but stays forbidden because production code must not bypass the package surface.",
+        "above but stays forbidden because production code must not bypass the package surface. " +
+        "keiko-memory-vault added under Wave-2 audit #2627 to align the depcruise rule with the " +
+        "check-package-graph.mjs allowlist that already permits `cli/src/memory.ts`'s vault " +
+        "read path. from.pathNot exempts .test files consistent with sibling direction rules.",
       severity: "error",
       from: {
         path: "^(packages/keiko-cli/src/|src/cli/|tests/architecture/fixtures/cli/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|quality-intelligence)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|quality-intelligence)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|quality-intelligence)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|memory-vault|quality-intelligence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|memory-vault|quality-intelligence)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|memory-vault|quality-intelligence)|" +
           "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations))",
         pathNot: "^src/cli/",
       },
@@ -947,8 +980,11 @@ module.exports = {
       exportsFields: ["exports"],
       conditionNames: ["import", "node"],
     },
-    // Source-only by design: package-name dependency direction is enforced by
-    // scripts/check-package-graph.mjs rather than by scanning generated dist output.
-    includeOnly: "^(src|packages/[^/]+/src)",
+    // Includes `packages/<name>/dist` so cross-package bare-specifier imports resolved through
+    // package `exports` map to a graph node the direction rules can see (Wave-2 audit #2627).
+    // Rule `from.path` regexes remain scoped to `src/**`; dist entries only supply destinations,
+    // never new firings from production code. scripts/check-package-graph.mjs still owns the
+    // manifest-level allowlist governance.
+    includeOnly: "^(src|packages/[^/]+/(src|dist))",
   },
 };

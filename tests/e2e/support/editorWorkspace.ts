@@ -330,12 +330,34 @@ export async function openEditorWorkspace(
   const workspace = page.locator(EDITOR_SELECTORS.workspace).first();
   await expect(workspace.locator(EDITOR_SELECTORS.tablist).first()).toBeVisible();
   if (options.dismissTrustPrompt ?? true) {
-    const safeChoice = page.getByRole("button", { name: "Stay restricted" });
-    const promptAppeared = await safeChoice
-      .waitFor({ state: "visible", timeout: 1_500 })
-      .then(() => true)
-      .catch(() => false);
-    if (promptAppeared) await safeChoice.click();
+    // Deterministic settlement: the initial-prompt trust dialog is rendered in the same
+    // React commit that resolves the workspace-trust status carried in the verification
+    // catalog. Race the two decisive outcomes rather than guessing at a wall-clock budget:
+    //   - the dialog becomes visible => trust is restricted, dismiss it.
+    //   - the verification-catalog response settles without the dialog rendering => the
+    //     workspace is pre-trusted (or trust prompting is suppressed) and there is nothing
+    //     to dismiss.
+    // Both waits inherit Playwright's per-lane action timeout — no literal wall-clock
+    // survives in the primary path. The short post-race settle window bounds the "trust
+    // resolved as restricted; React has not committed yet" microtask gap on the second
+    // branch without leaking a heuristic into the first.
+    const dialog = page.getByRole("alertdialog", { name: /Trust this workspace/iu });
+    const dialogVisible = dialog
+      .waitFor({ state: "visible" })
+      .then(() => "dialog" as const)
+      .catch(() => "gone" as const);
+    const catalogSettled = page
+      .waitForResponse((response) => response.url().endsWith("/api/editor/verification/catalog"))
+      .then(() => "catalog" as const)
+      .catch(() => "catalog" as const);
+    const outcome = await Promise.race([dialogVisible, catalogSettled]);
+    if (outcome === "catalog" && !(await dialog.isVisible())) {
+      await dialog.waitFor({ state: "visible", timeout: 2_000 }).catch(() => undefined);
+    }
+    if (await dialog.isVisible()) {
+      await dialog.getByRole("button", { name: "Stay restricted" }).click();
+      await expect(dialog).toBeHidden();
+    }
   }
   return workspace;
 }
