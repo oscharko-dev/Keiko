@@ -1,8 +1,5 @@
-import { type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import {
-  CODING_WORKBENCH_MODES,
-  isCodingWorkbenchModeWidening,
-  type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeResearchGrant,
   type CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
@@ -19,8 +16,6 @@ import type {
 import {
   activeRunState,
   cx,
-  modeDescription,
-  modeLabel,
   resourceStatusLabel,
   resourceStatusSymbol,
   resourceTone,
@@ -30,13 +25,8 @@ export { PanelTitle } from "./CodingWorkbenchPanelTitle";
 export { Timeline } from "./CodingWorkbenchTimeline";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
+import { Icons } from "../../Icons";
 import styles from "./CodingWorkbenchWindow.module.css";
-
-const MODE_ORDER: Readonly<Record<CodingWorkbenchMode, number>> = {
-  "governed-assist": 0,
-  "supervised-coding": 1,
-  "autonomous-delivery": 2,
-};
 
 export function WorkbenchHeader({
   state,
@@ -50,119 +40,16 @@ export function WorkbenchHeader({
   const snapshotState = state.run.value?.state ?? "idle";
   return (
     <header className={styles.header}>
-      <div>
-        <p className={styles.eyebrow}>{t("codingWorkbench.header.eyebrow")}</p>
-        <h2 className={styles.title} ref={focusRef} tabIndex={-1}>
-          {sharedT("rail.coding")}
-        </h2>
-        <p className={styles.summary}>{t("codingWorkbench.header.summary")}</p>
-      </div>
+      <h2 className={styles.title} ref={focusRef} tabIndex={-1}>
+        {sharedT("rail.coding")}
+      </h2>
       <span className={styles.statePill} data-state={snapshotState}>
-        <span aria-hidden="true">{activeRunState(snapshotState) ? "●" : "○"}</span>
+        <span className={styles.statusSymbol} aria-hidden="true">
+          {activeRunState(snapshotState) ? "●" : "○"}
+        </span>
         {runStateLabel(snapshotState, t)}
       </span>
     </header>
-  );
-}
-
-export function ModeAuthority({
-  state,
-  onModeChange,
-  locked,
-}: {
-  readonly state: CodingWorkbenchRuntimeState;
-  readonly onModeChange: (mode: CodingWorkbenchMode) => void;
-  readonly locked: boolean;
-}): ReactNode {
-  const t = useCodingWorkbenchTranslate();
-  const readiness = state.runtime.value;
-  const ceiling = readiness?.deploymentCeiling;
-  const runState = state.run.value?.state;
-  const runLive = runState === "running" || runState === "paused";
-  // The server owns the effective mode; while a run is live, a request that widens past that
-  // effective mode is rejected until the run is stopped. Reflect that server decision, never
-  // re-derive the ordering — it comes from the shared contract predicate.
-  const wideningRejected =
-    readiness !== null &&
-    runLive &&
-    isCodingWorkbenchModeWidening(readiness.effectiveMode, state.requestedMode);
-  return (
-    <section className={styles.card} aria-labelledby="coding-workbench-mode-title">
-      <PanelTitle eyebrow={t("codingWorkbench.mode.eyebrow")} id="coding-workbench-mode-title">
-        {t("codingWorkbench.mode.title")}
-      </PanelTitle>
-      <div
-        className={styles.modeGrid}
-        role="radiogroup"
-        aria-label={t("codingWorkbench.mode.group")}
-      >
-        {CODING_WORKBENCH_MODES.map((mode) => {
-          const aboveCeiling = ceiling !== undefined && MODE_ORDER[mode] > MODE_ORDER[ceiling];
-          return (
-            <ModeOption
-              key={mode}
-              mode={mode}
-              selected={state.requestedMode === mode}
-              disabled={locked}
-              capped={aboveCeiling}
-              onModeChange={onModeChange}
-              t={t}
-            />
-          );
-        })}
-      </div>
-      {locked ? <p className={styles.helpText}>{t("codingWorkbench.mode.locked")}</p> : null}
-      {wideningRejected ? (
-        <p className={styles.alert} role="alert">
-          {t("codingWorkbench.mode.wideningRejected")}
-        </p>
-      ) : null}
-      {readiness ? (
-        <p className={styles.boundaryNote}>
-          {t("codingWorkbench.mode.boundary", {
-            effectiveMode: modeLabel(readiness.effectiveMode, t),
-            deploymentCeiling: modeLabel(readiness.deploymentCeiling, t),
-          })}
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-function ModeOption({
-  mode,
-  selected,
-  disabled,
-  capped,
-  onModeChange,
-  t,
-}: {
-  readonly mode: CodingWorkbenchMode;
-  readonly selected: boolean;
-  readonly disabled: boolean;
-  readonly capped: boolean;
-  readonly onModeChange: (mode: CodingWorkbenchMode) => void;
-  readonly t: CodingWorkbenchTranslate;
-}): ReactNode {
-  const id = `coding-workbench-mode-${mode}`;
-  return (
-    <div className={styles.modeOption} data-selected={selected} data-capped={capped}>
-      <input
-        id={id}
-        type="radio"
-        name="coding-workbench-mode"
-        checked={selected}
-        disabled={disabled}
-        onChange={() => onModeChange(mode)}
-      />
-      <label className={styles.modeText} htmlFor={id}>
-        <span className={styles.modeName}>{modeLabel(mode, t)}</span>
-        <span className={styles.modeDetail}>{modeDescription(mode, t)}</span>
-        {capped ? (
-          <span className={styles.cappedText}>{t("codingWorkbench.mode.capped")}</span>
-        ) : null}
-      </label>
-    </div>
   );
 }
 
@@ -191,101 +78,155 @@ export function TaskStartSection({
   readonly startBusy: boolean;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const submitBlocked =
+    mutationPending ||
+    (runState !== "running" && taskIntent.trim().length === 0) ||
+    (runState !== "running" && runState !== "paused" && (!canStart || startBusy));
+  const submit = (): void => {
+    if (submitBlocked) return;
+    if (runState === "running") actions.onPause();
+    else if (runState === "paused") actions.onSend();
+    else actions.onStart();
+  };
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea === null) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${String(Math.min(textarea.scrollHeight, 220))}px`;
+  }, [taskIntent]);
   return (
-    <section className={styles.card} aria-labelledby="coding-workbench-task-title">
-      <PanelTitle eyebrow={t("codingWorkbench.task.eyebrow")} id="coding-workbench-task-title">
+    <form
+      className="composer"
+      aria-labelledby="coding-workbench-task-title"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
+      <h3 className="sr-only" id="coding-workbench-task-title">
         {t("codingWorkbench.task.title")}
-      </PanelTitle>
-      <label className={styles.fieldLabel} htmlFor="coding-workbench-task-intent">
+      </h3>
+      <label className="sr-only" htmlFor="coding-workbench-task-intent">
         {t("codingWorkbench.task.instructions")}
       </label>
-      <textarea
-        id="coding-workbench-task-intent"
-        className={styles.taskInput}
-        value={taskIntent}
-        maxLength={65_536}
-        disabled={mutationPending}
-        aria-describedby="coding-workbench-task-help"
-        onChange={(event) => onTaskIntentChange(event.target.value)}
-      />
-      <p id="coding-workbench-task-help" className={styles.helpText}>
-        {t("codingWorkbench.task.help")}
-      </p>
-      <ComposerControls
-        taskIntent={taskIntent}
-        actions={actions}
-        canStart={canStart}
-        runState={runState}
-        mutationPending={mutationPending}
-        startBusy={startBusy}
-        t={t}
-      />
-    </section>
+      <div className="cmp-box">
+        <div className="cmp-input-stack">
+          <div className="cmp-input-combobox">
+            <textarea
+              id="coding-workbench-task-intent"
+              className="cmp-input"
+              ref={textareaRef}
+              rows={2}
+              value={taskIntent}
+              maxLength={65_536}
+              disabled={mutationPending}
+              placeholder={t("codingWorkbench.task.placeholder")}
+              onChange={(event) => onTaskIntentChange(event.target.value)}
+              onKeyDown={(event) => handleComposerKeyDown(event, submit, submitBlocked)}
+            />
+          </div>
+        </div>
+        <div className="cmp-footer-row">
+          <div className="cmp-bar cmp-bar-compact">
+            <div className="cmp-bar-model">
+              <span className="cmp-model mono">
+                <Icons.code size={15} />
+                {t("codingWorkbench.header.eyebrow")}
+              </span>
+            </div>
+            <ComposerControls
+              actions={actions}
+              runState={runState}
+              submitBlocked={submitBlocked}
+              busy={mutationPending}
+              startBusy={startBusy}
+              t={t}
+            />
+          </div>
+        </div>
+      </div>
+    </form>
   );
 }
 
+function handleComposerKeyDown(
+  event: KeyboardEvent<HTMLTextAreaElement>,
+  submit: () => void,
+  blocked: boolean,
+): void {
+  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+  event.preventDefault();
+  if (!blocked) submit();
+}
+
 function ComposerControls({
-  taskIntent,
   actions,
-  canStart,
   runState,
-  mutationPending,
+  submitBlocked,
+  busy,
   startBusy,
   t,
 }: {
-  readonly taskIntent: string;
   readonly actions: TaskComposerActions;
-  readonly canStart: boolean;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
-  readonly mutationPending: boolean;
+  readonly submitBlocked: boolean;
+  readonly busy: boolean;
   readonly startBusy: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const empty = taskIntent.trim().length === 0;
   if (runState === "running") {
     return (
-      <div className={styles.controls}>
+      <div className="cmp-bar-main">
         <button
-          className={styles.button}
-          type="button"
-          disabled={mutationPending}
-          onClick={actions.onPause}
+          className="cmp-send cmp-send-cancel cmp-tip-end"
+          type={submitBlocked ? "button" : "submit"}
+          data-on={!submitBlocked}
+          data-tip={t("codingWorkbench.composer.pause")}
+          aria-label={t("codingWorkbench.composer.pause")}
+          aria-disabled={submitBlocked}
         >
-          {t("codingWorkbench.composer.pause")}
+          <Icons.minimize size={16} />
         </button>
       </div>
     );
   }
   if (runState === "paused") {
     return (
-      <div className={styles.controls}>
+      <div className="cmp-bar-main">
         <button
-          className={cx(styles.button, styles.buttonPrimary)}
+          className="cmp-icon ui-tip"
           type="button"
-          disabled={mutationPending || empty}
-          onClick={actions.onSend}
-        >
-          {t("codingWorkbench.composer.send")}
-        </button>
-        <button
-          className={styles.button}
-          type="button"
-          disabled={mutationPending}
+          data-tip={t("codingWorkbench.composer.resume")}
+          aria-label={t("codingWorkbench.composer.resume")}
+          disabled={busy}
           onClick={actions.onResume}
         >
-          {t("codingWorkbench.composer.resume")}
+          <Icons.fwd size={16} />
+        </button>
+        <button
+          className="cmp-send cmp-tip-end"
+          type={submitBlocked ? "button" : "submit"}
+          data-on={!submitBlocked}
+          data-tip={t("codingWorkbench.composer.send")}
+          aria-label={t("codingWorkbench.composer.send")}
+          aria-disabled={submitBlocked}
+        >
+          <Icons.arrowUp size={16} />
         </button>
       </div>
     );
   }
   return (
     <button
-      className={cx(styles.button, styles.buttonPrimary)}
-      type="button"
-      disabled={startBusy || !canStart || empty}
-      onClick={actions.onStart}
+      className="cmp-send cmp-tip-end"
+      type={submitBlocked ? "button" : "submit"}
+      data-on={!submitBlocked}
+      data-tip={startBusy ? t("codingWorkbench.task.starting") : t("codingWorkbench.task.start")}
+      aria-label={startBusy ? t("codingWorkbench.task.starting") : t("codingWorkbench.task.start")}
+      aria-disabled={submitBlocked}
     >
-      {startBusy ? t("codingWorkbench.task.starting") : t("codingWorkbench.task.start")}
+      <Icons.arrowUp size={16} />
     </button>
   );
 }

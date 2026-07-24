@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -25,10 +26,15 @@ import {
   type GitProcessRunner,
 } from "./gitRoutes.js";
 import { handleGitHistory, handleGitSummary } from "./gitRepositoryReads.js";
+import { deriveManagedWorktreePath } from "./task-workspace/naming.js";
+import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 
+const REPOSITORY_ID = "repo_0123456789abcdef";
+const WORKSPACE_ID = "ws_0123456789abcdef01234567";
 let root: string;
 let managedRoot: string;
 let managedWorktree: string;
+let instance: WorkspaceInstance;
 
 function ok(stdout: string): GitProcessResult {
   return { exitCode: 0, signal: null, stdout, stderr: "", truncated: false };
@@ -43,6 +49,19 @@ function route(path: string, cookie?: string): RouteContext {
   };
 }
 
+function provisioningStub(): WorkspaceProvisioningService {
+  return {
+    provision: (): never => {
+      throw new Error("not used in this test");
+    },
+    activate: (): never => {
+      throw new Error("not used in this test");
+    },
+    getInstance: (workspaceId): WorkspaceInstance | undefined =>
+      workspaceId === WORKSPACE_ID ? instance : undefined,
+  };
+}
+
 function deps(runner: GitProcessRunner): UiHandlerDeps {
   return {
     config: undefined,
@@ -54,6 +73,7 @@ function deps(runner: GitProcessRunner): UiHandlerDeps {
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
     managedTaskWorkspaceRoot: managedRoot,
+    workspaceProvisioning: provisioningStub(),
     codingAppSessionChannel: createCodingAppSessionChannel({
       registry: createSessionRegistry(),
       pairingPort: createFakeSessionPairingPort(),
@@ -72,9 +92,33 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "keiko-managed-git-auth-"));
   const managedStorage = join(root, "managed-storage");
   managedRoot = join(root, "managed");
-  managedWorktree = join(managedRoot, "repository", "workspace");
-  await mkdir(join(managedStorage, "repository", "workspace"), { recursive: true });
+  managedWorktree = deriveManagedWorktreePath({
+    managedRoot,
+    repositoryId: REPOSITORY_ID,
+    workspaceId: WORKSPACE_ID,
+  });
+  await mkdir(join(managedStorage, REPOSITORY_ID, WORKSPACE_ID), { recursive: true });
   await symlink(managedStorage, managedRoot, "dir");
+  const now = new Date(0).toISOString();
+  instance = {
+    schemaVersion: "1",
+    workspaceId: WORKSPACE_ID,
+    taskId: "managed-git-auth",
+    repositoryId: REPOSITORY_ID,
+    repositoryRoot: root,
+    baseBranch: "dev",
+    taskBranch: "keiko/task/managed-git-auth-01234567",
+    managedWorktreePath: managedWorktree,
+    gitdirIdentity: "gitdir-identity",
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: now,
+    updatedAt: now,
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "corr_managed_git_auth",
+  };
 });
 
 afterEach(async () => {

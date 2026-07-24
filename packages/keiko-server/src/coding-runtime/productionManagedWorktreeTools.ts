@@ -118,6 +118,7 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
       workspaceRootDigest: input.liveFacts().binding.workspaceRootDigest,
       expiresAt: input.authorityExpiresAt,
     }),
+    resolveWorkspaceRoot: () => input.workspaceRoot,
     requiresEditorReview: () =>
       codingWorkbenchPolicyEffectFor(input.effectiveMode, "workspace-contained", "high") !==
       "allowed",

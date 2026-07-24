@@ -1,7 +1,7 @@
 import { detectWorkspaceAt, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { resolveRoot, runFilesHandler } from "../files.js";
+import { resolveRequestRoot, runFilesHandler } from "../files.js";
 import {
   detectRuntimeCapabilities,
   type RuntimeCapabilityDetectorOptions,
@@ -53,7 +53,7 @@ export async function handleRuntimeCapabilities(
     return workspaceNotRegistered();
   }
   return runFilesHandler(async () => {
-    const resolved = await resolveRoot(deps.store, root, deps.redactor);
+    const resolved = await resolveRequestRoot(ctx, deps, root);
     const workspace = (options.detectWorkspace ?? detectWorkspaceAt)(resolved.realRoot);
     const body = detectRuntimeCapabilities({
       env: deps.env,

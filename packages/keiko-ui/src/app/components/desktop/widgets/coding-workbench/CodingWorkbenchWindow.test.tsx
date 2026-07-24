@@ -20,6 +20,7 @@ const runtimeHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
+const autonomyHookMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -35,6 +36,10 @@ vi.mock("@/lib/useCodingWorkbenchSafeActivity", () => ({
 
 vi.mock("@/lib/useCodingWorkbenchResearch", () => ({
   useCodingWorkbenchResearch: researchHookMock,
+}));
+
+vi.mock("../../hooks/useAutonomyModePolicy", () => ({
+  useAutonomyModePolicy: autonomyHookMock,
 }));
 
 const AT = "2026-07-13T12:00:00.000Z";
@@ -159,6 +164,14 @@ describe("CodingWorkbenchWindow", () => {
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
     researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
+    autonomyHookMock.mockReturnValue({
+      requestedMode: "supervised-coding",
+      effectiveMode: "supervised-coding",
+      deploymentCeiling: "autonomous-delivery",
+      pending: false,
+      error: null,
+      change: vi.fn(),
+    });
   });
 
   function egressApprovalState(
@@ -190,13 +203,10 @@ describe("CodingWorkbenchWindow", () => {
     const liveActions = renderWorkbench();
 
     expect(screen.getByRole("heading", { name: "Coding Workbench" })).toBeInTheDocument();
-    expect(screen.getByText(/Server effective mode:/u)).toHaveTextContent(
-      "Server effective mode: Ask for approval.",
-    );
-    expect(screen.getByText(/Deployment ceiling:/u)).toHaveTextContent(
-      "Deployment ceiling: Supervised workspace.",
-    );
-    expect(screen.getByText("task-1 · issue/2257 · healthy")).toBeInTheDocument();
+    expect(screen.getByText("task-1 · issue/2257")).toBeInTheDocument();
+    expect(screen.getByText("Keiko Gateway")).toBeInTheDocument();
+    expect(screen.getByText("Ask for approval")).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /Full access/u })).not.toBeInTheDocument();
     expect(screen.queryByText(/Issue #1990|marketing|preview/u)).not.toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Task instructions"), "Investigate the failing test");

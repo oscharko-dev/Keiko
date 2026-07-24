@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -50,6 +53,51 @@ function editorSession(sessionId: string, workspaceRoot: string): EditorAgentSes
 }
 
 describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
+  it("discovers exact governed file paths without exposing denied or unrelated entries", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-"));
+    try {
+      mkdirSync(join(root, "packages", "ui", "src"), { recursive: true });
+      mkdirSync(join(root, "ignored"), { recursive: true });
+      writeFileSync(join(root, "package.json"), '{"name":"fixture","version":"1.0.0"}\n');
+      writeFileSync(join(root, ".gitignore"), "ignored/\n");
+      writeFileSync(join(root, ".env"), "PRIVATE_SENTINEL=1\n");
+      writeFileSync(join(root, "ignored", "safeActivity-secret.ts"), "ignored\n");
+      writeFileSync(join(root, "packages", "ui", "src", "useSafeActivity.ts"), "export {};\n");
+      writeFileSync(join(root, "packages", "ui", "src", "composer.ts"), "export {};\n");
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action: vi.fn() },
+        resolveEditorActionContext: () => ({
+          sessionId: "session-discover",
+          authorityRef: { runId: "run-discover", envelopeDigest: DIGEST },
+          origin: "agent",
+        }),
+        resolveWorkspaceRoot: () => root,
+      });
+
+      const result = await ports.repositoryDiscover.execute(
+        {
+          action: "discover",
+          actionId: "discover-1",
+          idempotencyKey: "discover-key",
+          query: "safe activity",
+          maxResults: 10,
+        },
+        undefined,
+        { check: (): true => true },
+      );
+
+      expect(result).toMatchObject({
+        status: "completed",
+        read: { text: "packages/ui/src/useSafeActivity.ts\n", totalLines: 1 },
+      });
+      expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
+      expect(JSON.stringify(result)).not.toContain("ignored");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses only SecureWorkspaceTextReadPort and exposes the sole bounded content-bearing read result", async () => {
     const readText = vi.fn(() =>
       Promise.resolve({ ok: true as const, text: "const value = 1;\n" }),

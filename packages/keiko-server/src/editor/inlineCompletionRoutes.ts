@@ -46,7 +46,7 @@ import { Gateway, selectCompletionModel } from "@oscharko-dev/keiko-model-gatewa
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
-import { readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
+import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
@@ -613,7 +613,7 @@ export async function handleEditorInlineCompletion(
   }
   const request = parsed.value;
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     // Containment check for the overlay document path (throws on escape → handled by runFilesHandler).
     resolveOverlayPath(root.realRoot, request.document.path);
     if (!(await activationStillActive(deps, root.realRoot))) {
@@ -652,7 +652,7 @@ export async function handleEditorInlineCompletionTelemetry(
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, parsed.value.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, parsed.value.root);
     const now = options.now ?? Date.now;
     recordInlineCompletionTelemetryEvidence(
       deps.evidenceStore,

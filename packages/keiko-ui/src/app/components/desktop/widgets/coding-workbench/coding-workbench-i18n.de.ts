@@ -29,6 +29,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.task.eyebrow": "Aufgabe",
   "codingWorkbench.task.title": "Begrenzte Coding-Aufgabe beschreiben",
   "codingWorkbench.task.instructions": "Aufgabenanweisungen",
+  "codingWorkbench.task.placeholder":
+    "Bitte Keiko, etwas in diesem Repository zu prüfen, zu erklären, umzusetzen, zu testen oder zu reparieren…",
   "codingWorkbench.task.help":
     "Aufgabentext ist eine flüchtige Absicht. Start wird erst freigeschaltet, wenn alle Bereitschaftsprüfungen bestätigt sind.",
   "codingWorkbench.task.starting": "Wird gestartet…",

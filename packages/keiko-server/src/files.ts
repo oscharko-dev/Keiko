@@ -49,7 +49,9 @@ import {
   type RouteResult,
 } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
+import { resolveManagedTaskWorkspaceRoot } from "./task-workspace/authorization.js";
 
 const MAX_DIRECTORY_ENTRIES = 1_000;
 const DEFAULT_FILE_SEARCH_LIMIT = 24;
@@ -193,6 +195,40 @@ export interface ResolvedEditorFileIdentity {
 export interface ResolvedProjectRoot {
   readonly root: string;
   readonly realRoot: string;
+}
+
+function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): boolean {
+  const managedRoot = deps.managedTaskWorkspaceRoot;
+  if (managedRoot === undefined || rootInput === null || !isAbsolute(rootInput)) return false;
+  return containsPath(resolve(managedRoot), resolve(rootInput));
+}
+
+/**
+ * Resolves a request-bound workspace root. Ordinary roots retain the Files surface's established
+ * project/arbitrary-folder rules. A path inside Keiko's private managed-task-workspace root is
+ * admitted only when a live launcher-paired app session is present and the persisted workspace
+ * identity, derived path, ownership containment, and on-disk presence all agree.
+ */
+export async function resolveRequestRoot(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  rootInput: string | null,
+): Promise<ResolvedProjectRoot> {
+  if (!requestedManagedRoot(deps, rootInput)) {
+    return resolveRoot(deps.store, rootInput, deps.redactor);
+  }
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  const workspace =
+    rootInput === null ? undefined : resolveManagedTaskWorkspaceRoot(deps, rootInput);
+  if (workspace === undefined) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  assertMetadataSafe(workspace.root, deps.redactor);
+  const realRoot = await resolveDirectory(workspace.root);
+  assertMetadataSafe(realRoot, deps.redactor);
+  return { root: workspace.root, realRoot };
 }
 
 function filesErrorResult(error: FilesError): RouteResult {
@@ -354,8 +390,9 @@ async function resolveInsideRoot(
   rootInput: string | null,
   pathInput: string | null,
   redactor: FilesMetadataRedactor,
+  resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ResolvedTarget> {
-  const root = await resolveRoot(store, rootInput, redactor);
+  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   assertMetadataSafe(relativePath, redactor);
   // Deny check runs BEFORE realpath so existence of a denied path is not
@@ -530,8 +567,9 @@ export async function readFilesTree(
   rootInput: string | null,
   pathInput: string | null,
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+  resolvedRoot?: ResolvedProjectRoot,
 ): Promise<FilesTreeResponse> {
-  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor);
+  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor, resolvedRoot);
   if (!target.stats.isDirectory()) {
     throw new FilesError(400, "NOT_DIRECTORY", "The requested path is not a directory.");
   }
@@ -1104,8 +1142,9 @@ export async function searchFiles(
   queryInput: string | null,
   limitInput?: number,
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+  resolvedRoot?: ResolvedProjectRoot,
 ): Promise<FilesSearchResponse> {
-  const root = await resolveRoot(store, rootInput, redactor);
+  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
   const query = normalizeSearchQuery(queryInput);
   const limit = Math.min(
     Math.max(limitInput ?? DEFAULT_FILE_SEARCH_LIMIT, 1),
@@ -1462,8 +1501,9 @@ export async function readFilesContent(
   rootInput: string | null,
   pathInput: string | null,
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+  resolvedRoot?: ResolvedProjectRoot,
 ): Promise<FilesContentResponse> {
-  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor);
+  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor, resolvedRoot);
   if (!target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
@@ -1538,12 +1578,14 @@ export async function writeFilesContent(args: {
   readonly expectedModifiedAt?: number | undefined;
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
+  readonly resolvedRoot?: ResolvedProjectRoot | undefined;
 }): Promise<FilesContentResponse> {
   const target = await resolveInsideRoot(
     args.store,
     args.rootInput,
     args.pathInput,
     args.redactor ?? staticFilesMetadataRedactor,
+    args.resolvedRoot,
   );
   return writeResolvedFilesContent({
     target,
@@ -1677,8 +1719,9 @@ async function resolveCreationTarget(
   rootInput: string | null,
   pathInput: string | null,
   redactor: FilesMetadataRedactor,
+  resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ResolvedCreationTarget> {
-  const root = await resolveRoot(store, rootInput, redactor);
+  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   if (relativePath.length === 0) {
     throw new FilesError(400, "BAD_PATH", "A new entry needs a name inside the selected root.");
@@ -1860,6 +1903,7 @@ export async function createFilesEntry(args: {
   readonly pathInput: string | null;
   readonly kind: FilesEntryKind;
   readonly redactor?: FilesMetadataRedactor | undefined;
+  readonly resolvedRoot?: ResolvedProjectRoot | undefined;
 }): Promise<FilesMutationResponse> {
   if (args.kind !== "file" && args.kind !== "directory") {
     throw new FilesError(400, "BAD_REQUEST", "A new entry must be a file or a directory.");
@@ -1869,6 +1913,7 @@ export async function createFilesEntry(args: {
     args.rootInput,
     args.pathInput,
     args.redactor ?? staticFilesMetadataRedactor,
+    args.resolvedRoot,
   );
   await assertCreationParentStillContained(target);
   try {
@@ -1919,6 +1964,7 @@ interface RenameFilesEntryArgs {
   // the on-disk file changed since that revision — so a move never races a concurrent edit.
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
+  readonly resolvedRoot?: ResolvedProjectRoot | undefined;
 }
 
 interface RenameFilesPlan {
@@ -1938,7 +1984,13 @@ function assertRenameRelativePathAllowed(sourcePath: string, targetPath: string)
 
 async function resolveRenameFilesPlan(args: RenameFilesEntryArgs): Promise<RenameFilesPlan> {
   const redactor = args.redactor ?? staticFilesMetadataRedactor;
-  const source = await resolveInsideRoot(args.store, args.rootInput, args.pathInput, redactor);
+  const source = await resolveInsideRoot(
+    args.store,
+    args.rootInput,
+    args.pathInput,
+    redactor,
+    args.resolvedRoot,
+  );
   if (source.relativePath.length === 0) {
     throw new FilesError(400, "BAD_PATH", "The root folder cannot be renamed.");
   }
@@ -1954,6 +2006,7 @@ async function resolveRenameFilesPlan(args: RenameFilesEntryArgs): Promise<Renam
     args.rootInput,
     args.newPathInput,
     redactor,
+    args.resolvedRoot,
   );
   assertRenameRelativePathAllowed(source.relativePath, target.relativePath);
   await assertRenameDestinationFree(target.path, source.path);
@@ -2000,12 +2053,14 @@ export async function deleteFilesEntry(args: {
   // STALE_SESSION (409) if the on-disk file changed since this revision.
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
+  readonly resolvedRoot?: ResolvedProjectRoot | undefined;
 }): Promise<FilesMutationResponse> {
   const target = await resolveInsideRoot(
     args.store,
     args.rootInput,
     args.pathInput,
     args.redactor ?? staticFilesMetadataRedactor,
+    args.resolvedRoot,
   );
   if (target.relativePath.length === 0) {
     throw new FilesError(400, "BAD_PATH", "The root folder cannot be deleted.");
@@ -2036,6 +2091,7 @@ export async function copyFilesEntry(args: {
   readonly sourcePathInput: string | null;
   readonly destPathInput: string | null;
   readonly redactor?: FilesMetadataRedactor | undefined;
+  readonly resolvedRoot?: ResolvedProjectRoot | undefined;
 }): Promise<FilesMutationResponse> {
   const redactor = args.redactor ?? staticFilesMetadataRedactor;
   // Source must exist, be contained, and not be denied or a symlink (we never dereference one).
@@ -2044,6 +2100,7 @@ export async function copyFilesEntry(args: {
     args.rootInput,
     args.sourcePathInput,
     redactor,
+    args.resolvedRoot,
   );
   if (source.relativePath.length === 0) {
     throw new FilesError(400, "BAD_PATH", "The root folder cannot be copied.");
@@ -2058,6 +2115,7 @@ export async function copyFilesEntry(args: {
     args.rootInput,
     args.destPathInput,
     redactor,
+    args.resolvedRoot,
   );
   if (
     target.relativePath === source.relativePath ||
@@ -2100,8 +2158,9 @@ export async function readFilesPreview(
   rootInput: string | null,
   pathInput: string | null,
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+  resolvedRoot?: ResolvedProjectRoot,
 ): Promise<FilesPreviewResponse> {
-  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor);
+  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor, resolvedRoot);
   if (!target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
@@ -2118,46 +2177,61 @@ export async function handleFilesTree(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runFilesHandler(async () => ({
-    status: 200,
-    body: await readFilesTree(
-      deps.store,
-      ctx.url.searchParams.get("root"),
-      ctx.url.searchParams.get("path"),
-      deps.redactor,
-    ),
-  }));
+  return runFilesHandler(async () => {
+    const rootInput = ctx.url.searchParams.get("root");
+    const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
+    return {
+      status: 200,
+      body: await readFilesTree(
+        deps.store,
+        rootInput,
+        ctx.url.searchParams.get("path"),
+        deps.redactor,
+        resolvedRoot,
+      ),
+    };
+  });
 }
 
 export async function handleFilesSearch(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runFilesHandler(async () => ({
-    status: 200,
-    body: await searchFiles(
-      deps.store,
-      ctx.url.searchParams.get("root"),
-      ctx.url.searchParams.get("q") ?? ctx.url.searchParams.get("query"),
-      parseSearchLimit(ctx.url.searchParams.get("limit")),
-      deps.redactor,
-    ),
-  }));
+  return runFilesHandler(async () => {
+    const rootInput = ctx.url.searchParams.get("root");
+    const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
+    return {
+      status: 200,
+      body: await searchFiles(
+        deps.store,
+        rootInput,
+        ctx.url.searchParams.get("q") ?? ctx.url.searchParams.get("query"),
+        parseSearchLimit(ctx.url.searchParams.get("limit")),
+        deps.redactor,
+        resolvedRoot,
+      ),
+    };
+  });
 }
 
 export async function handleFilesPreview(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runFilesHandler(async () => ({
-    status: 200,
-    body: await readFilesPreview(
-      deps.store,
-      ctx.url.searchParams.get("root"),
-      ctx.url.searchParams.get("path"),
-      deps.redactor,
-    ),
-  }));
+  return runFilesHandler(async () => {
+    const rootInput = ctx.url.searchParams.get("root");
+    const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
+    return {
+      status: 200,
+      body: await readFilesPreview(
+        deps.store,
+        rootInput,
+        ctx.url.searchParams.get("path"),
+        deps.redactor,
+        resolvedRoot,
+      ),
+    };
+  });
 }
 
 export async function handleFilesPreviewImage(
@@ -2165,11 +2239,14 @@ export async function handleFilesPreviewImage(
   deps: UiHandlerDeps,
 ): Promise<HandlerOutcome> {
   try {
+    const rootInput = ctx.url.searchParams.get("root");
+    const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
     const target = await resolveInsideRoot(
       deps.store,
-      ctx.url.searchParams.get("root"),
+      rootInput,
       ctx.url.searchParams.get("path"),
       deps.redactor,
+      resolvedRoot,
     );
     if (!target.stats.isFile()) {
       throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
@@ -2222,13 +2299,16 @@ function readFilesWriteFields(body: Record<string, unknown>): FilesWriteFields |
 }
 
 async function readFilesContentRoute(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
+  const rootInput = ctx.url.searchParams.get("root");
+  const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
   return {
     status: 200,
     body: await readFilesContent(
       deps.store,
-      ctx.url.searchParams.get("root"),
+      rootInput,
       ctx.url.searchParams.get("path"),
       deps.redactor,
+      resolvedRoot,
     ),
   };
 }
@@ -2276,11 +2356,13 @@ async function writeFilesContentRoute(
     const message = "root, path, and content are required for a file save request.";
     return { status: 400, body: errorBody("BAD_REQUEST", message) };
   }
+  const resolvedRoot = await resolveRequestRoot(ctx, deps, fields.rootInput);
   const target = await resolveInsideRoot(
     deps.store,
     fields.rootInput,
     fields.pathInput,
     deps.redactor,
+    resolvedRoot,
   );
   let baseVersion: EditorDocumentVersion | undefined;
   if (body.baseVersion !== undefined) {
@@ -2337,6 +2419,7 @@ export async function handleFilesCreate(
         ),
       };
     }
+    const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
     return {
       status: 201,
       body: await createFilesEntry({
@@ -2345,6 +2428,7 @@ export async function handleFilesCreate(
         pathInput,
         kind,
         redactor: deps.redactor,
+        resolvedRoot,
       }),
     };
   });
@@ -2379,6 +2463,7 @@ export async function handleFilesRename(
         body: errorBody("BAD_REQUEST", "root, path, and newPath are required to rename an entry."),
       };
     }
+    const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
     const baseVersion = parseOptionalBaseVersion(body);
     if (isRouteResult(baseVersion)) return baseVersion;
     return {
@@ -2390,6 +2475,7 @@ export async function handleFilesRename(
         newPathInput,
         baseVersion: baseVersion.version,
         redactor: deps.redactor,
+        resolvedRoot,
       }),
     };
   });
@@ -2410,6 +2496,7 @@ export async function handleFilesDelete(
         body: errorBody("BAD_REQUEST", "root and path are required to delete an entry."),
       };
     }
+    const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
     const baseVersion = parseOptionalBaseVersion(body);
     if (isRouteResult(baseVersion)) return baseVersion;
     return {
@@ -2420,6 +2507,7 @@ export async function handleFilesDelete(
         pathInput,
         baseVersion: baseVersion.version,
         redactor: deps.redactor,
+        resolvedRoot,
       }),
     };
   });
@@ -2444,6 +2532,7 @@ export async function handleFilesCopy(
         ),
       };
     }
+    const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
     return {
       status: 201,
       body: await copyFilesEntry({
@@ -2452,6 +2541,7 @@ export async function handleFilesCopy(
         sourcePathInput,
         destPathInput,
         redactor: deps.redactor,
+        resolvedRoot,
       }),
     };
   });

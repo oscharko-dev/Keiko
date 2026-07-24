@@ -15,9 +15,12 @@ export const CODING_TOOL_MAX_READ_BYTES = 65_536;
 export const CODING_TOOL_READ_MAX_START_LINE = 1_000_000;
 /** Largest read-window height; bounds the model-visible schema too. */
 export const CODING_TOOL_READ_MAX_WINDOW_LINES = 5_000;
+/** Largest model-visible repository-path discovery result. */
+export const CODING_TOOL_DISCOVER_MAX_RESULTS = 100;
 
 export type CodingToolAction =
   | "read"
+  | "discover"
   | "edit"
   | "command"
   | "verification"
@@ -41,6 +44,11 @@ export type CodingToolActionRequest =
       readonly startLine?: number;
       /** Optional maximum number of lines in the returned window. */
       readonly maxLines?: number;
+    })
+  | (CodingToolRequestIdentity & {
+      readonly action: "discover";
+      readonly query: string;
+      readonly maxResults: number;
     })
   | (CodingToolRequestIdentity & {
       readonly action: "edit";
@@ -155,6 +163,8 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
   switch (value.action) {
     case "read":
       return readRequest(value);
+    case "discover":
+      return discoverRequest(value);
     case "edit":
       return editRequest(value);
     case "command":
@@ -176,6 +186,21 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
     default:
       return undefined;
   }
+}
+
+function discoverRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  return identity !== undefined &&
+    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "query", "maxResults"]) &&
+    boundedString(value.query, 256) &&
+    positiveBoundedInteger(value.maxResults, CODING_TOOL_DISCOVER_MAX_RESULTS)
+    ? {
+        ...identity,
+        action: "discover",
+        query: value.query,
+        maxResults: value.maxResults,
+      }
+    : undefined;
 }
 
 function skillRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
@@ -377,6 +402,11 @@ function hasAllowedKeys(value: Record<string, unknown>, keys: readonly string[])
 }
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 512;
+}
+function boundedString(value: unknown, maxBytes: number): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= maxBytes
+  );
 }
 function deliveryIntent(value: unknown): value is "commit" | "push" | "pull-request" | "merge" {
   return value === "commit" || value === "push" || value === "pull-request" || value === "merge";

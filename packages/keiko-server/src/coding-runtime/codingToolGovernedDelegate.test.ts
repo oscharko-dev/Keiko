@@ -29,6 +29,7 @@ function governedPort<
 function governedPorts(): CodingToolGovernedPorts {
   return {
     repositoryRead: governedPort(),
+    repositoryDiscover: governedPort(),
     editorChangeset: governedPort(),
     commandRunner: governedPort(),
     verificationRunner: governedPort(),
@@ -52,6 +53,7 @@ describe("CodingToolGovernedDelegate", () => {
     const delegate = createCodingToolGovernedDelegate(ports);
     const actions: readonly CodingToolActionRequest[] = [
       { ...identity, action: "read", relativePath: "src/a.ts" },
+      { ...identity, action: "discover", query: "safeActivity", maxResults: 20 },
       { ...identity, action: "edit", changeset },
       { ...identity, action: "command", commandId: "command-1" },
       { ...identity, action: "verification", verifierId: "verification-1" },
@@ -67,6 +69,7 @@ describe("CodingToolGovernedDelegate", () => {
       });
     }
     expect(ports.repositoryRead.execute).toHaveBeenCalledTimes(1);
+    expect(ports.repositoryDiscover.execute).toHaveBeenCalledTimes(1);
     expect(ports.editorChangeset.execute).toHaveBeenCalledTimes(1);
     expect(ports.commandRunner.execute).toHaveBeenCalledTimes(1);
     expect(ports.verificationRunner.execute).toHaveBeenCalledTimes(1);

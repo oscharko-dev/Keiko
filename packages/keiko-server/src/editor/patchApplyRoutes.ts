@@ -45,7 +45,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
+import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { clientAbortSignal } from "./languageRoutes.js";
 import {
   captureEditorLocalHistorySafely,
@@ -476,7 +476,7 @@ export async function handleEditorPatchApply(
   }
   const request = parsed.value;
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     const activation = await resolveEditorAiAssistStatusForRoot(deps, root.realRoot, "patchApply");
     if (!editorAiStatusActive(activation)) {
       return { status: 200, body: deps.redactor(disabledResponse()) };

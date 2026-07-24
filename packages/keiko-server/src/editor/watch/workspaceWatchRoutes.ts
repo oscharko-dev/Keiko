@@ -6,7 +6,7 @@ import type {
   EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 
-import { resolveRoot, runFilesHandler } from "../../files.js";
+import { resolveRequestRoot, runFilesHandler } from "../../files.js";
 import {
   errorBody,
   STREAMING,
@@ -42,7 +42,7 @@ function parseLastSequence(ctx: RouteContext): number | undefined {
 }
 
 async function resolveRealRoot(ctx: RouteContext, deps: UiHandlerDeps): Promise<string> {
-  const resolved = await resolveRoot(deps.store, ctx.url.searchParams.get("root"), deps.redactor);
+  const resolved = await resolveRequestRoot(ctx, deps, ctx.url.searchParams.get("root"));
   return resolved.realRoot;
 }
 

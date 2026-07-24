@@ -34,7 +34,7 @@ import {
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
-import { FilesError, resolveRoot, runFilesHandler } from "./files.js";
+import { FilesError, resolveRequestRoot, runFilesHandler } from "./files.js";
 import { parseGitBlamePorcelain } from "./gitBlameParser.js";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
 
@@ -189,7 +189,7 @@ export async function resolveRepository(
   ) {
     return genericUnavailable(requestedRoot ?? "", "unknown");
   }
-  const selectedRoot = await resolveRoot(deps.store, requestedRoot, deps.redactor);
+  const selectedRoot = await resolveRequestRoot(ctx, deps, requestedRoot);
   // Issue #2482 / ADR-0141 W1.9: any generic Git read whose RESOLVED root is inside Keiko's
   // managed task-worktree root requires the launcher-attested app session. Classifying after
   // resolveRoot closes trailing-separator, `.`-segment, and outside-symlink aliases of a managed

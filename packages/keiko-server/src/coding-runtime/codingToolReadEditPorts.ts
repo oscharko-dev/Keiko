@@ -6,7 +6,7 @@ import {
   type EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
-import { isDenied } from "@oscharko-dev/keiko-workspace";
+import { detectWorkspaceAt, discoverWithStats, isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
@@ -22,6 +22,7 @@ const RAW_SINGLE_FILE_PATCH =
   /^:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M ([^\r\n]+)\r?\n(@@ [\s\S]+)$/u;
 
 type RepositoryReadRequest = CodingToolActionOf<"read">;
+type RepositoryDiscoverRequest = CodingToolActionOf<"discover">;
 type EditorChangesetRequest = CodingToolActionOf<"edit">;
 
 type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action"> &
@@ -33,6 +34,7 @@ const EDITOR_SESSION_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 3_000, 5_000] as
 
 export interface CodingToolReadEditPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
+  readonly repositoryDiscover: GovernedCodingToolPort<"discover">;
   readonly editorChangeset: GovernedCodingToolPort<"edit">;
 }
 
@@ -41,6 +43,7 @@ export interface CodingToolReadEditPortDeps {
   readonly editorAgentClient: EditorAgentActionClient;
   readonly resolveEditorActionContext: () => EditorActionContext;
   readonly resolveRepositoryReadContext?: (() => RuntimeProducerBinding) | undefined;
+  readonly resolveWorkspaceRoot?: (() => string | undefined) | undefined;
   readonly requiresEditorReview?: (() => boolean) | undefined;
   readonly mutationLeaseCoordinator?:
     Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard"> | undefined;
@@ -76,10 +79,95 @@ export function createCodingToolReadEditPorts(
       execute: (request, signal, mutationGuard) =>
         executeRead(deps, request, signal, mutationGuard),
     },
+    repositoryDiscover: {
+      execute: (request, signal, mutationGuard) =>
+        executeDiscover(deps, request, signal, mutationGuard),
+    },
     editorChangeset: {
       execute: (request, signal, mutationGuard) =>
         executeEdit(deps, request, signal, mutationGuard),
     },
+  };
+}
+
+function executeDiscover(
+  deps: CodingToolReadEditPortDeps,
+  request: RepositoryDiscoverRequest,
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+): Promise<
+  | { readonly status: "completed"; readonly read: CodingToolReadResult }
+  | { readonly status: "failed" }
+> {
+  return Promise.resolve(executeDiscoverSync(deps, request, signal, mutationGuard));
+}
+
+function executeDiscoverSync(
+  deps: CodingToolReadEditPortDeps,
+  request: RepositoryDiscoverRequest,
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+):
+  | { readonly status: "completed"; readonly read: CodingToolReadResult }
+  | { readonly status: "failed" } {
+  const binding = discoveryPreflight(deps, signal, mutationGuard);
+  const workspaceRoot = deps.resolveWorkspaceRoot?.();
+  if (binding === false || workspaceRoot === undefined) return { status: "failed" };
+  try {
+    const workspace = detectWorkspaceAt(workspaceRoot);
+    const discovered = discoverWithStats(workspace, {
+      maxDepth: 40,
+      maxFiles: 20_000,
+      applyGitignore: true,
+    });
+    const text = discoveredPathText(
+      discovered.files.map(({ relativePath }) => relativePath),
+      request.query,
+      request.maxResults,
+    );
+    if (!discoveryPostflight(deps, workspaceRoot, binding, signal, mutationGuard)) {
+      return { status: "failed" };
+    }
+    return { status: "completed", read: discoveryReadResult(text) };
+  } catch {
+    return { status: "failed" };
+  }
+}
+
+function discoveredPathText(paths: readonly string[], query: string, maxResults: number): string {
+  const terms = discoveryTerms(query);
+  const matches = paths.filter((path) => {
+    const candidate = path.toLowerCase();
+    return terms.every((term) => candidate.includes(term));
+  });
+  const selected: string[] = [];
+  let bytes = 0;
+  for (const path of matches) {
+    if (selected.length >= maxResults) break;
+    const lineBytes = Buffer.byteLength(`${path}\n`, "utf8");
+    if (bytes + lineBytes > MAX_READ_BYTES) break;
+    selected.push(path);
+    bytes += lineBytes;
+  }
+  return selected.length === 0 ? "" : `${selected.join("\n")}\n`;
+}
+
+function discoveryTerms(query: string): readonly string[] {
+  if (query.trim() === "*") return [];
+  return query
+    .toLowerCase()
+    .split(/[\s/_.-]+/u)
+    .filter((term) => term.length > 0)
+    .slice(0, 8);
+}
+
+function discoveryReadResult(text: string): CodingToolReadResult {
+  const totalLines = text.length === 0 ? 0 : text.split("\n").length - 1;
+  return {
+    text,
+    byteCount: Buffer.byteLength(text, "utf8"),
+    digest: createHash("sha256").update(text, "utf8").digest("hex"),
+    totalLines,
   };
 }
 
@@ -169,6 +257,32 @@ function readPreflight(
   if (binding === null) return false;
   if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return false;
   return isDenied(request.relativePath) ? false : binding;
+}
+
+function discoveryPreflight(
+  deps: CodingToolReadEditPortDeps,
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+): RuntimeProducerBinding | undefined | false {
+  if (isAborted(signal)) return false;
+  const binding = mutationBinding(mutationGuard);
+  if (binding === null) return false;
+  return readContextMatches(deps, binding) && checkGuard(mutationGuard) ? binding : false;
+}
+
+function discoveryPostflight(
+  deps: CodingToolReadEditPortDeps,
+  workspaceRoot: string,
+  binding: RuntimeProducerBinding | undefined,
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+): boolean {
+  return (
+    deps.resolveWorkspaceRoot?.() === workspaceRoot &&
+    checkGuard(mutationGuard) &&
+    readContextMatches(deps, binding) &&
+    !isAborted(signal)
+  );
 }
 
 function readPostflight(

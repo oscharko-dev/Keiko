@@ -10,7 +10,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../../deps.js";
-import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
+import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";
 import {
   STREAMING,
   errorBody,
@@ -248,7 +248,7 @@ async function resolveEventRoot(ctx: RouteContext, deps: UiHandlerDeps): Promise
   return runFilesHandler(async () => {
     const rootInput = ctx.url.searchParams.get("root");
     const resolved =
-      rootInput === null ? undefined : await resolveRoot(deps.store, rootInput, deps.redactor);
+      rootInput === null ? undefined : await resolveRequestRoot(ctx, deps, rootInput);
     return rootResolution(resolved?.realRoot);
   });
 }
@@ -266,7 +266,7 @@ export async function handleGetEditorSettings(
   return runFilesHandler(async () => {
     const rootInput = ctx.url.searchParams.get("root");
     const resolved =
-      rootInput === null ? undefined : await resolveRoot(deps.store, rootInput, deps.redactor);
+      rootInput === null ? undefined : await resolveRequestRoot(ctx, deps, rootInput);
     const snapshot = await deps.editorSettingsControl?.read(resolved?.realRoot);
     if (snapshot === undefined) throw new Error("editor settings control disappeared");
     return {
@@ -297,7 +297,7 @@ export async function handlePatchEditorSettings(
   }
   return runFilesHandler(async () => {
     const resolved =
-      body.root === undefined ? undefined : await resolveRoot(deps.store, body.root, deps.redactor);
+      body.root === undefined ? undefined : await resolveRequestRoot(ctx, deps, body.root);
     const realRoot = resolved?.realRoot;
     if (!hasRevisionPrecondition(precondition, body, realRoot)) {
       return invalidEditorSettingsRequest();

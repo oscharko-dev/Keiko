@@ -16,6 +16,7 @@ import {
   type CodingWorkbenchRuntimeActions,
   type UseCodingWorkbenchRuntimeInput,
 } from "@/lib/useCodingWorkbenchRuntime";
+import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
 import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
 import { useCodingWorkbenchQuestions } from "@/lib/useCodingWorkbenchQuestions";
 import { useCodingWorkbenchSafeActivity } from "@/lib/useCodingWorkbenchSafeActivity";
@@ -24,18 +25,18 @@ import {
   type CodingWorkbenchResearchState,
 } from "@/lib/useCodingWorkbenchResearch";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
-import {
-  ModeAuthority,
-  PanelTitle,
-  ReadinessGrid,
-  TaskStartSection,
-  Timeline,
-  WorkbenchHeader,
-} from "./CodingWorkbenchSections";
-import { ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
+import { PanelTitle, TaskStartSection, Timeline, WorkbenchHeader } from "./CodingWorkbenchSections";
 import { CodingWorkbenchSetup } from "./CodingWorkbenchSetup";
 import { CodingWorkbenchChanges } from "./CodingWorkbenchChanges";
-import { activeRunState, cx, lifecycleAnnouncement, visibleAlert } from "./codingWorkbenchLabels";
+import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
+import {
+  activeRunState,
+  cx,
+  lifecycleAnnouncement,
+  modeLabel,
+  modelSourceLabel,
+  visibleAlert,
+} from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const EMPTY_WORKSPACE = {
@@ -58,6 +59,7 @@ function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]):
 export function CodingWorkbenchWindow(): ReactNode {
   const activeWorkspace = useOptionalActiveWorkspace() ?? EMPTY_WORKSPACE;
   const { state, actions } = useCodingWorkbenchRuntime({ workspace: activeWorkspace });
+  const autonomyPolicy = useAutonomyModePolicy();
   const research = useCodingWorkbenchResearch({
     runId: state.run.value?.runId,
     revision: state.run.value?.revision,
@@ -70,8 +72,18 @@ export function CodingWorkbenchWindow(): ReactNode {
   const workbenchLabel = useTranslate()("rail.coding");
   const pendingPermission = state.run.value?.pendingPermission;
   const runState = state.run.value?.state;
-  const locked = activeRunState(runState) || state.mutation.status === "pending";
   const alert = visibleAlert(state, t);
+
+  useEffect(() => {
+    if (
+      activeRunState(runState) ||
+      state.mutation.status === "pending" ||
+      state.requestedMode === autonomyPolicy.requestedMode
+    ) {
+      return;
+    }
+    actions.setRequestedMode(autonomyPolicy.requestedMode);
+  }, [actions, autonomyPolicy.requestedMode, runState, state.mutation.status, state.requestedMode]);
 
   useEffect(() => {
     if (!approvalAction.current || pendingPermission !== undefined) return;
@@ -91,7 +103,6 @@ export function CodingWorkbenchWindow(): ReactNode {
       taskIntent={taskIntent}
       onTaskIntentChange={setTaskIntent}
       focusRef={focusRef}
-      locked={locked}
       alert={alert}
       t={t}
       workbenchLabel={workbenchLabel}
@@ -108,7 +119,6 @@ interface WorkbenchContentProps {
   readonly taskIntent: string;
   readonly onTaskIntentChange: (taskIntent: string) => void;
   readonly focusRef: RefObject<HTMLHeadingElement | null>;
-  readonly locked: boolean;
   readonly alert: string | null;
   readonly t: CodingWorkbenchTranslate;
   readonly workbenchLabel: string;
@@ -123,7 +133,6 @@ function WorkbenchContent({
   taskIntent,
   onTaskIntentChange,
   focusRef,
-  locked,
   alert,
   t,
   workbenchLabel,
@@ -139,6 +148,7 @@ function WorkbenchContent({
       data-state={runState ?? "idle"}
     >
       <WorkbenchHeader state={state} focusRef={focusRef} />
+      <SessionContextBar state={state} activeWorkspace={activeWorkspace} />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
@@ -153,7 +163,6 @@ function WorkbenchContent({
         activeWorkspace={activeWorkspace}
         taskIntent={taskIntent}
         onTaskIntentChange={onTaskIntentChange}
-        locked={locked}
         onDecision={onDecision}
         research={research}
       />
@@ -167,7 +176,6 @@ function WorkbenchColumns({
   activeWorkspace,
   taskIntent,
   onTaskIntentChange,
-  locked,
   onDecision,
   research,
 }: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t" | "workbenchLabel">): ReactNode {
@@ -176,7 +184,7 @@ function WorkbenchColumns({
   // hides behind runtime availability: on an unactivated install it stays reachable and honestly
   // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
   // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
-  const showSetup = activeWorkspace.activeBinding === null;
+  const showSetup = activeWorkspace.activeBinding === null && state.workspace.value === null;
   const runtimeUnavailable =
     state.runtime.status === "ready" && state.runtime.value?.runtimeAvailable === false;
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
@@ -200,42 +208,44 @@ function WorkbenchColumns({
     runState: state.run.value?.state,
     runtimeEventSignal,
   });
-  return (
-    <div className={styles.grid}>
-      <div className={styles.stack}>
-        {showSetup ? (
-          <CodingWorkbenchSetup
-            refreshWorkspace={(root) => activeWorkspace.refresh(root)}
-            runtimeUnavailable={runtimeUnavailable}
-          />
-        ) : null}
-        <TaskStartSection
-          taskIntent={taskIntent}
-          onTaskIntentChange={onTaskIntentChange}
-          actions={{
-            onStart: () => void actions.start(taskIntent.trim()),
-            onPause: () => void actions.pause(),
-            onResume: () => void actions.resume(),
-            onSend: () => void actions.submitFollowUp(taskIntent.trim()),
-          }}
-          canStart={state.canStart}
-          runState={state.run.value?.state}
-          mutationPending={state.mutation.status === "pending"}
-          startBusy={state.mutation.kind === "start" && state.mutation.status === "pending"}
-        />
-        <ModeAuthority state={state} onModeChange={actions.setRequestedMode} locked={locked} />
-        <ModelRuntimeStatus state={state} actions={actions} locked={locked} />
-        <ReadinessGrid
-          state={state}
-          actions={actions}
-          refreshWorkspace={() => activeWorkspace.refresh()}
-          researchGrant={research.grant}
+  const taskComposer = (
+    <TaskStartSection
+      taskIntent={taskIntent}
+      onTaskIntentChange={onTaskIntentChange}
+      actions={{
+        onStart: () => void actions.start(taskIntent.trim()),
+        onPause: () => void actions.pause(),
+        onResume: () => void actions.resume(),
+        onSend: () => void actions.submitFollowUp(taskIntent.trim()),
+      }}
+      canStart={state.canStart}
+      runState={state.run.value?.state}
+      mutationPending={state.mutation.status === "pending"}
+      startBusy={state.mutation.kind === "start" && state.mutation.status === "pending"}
+    />
+  );
+  if (showSetup) {
+    return (
+      <div className={styles.emptySession}>
+        <CodingWorkbenchSetup
+          refreshWorkspace={(root) => activeWorkspace.refresh(root)}
+          runtimeUnavailable={runtimeUnavailable}
         />
       </div>
-      <div className={styles.stack}>
+    );
+  }
+  return (
+    <div className={styles.session}>
+      <div className={styles.sessionStream}>
         <PermissionPrompt state={state} research={research} onDecision={onDecision} />
         <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
-        <RuntimeControls state={state} actions={actions} />
+        <ResearchGrantChip
+          grant={research.grant ?? undefined}
+          busy={state.mutation.status === "pending"}
+          onRevoke={() => {
+            if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
+          }}
+        />
         <Timeline events={state.events} activity={activity} questions={questions} />
         <CodingWorkbenchChanges
           root={
@@ -248,6 +258,52 @@ function WorkbenchColumns({
           bindingPending={activeWorkspace.loading || activeWorkspace.switching}
         />
       </div>
+      <div className={styles.composerDock}>
+        <RuntimeControls state={state} actions={actions} />
+        {taskComposer}
+      </div>
+    </div>
+  );
+}
+
+function SessionContextBar({
+  state,
+  activeWorkspace,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const workspace = state.workspace.value;
+  const source = state.source.value;
+  const effectiveMode = state.runtime.value?.effectiveMode ?? state.requestedMode;
+  const repository = activeWorkspace.activeBinding?.activeRoot;
+  const workspaceValue =
+    workspace === null
+      ? t("codingWorkbench.readiness.workspace.none")
+      : `${workspace.taskId} · ${workspace.taskBranch}`;
+  const sourceValue =
+    source === null
+      ? t("codingWorkbench.readiness.modelSource.select")
+      : modelSourceLabel(source.modelSource, t);
+  return (
+    <div className={styles.contextBar} aria-label={t("codingWorkbench.header.summary")}>
+      <span className={styles.contextItem} title={repository}>
+        <span className={styles.contextLabel}>
+          {t("codingWorkbench.readiness.workspace.label")}
+        </span>
+        <span className={styles.contextValue}>{workspaceValue}</span>
+      </span>
+      <span className={styles.contextItem}>
+        <span className={styles.contextLabel}>
+          {t("codingWorkbench.readiness.modelSource.label")}
+        </span>
+        <span className={styles.contextValue}>{sourceValue}</span>
+      </span>
+      <span className={styles.contextItem} data-mode={effectiveMode}>
+        <span className={styles.contextLabel}>{t("codingWorkbench.mode.eyebrow")}</span>
+        <span className={styles.contextValue}>{modeLabel(effectiveMode, t)}</span>
+      </span>
     </div>
   );
 }
@@ -261,15 +317,11 @@ function RuntimeControls({ state, actions }: LiveSectionProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const running = activeRunState(state.run.value?.state);
   const busy = state.mutation.status === "pending";
+  if (!running) return null;
   return (
-    <section className={styles.card} aria-labelledby="coding-workbench-controls-title">
-      <PanelTitle
-        eyebrow={t("codingWorkbench.controls.eyebrow")}
-        id="coding-workbench-controls-title"
-      >
-        {t("codingWorkbench.controls.title")}
-      </PanelTitle>
-      <div className={styles.controls}>
+    <div className={styles.runtimeControls} aria-label={t("codingWorkbench.controls.title")}>
+      <span>{t("codingWorkbench.controls.help")}</span>
+      <div className={styles.inlineActions}>
         <button
           className={cx(styles.button, styles.buttonDanger)}
           type="button"
@@ -287,8 +339,7 @@ function RuntimeControls({ state, actions }: LiveSectionProps): ReactNode {
           {t("codingWorkbench.controls.takeover")}
         </button>
       </div>
-      <p className={styles.helpText}>{t("codingWorkbench.controls.help")}</p>
-    </section>
+    </div>
   );
 }
 

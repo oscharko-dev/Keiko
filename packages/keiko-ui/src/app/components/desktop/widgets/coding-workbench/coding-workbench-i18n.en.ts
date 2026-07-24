@@ -26,6 +26,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.task.eyebrow": "Task",
   "codingWorkbench.task.title": "Describe the bounded coding task",
   "codingWorkbench.task.instructions": "Task instructions",
+  "codingWorkbench.task.placeholder":
+    "Ask Keiko to inspect, explain, implement, test, or repair something in this repository…",
   "codingWorkbench.task.help":
     "Task text is transient intent. Start unlocks only after every readiness check is confirmed.",
   "codingWorkbench.task.starting": "Starting…",
