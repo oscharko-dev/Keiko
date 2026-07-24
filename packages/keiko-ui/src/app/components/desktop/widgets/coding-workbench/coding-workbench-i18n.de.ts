@@ -8,6 +8,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.header.summary":
     "Starte und beaufsichtige einen gesteuerten Coding-Lauf. Autorität und Ergebnisse bleiben serverseitig.",
   "codingWorkbench.mode.eyebrow": "Autonomie",
+  "codingWorkbench.mode.unconfirmed": "Warten auf Serverbestätigung",
   "codingWorkbench.mode.governed-assist.label": "Um Genehmigung bitten",
   "codingWorkbench.mode.governed-assist.description":
     "Lese- und Planungsvorgänge werden ausgeführt; Bearbeitungen im Arbeitsbereich, Befehle, der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",

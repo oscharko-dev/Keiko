@@ -214,7 +214,27 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
   });
 
-  it("keeps a drifted worktree visible in the session context", () => {
+  it("never presents the requested mode as server-effective before readiness resolves", (): void => {
+    autonomyHookMock.mockReturnValue({
+      requestedMode: "autonomous-delivery",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      pending: false,
+      error: null,
+      change: vi.fn(),
+    });
+    renderWorkbench(
+      liveState({
+        requestedMode: "autonomous-delivery",
+        runtime: { status: "loading", value: null, error: null },
+      }),
+    );
+
+    expect(screen.getByText("Awaiting server confirmation")).toBeInTheDocument();
+    expect(document.querySelector("[data-mode]")).toBeNull();
+  });
+
+  it("keeps a drifted worktree visible in the session context", (): void => {
     renderWorkbench(
       liveState({
         workspace: {

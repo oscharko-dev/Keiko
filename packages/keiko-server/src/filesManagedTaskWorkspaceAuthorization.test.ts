@@ -169,14 +169,17 @@ describe("managed task-workspace Files authorization", (): void => {
   it("keeps a workspace ancestor browsable when its managed subtree is already denied", async (): Promise<void> => {
     const deniedManagedRoot = join(fixtureRoot, ".keiko", "ui", "task-workspaces");
     await mkdir(deniedManagedRoot, { recursive: true });
+    await mkdir(join(fixtureRoot, "docs"), { recursive: true });
     dependencies = { ...dependencies, managedTaskWorkspaceRoot: deniedManagedRoot };
 
     const result = await handleFilesTree(route(treePath(fixtureRoot)), dependencies);
 
     expect(result.status).toBe(200);
-    expect((result.body as FilesTreeResponse).entries.map((entry) => entry.name)).not.toContain(
-      ".keiko",
-    );
+    const names = (result.body as FilesTreeResponse).entries.map((entry) => entry.name);
+    // A 200 alone would also accept an empty listing, which is what the over-restrictive ancestor
+    // rule produced before: the permitted sibling must still be served, not just `.keiko` withheld.
+    expect(names).toContain("docs");
+    expect(names).not.toContain(".keiko");
   });
 
   it("fails closed when managed-root containment cannot be canonicalized", async (): Promise<void> => {

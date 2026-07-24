@@ -294,7 +294,10 @@ function SessionContextBar({
   const t = useCodingWorkbenchTranslate();
   const workspace = state.workspace.value;
   const source = state.source.value;
-  const effectiveMode = state.runtime.value?.effectiveMode ?? state.requestedMode;
+  // Never present the locally requested mode as the effective one. Until readiness resolves, the
+  // request and the server's answer can differ — a deployment ceiling clamps it — and this bar is
+  // where an operator reads the authority a run will actually get.
+  const confirmedMode = state.runtime.value?.effectiveMode ?? null;
   const repository = activeWorkspace.activeBinding?.activeRoot;
   const workspaceValue = workspaceContextValue(workspace, t);
   const sourceValue =
@@ -315,9 +318,16 @@ function SessionContextBar({
         </span>
         <span className={styles.contextValue}>{sourceValue}</span>
       </span>
-      <span className={styles.contextItem} data-mode={effectiveMode}>
+      <span
+        className={styles.contextItem}
+        {...(confirmedMode === null ? {} : { "data-mode": confirmedMode })}
+      >
         <span className={styles.contextLabel}>{t("codingWorkbench.mode.eyebrow")}</span>
-        <span className={styles.contextValue}>{modeLabel(effectiveMode, t)}</span>
+        <span className={styles.contextValue}>
+          {confirmedMode === null
+            ? t("codingWorkbench.mode.unconfirmed")
+            : modeLabel(confirmedMode, t)}
+        </span>
       </span>
     </div>
   );

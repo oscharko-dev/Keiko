@@ -6,6 +6,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.header.summary":
     "Start and supervise one governed coding run. Authority and outcomes remain server-owned.",
   "codingWorkbench.mode.eyebrow": "Autonomy",
+  "codingWorkbench.mode.unconfirmed": "Awaiting server confirmation",
   "codingWorkbench.mode.governed-assist.label": "Ask for approval",
   "codingWorkbench.mode.governed-assist.description":
     "Reads and planning proceed; workspace edits, commands, external-file access, and internet use require approval. Delivery remains separately human-approved.",

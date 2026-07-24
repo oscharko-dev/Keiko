@@ -13,6 +13,14 @@ vi.mock("../../hooks/useAutonomyModePolicy", () => ({
 describe("AutonomySettings", () => {
   const change = vi.fn();
 
+  // The effective-mode chip carries data-mode too and precedes the options, so a bare attribute
+  // query can answer for the chip instead of the option under test. Resolve through the radio.
+  function option(label: string): HTMLElement {
+    const control = screen.getByRole("radio", { name: label }).closest("label");
+    if (control === null) throw new Error(`no option wrapper for ${label}`);
+    return control;
+  }
+
   beforeEach(() => {
     change.mockReset();
     autonomyPolicyMock.mockReturnValue({
@@ -66,16 +74,10 @@ describe("AutonomySettings", () => {
     render(<AutonomySettings />);
 
     expect(document.querySelectorAll('[data-capped="true"]')).toHaveLength(2);
-    for (const mode of ["supervised-coding", "autonomous-delivery"]) {
-      expect(document.querySelector(`[data-mode="${mode}"]`)).toHaveAttribute(
-        "data-capped",
-        "true",
-      );
+    for (const label of ["Supervised workspace", "Full access"]) {
+      expect(option(label)).toHaveAttribute("data-capped", "true");
     }
-    expect(document.querySelector('[data-mode="governed-assist"]')).not.toHaveAttribute(
-      "data-capped",
-      "true",
-    );
+    expect(option("Ask for approval")).not.toHaveAttribute("data-capped", "true");
     expect(screen.getAllByText("Capped by this deployment")).toHaveLength(2);
   });
 

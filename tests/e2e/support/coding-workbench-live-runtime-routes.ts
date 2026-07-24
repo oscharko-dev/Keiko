@@ -15,6 +15,7 @@ import {
   type MemoryAutonomyPolicyWire,
 } from "@oscharko-dev/keiko-contracts";
 import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.js";
+import { parsedRequestedMode } from "./autonomyPolicyRequest.js";
 import {
   activeWorkspace,
   codexProfile,
@@ -54,10 +55,16 @@ async function handleAutonomyPolicy(
   state: { requestedMode: CodingWorkbenchMode },
 ): Promise<void> {
   if (route.request().method() === "PUT") {
-    const body: unknown = JSON.parse(route.request().postData() ?? "{}");
-    const requested = (body as { requestedMode?: CodingWorkbenchMode }).requestedMode;
-    expect(requested).toBeDefined();
-    if (requested !== undefined) state.requestedMode = requested;
+    const requested = parsedRequestedMode(route.request().postData());
+    if (requested === null) {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "INVALID_AUTONOMY_REQUEST" }),
+      });
+      return;
+    }
+    state.requestedMode = requested;
   }
   const policy: MemoryAutonomyPolicyWire = {
     requestedMode: state.requestedMode,
