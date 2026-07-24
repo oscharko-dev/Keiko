@@ -17,13 +17,14 @@
 // still resolves the import to a `packages/...` path that stays inside the scan.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
   checkArchitectureImportPolicy,
   countImportPolicyViolationsByRule,
 } from "./check-import-policy.mjs";
+import { runBareSpecifierVisibilityProbe } from "./lib/bare-specifier-visibility-probe.mjs";
 
 const RULES_FILE = ".dependency-cruiser.cjs";
 const FIXTURE_PATH = "tests/architecture/fixtures";
@@ -46,8 +47,7 @@ const REQUIRED_DIST_ENTRYPOINTS = [PROBE_EXPECTED_RESOLVED];
 // packages/<name>/(src|dist). The `dist` suffix mirrors the production widening from
 // Wave-2 audit #2627 so the bare-specifier visibility probe (run separately below) has
 // the same graph shape available to the fixture scan.
-const INCLUDE_ONLY_OVERRIDE =
-  "^(tests/architecture/fixtures|\\.\\./|src|packages/[^/]+/(src|dist))";
+const INCLUDE_ONLY_OVERRIDE = String.raw`^(tests/architecture/fixtures|\.\./|src|packages/[^/]+/(src|dist))`;
 
 // One expected rule per physically-extracted package boundary. Most rules should fire exactly once
 // against their dedicated fixture subdir; workflows intentionally fires twice because it pins both
@@ -122,68 +122,33 @@ if (missingDist.length > 0) {
   process.exit(1);
 }
 
-/**
- * Run the bare-specifier visibility probe (Wave-2 audit #2627). Writes a temporary source file
- * under a keiko-security src path, imports `@oscharko-dev/keiko-harness` by its workspace
- * package name, runs dependency-cruiser, and verifies rule 2 fires against
- * `packages/keiko-harness/dist/index.js` — the exact class of edge the audit found the earlier
- * `includeOnly` regex blind to. The probe owns its file lifecycle end-to-end so no persistent
- * fixture (and no external-mutable-state coupling) enters the tree; only the workspace-package
- * export map's dist target is required, which the preflight above already checked.
- *
- * @returns {void}
- */
-function runBareSpecifierVisibilityProbe() {
-  const probePath = join(process.cwd(), PROBE_HOST_PACKAGE_SRC, PROBE_FILE_BASENAME);
-  const probeSource =
-    "// Bare-specifier visibility probe written by scripts/arch-check-negative.mjs (Wave-2 audit\n" +
-    "// #2627). This file is created, verified, and removed within a single run — it MUST NOT be\n" +
-    "// committed. If you find it in a diff, the probe crashed before cleanup; delete it and rerun\n" +
-    "// `npm run arch:check:negative` to reproduce the failure.\n" +
-    `import { violationTarget } from "${PROBE_TARGET_SPECIFIER}";\n` +
-    "export const bareSpecifierVisibilityProbe: unknown = violationTarget;\n";
-  writeFileSync(probePath, probeSource, "utf8");
-  try {
-    const probeResult = spawnSync(
-      process.execPath,
-      [
-        join(process.cwd(), "node_modules", "dependency-cruiser", "bin", "dependency-cruise.mjs"),
-        "--validate",
-        RULES_FILE,
-        probePath,
-      ],
-      { encoding: "utf8" },
+const probeOutcome = runBareSpecifierVisibilityProbe({
+  repoRoot: process.cwd(),
+  rulesFile: RULES_FILE,
+  hostPackageSrc: PROBE_HOST_PACKAGE_SRC,
+  probeFileBasename: PROBE_FILE_BASENAME,
+  targetSpecifier: PROBE_TARGET_SPECIFIER,
+  expectedRule: PROBE_EXPECTED_RULE,
+  expectedResolved: PROBE_EXPECTED_RESOLVED,
+});
+if (!probeOutcome.ok) {
+  if (probeOutcome.reason === "spawn-failed") {
+    console.error("arch-check-negative: FAIL — bare-specifier probe failed to spawn depcruise.");
+  } else {
+    console.error(
+      "arch-check-negative: FAIL — bare-specifier visibility probe did not fire the expected rule.",
     );
-    if (probeResult.status === null) {
-      console.error(
-        "arch-check-negative: FAIL — bare-specifier probe failed to spawn depcruise:",
-        probeResult.error,
-      );
-      process.exit(1);
-    }
-    // Rule 2's `from.path` regex already covers `packages/keiko-security/src/` so the probe
-    // file's location alone is enough to activate the rule; the assertion below is on the
-    // resolved destination — the whole point of the visibility restoration.
-    const expected = `${PROBE_EXPECTED_RULE}: ${probePath.slice(process.cwd().length + 1)} → ${PROBE_EXPECTED_RESOLVED}`;
-    if (probeResult.status === 0 || !probeResult.stdout.includes(expected)) {
-      console.error(
-        "arch-check-negative: FAIL — bare-specifier visibility probe did not fire the expected rule.",
-      );
-      console.error(`  Expected substring: ${expected}`);
+    if (probeOutcome.stdout !== undefined) {
       console.error("  Stdout:");
-      console.error(probeResult.stdout);
-      console.error("  Stderr:");
-      console.error(probeResult.stderr);
-      process.exit(1);
+      console.error(probeOutcome.stdout);
     }
-  } finally {
-    // Unconditional cleanup: the probe file must not survive the run whether the assertion
-    // passed, failed, or the script crashed on an unrelated error.
-    rmSync(probePath, { force: true });
+    if (probeOutcome.stderr !== undefined) {
+      console.error("  Stderr:");
+      console.error(probeOutcome.stderr);
+    }
   }
+  process.exit(1);
 }
-
-runBareSpecifierVisibilityProbe();
 
 // Calling the dependency-cruiser bin through Node keeps the gate hermetic without
 // going through platform-specific npm/npx shell shims.
