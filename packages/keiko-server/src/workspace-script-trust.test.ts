@@ -71,6 +71,26 @@ function readTrustFrom(recordJson: string | undefined): string | undefined {
   const value = parseTrustRecord(recordJson).trust;
   return typeof value === "string" ? value : undefined;
 }
+// Field-level guard for the persisted trust-record binding shape. Used only by the tampering
+// helper below to narrow before mutation — the SUT's own contract validators (invoked at every
+// store read) remain the authority for the closed shape at trust-decision time.
+function isMutatedBinding(value: unknown): value is MutatedBinding {
+  return (
+    isRecord(value) &&
+    typeof value.rootIdentityDigest === "string" &&
+    typeof value.manifestDigest === "string" &&
+    typeof value.manifestRef === "string" &&
+    typeof value.manifestRevision === "number"
+  );
+}
+// Wrap the two-step realpath+inspect chain so the intermediate `string` type is explicit at the
+// call site. Even though nodeWorkspaceFs.realPath is typed by @oscharko-dev/keiko-workspace,
+// type-aware ESLint's no-unsafe-* rules can surface `error`-typed views of an isolated call —
+// the local binding pins the type and keeps the callers unambiguous.
+function identityDigestFor(fsPath: string): string {
+  const canonical: string = nodeWorkspaceFs.realPath(fsPath);
+  return inspectWorkspaceRootIdentity(canonical).identityDigest;
+}
 
 function successfulSpawn(): SpawnFn {
   return vi.fn(() => {
@@ -321,16 +341,12 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     // Use the SUT's own identity digest as the proof-of-swap. Inode comparison is unreliable on
     // ext4 (recycled after rmSync+mkdirSync), while identityDigest is the same key the trust
     // decision compares — if it changes, the SUT is guaranteed to observe a different object.
-    const originalIdentityDigest = inspectWorkspaceRootIdentity(
-      nodeWorkspaceFs.realPath(root),
-    ).identityDigest;
+    const originalIdentityDigest = identityDigestFor(root);
 
     rmSync(root, { recursive: true, force: true });
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
-    const newIdentityDigest = inspectWorkspaceRootIdentity(
-      nodeWorkspaceFs.realPath(root),
-    ).identityDigest;
+    const newIdentityDigest = identityDigestFor(root);
     expect(newIdentityDigest).not.toBe(originalIdentityDigest);
 
     expect(typecheckTrustState(trust)).toBe("approval-required");
@@ -394,7 +410,12 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     // detectWorkspaceAt step. realpathSync.native (the real node:fs call) then fails with
     // ENOENT, the catch converts it to the coded error carrying the fs cause, and isTrusted's
     // outer try returns false without leaking the throw.
-    const fakeRoot = join(tmpdir(), "keiko-scripttrust-native-snap-does-not-exist-xyz");
+    // Use a mkdtempSync-derived unique path and remove it before the assertion so the ENOENT
+    // branch cannot collide with a stale artifact from a prior run or a parallel worker on the
+    // same host tmpdir.
+    const scratch = mkdtempSync(join(tmpdir(), "keiko-scripttrust-native-snap-"));
+    rmSync(scratch, { recursive: true, force: true });
+    const fakeRoot = scratch;
     const stubFs: WorkspaceFs = { ...nodeWorkspaceFs, realPath: (): string => fakeRoot };
     const workspace: WorkspaceInfo = {
       root: fakeRoot,
@@ -481,10 +502,10 @@ describe("WorkspaceScriptTrust invalidation reasons", () => {
     trust.grant(root);
     const rootRef = deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(root));
     const parsed = parseTrustRecord(store.readWorkspaceTrustRecord(rootRef)?.recordJson);
-    if (!isRecord(parsed.binding)) throw new Error("granted record missing binding");
-    // The persisted binding shape is stable at grant time; a plain reader adapter isolates the
-    // cast to this test-only mutation seam rather than the read boundary.
-    mutate(parsed.binding as unknown as MutatedBinding);
+    if (!isMutatedBinding(parsed.binding)) {
+      throw new Error("granted record binding does not match MutatedBinding shape");
+    }
+    mutate(parsed.binding);
     // Supersede the grant (revision 0) at a higher revision so the monotonic store guard admits the
     // injected stale record; the resulting invalidation then lands at revision 2.
     parsed.revision = 1;
