@@ -21,10 +21,6 @@ export function modeLabel(mode: CodingWorkbenchMode, t: CodingWorkbenchTranslate
   return t(`codingWorkbench.mode.${mode}.label`);
 }
 
-export function modeDescription(mode: CodingWorkbenchMode, t: CodingWorkbenchTranslate): string {
-  return t(`codingWorkbench.mode.${mode}.description`);
-}
-
 export function modelSourceLabel(
   source: CodingWorkbenchModelSource,
   t: CodingWorkbenchTranslate,

@@ -5,7 +5,7 @@ import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import { loadMemoryAutonomyMode, persistMemoryAutonomyMode } from "@/lib/memory-api";
 import { currentConversationMemoryMode, useConversationMemorySettings } from "./memorySettings";
 
-export type AutonomyModePolicyError = "hydrate" | "persist" | null;
+type AutonomyModePolicyError = "hydrate" | "persist" | null;
 
 export interface AutonomyModePolicy {
   readonly requestedMode: CodingWorkbenchMode;
