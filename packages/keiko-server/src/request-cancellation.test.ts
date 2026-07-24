@@ -5,6 +5,7 @@ import { createRequestCancellation } from "./request-cancellation.js";
 import type { RouteContext } from "./routes.js";
 
 interface RequestDouble extends EventEmitter {
+  complete: boolean;
   destroyed: boolean;
 }
 
@@ -16,10 +17,10 @@ interface ResponseDouble extends EventEmitter {
 
 const ALREADY_CLOSED_CASES: readonly {
   readonly label: string;
-  readonly request?: Partial<Pick<RequestDouble, "destroyed">>;
+  readonly request?: Partial<Pick<RequestDouble, "complete" | "destroyed">>;
   readonly response?: Partial<Pick<ResponseDouble, "closed" | "destroyed" | "writableEnded">>;
 }[] = [
-  { label: "request destroyed", request: { destroyed: true } },
+  { label: "incomplete request destroyed", request: { complete: false, destroyed: true } },
   { label: "response destroyed", response: { destroyed: true } },
   { label: "unfinished response closed", response: { closed: true } },
 ];
@@ -29,7 +30,10 @@ function context(): {
   readonly req: RequestDouble;
   readonly res: ResponseDouble;
 } {
-  const req = Object.assign(new EventEmitter(), { destroyed: false });
+  const req = Object.assign(new EventEmitter(), {
+    complete: false,
+    destroyed: false,
+  });
   const res = Object.assign(new EventEmitter(), {
     closed: false,
     destroyed: false,
@@ -101,6 +105,17 @@ describe("request cancellation", () => {
     const fixture = context();
     fixture.res.closed = true;
     fixture.res.writableEnded = true;
+
+    const cancellation = createRequestCancellation(fixture.ctx, "cancelled");
+
+    expect(cancellation.signal.aborted).toBe(false);
+    cancellation.dispose();
+  });
+
+  it("does not treat a fully consumed request as cancelled after Node destroys the message", (): void => {
+    const fixture = context();
+    fixture.req.complete = true;
+    fixture.req.destroyed = true;
 
     const cancellation = createRequestCancellation(fixture.ctx, "cancelled");
 
