@@ -106,44 +106,67 @@ describe("runBareSpecifierVisibilityProbe", () => {
     expect(removeProbeFile).toHaveBeenCalledOnce();
   });
 
-  it("removes the probe file even when the runner throws", () => {
-    const removeProbeFile = vi.fn();
-    expect(() =>
-      runBareSpecifierVisibilityProbe(
-        baseOptions({
-          runDepcruise: () => {
-            throw new Error("boom");
-          },
-          writeProbeFile: () => undefined,
-          removeProbeFile,
-        }),
-      ),
-    ).toThrow("boom");
-    expect(removeProbeFile).toHaveBeenCalledOnce();
-  });
-
-  // The writer must live inside the same try boundary as the runner: a writer
-  // that partially creates the probe (opens the file, writes some bytes, then
-  // throws — disk full, permissions race, filesystem gone) would otherwise
-  // leak an orphan probe into the working tree.
-  it("removes the probe file even when the writer creates it and then throws", () => {
+  // Writer and runner exceptions must be caught inside the probe and converted
+  // into the same redacted `{ok: false, reason}` contract the caller documents.
+  // If they escaped, `scripts/arch-check-negative.mjs` would print an
+  // unredacted stack trace (including absolute paths) and bypass the intended
+  // `reason=...` single-line summary.
+  it("returns writer-failed and removes the probe when the writer throws", () => {
     const removeProbeFile = vi.fn();
     let writeInvoked = false;
     const writeProbeFile = vi.fn(() => {
       writeInvoked = true;
       throw new Error("disk full after partial write");
     });
-    expect(() =>
-      runBareSpecifierVisibilityProbe(
-        baseOptions({
-          runDepcruise: () => ({ status: 0, stdout: "", stderr: "" }),
-          writeProbeFile,
-          removeProbeFile,
-        }),
-      ),
-    ).toThrow("disk full after partial write");
+    const outcome = runBareSpecifierVisibilityProbe(
+      baseOptions({
+        runDepcruise: () => ({ status: 0, stdout: "", stderr: "" }),
+        writeProbeFile,
+        removeProbeFile,
+      }),
+    );
+    expect(outcome).toEqual({ ok: false, reason: "writer-failed" });
+    expect(outcome).not.toHaveProperty("stdout");
+    expect(outcome).not.toHaveProperty("stderr");
     expect(writeInvoked).toBe(true);
     expect(removeProbeFile).toHaveBeenCalledOnce();
     expect(removeProbeFile).toHaveBeenCalledWith("/repo/packages/keiko-security/src/__probe.ts");
+  });
+
+  it("returns runner-failed and removes the probe when the runner throws", () => {
+    const removeProbeFile = vi.fn();
+    const outcome = runBareSpecifierVisibilityProbe(
+      baseOptions({
+        runDepcruise: () => {
+          throw new Error("child_process barfed");
+        },
+        writeProbeFile: () => undefined,
+        removeProbeFile,
+      }),
+    );
+    expect(outcome).toEqual({ ok: false, reason: "runner-failed" });
+    expect(outcome).not.toHaveProperty("stdout");
+    expect(outcome).not.toHaveProperty("stderr");
+    expect(removeProbeFile).toHaveBeenCalledOnce();
+  });
+
+  // Cleanup is best-effort: an ENOENT from `removeProbeFile` (writer never
+  // actually created the file) MUST NOT poison the outcome the try block has
+  // already decided; the redacted return value stays authoritative.
+  it("preserves the writer-failed outcome even when the remover throws", () => {
+    const removeProbeFile = vi.fn(() => {
+      throw new Error("ENOENT: no such file or directory");
+    });
+    const outcome = runBareSpecifierVisibilityProbe(
+      baseOptions({
+        runDepcruise: () => ({ status: 0, stdout: "", stderr: "" }),
+        writeProbeFile: () => {
+          throw new Error("write failed");
+        },
+        removeProbeFile,
+      }),
+    );
+    expect(outcome).toEqual({ ok: false, reason: "writer-failed" });
+    expect(removeProbeFile).toHaveBeenCalledOnce();
   });
 });

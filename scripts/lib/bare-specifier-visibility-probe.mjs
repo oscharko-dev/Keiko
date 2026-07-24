@@ -41,9 +41,54 @@ import { join } from "node:path";
  * @returns {{ok: true} | {ok: false, reason: string, exitStatus?: number | null}}
  *   `{ok: true}` when the expected rule fired against the expected resolved edge.
  *   `{ok: false, reason}` otherwise; `reason` names the failure mode
- *   (`"spawn-failed"`, `"rule-not-fired"`, or `"writer-failed"`) and, on
- *   subprocess failures, `exitStatus` carries the numeric exit status only.
+ *   (`"writer-failed"`, `"runner-failed"`, `"spawn-failed"`, or
+ *   `"rule-not-fired"`) and, when the subprocess ran, `exitStatus` carries
+ *   the numeric exit status only. No raw subprocess text is returned.
  */
+function buildProbeSource(targetSpecifier) {
+  return (
+    "// Bare-specifier visibility probe written by scripts/arch-check-negative.mjs (Wave-2 audit\n" +
+    "// #2627). This file is created, verified, and removed within a single run - it MUST NOT be\n" +
+    "// committed. If you find it in a diff, the probe crashed before cleanup; delete it and rerun\n" +
+    "// `npm run arch:check:negative` to reproduce the failure.\n" +
+    `import { violationTarget } from "${targetSpecifier}";\n` +
+    "export const bareSpecifierVisibilityProbe: unknown = violationTarget;\n"
+  );
+}
+
+function invokeDepcruise(runDepcruise, repoRoot, rulesFile, probePath) {
+  try {
+    return {
+      ok: true,
+      result: runDepcruise(
+        process.execPath,
+        [
+          join(repoRoot, "node_modules", "dependency-cruiser", "bin", "dependency-cruise.mjs"),
+          "--validate",
+          rulesFile,
+          probePath,
+        ],
+        { encoding: "utf8" },
+      ),
+    };
+  } catch {
+    return { ok: false, reason: "runner-failed" };
+  }
+}
+
+function evaluateDepcruiseResult(result, repoRoot, probePath, expectedRule, expectedResolved) {
+  if (result.status === null) return { ok: false, reason: "spawn-failed" };
+  const relativeProbePath = probePath.slice(repoRoot.length + 1);
+  const expectedSubstring = `${expectedRule}: ${relativeProbePath} → ${expectedResolved}`;
+  if (result.status === 0 || !result.stdout.includes(expectedSubstring)) {
+    return { ok: false, reason: "rule-not-fired", exitStatus: result.status };
+  }
+  return { ok: true };
+}
+
+// The catches below convert writer and runner throws into the same redacted
+// `{ok: false, reason}` contract the JSDoc documents, so an unhandled stack
+// trace never bypasses `scripts/arch-check-negative.mjs`'s redacted logging.
 export function runBareSpecifierVisibilityProbe({
   repoRoot,
   rulesFile,
@@ -57,39 +102,33 @@ export function runBareSpecifierVisibilityProbe({
   removeProbeFile = defaultRemoveProbeFile,
 }) {
   const probePath = join(repoRoot, hostPackageSrc, probeFileBasename);
-  const probeSource =
-    "// Bare-specifier visibility probe written by scripts/arch-check-negative.mjs (Wave-2 audit\n" +
-    "// #2627). This file is created, verified, and removed within a single run - it MUST NOT be\n" +
-    "// committed. If you find it in a diff, the probe crashed before cleanup; delete it and rerun\n" +
-    "// `npm run arch:check:negative` to reproduce the failure.\n" +
-    `import { violationTarget } from "${targetSpecifier}";\n` +
-    "export const bareSpecifierVisibilityProbe: unknown = violationTarget;\n";
   try {
     // The write MUST live inside the try boundary: a writer that opened/created
     // the probe file before throwing (partial-write, disk full, permissions race)
     // would otherwise leak an orphan file into the working tree.
-    writeProbeFile(probePath, probeSource);
-    const result = runDepcruise(
-      process.execPath,
-      [
-        join(repoRoot, "node_modules", "dependency-cruiser", "bin", "dependency-cruise.mjs"),
-        "--validate",
-        rulesFile,
-        probePath,
-      ],
-      { encoding: "utf8" },
+    try {
+      writeProbeFile(probePath, buildProbeSource(targetSpecifier));
+    } catch {
+      return { ok: false, reason: "writer-failed" };
+    }
+    const invocation = invokeDepcruise(runDepcruise, repoRoot, rulesFile, probePath);
+    if (!invocation.ok) return invocation;
+    return evaluateDepcruiseResult(
+      invocation.result,
+      repoRoot,
+      probePath,
+      expectedRule,
+      expectedResolved,
     );
-    if (result.status === null) {
-      return { ok: false, reason: "spawn-failed" };
-    }
-    const relativeProbePath = probePath.slice(repoRoot.length + 1);
-    const expectedSubstring = `${expectedRule}: ${relativeProbePath} → ${expectedResolved}`;
-    if (result.status === 0 || !result.stdout.includes(expectedSubstring)) {
-      return { ok: false, reason: "rule-not-fired", exitStatus: result.status };
-    }
-    return { ok: true };
   } finally {
-    removeProbeFile(probePath);
+    // Remove is best-effort: if the writer never actually created the file, an
+    // ENOENT during rmSync must NOT poison the outcome the try block has
+    // already decided.
+    try {
+      removeProbeFile(probePath);
+    } catch {
+      // ignored: the redacted outcome above is authoritative.
+    }
   }
 }
 
