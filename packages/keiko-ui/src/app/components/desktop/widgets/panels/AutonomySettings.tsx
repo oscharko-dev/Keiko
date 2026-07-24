@@ -3,7 +3,7 @@
 import { useId, type ReactNode } from "react";
 import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
-import { useSettingsTranslate, type I18nTranslate } from "./settings-i18n";
+import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
 import styles from "./AutonomySettings.module.css";
 
 const MODE_KEYS = {
@@ -68,7 +68,7 @@ function ModeOption({
 }
 
 export function AutonomySettings(): ReactNode {
-  const t = useSettingsTranslate();
+  const t = useTranslate();
   const groupId = `${useId()}-product-autonomy`;
   const policy = useAutonomyModePolicy();
   const clamped = policy.effectiveMode !== null && policy.effectiveMode !== policy.requestedMode;
