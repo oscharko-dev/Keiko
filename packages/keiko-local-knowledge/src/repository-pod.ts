@@ -55,6 +55,7 @@ export interface RepositoryPodDeps {
 export interface RepositoryPodIndexingDeps extends RepositoryPodDeps {
   readonly parserRegistry: ParserRegistry;
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
+  readonly embeddingPreflightCacheScope?: object | undefined;
   readonly workspaceFs: WorkspaceFs;
   readonly trackedPaths?: ReadonlySet<string> | undefined;
   readonly discoveryOptions?: Omit<DiscoveryOptions, "respectGitIgnore" | "signal"> | undefined;
@@ -231,6 +232,9 @@ function runRepositoryIndexing(
       parserRegistry: deps.parserRegistry,
       workspaceFs: deps.workspaceFs,
       embeddingAdapter: deps.embeddingAdapter,
+      ...(deps.embeddingPreflightCacheScope === undefined
+        ? {}
+        : { embeddingPreflightCacheScope: deps.embeddingPreflightCacheScope }),
       store: deps.store,
       discoveryOptions,
       ...(deps.auditSink === undefined ? {} : { auditSink: deps.auditSink }),

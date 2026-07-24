@@ -26,7 +26,12 @@ import {
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
-import { createCapsule, getCapsule, updateCapsuleDetails } from "../capsule-lifecycle.js";
+import {
+  createCapsule,
+  getCapsule,
+  updateCapsuleDetails,
+  updateCapsuleEmbeddingModelIdentity,
+} from "../capsule-lifecycle.js";
 import {
   createDefaultParserRegistry,
   createParserRegistry,
@@ -154,6 +159,17 @@ function buildOptions(fixture: Fixture, overrides: Partial<IndexingOptions> = {}
     store: fixture.store,
   };
   return { ...base, ...overrides };
+}
+
+function provisionalDefaultEmbedding(): EmbeddingModelIdentity {
+  return {
+    provider: DEFAULT_EMBEDDING.provider,
+    modelId: DEFAULT_EMBEDDING.modelId,
+    vectorDimensions: DEFAULT_EMBEDDING.vectorDimensions,
+    vectorMetric: DEFAULT_EMBEDDING.vectorMetric,
+    normalization: "l2",
+    instructionVersion: "keiko-embedding-input-v1",
+  };
 }
 
 function normalizedContextResponse(modelId: string, content: string): NormalizedResponse {
@@ -1633,8 +1649,10 @@ describe("runIndexingJob — embedding capability preflight", () => {
     }
   });
 
-  it("reuses a recent successful preflight for the same adapter and embedding lane", async () => {
+  it("reuses a recent preflight until the injected clock expires its cache entry", async () => {
     let requestCount = 0;
+    let now = 1_000;
+    const embeddingPreflightCacheScope = {};
     const adapter = scriptedAdapter({
       responder: (request) => {
         requestCount += 1;
@@ -1648,16 +1666,109 @@ describe("runIndexingJob — embedding capability preflight", () => {
       },
     });
 
-    const first = await drain(runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })));
+    const options = {
+      embeddingAdapter: adapter,
+      embeddingPreflightCacheScope,
+      now: (): number => now,
+    };
+    const first = await drain(runIndexingJob(buildOptions(fixture, options)));
     const requestsAfterFirstRun = requestCount;
-    const second = await drain(
-      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })),
-    );
+    const second = await drain(runIndexingJob(buildOptions(fixture, options)));
 
     expect(first.at(-1)?.kind).toBe("job-completed");
     expect(second.at(-1)?.kind).toBe("job-completed");
     expect(requestsAfterFirstRun).toBeGreaterThan(0);
     expect(requestCount).toBe(requestsAfterFirstRun);
+
+    now += 10 * 60 * 1_000 + 1;
+    const third = await drain(runIndexingJob(buildOptions(fixture, options)));
+    expect(third.at(-1)?.kind).toBe("job-completed");
+    expect(requestCount).toBeGreaterThan(requestsAfterFirstRun);
+  });
+
+  it("does not reuse an unconstrained preflight for a different expected dimension", async () => {
+    fixture.cleanup();
+    fixture = buildFixture(
+      { "alpha.txt": "Provisional source text. ".repeat(8) },
+      provisionalDefaultEmbedding(),
+    );
+    let requestCount = 0;
+    const adapter = scriptedAdapter({
+      responder: (request) => {
+        requestCount += 1;
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(request.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+    const embeddingPreflightCacheScope = {};
+
+    await drain(
+      runIndexingJob(
+        buildOptions(fixture, { embeddingAdapter: adapter, embeddingPreflightCacheScope }),
+      ),
+    );
+    const requestsAfterUnconstrainedRun = requestCount;
+    updateCapsuleEmbeddingModelIdentity(fixture.store, fixture.capsuleId, {
+      ...DEFAULT_EMBEDDING,
+      vectorDimensions: DEFAULT_EMBEDDING.vectorDimensions + 1,
+    });
+    const constrained = await drain(
+      runIndexingJob(
+        buildOptions(fixture, {
+          embeddingAdapter: adapter,
+          embeddingPreflightCacheScope,
+        }),
+      ),
+    );
+
+    expect(requestCount).toBeGreaterThan(requestsAfterUnconstrainedRun);
+    expect(constrained.at(-1)?.kind).toBe("job-failed");
+  });
+
+  it("does not reuse a constrained preflight for a later unconstrained lane", async () => {
+    const provisionalFixture = buildFixture(
+      { "beta.txt": "Provisional source text. ".repeat(8) },
+      provisionalDefaultEmbedding(),
+    );
+    let requestCount = 0;
+    const adapter = scriptedAdapter({
+      responder: (request) => {
+        requestCount += 1;
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(request.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+    const embeddingPreflightCacheScope = {};
+
+    try {
+      await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embeddingPreflightCacheScope }),
+        ),
+      );
+      const requestsAfterConstrainedRun = requestCount;
+      await drain(
+        runIndexingJob(
+          buildOptions(provisionalFixture, {
+            embeddingAdapter: adapter,
+            embeddingPreflightCacheScope,
+          }),
+        ),
+      );
+      expect(requestCount).toBeGreaterThan(requestsAfterConstrainedRun);
+    } finally {
+      provisionalFixture.cleanup();
+    }
   });
 
   it("persists a fixed safe message when embedding preflight throws", async () => {
