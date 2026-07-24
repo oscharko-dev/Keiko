@@ -341,7 +341,11 @@ export function EditorDebugSessionHost({
   const beginTextPrompt = useCallback((kind: TextPromptRequest["kind"], line: number): void => {
     setTextPrompt({ kind, line });
   }, []);
-  const { loadScopes, loadStack, loadVariables } = actions;
+  // Destructured (not read as `actions.x`) so `saveBreakpoint` and `host` below depend on the
+  // individual stable callbacks rather than the `actions` wrapper object itself (#2695): a caller
+  // whose `actions` wrapper is not memoized independently of `snapshot` would otherwise still force
+  // `host` to recompute on every stack/scope/variable publish even with `session` stable.
+  const { loadScopes, loadStack, loadVariables, saveBreakpoints, start, control } = actions;
   const pausedSession = session?.status === "paused" ? session : null;
   const pausedFrame = snapshot.stack?.frames[0];
   const pausedScopes = useMemo(
@@ -382,9 +386,9 @@ export function EditorDebugSessionHost({
   const saveBreakpoint = useCallback(
     (line: number, replacement: SourceBreakpoint | undefined): void => {
       if (fileId === undefined) return;
-      perform(actions.saveBreakpoints(fileId, replaceBreakpoint(breakpoints, line, replacement)));
+      perform(saveBreakpoints(fileId, replaceBreakpoint(breakpoints, line, replacement)));
     },
-    [actions, breakpoints, fileId, perform],
+    [breakpoints, fileId, perform, saveBreakpoints],
   );
   const labels = useMemo(() => debugEditorLabels(t), [t]);
   const runBreakpointAction = useCallback(
@@ -450,26 +454,26 @@ export function EditorDebugSessionHost({
             onOpenDebugPanel?.();
             perform(
               resolveDebugLaunchTarget(root, fileId).then((target) =>
-                actions.start(target, activationRevision),
+                start(target, activationRevision),
               ),
             );
-          } else if (session.status === "paused") perform(actions.control(session, "continue"));
+          } else if (session.status === "paused") perform(control(session, "continue"));
         },
         pause: (): void => {
-          if (session?.status === "running") perform(actions.control(session, "pause"));
+          if (session?.status === "running") perform(control(session, "pause"));
         },
         stepOver: (): void => {
-          if (session?.status === "paused") perform(actions.control(session, "next"));
+          if (session?.status === "paused") perform(control(session, "next"));
         },
         stepInto: (): void => {
-          if (session?.status === "paused") perform(actions.control(session, "stepIn"));
+          if (session?.status === "paused") perform(control(session, "stepIn"));
         },
         stepOut: (): void => {
-          if (session?.status === "paused") perform(actions.control(session, "stepOut"));
+          if (session?.status === "paused") perform(control(session, "stepOut"));
         },
         stop: (): void => {
           if (session !== null && ACTIVE_SESSION_STATES.has(session.status))
-            perform(actions.control(session, "stop"));
+            perform(control(session, "stop"));
         },
       },
       // The bridge supplies its mounted Monaco URI on every refresh. This keeps the exact URI
@@ -482,9 +486,9 @@ export function EditorDebugSessionHost({
     };
   }, [
     activationRevision,
-    actions,
     beginTextPrompt,
     breakpoints,
+    control,
     enabled,
     fileId,
     labels,
@@ -494,6 +498,7 @@ export function EditorDebugSessionHost({
     root,
     saveBreakpoint,
     session,
+    start,
     t,
   ]);
 

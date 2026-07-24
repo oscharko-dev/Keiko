@@ -398,7 +398,14 @@ describe("EditorDebugSessionHost", () => {
         ],
       }),
     };
-    vi.mocked(useDebugSession).mockReturnValue({ snapshot: nextVariablePage, actions });
+    // Production `useDebugSession()` returns a brand-new `actions` object identity on every
+    // publish too (the same object-per-render pattern as `snapshot`) — spread here instead of
+    // reusing the module-level `actions` object so this test cannot pass merely because the mock
+    // held a stable `actions` reference the real hook would not (Qodo finding on this PR).
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: nextVariablePage,
+      actions: { ...actions },
+    });
     rerender(
       createElement(EditorDebugSessionHost, {
         root: "/workspace",
