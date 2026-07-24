@@ -324,6 +324,16 @@ export function EditorDebugSessionHost({
 }: EditorDebugSessionHostProps): ReactNode {
   const t = useTranslate();
   const { snapshot, actions } = useDebugSession(workspaceId, enabled);
+  // GEN-PERF-EDITOR-009 (#2695): the store publishes a new `snapshot` object on every stack/scope/
+  // variable page that lands during a single pause-settle sequence (up to ~35 publishes for a large
+  // paused frame), but `session` itself is a stable reference across those publishes (the store only
+  // replaces it on a real session-state transition). `resolvePausedValues` still needs the LATEST
+  // stack/scope/variable data whenever it is actually called, so it reads this ref instead of closing
+  // over `snapshot` directly — keeping `host` referentially stable across the settle sequence so the
+  // host callback below does not re-render the whole editor pane on every intermediate DAP page.
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  const session = snapshot.session;
   const [contextMenu, setContextMenu] = useState<BreakpointContext | null>(null);
   const [textPrompt, setTextPrompt] = useState<TextPromptRequest | null>(null);
   const [actionError, setActionError] = useState(false);
@@ -331,8 +341,12 @@ export function EditorDebugSessionHost({
   const beginTextPrompt = useCallback((kind: TextPromptRequest["kind"], line: number): void => {
     setTextPrompt({ kind, line });
   }, []);
-  const { loadScopes, loadStack, loadVariables } = actions;
-  const pausedSession = snapshot.session?.status === "paused" ? snapshot.session : null;
+  // Destructured (not read as `actions.x`) so `saveBreakpoint` and `host` below depend on the
+  // individual stable callbacks rather than the `actions` wrapper object itself (#2695): a caller
+  // whose `actions` wrapper is not memoized independently of `snapshot` would otherwise still force
+  // `host` to recompute on every stack/scope/variable publish even with `session` stable.
+  const { loadScopes, loadStack, loadVariables, saveBreakpoints, start, control } = actions;
+  const pausedSession = session?.status === "paused" ? session : null;
   const pausedFrame = snapshot.stack?.frames[0];
   const pausedScopes = useMemo(
     () =>
@@ -341,6 +355,26 @@ export function EditorDebugSessionHost({
         : (snapshot.scopesByFrame.get(pausedFrame.frameRef)?.scopes ?? []),
     [pausedFrame, snapshot.scopesByFrame],
   );
+  // Advances 0 (nothing loaded) -> 1 (some scope loaded) -> 2 (every scope loaded) at most once
+  // each per pause. `host` depends on this milestone rather than on `snapshot`/`pausedScopes`
+  // themselves, so the Monaco inline-value refresh it drives (keyed on the `debug` prop's identity
+  // in KeikoCodeEditor's useDebugRefresh) fires a BOUNDED number of times per pause instead of once
+  // per individual loadVariables page — the up-to-32 pages of the D12 cap fixture are what caused
+  // the #2695 regression.
+  //
+  // The intermediate "1" step is load-bearing, not cosmetic: a scope whose variables never publish
+  // (parse failure, abort, or a pause-identity mismatch) is never retried — `loadVariables` returns
+  // early once an entry exists and its effect deps do not change on failure. Without the "some"
+  // step, one such scope would hold an all-or-nothing "settled" flag false forever and starve the
+  // refresh, so the editor would show NO inline values for the whole pause even for the scopes that
+  // did load. Two steps keep every successfully loaded scope reachable while staying O(1).
+  const pausedValuesMilestone = useMemo(() => {
+    const pending = pausedScopes.filter((scope) => scope.variableCount !== 0);
+    if (pending.length === 0) return 2;
+    const loaded = pending.filter((scope) => snapshot.variablesByParent.has(scope.scopeRef)).length;
+    if (loaded === 0) return 0;
+    return loaded === pending.length ? 2 : 1;
+  }, [pausedScopes, snapshot.variablesByParent]);
   useEffect(() => {
     if (pausedSession !== null) void loadStack(pausedSession).catch(() => setActionError(true));
   }, [loadStack, pausedSession]);
@@ -372,9 +406,9 @@ export function EditorDebugSessionHost({
   const saveBreakpoint = useCallback(
     (line: number, replacement: SourceBreakpoint | undefined): void => {
       if (fileId === undefined) return;
-      perform(actions.saveBreakpoints(fileId, replaceBreakpoint(breakpoints, line, replacement)));
+      perform(saveBreakpoints(fileId, replaceBreakpoint(breakpoints, line, replacement)));
     },
-    [actions, breakpoints, fileId, perform],
+    [breakpoints, fileId, perform, saveBreakpoints],
   );
   const labels = useMemo(() => debugEditorLabels(t), [t]);
   const runBreakpointAction = useCallback(
@@ -398,7 +432,6 @@ export function EditorDebugSessionHost({
   );
   const host = useMemo<EditorSurfaceProps["debug"]>(() => {
     if (!enabled || fileId === undefined || activationRevision === undefined) return undefined;
-    const session = snapshot.session;
     return {
       gutter: {
         ...(pausedFrame?.sourceFileId === fileId ? { pausedLine: pausedFrame.line } : {}),
@@ -441,48 +474,53 @@ export function EditorDebugSessionHost({
             onOpenDebugPanel?.();
             perform(
               resolveDebugLaunchTarget(root, fileId).then((target) =>
-                actions.start(target, activationRevision),
+                start(target, activationRevision),
               ),
             );
-          } else if (session.status === "paused") perform(actions.control(session, "continue"));
+          } else if (session.status === "paused") perform(control(session, "continue"));
         },
         pause: (): void => {
-          if (session?.status === "running") perform(actions.control(session, "pause"));
+          if (session?.status === "running") perform(control(session, "pause"));
         },
         stepOver: (): void => {
-          if (session?.status === "paused") perform(actions.control(session, "next"));
+          if (session?.status === "paused") perform(control(session, "next"));
         },
         stepInto: (): void => {
-          if (session?.status === "paused") perform(actions.control(session, "stepIn"));
+          if (session?.status === "paused") perform(control(session, "stepIn"));
         },
         stepOut: (): void => {
-          if (session?.status === "paused") perform(actions.control(session, "stepOut"));
+          if (session?.status === "paused") perform(control(session, "stepOut"));
         },
         stop: (): void => {
           if (session !== null && ACTIVE_SESSION_STATES.has(session.status))
-            perform(actions.control(session, "stop"));
+            perform(control(session, "stop"));
         },
       },
       // The bridge supplies its mounted Monaco URI on every refresh. This keeps the exact URI
       // comparison tied to the model that will receive decorations, while fileId still rejects
-      // paused frames from any other workspace file.
+      // paused frames from any other workspace file. Reads snapshotRef (not the memo's `snapshot`
+      // dependency) so it always reflects the latest stack/scope/variable page — see the
+      // GEN-PERF-EDITOR-009 note above `snapshotRef`.
       resolvePausedValues: (mountedDocumentUri) =>
-        derivePausedDebugValues(snapshot, fileId, mountedDocumentUri, t("pausedValues")),
+        derivePausedDebugValues(snapshotRef.current, fileId, mountedDocumentUri, t("pausedValues")),
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-EDITOR-009: pausedValuesMilestone is the intentional invalidation signal, not a value this projection reads. resolvePausedValues reads snapshotRef, so without it the host would never re-notify and keiko-editor's useDebugRefresh (keyed on this object's identity) would never re-pull newly loaded inline values.
   }, [
     activationRevision,
-    actions,
     beginTextPrompt,
     breakpoints,
+    control,
     enabled,
     fileId,
     labels,
     onOpenDebugPanel,
     pausedFrame,
+    pausedValuesMilestone,
     perform,
     root,
     saveBreakpoint,
-    snapshot,
+    session,
+    start,
     t,
   ]);
 
