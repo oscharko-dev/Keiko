@@ -139,12 +139,21 @@ export function isGeneratedOrBinaryPath(input) {
   );
 }
 
+// Top-level orchestration scripts whose only side effects are subprocess spawns v8 coverage
+// cannot cross. Their testable logic is extracted into `scripts/lib/*.mjs` modules covered by
+// their own pods; the orchestration itself is exercised end-to-end by the matching npm gate
+// (`npm run arch:check:negative`). Kept out of the LCOV coverage track AND excluded from the
+// `check:lcov-source-mapping` gate that would otherwise demand an importing pod for every
+// changed scripts/*.mjs — same rationale pattern as the packages/keiko-ui/public/ carve-out.
+const NON_LCOV_SCRIPTS = new Set(["scripts/arch-check-negative.mjs"]);
+
 export function isCoverableProductSource(input) {
   const path = normalizePath(input);
   if (
     isTestPath(path) ||
     isGeneratedOrBinaryPath(path) ||
-    !coverableExtensions.has(fileExtension(path))
+    !coverableExtensions.has(fileExtension(path)) ||
+    NON_LCOV_SCRIPTS.has(path)
   ) {
     return false;
   }
@@ -181,13 +190,6 @@ function nativeExclusionFailures(nativeEntries, properties) {
     .filter((path) => !patterns.some((pattern) => matchesScopePattern(path, pattern)))
     .map((path) => `native quality source is not excluded from Sonar analysis: ${path}`);
 }
-
-// Top-level orchestration scripts whose only side effects are subprocess spawns v8 coverage
-// cannot cross. Their testable logic is extracted into `scripts/lib/*.mjs` modules covered by
-// their own pods; the orchestration itself is exercised end-to-end by the matching npm gate
-// (`npm run arch:check:negative`). Kept out of the LCOV coverage track (same rationale pattern
-// as the packages/keiko-ui/public/ carve-out below) but still analyzed for static rules.
-const NON_LCOV_SCRIPTS = new Set(["scripts/arch-check-negative.mjs"]);
 
 export function coverageDisposition(input, nativeSources = new Set()) {
   const path = normalizePath(input);
