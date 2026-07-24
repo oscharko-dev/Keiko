@@ -80,9 +80,10 @@ import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } 
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import {
+  EMBEDDING_INSTRUCTION_VERSION,
+  EMBEDDING_NORMALIZATION,
   findConfiguredCapability,
   Gateway,
-  assertCompatibleEmbeddingIdentity,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
   selectConfiguredModel,
@@ -289,6 +290,28 @@ function configuredEmbeddingProvider(
   return isConfiguredEmbeddingModel(config, provider.modelId) ? provider : undefined;
 }
 
+function derivedVectorDimensions(modelId: string): number {
+  const lower = modelId.toLowerCase();
+  if (lower.includes("text-embedding-3-large")) return 3072;
+  if (lower.includes("text-embedding-3-small") || lower.includes("text-embedding-ada-002")) {
+    return 1536;
+  }
+  return 1536;
+}
+
+function provisionalEmbeddingIdentity(
+  provider: ModelProviderConfig,
+): KnowledgeCapsule["embeddingModelIdentity"] {
+  return {
+    provider: embeddingProviderIdentity(provider),
+    modelId: provider.modelId,
+    vectorDimensions: derivedVectorDimensions(provider.modelId),
+    vectorMetric: "cosine",
+    normalization: EMBEDDING_NORMALIZATION,
+    instructionVersion: EMBEDDING_INSTRUCTION_VERSION,
+  };
+}
+
 // Exported for the Atlassian connector sync service (Issue #2242), which drives the SAME
 // indexing composition (provider resolution + embedding adapter) for connector pods instead of
 // growing a second one.
@@ -309,27 +332,6 @@ export function configuredProviderForCapsule(
 interface ResolvedCapsuleEmbeddingProvider {
   readonly capsule: KnowledgeCapsule;
   readonly provider: ModelProviderConfig;
-}
-
-function usesLegacyProviderIdentity(identity: EmbeddingModelIdentity): boolean {
-  return !identity.provider.startsWith("openai-compatible:");
-}
-
-function embeddingIdentityChanged(
-  left: EmbeddingModelIdentity,
-  right: EmbeddingModelIdentity,
-): boolean {
-  return (
-    left.provider !== right.provider ||
-    left.modelId !== right.modelId ||
-    left.modelRevision !== right.modelRevision ||
-    left.vectorDimensions !== right.vectorDimensions ||
-    left.vectorMetric !== right.vectorMetric ||
-    left.normalization !== right.normalization ||
-    left.instructionVersion !== right.instructionVersion ||
-    left.embeddingSpaceFingerprint !== right.embeddingSpaceFingerprint ||
-    left.dimensionsParam !== right.dimensionsParam
-  );
 }
 
 function embeddingIdentityMatchesCapsuleAlias(
@@ -354,12 +356,7 @@ async function probeConfiguredProviderForCapsule(
   provider: ModelProviderConfig,
   capsule: KnowledgeCapsule,
 ): Promise<EmbeddingModelIdentity | undefined> {
-  const adapter = createEmbeddingAdapter(
-    provider,
-    requestEmbeddingImpl(deps),
-    requestEmbeddingBatchImpl(deps),
-    currentGatewayEgressConfig(deps),
-  );
+  const adapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
   try {
     const result = await verifyEmbeddingCapability(adapter, {
       modelId: provider.modelId,
@@ -390,10 +387,7 @@ async function resolveIndexingProviderForCapsule(
   capsule: KnowledgeCapsule,
 ): Promise<ResolvedCapsuleEmbeddingProvider | undefined> {
   const exact = configuredProviderForCapsule(deps, capsule);
-  if (exact !== undefined) {
-    const verified = await updateCapsuleToCurrentEmbeddingIdentity(deps, store, capsule, exact);
-    return { capsule: verified, provider: exact };
-  }
+  if (exact !== undefined) return { capsule, provider: exact };
   const providers = configuredEmbeddingProviders(currentGatewayConfig(deps));
   for (const provider of providers) {
     if (
@@ -413,22 +407,6 @@ async function resolveIndexingProviderForCapsule(
   return undefined;
 }
 
-async function updateCapsuleToCurrentEmbeddingIdentity(
-  deps: UiHandlerDeps,
-  store: ReturnType<typeof openKnowledgeStore>,
-  capsule: KnowledgeCapsule,
-  provider: ModelProviderConfig,
-): Promise<KnowledgeCapsule> {
-  if (usesLegacyProviderIdentity(capsule.embeddingModelIdentity)) return capsule;
-  const identity = await probeConfiguredProviderForCapsule(deps, provider, capsule);
-  if (identity === undefined) return capsule;
-  const compatibility = assertCompatibleEmbeddingIdentity(capsule.embeddingModelIdentity, identity);
-  if (!compatibility.ok) return capsule;
-  return embeddingIdentityChanged(capsule.embeddingModelIdentity, compatibility.identity)
-    ? updateCapsuleEmbeddingModelIdentity(store, capsule.id, compatibility.identity)
-    : capsule;
-}
-
 function forceReembedProviderForCapsule(
   deps: UiHandlerDeps,
   capsule: KnowledgeCapsule,
@@ -446,12 +424,7 @@ async function verifiedForceReembedIdentity(
   | { readonly ok: true; readonly identity: EmbeddingModelIdentity }
   | { readonly ok: false; readonly message: string }
 > {
-  const adapter = createEmbeddingAdapter(
-    provider,
-    requestEmbeddingImpl(deps),
-    requestEmbeddingBatchImpl(deps),
-    currentGatewayEgressConfig(deps),
-  );
+  const adapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
   try {
     const result = await verifyEmbeddingCapability(adapter, {
       modelId: provider.modelId,
@@ -1302,18 +1275,38 @@ function requestEmbeddingImpl(
   return deps.localKnowledgeEmbeddingRequest ?? requestOpenAIEmbedding;
 }
 
+const LOCAL_KNOWLEDGE_EMBEDDING_ADAPTERS = new WeakMap<
+  UiHandlerDeps,
+  WeakMap<ModelProviderConfig, OpenAIEmbeddingAdapter>
+>();
+
+function embeddingAdapterCacheFor(
+  deps: UiHandlerDeps,
+): WeakMap<ModelProviderConfig, OpenAIEmbeddingAdapter> {
+  const existing = LOCAL_KNOWLEDGE_EMBEDDING_ADAPTERS.get(deps);
+  if (existing !== undefined) return existing;
+  const created = new WeakMap<ModelProviderConfig, OpenAIEmbeddingAdapter>();
+  LOCAL_KNOWLEDGE_EMBEDDING_ADAPTERS.set(deps, created);
+  return created;
+}
+
 // Exported for the Atlassian connector sync service (Issue #2242): the identical indexing-time
 // embedding adapter composition every capsule indexing run already uses.
 export function localKnowledgeEmbeddingAdapterForProvider(
   deps: UiHandlerDeps,
   provider: ModelProviderConfig,
 ): OpenAIEmbeddingAdapter {
-  return createEmbeddingAdapter(
+  const cache = embeddingAdapterCacheFor(deps);
+  const existing = cache.get(provider);
+  if (existing !== undefined) return existing;
+  const created = createEmbeddingAdapter(
     provider,
     requestEmbeddingImpl(deps),
     requestEmbeddingBatchImpl(deps),
     currentGatewayEgressConfig(deps),
   );
+  cache.set(provider, created);
+  return created;
 }
 
 // #189 GRD-004: returns the array-batch impl, or undefined to fall back to per-chunk scalar
@@ -1581,12 +1574,7 @@ async function verifiedNewCapsuleEmbeddingIdentity(
   | { readonly ok: true; readonly identity: KnowledgeCapsule["embeddingModelIdentity"] }
   | { readonly ok: false; readonly result: RouteResult }
 > {
-  const adapter = createEmbeddingAdapter(
-    provider,
-    requestEmbeddingImpl(deps),
-    requestEmbeddingBatchImpl(deps),
-    currentGatewayEgressConfig(deps),
-  );
+  const adapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
   try {
     const result = await verifyEmbeddingCapability(adapter, {
       modelId: provider.modelId,
@@ -1607,8 +1595,10 @@ async function verifiedNewCapsuleEmbeddingIdentity(
   }
 }
 
-// Exported for the Atlassian connector sync service (Issue #2242): connector pods pin their
-// embedding identity through the same preflight-verified resolution as every other new capsule.
+// Exported for non-interactive ingestion services such as Atlassian sync and HTML manuals. Those
+// services immediately ingest content, so they verify the full identity before creating their pod.
+// Interactive local drafts use a provider-I/O-free provisional identity and run this verification
+// immediately before their first indexing job.
 export async function resolveNewCapsuleEmbeddingIdentity(
   deps: UiHandlerDeps,
 ): Promise<
@@ -2059,12 +2049,7 @@ async function runCapsuleIndexingJob(
     return { kind: "job-failed", jobId: "" };
   }
   canonicalizeCapsuleSourceRoots(store, capsule);
-  const adapter = createEmbeddingAdapter(
-    provider,
-    requestEmbeddingImpl(deps),
-    requestEmbeddingBatchImpl(deps),
-    currentGatewayEgressConfig(deps),
-  );
+  const adapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
   const sourceSelection = resolveIndexingSourceSelection(store, capsule, options.mode);
   if (!sourceSelection.shouldRun) {
     return undefined;
@@ -2510,9 +2495,11 @@ export async function handleCreateLocalKnowledgeCapsule(
     const input = parseCreateCapsuleInput(await readJsonObject(ctx.req));
     const env = openStoreForDeps(deps);
     try {
-      const embeddingIdentity = await resolveNewCapsuleEmbeddingIdentity(deps);
-      if (!embeddingIdentity.ok) {
-        return embeddingIdentity.result;
+      const provider = configuredEmbeddingProviders(currentGatewayConfig(deps))[0];
+      if (provider === undefined) {
+        return conflict(
+          "No configured embedding-capable model is available for new capsules. Configure the Model Gateway first.",
+        );
       }
       const capsuleId = randomUUID() as KnowledgeCapsule["id"];
       const capsule = createCapsule(
@@ -2526,7 +2513,7 @@ export async function handleCreateLocalKnowledgeCapsule(
           outputMode: "snippets",
           answerGroundingPolicy: "require-citations",
           modelUsePolicy: input.modelUsePolicy ?? standardPodModelUsePolicy(),
-          embeddingModelIdentity: embeddingIdentity.identity,
+          embeddingModelIdentity: provisionalEmbeddingIdentity(provider),
           lifecycleState: "draft",
           storageReference: createCapsuleStorageReference(capsuleId),
         },

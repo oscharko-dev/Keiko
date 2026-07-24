@@ -236,6 +236,71 @@ async function requestProbeEmbedding(
   return adapter.request(request);
 }
 
+async function requestProbeEmbeddingBatch(
+  adapter: OpenAIEmbeddingAdapter,
+  options: EmbeddingProbeOptions,
+): Promise<OpenAIEmbeddingBatchOutcome> {
+  if (adapter.requestBatch === undefined) {
+    return { ok: false, kind: "invalid-response" };
+  }
+  const request: OpenAIEmbeddingBatchRequest = {
+    endpoint: adapter.endpoint,
+    apiKey: adapter.apiKey,
+    ...(adapter.apiKeyHeaderName !== undefined
+      ? { apiKeyHeaderName: adapter.apiKeyHeaderName }
+      : {}),
+    ...(adapter.egress !== undefined ? { egress: adapter.egress } : {}),
+    modelId: options.modelId,
+    inputs: [PROBE_INPUT, ...EMBEDDING_SPACE_PROBE_INPUTS],
+    ...(options.dimensionsParam !== undefined ? { dimensions: options.dimensionsParam } : {}),
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+  };
+  return adapter.requestBatch(request);
+}
+
+function fingerprintFromBatch(
+  outcome: Extract<OpenAIEmbeddingBatchOutcome, { readonly ok: true }>,
+  expectedDimensions: number,
+): EmbeddingFingerprintCheck {
+  const vectors = outcome.value.slice(1).map((entry) => entry.vector);
+  if (
+    vectors.length !== EMBEDDING_SPACE_PROBE_INPUTS.length ||
+    vectors.some((vector) => vector.length !== expectedDimensions)
+  ) {
+    return failFingerprint("dimension-mismatch");
+  }
+  const fingerprint = embeddingSpaceFingerprintForVectors(vectors);
+  return fingerprint === undefined
+    ? failFingerprint("invalid-response")
+    : { ok: true, fingerprint };
+}
+
+function capabilityFromBatch(
+  options: EmbeddingProbeOptions,
+  outcome: OpenAIEmbeddingBatchOutcome,
+): EmbeddingCapabilityCheck {
+  if (!outcome.ok) return fail(reasonFromAdapter(outcome.kind));
+  const primary = outcome.value[0];
+  if (primary === undefined || primary.vector.length === 0) return fail("invalid-response");
+  const detected = primary.vector.length;
+  if (options.expectedDimensions !== undefined && options.expectedDimensions !== detected) {
+    return fail("dimension-mismatch");
+  }
+  const fingerprint = fingerprintFromBatch(outcome, detected);
+  if (!fingerprint.ok) return fingerprint;
+  return {
+    ok: true,
+    identity: buildIdentity(
+      options,
+      primary.modelId,
+      detected,
+      primary.modelRevision,
+      fingerprint.fingerprint,
+    ),
+  };
+}
+
 async function computeEmbeddingSpaceFingerprint(
   adapter: OpenAIEmbeddingAdapter,
   options: EmbeddingProbeOptions,
@@ -279,7 +344,6 @@ function buildIdentity(
   };
 }
 
-// eslint-disable-next-line complexity
 export async function verifyEmbeddingCapability(
   adapter: OpenAIEmbeddingAdapter,
   options: EmbeddingProbeOptions,
@@ -287,21 +351,10 @@ export async function verifyEmbeddingCapability(
   if (!hasCredentials(adapter)) {
     return fail("missing-credentials");
   }
-  const request: OpenAIEmbeddingRequest = {
-    endpoint: adapter.endpoint,
-    apiKey: adapter.apiKey,
-    ...(adapter.apiKeyHeaderName !== undefined
-      ? { apiKeyHeaderName: adapter.apiKeyHeaderName }
-      : {}),
-    ...(adapter.egress !== undefined ? { egress: adapter.egress } : {}),
-    modelId: options.modelId,
-    input: PROBE_INPUT,
-    ...(options.dimensionsParam !== undefined ? { dimensions: options.dimensionsParam } : {}),
-    ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-  };
-
-  const outcome = await adapter.request(request);
+  if (options.includeSpaceFingerprint === true && adapter.requestBatch !== undefined) {
+    return capabilityFromBatch(options, await requestProbeEmbeddingBatch(adapter, options));
+  }
+  const outcome = await requestProbeEmbedding(adapter, options, PROBE_INPUT);
   if (!outcome.ok) {
     return fail(reasonFromAdapter(outcome.kind));
   }
