@@ -273,15 +273,15 @@ function WorkbenchColumns({
   );
 }
 
-// The bound worktree's health belongs next to its identity: a drifted or unreported worktree must
-// stay visible in the session context bar rather than only in the readiness resources (#1990).
+// The bound worktree's health belongs next to its identity: a drifted worktree must stay visible in
+// the session context bar rather than only in the readiness resources (#1990). The projection always
+// carries a health, so there is no unreported case to branch on.
 function workspaceContextValue(
   workspace: CodingWorkbenchRuntimeState["workspace"]["value"],
   t: CodingWorkbenchTranslate,
 ): string {
   if (workspace === null) return t("codingWorkbench.readiness.workspace.none");
-  const identity = `${workspace.taskId} · ${workspace.taskBranch}`;
-  return workspace.health === undefined ? identity : `${identity} · ${workspace.health}`;
+  return `${workspace.taskId} · ${workspace.taskBranch} · ${workspace.health}`;
 }
 
 function SessionContextBar({

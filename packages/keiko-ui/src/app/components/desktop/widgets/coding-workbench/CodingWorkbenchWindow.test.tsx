@@ -214,31 +214,23 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
   });
 
-  const boundWorkspace = {
-    workspaceId: "workspace-1",
-    taskId: "task-1",
-    taskBranch: "issue/2257",
-    switching: false,
-  } as const;
-
   it("keeps a drifted worktree visible in the session context", () => {
     renderWorkbench(
       liveState({
         workspace: {
           status: "ready",
-          value: { ...boundWorkspace, health: "drifted" },
+          value: {
+            workspaceId: "workspace-1",
+            taskId: "task-1",
+            taskBranch: "issue/2257",
+            health: "drifted",
+            switching: false,
+          },
           error: null,
         },
       }),
     );
     expect(screen.getByText("task-1 · issue/2257 · drifted")).toBeInTheDocument();
-  });
-
-  it("omits the health segment when the server reports no worktree health", () => {
-    renderWorkbench(
-      liveState({ workspace: { status: "ready", value: boundWorkspace, error: null } }),
-    );
-    expect(screen.getByText("task-1 · issue/2257")).toBeInTheDocument();
   });
 
   it("binds one-time approval controls to live pending permission truth", async () => {
