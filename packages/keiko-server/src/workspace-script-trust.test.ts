@@ -135,6 +135,42 @@ describe("WorkspaceScriptTrustService", () => {
     }
   });
 
+  it("notifies recomputeForRoots listeners with the CANONICAL root even for symlinked inputs (#2628)", () => {
+    // Guards the CodeRabbit finding on PR #2688: revoke and the isTrusted invalidation
+    // path emit canonicalRoot to listeners, so recomputeForRoots must do the same or a
+    // symlinked/aliased root would reach managed-LSP restriction with a non-real
+    // identity and miss the pool entry keyed on the canonical path.
+    const symlinkRoot = `${root}-link`;
+    symlinkSync(root, symlinkRoot, "dir");
+    try {
+      const notified: string[] = [];
+      const trust = createWorkspaceScriptTrustService({
+        store,
+        onRestricted: (canonicalRoot) => notified.push(canonicalRoot),
+      });
+      const canonical = nodeWorkspaceFs.realPath(symlinkRoot);
+      expect(trust.recomputeForRoots?.([symlinkRoot])).toEqual(["restricted"]);
+      expect(notified).toEqual([canonical]);
+      expect(notified).not.toContain(symlinkRoot);
+    } finally {
+      rmSync(symlinkRoot, { force: true });
+    }
+  });
+
+  it("suppresses recomputeForRoots notification when the root cannot be canonicalized (#2628)", () => {
+    // Fail-closed: without a canonical identity there is no legitimate value to hand a
+    // downstream listener (the LSP pool is keyed on the canonical path), so the
+    // notification is dropped. The trust decision itself already projects "restricted".
+    const notified: string[] = [];
+    const trust = createWorkspaceScriptTrustService({
+      store,
+      onRestricted: (canonicalRoot) => notified.push(canonicalRoot),
+    });
+    const missing = join(root, "does-not-exist");
+    expect(trust.recomputeForRoots?.([missing])).toEqual(["restricted"]);
+    expect(notified).toEqual([]);
+  });
+
   it("fails closed, grants explicitly, and invalidates the grant after a manifest change", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     const verification = createVerificationRunnerManager({

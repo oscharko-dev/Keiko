@@ -523,10 +523,21 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     }
   };
 
+  // #2628 — listeners are contracted to receive the CANONICAL root (revoke and the
+  // isTrusted invalidation path both notify with canonicalRoot). Passing the caller's
+  // raw root here would let a symlink or alias reach managed-LSP restriction with a
+  // non-real identity and miss the pool entry keyed on the canonical path. Canonicalize
+  // via the same resolver trustLevelForRoot uses, and skip the notification when the
+  // path cannot be canonicalized (the trust decision already fails closed to
+  // "restricted", so nothing is left silently open — only the notification is dropped
+  // because there is no canonical identity to notify with).
   public readonly recomputeForRoots = (roots: readonly string[]): readonly WorkspaceTrustLevel[] =>
     roots.map((root): WorkspaceTrustLevel => {
       const level = this.trustLevelForRoot(root);
-      if (level === "restricted") this.notifyRestricted(root);
+      if (level === "restricted") {
+        const canonicalRoot = realPathOrUndefined(this.fs, root);
+        if (canonicalRoot !== undefined) this.notifyRestricted(canonicalRoot);
+      }
       return level;
     });
 
