@@ -1753,23 +1753,25 @@ export function useDebugSession(
     [abortPendingRequests, enabled, stableWorkspaceId, trackedRequest],
   );
 
-  return useMemo(
+  // Kept out of the `snapshot`-dependent path so its identity survives incremental stack/scope/
+  // variable publishes (#2695): every field here is already its own stable useCallback, so nothing
+  // needs `snapshot` in these deps. A consumer (e.g. EditorDebugSessionHost) that lists `actions` in
+  // its own memo deps would otherwise be forced to recompute on every DAP page even after dropping
+  // `snapshot` from its own deps.
+  const actions = useMemo(
     () => ({
-      snapshot,
-      actions: {
-        refreshInstrumentation,
-        refreshSession,
-        start,
-        control,
-        saveBreakpoints,
-        loadStack,
-        loadScopes,
-        loadVariables,
-        saveWatches,
-        saveExceptionFilters,
-        evaluateWatch,
-        setVariable,
-      },
+      refreshInstrumentation,
+      refreshSession,
+      start,
+      control,
+      saveBreakpoints,
+      loadStack,
+      loadScopes,
+      loadVariables,
+      saveWatches,
+      saveExceptionFilters,
+      evaluateWatch,
+      setVariable,
     }),
     [
       control,
@@ -1784,7 +1786,7 @@ export function useDebugSession(
       saveWatches,
       setVariable,
       start,
-      snapshot,
     ],
   );
+  return { snapshot, actions };
 }
