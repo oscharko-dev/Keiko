@@ -57,6 +57,8 @@ import { buildCspHeader } from "./csp.js";
 import { UI_HOST } from "./server.js";
 import { startUiTestServer } from "./ui-test-server/_support.js";
 import type { DapProductionProvisioning } from "./editor/dap/dapProductionService.js";
+import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
+import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
 
 const tmpDirs: string[] = [];
 
@@ -1422,4 +1424,136 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     const disabled = depsWithEnv({ KEIKO_CODING_SIDECAR_DISABLED: "1" });
     expect(disabled.codingRuntimeUnavailableReason).toBe("runtime-disabled");
   });
+});
+
+// Epic #2285 Wave 2 audit follow-up (#2628). The only production wiring of
+// "revoke trust -> stop running managed language servers" lives in buildPeripherals: the
+// fallback WorkspaceScriptTrustService is created with an onRestricted callback that calls
+// propagateManagedLspRestriction. When callers inject a trust service — which is how the
+// route/integration suites construct one — the fallback branch is skipped and, without the
+// fix, the restriction is silently dropped for the composition that production tests use.
+// Both tests below drive the real assembly (buildUiHandlerDeps) and observe the injected
+// managedLspControl's restrict() calls to prove the propagation on both paths.
+describe("buildUiHandlerDeps — workspace-trust revocation stops managed language servers (#2628)", () => {
+  const TRUST_LSP_MANIFEST = JSON.stringify({
+    name: "trust-lsp-fixture",
+    scripts: { test: "vitest run" },
+    devDependencies: { vitest: "1.0.0" },
+  });
+
+  interface RestrictionRecorder {
+    readonly control: ManagedLspControlService;
+    readonly restricted: string[];
+  }
+
+  function recordingManagedLspControl(): RestrictionRecorder {
+    const restricted: string[] = [];
+    const notUsed = (name: string): (() => Promise<never>) => {
+      return () => Promise.reject(new Error(`ManagedLspControlService.${name} not used in test`));
+    };
+    return {
+      restricted,
+      control: {
+        stateDir: "/nonexistent-managed-lsp-state",
+        read: notUsed("read"),
+        readConfiguration: notUsed("readConfiguration"),
+        mutate: notUsed("mutate"),
+        restrict: (realRoot: string): Promise<void> => {
+          restricted.push(realRoot);
+          return Promise.resolve();
+        },
+      },
+    };
+  }
+
+  function seedTrustFixture(prefix: string): { root: string; canonicalRoot: string } {
+    const root = tmp(prefix);
+    writeFileSync(join(root, "package.json"), TRUST_LSP_MANIFEST, "utf8");
+    return { root, canonicalRoot: realpathSync(root) };
+  }
+
+  it("propagates revoke to the managed-LSP control when the trust service is the fallback service (regression pin)", async () => {
+    const store = createInMemoryUiStore();
+    const { root, canonicalRoot } = seedTrustFixture("keiko-trust-lsp-fallback-");
+    store.createProject(root);
+    const lsp = recordingManagedLspControl();
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("keiko-trust-lsp-fallback-ev-"),
+      env: {},
+      store,
+      uiDbPath: join(tmp("keiko-trust-lsp-fallback-state-"), "keiko-ui.db"),
+      managedLspControl: lsp.control,
+    });
+    try {
+      deps.workspaceScriptTrust?.grant(root);
+      expect(lsp.restricted).toEqual([]);
+      deps.workspaceScriptTrust?.revoke(root);
+      expect(lsp.restricted).toEqual([canonicalRoot]);
+    } finally {
+      await deps.dispose?.();
+    }
+  }, 15000);
+
+  it("unsubscribes the injected trust service on dispose so a later revoke cannot reach a disposed managedLspControl (#2628)", async () => {
+    // Guards the Qodo finding on PR #2688: resolveTrustAndManagedLspControl subscribes a
+    // listener that captures the assembly-scoped managedLspControl closure; if the
+    // injected trust service outlives the deps (test doubles reused across assemblies),
+    // dispose() must remove the listener so a subsequent revoke does not fire into a
+    // disposed dependency graph.
+    const store = createInMemoryUiStore();
+    const { root, canonicalRoot } = seedTrustFixture("keiko-trust-lsp-unsub-");
+    store.createProject(root);
+    const injectedTrust = createWorkspaceScriptTrustService({ store });
+    const firstLsp = recordingManagedLspControl();
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("keiko-trust-lsp-unsub-ev-"),
+      env: {},
+      store,
+      uiDbPath: join(tmp("keiko-trust-lsp-unsub-state-"), "keiko-ui.db"),
+      workspaceScriptTrust: injectedTrust,
+      managedLspControl: firstLsp.control,
+    });
+    injectedTrust.grant(root);
+    injectedTrust.revoke(root);
+    expect(firstLsp.restricted).toEqual([canonicalRoot]);
+    await deps.dispose?.();
+    firstLsp.restricted.length = 0;
+    // Re-grant then revoke; the disposed deps' listener must not re-fire.
+    injectedTrust.grant(root);
+    injectedTrust.revoke(root);
+    expect(firstLsp.restricted).toEqual([]);
+  }, 15000);
+
+  it("propagates revoke to the managed-LSP control when the trust service is INJECTED (failure-first, #2628)", async () => {
+    // Before the fix, this call sequence produces `lsp.restricted === []` because
+    // buildPeripherals only wires propagateManagedLspRestriction into the fallback
+    // WorkspaceScriptTrustService and silently drops it whenever a trust service is
+    // supplied via BuildHandlerDepsOptions.workspaceScriptTrust. After the fix,
+    // propagation is wired regardless of injection, so revoke reaches the managed LSP
+    // control and the injected recorder captures the canonical root.
+    const store = createInMemoryUiStore();
+    const { root, canonicalRoot } = seedTrustFixture("keiko-trust-lsp-injected-");
+    store.createProject(root);
+    const injectedTrust = createWorkspaceScriptTrustService({ store });
+    const lsp = recordingManagedLspControl();
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("keiko-trust-lsp-injected-ev-"),
+      env: {},
+      store,
+      uiDbPath: join(tmp("keiko-trust-lsp-injected-state-"), "keiko-ui.db"),
+      workspaceScriptTrust: injectedTrust,
+      managedLspControl: lsp.control,
+    });
+    try {
+      injectedTrust.grant(root);
+      expect(lsp.restricted).toEqual([]);
+      injectedTrust.revoke(root);
+      expect(lsp.restricted).toEqual([canonicalRoot]);
+    } finally {
+      await deps.dispose?.();
+    }
+  }, 15000);
 });
