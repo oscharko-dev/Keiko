@@ -57,10 +57,18 @@ async function handleAutonomyPolicy(
   if (route.request().method() === "PUT") {
     const requested = parsedRequestedMode(route.request().postData());
     if (requested === null) {
+      // The client parses failures out of the server's `{ error: { code, message } }` envelope; a
+      // bare body would degrade to a generic HTTP error here and hide client-side regressions in
+      // error-code handling behind a fixture that does not speak the real contract.
       await route.fulfill({
         status: 400,
         contentType: "application/json",
-        body: JSON.stringify({ code: "INVALID_AUTONOMY_REQUEST" }),
+        body: JSON.stringify({
+          error: {
+            code: "INVALID_AUTONOMY_REQUEST",
+            message: "The requested autonomy mode is not a supported product mode.",
+          },
+        }),
       });
       return;
     }

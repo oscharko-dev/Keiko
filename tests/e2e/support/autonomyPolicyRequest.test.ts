@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parsedRequestedMode } from "./autonomyPolicyRequest.js";
 
-describe("parsedRequestedMode", () => {
+describe("parsedRequestedMode", (): void => {
   it("accepts each product mode the contracts define", (): void => {
     expect(parsedRequestedMode('{"requestedMode":"governed-assist"}')).toBe("governed-assist");
     expect(parsedRequestedMode('{"requestedMode":"supervised-coding"}')).toBe("supervised-coding");

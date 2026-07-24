@@ -175,7 +175,7 @@ describe("managed task-workspace Files authorization", (): void => {
     const result = await handleFilesTree(route(treePath(fixtureRoot)), dependencies);
 
     expect(result.status).toBe(200);
-    const names = (result.body as FilesTreeResponse).entries.map((entry) => entry.name);
+    const names = (result.body as FilesTreeResponse).entries.map((entry): string => entry.name);
     // A 200 alone would also accept an empty listing, which is what the over-restrictive ancestor
     // rule produced before: the permitted sibling must still be served, not just `.keiko` withheld.
     expect(names).toContain("docs");
