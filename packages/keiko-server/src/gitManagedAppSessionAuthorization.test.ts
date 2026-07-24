@@ -222,7 +222,7 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it("classifies an ancestor root as managed overlap before executing Git", async () => {
+  it("classifies an ancestor root as managed overlap before executing Git", async (): Promise<void> => {
     const runner = vi.fn<GitProcessRunner>();
     const result = await handleGitStatus(
       route(`/api/git/status?root=${encodeURIComponent(root)}`),

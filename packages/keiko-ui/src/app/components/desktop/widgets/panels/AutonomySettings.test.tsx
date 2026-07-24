@@ -25,7 +25,7 @@ describe("AutonomySettings", () => {
     });
   });
 
-  it("owns all three product modes and persists a full-access selection", async () => {
+  it("owns all three product modes and persists a full-access selection", async (): Promise<void> => {
     const user = userEvent.setup();
     render(<AutonomySettings />);
 

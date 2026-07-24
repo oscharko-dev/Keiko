@@ -54,7 +54,7 @@ function editorSession(sessionId: string, workspaceRoot: string): EditorAgentSes
 }
 
 describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
-  it("discovers exact governed file paths without exposing denied or unrelated entries", async () => {
+  it("discovers exact governed file paths without exposing denied or unrelated entries", async (): Promise<void> => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-"));
     try {
       mkdirSync(join(root, "packages", "ui", "src"), { recursive: true });

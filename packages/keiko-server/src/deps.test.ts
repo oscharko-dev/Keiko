@@ -335,7 +335,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.managedLspControl).toBeDefined();
   }, 15000);
 
-  it("materializes the managed root before content-bearing routes classify ordinary roots", async () => {
+  it("materializes the managed root before content-bearing routes classify ordinary roots", async (): Promise<void> => {
     const stateDir = tmp("managed-root-composition-");
     const deps = buildUiHandlerDeps({
       configPath: undefined,
