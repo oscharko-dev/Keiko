@@ -105,13 +105,14 @@ test("#2385 tracer: the workbench readiness surface is live, not static", async 
   );
   await openWorkbench(page);
 
-  await expect(page.getByText("Runtime not confirmed", { exact: true })).toBeVisible();
   // #2476 AC4 — the setup surface stays reachable and honestly explains why start is unavailable
   // instead of disappearing behind the unconfirmed runtime.
   await expect(page.getByRole("region", { name: "Code setup" })).toBeVisible();
   await expect(page.getByTestId("coding-workbench-setup-runtime-note")).toBeVisible();
-  await page.getByLabel("Task instructions").fill("Must stay blocked without a confirmed runtime");
-  await expect(page.getByRole("button", { name: "Start coding run" })).toBeDisabled();
+  // #2644 put the task composer behind the binding step, so an unconfirmed runtime cannot be
+  // started at all here — a stronger guarantee than the disabled control this used to assert.
+  await expect(page.getByLabel("Task instructions")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Start coding run" })).toHaveCount(0);
 });
 
 test("#2385 tracer: bind, run, observe live SSE activity, and settle against the real runtime", async ({
@@ -120,7 +121,14 @@ test("#2385 tracer: bind, run, observe live SSE activity, and settle against the
   await openWorkbench(page);
   await bindFixtureWorkspace(page);
 
-  await page.getByRole("radio", { name: /Full access/u }).check();
+  // #2644 moved the autonomy selector into Settings -> Security; the Workbench reports the mode the
+  // server confirmed rather than owning the control.
+  await page.getByRole("button", { name: "Settings" }).click();
+  const settings = page.getByRole("region", { name: /^Settings/u });
+  await settings.getByRole("button", { name: "Security" }).click();
+  await page.getByRole("radio", { name: /Full access/u }).click();
+  await expect(page.getByRole("radio", { name: /Full access/u })).toBeChecked();
+  await page.getByRole("button", { name: "Close Settings window" }).click();
   await page.getByLabel("Task instructions").fill("Rename the tracer constant under src/");
   const start = page.getByRole("button", { name: "Start coding run" });
   await expect(start).toBeEnabled();

@@ -69,22 +69,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Workspace konnte nicht verifiziert werden. Die Reconciliation hat keinen sauberen, passenden Checkout bestätigt, daher bleibt der Lauf nicht verfügbar. Prüfe das Repository und versuche es erneut.",
   "codingWorkbench.setup.runtimeUnavailable":
     "Das Starten eines Coding-Laufs ist auf dieser Installation nicht verfügbar, bis die Coding-Runtime aktiv ist. Du kannst jetzt einen Workspace binden; der Lauf wird startbar, sobald die Runtime bestätigt ist.",
-  "codingWorkbench.readiness.eyebrow": "Bereitschaft",
-  "codingWorkbench.readiness.title": "Unabhängige Live-Ressourcen",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",
-  "codingWorkbench.readiness.modelSource.confirmed": "Server bestätigt",
   "codingWorkbench.readiness.modelSource.select": "Verfügbare Quelle auswählen",
   "codingWorkbench.readiness.workspace.label": "Aufgabenarbeitsbereich",
   "codingWorkbench.readiness.workspace.none": "Kein aktiver Aufgabenarbeitsbereich",
-  "codingWorkbench.readiness.runtime.label": "Coding-Runtime",
-  "codingWorkbench.readiness.runtime.available": "Steuerungsebene verfügbar",
-  "codingWorkbench.readiness.runtime.notConfirmed": "Runtime nicht bestätigt",
-  "codingWorkbench.readiness.run.label": "Lauf-Snapshot",
-  "codingWorkbench.readiness.run.none": "Kein Snapshot",
   "codingWorkbench.readiness.eventStream.label": "Ereignisstrom",
-  "codingWorkbench.readiness.eventStream.resumable": "Fortsetzbare Live-Ereignisse",
-  "codingWorkbench.readiness.eventStream.waiting": "Wartet auf einen Lauf",
-  "codingWorkbench.readiness.eventStream.resnapshot": "Snapshot erneuern",
   "codingWorkbench.timeline.eyebrow": "Authentifizierte Aktivität",
   "codingWorkbench.timeline.title": "Live-Aktivitätszeitleiste",
   "codingWorkbench.timeline.empty": "Noch keine bestätigte Aktivität.",
@@ -359,6 +348,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.modelSourceRefreshFailed":
     "Modellquelle konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime konnte nicht aktualisiert werden.",
+  "codingWorkbench.alert.runtimeUnqualified":
+    "Das Starten eines Coding-Laufs bleibt nicht verfügbar, bis die Coding-Runtime dieser Installation als aktiv bestätigt ist.",
   "codingWorkbench.alert.workspaceRefreshFailed":
     "Arbeitsbereich konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.workspaceBindFailed":

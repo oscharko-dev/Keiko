@@ -254,8 +254,12 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     // The bootstrap setup section is absent once a workspace is bound, so this is the only place
-    // left that can explain why the start control is disabled.
-    expect(screen.getByRole("alert")).toHaveTextContent(/until the coding runtime is active/u);
+    // left that can explain why the start control is disabled — and it must not repeat the setup
+    // copy, which invites binding a workspace that is already bound.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active.",
+    );
+    expect(screen.queryByText(/You can bind a workspace now/u)).not.toBeInTheDocument();
   });
 
   it("states the unqualified runtime once while the bootstrap setup section owns that message", (): void => {

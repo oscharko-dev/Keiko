@@ -239,14 +239,14 @@ export function visibleAlert(
   // Last, because the surface shows one alert at a time: a refresh failure is actionable (retry),
   // an unqualified runtime is a standing condition. Reporting the condition first would swallow the
   // recoverable error. Only while the bootstrap setup section is off screen — it states the same
-  // sentence itself, and duplicating it would also announce it twice to assistive technology; once
-  // a workspace is bound that section is gone and nothing else explains the disabled start (#2644).
+  // condition itself, and duplicating it would announce it twice to assistive technology. This
+  // wording is its own: the setup copy invites binding a workspace, which is already done here.
   if (
     !setupVisible &&
     state.runtime.status === "ready" &&
     state.runtime.value?.runtimeAvailable === false
   ) {
-    return t("codingWorkbench.setup.runtimeUnavailable");
+    return t("codingWorkbench.alert.runtimeUnqualified");
   }
   return null;
 }
