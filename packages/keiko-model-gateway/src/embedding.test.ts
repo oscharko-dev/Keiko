@@ -10,6 +10,7 @@ import {
 import {
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
+  type OpenAIEmbeddingBatchOutcome,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "./openai-embedding-adapter.js";
@@ -57,6 +58,42 @@ function successOutcome(dimensions: number, modelRevision?: string): OpenAIEmbed
       ...(modelRevision !== undefined ? { modelRevision } : {}),
     },
   };
+}
+
+function batchOutcome(dimensions: readonly number[]): OpenAIEmbeddingBatchOutcome {
+  return {
+    ok: true,
+    value: dimensions.map((dimension) => ({
+      vector: new Float32Array(dimension).fill(0.5),
+      modelId: PROBE.modelId,
+    })),
+  };
+}
+
+function batchAdapterReturning(outcome: OpenAIEmbeddingBatchOutcome): OpenAIEmbeddingAdapter {
+  return {
+    endpoint: PROVIDER_ENDPOINT,
+    apiKey: SECRET_API_KEY,
+    request: () => Promise.resolve(successOutcome(4)),
+    requestBatch: () => Promise.resolve(outcome),
+  };
+}
+
+async function expectBatchFailure(
+  outcome: OpenAIEmbeddingBatchOutcome,
+  reason: "dimension-mismatch" | "invalid-response",
+  options: Partial<EmbeddingProbeOptions> = {},
+): Promise<void> {
+  const result = await verifyEmbeddingCapability(batchAdapterReturning(outcome), {
+    ...PROBE,
+    ...options,
+    includeSpaceFingerprint: true,
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.reason).toBe(reason);
+    assertSafeMessage(result.safeMessage);
+  }
 }
 
 function assertSafeMessage(safeMessage: string): void {
@@ -342,6 +379,29 @@ describe("verifyEmbeddingCapability", () => {
     expect(scalarCalls).toBe(0);
     expect(batches).toHaveLength(1);
     expect(batches[0]).toHaveLength(4);
+  });
+
+  it("rejects a batch response with no primary vector", async () => {
+    await expectBatchFailure(batchOutcome([]), "invalid-response");
+  });
+
+  it("rejects a batch response with an empty primary vector", async () => {
+    await expectBatchFailure(batchOutcome([0, 4, 4, 4]), "invalid-response");
+  });
+
+  it("rejects a batch response with the wrong fingerprint probe count", async () => {
+    await expectBatchFailure(batchOutcome([4, 4, 4]), "dimension-mismatch");
+  });
+
+  it("rejects a batch response when a fingerprint probe has different dimensions", async () => {
+    await expectBatchFailure(batchOutcome([4, 4, 3, 4]), "dimension-mismatch");
+  });
+
+  it("rejects conflicting requested and expected dimensions on the batch path", async () => {
+    await expectBatchFailure(batchOutcome([4, 4, 4, 4]), "dimension-mismatch", {
+      dimensionsParam: 4,
+      expectedDimensions: 8,
+    });
   });
 
   it("ensures the probe input is never echoed into any failure safeMessage", async () => {
