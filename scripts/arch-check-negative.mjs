@@ -17,7 +17,7 @@
 // still resolves the import to a `packages/...` path that stays inside the scan.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -27,18 +27,25 @@ import {
 
 const RULES_FILE = ".dependency-cruiser.cjs";
 const FIXTURE_PATH = "tests/architecture/fixtures";
-// Fixtures that resolve their forbidden edge through the workspace `exports` map (into
-// `packages/keiko-<name>/dist/index.js`) require the target dist file to exist on disk. The
-// canonical example is `tests/architecture/fixtures/security-bare-specifier/` (Wave-2 audit
-// #2627) which imports `@oscharko-dev/keiko-harness` by its package name; without dist the
-// specifier resolves to nothing and rule 2 loses its bare-specifier variant firing. Enforce
-// the prerequisite here rather than in the fixture's JSDoc so the harness fails loudly with
-// an actionable message instead of quietly under-firing.
-const REQUIRED_DIST_ENTRYPOINTS = ["packages/keiko-harness/dist/index.js"];
+// The bare-specifier visibility probe (Wave-2 audit #2627) writes a temporary source file
+// under a `keiko-security` src path, imports `@oscharko-dev/keiko-harness` by its workspace
+// package name, runs dependency-cruiser, verifies rule 2 fires against
+// `packages/keiko-harness/dist/index.js`, and unconditionally cleans up. This proves the
+// production `includeOnly` regex sees cross-package bare-specifier resolutions through the
+// workspace `exports` map — the exact class of edge the audit found the previous gate blind
+// to — without introducing a persistent test fixture whose lifecycle depends on an external
+// build step. The dist file MUST exist for the resolver to reach it, so a preflight below
+// fails loudly with `run \`npm run build:packages\` first` when the target is missing.
+const PROBE_HOST_PACKAGE_SRC = "packages/keiko-security/src";
+const PROBE_FILE_BASENAME = "__arch_check_negative_bare_specifier_probe__.ts";
+const PROBE_TARGET_SPECIFIER = "@oscharko-dev/keiko-harness";
+const PROBE_EXPECTED_RULE = "adr-0019-direction-2-security-only-contracts";
+const PROBE_EXPECTED_RESOLVED = "packages/keiko-harness/dist/index.js";
+const REQUIRED_DIST_ENTRYPOINTS = [PROBE_EXPECTED_RESOLVED];
 // Superset of the production `includeOnly`: fixtures + relative-path targets + src +
-// packages/<name>/(src|dist). The `dist` suffix landed with Wave-2 audit #2627 so the
-// bare-specifier variant fixture (which resolves through the workspace `exports` map into
-// `packages/keiko-<name>/dist/index.js`) stays visible to the fixture scan.
+// packages/<name>/(src|dist). The `dist` suffix mirrors the production widening from
+// Wave-2 audit #2627 so the bare-specifier visibility probe (run separately below) has
+// the same graph shape available to the fixture scan.
 const INCLUDE_ONLY_OVERRIDE =
   "^(tests/architecture/fixtures|\\.\\./|src|packages/[^/]+/(src|dist))";
 
@@ -56,10 +63,7 @@ const INCLUDE_ONLY_OVERRIDE =
 const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0128-connectors-only-contracts-security": 1,
   "adr-0019-direction-1-contracts-leaf": 1,
-  // Two fires: the original relative-path fixture and the bare-specifier variant that
-  // proves cross-package `@oscharko-dev/keiko-<name>` imports are visible to the graph
-  // through `packages/<name>/dist/index.js` (Wave-2 audit #2627).
-  "adr-0019-direction-2-security-only-contracts": 2,
+  "adr-0019-direction-2-security-only-contracts": 1,
   "adr-0019-direction-3a-model-gateway-only-contracts-security": 1,
   "adr-0019-direction-3b-workspace-only-contracts-security": 1,
   "adr-0019-direction-3c-tools-only-contracts-security-workspace": 1,
@@ -100,10 +104,11 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0112-provider-runtime-no-internal-bypass": 3,
 };
 
-// Fail loudly if a required dist entrypoint is missing. Fixture edges that resolve through
-// the workspace `exports` map (bare-specifier variant, #2627) need the build output to exist
-// or dep-cruiser sees a broken import and the corresponding rule under-fires. Running
-// `npm run build:packages` produces every dist target enumerated above.
+// Fail loudly if a required dist entrypoint is missing. The bare-specifier visibility probe
+// (Wave-2 audit #2627) needs the workspace `exports` map to resolve `@oscharko-dev/keiko-*`
+// specifiers into `packages/keiko-<name>/dist/index.js`; without dist the resolver drops the
+// edge and the probe assertion silently under-fires. Running `npm run build:packages` produces
+// every dist target enumerated above.
 const missingDist = REQUIRED_DIST_ENTRYPOINTS.filter(
   (entrypoint) => !existsSync(join(process.cwd(), entrypoint)),
 );
@@ -116,6 +121,69 @@ if (missingDist.length > 0) {
   }
   process.exit(1);
 }
+
+/**
+ * Run the bare-specifier visibility probe (Wave-2 audit #2627). Writes a temporary source file
+ * under a keiko-security src path, imports `@oscharko-dev/keiko-harness` by its workspace
+ * package name, runs dependency-cruiser, and verifies rule 2 fires against
+ * `packages/keiko-harness/dist/index.js` — the exact class of edge the audit found the earlier
+ * `includeOnly` regex blind to. The probe owns its file lifecycle end-to-end so no persistent
+ * fixture (and no external-mutable-state coupling) enters the tree; only the workspace-package
+ * export map's dist target is required, which the preflight above already checked.
+ *
+ * @returns {void}
+ */
+function runBareSpecifierVisibilityProbe() {
+  const probePath = join(process.cwd(), PROBE_HOST_PACKAGE_SRC, PROBE_FILE_BASENAME);
+  const probeSource =
+    "// Bare-specifier visibility probe written by scripts/arch-check-negative.mjs (Wave-2 audit\n" +
+    "// #2627). This file is created, verified, and removed within a single run — it MUST NOT be\n" +
+    "// committed. If you find it in a diff, the probe crashed before cleanup; delete it and rerun\n" +
+    "// `npm run arch:check:negative` to reproduce the failure.\n" +
+    `import { violationTarget } from "${PROBE_TARGET_SPECIFIER}";\n` +
+    "export const bareSpecifierVisibilityProbe: unknown = violationTarget;\n";
+  writeFileSync(probePath, probeSource, "utf8");
+  try {
+    const probeResult = spawnSync(
+      process.execPath,
+      [
+        join(process.cwd(), "node_modules", "dependency-cruiser", "bin", "dependency-cruise.mjs"),
+        "--validate",
+        RULES_FILE,
+        probePath,
+      ],
+      { encoding: "utf8" },
+    );
+    if (probeResult.status === null) {
+      console.error(
+        "arch-check-negative: FAIL — bare-specifier probe failed to spawn depcruise:",
+        probeResult.error,
+      );
+      process.exit(1);
+    }
+    // Rule 2's `from.path` regex already covers `packages/keiko-security/src/` so the probe
+    // file's location alone is enough to activate the rule; the assertion below is on the
+    // resolved destination — the whole point of the visibility restoration.
+    const expected = `${PROBE_EXPECTED_RULE}: ${probePath.slice(process.cwd().length + 1)} → ${PROBE_EXPECTED_RESOLVED}`;
+    if (probeResult.status === 0 || !probeResult.stdout.includes(expected)) {
+      console.error(
+        "arch-check-negative: FAIL — bare-specifier visibility probe did not fire the expected rule.",
+      );
+      console.error(`  Expected substring: ${expected}`);
+      console.error("  Stdout:");
+      console.error(probeResult.stdout);
+      console.error("  Stderr:");
+      console.error(probeResult.stderr);
+      process.exit(1);
+    }
+  } finally {
+    // Unconditional cleanup: the probe file must not survive the run whether the assertion
+    // passed, failed, or the script crashed on an unrelated error.
+    rmSync(probePath, { force: true });
+  }
+}
+
+runBareSpecifierVisibilityProbe();
 
 // Calling the dependency-cruiser bin through Node keeps the gate hermetic without
 // going through platform-specific npm/npx shell shims.

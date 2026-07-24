@@ -69,19 +69,22 @@ module.exports = {
       name: "adr-0019-direction-2-security-only-contracts",
       comment:
         "ADR-0019 direction rule 2: keiko-security may only depend on keiko-contracts. Imports " +
-        "from any other @oscharko-dev/keiko-* package are forbidden. Also fires on two negative-" +
-        "test fixtures: `tests/architecture/fixtures/security/` proves the relative-path " +
-        "variant, `tests/architecture/fixtures/security-bare-specifier/` proves the bare-" +
-        "specifier variant that resolves through the workspace `exports` map into " +
-        "`packages/keiko-<name>/dist/index.js` (Wave-2 audit #2627: the includeOnly regex " +
-        "used to drop that destination and made real production bare-specifier violations " +
-        "invisible).",
+        "from any other @oscharko-dev/keiko-* package are forbidden. Also fires on the negative-" +
+        "test fixture under tests/architecture/fixtures/security/ so the gate can be proven live " +
+        "by scripts/arch-check-negative.mjs. The bare-specifier-visibility invariant restored by " +
+        'Wave-2 audit #2627 (real `import from "@oscharko-dev/keiko-<other>"` in production ' +
+        "source resolves through the workspace `exports` map into `packages/<name>/dist/index.js` " +
+        "and MUST be visible to this rule) is proven at runtime by " +
+        "`scripts/arch-check-negative.mjs`'s bare-specifier visibility probe rather than by a " +
+        "persistent fixture — the probe writes a temporary source file under a keiko-security " +
+        "src path, verifies THIS rule fires against `packages/keiko-harness/dist/index.js`, and " +
+        "unconditionally cleans up. Persistent fixture form was avoided because compliance rule " +
+        "2171498 (Qodo) treats a checked-in fixture that depends on generated dist as an " +
+        "execution-order coupling; the runtime probe owns its lifecycle end-to-end and is not " +
+        "a fixture.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-security/src/|" +
-          "tests/architecture/fixtures/security/|" +
-          "tests/architecture/fixtures/security-bare-specifier/)",
+        path: "^(packages/keiko-security/src/|" + "tests/architecture/fixtures/security/)",
       },
       to: {
         path:
