@@ -6,11 +6,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.header.summary":
     "Start and supervise one governed coding run. Authority and outcomes remain server-owned.",
   "codingWorkbench.mode.eyebrow": "Autonomy",
-  "codingWorkbench.mode.title": "Select a requested mode",
-  "codingWorkbench.mode.group": "Coding autonomy mode",
-  "codingWorkbench.mode.capped": "Capped by deployment",
-  "codingWorkbench.mode.boundary":
-    "Server effective mode: {effectiveMode}. Deployment ceiling: {deploymentCeiling}.",
   "codingWorkbench.mode.governed-assist.label": "Ask for approval",
   "codingWorkbench.mode.governed-assist.description":
     "Reads and planning proceed; workspace edits, commands, external-file access, and internet use require approval. Delivery remains separately human-approved.",
@@ -20,9 +15,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.mode.autonomous-delivery.label": "Full access",
   "codingWorkbench.mode.autonomous-delivery.description":
     "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
-  "codingWorkbench.mode.locked": "Mode changes are only accepted while the run is idle or paused.",
-  "codingWorkbench.mode.wideningRejected":
-    "The server rejected this change: widening authority requires stopping the run first.",
   "codingWorkbench.task.eyebrow": "Task",
   "codingWorkbench.task.title": "Describe the bounded coding task",
   "codingWorkbench.task.instructions": "Task instructions",

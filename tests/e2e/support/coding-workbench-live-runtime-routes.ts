@@ -6,11 +6,13 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  resolveEffectiveCodingWorkbenchMode,
   validateCodingWorkbenchCodexAuthSetupRequest,
   validateCodingWorkbenchRuntimeReadiness,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeReadiness,
   type CodingWorkbenchValidationResult,
+  type MemoryAutonomyPolicyWire,
 } from "@oscharko-dev/keiko-contracts";
 import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.js";
 import {
@@ -33,13 +35,36 @@ type RuntimeOptions = Required<
   >
 >;
 
+// The clamp is the product invariant under test, so the fixture must not re-implement it: it uses
+// the same contracts resolver the server does. A local copy could drift and let a projection bug
+// pass as a server-capped result (#1991).
 function effectiveMode(
   requestedMode: CodingWorkbenchMode,
   ceiling: CodingWorkbenchMode,
 ): CodingWorkbenchMode {
-  if (requestedMode === "autonomous-delivery" && ceiling !== "autonomous-delivery") return ceiling;
-  if (requestedMode === "supervised-coding" && ceiling === "governed-assist") return ceiling;
-  return requestedMode;
+  return resolveEffectiveCodingWorkbenchMode(requestedMode, ceiling);
+}
+
+// The product-wide autonomy mode now lives in Settings and reaches the Workbench through this
+// policy channel (#2644), so the fixture owns it as server state: a persisted request is stored
+// verbatim and the effective mode is always re-derived against the deployment ceiling.
+async function handleAutonomyPolicy(
+  route: Route,
+  ceiling: CodingWorkbenchMode,
+  state: { requestedMode: CodingWorkbenchMode },
+): Promise<void> {
+  if (route.request().method() === "PUT") {
+    const body: unknown = JSON.parse(route.request().postData() ?? "{}");
+    const requested = (body as { requestedMode?: CodingWorkbenchMode }).requestedMode;
+    expect(requested).toBeDefined();
+    if (requested !== undefined) state.requestedMode = requested;
+  }
+  const policy: MemoryAutonomyPolicyWire = {
+    requestedMode: state.requestedMode,
+    effectiveMode: effectiveMode(state.requestedMode, ceiling),
+    deploymentCeiling: ceiling,
+  };
+  await fulfillJson(route, policy);
 }
 
 async function handleFoundationRoute(
@@ -262,8 +287,15 @@ export async function installRuntimeRoutes(
     runtimeAvailable: options.runtimeAvailable ?? true,
   };
   const authStatus = options.authStatus ?? "connected";
+  // #2386 fixed the product default at the supervised middle mode; the policy channel starts there
+  // so the Workbench sees the same baseline it had before the modes moved into Settings.
+  const autonomy = { requestedMode: options.requestedMode ?? "supervised-coding" };
   await page.route("**/api/**", async (route) => {
     const { pathname, searchParams } = new URL(route.request().url());
+    if (pathname === "/api/memory/autonomy-policy") {
+      await handleAutonomyPolicy(route, runtimeOptions.deploymentCeiling, autonomy);
+      return;
+    }
     if (await handleFoundationRoute(route, pathname, authStatus)) return;
     if (await handleCodexSetupRoute(route, pathname, fixture)) return;
     if (route.request().method() === "GET") {

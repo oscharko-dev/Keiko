@@ -179,6 +179,7 @@ function WorkbenchColumns({
   onDecision,
   research,
 }: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t" | "workbenchLabel">): ReactNode {
+  const t = useCodingWorkbenchTranslate();
   // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
   // hand-bound repository can be bound → verified → started entirely from the UI (#2476). It no longer
   // hides behind runtime availability: on an unactivated install it stays reachable and honestly
@@ -236,7 +237,13 @@ function WorkbenchColumns({
   }
   return (
     <div className={styles.session}>
-      <div className={styles.sessionStream}>
+      <div
+        className={styles.sessionStream}
+        role="log"
+        aria-label={t("codingWorkbench.readiness.eventStream.label")}
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
+        tabIndex={0}
+      >
         <PermissionPrompt state={state} research={research} onDecision={onDecision} />
         <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
         <ResearchGrantChip
@@ -266,6 +273,17 @@ function WorkbenchColumns({
   );
 }
 
+// The bound worktree's health belongs next to its identity: a drifted or unreported worktree must
+// stay visible in the session context bar rather than only in the readiness resources (#1990).
+function workspaceContextValue(
+  workspace: CodingWorkbenchRuntimeState["workspace"]["value"],
+  t: CodingWorkbenchTranslate,
+): string {
+  if (workspace === null) return t("codingWorkbench.readiness.workspace.none");
+  const identity = `${workspace.taskId} · ${workspace.taskBranch}`;
+  return workspace.health === undefined ? identity : `${identity} · ${workspace.health}`;
+}
+
 function SessionContextBar({
   state,
   activeWorkspace,
@@ -278,10 +296,7 @@ function SessionContextBar({
   const source = state.source.value;
   const effectiveMode = state.runtime.value?.effectiveMode ?? state.requestedMode;
   const repository = activeWorkspace.activeBinding?.activeRoot;
-  const workspaceValue =
-    workspace === null
-      ? t("codingWorkbench.readiness.workspace.none")
-      : `${workspace.taskId} · ${workspace.taskBranch}`;
+  const workspaceValue = workspaceContextValue(workspace, t);
   const sourceValue =
     source === null
       ? t("codingWorkbench.readiness.modelSource.select")

@@ -53,6 +53,48 @@ describe("AutonomySettings", () => {
     );
   });
 
+  it("marks every mode above the deployment ceiling as capped before the choice is made", (): void => {
+    autonomyPolicyMock.mockReturnValue({
+      requestedMode: "governed-assist",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      pending: false,
+      error: null,
+      change,
+    });
+
+    render(<AutonomySettings />);
+
+    expect(document.querySelectorAll('[data-capped="true"]')).toHaveLength(2);
+    for (const mode of ["supervised-coding", "autonomous-delivery"]) {
+      expect(document.querySelector(`[data-mode="${mode}"]`)).toHaveAttribute(
+        "data-capped",
+        "true",
+      );
+    }
+    expect(document.querySelector('[data-mode="governed-assist"]')).not.toHaveAttribute(
+      "data-capped",
+      "true",
+    );
+    expect(screen.getAllByText("Capped by this deployment")).toHaveLength(2);
+  });
+
+  it("caps nothing while the server reports no deployment ceiling", (): void => {
+    autonomyPolicyMock.mockReturnValue({
+      requestedMode: "supervised-coding",
+      effectiveMode: "supervised-coding",
+      deploymentCeiling: null,
+      pending: false,
+      error: null,
+      change,
+    });
+
+    render(<AutonomySettings />);
+
+    expect(document.querySelectorAll('[data-capped="true"]')).toHaveLength(0);
+    expect(screen.queryByText("Capped by this deployment")).not.toBeInTheDocument();
+  });
+
   it("omits effective status while the server policy has no effective mode", (): void => {
     autonomyPolicyMock.mockReturnValue({
       requestedMode: "supervised-coding",

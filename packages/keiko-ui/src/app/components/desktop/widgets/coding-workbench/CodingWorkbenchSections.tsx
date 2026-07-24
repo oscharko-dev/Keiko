@@ -9,7 +9,6 @@ import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-st
 import { activeRunState, runStateLabel } from "./codingWorkbenchLabels";
 export { PanelTitle } from "./CodingWorkbenchPanelTitle";
 export { Timeline } from "./CodingWorkbenchTimeline";
-import { PanelTitle } from "./CodingWorkbenchPanelTitle";
 import { Icons } from "../../Icons";
 import styles from "./CodingWorkbenchWindow.module.css";
 

@@ -1095,6 +1095,10 @@
     "en": "Default operating mode",
     "de": "Standard-Arbeitsmodus"
   },
+  "settings.autonomy.mode.capped": {
+    "en": "Capped by this deployment",
+    "de": "Durch diese Bereitstellung begrenzt"
+  },
   "settings.autonomy.mode.governedAssist.label": {
     "en": "Ask for approval",
     "de": "Um Genehmigung bitten"

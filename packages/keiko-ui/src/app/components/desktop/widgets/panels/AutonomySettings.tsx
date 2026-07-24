@@ -1,7 +1,11 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
-import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_WORKBENCH_MODES,
+  compareCodingWorkbenchModeAuthority,
+  type CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
 import styles from "./AutonomySettings.module.css";
@@ -25,11 +29,25 @@ function modeLabel(mode: CodingWorkbenchMode, t: I18nTranslate): string {
   return t(MODE_KEYS[mode].label);
 }
 
+// A deployment ceiling is an authority bound, not a preference: an option above it can be requested
+// but never takes effect. Mark it at the option itself so the bound is visible before the choice,
+// rather than only as an after-the-fact clamp notice. The ordering comes from the contracts helper
+// so this surface cannot fork the authority order locally.
+function cappedByCeiling(
+  mode: CodingWorkbenchMode,
+  deploymentCeiling: CodingWorkbenchMode | null,
+): boolean {
+  return (
+    deploymentCeiling !== null && compareCodingWorkbenchModeAuthority(mode, deploymentCeiling) > 0
+  );
+}
+
 function ModeOption({
   groupId,
   mode,
   selected,
   disabled,
+  capped,
   onChange,
   t,
 }: {
@@ -37,6 +55,7 @@ function ModeOption({
   readonly mode: CodingWorkbenchMode;
   readonly selected: boolean;
   readonly disabled: boolean;
+  readonly capped: boolean;
   readonly onChange: (mode: CodingWorkbenchMode) => void;
   readonly t: I18nTranslate;
 }): ReactNode {
@@ -46,6 +65,7 @@ function ModeOption({
     <label
       className={styles.option}
       data-selected={selected}
+      data-capped={capped}
       data-mode={mode}
       htmlFor={id}
       aria-label={t(copy.label)}
@@ -62,6 +82,9 @@ function ModeOption({
       <span className={styles.optionText}>
         <strong>{t(copy.label)}</strong>
         <span>{t(copy.description)}</span>
+        {capped ? (
+          <span className={styles.capped}>{t("settings.autonomy.mode.capped")}</span>
+        ) : null}
       </span>
     </label>
   );
@@ -97,6 +120,7 @@ export function AutonomySettings(): ReactNode {
               mode={mode}
               selected={policy.requestedMode === mode}
               disabled={policy.pending}
+              capped={cappedByCeiling(mode, policy.deploymentCeiling)}
               onChange={policy.change}
               t={t}
             />
@@ -104,11 +128,11 @@ export function AutonomySettings(): ReactNode {
         </div>
       </fieldset>
       {clamped && policy.effectiveMode !== null ? (
-        <p className={styles.notice} role="status">
+        <output className={styles.notice}>
           {t("settings.autonomy.clamped", {
             mode: modeLabel(policy.effectiveMode, t),
           })}
-        </p>
+        </output>
       ) : null}
       {policy.error === null ? null : (
         <p className={styles.error} role="alert">

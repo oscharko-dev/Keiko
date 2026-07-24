@@ -8,11 +8,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.header.summary":
     "Starte und beaufsichtige einen gesteuerten Coding-Lauf. Autorität und Ergebnisse bleiben serverseitig.",
   "codingWorkbench.mode.eyebrow": "Autonomie",
-  "codingWorkbench.mode.title": "Angeforderten Modus auswählen",
-  "codingWorkbench.mode.group": "Coding-Autonomiemodus",
-  "codingWorkbench.mode.capped": "Durch Bereitstellung begrenzt",
-  "codingWorkbench.mode.boundary":
-    "Serverseitig wirksamer Modus: {effectiveMode}. Bereitstellungsgrenze: {deploymentCeiling}.",
   "codingWorkbench.mode.governed-assist.label": "Um Genehmigung bitten",
   "codingWorkbench.mode.governed-assist.description":
     "Lese- und Planungsvorgänge werden ausgeführt; Bearbeitungen im Arbeitsbereich, Befehle, der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
@@ -22,10 +17,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.mode.autonomous-delivery.label": "Vollzugriff",
   "codingWorkbench.mode.autonomous-delivery.description":
     "Datei- und Internetvorgänge innerhalb des validierten Authority Envelope werden ohne Genehmigung pro Aktion ausgeführt. Die Auslieferung bleibt separat menschlich genehmigt.",
-  "codingWorkbench.mode.locked":
-    "Moduswechsel werden nur akzeptiert, während der Lauf im Leerlauf oder pausiert ist.",
-  "codingWorkbench.mode.wideningRejected":
-    "Der Server hat diese Änderung abgelehnt: Eine Erweiterung der Berechtigung erfordert zuerst das Stoppen des Laufs.",
   "codingWorkbench.task.eyebrow": "Aufgabe",
   "codingWorkbench.task.title": "Begrenzte Coding-Aufgabe beschreiben",
   "codingWorkbench.task.instructions": "Aufgabenanweisungen",
