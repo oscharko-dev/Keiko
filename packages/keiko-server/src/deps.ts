@@ -1575,6 +1575,19 @@ function resolveManagedWorktreeRoot(uiDbPath: string): string {
   return join(dirname(uiDbPath), "task-workspaces");
 }
 
+function composedManagedWorktreeRoot(
+  provisioning: WorkspaceProvisioningService | undefined,
+  resolvedUiDbPath: string,
+): string | undefined {
+  if (provisioning === undefined) return undefined;
+  const managedRoot = resolveManagedWorktreeRoot(resolvedUiDbPath);
+  // Canonical managed-root classification is a shared Files/Git trust boundary even before the
+  // first Coding run. Materialize the directory with the persistence services so an idle/fresh
+  // installation can classify ordinary roots without treating an absent boundary as authority.
+  materializedManagedRoot(managedRoot);
+  return managedRoot;
+}
+
 function buildWorkspaceProvisioning(
   options: BuildHandlerDepsOptions,
   store: WorkspaceInstanceStore | undefined,
@@ -2601,16 +2614,17 @@ function buildPersistenceBundle(
     evidenceStore,
     redactString,
   );
+  const managedTaskWorkspaceRoot = composedManagedWorktreeRoot(
+    services.workspaceProvisioning,
+    resolvedUiDbPath,
+  );
   return {
     uiStore: store,
     dispose,
     relationship,
     codingRuntimeSnapshotStore,
     ...services,
-    managedTaskWorkspaceRoot:
-      services.workspaceProvisioning === undefined
-        ? undefined
-        : resolveManagedWorktreeRoot(resolvedUiDbPath),
+    managedTaskWorkspaceRoot,
     preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
   };
 }

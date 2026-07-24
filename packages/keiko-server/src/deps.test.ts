@@ -335,6 +335,20 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.managedLspControl).toBeDefined();
   }, 15000);
 
+  it("materializes the managed root before content-bearing routes classify ordinary roots", async () => {
+    const stateDir = tmp("managed-root-composition-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("managed-root-evidence-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+    });
+
+    expect(deps.managedTaskWorkspaceRoot).toBe(join(stateDir, "task-workspaces"));
+    expect(existsSync(join(stateDir, "task-workspaces"))).toBe(true);
+    await deps.dispose?.();
+  });
+
   it("constructs and composes the real fail-closed debug activation control (#2347)", async () => {
     const store = createInMemoryUiStore();
     const root = tmp("debug-activation-workspace-");
