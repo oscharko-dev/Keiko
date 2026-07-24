@@ -112,7 +112,7 @@ describe("request cancellation", () => {
     cancellation.dispose();
   });
 
-  it("does not treat a fully consumed request as cancelled after Node destroys the message", () => {
+  it("does not treat a fully consumed request as cancelled after Node destroys the message", (): void => {
     const fixture = context();
     fixture.req.complete = true;
     fixture.req.destroyed = true;
