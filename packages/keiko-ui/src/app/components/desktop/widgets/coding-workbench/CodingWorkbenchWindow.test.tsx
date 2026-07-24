@@ -258,6 +258,58 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/until the coding runtime is active/u);
   });
 
+  it("states the unqualified runtime once while the bootstrap setup section owns that message", (): void => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    renderWorkbench({
+      ...initial,
+      canStart: false,
+      runtime: {
+        status: "ready",
+        error: null,
+        value: {
+          schemaVersion: "1",
+          requestedMode: "governed-assist",
+          deploymentCeiling: "supervised-coding",
+          effectiveMode: "governed-assist",
+          runtimeAvailable: false,
+          runtimeUnavailableReason: "runtime-unqualified",
+        },
+      },
+    });
+
+    // Setup renders the sentence itself; a second live-region copy would announce it twice.
+    expect(screen.getAllByText(/until the coding runtime is active/u)).toHaveLength(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps a recoverable refresh failure ahead of the standing runtime condition", (): void => {
+    const base = liveState();
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "governed-assist",
+            deploymentCeiling: "supervised-coding",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: false,
+          },
+        },
+        workspace: {
+          ...base.workspace,
+          status: "error",
+          error: { code: "TASK_WORKSPACE_UNAVAILABLE", message: "unavailable", retryable: true },
+        },
+      }),
+    );
+
+    // One alert is shown at a time: the retryable failure must not be swallowed by the condition.
+    expect(screen.getByRole("alert")).toHaveTextContent("Workspace could not be refreshed.");
+  });
+
   it("keeps a drifted worktree visible in the session context", (): void => {
     renderWorkbench(
       liveState({

@@ -72,7 +72,7 @@ export function CodingWorkbenchWindow(): ReactNode {
   const workbenchLabel = useTranslate()("rail.coding");
   const pendingPermission = state.run.value?.pendingPermission;
   const runState = state.run.value?.state;
-  const alert = visibleAlert(state, t);
+  const alert = visibleAlert(state, t, bootstrapSetupVisible(state, activeWorkspace));
 
   useEffect(() => {
     if (
@@ -185,7 +185,7 @@ function WorkbenchColumns({
   // hides behind runtime availability: on an unactivated install it stays reachable and honestly
   // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
   // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
-  const showSetup = activeWorkspace.activeBinding === null && state.workspace.value === null;
+  const showSetup = bootstrapSetupVisible(state, activeWorkspace);
   const runtimeUnavailable =
     state.runtime.status === "ready" && state.runtime.value?.runtimeAvailable === false;
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
@@ -271,6 +271,15 @@ function WorkbenchColumns({
       </div>
     </div>
   );
+}
+
+// Single source for "the bootstrap Code setup section is on screen". Two copies of this predicate
+// would let the live alert and the setup section disagree about who states a condition.
+function bootstrapSetupVisible(
+  state: CodingWorkbenchRuntimeState,
+  activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"],
+): boolean {
+  return activeWorkspace.activeBinding === null && state.workspace.value === null;
 }
 
 // The bound worktree's health belongs next to its identity: a drifted worktree must stay visible in
