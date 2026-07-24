@@ -6,7 +6,7 @@ import {
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
-import { activeRunState, cx, runStateLabel } from "./codingWorkbenchLabels";
+import { activeRunState, runStateLabel } from "./codingWorkbenchLabels";
 export { PanelTitle } from "./CodingWorkbenchPanelTitle";
 export { Timeline } from "./CodingWorkbenchTimeline";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
