@@ -172,6 +172,17 @@ async function isResolvedManagedRoot(
   return containsPath(resolvedManagedRoot, resolvedTarget);
 }
 
+async function lacksManagedRootReadAuthority(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  resolvedTarget: string,
+): Promise<boolean> {
+  return (
+    (await isResolvedManagedRoot(deps.managedTaskWorkspaceRoot, resolvedTarget)) &&
+    resolveAppSessionReadAuthority(deps, ctx.req) === undefined
+  );
+}
+
 export async function resolveRepository(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -189,17 +200,16 @@ export async function resolveRepository(
   ) {
     return genericUnavailable(requestedRoot ?? "", "unknown");
   }
-  const selectedRoot = await resolveRequestRoot(ctx, deps, requestedRoot);
+  const selectedRoot = await resolveRequestRoot(ctx, deps, requestedRoot, {
+    managedRootAuthority: "defer-to-caller",
+  });
   // Issue #2482 / ADR-0141 W1.9: any generic Git read whose RESOLVED root is inside Keiko's
   // managed task-worktree root requires the launcher-attested app session. Classifying after
   // resolveRoot closes trailing-separator, `.`-segment, and outside-symlink aliases of a managed
   // worktree. An unpaired, forged, revoked, or expired session receives the same schema-valid,
   // content-free unavailable projection as an unavailable repository; ordinary roots retain the
   // existing generic Git behavior. This is uniform content posture, not an OS read-authority claim.
-  if (
-    (await isResolvedManagedRoot(deps.managedTaskWorkspaceRoot, selectedRoot.realRoot)) &&
-    resolveAppSessionReadAuthority(deps, ctx.req) === undefined
-  ) {
+  if (await lacksManagedRootReadAuthority(deps, ctx, selectedRoot.realRoot)) {
     return genericUnavailable(selectedRoot.root, "unknown");
   }
   const membership = await resolveGitMembership(selectedRoot.realRoot, options.runner, {

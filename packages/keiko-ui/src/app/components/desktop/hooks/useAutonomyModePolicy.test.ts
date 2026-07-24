@@ -2,7 +2,10 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode, MemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
 
-import { resetConversationMemorySettingsForTests } from "./memorySettings";
+import {
+  currentConversationMemoryMode,
+  resetConversationMemorySettingsForTests,
+} from "./memorySettings";
 import { useAutonomyModePolicy, type AutonomyModePolicy } from "./useAutonomyModePolicy";
 
 function policy(
@@ -91,5 +94,24 @@ describe("useAutonomyModePolicy", (): void => {
 
     expect(view.result.current.requestedMode).toBe("autonomous-delivery");
     expect(view.result.current.effectiveMode).toBe("autonomous-delivery");
+  });
+
+  it("does not publish a persistence result after unmount", async (): Promise<void> => {
+    const persistence = deferred<MemoryAutonomyPolicyWire>();
+    const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
+      Promise.resolve(policy("supervised-coding")),
+    );
+    const persist = vi.fn((): Promise<MemoryAutonomyPolicyWire> => persistence.promise);
+    const view = renderHook((): AutonomyModePolicy => useAutonomyModePolicy({ load, persist }));
+    await waitFor((): void => expect(view.result.current.pending).toBe(false));
+
+    act((): void => view.result.current.change("autonomous-delivery"));
+    view.unmount();
+    await act(async (): Promise<void> => {
+      persistence.resolve(policy("autonomous-delivery"));
+      await persistence.promise;
+    });
+
+    expect(currentConversationMemoryMode()).toBe("supervised-coding");
   });
 });

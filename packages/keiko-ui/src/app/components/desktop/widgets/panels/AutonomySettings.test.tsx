@@ -33,6 +33,7 @@ describe("AutonomySettings", () => {
     await user.click(screen.getByRole("radio", { name: "Full access" }));
 
     expect(change).toHaveBeenCalledWith("autonomous-delivery");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("shows the server-effective clamp without changing the requested selection", () => {
@@ -50,5 +51,57 @@ describe("AutonomySettings", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "This deployment currently limits the effective mode to Supervised workspace.",
     );
+  });
+
+  it("omits effective status while the server policy has no effective mode", (): void => {
+    autonomyPolicyMock.mockReturnValue({
+      requestedMode: "supervised-coding",
+      effectiveMode: null,
+      deploymentCeiling: null,
+      pending: false,
+      error: null,
+      change,
+    });
+
+    render(<AutonomySettings />);
+
+    expect(screen.queryByText(/^Effective:/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Supervised workspace" })).toBeEnabled();
+  });
+
+  it.each([
+    ["hydrate", "The current autonomy policy could not be loaded. Keiko remains fail-closed."],
+    [
+      "persist",
+      "The autonomy mode could not be saved. The previous server-confirmed mode remains active.",
+    ],
+  ] as const)("renders the server policy %s failure", (error, message): void => {
+    autonomyPolicyMock.mockReturnValue({
+      requestedMode: "supervised-coding",
+      effectiveMode: "supervised-coding",
+      deploymentCeiling: "autonomous-delivery",
+      pending: false,
+      error,
+      change,
+    });
+
+    render(<AutonomySettings />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+  });
+
+  it("locks all mode controls while a policy request is pending", (): void => {
+    autonomyPolicyMock.mockReturnValue({
+      requestedMode: "supervised-coding",
+      effectiveMode: "supervised-coding",
+      deploymentCeiling: "autonomous-delivery",
+      pending: true,
+      error: null,
+      change,
+    });
+
+    render(<AutonomySettings />);
+
+    for (const control of screen.getAllByRole("radio")) expect(control).toBeDisabled();
   });
 });

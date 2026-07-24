@@ -197,6 +197,14 @@ export interface ResolvedProjectRoot {
   readonly realRoot: string;
 }
 
+export interface ResolveRequestRootOptions {
+  /**
+   * The caller owns the managed-root response projection after canonical classification. Git uses
+   * this to preserve ADR-0141 F5's content-free unavailable response instead of a Files 403.
+   */
+  readonly managedRootAuthority?: "authorize" | "defer-to-caller";
+}
+
 function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): boolean {
   const managedRoot = deps.managedTaskWorkspaceRoot;
   if (managedRoot === undefined || rootInput === null || !isAbsolute(rootInput)) return false;
@@ -209,7 +217,10 @@ async function resolvesInsideManagedRoot(deps: UiHandlerDeps, realRoot: string):
   try {
     return containsPath(await realpath(managedRoot), realRoot);
   } catch {
-    return false;
+    // This check separates ordinary roots from Keiko-owned managed worktrees. An unreadable or
+    // missing managed root is therefore an unknown authorization state, never proof that the
+    // candidate is outside it.
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
 }
 
@@ -223,13 +234,23 @@ export async function resolveRequestRoot(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   rootInput: string | null,
+  options: ResolveRequestRootOptions = {},
 ): Promise<ResolvedProjectRoot> {
+  const deferManagedAuthority = options.managedRootAuthority === "defer-to-caller";
   if (!requestedManagedRoot(deps, rootInput)) {
     const root = await resolveRoot(deps.store, rootInput, deps.redactor);
     if (!(await resolvesInsideManagedRoot(deps, root.realRoot))) return root;
+    if (deferManagedAuthority) return root;
     // An external symlink or registered-project alias must not turn a managed worktree into an
     // ordinary root. Only the canonical derived path can be re-proven against persisted identity.
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  if (deferManagedAuthority) {
+    const root = await resolveRoot(deps.store, rootInput, deps.redactor);
+    if (!(await resolvesInsideManagedRoot(deps, root.realRoot))) {
+      throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+    }
+    return root;
   }
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);

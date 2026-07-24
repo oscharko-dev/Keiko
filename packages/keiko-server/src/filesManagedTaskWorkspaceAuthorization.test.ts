@@ -91,7 +91,7 @@ function contentPath(path: string): string {
   return `/api/files/content?root=${encodeURIComponent(managedWorktree)}&path=${encodeURIComponent(path)}`;
 }
 
-beforeEach(async () => {
+beforeEach(async (): Promise<void> => {
   fixtureRoot = await mkdtemp(join(tmpdir(), "keiko-files-managed-auth-"));
   managedRoot = join(fixtureRoot, "managed", "task-workspaces");
   managedWorktree = deriveManagedWorktreePath({
@@ -125,13 +125,13 @@ beforeEach(async () => {
   dependencies = createDependencies();
 });
 
-afterEach(async () => {
+afterEach(async (): Promise<void> => {
   dependencies.store.close();
   await rm(fixtureRoot, { recursive: true, force: true });
 });
 
-describe("managed task-workspace Files authorization", () => {
-  it("denies existing and absent managed roots identically before consulting persistence", async () => {
+describe("managed task-workspace Files authorization", (): void => {
+  it("denies existing and absent managed roots identically before consulting persistence", async (): Promise<void> => {
     const getInstance = vi.fn<WorkspaceProvisioningService["getInstance"]>();
     dependencies.store.close();
     dependencies = createDependencies(getInstance);
@@ -149,7 +149,7 @@ describe("managed task-workspace Files authorization", () => {
     expect(getInstance).not.toHaveBeenCalled();
   });
 
-  it("denies an unpaired symlink alias that resolves into a managed workspace", async () => {
+  it("denies an unpaired symlink alias that resolves into a managed workspace", async (): Promise<void> => {
     const aliasRoot = join(fixtureRoot, "managed-workspace-alias");
     await symlink(managedWorktree, aliasRoot, "dir");
 
@@ -160,7 +160,18 @@ describe("managed task-workspace Files authorization", () => {
     expect(aliased).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
   });
 
-  it("allows a paired session to browse and read only its persisted managed workspace", async () => {
+  it("fails closed when managed-root containment cannot be canonicalized", async (): Promise<void> => {
+    dependencies = {
+      ...dependencies,
+      managedTaskWorkspaceRoot: join(fixtureRoot, "missing-managed-root"),
+    };
+
+    const result = await handleFilesTree(route(treePath(fixtureRoot)), dependencies);
+
+    expect(result).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
+  });
+
+  it("allows a paired session to browse and read only its persisted managed workspace", async (): Promise<void> => {
     const cookie = pair();
 
     const tree = await handleFilesTree(route(treePath(managedWorktree), cookie), dependencies);
@@ -182,7 +193,7 @@ describe("managed task-workspace Files authorization", () => {
     expect(deniedSecret).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
   });
 
-  it("denies a paired session when the workspace path is not backed by persisted identity", async () => {
+  it("denies a paired session when the workspace path is not backed by persisted identity", async (): Promise<void> => {
     const forged = deriveManagedWorktreePath({
       managedRoot,
       repositoryId: REPOSITORY_ID,

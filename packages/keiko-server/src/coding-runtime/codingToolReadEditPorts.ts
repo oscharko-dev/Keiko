@@ -8,6 +8,11 @@ import {
 import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { detectWorkspaceAt, discoverWithStats, isDenied } from "@oscharko-dev/keiko-workspace";
 
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
@@ -45,6 +50,7 @@ export interface CodingToolReadEditPortDeps {
   readonly resolveRepositoryReadContext?: (() => RuntimeProducerBinding) | undefined;
   readonly resolveWorkspaceRoot?: (() => string | undefined) | undefined;
   readonly requiresEditorReview?: (() => boolean) | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly mutationLeaseCoordinator?:
     Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard"> | undefined;
 }
@@ -111,9 +117,10 @@ function executeDiscoverSync(
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" } {
   const binding = discoveryPreflight(deps, signal, mutationGuard);
-  const workspaceRoot = deps.resolveWorkspaceRoot?.();
-  if (binding === false || workspaceRoot === undefined) return { status: "failed" };
+  if (binding === false) return { status: "failed" };
   try {
+    const workspaceRoot = deps.resolveWorkspaceRoot?.();
+    if (workspaceRoot === undefined) return { status: "failed" };
     const workspace = detectWorkspaceAt(workspaceRoot);
     const discovered = discoverWithStats(workspace, {
       maxDepth: 40,
@@ -129,9 +136,31 @@ function executeDiscoverSync(
       return { status: "failed" };
     }
     return { status: "completed", read: discoveryReadResult(text) };
-  } catch {
+  } catch (error) {
+    emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, request.actionId, error);
     return { status: "failed" };
   }
+}
+
+const SAFE_DISCOVERY_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/u;
+
+function emitDiscoveryFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  binding: RuntimeProducerBinding | undefined,
+  actionId: string,
+  error: unknown,
+): void {
+  const candidate = binding?.runId ?? actionId;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: SAFE_DISCOVERY_CORRELATION_ID.test(candidate)
+      ? candidate
+      : "coding-discovery-failure",
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.workspace-discovery",
+    source: "coding-tool-read-edit-ports.discover",
+    errorClass: contentFreeErrorClass(error),
+    message: "workspace-discovery-failed",
+  });
 }
 
 function discoveredPathText(paths: readonly string[], query: string, maxResults: number): string {

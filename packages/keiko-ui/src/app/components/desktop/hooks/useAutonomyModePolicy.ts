@@ -30,6 +30,14 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
   const [effectiveMode, setEffectiveMode] = useState<CodingWorkbenchMode | null>(null);
   const [deploymentCeiling, setDeploymentCeiling] = useState<CodingWorkbenchMode | null>(null);
   const sequence = useRef(0);
+  const mounted = useRef(true);
+
+  useEffect((): (() => void) => {
+    mounted.current = true;
+    return (): void => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect((): (() => void) => {
     let active = true;
@@ -63,16 +71,16 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
       setError(null);
       void persist(mode)
         .then((policy): void => {
-          if (request !== sequence.current) return;
+          if (!mounted.current || request !== sequence.current) return;
           setMemoryMode(policy.requestedMode);
           setEffectiveMode(policy.effectiveMode);
           setDeploymentCeiling(policy.deploymentCeiling);
         })
         .catch((): void => {
-          if (request === sequence.current) setError("persist");
+          if (mounted.current && request === sequence.current) setError("persist");
         })
         .finally((): void => {
-          if (request === sequence.current) setPending(false);
+          if (mounted.current && request === sequence.current) setPending(false);
         });
     },
     [persist, setMemoryMode],

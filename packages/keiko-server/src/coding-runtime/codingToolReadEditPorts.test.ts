@@ -13,6 +13,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
 
@@ -111,6 +112,47 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("emits a redacted, correlated diagnostic when workspace discovery throws", async (): Promise<void> => {
+    const records: ServerDiagnosticRecord[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-discover",
+        authorityRef: { runId: "run-discover", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+      resolveWorkspaceRoot: (): never => {
+        throw new Error(SENTINEL);
+      },
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+
+    const result = await ports.repositoryDiscover.execute(
+      {
+        action: "discover",
+        actionId: "discover-failure",
+        idempotencyKey: "discover-failure-key",
+        query: "*",
+        maxResults: 10,
+      },
+      undefined,
+      { check: (): true => true },
+    );
+
+    expect(result).toEqual({ status: "failed" });
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "discover-failure",
+        operation: "coding-runtime.workspace-discovery",
+        source: "coding-tool-read-edit-ports.discover",
+        errorClass: "Error",
+        message: "workspace-discovery-failed",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain(SENTINEL);
   });
 
   it("uses only SecureWorkspaceTextReadPort and exposes the sole bounded content-bearing read result", async () => {

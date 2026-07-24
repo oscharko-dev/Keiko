@@ -48,7 +48,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: currentColor;
+  background: currentcolor;
   box-shadow: 0 0 0 3px var(--surface-accent-subtle);
   content: "";
 }

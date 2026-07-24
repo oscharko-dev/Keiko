@@ -3385,6 +3385,16 @@ function runtimeWorkspaceAuthority(
   };
 }
 
+function runtimeStartConfirmationConsumer(
+  args: UiHandlerDepsAssemblyArgs,
+  activated: boolean,
+): CodingRuntimeStartConfirmationConsumer | undefined {
+  if (args.options.codingRuntimeStartConfirmationConsumer !== undefined) {
+    return args.options.codingRuntimeStartConfirmationConsumer;
+  }
+  return activated ? createAuthenticatedSessionStartConfirmationPlane() : undefined;
+}
+
 function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
   verificationRunner: PeripheralManagers["verificationRunner"],
@@ -3409,9 +3419,7 @@ function productionRuntimeResolver(
   if (!materializedManagedRoot(managedTaskWorkspaceRoot)) {
     return unqualifiedComposition("runtime-unqualified");
   }
-  const confirmationConsumer =
-    args.options.codingRuntimeStartConfirmationConsumer ??
-    (resolution.activated ? createAuthenticatedSessionStartConfirmationPlane() : undefined);
+  const confirmationConsumer = runtimeStartConfirmationConsumer(args, resolution.activated);
   const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
   const resolver = createProductionCodingRuntimeResolver({
     workspaceAuthority: runtimeWorkspaceAuthority(
@@ -3430,6 +3438,7 @@ function productionRuntimeResolver(
     // coding-safe PROVIDER model id the sidecar gateway maps the runtime's "coding" alias onto.
     // Resolved per call because the gateway config can change while the server is up.
     childModelId: (): string | undefined => codingSafeChildModelId(args.runtimeConfig),
+    ...(args.options.diagnostics ? { diagnostics: args.options.diagnostics } : {}),
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
   return qualifiedProductionRuntimeComposition(resolver, readiness, runtimeMutationLeaseBroker);
