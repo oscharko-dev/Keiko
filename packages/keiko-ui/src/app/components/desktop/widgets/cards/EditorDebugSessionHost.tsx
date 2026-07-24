@@ -355,6 +355,19 @@ export function EditorDebugSessionHost({
         : (snapshot.scopesByFrame.get(pausedFrame.frameRef)?.scopes ?? []),
     [pausedFrame, snapshot.scopesByFrame],
   );
+  // Flips false -> true exactly once per pause, the moment every scope's variables (if any) have
+  // arrived — not on each individual variable page. `host` depends on this boolean (not on
+  // `snapshot`/`pausedScopes` themselves) so the Monaco inline-value refresh it drives (keyed on the
+  // `debug` prop's identity in KeikoCodeEditor's useDebugRefresh) still reliably fires once the full
+  // paused-value set is resolvable, without re-notifying the parent on every one of the up-to-32
+  // intermediate loadVariables pages that caused the #2695 regression.
+  const variablesSettled = useMemo(
+    () =>
+      pausedScopes.every(
+        (scope) => scope.variableCount === 0 || snapshot.variablesByParent.has(scope.scopeRef),
+      ),
+    [pausedScopes, snapshot.variablesByParent],
+  );
   useEffect(() => {
     if (pausedSession !== null) void loadStack(pausedSession).catch(() => setActionError(true));
   }, [loadStack, pausedSession]);
@@ -412,6 +425,10 @@ export function EditorDebugSessionHost({
   );
   const host = useMemo<EditorSurfaceProps["debug"]>(() => {
     if (!enabled || fileId === undefined || activationRevision === undefined) return undefined;
+    // Deliberate recompute trigger, not a value this memo needs: see the note above
+    // `variablesSettled`. Referencing it here (rather than only in the deps array) keeps that
+    // intent honest for react-hooks/exhaustive-deps instead of suppressing the lint rule.
+    void variablesSettled;
     return {
       gutter: {
         ...(pausedFrame?.sourceFileId === fileId ? { pausedLine: pausedFrame.line } : {}),
@@ -500,6 +517,7 @@ export function EditorDebugSessionHost({
     session,
     start,
     t,
+    variablesSettled,
   ]);
 
   useEffect(() => {
