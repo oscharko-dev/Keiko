@@ -334,6 +334,92 @@ describe("EditorDebugSessionHost", () => {
     expect(actions.loadVariables).not.toHaveBeenCalledWith(expect.anything(), "scope-2");
   });
 
+  it("keeps the host projection stable across incremental DAP pages so onHostChange does not re-notify the host on every intermediate stack/scope/variable publish (#2695)", async () => {
+    // The store publishes a brand-new top-level snapshot object on every stack/scope/variable page
+    // that lands during one pause-settle sequence (dozens for a large paused frame), but `session`
+    // itself keeps the same reference throughout since none of these pages touch it. A host that
+    // recomputes (and re-notifies its parent) on every one of those pages forces the parent editor
+    // pane to fully re-render dozens of times per pause — the structural cost behind the D12
+    // stopped-projection p75 regression. `resolvePausedValues` must still see the freshest data.
+    const onOpenDebugPanel = vi.fn();
+    const onHostChange = vi.fn();
+    const onSessionStateChange = vi.fn();
+    const initial = snapshot();
+    vi.mocked(useDebugSession).mockReturnValue({ snapshot: initial, actions });
+    const { rerender } = render(
+      createElement(EditorDebugSessionHost, {
+        root: "/workspace",
+        workspaceId: "workspace-1",
+        activationRevision: 1,
+        enabled: true,
+        fileId: "src/program.ts",
+        onOpenDebugPanel,
+        onHostChange,
+        onSessionStateChange,
+      }),
+    );
+    await waitFor(() => expect(onHostChange).toHaveBeenCalled());
+    const callsAfterMount = onHostChange.mock.calls.length;
+    const hostAfterMount = onHostChange.mock.calls.at(-1)?.[0] as NonNullable<
+      EditorSurfaceProps["debug"]
+    >;
+
+    const scopeTwoVariables = initial.variablesByParent.get("scope-2");
+    if (scopeTwoVariables === undefined) throw new Error("Expected scope-2 fixture");
+    const nextVariablePage: DebugSessionSnapshot = {
+      ...initial,
+      sequence: initial.sequence + 1,
+      variablesByParent: new Map(initial.variablesByParent).set("scope-2", {
+        ...scopeTwoVariables,
+        nodes: [
+          ...scopeTwoVariables.nodes,
+          {
+            kind: "variable",
+            name: {
+              value: "extra",
+              truncated: false,
+              originalBytes: 5,
+              retainedBytes: 5,
+              omittedBytes: 0,
+            },
+            value: {
+              value: "9",
+              truncated: false,
+              originalBytes: 1,
+              retainedBytes: 1,
+              omittedBytes: 0,
+            },
+            presentation: "data",
+            children: [],
+            retainedCount: 0,
+            omittedCount: 0,
+            truncated: false,
+          },
+        ],
+      }),
+    };
+    vi.mocked(useDebugSession).mockReturnValue({ snapshot: nextVariablePage, actions });
+    rerender(
+      createElement(EditorDebugSessionHost, {
+        root: "/workspace",
+        workspaceId: "workspace-1",
+        activationRevision: 1,
+        enabled: true,
+        fileId: "src/program.ts",
+        onOpenDebugPanel,
+        onHostChange,
+        onSessionStateChange,
+      }),
+    );
+
+    expect(onHostChange).toHaveBeenCalledTimes(callsAfterMount);
+    const hostAfterVariablePage = onHostChange.mock.calls.at(-1)?.[0];
+    expect(hostAfterVariablePage).toBe(hostAfterMount);
+    expect(hostAfterVariablePage?.resolvePausedValues("keiko://program").values).toContainEqual(
+      expect.objectContaining({ value: "Arguments: extra: 9" }),
+    );
+  });
+
   it("sends only paused-state controls and blocks Pause while already paused", async () => {
     const rendered = renderHost();
     await waitFor(() => expect(rendered.host()).toBeDefined());

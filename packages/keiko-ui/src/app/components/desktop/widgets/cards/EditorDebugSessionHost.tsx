@@ -324,6 +324,16 @@ export function EditorDebugSessionHost({
 }: EditorDebugSessionHostProps): ReactNode {
   const t = useTranslate();
   const { snapshot, actions } = useDebugSession(workspaceId, enabled);
+  // GEN-PERF-EDITOR-009 (#2695): the store publishes a new `snapshot` object on every stack/scope/
+  // variable page that lands during a single pause-settle sequence (up to ~35 publishes for a large
+  // paused frame), but `session` itself is a stable reference across those publishes (the store only
+  // replaces it on a real session-state transition). `resolvePausedValues` still needs the LATEST
+  // stack/scope/variable data whenever it is actually called, so it reads this ref instead of closing
+  // over `snapshot` directly — keeping `host` referentially stable across the settle sequence so the
+  // host callback below does not re-render the whole editor pane on every intermediate DAP page.
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  const session = snapshot.session;
   const [contextMenu, setContextMenu] = useState<BreakpointContext | null>(null);
   const [textPrompt, setTextPrompt] = useState<TextPromptRequest | null>(null);
   const [actionError, setActionError] = useState(false);
@@ -332,7 +342,7 @@ export function EditorDebugSessionHost({
     setTextPrompt({ kind, line });
   }, []);
   const { loadScopes, loadStack, loadVariables } = actions;
-  const pausedSession = snapshot.session?.status === "paused" ? snapshot.session : null;
+  const pausedSession = session?.status === "paused" ? session : null;
   const pausedFrame = snapshot.stack?.frames[0];
   const pausedScopes = useMemo(
     () =>
@@ -398,7 +408,6 @@ export function EditorDebugSessionHost({
   );
   const host = useMemo<EditorSurfaceProps["debug"]>(() => {
     if (!enabled || fileId === undefined || activationRevision === undefined) return undefined;
-    const session = snapshot.session;
     return {
       gutter: {
         ...(pausedFrame?.sourceFileId === fileId ? { pausedLine: pausedFrame.line } : {}),
@@ -465,9 +474,11 @@ export function EditorDebugSessionHost({
       },
       // The bridge supplies its mounted Monaco URI on every refresh. This keeps the exact URI
       // comparison tied to the model that will receive decorations, while fileId still rejects
-      // paused frames from any other workspace file.
+      // paused frames from any other workspace file. Reads snapshotRef (not the memo's `snapshot`
+      // dependency) so it always reflects the latest stack/scope/variable page — see the
+      // GEN-PERF-EDITOR-009 note above `snapshotRef`.
       resolvePausedValues: (mountedDocumentUri) =>
-        derivePausedDebugValues(snapshot, fileId, mountedDocumentUri, t("pausedValues")),
+        derivePausedDebugValues(snapshotRef.current, fileId, mountedDocumentUri, t("pausedValues")),
     };
   }, [
     activationRevision,
@@ -482,7 +493,7 @@ export function EditorDebugSessionHost({
     perform,
     root,
     saveBreakpoint,
-    snapshot,
+    session,
     t,
   ]);
 
