@@ -188,6 +188,26 @@ function debugUrl(workspaceId: string, suffix: string): string {
   return `/api/editor/debug/${suffix}?workspaceId=${encodeURIComponent(workspaceId)}`;
 }
 
+// Queue `task` so it runs AFTER the browser has painted at least one frame — i.e. after any
+// pending React commit has landed and the compositor has flushed. Double-rAF is the portable
+// hook that guarantees this without depending on `requestIdleCallback` (which is unavailable
+// in Safari and unspecified about post-paint ordering). Consumers use this to defer session-
+// refresh network work off the stopped-projection critical path so it does not compete with
+// the projection commit measured by the ADR-0139 D1 p75 budget.
+function scheduleAfterPaint(task: () => void): void {
+  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+    // Non-browser (SSR/jsdom without RAF): fall back to a macrotask so the task still runs
+    // asynchronously and the synchronous caller returns immediately.
+    setTimeout(task, 0);
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      task();
+    });
+  });
+}
+
 function sharedBootstrap(workspaceId: string): Promise<void> {
   const pending = bootstrapRequests.get(workspaceId);
   if (pending !== undefined) return pending;
@@ -1303,11 +1323,22 @@ export function useDebugSession(
         }
         return;
       }
-      if (
-        event.kind === "session-started" ||
-        event.kind === "stopped" ||
-        event.kind === "continued"
-      ) {
+      // ADR-0139 D1: the D12 stopped-projection p75 budget is 200 ms — the time from a `stopped`
+      // DAP event being observed to the projection UI committing 128 stack frames + 32 variables
+      // + inline decorations. `refreshSession` fetches session metadata over the network and
+      // then setStates; before this deferral it ran on the same event tick as the projection
+      // render, and the resulting commit competed with the projection commit on the main thread.
+      // Post-#2463 the nightly regen regressed from p75 ~125 ms to ~250 ms exactly because of
+      // this competition. Defer the session refresh into a task queued AFTER the current
+      // browser paint (double-rAF fallback for non-idle environments) so the projection can
+      // land within its budget while the session refresh still happens promptly.
+      if (event.kind === "stopped") {
+        scheduleAfterPaint(() => {
+          void refreshSession(event.sessionId);
+        });
+        return;
+      }
+      if (event.kind === "session-started" || event.kind === "continued") {
         await refreshSession(event.sessionId);
       }
     },
