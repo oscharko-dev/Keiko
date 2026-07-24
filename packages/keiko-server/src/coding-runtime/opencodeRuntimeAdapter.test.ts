@@ -131,6 +131,7 @@ interface GeneratedOpenCodeBundle {
   readonly config: {
     readonly snapshot: boolean;
     readonly model: string;
+    readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
@@ -283,6 +284,9 @@ describe("OpenCode runtime adapter readiness", () => {
     if (bundle === undefined) throw new Error("expected generated config bundle");
     expect(bundle.config.snapshot).toBe(false);
     expect(bundle.config.model).toBe("keiko-runtime/coding");
+    expect(Object.keys(bundle.config.agent)).toEqual(["build"]);
+    expect(bundle.config.agent.build?.prompt).toContain("keiko_workspace_read");
+    expect(bundle.config.agent.build?.prompt).toContain("must never be called");
     const provider = record(bundle.config.provider["keiko-runtime"]);
     const options = record(provider.options);
     const headers = record(options.headers);

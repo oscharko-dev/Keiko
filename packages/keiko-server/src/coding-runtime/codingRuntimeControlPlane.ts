@@ -50,6 +50,7 @@ export interface CodingRuntimeHost {
         readonly claim: (runId: string) => boolean;
         readonly isVerified: (runId: string) => boolean;
         readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+        readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
         readonly clear: (runId: string, preserveVerification?: boolean) => void;
       }
     | undefined;

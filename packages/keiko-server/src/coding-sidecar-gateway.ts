@@ -30,17 +30,26 @@ const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
 const BUFFERED_STREAM_HEARTBEAT_MS = 5_000;
 const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
+// The #2680 live-probe fingerprint (many model requests, zero keiko_* facade calls) becomes
+// judgeable once the replayed history holds the two system messages, the task prompt, and three
+// assistant/user rounds without one governed tool call; legitimate coding turns read a file
+// within their first rounds.
+const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
+const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
 
 export interface OpenCodeGatewayReadinessRegistry {
   readonly claim: (runId: string) => boolean;
   readonly isVerified: (runId: string) => boolean;
   readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+  /** True only on the first call per run — bounds the adoption-gap diagnostic to one per run. */
+  readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
   readonly clear: (runId: string, preserveVerification?: boolean) => void;
 }
 
 export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadinessRegistry {
   const observed = new Set<string>();
   const armed = new Set<string>();
+  const adoptionGapDiagnosed = new Set<string>();
   const waiters = new Map<string, (result: boolean) => void>();
   return {
     claim: (runId): boolean => {
@@ -69,9 +78,15 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
         signal.addEventListener("abort", abort, { once: true });
       });
     },
+    noteAdoptionGapDiagnosed: (runId): boolean => {
+      if (adoptionGapDiagnosed.has(runId)) return false;
+      adoptionGapDiagnosed.add(runId);
+      return true;
+    },
     clear: (runId, preserveVerification = false): void => {
       if (!preserveVerification) observed.delete(runId);
       armed.delete(runId);
+      adoptionGapDiagnosed.delete(runId);
       waiters.get(runId)?.(false);
     },
   };
@@ -689,6 +704,45 @@ function emitGatewayToolContractDiagnostic(
   });
 }
 
+/**
+ * True when a long managed-tool-set history never invoked one governed keiko_* tool: the model is
+ * burning turns without adopting the projected suite. Question/todowrite calls do not count as
+ * adoption — a planning-only loop is the same operator-facing gap.
+ */
+function hasToolAdoptionGapFingerprint(
+  messages: readonly CodingSidecarGatewayChatMessage[],
+): boolean {
+  if (messages.length < TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD) return false;
+  return !messages.some(
+    (message) =>
+      message.toolCalls?.some((call) => call.name.startsWith(GOVERNED_TOOL_NAME_PREFIX)) === true,
+  );
+}
+
+/**
+ * Diagnostic only — the request keeps flowing; fixed labels only, never message content. One
+ * record per run: a stuck planning loop keeps matching the fingerprint on every request, and the
+ * registry mark keeps that from flooding the operator log (a missing registry never suppresses).
+ */
+function noteToolAdoptionGap(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  messages: readonly CodingSidecarGatewayChatMessage[],
+): void {
+  if (!hasToolAdoptionGapFingerprint(messages)) return;
+  if (gatewayReadinessRegistry(deps)?.noteAdoptionGapDiagnosed(runId) === false) return;
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: ctx.correlationId ?? "unknown",
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    source: "coding-sidecar-gateway.tool-adoption",
+    errorClass: "CodingSidecarGatewayToolAdoptionGap",
+    message: "coding-sidecar-gateway-tool-adoption-gap",
+    code: "CODING_GATEWAY_TOOL_ADOPTION_GAP",
+  });
+}
+
 function forbiddenGatewayRequest(): RouteResult {
   return { status: 403, body: errorBody("FORBIDDEN", "Coding sidecar gateway request is denied.") };
 }
@@ -1263,6 +1317,7 @@ export async function handleCodingSidecarGatewayChatCompletions(
     if (isExactManagedToolSet(parsed.tools) && registry?.claim(authentication.runId) === true) {
       return fixedReadinessResponse(ctx, resolved.result.modelAlias, parsed.stream === true);
     }
+    noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
   }
   return executeGatewayChat(ctx, deps, resolved.config, parsed, authentication.runId, {
     modelAlias: resolved.result.modelAlias,

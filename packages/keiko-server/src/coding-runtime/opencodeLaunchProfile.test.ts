@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenCodeLaunchProfile,
+  OPENCODE_GOVERNED_SYSTEM_PROMPT,
   type OpenCodeLaunchProfileInput,
 } from "./opencodeLaunchProfile.js";
 import {
@@ -77,11 +78,14 @@ describe("OpenCode launch profile", () => {
     if (!profile.ok) throw new Error("expected fixed managed launch profile");
     const config = JSON.parse(profile.config) as {
       readonly model: string;
+      readonly agent: Readonly<Record<string, unknown>>;
       readonly provider: Readonly<Record<string, unknown>>;
       readonly tools: Readonly<Record<string, boolean>>;
       readonly permission: Readonly<Record<string, string>>;
     };
     expect(config.model).toBe("keiko-runtime/coding");
+    expect(Object.keys(config.agent)).toEqual(["build"]);
+    expect(record(config.agent.build)).toEqual({ prompt: OPENCODE_GOVERNED_SYSTEM_PROMPT });
     const provider = record(config.provider["keiko-runtime"]);
     expect(provider).toMatchObject({
       name: "Keiko Governed Coding Gateway",
@@ -114,6 +118,26 @@ describe("OpenCode launch profile", () => {
     expect(config.permission.keiko_repository_read).toBeUndefined();
     expect(config.permission.keiko_submit_changeset).toBeUndefined();
     expect(config.permission).toMatchObject({ "*": "deny" });
+  });
+
+  it("documents every model-visible tool and the built-in prohibition in the agent prompt", () => {
+    // The v1.17.17 child resolves the unknown model id "coding" to its built-in-tool default
+    // prompt; the agent.build.prompt override is what live models actually receive, so every
+    // projected tool must be taught there and the removed built-ins must be named as absent.
+    for (const tool of OPENCODE_MODEL_VISIBLE_TOOL_NAMES) {
+      expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain(tool);
+    }
+    for (const builtIn of ["bash", "grep", "glob", "webfetch", "apply_patch", "git"]) {
+      expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain(builtIn);
+    }
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("must never be called");
+    // The pinned built-in "skill" collides with the governed keiko_skill by name; the prompt must
+    // disambiguate instead of leaving the built-in unmentioned.
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("skills run only through keiko_skill");
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("expectedContentHash");
+    for (const verifier of ["test", "targeted-test", "typecheck", "lint", "build"]) {
+      expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain(verifier);
+    }
   });
 
   it("uses only fixed server-owned loopback arguments and isolated state", () => {
