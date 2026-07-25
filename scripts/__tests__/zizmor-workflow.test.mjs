@@ -5,15 +5,27 @@ import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
-const workflow = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+// ADR-0159 moved zizmor out of its own ci.yml job and into a step of the bundled `workflow hygiene`
+// job. Every assertion below is the one it made about the job, re-anchored on the step.
+const workflow = readFileSync(resolve(repoRoot, ".github/workflows/workflow-hygiene.yml"), "utf8");
 const config = readFileSync(resolve(repoRoot, ".github/zizmor.yml"), "utf8");
 
 const ZIZMOR_ACTION_SHA = "6599ee8b7a49aef6a770f63d261d214911a7ce02";
 
+// The job these assertions moved from contained zizmor and nothing else; the one they moved to runs
+// four tools. Scoping to the step keeps the pin as tight as it was: another step carrying
+// `annotations: true` must not be able to satisfy an assertion about zizmor's invocation.
+function zizmorStep(source) {
+  return /( {6}- name: Run zizmor\n(?: {8}.*\n| {10}.*\n)*)/u.exec(source)?.[1] ?? "";
+}
+
 describe("zizmor workflow job", () => {
   it("uses the verified zizmor-action release commit and a pinned zizmor version", () => {
     expect(workflow).toContain(`zizmorcore/zizmor-action@${ZIZMOR_ACTION_SHA}`);
-    expect(workflow).toMatch(/zizmor:\s*\n[\s\S]*?version:\s*"1\.26\.1"/u);
+    // Anchored on the step that invokes it, not on a job key: ADR-0159 replaced the `zizmor:` job
+    // with a `Run zizmor` step, and the version must stay pinned to that specific invocation rather
+    // than to any `version:` that happens to appear later in the file.
+    expect(workflow).toMatch(/- name: Run zizmor\n[\s\S]*?version:\s*"1\.26\.1"/u);
   });
 
   it("fails the job on findings instead of only reporting via SARIF", () => {
@@ -21,13 +33,14 @@ describe("zizmor workflow job", () => {
     // non-zero exit code (SARIF consumers read the report, not the process exit code) - so the
     // job would stay green even with findings. annotations: true keeps the job's own exit code
     // as the gate, matching every other check in this repository.
-    const jobBlock = workflow.match(/ {2}zizmor:\n(?:.*\n)*?(?= {2}\S|$)/u)?.[0] ?? "";
-    expect(jobBlock).toMatch(/advanced-security:\s*false/u);
-    expect(jobBlock).toMatch(/annotations:\s*true/u);
+    const step = zizmorStep(workflow);
+    expect(step, "the Run zizmor step must exist").not.toBe("");
+    expect(step).toMatch(/advanced-security:\s*false/u);
+    expect(step).toMatch(/annotations:\s*true/u);
   });
 
   it("uses read-only repository permissions and disables checkout credentials", () => {
-    const jobBlock = workflow.match(/ {2}zizmor:\n(?:.*\n)*?(?= {2}\S|$)/u)?.[0] ?? "";
+    const jobBlock = workflow.match(/ {2}workflow-hygiene:\n(?:.*\n)*?(?= {2}\S|$)/u)?.[0] ?? "";
     expect(jobBlock).toMatch(/permissions:\s*\n\s+contents: read/u);
     expect(jobBlock).toContain("persist-credentials: false");
   });

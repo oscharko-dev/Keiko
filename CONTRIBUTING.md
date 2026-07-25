@@ -16,23 +16,23 @@ npm run typecheck  # strict type-checking for src + tests
 
 ## Pull requests
 
-All 14 app-bound required status checks must pass on the current pull-request head before a change
+All 11 app-bound required status checks must pass on the current pull-request head before a change
 can merge into `dev`:
 
 1. `ci`
-2. `actionlint`
-3. `Verify pinned action SHAs`
-4. `zizmor`
-5. `Analyze (actions)`
-6. `Analyze (javascript-typescript)`
-7. `Build, scan, SBOM, smoke`
-8. `Review dependency diff (dev/main)`
-9. `ui`
-10. `Scan dependency lockfiles`
-11. `SonarCloud Code Analysis`
-12. `Socket Security: Project Report`
-13. `Socket Security: Pull Request Alerts`
-14. `Keiko for Quality`
+2. `workflow hygiene`
+3. `Analyze (actions)`
+4. `Analyze (javascript-typescript)`
+5. `Build, scan, SBOM, smoke`
+6. `Review dependency diff (dev/main)`
+7. `ui`
+8. `SonarCloud Code Analysis`
+9. `Socket Security: Project Report`
+10. `Socket Security: Pull Request Alerts`
+11. `Keiko for Quality`
+
+`workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile
+scan as one context (ADR-0159); the tools, pinned versions and rule sets are unchanged.
 
 No human approving review or manual merge is required. GitHub native auto-merge integrates only
 after the required checks succeed on the exact current head and every review conversation is

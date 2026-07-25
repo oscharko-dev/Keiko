@@ -20,7 +20,7 @@ permissions: {}
 
 env:
   RELEASE_BASE_BRANCH: release/0.2
-  RELEASE_REQUIRED_CHECKS: '["ci","actionlint","Verify pinned action SHAs","zizmor","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
+  RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:
   production-signing-preflight:

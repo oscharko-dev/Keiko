@@ -2,52 +2,17 @@ name: OSV dependency scan
 
 on:
   # ADR-0156 D2: this scan is the compensating control for the shipped-dependency scope of the npm
-  # audit gates, so it must cover every branch target those gates run on — not dev alone.
-  pull_request:
-    branches:
-      - dev
-      - feat/dev
-      - feat/epic-open-code-engine-in-keiko-2473
-      - feat/keiko-editor
-      - feat/keiko-agent-native-editor-foundation-and-runtime
-      - feat/prompt-enhancer-1307
-      - feat/keiko-establish-governed-end-to-end-git-delivery
-      - feat/keiko-voice-digital-twin
-      - feat/keiko-isolated-task-workspaces
-      - feat/keiko-colleague-like-voice-dialogue-mode
-      - feat/keiko-repository-centered-desktop-workflow
-      - feat/epic-built-in-editor-2285-M11
-      - feat/epic-memoria-viva-2538
-      - epic/coding-workbench-opencode-codex
-      - "release/**"
-    types:
-      - opened
-      - ready_for_review
-      - reopened
-      - synchronize
-  push:
-    branches:
-      - dev
-      - feat/dev
-      - feat/epic-open-code-engine-in-keiko-2473
-      - feat/keiko-editor
-      - feat/keiko-agent-native-editor-foundation-and-runtime
-      - feat/prompt-enhancer-1307
-      - feat/keiko-establish-governed-end-to-end-git-delivery
-      - feat/keiko-voice-digital-twin
-      - feat/keiko-isolated-task-workspaces
-      - feat/keiko-colleague-like-voice-dialogue-mode
-      - feat/keiko-repository-centered-desktop-workflow
-      - feat/epic-built-in-editor-2285-M11
-      - feat/epic-memoria-viva-2538
-      - epic/coding-workbench-opencode-codex
-      - "release/**"
-  # ci.yml validates merge-queue groups (ADR-0139 D7). With the audit gates scoped to the shipped
-  # graph, this scan is the compensating control for build-time dependencies, so a merge-queue
-  # integration must not proceed without it either.
-  merge_group:
-    branches:
-      - dev
+  # audit gates, so it must cover every branch target those gates run on - not dev alone.
+  #
+  # ADR-0159: every event-driven execution of this scan moved into the single required
+  # `workflow hygiene` context in .github/workflows/workflow-hygiene.yml, which declares the union of
+  # this workflow's and ci.yml's surface - including `ready_for_review`, which ci.yml's default types
+  # omit. Its `push` branch list is byte-identical to the one this file carried, so it strictly
+  # dominates and running both would scan every pushed commit twice.
+  #
+  # What stays here is what an event-driven lane cannot do: `schedule` re-reads a LIVE vulnerability
+  # database against an unchanged tree, so a newly published advisory is detected without anyone
+  # pushing. That cadence is the reason this workflow still exists, and it is unchanged.
   schedule:
     - cron: "37 3 * * *"
   workflow_dispatch:

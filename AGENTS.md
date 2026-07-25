@@ -358,11 +358,14 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **All required CI checks must be green before merge.** As of today (verify against
   [`CONTRIBUTING.md`](CONTRIBUTING.md), which is authoritative):
 
-  `ci` · `actionlint` · `Verify pinned action SHAs` · `zizmor` · `Analyze (actions)` ·
-  `Analyze (javascript-typescript)` · `Build, scan, SBOM, smoke` ·
-  `Review dependency diff (dev/main)` · `ui` · `Scan dependency lockfiles` ·
+  `ci` · `workflow hygiene` · `Analyze (actions)` · `Analyze (javascript-typescript)` ·
+  `Build, scan, SBOM, smoke` · `Review dependency diff (dev/main)` · `ui` ·
   `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
   `Socket Security: Pull Request Alerts` · `Keiko for Quality`
+
+  `workflow hygiene` is one context running actionlint, the pinned-SHA grep, zizmor and the OSV
+  lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
+  sets as the four separate contexts it replaced.
 
   No human approving review is required for `dev`. `Keiko for Quality` is required and app-bound
   (App id `4290143`) since the ADR-0142 cutover (2026-07-19), after all six live probes in
@@ -373,7 +376,8 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   path.
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
-  branch ref (`@v4`) fails the `Verify pinned action SHAs` gate. Keep the SHA-plus-comment format.
+  branch ref (`@v4`) fails the pinned-SHA step of `workflow hygiene`. Keep the SHA-plus-comment
+  format.
 - Fill in the [PR template](.github/pull_request_template.md) honestly — the Reuse/No-Duplication,
   Verification, and Update-Impact sections are load-bearing, not decoration. Report failures and
   skipped steps truthfully; "green" claims must be backed by output you actually ran.
