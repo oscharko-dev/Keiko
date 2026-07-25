@@ -155,6 +155,11 @@ describe("keiko-tools public surface", () => {
     expect(tools.DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS).toBeGreaterThan(
       tools.DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
     );
+    // Issue #2713 — a server-resolved language dispatch must outlast the language service's own
+    // deadline, so the server's governed verdict reaches the caller instead of a transport abort.
+    expect(tools.DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBeGreaterThan(
+      tools.DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+    );
     // Terminal policy:
     expect(tools.TERMINAL_COMMAND_RULES).toBeDefined();
     expect(tools.TERMINAL_NO_FLAGS).toBeDefined();

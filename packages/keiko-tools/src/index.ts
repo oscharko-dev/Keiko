@@ -99,6 +99,7 @@ export { EDITOR_AGENT_TOOL_DEFINITIONS } from "./editor-agent-schemas.js";
 export { WorkspaceToolHost } from "./registry.js";
 export {
   DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+  DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS,
   DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES,
   DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS,
   EditorAgentHttpClient,
