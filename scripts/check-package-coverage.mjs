@@ -21,7 +21,7 @@ const DEFAULT_METRIC = "lines";
 const ROUNDING_EPSILON = 0.004;
 const RATCHET_EPSILON = 0.1;
 const METRICS = ["lines", "statements", "branches", "functions"];
-const FILE_FLOOR_GOVERNANCE = ["ratcheted", "absolute"];
+const FILE_FLOOR_GOVERNANCE = new Set(["ratcheted", "absolute"]);
 
 // ADR-0158 D1: headroom (percentage points) a ratcheted floored file may drift below its recorded
 // value before the per-file gate fails. Matches the package ratchet's platform-noise allowance.
@@ -470,7 +470,7 @@ function fileFloorEntryFailures(file, entry) {
         "Schema 1 was replaced by ADR-0158; restore the committed baseline instead of half-migrating it.",
     ];
   }
-  if (!FILE_FLOOR_GOVERNANCE.includes(entry.governance)) {
+  if (!FILE_FLOOR_GOVERNANCE.has(entry.governance)) {
     return [`file floor "${file}" declares no governance ("ratcheted" or "absolute").`];
   }
   if (!isPercent(entry.tolerance)) {
