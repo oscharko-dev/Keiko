@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  DEFAULT_LSP_PROCESS_CONFIG,
   DEFAULT_VERIFICATION_LIMITS,
   EDITOR_AGENT_SCHEMA_VERSION,
   type EditorAgentAction,
@@ -9,6 +11,7 @@ import {
 import {
   createFetchEditorAgentHttpTransport,
   DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+  DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS,
   DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS,
   DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS,
   EditorAgentHttpClient,
@@ -33,6 +36,17 @@ const QUERY_GIT_ACTION: EditorAgentAction = {
   idempotencyKey: "idempotency-query-git",
   type: "queryGit",
   queryGit: { path: "src/a.ts", aspects: ["status"] },
+};
+const NAVIGATE_SYMBOL_ACTION: EditorAgentAction = {
+  ...ACTION,
+  actionId: "action-navigate-symbol",
+  idempotencyKey: "idempotency-navigate-symbol",
+  type: "navigateSymbol",
+  navigateSymbol: {
+    operation: "definition",
+    document: { path: "src/a.ts", languageId: "typescript" },
+    position: { line: 0, character: 6 },
+  },
 };
 const QUERY_GIT_DATA = {
   schemaVersion: "1",
@@ -655,6 +669,98 @@ describe("EditorAgentHttpClient.action timeout selection", () => {
     expect(DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS).toBeGreaterThan(
       DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
     );
+  });
+
+  // Issue #2713 — a server-resolved navigateSymbol is bounded server-side by the language service's
+  // own `deadlineMs`. While the client used the shared 2-second default the two budgets were EQUAL,
+  // and the client's clock starts strictly earlier (connect, serialization, route parse, root
+  // realpath, containment check and the host-provider probe all run before the server arms its
+  // deadline), so the client always aborted first: the governed TIMED_OUT action result was
+  // unreachable and every overrun surfaced as an opaque transport abort instead. Same rule the
+  // queryGit (#2298) and verification (#2214) budgets already follow — the client waits out the
+  // server's own bound so the server's verdict is what the caller sees.
+  it("budgets a server-resolved navigateSymbol above the language service's own deadline", async () => {
+    const captured = capturingScheduler();
+    await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: transportWith(
+        JSON.stringify({
+          result: {
+            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+            actionId: NAVIGATE_SYMBOL_ACTION.actionId,
+            sessionId: NAVIGATE_SYMBOL_ACTION.sessionId,
+            status: "succeeded",
+          },
+        }),
+      ),
+      scheduler: captured.scheduler,
+    }).action(NAVIGATE_SYMBOL_ACTION, new AbortController().signal);
+    expect(captured.timeouts).toEqual([DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS]);
+    // Pinned absolutely, like the queryGit budget above: the relational assertions below would still
+    // hold at `deadlineMs + 1`, which is arithmetically greater and practically just as racy.
+    expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBe(17_000);
+    // Must outlast BOTH server implementations of navigateSymbol: the in-process TypeScript provider
+    // bounded by `deadlineMs`, and a managed LSP bounded by a cold spawn's initialize + request.
+    expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBeGreaterThan(
+      DEFAULT_LANGUAGE_SERVICE_LIMITS.deadlineMs,
+    );
+    expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBeGreaterThan(
+      DEFAULT_LSP_PROCESS_CONFIG.initializeTimeoutMs + DEFAULT_LSP_PROCESS_CONFIG.requestTimeoutMs,
+    );
+    expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBeGreaterThan(
+      DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+    );
+  });
+
+  // The language budget is a FLOOR, not a plain default. A caller that raises the generic budget
+  // means it; one that lowers it must not silently push a language call back under the server's own
+  // bound, which is the defect #2713 fixes. tests/editor-agent-managed-lsp.integration.test.ts
+  // deliberately raises `timeoutMs` for exactly this race, so a plain default would discard it.
+  it.each([
+    ["honours a generic budget above the floor", 30_000, 30_000],
+    [
+      "holds the floor against a generic budget below it",
+      50,
+      DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS,
+    ],
+  ])("%s", async (_case, timeoutMs, expected) => {
+    const captured = capturingScheduler();
+    await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: transportWith(
+        JSON.stringify({
+          result: {
+            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+            actionId: NAVIGATE_SYMBOL_ACTION.actionId,
+            sessionId: NAVIGATE_SYMBOL_ACTION.sessionId,
+            status: "succeeded",
+          },
+        }),
+      ),
+      timeoutMs,
+      scheduler: captured.scheduler,
+    }).action(NAVIGATE_SYMBOL_ACTION, new AbortController().signal);
+    expect(captured.timeouts).toEqual([expected]);
+  });
+
+  it("lets an explicit languageTimeoutMs override the floor in either direction", async () => {
+    const captured = capturingScheduler();
+    await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: transportWith(
+        JSON.stringify({
+          result: {
+            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+            actionId: NAVIGATE_SYMBOL_ACTION.actionId,
+            sessionId: NAVIGATE_SYMBOL_ACTION.sessionId,
+            status: "succeeded",
+          },
+        }),
+      ),
+      languageTimeoutMs: 250,
+      scheduler: captured.scheduler,
+    }).action(NAVIGATE_SYMBOL_ACTION, new AbortController().signal);
+    expect(captured.timeouts).toEqual([250]);
   });
 
   it.each([

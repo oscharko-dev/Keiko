@@ -1,4 +1,6 @@
 import {
+  DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  DEFAULT_LSP_PROCESS_CONFIG,
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentActionResult,
   isEditorAgentRootAttribution,
@@ -24,6 +26,28 @@ type EditorAgentFileActionResult = NonNullable<EditorAgentActionResult["files"]>
 export const DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS = 2_000;
 // Issue #2298: allow a 5-second client margin over the bounded 20-second server worst case.
 export const DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS = 25_000;
+// Issue #2713 — a server-resolved navigateSymbol was bounded by the shared 2-second default, which
+// matched DEFAULT_LANGUAGE_SERVICE_LIMITS.deadlineMs exactly. Equal budgets race, and the client's
+// clock starts strictly earlier (connect, serialization, route parse, root realpath, containment
+// check and the provider probe all run before the server arms its deadline), so the client always
+// won: the governed TIMED_OUT action result was unreachable and every overrun reached the caller as
+// an opaque transport abort carrying no governed failure code.
+//
+// navigateSymbol has TWO server-side implementations and this must outlast the slower one. The
+// in-process TypeScript provider bounds itself with `deadlineMs` — cooperatively, polled at
+// cancellation checkpoints, so a cold project bootstrap (config discovery, parseJsonConfigFileContent,
+// the bounded directory walk, default-lib parsing) overruns it before the next checkpoint. A managed
+// LSP provider (python/go/java/rust/shell) is bounded instead by a cold spawn's
+// initializeTimeoutMs + requestTimeoutMs, which `deadlineMs` never applies to. The client cannot tell
+// which will serve a call — languageId and PATH probing decide that server-side — so it budgets for
+// the worse of the two.
+const LANGUAGE_SERVER_WORST_CASE_MS = Math.max(
+  DEFAULT_LANGUAGE_SERVICE_LIMITS.deadlineMs,
+  DEFAULT_LSP_PROCESS_CONFIG.initializeTimeoutMs + DEFAULT_LSP_PROCESS_CONFIG.requestTimeoutMs,
+);
+// A backstop for a server that never answers, not a bound on the analysis — the server bounds that —
+// so it takes the same 5-second margin over the server's worst case that #2298 established.
+export const DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS = LANGUAGE_SERVER_WORST_CASE_MS + 5_000;
 export const DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES = 256 * 1024;
 // Issue #2214 (AC7) — a verification run's own wall-time ceiling is DEFAULT_VERIFICATION_LIMITS.wallTimeMs
 // (120_000 ms). The synchronous, single-shot verification route holds its POST open until the run
@@ -212,6 +236,15 @@ function redactUnknownFileResult(value: unknown): unknown {
   };
 }
 
+// Extracted from the spread below purely to unnest a three-armed ternary (sonarjs/no-nested-
+// conditional): the local `check:sonar-rules` gate lints whole changed files, so this pre-existing
+// finding blocks any pull request that touches this file. Behaviour is unchanged — an array is
+// redacted element-wise, `undefined` contributes no key, anything else passes through as it did.
+function redactUnknownFiles(files: unknown): Record<string, unknown> {
+  if (Array.isArray(files)) return { files: files.map((file) => redactUnknownFileResult(file)) };
+  return files === undefined ? {} : { files };
+}
+
 function redactUnknownActionResult(value: unknown): unknown {
   if (!isRecord(value)) return value;
   return {
@@ -229,11 +262,7 @@ function redactUnknownActionResult(value: unknown): unknown {
         }),
     ...(value.conflict === undefined ? {} : { conflict: redactUnknownConflict(value.conflict) }),
     ...(value.failure === undefined ? {} : { failure: redactUnknownConflict(value.failure) }),
-    ...(Array.isArray(value.files)
-      ? { files: value.files.map((file) => redactUnknownFileResult(file)) }
-      : value.files === undefined
-        ? {}
-        : { files: value.files }),
+    ...redactUnknownFiles(value.files),
     ...(value.data === undefined ? {} : { data: value.data }),
   };
 }
@@ -366,11 +395,20 @@ function editorAgentSessionsScope(
   };
 }
 
+// Every bound is validated the same way, so the check lives in one place rather than growing another
+// `||` arm on the constructor for each new per-action budget.
+function assertPositiveBounds(bounds: readonly number[]): void {
+  if (!bounds.every((bound) => isPositiveInteger(bound))) {
+    throw new Error("Editor agent HTTP bounds must be positive.");
+  }
+}
+
 export class EditorAgentHttpClient {
   private readonly origin: URL;
   private readonly transport: EditorAgentHttpTransport;
   private readonly timeoutMs: number;
   private readonly queryGitTimeoutMs: number;
+  private readonly languageTimeoutMs: number;
   private readonly verificationTimeoutMs: number;
   private readonly maxResponseBytes: number;
   private readonly scheduler: EditorAgentTimeoutScheduler;
@@ -380,6 +418,7 @@ export class EditorAgentHttpClient {
     readonly transport: EditorAgentHttpTransport;
     readonly timeoutMs?: number | undefined;
     readonly queryGitTimeoutMs?: number | undefined;
+    readonly languageTimeoutMs?: number | undefined;
     readonly verificationTimeoutMs?: number | undefined;
     readonly maxResponseBytes?: number | undefined;
     readonly scheduler?: EditorAgentTimeoutScheduler | undefined;
@@ -388,18 +427,31 @@ export class EditorAgentHttpClient {
     this.transport = deps.transport;
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS;
     this.queryGitTimeoutMs = deps.queryGitTimeoutMs ?? DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS;
+    // A FLOOR, not a plain default: a caller who raises the generic budget means it and keeps it,
+    // but one who lowers it must not silently push a language call back under the server's own bound
+    // — that is the #2713 defect itself. Going below the floor takes an explicit `languageTimeoutMs`.
+    this.languageTimeoutMs =
+      deps.languageTimeoutMs ?? Math.max(this.timeoutMs, DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS);
     this.verificationTimeoutMs =
       deps.verificationTimeoutMs ?? DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS;
     this.maxResponseBytes = deps.maxResponseBytes ?? DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES;
     this.scheduler = deps.scheduler ?? scheduler;
-    if (
-      !isPositiveInteger(this.timeoutMs) ||
-      !isPositiveInteger(this.queryGitTimeoutMs) ||
-      !isPositiveInteger(this.verificationTimeoutMs) ||
-      !isPositiveInteger(this.maxResponseBytes)
-    ) {
-      throw new Error("Editor agent HTTP bounds must be positive.");
-    }
+    assertPositiveBounds([
+      this.timeoutMs,
+      this.queryGitTimeoutMs,
+      this.languageTimeoutMs,
+      this.verificationTimeoutMs,
+      this.maxResponseBytes,
+    ]);
+  }
+
+  // The action budget is per action type because the SERVER's own worst case is: queryGit is bounded
+  // by the git route's timeout (#2298), navigateSymbol by the language service deadline (#2713), and
+  // everything else answers from memory within the shared default.
+  private actionTimeoutMs(type: EditorAgentAction["type"]): number {
+    if (type === "queryGit") return this.queryGitTimeoutMs;
+    if (type === "navigateSymbol") return this.languageTimeoutMs;
+    return this.timeoutMs;
   }
 
   listSessions(
@@ -445,7 +497,7 @@ export class EditorAgentHttpClient {
       signal,
       [200, 202, 403, 409, 429],
       body.type === "queryGit" ? parseQueryGitActionResult : parseActionResult,
-      body.type === "queryGit" ? this.queryGitTimeoutMs : this.timeoutMs,
+      this.actionTimeoutMs(body.type),
     );
   }
 

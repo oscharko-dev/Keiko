@@ -38,6 +38,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import {
   createFetchEditorAgentHttpTransport,
+  DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS,
   EditorAgentHttpClient,
   EditorAgentToolHost,
   type EditorAgentToolOutput,
@@ -52,9 +53,16 @@ import {
 } from "./agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { _resetEditorAgentAuditForTests, listEditorAgentActionAudit } from "./agentActionAudit.js";
+import { _producerToolOutcomeForTests } from "./agentProducerRoute.js";
 
 const SESSION_ID = "session-2489";
 const HASH = "a".repeat(64);
+// Issue #2713 — kept strictly below DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS (the budget the
+// producer's own tool host arms) so the server's deadline is always the one that decides. Asserted,
+// not assumed, by "keeps the server's analysis deadline under the producer's client budget". The
+// value itself is the fixture's original headroom for a cold bootstrap: before #2713 it was dead
+// letter, because the client aborted the call at 2s no matter what this said.
+const PRODUCER_LANGUAGE_DEADLINE_MS = 15_000;
 const CEILING = "autonomous-delivery" as const;
 const DECL_TEXT = "export const sharedValue = 1;\n";
 const MAIN_TEXT = "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n";
@@ -299,9 +307,18 @@ async function createFixture(): Promise<Fixture> {
     store,
     modelPortFactory: (modelId: string): ModelPort | undefined =>
       modelId === "producer-test-model" ? model : undefined,
+    // Issue #2713: the producer dispatches back into THIS server over a real loopback hop, so two
+    // budgets bound the same navigateSymbol call -- the server's analysis deadline below, and the
+    // EditorAgentHttpClient budget the producer's own tool host arms
+    // (DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS). The server's must stay UNDER the client's, or the
+    // client aborts mid-analysis and the governed verdict is replaced by an opaque transport error;
+    // the shared 2s client default sat BELOW this, which is how a cold TypeScript project bootstrap
+    // on a loaded 4-core runner turned into `{ ok: false }` with no cause attached.
+    // Raised above the production default because the cold bootstrap this fixture forces (a fresh
+    // mkdtemp root per test, so the project cache always misses) is exactly the case 2s is tight for.
     editorLanguageRouteOptions: {
       now: (): number => Date.now(),
-      limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, deadlineMs: 15_000 },
+      limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, deadlineMs: PRODUCER_LANGUAGE_DEADLINE_MS },
     },
     gitRouteOptions: { timeoutMs: 5_000 },
     verificationRunner,
@@ -348,6 +365,7 @@ interface ProducerTurnResponse {
       readonly toolName: string;
       readonly ok: boolean;
       readonly status?: string;
+      readonly failureKind?: string;
     }[];
     readonly error?: { readonly code: string };
   };
@@ -375,16 +393,24 @@ async function postProducerTurn(
 
 // Asserts the producer genuinely reached a SUCCEEDED dispatch, not merely an invoked-but-conflicted
 // one (e.g. NO_ACTIVE_SESSION still counts as an invoked, completed harness tool call).
+//
+// Issue #2713: every assertion carries the serialized body. The #2704 shard run that exposed the
+// navigateSymbol flake printed nothing but `[{ toolName, ok: false }]`, which named no cause and
+// cost a full CI cycle to even categorise; with the body attached, the next occurrence reports the
+// governed status or the `failureKind` discriminator that says WHICH layer refused.
 function expectSucceededToolOutcome(
   response: ProducerTurnResponse,
   toolName: string,
   expectedStatus: string,
 ): void {
-  expect(response.status, JSON.stringify(response.body)).toBe(200);
-  expect(response.body.outcome).toBe("completed");
-  expect(response.body.toolCallCount).toBe(1);
-  expect(response.body.toolNames).toEqual([toolName]);
-  expect(response.body.toolOutcomes).toEqual([{ toolName, ok: true, status: expectedStatus }]);
+  const detail = JSON.stringify(response.body);
+  expect(response.status, detail).toBe(200);
+  expect(response.body.outcome, detail).toBe("completed");
+  expect(response.body.toolCallCount, detail).toBe(1);
+  expect(response.body.toolNames, detail).toEqual([toolName]);
+  expect(response.body.toolOutcomes, detail).toEqual([
+    { toolName, ok: true, status: expectedStatus },
+  ]);
 }
 
 beforeEach(async () => {
@@ -470,6 +496,19 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
     expect(current.verificationRunner.calls).toBe(1);
   });
 
+  // Issue #2713 — the #2704 shard exposed this test file failing with `{ ok: false }` because TWO
+  // budgets bound one navigateSymbol dispatch and the wrong one was smaller: the producer's tool
+  // host armed the shared 2s client default while the server was still inside a cold TypeScript
+  // project bootstrap. Whenever the client budget is the smaller of the two, the client aborts
+  // mid-analysis and the caller sees an opaque transport error instead of the server's governed
+  // verdict -- so the ordering, not either number on its own, is the invariant worth pinning here.
+  it("keeps the server's analysis deadline under the producer's client budget", () => {
+    expect(PRODUCER_LANGUAGE_DEADLINE_MS).toBeLessThan(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS);
+    expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBeGreaterThan(
+      DEFAULT_LANGUAGE_SERVICE_LIMITS.deadlineMs,
+    );
+  });
+
   it("404s before/without the producer route for an unknown pattern (route existence sanity)", async () => {
     const current = fixture;
     if (current === undefined) throw new Error("fixture missing");
@@ -552,7 +591,13 @@ describe("editor-agent producer tool-scope enforcement (#2489 security hardening
     expect(response.status).toBe(200);
     expect(response.body.outcome).toBe("completed");
     expect(response.body.toolCallCount).toBe(1);
-    expect(response.body.toolOutcomes).toEqual([{ toolName: "editor_propose_edit", ok: false }]);
+    // #2713 strengthens this pin rather than relaxing it: the rejection must still be a FAILURE, and
+    // it must now also identify itself as a PRE-DISPATCH refusal ("invalid-arguments"), never a
+    // route/transport kind — which would mean the call had actually reached a downstream route. The
+    // audit-ledger assertion below stays the decisive proof; this only narrows what may precede it.
+    expect(response.body.toolOutcomes).toEqual([
+      { toolName: "editor_propose_edit", ok: false, failureKind: "invalid-arguments" },
+    ]);
     // The decisive proof: a real applyTextEdits dispatch would have reached agentRoutes.ts and
     // been audited (queued for browser-bridge review or denied) — zero audit entries proves the
     // request never left the producer's own scope check.
@@ -563,6 +608,46 @@ describe("editor-agent producer tool-scope enforcement (#2489 security hardening
 function toolOutput(result: { readonly output: string }): EditorAgentToolOutput {
   return JSON.parse(result.output) as EditorAgentToolOutput;
 }
+
+// Issue #2713 — `failureKind` is only admissible because it can never carry content: it is echoed
+// only when it is one of the tool output's own six failure literals, and dropped otherwise. No real
+// dispatch can produce an unknown kind (every output the producer parses is built in-process by
+// EditorAgentToolHost), so the degraded arms are unreachable through the route and are proven here
+// against the pure parser instead. Without this, the fail-closed claim is prose with no test.
+describe("producer tool outcome failure discrimination (#2713)", () => {
+  it.each([
+    ["a transport abort", { kind: "transport", code: "TIMED_OUT" }, "transport"],
+    ["a route rejection", { kind: "route", code: "DENIED" }, "route"],
+    ["a host failure", { kind: "host", code: "HOST_FAILURE" }, "host"],
+  ])("names %s by its own kind", (_case, error, expected) => {
+    expect(_producerToolOutcomeForTests("tool", JSON.stringify({ ok: false, error }))).toEqual({
+      toolName: "tool",
+      ok: false,
+      failureKind: expected,
+    });
+  });
+
+  it.each([
+    ["an unknown kind", { ok: false, error: { kind: "exfiltrate", code: "X" } }],
+    ["a kind carrying content instead of an enum", { ok: false, error: { kind: "/etc/passwd" } }],
+    ["a non-string kind", { ok: false, error: { kind: 7 } }],
+    ["a non-record error", { ok: false, error: "boom" }],
+    ["no error at all", { ok: false }],
+    ["a non-record payload", [1, 2, 3]],
+  ])("drops %s rather than echoing it", (_case, payload) => {
+    expect(_producerToolOutcomeForTests("tool", JSON.stringify(payload))).toEqual({
+      toolName: "tool",
+      ok: false,
+    });
+  });
+
+  it("stays content-free when the output is not JSON at all", () => {
+    expect(_producerToolOutcomeForTests("tool", "not json")).toEqual({
+      toolName: "tool",
+      ok: false,
+    });
+  });
+});
 
 describe("editor_search_workspace wholeWord/regex parity (#2489 Finding 3)", () => {
   it("accepts wholeWord against real production dispatch", async () => {
