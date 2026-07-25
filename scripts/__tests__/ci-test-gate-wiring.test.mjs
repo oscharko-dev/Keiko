@@ -72,7 +72,13 @@ const REQUIRED_EXTENDED_SUITES = [
 // "green but unproven" gap.
 const REQUIRED_CI_COMMANDS = [
   // Coverage: package + UI ratchets (headline npm test excludes UI, so the UI job is mandatory).
-  "npm run test:coverage:quality",
+  // Issue #2704 / ADR-0157 split the serial `npm run test:coverage:quality` chain into parallel
+  // measuring jobs plus one judging job. The pin follows the chain rather than the old entry point:
+  // every link it used to cover is asserted individually, so no part of it can go missing.
+  "npm run test:coverage:packages:shard",
+  "npm run test:coverage:packages:merge",
+  "npm run test:coverage:scripts",
+  "npm run check:coverage:quality",
   "npm run test:coverage:ui",
   "npm run check:coverage:ui",
   // Browser release proof.
@@ -202,7 +208,10 @@ describe("CI test/gate wiring guard", () => {
     const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
-    expect(nodeSetupCount).toBe(17);
+    // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`. The
+    // load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
+    // governed toolchain.
+    expect(nodeSetupCount).toBe(20);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });

@@ -44,6 +44,21 @@ on:
 
 permissions: {}
 
+# A superseded pull-request run has no consumer left: its evidence binds a head commit that the
+# next push already replaced, and branch protection only ever reads the current head. Cancelling it
+# frees the runners the replacement run is queued behind.
+#
+# Everything that is not a pull request gets a group of ONE — `github.run_id` is unique per run — so
+# it is never grouped with another run and can never be cancelled by one. `cancel-in-progress: false`
+# would NOT be enough: GitHub cancels a previously *pending* run in a group whenever a newer run
+# enters it, regardless of that flag, so a shared `refs/heads/dev` group would drop the middle run
+# of three merges landing inside one CI window. A cancelled required check on `dev` is
+# indistinguishable from a real defect, and that evidence binds an integration commit nothing else
+# re-measures (Issue #2704).
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   protected-branch-gate:
     name: Protected branch gate
@@ -231,23 +246,56 @@ jobs:
           npm run check:package-surface
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 npm run smoke:install
 
-  coverage-sonar:
-    name: Coverage and SonarCloud
+  # Issue #2704: the three coverage suites used to run serially inside `coverage-sonar`, and that one
+  # step was the whole clean-pull-request critical path (1649 s of a 1936 s job on run 30156130977:
+  # packages 1093 s, keiko-ui 383 s, scripts 161 s). They now execute as parallel jobs, with the
+  # heaviest suite split into vitest shards. Every one of them MEASURES and none of them judges
+  # (ADR-0156 D1): a shard writes a vitest blob report, and `coverage-sonar` below merges the blobs
+  # and evaluates every floor exactly once, against complete coverage. A per-shard verdict would
+  # compare a third of the suite against the whole suite's floors.
+  coverage-packages:
+    name: Coverage shard (packages ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      # One shard's result must never mask another's; `coverage-sonar` fails closed on all of them.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # Unchanged from the serial job: package tests read real repository history.
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}
+          # Pinned to the run's immutable commit, not the moving ref the single job could safely
+          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
+          # whenever the head or base moves. Skew would have the shards measure one tree while the
+          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Restore the npm download cache
+        # Restore-only. The measuring jobs sit on the critical path, and on a cold key all five
+        # would otherwise tar and compress a several-hundred-megabyte `~/.npm` in their post-job
+        # step for exactly one of them to win the reservation. `coverage-sonar` runs last and owns
+        # the save.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # The npm DOWNLOAD cache only. `node_modules` is never cached or restored anywhere in this
+          # workflow: `npm ci --ignore-scripts` always executes, and its per-package lockfile
+          # integrity verification is the post-restore integrity check for this cache. A restored
+          # tarball whose digest does not match the lockfile fails the install (Issue #2704).
+          # Exact key only: a prefix match would restore an older cache and save it back merged, and
+          # npm never prunes `_cacache`, so the entry would grow until it evicted itself out of the
+          # repository cache budget. A miss simply reproduces today's cold install.
+          path: ~/.npm
+          key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
       - name: Install sandbox isolation backend (bubblewrap)
         run: |
@@ -256,19 +304,282 @@ jobs:
           # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
           # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Restore the provisioned sqlite-vec extension
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # `provision:sqlite-vec` recomputes the extension's SHA-256 and compares it against the
+          # pinned value on every run, restored or not, and refuses a file that does not match — so
+          # this cache can only ever save the download, never substitute the artifact.
+          path: .sqlite-vec
+          key: sqlite-vec-${{ runner.os }}-${{ hashFiles('scripts/provision-sqlite-vec.mjs') }}
       - name: Provision the sqlite-vec loadable extension (Issue #2566)
         # Not an npm dependency: sqlite-vec publishes an invalid SPDX license string, which both the
         # dependency-review policy and check:workspace-supply-chain reject — the latter by design has
         # no exception mechanism. Fetched here and verified against a pinned SHA-256 instead, the
-        # same way the Sonar Scanner CLI is obtained below. Without the binary the vector-index suite
-        # asserts its fail-closed fallback rather than skipping, so this step adds real-binary
-        # coverage. It does gate: a failed download or a checksum mismatch exits nonzero and fails
-        # the job, which is the intended behaviour — a tampered artifact must stop the run, not
-        # silently downgrade it to fallback coverage. Hosts with no published asset return success.
+        # same way the Sonar Scanner CLI is obtained in the finalizing job. Without the binary the
+        # vector-index suite asserts its fail-closed fallback rather than skipping, so this step adds
+        # real-binary coverage. It does gate: a failed download or a checksum mismatch exits nonzero
+        # and fails the job, which is the intended behaviour — a tampered artifact must stop the run,
+        # not silently downgrade it to fallback coverage. Hosts with no published asset return
+        # success. Provisioned in every coverage job so each suite executes in exactly the
+        # environment it did when the three ran in one job.
         run: npm run provision:sqlite-vec
+      - name: Measure package coverage shard
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # `--reporter` on the command line REPLACES the reporter list, and vitest only auto-appends
+        # `default` + `github-actions` when that list is empty. The npm script carries `default` so a
+        # local shard run still prints its failures; the annotation reporter is added here, where
+        # `GITHUB_ACTIONS` is what makes it meaningful, so a failing shard still annotates the diff
+        # instead of showing nothing but a nonzero exit code.
+        run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
+      - name: Upload package coverage shard evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-blob-packages-${{ matrix.shard }}
+          # Vitest names a sharded blob `blob-<index>-<count>.json`, so the three uploads merge into
+          # one directory without collision. `.vitest-reports` is a dot directory and
+          # upload-artifact skips those unless told otherwise.
+          path: .vitest-reports/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage-ui:
+    name: Coverage suite (keiko-ui)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          # Pinned to the run's immutable commit, not the moving ref the single job could safely
+          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
+          # whenever the head or base moves. Skew would have the shards measure one tree while the
+          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Restore the npm download cache
+        # Restore-only; `coverage-sonar` owns the save. See the note in `coverage-packages`.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
+      - run: npm ci --ignore-scripts
+      - name: Install sandbox isolation backend (bubblewrap)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Restore the provisioned sqlite-vec extension
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .sqlite-vec
+          key: sqlite-vec-${{ runner.os }}-${{ hashFiles('scripts/provision-sqlite-vec.mjs') }}
+      - name: Provision the sqlite-vec loadable extension (Issue #2566)
+        run: npm run provision:sqlite-vec
+      # Not optional and easy to lose in the split: while the three suites shared one step, the
+      # package build came free with `test:coverage:packages`, which runs first in that chain. The
+      # UI imports workspace packages by bare specifier and they resolve to `dist`, which no
+      # checkout contains, so a standalone job has to build them itself — as the `ui` job below
+      # already does for the same reason.
+      - name: Build internal packages so workspace dist resolves
+        run: npm run build:packages
+      # This suite declares no coverage thresholds, so it needs no measure/judge split: it produces
+      # its final LCOV and summary directly and the finalizing job only relocates them.
+      - name: Measure keiko-ui coverage
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:coverage:ui
+      - name: Upload keiko-ui coverage evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report-ui
+          # Exactly the two artefacts the downstream gates read (the ratchet's summary and the LCOV
+          # the mapping gate and the scanner consume). The HTML tree the lcov reporter also writes is
+          # ~1 GB of derived output no gate looks at.
+          path: |
+            packages/keiko-ui/coverage/lcov.info
+            packages/keiko-ui/coverage/coverage-summary.json
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage-scripts:
+    name: Coverage suite (scripts)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          # Pinned to the run's immutable commit, not the moving ref the single job could safely
+          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
+          # whenever the head or base moves. Skew would have the shards measure one tree while the
+          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Restore the npm download cache
+        # Restore-only; `coverage-sonar` owns the save. See the note in `coverage-packages`.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
+      - run: npm ci --ignore-scripts
+      - name: Install sandbox isolation backend (bubblewrap)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Restore the provisioned sqlite-vec extension
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .sqlite-vec
+          key: sqlite-vec-${{ runner.os }}-${{ hashFiles('scripts/provision-sqlite-vec.mjs') }}
+      - name: Provision the sqlite-vec loadable extension (Issue #2566)
+        run: npm run provision:sqlite-vec
+      # Same reason as in `coverage-ui`: several `scripts/__tests__` suites import workspace
+      # packages by bare specifier, which resolve to `dist`.
+      - name: Build internal packages so workspace dist resolves
+        run: npm run build:packages
+      - name: Measure script coverage
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:coverage:scripts
+      - name: Upload script coverage evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report-scripts
+          path: |
+            coverage/scripts/lcov.info
+            coverage/scripts/coverage-summary.json
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage-sonar:
+    name: Coverage and SonarCloud
+    # `always()` is load-bearing. Without it a failing shard would leave this job SKIPPED, and a
+    # skipped context reads like "not applicable" rather than "a coverage suite did not execute".
+    # The first step below turns every non-success shard result — failure, cancelled AND skipped —
+    # into a red context. ADR-0135 D3 is unaffected: this job is not itself a required check; it is
+    # the dependency the required `ci` aggregate already observes (Issue #2704).
+    if: ${{ always() }}
+    needs:
+      - coverage-packages
+      - coverage-scripts
+      - coverage-ui
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require every coverage suite to have executed
+        env:
+          PACKAGES_RESULT: ${{ needs.coverage-packages.result }}
+          SCRIPTS_RESULT: ${{ needs.coverage-scripts.result }}
+          UI_RESULT: ${{ needs.coverage-ui.result }}
+        run: |
+          set -euo pipefail
+          unexecuted=0
+          for entry in "packages:${PACKAGES_RESULT}" "keiko-ui:${UI_RESULT}" "scripts:${SCRIPTS_RESULT}"; do
+            if [ "${entry#*:}" != "success" ]; then
+              echo "Coverage suite '${entry%%:*}' did not succeed: ${entry#*:}"
+              unexecuted=1
+            fi
+          done
+          if [ "$unexecuted" -ne 0 ]; then
+            echo "A coverage suite must EXECUTE for this context to be green: failure, cancelled and"
+            echo "skipped are all non-success and fail closed here. A silently skipped shard must"
+            echo "never let this context pass with a coverage suite unexecuted."
+            exit 1
+          fi
+          echo "Every coverage suite succeeded."
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          # Pinned to the run's immutable commit, not the moving ref the single job could safely
+          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
+          # whenever the head or base moves. Skew would have the shards measure one tree while the
+          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Restore and maintain the npm download cache
+        # The one job that also SAVES. It runs after the measuring jobs, so a cold key costs exactly
+        # one post-job compression instead of six racing ones.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
+      - run: npm ci --ignore-scripts
+      # Reassembly happens before ANY evaluation, and the `needs:` edges above make that ordering
+      # structural rather than a convention: a per-file floor read off one shard's partial summary
+      # would silently under-report, so no gate below ever sees a shard-local view.
+      - name: Download package coverage shard evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          # The blob reporter's own default directory, so `test:coverage:packages:shard` followed
+          # by `test:coverage:packages:merge` composes locally too, with no artifact relocation.
+          path: .vitest-reports
+          pattern: coverage-blob-packages-*
+          merge-multiple: true
+      - name: Download keiko-ui coverage evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-report-ui
+          path: packages/keiko-ui/coverage
+      - name: Download script coverage evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-report-scripts
+          path: coverage/scripts
+      - name: Verify every package coverage shard delivered its evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # download-artifact's `pattern:` form succeeds silently when nothing matches, so it is the
+        # one fail-open primitive in this chain. Counting the blobs binds the hardcoded `/3` in the
+        # shard command to the matrix: if the two ever drift, a PARTIAL merge would otherwise be
+        # judged as if it were complete.
+        run: |
+          set -euo pipefail
+          expected=3
+          actual=$(find .vitest-reports -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
+          if [ "$actual" -ne "$expected" ]; then
+            echo "Expected $expected package coverage shard blobs, found $actual."
+            echo "A merge over a partial shard set would under-report every per-file floor."
+            exit 1
+          fi
+          echo "All $expected package coverage shard blobs are present."
+      - name: Reassemble merged package coverage
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # Vitest's own blob merge, not a bespoke reassembler: it merges the shards' coverage maps
+        # and re-runs the reporters, so `coverage/packages/lcov.info` and `coverage-summary.json`
+        # are regenerated rather than concatenated. The summary carries only covered/total counts
+        # with no line identity and is not losslessly concatenable. This run uses the JUDGING
+        # configuration, so the per-file floors are evaluated here, once, on complete coverage.
+        run: npm run test:coverage:packages:merge
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        run: npm run test:coverage:quality
+        run: npm run check:coverage:quality
       - name: Verify governed Sonar analysis scope
         run: npm run check:sonar-scope
       - name: Verify changed production sources are mapped into LCOV
@@ -292,13 +603,32 @@ jobs:
             exit 1
           fi
           echo "sha=$actual" >> "$GITHUB_OUTPUT"
+      - name: Restore the pinned Sonar Scanner CLI archive
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Keyed on the archive's own pinned digest, so a new scanner version or a corrected
+          # checksum is a different cache entry rather than a stale hit. The digest is re-verified
+          # after restore by the step below — the cache is a download saver, not a trust anchor.
+          # Cached where the scanner already lived: under RUNNER_TEMP, outside the repository.
+          path: ${{ runner.temp }}/sonar-scanner-cli.zip
+          key: sonar-scanner-cli-8.1.0.6389-linux-x64-bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b
       - name: Download Sonar Scanner CLI
         # Downloaded and checksum-verified directly rather than through a marketplace action whose
         # license is denied by the repository dependency-review policy.
         if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         run: |
+          set -euo pipefail
           scanner_zip="$RUNNER_TEMP/sonar-scanner-cli.zip"
-          curl --proto '=https' -sSfL -o "$scanner_zip" "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-linux-x64.zip"
+          if [ ! -f "$scanner_zip" ]; then
+            curl --proto '=https' -sSfL -o "$scanner_zip" "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-linux-x64.zip"
+          fi
+          # NEGATIVE CONTROL for Issue #2704, reverted in the next commit: corrupt the archive so
+          # the pinned digest check below has a tampered artifact to catch.
+          printf 'tampered' >> "$scanner_zip"
+          # Re-executed after every cache restore, and fail-closed by design: a restored archive
+          # whose digest does not match the pinned value is a tampered artifact, not a stale one.
+          # The remediation is to evict the cache entry, never to skip the verification.
           echo "bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b  $scanner_zip" | sha256sum --check
           unzip -q "$scanner_zip" -d "$RUNNER_TEMP"
           echo "SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64" >> "$GITHUB_ENV"
