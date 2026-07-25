@@ -701,17 +701,20 @@ export function useEditorVerificationRun(
   const [catalogSettled, setCatalogSettled] = useState(false);
   if (lastCatalogRoot !== root) {
     // React's documented "adjust state when a prop changes" idiom, deliberately during render.
-    // Resetting in the effect instead would land one commit late, so a re-bound root (A -> unbound
-    // -> A, or A -> B -> A while B never resolved) would report the PREVIOUS binding's settled
-    // state for exactly the commit that binds it — the one thing this signal exists to rule out
-    // (#2696). Adjusting during render re-renders before commit, so the committed DOM never shows
-    // a stale "settled", and it introduces no true -> false -> true flicker for a polling observer.
+    // The catalog AND its settled flag are invalidated here rather than in the effect below,
+    // because an effect-based reset lands one commit late. That commit would pair the newly bound
+    // root with the PREVIOUS root's catalog, and `catalog.workspaceTrust` drives both the initial
+    // trust prompt and the `data-trust-settled` readiness signal — so a root switch could raise a
+    // prompt for the new root off the old root's trust state (#2696). Adjusting during render
+    // re-renders before commit, so no committed render can observe that pairing, and a re-bound
+    // root (A -> unbound -> A) cannot inherit the previous binding's "settled" either. It
+    // introduces no true -> false -> true flicker for a polling observer.
     setLastCatalogRoot(root);
     setCatalogSettled(false);
+    setCatalog(null);
   }
 
   useEffect(() => {
-    setCatalog(null);
     if (root.length === 0) return undefined;
     const controller = new AbortController();
     void fetchVerificationCatalog(root, controller.signal)

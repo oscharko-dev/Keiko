@@ -190,6 +190,27 @@ function useObservedRun(root: string, observed: string[]): EditorVerificationRun
   return controls;
 }
 
+interface CommittedCatalogObservation {
+  readonly root: string;
+  readonly catalogProjectId: string | null;
+  readonly settled: boolean;
+}
+
+// Same committed-render discipline as `useObservedRun`, but records WHICH catalog each commit paired
+// with the bound root. `catalog.workspaceTrust` is what the editor derives its initial trust prompt
+// from, so the pairing itself — not just the settled flag — is the thing a root switch must not get
+// wrong.
+function useObservedCatalog(root: string, observed: CommittedCatalogObservation[]): void {
+  const controls = useEditorVerificationRun({ root, activeFile: null });
+  useEffect(() => {
+    observed.push({
+      root,
+      catalogProjectId: controls.catalog?.projectId ?? null,
+      settled: controls.catalogSettled,
+    });
+  });
+}
+
 describe("useEditorVerificationRun", () => {
   it("resolves the file-targeted verification target from the active file", () => {
     expect(render("src/foo.ts").result.current.verifiableTarget).toBe("src/foo.test.ts");
@@ -1141,6 +1162,53 @@ describe("useEditorVerificationRun", () => {
     });
     await tick();
     expect(observed).toContain("/project-b:true");
+  });
+
+  it("never pairs a newly bound root with the PREVIOUS root's catalog", async () => {
+    const pendingB = deferredResponse();
+    fetchMock.mockImplementation((url: string) => {
+      if (isCatalogRequest(url, "/project-b")) return pendingB.promise;
+      if (isCatalogRequest(url)) return Promise.resolve(response(catalog("/project-a")));
+      return Promise.resolve(response({ ok: true }));
+    });
+
+    const observed: CommittedCatalogObservation[] = [];
+    const { rerender } = renderHook(
+      ({ root }: { readonly root: string }) => {
+        useObservedCatalog(root, observed);
+      },
+      { initialProps: { root: "/project-a" } },
+    );
+    await tick();
+    expect(observed.at(-1)).toEqual({
+      root: "/project-a",
+      catalogProjectId: "/project-a",
+      settled: true,
+    });
+
+    observed.length = 0;
+    rerender({ root: "/project-b" });
+    // Invalidating the catalog in the effect instead of during render lands one commit late, and
+    // THAT commit pairs the newly bound root with the previous root's catalog. Since
+    // `catalog.workspaceTrust` drives the initial trust prompt, the pairing is enough to raise a
+    // prompt for /project-b off /project-a's trust state (#2696) — the settled flag being false in
+    // that commit does not prevent it, because the prompt is raised from the catalog, not from
+    // readiness. So every commit that binds the new root must already report a null catalog.
+    const staleFreeCommit = { root: "/project-b", catalogProjectId: null, settled: false };
+    expect(observed.length).toBeGreaterThan(0);
+    // Only the LENGTH is borrowed from the actual log: this asserts every committed render equals
+    // the stale-free shape, while still producing a per-entry diff when one of them does not.
+    expect(observed).toEqual(observed.map(() => staleFreeCommit));
+
+    await act(async () => {
+      pendingB.resolve(response(catalog("/project-b")));
+    });
+    await tick();
+    expect(observed.at(-1)).toEqual({
+      root: "/project-b",
+      catalogProjectId: "/project-b",
+      settled: true,
+    });
   });
 
   it("clears catalogSettled when the SAME root is re-bound after an unbound render", async () => {

@@ -54,7 +54,10 @@ import {
   type EditorOutlineSnapshot,
 } from "./editorOutlineModel";
 import { type EditorPaletteHost } from "./editorCommands";
-import { useEditorVerificationRun } from "./useEditorVerificationRun";
+import {
+  useEditorVerificationRun,
+  type EditorVerificationRunControls,
+} from "./useEditorVerificationRun";
 import { useEditorSettings } from "./useEditorSettings";
 import {
   WorkspaceTrustBanner,
@@ -383,6 +386,25 @@ interface PaneBinding {
 
 function nonEmptyRoot(value: string): string | undefined {
   return value.length > 0 ? value : undefined;
+}
+
+/**
+ * #2696 — deterministic post-trust readiness signal for browser regression harnesses. Reports
+ * `"true"` only once the workspace-trust status for the bound root has resolved (or definitively
+ * failed to resolve) AND the initial-prompt decision has been committed, so an observer can read
+ * the prompt's presence in that same commit instead of racing it with a timeout. Derived outside
+ * the component so the widget's cognitive complexity is unaffected.
+ */
+function resolveTrustSettledAttribute(
+  verification: EditorVerificationRunControls,
+  promptedTrustRoot: string | null,
+  workspaceRoot: string,
+): "true" | "false" {
+  if (!verification.catalogSettled) return "false";
+  const initialPromptPending =
+    verification.catalog?.workspaceTrust.trust === "restricted" &&
+    promptedTrustRoot !== workspaceRoot;
+  return initialPromptPending ? "false" : "true";
 }
 
 export function EditorWidget({
@@ -1747,22 +1769,14 @@ export function EditorWidget({
       loading: false,
     } satisfies EditorOutlineSnapshot);
 
-  // #2696 — deterministic post-trust readiness signal for browser regression harnesses. The
-  // attribute flips to "true" only once the workspace-trust status for the bound root has
-  // resolved (or definitively failed to resolve) AND the initial-prompt decision has been
-  // committed to state, so an observer can read the prompt's presence in that same commit
-  // instead of racing it with a timeout.
-  const initialTrustPromptPending =
-    verification.catalog?.workspaceTrust.trust === "restricted" &&
-    promptedTrustRoot !== workspaceRoot;
-  const trustSettled = verification.catalogSettled && !initialTrustPromptPending;
+  const trustSettled = resolveTrustSettledAttribute(verification, promptedTrustRoot, workspaceRoot);
 
   return (
     <div
       className={`editor-workspace${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}`}
       data-tab-dragging={draggedTab === null ? "false" : "true"}
       data-pane-count={paneCount}
-      data-trust-settled={trustSettled ? "true" : "false"}
+      data-trust-settled={trustSettled}
       ref={workspaceRef}
       style={{ "--ed-sidebar-width": `${String(layout.sidebarWidth)}px` } as CSSProperties}
     >

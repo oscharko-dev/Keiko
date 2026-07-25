@@ -1963,14 +1963,17 @@ type CatalogOutcome = "trusted" | "restricted" | "unavailable";
 
 const CATALOG_URL = "/api/editor/verification/catalog";
 
-function catalogPayload(trust: "trusted" | "restricted"): Record<string, unknown> {
+function catalogPayload(
+  projectId: string,
+  trust: "trusted" | "restricted",
+): Record<string, unknown> {
   return {
     schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
-    projectId: "/repo",
+    projectId,
     workspaceTrust: {
       kind: "workspace-trust-status",
       schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
-      projectId: "/repo",
+      projectId,
       trust,
       decidedBy: "server",
       reason: trust === "trusted" ? "human-grant" : "human-revocation",
@@ -1988,15 +1991,53 @@ function jsonResponse(ok: boolean, body: Record<string, unknown>): Response {
   return { ok, status: ok ? 200 : 500, json: () => Promise.resolve(body) } as Response;
 }
 
+// The hook rejects a catalog whose `projectId` differs from the requested root, so the stub has to
+// echo back the root that was actually asked for — a hardcoded one would make every root but that
+// one resolve as "unavailable".
+function requestedProjectId(url: string): string {
+  return new URL(url, "http://127.0.0.1").searchParams.get("projectId") ?? "";
+}
+
+function catalogResponse(projectId: string, outcome: CatalogOutcome): Response {
+  return outcome === "unavailable"
+    ? jsonResponse(false, {})
+    : jsonResponse(true, catalogPayload(projectId, outcome));
+}
+
 function stubVerificationFetch(outcome: CatalogOutcome): void {
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string) => {
       if (!url.startsWith(CATALOG_URL)) return Promise.resolve(jsonResponse(false, {}));
-      if (outcome === "unavailable") return Promise.resolve(jsonResponse(false, {}));
-      return Promise.resolve(jsonResponse(true, catalogPayload(outcome)));
+      return Promise.resolve(catalogResponse(requestedProjectId(url), outcome));
     }),
   );
+}
+
+// Per-root catalog stub. A root mapped to a still-pending promise keeps its catalog in flight until
+// the test releases it, so "is the NEW root settled yet?" has a deterministic window instead of
+// racing an already-resolved promise. An unmapped root resolves as unavailable (fail closed).
+function stubVerificationFetchByRoot(byRoot: ReadonlyMap<string, Promise<Response>>): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (!url.startsWith(CATALOG_URL)) return Promise.resolve(jsonResponse(false, {}));
+      return byRoot.get(requestedProjectId(url)) ?? Promise.resolve(jsonResponse(false, {}));
+    }),
+  );
+}
+
+interface DeferredCatalog {
+  readonly promise: Promise<Response>;
+  readonly resolve: (value: Response) => void;
+}
+
+function deferredCatalog(): DeferredCatalog {
+  let settle: (value: Response) => void = () => undefined;
+  const promise = new Promise<Response>((resolve) => {
+    settle = resolve;
+  });
+  return { promise, resolve: (value: Response): void => settle(value) };
 }
 
 function workspaceRootOf(container: HTMLElement): Element {
@@ -2051,6 +2092,68 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
       expect(
         screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
       ).toBeInTheDocument();
+      expect(observations.some((entry) => entry.settled === "true")).toBe(true);
+      expect(
+        observations
+          .filter((entry) => entry.settled === "true")
+          .every((entry) => entry.promptMounted),
+      ).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("re-arms the signal on a root switch and re-prompts only from the NEW restricted root", async () => {
+    const pendingB = deferredCatalog();
+    stubVerificationFetchByRoot(
+      new Map([
+        ["/repo-a", Promise.resolve(catalogResponse("/repo-a", "restricted"))],
+        ["/repo-b", pendingB.promise],
+      ]),
+    );
+    try {
+      const { container, rerender } = render(<EditorWidget root="/repo-a" file="src/a.ts" />);
+      const workspace = workspaceRootOf(container);
+      await waitFor(() => {
+        expect(workspace).toHaveAttribute("data-trust-settled", "true");
+      });
+      expect(
+        screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
+      ).toBeInTheDocument();
+
+      const observations: SettledObservation[] = [];
+      const observer = observeSettledTransitions(workspace, observations);
+      try {
+        rerender(<EditorWidget root="/repo-b" file="src/a.ts" />);
+        // A switch to an undecided root re-arms the signal: /repo-a's prompt is dismissed and
+        // readiness drops back to "false" until /repo-b's own trust state resolves.
+        await waitFor(() => {
+          expect(workspace).toHaveAttribute("data-trust-settled", "false");
+        });
+        // The stale-catalog class (#2696): while /repo-b's catalog is still in flight the ONLY
+        // trust state in the tree is /repo-a's. A prompt standing here could only have been raised
+        // from the previous root's catalog — which is exactly the pairing the render-phase catalog
+        // invalidation rules out. An effect-based invalidation raises it one commit after the
+        // switch, before /repo-b has said anything at all.
+        expect(screen.queryByRole("alertdialog")).toBeNull();
+
+        await act(async () => {
+          pendingB.resolve(catalogResponse("/repo-b", "restricted"));
+        });
+        await waitFor(() => {
+          expect(workspace).toHaveAttribute("data-trust-settled", "true");
+        });
+      } finally {
+        observer.disconnect();
+      }
+
+      // Re-settling is again a conjunction: the prompt for the NEW root is already mounted in the
+      // commit that reports "true", so a synchronous read resolves it.
+      expect(
+        screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
+      ).toBeInTheDocument();
+      expect(observations.some((entry) => entry.settled === "false")).toBe(true);
       expect(observations.some((entry) => entry.settled === "true")).toBe(true);
       expect(
         observations
