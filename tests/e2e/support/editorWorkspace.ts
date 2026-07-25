@@ -43,6 +43,14 @@ export const EDITOR_SELECTORS = {
   loadError: "[role='alert']",
 } as const;
 
+/**
+ * The workspace-root attribute that reports whether workspace trust has settled (#2696). It is
+ * `"true"` only once the trust status for the bound root has resolved — or definitively failed to
+ * resolve — AND the initial-prompt decision has been committed, so the prompt (if any) is already
+ * mounted in that very commit. Rendered by EditorWidget.tsx on `EDITOR_SELECTORS.workspace`.
+ */
+export const EDITOR_TRUST_SETTLED_ATTRIBUTE = "data-trust-settled";
+
 /** The IndexedDB database/store the hot-exit snapshots are persisted into (editorHotExitStore.ts). */
 const HOT_EXIT_DB = "keiko-editor-hot-exit";
 const HOT_EXIT_STORE = "snapshots";
@@ -322,34 +330,29 @@ export async function seedEditorWindow(
   );
 }
 
-/** Wait for the workspace and its tablist, then return the workspace locator. */
+/** Wait for the workspace, its tablist, and a settled workspace-trust decision; return the workspace. */
 export async function openEditorWorkspace(
   page: Page,
   options: { readonly dismissTrustPrompt?: boolean } = {},
 ): Promise<Locator> {
   const workspace = page.locator(EDITOR_SELECTORS.workspace).first();
   await expect(workspace.locator(EDITOR_SELECTORS.tablist).first()).toBeVisible();
+  // Condition-based settlement on the app's own readiness signal (#2696). The workspace root only
+  // reports `data-trust-settled="true"` once the trust status for the bound root has resolved (or
+  // definitively failed to resolve, e.g. an unregistered project) AND the initial-prompt decision
+  // has been committed — the prompt is mounted in that same React commit. So the presence check
+  // below needs no retry and no timeout: after this assertion, "no dialog in the DOM" provably
+  // means "no dialog will be raised for this load".
+  //
+  // This replaces a bounded `waitFor(..., { timeout: 5_000 })` whose expiry was swallowed as
+  // "no dialog" — a genuinely stuck trust resolution silently degraded into a skipped dismissal
+  // instead of a failure. It preserves the #2627 invariant that the helper leaves NO lingering
+  // locator poll running after it returns: every wait here is awaited to completion, so the
+  // helper's own footprint stays invisible to the D12 stopped-projection measurement.
+  await expect(workspace).toHaveAttribute(EDITOR_TRUST_SETTLED_ATTRIBUTE, "true");
   if (options.dismissTrustPrompt ?? true) {
-    // Bounded, self-contained trust-dialog dismiss. The initial-prompt dialog is rendered in
-    // the same React commit that resolves the workspace-trust status carried in the
-    // verification catalog — so on the restricted path it appears within the app's own
-    // sub-second post-mount window. Wait for it with an EXPLICIT timeout (Playwright's
-    // default `locator.waitFor` timeout is `0` = indefinite; leaving it unbounded let a
-    // broken UI hang the helper for the whole test-lane timeout, which is what the E2E
-    // editor lanes on this PR first tripped over). The 5 s ceiling comfortably outruns the
-    // restricted-path React-commit latency, and returns cleanly on the pre-trusted path
-    // where no dialog will ever render. The earlier iteration raced this wait against a
-    // `page.waitForResponse` on the trust catalog; the loser of that race left a
-    // ~10-15 s locator poll running against the DOM after the helper returned, which
-    // introduced background long-task pressure that showed up in the D12 stopped-projection
-    // p75 measurement. Sequencing the wait — with a single bounded `waitFor` and no
-    // lingering promise — keeps the helper's footprint invisible to the D12 harness.
     const dialog = page.getByRole("alertdialog", { name: /Trust this workspace/iu });
-    const dialogAppeared: boolean = await dialog
-      .waitFor({ state: "visible", timeout: 5_000 })
-      .then((): true => true)
-      .catch((): false => false);
-    if (dialogAppeared) {
+    if ((await dialog.count()) > 0) {
       await dialog.getByRole("button", { name: "Stay restricted" }).click();
       await expect(dialog).toBeHidden();
     }

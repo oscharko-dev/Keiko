@@ -32,6 +32,10 @@ jobs:
       - name: Scan dependency manifests with OSV Scanner
         uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
         with:
+          # `--config` is passed explicitly rather than relying on directory auto-discovery, so the
+          # committed triage record in osv-scanner.toml is the single, reviewable source of every
+          # time-boxed waiver instead of something the scanner may or may not pick up per lockfile.
           scan-args: |-
+            --config=osv-scanner.toml
             --recursive
             ./
