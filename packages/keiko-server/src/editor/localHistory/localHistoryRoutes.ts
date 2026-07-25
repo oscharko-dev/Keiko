@@ -3,7 +3,7 @@ import { resolveAppSessionReadAuthority } from "../../coding-app-session/appSess
 import type { UiHandlerDeps } from "../../deps.js";
 import {
   readJsonObject,
-  resolveEditorFileIdentity,
+  resolveContainedEditorFilePath,
   resolveRoot,
   runFilesHandler,
 } from "../../files.js";
@@ -76,12 +76,20 @@ async function rootScope(
   };
 }
 
+// A checkpoint outlives the file it records, so every entry-scoped route asserts containment
+// without requiring the file to still be there (#2616). The bytes served come from this store's own
+// encrypted body, never from the workspace file, so existence was never what made the read safe.
 async function fileScope(
   deps: UiHandlerDeps,
   rootInput: string | null,
   pathInput: string | null,
 ): Promise<{ readonly scope: EditorLocalHistoryRootScope; readonly relativePath: string }> {
-  const file = await resolveEditorFileIdentity(deps.store, rootInput, pathInput, deps.redactor);
+  const file = await resolveContainedEditorFilePath(
+    deps.store,
+    rootInput,
+    pathInput,
+    deps.redactor,
+  );
   return { scope: await rootScope(deps, file.realRoot), relativePath: file.relativePath };
 }
 
@@ -97,7 +105,7 @@ async function authorizedEntry(
   const scope = await rootScope(deps, rootInput);
   const store = historyStore(deps);
   const entry = store.entry(scope, ctx.params.entryRef ?? "");
-  await resolveEditorFileIdentity(deps.store, rootInput, entry.relativePath, deps.redactor);
+  await resolveContainedEditorFilePath(deps.store, rootInput, entry.relativePath, deps.redactor);
   return { scope, entry, store };
 }
 

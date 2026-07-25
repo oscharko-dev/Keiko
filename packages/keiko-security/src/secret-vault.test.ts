@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
@@ -18,6 +19,7 @@ import {
   SecretVaultStoreError,
   createKeychainVaultKeyAccess,
   createLocalSecretVault,
+  createShardedLocalSecretVault,
   readLocalVaultReferences,
   resolveLocalVaultKey,
 } from "./secret-vault.js";
@@ -580,5 +582,185 @@ describe("createKeychainVaultKeyAccess", () => {
       throw new Error("security unavailable");
     };
     expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createShardedLocalSecretVault — one sealed file per entry (#2616)
+// ---------------------------------------------------------------------------
+
+function shardedVaultAt(storeDir: string): ReturnType<typeof createShardedLocalSecretVault> {
+  return createShardedLocalSecretVault({ key: KEY, storeDir });
+}
+
+describe("createShardedLocalSecretVault — CRUD parity with the single-file layout", () => {
+  it("round-trips, reports membership, lists references, and deletes one entry", () => {
+    const vault = shardedVaultAt(join(dir, "sharded"));
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:b", "secret-B");
+
+    expect(vault.get("cred:a")).toBe("secret-A");
+    expect(vault.get("cred:b")).toBe("secret-B");
+    expect(vault.get("cred:missing")).toBeUndefined();
+    expect(vault.has("cred:a")).toBe(true);
+    expect(vault.has("cred:missing")).toBe(false);
+    expect([...vault.list()].sort()).toEqual(["cred:a", "cred:b"]);
+
+    vault.delete("cred:a");
+    expect(vault.get("cred:a")).toBeUndefined();
+    expect(vault.list()).toEqual(["cred:b"]);
+    // Deleting an absent reference is a no-op, never a throw.
+    expect(() => {
+      vault.delete("cred:a");
+    }).not.toThrow();
+  });
+
+  it("replaces a value in place and replaceAll drops references not supplied", () => {
+    const vault = shardedVaultAt(join(dir, "sharded"));
+    vault.set("cred:a", "first");
+    vault.set("cred:a", "second");
+    expect(vault.get("cred:a")).toBe("second");
+    expect(vault.list()).toEqual(["cred:a"]);
+
+    vault.set("cred:stale", "gone");
+    vault.replaceAll(new Map([["cred:kept", "kept-value"]]));
+    expect([...vault.list()].sort()).toEqual(["cred:kept"]);
+    expect(vault.get("cred:kept")).toBe("kept-value");
+  });
+
+  it("writes one 0600 file per entry into a 0700 directory and never plaintext", () => {
+    const storeDir = join(dir, "sharded");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "plaintext-marker-A");
+    vault.set("cred:b", "plaintext-marker-B");
+
+    const files = readdirSync(storeDir);
+    expect(files).toHaveLength(2);
+    for (const name of files) {
+      const filePath = join(storeDir, name);
+      expect(readFileSync(filePath, "utf8")).not.toContain("plaintext-marker");
+      expect(readFileSync(filePath, "utf8").startsWith("kv1.")).toBe(true);
+      expect(statSync(filePath).mode & 0o777).toBe(0o600);
+    }
+    expect(statSync(storeDir).mode & 0o777).toBe(0o700);
+  });
+
+  it("ignores foreign and malformed filenames instead of reporting them as references", () => {
+    const storeDir = join(dir, "sharded");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "secret-A");
+    writeFileSync(join(storeDir, "README.txt"), "not an entry", "utf8");
+    writeFileSync(join(storeDir, "entry-zz.sealed"), "not hex", "utf8");
+    writeFileSync(join(storeDir, "entry-616.sealed"), "odd length", "utf8");
+    writeFileSync(join(storeDir, "entry-.sealed"), "empty", "utf8");
+    // Valid hex that UTF-8 cannot represent: it would decode to a reference whose own filename is
+    // a different one, so it is not a reference this vault could have written.
+    writeFileSync(join(storeDir, "entry-eda080.sealed"), "lone surrogate", "utf8");
+
+    expect(vault.list()).toEqual(["cred:a"]);
+  });
+
+  it("returns undefined for an entry file that is not a sealed envelope", () => {
+    const storeDir = join(dir, "sharded");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "secret-A");
+    const [name] = readdirSync(storeDir);
+    writeFileSync(join(storeDir, name ?? "missing"), "tampered-not-sealed", "utf8");
+
+    expect(vault.get("cred:a")).toBeUndefined();
+    expect(vault.has("cred:a")).toBe(false);
+  });
+
+  it("lists nothing before the first write", () => {
+    const vault = shardedVaultAt(join(dir, "sharded"));
+    expect(vault.list()).toEqual([]);
+    expect(vault.get("cred:a")).toBeUndefined();
+  });
+
+  it("refuses to STORE a reference no filename can represent, and treats it as absent on read", () => {
+    const vault = shardedVaultAt(join(dir, "sharded"));
+    // A lone surrogate is not UTF-8 encodable: Buffer substitutes U+FFFD, so two distinct
+    // references would land on ONE file and silently serve each other's secret. Over-long
+    // references cannot be named at all. Both are refused on the way in.
+    for (const reference of ["\uD800", "\uDC00", "r".repeat(97)]) {
+      expect(() => {
+        vault.set(reference, "unstorable");
+      }).toThrow(/cannot be stored/u);
+      expect(() => {
+        vault.replaceAll(new Map([[reference, "unstorable"]]));
+      }).toThrow(/cannot be stored/u);
+    }
+
+    // A reference that can hold no entry reports absent rather than throwing, exactly as the
+    // single-file layout does for any unknown reference.
+    vault.set("\uFFFD", "replacement-character-is-storable");
+    expect(vault.get("\uD800")).toBeUndefined();
+    expect(vault.has("\uD800")).toBe(false);
+    expect(() => {
+      vault.delete("\uD800");
+    }).not.toThrow();
+    expect(vault.get("\uFFFD")).toBe("replacement-character-is-storable");
+  });
+
+  it("reports an unreadable entry as absent instead of throwing a raw fs error", () => {
+    const storeDir = join(dir, "sharded");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "secret-A");
+    const [name] = readdirSync(storeDir);
+    // A directory where the entry file belongs makes readFileSync raise EISDIR. One unreadable
+    // entry says nothing about the others, so it reports absent — which is what get/has promise.
+    rmSync(join(storeDir, name ?? "missing"));
+    mkdirSync(join(storeDir, name ?? "missing"), { recursive: true });
+
+    expect(vault.get("cred:a")).toBeUndefined();
+    expect(vault.has("cred:a")).toBe(false);
+  });
+
+  it("never lists a filename it would refuse to read or delete under that reference", () => {
+    const storeDir = join(dir, "sharded");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "secret-A");
+    // Well-formed hex, but the reference it decodes to is past the byte bound, so this vault would
+    // never store it under this name. Listing it would name a body no caller could ever reclaim.
+    const overLong = Buffer.from("r".repeat(97), "utf8").toString("hex");
+    writeFileSync(join(storeDir, `entry-${overLong}.sealed`), "unreachable", "utf8");
+
+    expect(vault.list()).toEqual(["cred:a"]);
+  });
+
+  it("refuses to enumerate through a symlinked store directory", () => {
+    const storeDir = join(dir, "sharded-list");
+    mkdirSync(join(dir, "foreign"), { recursive: true });
+    shardedVaultAt(join(dir, "foreign")).set("cred:foreign", "not mine");
+    symlinkSync(join(dir, "foreign"), storeDir);
+
+    // The single-file list() reads through readStore, which refuses a symlinked path; the sharded
+    // one must not become the one operation a hostile redirect can enumerate.
+    expect(() => shardedVaultAt(storeDir).list()).toThrow(/symlinked path/u);
+  });
+
+  it("leaves no temp file behind when the commit rename fails", () => {
+    const storeDir = join(dir, "sharded");
+    const reference = "cred:blocked";
+    const shardName = `entry-${Buffer.from(reference, "utf8").toString("hex")}.sealed`;
+    // A non-empty directory sitting on the entry's own path makes renameSync fail after the temp
+    // file is written and fsynced, which is the only way into the cleanup branch.
+    mkdirSync(join(storeDir, shardName), { recursive: true });
+    writeFileSync(join(storeDir, shardName, "occupant"), "blocks the rename", "utf8");
+
+    expect(() => {
+      shardedVaultAt(storeDir).set(reference, "secret-A");
+    }).toThrow();
+    expect(readdirSync(storeDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("refuses to write through a symlinked path segment", () => {
+    const storeDir = join(dir, "sharded");
+    mkdirSync(join(dir, "elsewhere"), { recursive: true });
+    symlinkSync(join(dir, "elsewhere"), storeDir);
+
+    expect(() => {
+      shardedVaultAt(storeDir).set("cred:a", "secret-A");
+    }).toThrow(/symlinked path/u);
   });
 });

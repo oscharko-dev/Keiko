@@ -9,7 +9,7 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { emitServerDiagnostic } from "../../diagnostics-log.js";
 import { WorkspaceManifestService } from "../../workspace-manifests.js";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
-import { EditorLocalHistoryError } from "./localHistoryStore.js";
+import { EditorLocalHistoryError, editorLocalHistoryWorkspaceId } from "./localHistoryStore.js";
 
 export interface EditorLocalHistoryResolvedRoot {
   readonly workspaceId: string;
@@ -50,8 +50,12 @@ export function resolveEditorLocalHistoryRoot(
     if (inspected.rootRef !== root.rootRef || inspected.identityDigest !== root.identityDigest) {
       return unavailableRoot("IDENTITY_DRIFT");
     }
+    // Membership still decides ACCESS — a root outside every manifest has no history surface. It
+    // no longer decides IDENTITY: the history workspace is derived from the root, so joining or
+    // leaving a multi-root workspace carries this root's checkpoints along instead of stranding
+    // them under a manifest id the root no longer has (#2616).
     return {
-      workspaceId: manifest.workspaceId,
+      workspaceId: editorLocalHistoryWorkspaceId(root.rootRef),
       rootRef: root.rootRef,
       rootIdentityDigest: root.identityDigest,
       realRoot,
