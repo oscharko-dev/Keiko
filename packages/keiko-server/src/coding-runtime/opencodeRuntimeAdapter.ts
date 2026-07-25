@@ -844,9 +844,17 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   };
 }
 
-type GeneratedToolAction = "read" | "edit" | "verification" | "egress" | "skill" | "child-agent";
+type GeneratedToolAction =
+  "read" | "discover" | "edit" | "verification" | "egress" | "skill" | "child-agent";
 
 function toolDescription(action: GeneratedToolAction): string {
+  if (action === "discover") {
+    return (
+      "Find exact workspace-relative file paths through Keiko's bounded repository discovery. " +
+      "Search by short filename or path keywords before reading files; * returns only a bounded " +
+      "overview. Denied and ignored paths never appear."
+    );
+  }
   if (action === "read") {
     return (
       "Read one repository text file through Keiko governance — the only way to observe " +
@@ -926,10 +934,10 @@ function toolSource(
     "function validResult(value) {",
     '  if (!value || typeof value !== "object" || Array.isArray(value)) return false;',
     '  if (!["completed", "failed", "denied", "invalid", "cancelled", "busy", "observed"].includes(value.status)) return false;',
-    '  if ((action !== "read" && action !== "egress") || value.status !== "completed") return true;',
+    '  if ((action !== "read" && action !== "discover" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
     '  if (!read || typeof read !== "object" || Array.isArray(read) || typeof read.text !== "string" || !Number.isSafeInteger(read.byteCount) || !/^[a-f0-9]{64}$/.test(read.digest)) return false;',
-    '  if (action !== "read") return true;',
+    '  if (action !== "read" && action !== "discover") return true;',
     "  if (!Number.isSafeInteger(read.totalLines) || read.totalLines < 0) return false;",
     "  return read.nextStartLine === undefined || (Number.isSafeInteger(read.nextStartLine) && read.nextStartLine >= 2);",
     "}",

@@ -1,5 +1,5 @@
 import type { UiHandlerDeps } from "../../deps.js";
-import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
+import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../../routes.js";
 import {
   editorSettingsRootToken,
@@ -142,7 +142,7 @@ async function handleMutation(
   const key = idempotencyKey(ctx);
   if (body === undefined || key === undefined) return invalid();
   return runFilesHandler(async () => {
-    const resolved = await resolveRoot(deps.store, body.root, deps.redactor);
+    const resolved = await resolveRequestRoot(ctx, deps, body.root);
     if (!hasWorkspaceRevisionPrecondition(ctx, body.expectedRevision, resolved.realRoot))
       return invalid();
     const result = await deps.editorSettingsControl?.mutate({

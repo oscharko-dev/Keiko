@@ -1082,5 +1082,65 @@
   "settings.security.placeholder": {
     "en": "SSO · audit log · data residency - coming soon.",
     "de": "SSO · Audit-Log · Datenresidenz - bald verfügbar."
+  },
+  "settings.autonomy.title": {
+    "en": "Autonomy and governance",
+    "de": "Autonomie und Governance"
+  },
+  "settings.autonomy.description": {
+    "en": "Choose Keiko's product-wide operating mode. The effective mode applies to coding, memory, tools, and every other autonomy-capable surface.",
+    "de": "Lege Keikos produktweiten Arbeitsmodus fest. Der wirksame Modus gilt für Coding, Memory, Tools und alle weiteren autonomiefähigen Bereiche."
+  },
+  "settings.autonomy.mode.legend": {
+    "en": "Default operating mode",
+    "de": "Standard-Arbeitsmodus"
+  },
+  "settings.autonomy.mode.capped": {
+    "en": "Capped by this deployment",
+    "de": "Durch diese Bereitstellung begrenzt"
+  },
+  "settings.autonomy.mode.governedAssist.label": {
+    "en": "Ask for approval",
+    "de": "Um Genehmigung bitten"
+  },
+  "settings.autonomy.mode.governedAssist.description": {
+    "en": "Read and plan freely. Ask before edits, commands, external files, internet access, or delivery.",
+    "de": "Lesen und planen ohne Rückfrage. Vor Änderungen, Befehlen, externen Dateien, Internetzugriff oder Auslieferung nachfragen."
+  },
+  "settings.autonomy.mode.supervisedCoding.label": {
+    "en": "Supervised workspace",
+    "de": "Überwachter Workspace"
+  },
+  "settings.autonomy.mode.supervisedCoding.description": {
+    "en": "Handle routine workspace edits and verified commands. Ask before risky or external actions.",
+    "de": "Routineänderungen im Workspace und geprüfte Befehle selbstständig ausführen. Vor riskanten oder externen Aktionen nachfragen."
+  },
+  "settings.autonomy.mode.autonomousDelivery.label": {
+    "en": "Full access",
+    "de": "Vollzugriff"
+  },
+  "settings.autonomy.mode.autonomousDelivery.description": {
+    "en": "Work autonomously inside the validated authority envelope, including internet use and governed delivery.",
+    "de": "Innerhalb des validierten Authority Envelope autonom arbeiten – einschließlich Internetzugriff und kontrollierter Auslieferung."
+  },
+  "settings.autonomy.effective": {
+    "en": "Effective: {mode}",
+    "de": "Wirksam: {mode}"
+  },
+  "settings.autonomy.clamped": {
+    "en": "This deployment currently limits the effective mode to {mode}.",
+    "de": "Diese Bereitstellung begrenzt den wirksamen Modus derzeit auf {mode}."
+  },
+  "settings.autonomy.error.hydrate": {
+    "en": "The current autonomy policy could not be loaded. Keiko remains fail-closed.",
+    "de": "Die aktuelle Autonomierichtlinie konnte nicht geladen werden. Keiko bleibt sicher eingeschränkt."
+  },
+  "settings.autonomy.error.persist": {
+    "en": "The autonomy mode could not be saved. The previous server-confirmed mode remains active.",
+    "de": "Der Autonomiemodus konnte nicht gespeichert werden. Der zuvor serverbestätigte Modus bleibt aktiv."
+  },
+  "settings.autonomy.footnote": {
+    "en": "Full access removes per-action prompts only inside the validated authority envelope. Hard denials and deployment ceilings always remain enforced.",
+    "de": "Vollzugriff entfernt Einzelrückfragen nur innerhalb des validierten Authority Envelope. Harte Verbote und Bereitstellungsgrenzen bleiben immer wirksam."
   }
 }

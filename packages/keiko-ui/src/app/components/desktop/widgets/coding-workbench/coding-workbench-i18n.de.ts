@@ -8,11 +8,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.header.summary":
     "Starte und beaufsichtige einen gesteuerten Coding-Lauf. Autorität und Ergebnisse bleiben serverseitig.",
   "codingWorkbench.mode.eyebrow": "Autonomie",
-  "codingWorkbench.mode.title": "Angeforderten Modus auswählen",
-  "codingWorkbench.mode.group": "Coding-Autonomiemodus",
-  "codingWorkbench.mode.capped": "Durch Bereitstellung begrenzt",
-  "codingWorkbench.mode.boundary":
-    "Serverseitig wirksamer Modus: {effectiveMode}. Bereitstellungsgrenze: {deploymentCeiling}.",
+  "codingWorkbench.mode.unconfirmed": "Warten auf Serverbestätigung",
   "codingWorkbench.mode.governed-assist.label": "Um Genehmigung bitten",
   "codingWorkbench.mode.governed-assist.description":
     "Lese- und Planungsvorgänge werden ausgeführt; Bearbeitungen im Arbeitsbereich, Befehle, der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
@@ -22,13 +18,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.mode.autonomous-delivery.label": "Vollzugriff",
   "codingWorkbench.mode.autonomous-delivery.description":
     "Datei- und Internetvorgänge innerhalb des validierten Authority Envelope werden ohne Genehmigung pro Aktion ausgeführt. Die Auslieferung bleibt separat menschlich genehmigt.",
-  "codingWorkbench.mode.locked":
-    "Moduswechsel werden nur akzeptiert, während der Lauf im Leerlauf oder pausiert ist.",
-  "codingWorkbench.mode.wideningRejected":
-    "Der Server hat diese Änderung abgelehnt: Eine Erweiterung der Berechtigung erfordert zuerst das Stoppen des Laufs.",
   "codingWorkbench.task.eyebrow": "Aufgabe",
   "codingWorkbench.task.title": "Begrenzte Coding-Aufgabe beschreiben",
   "codingWorkbench.task.instructions": "Aufgabenanweisungen",
+  "codingWorkbench.task.placeholder":
+    "Bitte Keiko, etwas in diesem Repository zu prüfen, zu erklären, umzusetzen, zu testen oder zu reparieren…",
   "codingWorkbench.task.help":
     "Aufgabentext ist eine flüchtige Absicht. Start wird erst freigeschaltet, wenn alle Bereitschaftsprüfungen bestätigt sind.",
   "codingWorkbench.task.starting": "Wird gestartet…",
@@ -75,22 +69,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Workspace konnte nicht verifiziert werden. Die Reconciliation hat keinen sauberen, passenden Checkout bestätigt, daher bleibt der Lauf nicht verfügbar. Prüfe das Repository und versuche es erneut.",
   "codingWorkbench.setup.runtimeUnavailable":
     "Das Starten eines Coding-Laufs ist auf dieser Installation nicht verfügbar, bis die Coding-Runtime aktiv ist. Du kannst jetzt einen Workspace binden; der Lauf wird startbar, sobald die Runtime bestätigt ist.",
-  "codingWorkbench.readiness.eyebrow": "Bereitschaft",
-  "codingWorkbench.readiness.title": "Unabhängige Live-Ressourcen",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",
-  "codingWorkbench.readiness.modelSource.confirmed": "Server bestätigt",
   "codingWorkbench.readiness.modelSource.select": "Verfügbare Quelle auswählen",
   "codingWorkbench.readiness.workspace.label": "Aufgabenarbeitsbereich",
   "codingWorkbench.readiness.workspace.none": "Kein aktiver Aufgabenarbeitsbereich",
-  "codingWorkbench.readiness.runtime.label": "Coding-Runtime",
-  "codingWorkbench.readiness.runtime.available": "Steuerungsebene verfügbar",
-  "codingWorkbench.readiness.runtime.notConfirmed": "Runtime nicht bestätigt",
-  "codingWorkbench.readiness.run.label": "Lauf-Snapshot",
-  "codingWorkbench.readiness.run.none": "Kein Snapshot",
   "codingWorkbench.readiness.eventStream.label": "Ereignisstrom",
-  "codingWorkbench.readiness.eventStream.resumable": "Fortsetzbare Live-Ereignisse",
-  "codingWorkbench.readiness.eventStream.waiting": "Wartet auf einen Lauf",
-  "codingWorkbench.readiness.eventStream.resnapshot": "Snapshot erneuern",
   "codingWorkbench.timeline.eyebrow": "Authentifizierte Aktivität",
   "codingWorkbench.timeline.title": "Live-Aktivitätszeitleiste",
   "codingWorkbench.timeline.empty": "Noch keine bestätigte Aktivität.",
@@ -365,6 +348,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.modelSourceRefreshFailed":
     "Modellquelle konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime konnte nicht aktualisiert werden.",
+  "codingWorkbench.alert.runtimeUnqualified":
+    "Das Starten eines Coding-Laufs bleibt nicht verfügbar, bis die Coding-Runtime dieser Installation als aktiv bestätigt ist.",
   "codingWorkbench.alert.workspaceRefreshFailed":
     "Arbeitsbereich konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.workspaceBindFailed":

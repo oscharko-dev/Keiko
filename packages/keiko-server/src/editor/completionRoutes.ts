@@ -45,7 +45,7 @@ import { Gateway, selectCompletionModel } from "@oscharko-dev/keiko-model-gatewa
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
-import { readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
+import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
@@ -619,7 +619,7 @@ export async function handleEditorCompletion(
   }
   const request = parsed.value;
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
     const sanitizedRequest = sanitizeRequestContext(request, root.realRoot);
     if (isRouteResult(sanitizedRequest)) {

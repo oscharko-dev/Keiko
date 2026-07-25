@@ -434,7 +434,11 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     accent: true,
     desc: "Govern coding agents",
     w: 860,
-    h: 680,
+    // #2644 docked the composer to the bottom of the shell, so this window's controls are only
+    // reachable while the whole frame fits the scene. At the 1280x720 reference viewport the scene
+    // offers ~623px between the top bar and the status footer; the previous 680 pushed the send
+    // control behind the footer, where no amount of scrolling could reach it.
+    h: 600,
     min: { w: 302, h: 420 },
     tiny: { w: 300, h: 260 },
     tool: true,

@@ -220,7 +220,10 @@ test("#2387 research: approval mints the grant, the governed fetch runs, revoke 
 
   // Start a supervised run; the scripted model immediately asks to research one public URL. The
   // fetch itself fails closed (no grant yet) and the run halts awaiting the egress approval.
-  await expect(page.getByRole("radio", { name: /Supervised workspace/u })).toBeChecked();
+  // #2644 moved the mode selector into Settings; the Workbench reports the server-confirmed mode.
+  await expect(
+    page.locator('section[aria-label="Coding Workbench"][data-state]').locator("[data-mode]"),
+  ).toHaveAttribute("data-mode", "governed-assist");
   await page.getByLabel("Task instructions").fill("Research the streams backpressure guide");
   const start = page.getByRole("button", { name: "Start coding run" });
   await expect(start).toBeEnabled();

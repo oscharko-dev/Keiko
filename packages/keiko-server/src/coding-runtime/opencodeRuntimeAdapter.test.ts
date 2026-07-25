@@ -7,6 +7,7 @@ import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 const DIGEST = "a".repeat(64);
 const SECRET = "SENTINEL_OPENCODE_RUNTIME_SECRET";
 const KEIKO_PRODUCER_TOOLS = [
+  "keiko_workspace_discover",
   "keiko_workspace_read",
   "keiko_changeset_edit",
   "keiko_verification",

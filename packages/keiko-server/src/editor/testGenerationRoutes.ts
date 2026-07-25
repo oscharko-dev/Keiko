@@ -39,7 +39,7 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
+import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { clientAbortSignal, resolveOverlayPath } from "./languageRoutes.js";
@@ -348,7 +348,7 @@ export async function handleEditorTestGeneration(
   }
   const request = parsed.value;
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     const containment = validateTargetContainment(root.realRoot, request.target);
     if (containment !== undefined) {
       return containment;

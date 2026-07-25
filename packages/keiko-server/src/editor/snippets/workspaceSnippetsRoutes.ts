@@ -7,7 +7,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../../deps.js";
-import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
+import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";
 import { errorBody, STREAMING, type RouteContext, type RouteResult } from "../../routes.js";
 import { SSE_HEADERS, startSseHeartbeat } from "../../sse.js";
 
@@ -96,8 +96,12 @@ function revisionFromEtag(value: string | undefined): number | undefined {
   return match === null ? undefined : Number(match[1]);
 }
 
-async function resolvedRoot(root: string, deps: UiHandlerDeps): Promise<string | undefined> {
-  const resolved = await resolveRoot(deps.store, root, deps.redactor);
+async function resolvedRoot(
+  ctx: RouteContext,
+  root: string,
+  deps: UiHandlerDeps,
+): Promise<string | undefined> {
+  const resolved = await resolveRequestRoot(ctx, deps, root);
   return resolved.realRoot;
 }
 
@@ -144,7 +148,7 @@ export async function handleGetWorkspaceSnippets(
     if (root === null || !validRoot(root)) {
       return { status: 400, body: errorBody("INVALID_REQUEST", "A workspace root is required.") };
     }
-    const realRoot = await resolvedRoot(root, deps);
+    const realRoot = await resolvedRoot(ctx, root, deps);
     if (realRoot === undefined) {
       return { status: 400, body: errorBody("UNSAFE_PATH", "Workspace root is unavailable.") };
     }
@@ -180,7 +184,7 @@ export async function handleMutateWorkspaceSnippets(
     return { status: 400, body: errorBody("INVALID_REQUEST", "Invalid snippet mutation.") };
   }
   return runFilesHandler(async () => {
-    const realRoot = await resolvedRoot(body.root, deps);
+    const realRoot = await resolvedRoot(ctx, body.root, deps);
     if (realRoot === undefined) {
       return { status: 400, body: errorBody("UNSAFE_PATH", "Workspace root is unavailable.") };
     }

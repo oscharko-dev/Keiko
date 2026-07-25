@@ -31,6 +31,7 @@ type GovernedCodingToolResult =
 
 export interface CodingToolGovernedPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
+  readonly repositoryDiscover: GovernedCodingToolPort<"discover">;
   readonly editorChangeset: GovernedCodingToolPort<"edit">;
   readonly commandRunner: GovernedCodingToolPort<"command">;
   readonly verificationRunner: GovernedCodingToolPort<"verification">;
@@ -61,6 +62,7 @@ export function createCodingToolGovernedDelegate(
 // complete.
 const READ_BEARING_ACTIONS: ReadonlySet<CodingToolActionRequest["action"]> = new Set([
   "read",
+  "discover",
   "egress",
 ]);
 const AUXILIARY_BEARING_ACTIONS: ReadonlySet<CodingToolActionRequest["action"]> = new Set([
@@ -95,6 +97,8 @@ function dispatch(
   switch (request.action) {
     case "read":
       return ports.repositoryRead.execute(request, signal, mutationGuard);
+    case "discover":
+      return ports.repositoryDiscover.execute(request, signal, mutationGuard);
     case "edit":
       return ports.editorChangeset.execute(request, signal, mutationGuard);
     case "command":

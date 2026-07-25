@@ -43,7 +43,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { FilesError, readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
+import { FilesError, readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
 
 const MAX_WORKSPACE_SEARCH_BODY_BYTES = 64 * 1024;
@@ -702,7 +702,7 @@ export async function handleEditorWorkspaceSearch(
   const validation = validateWorkspaceSearchRequest(request);
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     assertAllowedGlobScopes(request);
     const scope = buildSearchScope(
       root.realRoot,
@@ -729,7 +729,7 @@ export async function handleEditorWorkspaceSymbols(
   const validation = validateWorkspaceSymbolSearchRequest(request);
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     assertAllowedSymbolScope(request);
     const scope = buildSearchScope(
       root.realRoot,
@@ -750,7 +750,7 @@ export async function handleEditorWorkspaceReplacePreview(
   const validation = validateWorkspaceReplacePreviewRequest(request);
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     assertAllowedGlobScopes(request);
     const scope = buildSearchScope(root.realRoot);
     try {
@@ -774,7 +774,7 @@ export async function handleEditorWorkspaceReplaceApply(
   const validation = validateWorkspaceReplaceApplyRequest(request);
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     try {
       assertAllowedApplyFiles(request);
       const scope = buildSearchScope(root.realRoot);

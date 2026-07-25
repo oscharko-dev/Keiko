@@ -51,6 +51,44 @@ describe("coding tool IPC read windows (#2473)", () => {
   });
 });
 
+describe("coding tool IPC repository discovery", () => {
+  const discover = {
+    action: "discover",
+    actionId: "discover-1",
+    idempotencyKey: "discover-key",
+    query: "safeActivity",
+    maxResults: 20,
+  };
+
+  it("admits only an exact bounded discovery request", () => {
+    expect(parseCodingToolRequest(JSON.stringify(discover), 262_144)).toEqual(discover);
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({ ...discover, query: "ä".repeat(128), maxResults: 100 }),
+        262_144,
+      ),
+    ).toEqual({ ...discover, query: "ä".repeat(128), maxResults: 100 });
+    for (const invalid of [
+      { query: "" },
+      { query: "ä".repeat(129) },
+      { maxResults: 0 },
+      { maxResults: -1 },
+      { maxResults: 1.5 },
+      { maxResults: "20" },
+    ]) {
+      expect(
+        parseCodingToolRequest(JSON.stringify({ ...discover, ...invalid }), 262_144),
+      ).toBeUndefined();
+    }
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...discover, maxResults: 101 }), 262_144),
+    ).toBeUndefined();
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...discover, workspaceRoot: "/private" }), 262_144),
+    ).toBeUndefined();
+  });
+});
+
 describe("coding tool IPC auxiliary requests", () => {
   it("admits only model-safe skill fields", () => {
     const body = {

@@ -20,6 +20,7 @@ const runtimeHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
+const autonomyHookMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -35,6 +36,10 @@ vi.mock("@/lib/useCodingWorkbenchSafeActivity", () => ({
 
 vi.mock("@/lib/useCodingWorkbenchResearch", () => ({
   useCodingWorkbenchResearch: researchHookMock,
+}));
+
+vi.mock("../../hooks/useAutonomyModePolicy", () => ({
+  useAutonomyModePolicy: autonomyHookMock,
 }));
 
 const AT = "2026-07-13T12:00:00.000Z";
@@ -159,6 +164,14 @@ describe("CodingWorkbenchWindow", () => {
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
     researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
+    autonomyHookMock.mockReturnValue({
+      requestedMode: "supervised-coding",
+      effectiveMode: "supervised-coding",
+      deploymentCeiling: "autonomous-delivery",
+      pending: false,
+      error: null,
+      change: vi.fn(),
+    });
   });
 
   function egressApprovalState(
@@ -190,18 +203,134 @@ describe("CodingWorkbenchWindow", () => {
     const liveActions = renderWorkbench();
 
     expect(screen.getByRole("heading", { name: "Coding Workbench" })).toBeInTheDocument();
-    expect(screen.getByText(/Server effective mode:/u)).toHaveTextContent(
-      "Server effective mode: Ask for approval.",
-    );
-    expect(screen.getByText(/Deployment ceiling:/u)).toHaveTextContent(
-      "Deployment ceiling: Supervised workspace.",
-    );
     expect(screen.getByText("task-1 · issue/2257 · healthy")).toBeInTheDocument();
+    expect(screen.getByText("Keiko Gateway")).toBeInTheDocument();
+    expect(screen.getByText("Ask for approval")).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /Full access/u })).not.toBeInTheDocument();
     expect(screen.queryByText(/Issue #1990|marketing|preview/u)).not.toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Task instructions"), "Investigate the failing test");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
+  });
+
+  it("never presents the requested mode as server-effective before readiness resolves", (): void => {
+    autonomyHookMock.mockReturnValue({
+      requestedMode: "autonomous-delivery",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      pending: false,
+      error: null,
+      change: vi.fn(),
+    });
+    renderWorkbench(
+      liveState({
+        requestedMode: "autonomous-delivery",
+        runtime: { status: "loading", value: null, error: null },
+      }),
+    );
+
+    expect(screen.getByText("Awaiting server confirmation")).toBeInTheDocument();
+    expect(document.querySelector("[data-mode]")).toBeNull();
+  });
+
+  it("names the blocking reason when a bound workspace meets an unqualified runtime", (): void => {
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "governed-assist",
+            deploymentCeiling: "supervised-coding",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: false,
+            runtimeUnavailableReason: "runtime-unqualified",
+          },
+        },
+      }),
+    );
+
+    // The bootstrap setup section is absent once a workspace is bound, so this is the only place
+    // left that can explain why the start control is disabled — and it must not repeat the setup
+    // copy, which invites binding a workspace that is already bound.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active.",
+    );
+    expect(screen.queryByText(/You can bind a workspace now/u)).not.toBeInTheDocument();
+  });
+
+  it("states the unqualified runtime once while the bootstrap setup section owns that message", (): void => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    renderWorkbench({
+      ...initial,
+      canStart: false,
+      runtime: {
+        status: "ready",
+        error: null,
+        value: {
+          schemaVersion: "1",
+          requestedMode: "governed-assist",
+          deploymentCeiling: "supervised-coding",
+          effectiveMode: "governed-assist",
+          runtimeAvailable: false,
+          runtimeUnavailableReason: "runtime-unqualified",
+        },
+      },
+    });
+
+    // Setup renders the sentence itself; a second live-region copy would announce it twice.
+    expect(screen.getAllByText(/until the coding runtime is active/u)).toHaveLength(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps a recoverable refresh failure ahead of the standing runtime condition", (): void => {
+    const base = liveState();
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "governed-assist",
+            deploymentCeiling: "supervised-coding",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: false,
+          },
+        },
+        workspace: {
+          ...base.workspace,
+          status: "error",
+          error: { code: "TASK_WORKSPACE_UNAVAILABLE", message: "unavailable", retryable: true },
+        },
+      }),
+    );
+
+    // One alert is shown at a time: the retryable failure must not be swallowed by the condition.
+    expect(screen.getByRole("alert")).toHaveTextContent("Workspace could not be refreshed.");
+  });
+
+  it("keeps a drifted worktree visible in the session context", (): void => {
+    renderWorkbench(
+      liveState({
+        workspace: {
+          status: "ready",
+          value: {
+            workspaceId: "workspace-1",
+            taskId: "task-1",
+            taskBranch: "issue/2257",
+            health: "drifted",
+            switching: false,
+          },
+          error: null,
+        },
+      }),
+    );
+    expect(screen.getByText("task-1 · issue/2257 · drifted")).toBeInTheDocument();
   });
 
   it("binds one-time approval controls to live pending permission truth", async () => {

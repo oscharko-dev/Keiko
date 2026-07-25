@@ -11,6 +11,7 @@ import {
   editorAgentAuthorityRegistry,
 } from "../editor/agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
@@ -135,6 +136,7 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly childModelId?: (() => string | undefined) | undefined;
   /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
   readonly researchFetchImpl?: ProductionManagedWorktreeToolInput["researchFetchImpl"] | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
@@ -553,6 +555,7 @@ function createManagedToolFacade({
     childModelPortFactory: input.childModelPortFactory,
     verificationRunner: input.verificationRunner,
     onRuntimeEvent,
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
 }
 
