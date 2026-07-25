@@ -32,6 +32,10 @@ npm run gates:local:full     # + build, static export, package surface
 npm run gates:local:shell    # interactive session in the same environment
 ```
 
+The container runs as the image's non-root `node` user. If you used an earlier build, its named
+volumes are root-owned and `npm ci` inside will fail with `Permission denied`; recreate them once
+with `docker compose -f docker/gates/docker-compose.yml down -v`.
+
 The first run builds the image and installs the workspaces into a named volume; later runs reuse
 both. `node_modules` deliberately lives in that volume rather than a bind mount: a macOS host tree
 and a Linux container cannot share one install without swapping platform-native binaries under each

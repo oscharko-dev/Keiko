@@ -4,6 +4,9 @@
 # Linux userland the runners use. Two thirds of our failing CI runs were reproducible locally —
 # each one cost a full ~123 weighted runner-minute cycle to discover.
 #
+# Runs as the image's non-root `node` user: nothing here needs root, and a local gate container that
+# writes into a bind-mounted checkout should not do so as uid 0.
+#
 # What this image is NOT: the D12 measurement environment. That one is its own pinned container
 # (`npm run perf:evidence:regen`), and it is a developer machine rather than CI — the wall-clock
 # budgets are calibrated for linux/arm64 with >=14 logical cores, which no hosted runner offers
@@ -54,5 +57,15 @@ ENV npm_config_cache=/opt/npm-cache
 # index — dependency hygiene, the i18n guard, the D12 subject digest — fail with a status 128 that
 # says nothing about the real cause.
 RUN git config --global --add safe.directory /repo
+
+# The gate suite runs unprivileged (S6471). The `node` image ships a non-root `node` user; the three
+# named volumes are pre-created here so Docker copies this ownership into them on first use, and the
+# git safe.directory entry is repeated for that user's own global config — the one above belongs to
+# root and is not read by `node`.
+RUN mkdir -p /repo/node_modules /opt/playwright /opt/npm-cache \
+    && chown -R node:node /repo/node_modules /opt/playwright /opt/npm-cache
+USER node
+RUN git config --global --add safe.directory /repo \
+    && git config --global --add safe.directory '*'
 
 WORKDIR /repo
