@@ -87,6 +87,7 @@ const NON_FAILING_JOB_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 
 const REPOSITORY_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u;
 const RUN_ID = /^[1-9]\d{0,18}$/u;
+const CHECK_RUN_URL = /\/check-runs\/(\d+)$/u;
 const GH_API_MAX_BUFFER = 32 * 1024 * 1024;
 
 const EMPTY_DECISION = Object.freeze({
@@ -261,6 +262,15 @@ function requestFor(io) {
   return io.request ?? ((path, method) => ghApi(path, { ...io, method }));
 }
 
+// Annotations live on the Checks API, and a workflow job and its check run are different entities
+// even where their ids currently coincide. Follow GitHub's own pointer - the `check_run_url` the jobs
+// payload carries - instead of assuming the two ids are interchangeable. A job whose pointer is
+// present but unusable yields no annotations at all, which classifies genuine: fail closed.
+function checkRunIdOf(job) {
+  if (typeof job.check_run_url === "string") return CHECK_RUN_URL.exec(job.check_run_url)?.[1];
+  return String(job.id);
+}
+
 export function collectObservation(runId, io = {}) {
   const repository = requireRepositorySlug(io.repository ?? process.env.GITHUB_REPOSITORY);
   const id = requireRunId(runId);
@@ -271,8 +281,10 @@ export function collectObservation(runId, io = {}) {
   const annotations = {};
   for (const job of jobs.filter(isFailedJob)) {
     if (!isRecord(job) || !Number.isSafeInteger(job.id)) continue;
-    const key = String(job.id);
-    annotations[key] = request(`repos/${repository}/check-runs/${key}/annotations?per_page=100`);
+    const checkRunId = checkRunIdOf(job);
+    if (checkRunId === undefined) continue;
+    const path = `repos/${repository}/check-runs/${checkRunId}/annotations?per_page=100`;
+    annotations[String(job.id)] = request(path);
   }
   return { run, jobs, jobsTotal: isRecord(page) ? page.total_count : undefined, annotations };
 }

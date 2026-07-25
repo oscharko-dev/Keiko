@@ -48,9 +48,21 @@ which defaults to `dry-run`; pick `enforce` only when the intent is to actually 
 
 ## Observation window, 2026-07-20 → 2026-07-25
 
-Every failed run of 2026-07-25 was classified in `dry-run` mode against the live API (60 runs), and
-the 200 failed runs preceding it back to 2026-07-20 were swept for the zero-step signature. **The
-classifier took no action on any of the 260.**
+Two populations, examined two different ways. Keep them apart when reading the numbers.
+
+**Fully classified (60 runs).** Every failed run of 2026-07-25 was put through the classifier in
+`dry-run` mode against the live API. The table below accounts for all 60, and every one of them
+produced `no action`.
+
+**Signature-swept (200 runs).** The 200 failed runs preceding those, back to 2026-07-20, were not
+classified end to end; they were queried for the structural precondition alone — a failed job with
+zero executed steps. **None of the 200 contained one**, so none of them could have reached `infra` by
+any lane or signature, whatever the rest of their payload said. They are counted here as "could not
+have been re-run", not as classified rows.
+
+Together: **260 failed runs, no re-run in either population.**
+
+Classification of the 60 fully classified runs:
 
 | Classification      | Runs | Lanes                                                                                                                                                                                                     |
 | ------------------- | ---: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -59,8 +71,8 @@ classifier took no action on any of the 260.**
 | `already-attempted` |    3 | `ci.yml`                                                                                                                                                                                                  |
 | `infra`             |    0 | —                                                                                                                                                                                                         |
 
-The sweep classified every failed run, which is deliberately wider than what the lane observes in
-production: only `CI`, `Workflow hygiene`, `Nightly performance evidence`, `Mutation security` and
+Those 60 include every lane, which is deliberately wider than what the observer sees in production:
+only `CI`, `Workflow hygiene`, `Nightly performance evidence`, `Mutation security` and
 `OSV dependency scan` are named in the trigger's `workflows:` list. Runs of the other lanes above
 would reach the same `excluded-lane` verdict, but no observer job would run to record it. That is the
 two-list separation in ADR-0161 D4, measured.

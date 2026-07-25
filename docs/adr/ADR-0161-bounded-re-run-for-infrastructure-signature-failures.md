@@ -35,9 +35,11 @@ overwrite. Everything below exists to make sure only that row is ever acted on.
 
 The counterweight is ADR-0139's Consequences clause — "a red required check implies a real defect in
 the change (or a gate defect to be fixed at the gate), never runner weather". An automation that
-re-ran anything else would falsify it. The measured behaviour over the 2026-07-20 → 2026-07-25
-window (260 failed runs, recorded in [`docs/qa/infra-failure-retry.md`](../qa/infra-failure-retry.md))
-is that the classifier takes no action on 100% of them, including all 45 genuinely red `ci` runs.
+re-ran anything else would falsify it. Measured over the 2026-07-20 → 2026-07-25 window and recorded
+in [`docs/qa/infra-failure-retry.md`](../qa/infra-failure-retry.md), no run in it would have been
+re-run: the 60 failed runs of the incident day were classified end to end and every one produced
+`no action`, including all 45 genuinely red `ci` runs, and none of the 200 failed runs before them
+contained a job with zero executed steps at all.
 
 ## Decision
 

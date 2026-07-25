@@ -305,9 +305,9 @@ describe("pinned annotation signatures", () => {
   it("does not match a message that merely contains the wording", () => {
     const embedded = `Step failed. ${message} See the log.`;
 
-    expect(matchedInfraSignature([{ annotation_level: "failure", message: embedded }])).toBe(
-      undefined,
-    );
+    expect(
+      matchedInfraSignature([{ annotation_level: "failure", message: embedded }]),
+    ).toBeUndefined();
   });
 
   it("ignores malformed annotation entries and a non-array payload", () => {
@@ -405,6 +405,49 @@ describe("GitHub REST access", () => {
     expect(request).toHaveBeenCalledWith(
       "repos/oscharko-dev/Keiko/check-runs/11/annotations?per_page=100",
     );
+  });
+
+  it("addresses annotations by the check run GitHub points at, not by the job id", () => {
+    // A workflow job and its check run are different entities even where their ids currently
+    // coincide, so the fetch follows `check_run_url`. The map stays keyed by JOB id, because that is
+    // what the classifier looks a job's annotations up by.
+    const request = vi.fn((path) => {
+      if (path.endsWith("/jobs?per_page=100")) {
+        return {
+          total_count: 1,
+          jobs: [
+            {
+              id: 11,
+              conclusion: "failure",
+              steps: [],
+              check_run_url: "https://api.github.com/repos/o/r/check-runs/99",
+            },
+          ],
+        };
+      }
+      return path.includes("/check-runs/") ? [] : { id: 1, run_attempt: 1, path: ALLOWLISTED_LANE };
+    });
+
+    const observation = collectObservation(1, { repository: "o/r", request });
+
+    expect(request).toHaveBeenCalledWith("repos/o/r/check-runs/99/annotations?per_page=100");
+    expect(Object.keys(observation.annotations)).toEqual(["11"]);
+  });
+
+  it("fetches no annotations at all when the check run pointer is unusable", () => {
+    const request = vi.fn((path) =>
+      path.endsWith("/jobs?per_page=100")
+        ? {
+            total_count: 1,
+            jobs: [{ id: 11, conclusion: "failure", steps: [], check_run_url: "not-a-url" }],
+          }
+        : { id: 1, run_attempt: 1, path: ALLOWLISTED_LANE },
+    );
+
+    const observation = collectObservation(1, { repository: "o/r", request });
+
+    expect(observation.annotations).toEqual({});
+    expect(request).not.toHaveBeenCalledWith(expect.stringContaining("/check-runs/"));
   });
 
   it("tolerates a jobs page of an unexpected shape without inventing jobs", () => {
