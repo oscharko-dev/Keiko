@@ -59,6 +59,8 @@ INSERT INTO workspace_manifest_roots (
 ) VALUES (?, ?, ?, ?, ?, ?)
 `;
 
+const MAX_WORKSPACE_IDENTITY_ATTEMPTS = 8;
+
 function rootProjects(
   db: DatabaseSync,
   workspaceId: string,
@@ -196,6 +198,25 @@ function insertManifest(
   );
 }
 
+/**
+ * The first workspace identity for this root that no live workspace already holds. A workspace
+ * keeps the identity derived from its founding root even after that root leaves, so restoring a
+ * departed founding root collides with its own former workspace — and a swallowed UNIQUE violation
+ * would orphan exactly the root the restore exists to rescue (#2620). Discriminator 0 reproduces
+ * the original digest byte for byte, so project creation and the D9 migration are unchanged.
+ */
+function freeWorkspaceManifest(
+  db: DatabaseSync,
+  projectPath: string,
+  projectName: string,
+): WorkspaceManifest {
+  for (let discriminator = 0; discriminator < MAX_WORKSPACE_IDENTITY_ATTEMPTS; discriminator += 1) {
+    const manifest = createSingleRootWorkspaceManifest(projectPath, projectName, discriminator);
+    if (readWorkspaceManifestRecord(db, manifest.workspaceId) === undefined) return manifest;
+  }
+  throw new Error("WORKSPACE_IDENTITY_UNAVAILABLE");
+}
+
 export function ensureProjectWorkspaceManifest(
   db: DatabaseSync,
   projectPath: string,
@@ -208,7 +229,7 @@ export function ensureProjectWorkspaceManifest(
   // committing a project row with no workspace manifest — the paired-write
   // invariant every downstream lookup assumes. AGENTS.md §7: do not swallow
   // errors on trust-boundary paths.
-  const manifest = createSingleRootWorkspaceManifest(projectPath, projectName);
+  const manifest = freeWorkspaceManifest(db, projectPath, projectName);
   if (findWorkspaceManifestRecordByRoot(db, manifest.roots[0]?.rootRef ?? "") !== undefined) return;
   const root = manifest.roots[0];
   if (root === undefined) return;
@@ -232,6 +253,45 @@ export function migrateLegacyProjectManifests(db: DatabaseSync): void {
   }
   if (listWorkspaceManifestRecords(db).length > 0) {
     db.prepare("DELETE FROM workspace_trust_records").run();
+  }
+}
+
+/**
+ * The inverse of absorption. `addRoot` deletes the single-root manifest a joining root arrived
+ * with, so a later removal used to leave that project registered with no workspace of its own —
+ * permanently orphaned and undispatchable (#2620). Restoring it here, inside the membership
+ * transaction, is what makes the round trip lossless.
+ *
+ * Restoration returns membership only, never authority: the departed root's trust row is deleted in
+ * this same commit, and the manifest is minted fresh from live filesystem identity at revision 1,
+ * so no grant, order, or focus from the multi-root era survives (ADR-0147 D8, ADR-0155).
+ */
+function restoreReleasedProjects(
+  db: DatabaseSync,
+  input: WorkspaceManifestMutationInput,
+  now: number,
+): void {
+  const read = db.prepare("SELECT path, name FROM projects WHERE path = ?");
+  for (const projectPath of input.releasedProjectPaths) {
+    // A savepoint keeps a failed restore from committing a half-written manifest (the row inserted
+    // without its root rows) while leaving the membership change itself intact.
+    db.exec("SAVEPOINT keiko_restore_released_root");
+    try {
+      const project = read.get(projectPath) as unknown as ProjectRow | undefined;
+      if (project !== undefined) {
+        ensureProjectWorkspaceManifest(db, project.path, project.name, now);
+      }
+      db.exec("RELEASE keiko_restore_released_root");
+    } catch (error) {
+      // The same per-row tolerance the D9 migration documents: a root whose directory no longer
+      // exists cannot be re-inspected, and a root that is already gone from disk must stay
+      // removable. That project then stays pre-manifest, which downstream code already fails closed
+      // on (#2613). The failure is not swallowed — it is handed to the caller's sink, which turns
+      // it into a redacted operator diagnostic carrying the reason, not just a count.
+      db.exec("ROLLBACK TO keiko_restore_released_root");
+      db.exec("RELEASE keiko_restore_released_root");
+      input.onReleasedRestoreFailure?.(projectPath, error);
+    }
   }
 }
 
@@ -302,6 +362,8 @@ export function replaceWorkspaceManifest(
     for (const rootRef of invalidatedRootRefs(previousIdentities, input.manifest.roots)) {
       removeTrust.run(rootRef);
     }
+    // After the trust rows are gone, so a restored workspace can never carry a grant forward.
+    restoreReleasedProjects(db, input, now);
     db.exec("COMMIT");
     return true;
   } catch (error) {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -12,6 +12,11 @@ import { createUiServer, UI_HOST } from "./server.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { UiStore } from "./store/index.js";
 import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
+import { createEditorSettingsControlService } from "./editor/settings/editorSettingsControl.js";
+import type { EditorSettingsControlService } from "./editor/settings/editorSettingsControl.js";
+import { createEditorSettingsStore } from "./editor/settings/editorSettingsStore.js";
+import { createWorkspaceMutexRegistry } from "./task-workspace/mutex.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 
@@ -22,6 +27,11 @@ let staticRoot: string;
 let rootA: string;
 let rootB: string;
 let store: UiStore;
+let editorSettingsControl: EditorSettingsControlService;
+let diagnostics: ServerDiagnosticRecord[];
+// Read at call time, not at server construction, so a test can arm the failure after the fixture
+// has already built its handler deps.
+let invalidateRootFailure: Error | undefined;
 
 function requestUrl(path: string): string {
   return `http://${UI_HOST}:${String(port)}${path}`;
@@ -54,7 +64,35 @@ function deps(): UiHandlerDeps {
     modelPortFactory: () => undefined,
     store,
     workspaceScriptTrust: createWorkspaceScriptTrustService({ store }),
+    editorSettingsControl: {
+      ...editorSettingsControl,
+      invalidateRoot: (realRoot: string): Promise<void> =>
+        invalidateRootFailure === undefined
+          ? (editorSettingsControl.invalidateRoot?.(realRoot) ?? Promise.resolve())
+          : Promise.reject(invalidateRootFailure),
+    },
+    diagnostics: {
+      record: (entry: ServerDiagnosticRecord): void => {
+        diagnostics.push(entry);
+      },
+    },
   };
+}
+
+async function setRootFontSize(realRoot: string, value: number, key: string): Promise<void> {
+  await editorSettingsControl.mutate({
+    action: "set",
+    expectedRevision: 0,
+    idempotencyKey: key,
+    realRoot,
+    scope: "root",
+    values: { fontSize: value },
+  });
+}
+
+async function rootFontSizeSource(realRoot: string): Promise<string | undefined> {
+  const snapshot = await editorSettingsControl.read(realRoot);
+  return snapshot.settings.find((entry) => entry.id === "fontSize")?.source;
 }
 
 async function closeServer(): Promise<void> {
@@ -74,6 +112,12 @@ beforeEach(async () => {
   mkdirSync(rootA);
   mkdirSync(rootB);
   store = createInMemoryUiStore();
+  diagnostics = [];
+  invalidateRootFailure = undefined;
+  editorSettingsControl = createEditorSettingsControlService({
+    store: createEditorSettingsStore({ stateDir: join(tmp, "state") }),
+    mutex: createWorkspaceMutexRegistry(),
+  });
   store.createProject(rootA, "Alpha");
   store.createProject(rootB, "Beta");
   server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
@@ -276,6 +320,164 @@ describe("workspace manifest routes", () => {
     expect(removed.status).toBe(200);
     manifest = ((await removed.json()) as { readonly manifest: WorkspaceManifest }).manifest;
     expect(manifest.roots.map((root) => root.rootRef)).toEqual([first.rootRef]);
+  });
+
+  it("invalidates the departed root's settings binding and leaves the survivor's intact", async () => {
+    // #2620: ADR-0147 requires root removal to invalidate settings bindings, but this seam only
+    // recomputed trust, so per-root settings outlived their root and could be re-applied to a
+    // different directory that later occupied the same reference. Only the departed root is
+    // invalidated — `affectedRoots` names the whole workspace and would have wiped the survivor.
+    let manifest = await alphaManifest();
+    const added = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}/roots`), {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ dispatch: dispatch(manifest), projectPath: rootB }),
+    });
+    expect(added.status).toBe(200);
+    manifest = ((await added.json()) as { readonly manifest: WorkspaceManifest }).manifest;
+    const departing = manifest.roots.find((root) => root.canonicalRoot === rootB);
+    if (departing === undefined) throw new Error("missing beta root");
+
+    await setRootFontSize(rootA, 16, "routes-root-a");
+    await setRootFontSize(rootB, 18, "routes-root-b");
+    expect(await rootFontSizeSource(rootA)).toBe("root");
+    expect(await rootFontSizeSource(rootB)).toBe("root");
+
+    const removed = await fetch(
+      requestUrl(`/api/workspaces/${manifest.workspaceId}/roots/${departing.rootRef}`),
+      {
+        method: "DELETE",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ dispatch: dispatch(manifest) }),
+      },
+    );
+    expect(removed.status).toBe(200);
+
+    expect(await rootFontSizeSource(rootB)).toBe("builtInDefault");
+    expect(await rootFontSizeSource(rootA)).toBe("root");
+  });
+
+  it("keeps every per-root settings binding across a view-only reorder", async () => {
+    // Reorder changes no membership, so it invalidates nothing — the same rule that keeps trust
+    // grants alive across a focus click (ADR-0155).
+    let manifest = await alphaManifest();
+    const added = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}/roots`), {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ dispatch: dispatch(manifest), projectPath: rootB }),
+    });
+    manifest = ((await added.json()) as { readonly manifest: WorkspaceManifest }).manifest;
+    await setRootFontSize(rootA, 16, "routes-reorder-a");
+    await setRootFontSize(rootB, 18, "routes-reorder-b");
+
+    const reordered = await fetch(
+      requestUrl(`/api/workspaces/${manifest.workspaceId}/roots/order`),
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          dispatch: dispatch(manifest),
+          orderedRootRefs: [...manifest.roots].reverse().map((root) => root.rootRef),
+        }),
+      },
+    );
+    expect(reordered.status).toBe(200);
+
+    expect(await rootFontSizeSource(rootA)).toBe("root");
+    expect(await rootFontSizeSource(rootB)).toBe("root");
+  });
+
+  it("still reports a successful removal when the departed root left the filesystem", async () => {
+    // The membership change commits before settings invalidation runs. A root whose directory is
+    // gone has no readable identity, and reporting the propagation failure as a failed mutation
+    // would answer a removal that DID happen with a 500 — and the retry would then fail as a
+    // non-member. The stale record stays inert either way, because it binds an identity that no
+    // longer resolves.
+    let manifest = await alphaManifest();
+    const added = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}/roots`), {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ dispatch: dispatch(manifest), projectPath: rootB }),
+    });
+    manifest = ((await added.json()) as { readonly manifest: WorkspaceManifest }).manifest;
+    const departing = manifest.roots.find((root) => root.canonicalRoot === rootB);
+    if (departing === undefined) throw new Error("missing beta root");
+    await setRootFontSize(rootB, 18, "routes-vanished-b");
+
+    mkdirSync(`${rootB}.replacement`);
+    rmSync(rootB, { recursive: true, force: true });
+
+    const removed = await fetch(
+      requestUrl(`/api/workspaces/${manifest.workspaceId}/roots/${departing.rootRef}`),
+      {
+        method: "DELETE",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ dispatch: dispatch(manifest) }),
+      },
+    );
+    expect(removed.status).toBe(200);
+    const body = (await removed.json()) as { readonly manifest: WorkspaceManifest };
+    expect(body.manifest.roots.map((root) => root.canonicalRoot)).toEqual([rootA]);
+
+    // The loss is reported, not swallowed: the project stays registered with no workspace of its
+    // own, and that degradation reaches an operator instead of dying inside the store transaction.
+    expect(store.findWorkspaceManifestRecordByProject(rootB)).toBeUndefined();
+    const restoreDiagnostic = diagnostics.find(
+      (record) => record.operation === "workspace.root.restore",
+    );
+    expect(restoreDiagnostic).toMatchObject({
+      correlationId: manifest.workspaceId,
+      source: "workspace-manifest-routes",
+    });
+    // The reason travels with the report, not just the count: a vanished directory and an exhausted
+    // identity space are different operational stories (Qodo review, PR #2714). The class name is
+    // content-free — no path, no message text.
+    expect(restoreDiagnostic?.errorClass).toBeDefined();
+    expect(JSON.stringify(restoreDiagnostic)).not.toContain(rootB);
+
+    // A new directory taking the departed root's place inherits nothing: the record binds the old
+    // filesystem identity, so it stays inert whether or not the invalidation rewrite landed. The
+    // replacement is staged before the removal so its inode cannot be the recycled one — Linux
+    // commonly reuses a freed inode, which would leave the identity digest byte-identical.
+    renameSync(`${rootB}.replacement`, rootB);
+    expect(await rootFontSizeSource(rootB)).toBe("builtInDefault");
+  });
+
+  it("answers a failing settings invalidation with a body-free diagnostic, not a failed mutation", async () => {
+    // The membership change is already committed when invalidation runs. Reporting a propagation
+    // failure as a failed mutation would answer a removal that DID happen with a 500, and the
+    // retry would then fail as a non-member.
+    let manifest = await alphaManifest();
+    const added = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}/roots`), {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ dispatch: dispatch(manifest), projectPath: rootB }),
+    });
+    manifest = ((await added.json()) as { readonly manifest: WorkspaceManifest }).manifest;
+    const departing = manifest.roots.find((root) => root.canonicalRoot === rootB);
+    if (departing === undefined) throw new Error("missing beta root");
+    invalidateRootFailure = new Error("settings sink unavailable");
+
+    const removed = await fetch(
+      requestUrl(`/api/workspaces/${manifest.workspaceId}/roots/${departing.rootRef}`),
+      {
+        method: "DELETE",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ dispatch: dispatch(manifest) }),
+      },
+    );
+
+    expect(removed.status).toBe(200);
+    const entry = diagnostics.find(
+      (record) => record.operation === "workspace.root.settings.invalidate",
+    );
+    expect(entry).toMatchObject({
+      correlationId: manifest.workspaceId,
+      source: "workspace-manifest-routes",
+    });
+    // Body-free: no canonical path and no foreign error text reach the diagnostic.
+    expect(JSON.stringify(entry)).not.toContain(rootB);
+    expect(JSON.stringify(entry)).not.toContain("settings sink unavailable");
   });
 });
 
