@@ -8,14 +8,32 @@
 rules:
   cache-poisoning:
     ignore:
-      # Neither job publishes, signs, or attests anything: `core-quality` and `coverage-sonar`
-      # have read-only contents permission. Every ci.yml job that DOES hold signing-relevant
-      # permissions (currently
-      # build-scan-sbom-smoke and ui, both attestations: write / id-token: write for artifact
-      # attestations) has package-manager-cache: false instead, same as release.yml and
-      # portable-assets.yml - so there is no privileged consumer for a cache poisoned here.
-      - ci.yml:63
-      - ci.yml:172
+      # The four coverage jobs added by Issue #2704 (coverage-packages, coverage-ui,
+      # coverage-scripts, coverage-sonar) restore caches. None of them publishes, signs, or attests
+      # anything - all four hold contents: read and nothing else. Every ci.yml job that DOES hold
+      # signing-relevant permissions (currently build-scan-sbom-smoke and ui, both
+      # attestations: write / id-token: write for artifact attestations) uses no cache at all and
+      # keeps package-manager-cache: false, same as release.yml and portable-assets.yml - so there
+      # is no privileged consumer for a cache poisoned here.
+      # Each cached artifact is also re-verified AFTER restore, so a poisoned entry cannot be used
+      # even inside the job that restored it: the npm download cache is re-verified per package
+      # against the lockfile by `npm ci --ignore-scripts` (node_modules is never cached), and the
+      # sqlite-vec extension and the Sonar Scanner CLI archive are re-verified against their pinned
+      # SHA-256 values by provision-sqlite-vec.mjs and by an explicit `sha256sum --check` that fails
+      # the job closed.
+      # Only the save-capable `actions/cache` needs an entry; the three `actions/cache/restore`
+      # steps in the measuring jobs are not flagged, because a job that cannot write a cache cannot
+      # poison one.
+      # The two anchors this block previously carried (ci.yml:63, ci.yml:172) were verified dead
+      # before removal: `zizmor` reports zero cache-poisoning findings for the pre-#2704 ci.yml with
+      # no ignore list at all.
+      # sqlite-vec extension: coverage-packages, coverage-ui, coverage-scripts
+      - ci.yml:308
+      - ci.yml:382
+      - ci.yml:448
+      # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
+      - ci.yml:527
+      - ci.yml:606
   misfeature:
     ignore:
       # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are

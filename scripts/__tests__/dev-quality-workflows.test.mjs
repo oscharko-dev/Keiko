@@ -126,13 +126,56 @@ describe("dev quality workflows", () => {
     expect(ci).toContain("if: ${{ always() && github.event_name == 'workflow_dispatch' }}");
   });
 
-  it("runs coverage and Sonar in parallel and aggregates required CI fail closed", () => {
-    const coverageJob = ci.match(/ {2}coverage-sonar:\n[\s\S]*?(?=\n {2}ci:\n)/u)?.[0];
-    const aggregateJob = ci.match(/ {2}ci:\n[\s\S]*?(?=\n {2}actionlint:\n)/u)?.[0];
+  // Issue #2704 / ADR-0157 moved the three coverage suites into their own jobs, so `coverage-sonar`
+  // finalizes them and necessarily declares `needs:`. What ADR-0131 D1 actually protects — Sonar
+  // never queuing behind the unrelated package, retrieval, editor and architecture gates — is now
+  // asserted directly instead of through the proxy "this job has no dependencies at all".
+  it("keeps Sonar off the unrelated gate queue and fails closed on every coverage suite", () => {
+    // Sliced to the next top-level key, not to `ci:` by name: a job inserted between the two
+    // would otherwise be pulled into this block and the ordering assertions would hold over it.
+    const coverageJob = ci.match(/ {2}coverage-sonar:\n[\s\S]*?(?=\n {2}\S)/u)?.[0];
     expect(coverageJob).toBeDefined();
-    expect(coverageJob).not.toContain("needs:");
-    expect(coverageJob).toContain("Install sandbox isolation backend (bubblewrap)");
-    expect(coverageJob).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+    // Set equality, not a denylist: a job added to this `needs:` later must fail here rather than
+    // slip through because nobody thought to enumerate it.
+    const declaredNeeds = (coverageJob.match(/\n {4}needs:\n((?: {6}- \S+\n)+)/u)?.[1] ?? "")
+      .split("\n")
+      .map((line) => line.replace(/^ {6}- /u, "").trim())
+      .filter(Boolean)
+      .sort();
+    expect(declaredNeeds).toEqual(["coverage-packages", "coverage-scripts", "coverage-ui"]);
+    // always() plus an explicit per-suite success check: failure, cancelled AND skipped must all
+    // turn this context red, so a silently skipped shard can never pass it with a suite unexecuted.
+    expect(coverageJob).toContain("if: ${{ always() }}");
+    expect(coverageJob).toContain('if [ "${entry#*:}" != "success" ]');
+    expect(coverageJob).toContain("needs.coverage-packages.result");
+    expect(coverageJob).toContain("needs.coverage-scripts.result");
+    expect(coverageJob).toContain("needs.coverage-ui.result");
+    // Reassembly must precede every evaluation: a per-file floor read off a shard-local summary
+    // under-reports.
+    const mergeAt = coverageJob.indexOf("npm run test:coverage:packages:merge");
+    const judgeAt = coverageJob.indexOf("npm run check:coverage:quality");
+    const scanAt = coverageJob.indexOf("SonarCloud CI-based analysis");
+    expect(mergeAt).toBeGreaterThan(-1);
+    expect(judgeAt).toBeGreaterThan(mergeAt);
+    expect(scanAt).toBeGreaterThan(mergeAt);
+  });
+
+  // The live isolation proof the coverage run depends on moved with the suites. Asserting it on all
+  // three jobs is stricter than the single assertion it replaces.
+  it("gives every coverage suite job a real bubblewrap isolation backend", () => {
+    // Sliced to the NEXT top-level job key rather than to a named follower, so reordering jobs in
+    // ci.yml cannot silently change what each iteration asserts.
+    for (const job of ["coverage-packages", "coverage-ui", "coverage-scripts"]) {
+      const block = ci.match(new RegExp(` {2}${job}:\\n[\\s\\S]*?(?=\\n {2}\\S)`, "u"))?.[0];
+      expect(block, `${job} job block must exist`).toBeDefined();
+      expect(block).toContain("Install sandbox isolation backend (bubblewrap)");
+      expect(block).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+      expect(block).toContain("npm run provision:sqlite-vec");
+    }
+  });
+
+  it("aggregates required CI fail closed", () => {
+    const aggregateJob = ci.match(/ {2}ci:\n[\s\S]*?(?=\n {2}actionlint:\n)/u)?.[0];
     expect(aggregateJob).toContain("if: ${{ always() }}");
     expect(aggregateJob).toContain("- core-quality");
     expect(aggregateJob).toContain("- coverage-sonar");
