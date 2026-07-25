@@ -42,6 +42,12 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - "release/**"
+  # ci.yml validates merge-queue groups (ADR-0139 D7). With the audit gates scoped to the shipped
+  # graph, this scan is the compensating control for build-time dependencies, so a merge-queue
+  # integration must not proceed without it either.
+  merge_group:
+    branches:
+      - dev
   schedule:
     - cron: "37 3 * * *"
   workflow_dispatch:

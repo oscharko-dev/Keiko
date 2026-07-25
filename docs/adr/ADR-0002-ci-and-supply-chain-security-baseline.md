@@ -108,14 +108,17 @@ This avoids introducing an unpinnable `uses:` reference.
 
 ### Positive
 
-- All 7 required branch-protection status checks are produced with byte-for-byte correct names; PRs can
-  merge as soon as checks pass.
+- Every required branch-protection status check is produced with byte-for-byte correct names; PRs can
+  merge as soon as checks pass. (The count has grown since this record was written — CONTRIBUTING.md
+  is authoritative for the current list.)
 - SHA-pinned actions eliminate the mutable-tag attack vector in CI. Dependabot will surface updates as
   reviewable PRs rather than silent in-place changes.
 - `Verify pinned action SHAs` is a self-enforcing gate: if a developer adds a new action with a mutable
   tag, the job fails immediately on their PR, before any code runs with that action.
-- `npm audit` in the `Build, scan, SBOM, smoke` job catches newly published CVEs in devDependencies
-  before they merge.
+- `npm audit` in the `Build, scan, SBOM, smoke` job catches newly published CVEs before they merge.
+  Amended (#2696/#2699): it is scoped to the shipped dependency graph (`--omit=dev`), matching the
+  SBOM step beside it. Build-time-only advisories are carried by the OSV scan over the complete
+  lockfile, which runs on every branch target these audit gates do.
 - The CycloneDX SBOM artifact satisfies regulated-environment audit requirements without external tooling
   or a separate pipeline.
 - Three separate workflow files keep trigger logic clean and failure blast radius small: a CodeQL timeout

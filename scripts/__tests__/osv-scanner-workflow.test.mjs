@@ -14,9 +14,11 @@ const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
 // scan is the ONLY vulnerability coverage build-time dependencies get, so it has to reach every
 // target they do — leaving release/** or an integration branch out means shipping a release
 // candidate whose tooling was never scanned at all.
-function ciPullRequestBranches() {
-  const block = /\n {2}pull_request:\n {4}branches:\n((?: {6}- .*\n)+)/u.exec(ci);
-  if (block === null) throw new Error("ci.yml pull_request branch list not found");
+function branchList(source, event, label) {
+  const block = new RegExp(`\\n {2}${event}:\\n {4}branches:\\n((?: {6}- .*\\n)+)`, "u").exec(
+    source,
+  );
+  if (block === null) throw new Error(`${label} ${event} branch list not found`);
   return block[1]
     .split("\n")
     .map((line) =>
@@ -40,13 +42,20 @@ describe("OSV Scanner workflow", () => {
   // Replaces an earlier pin that asserted the scan stayed dev-only. That held while `npm audit`
   // still covered devDependencies; with the audit gates scoped to the shipped graph, a branch this
   // scan skips has NO dependency coverage. The pin now enforces the stronger property.
-  it("covers every branch target the npm audit gates run on", () => {
-    const expected = ciPullRequestBranches();
+  // Each event is checked against its OWN list: a branch present under `push` must not satisfy the
+  // `pull_request` expectation, which a whole-document search would have allowed.
+  it.each(["pull_request", "push"])("covers every %s target the audit gates run on", (event) => {
+    const expected = branchList(ci, event, "ci.yml");
+    const actual = branchList(workflow, event, "osv-scanner.yml");
     expect(expected).toContain("dev");
     expect(expected.length).toBeGreaterThan(1);
-    for (const branch of expected) {
-      expect(workflow).toContain(`- ${branch.includes("*") ? `"${branch}"` : branch}\n`);
-    }
+    for (const branch of expected) expect(actual).toContain(branch);
+  });
+
+  it("validates merge-queue groups like the audit gates do", () => {
+    expect(branchList(workflow, "merge_group", "osv-scanner.yml")).toEqual(
+      branchList(ci, "merge_group", "ci.yml"),
+    );
   });
 
   it("scans every dev push without a path filter", () => {
