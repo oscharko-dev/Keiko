@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
@@ -16,7 +17,7 @@ import { createCommandRunnerManager } from "./command-runner.js";
 import { createVerificationRunnerManager } from "./editor/verificationRunner.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import { deriveWorkspaceRootRef } from "./workspaceTrust/canonicalTrustIdentity.js";
-import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { createInMemoryUiStore, createNodeUiStore, type UiStore } from "./store/index.js";
 import {
   createWorkspaceScriptTrustService,
   WorkspaceScriptTrustError,
@@ -261,6 +262,67 @@ describe("WorkspaceScriptTrustService", () => {
       command.execute({ projectId: root, taskId: "npm-script:test" }),
     ).resolves.toMatchObject({ exitCode: 0 });
     expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it("projects a registered project the D9 migration left pre-manifest as unavailable", () => {
+    // ADR-0147 D9 migrates a one-root manifest for the CURRENT ACTIVE project only, so every other
+    // registered project stays pre-manifest after the upgrade. D9 requires that state to fail
+    // closed to unavailable/restricted. It used to escape manifestForCanonicalRoot as an uncoded
+    // Error, which the server turns into an opaque 500 on the trust status, grant, revoke and
+    // catalog routes.
+    //
+    // Relocated here from workspace-manifests.test.ts by #2620. That pin reached the same state by
+    // removing a root from a multi-root workspace, which no longer orphans the project — removal
+    // now restores a standalone single-root workspace. The invariant is unchanged and now sits at
+    // the layer that owns it, anchored to the D9 producer that still exists.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-script-trust-premanifest-"));
+    const dbPath = join(dir, "ui.db");
+    const active = join(dir, "active");
+    mkdirSync(active);
+    writeFileSync(join(active, "package.json"), MANIFEST, "utf8");
+    let clock = 1;
+    const options = { now: (): number => (clock += 1) };
+    try {
+      const seed = createNodeUiStore(dbPath, options);
+      seed.createProject(root, "fixture");
+      // Registered last, so `ORDER BY last_opened_at DESC LIMIT 1` migrates this one and leaves
+      // `root` pre-manifest. The ordering is pinned by the injected clock, never by wall time.
+      seed.createProject(active, "active");
+      seed.close();
+
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(
+        "DROP TABLE workspace_manifest_roots; DROP TABLE workspace_manifests; " +
+          "DROP TABLE workspace_trust_records; PRAGMA user_version = 13;",
+      );
+      legacy.close();
+
+      const migrated = createNodeUiStore(dbPath, options);
+      try {
+        expect(migrated.listProjects()).toHaveLength(2);
+        expect(migrated.listWorkspaceManifestRecords()).toHaveLength(1);
+        expect(migrated.findWorkspaceManifestRecordByProject(root)).toBeUndefined();
+
+        const trust = createWorkspaceScriptTrustService({ store: migrated });
+        expect(trust.status(root)).toMatchObject({
+          projectId: root,
+          trust: "restricted",
+          decidedBy: "server",
+          reason: "state-unavailable",
+        });
+        expect(trust.trustLevelForRoot(root)).toBe("restricted");
+        for (const worker of [
+          (): unknown => trust.grant(root),
+          (): unknown => trust.revoke(root),
+        ]) {
+          expect(worker).toThrow(WorkspaceScriptTrustError);
+        }
+      } finally {
+        migrated.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("grants a root that has no package manifest and re-restricts it once one appears", () => {

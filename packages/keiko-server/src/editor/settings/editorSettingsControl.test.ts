@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,6 +44,20 @@ function profileRef(value: string): WorkspaceProfileRef {
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+/**
+ * Replace the directory at `path` with a genuinely different filesystem object. The replacement is
+ * created BEFORE the original is removed, so its inode was allocated while the old one was still in
+ * use and can never be the recycled one. Deleting and re-creating in place is not deterministic:
+ * Linux commonly hands the freed inode straight back, which leaves the root identity digest — path,
+ * device, inode, mode, uid — byte-identical and the record still bound.
+ */
+function replaceDirectory(path: string): void {
+  const staged = `${path}.replacement`;
+  mkdirSync(staged);
+  rmSync(path, { recursive: true, force: true });
+  renameSync(staged, path);
+}
 
 function service(
   stateDir = temporaryDirectory("editor-settings-state"),
@@ -781,5 +795,146 @@ describe("editor settings control service", () => {
       value: false,
       source: "builtInDefault",
     });
+  });
+
+  it("invalidates only the departed root's settings and keeps the composite revision monotonic", async () => {
+    // #2620: a root that leaves its workspace must not keep a per-root settings binding that a
+    // later occupant of the same reference could inherit (ADR-0147). Invalidation writes an empty
+    // record at the next revision rather than deleting the file, so `rootRevision` never moves
+    // backwards and a stale ETag cannot re-match different content later.
+    const control = service();
+    const departing = temporaryDirectory("editor-settings-invalidate-departing");
+    const surviving = temporaryDirectory("editor-settings-invalidate-surviving");
+    for (const [realRoot, value, key] of [
+      [departing, 18, "invalidate-departing"],
+      [surviving, 20, "invalidate-surviving"],
+    ] as const) {
+      await control.mutate({
+        action: "set",
+        expectedRevision: 0,
+        idempotencyKey: key,
+        realRoot,
+        scope: "root",
+        values: { fontSize: value },
+      });
+    }
+    const before = await control.read(departing);
+    expect(before.rootRevision).toBe(1);
+
+    const invalidate = control.invalidateRoot;
+    if (invalidate === undefined) throw new Error("missing invalidateRoot");
+    await invalidate(departing);
+
+    const after = await control.read(departing);
+    expect(after.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
+      source: "builtInDefault",
+    });
+    // Monotonic: the empty record lands at the next revision instead of resetting to 0, so a stale
+    // ETag can never re-match different content later.
+    expect(after.rootRevision).toBe(2);
+    expect(after.etag).not.toBe(before.etag);
+
+    // The sibling root never lost the settings the human set on it.
+    expect(
+      (await control.read(surviving)).settings.find((entry) => entry.id === "fontSize"),
+    ).toMatchObject({ value: 20, source: "root", scope: "root" });
+  });
+
+  it("keeps every settings scope writable after the root directory is replaced", async () => {
+    // The blast radius of getting the store state wrong: `loadMutationState` rejects EVERY mutation
+    // carrying a root whose record is unavailable, so tagging a superseded root record as
+    // unavailable instead of absent would leave the human unable to change user-, workspace- OR
+    // root-scope settings for that root, with no recovery path through the API (#2620).
+    const stateDir = temporaryDirectory("editor-settings-replaced-state");
+    const parent = temporaryDirectory("editor-settings-replaced");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const control = service(stateDir);
+    await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "replaced-before",
+      realRoot: root,
+      scope: "root",
+      values: { fontSize: 18 },
+    });
+
+    replaceDirectory(root);
+
+    const snapshot = await control.read(root);
+    expect(snapshot.storeState).not.toBe("unavailable");
+    expect(snapshot.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
+      source: "builtInDefault",
+    });
+
+    for (const [scope, key] of [
+      ["user", "replaced-after-user"],
+      ["workspace", "replaced-after-workspace"],
+      ["root", "replaced-after-root"],
+    ] as const) {
+      // Each scope is at its own revision 0 here: the superseded root record reads as absent, so
+      // the empty record — not the stale revision 1 on disk — is what the write builds on.
+      await expect(
+        control.mutate({
+          action: "set",
+          expectedRevision: 0,
+          idempotencyKey: key,
+          realRoot: root,
+          scope,
+          values: { fontSize: 15 },
+        }),
+      ).resolves.toMatchObject({ kind: "ok" });
+    }
+    expect(
+      (await control.read(root)).settings.find((entry) => entry.id === "fontSize"),
+    ).toMatchObject({ value: 15, source: "root", scope: "root" });
+  });
+
+  it("answers a root replaced mid-mutation with a typed outcome, not a raw error", async () => {
+    // Losing the race against a root replacement between loading the record and persisting it is a
+    // recoverable condition. A raw throw here escapes the settings mutation path and reaches the
+    // top-level handler as an opaque 500 (Qodo review, PR #2714).
+    const stateDir = temporaryDirectory("editor-settings-race-state");
+    const parent = temporaryDirectory("editor-settings-race");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const store = createEditorSettingsStore({ stateDir });
+    const control = createEditorSettingsControlService({
+      store: {
+        ...store,
+        // Swap the directory out after the record has been loaded and before it is persisted.
+        commitRoot: (realRoot, record): void => {
+          replaceDirectory(root);
+          store.commitRoot(realRoot, record);
+        },
+      },
+      mutex: createWorkspaceMutexRegistry(),
+    });
+
+    await expect(
+      control.mutate({
+        action: "set",
+        expectedRevision: 0,
+        idempotencyKey: "race-root",
+        realRoot: root,
+        scope: "root",
+        values: { fontSize: 18 },
+      }),
+    ).resolves.toEqual({ kind: "unavailable", code: "STATE_UNAVAILABLE" });
+  });
+
+  it("leaves a root that never had per-root settings untouched", async () => {
+    // Invalidation must not materialize state for a root that has none — `absent` stays `absent`.
+    const control = service();
+    const root = temporaryDirectory("editor-settings-invalidate-absent");
+    const before = await control.read(root);
+
+    const invalidate = control.invalidateRoot;
+    if (invalidate === undefined) throw new Error("missing invalidateRoot");
+    await invalidate(root);
+
+    const after = await control.read(root);
+    expect(after.rootRevision).toBe(0);
+    expect(after.etag).toBe(before.etag);
   });
 });

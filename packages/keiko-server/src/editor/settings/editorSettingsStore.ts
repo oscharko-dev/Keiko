@@ -14,6 +14,7 @@ import {
 import { containsPath } from "@oscharko-dev/keiko-git";
 
 import { assertNoSymlinkedPathSegments, savePrivateJson } from "../../private-json.js";
+import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 
 const MAX_RECORD_BYTES = 512 * 1024;
 const MAX_IDEMPOTENCY_RECORDS = 64;
@@ -21,6 +22,20 @@ const MAX_EVENTS = 128;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 export type EditorSettingsStoreState = "absent" | "ready" | "unavailable";
+
+/**
+ * The root standing at this path is not the one the record was built for. Unlike the other
+ * `commitRoot` guards, which catch programming errors, this one fires on a race a human can lose
+ * innocently: replacing the directory between loading the record and persisting it. It is typed so
+ * the control layer can answer with a structured mutation outcome instead of letting a raw error
+ * reach the top-level handler as an opaque 500.
+ */
+export class EditorSettingsRootIdentityError extends Error {
+  public constructor() {
+    super("editor settings root identity mismatch");
+    this.name = "EditorSettingsRootIdentityError";
+  }
+}
 
 export interface EditorSettingsIdempotencyRecord {
   readonly keyHash: string;
@@ -60,6 +75,14 @@ export interface EditorSettingsWorkspaceRecord extends EditorSettingsRecordBase 
 export interface EditorSettingsRootRecord extends EditorSettingsRecordBase {
   readonly kind: "root";
   readonly rootFingerprint: string;
+  /**
+   * The filesystem identity the record was written against. The path fingerprint alone let settings
+   * written for one directory apply to a different directory that later occupied the same path —
+   * the ADR-0147 "root replacement at the same path" threat, and why root removal and replacement
+   * must invalidate settings bindings (#2620). Binding the identity here makes the record
+   * self-invalidating, so a missed invalidation signal still fails closed.
+   */
+  readonly rootIdentityDigest: string;
 }
 
 interface EditorSettingsLoadResult<T extends EditorSettingsRecordBase> {
@@ -197,11 +220,25 @@ export function emptyEditorSettingsWorkspaceRecord(
   };
 }
 
+/**
+ * The live filesystem identity of a root, or `undefined` when it cannot be read — a removed root, a
+ * path that is no longer a directory, or a symlink alias. `undefined` never equals a stored digest,
+ * so an unreadable root fails closed: its record neither applies nor accepts a write.
+ */
+function editorSettingsRootIdentityDigest(realRoot: string): string | undefined {
+  try {
+    return inspectWorkspaceRootIdentity(realRoot).identityDigest;
+  } catch {
+    return undefined;
+  }
+}
+
 export function emptyEditorSettingsRootRecord(realRoot: string): EditorSettingsRootRecord {
   return {
     kind: "root",
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     rootFingerprint: editorSettingsWorkspaceFingerprint(realRoot),
+    rootIdentityDigest: editorSettingsRootIdentityDigest(realRoot) ?? "",
     revision: 0,
     values: {},
     idempotency: [],
@@ -334,20 +371,34 @@ function parseWorkspaceRecord(
     : { kind: "workspace", workspaceFingerprint: fingerprint, ...base };
 }
 
+/**
+ * The identity a stored record claims. Claiming none — a record written before the binding existed,
+ * or one written for a root whose identity was unreadable — is the empty string, and readiness
+ * requires a READABLE live identity, so a claim of none can never match one. Only a present but
+ * malformed binding is a structural defect, and that rejects the whole record.
+ */
+function parsedRootIdentityBinding(value: unknown): string | undefined {
+  if (value === undefined || value === "") return "";
+  return validSha(value) ? value : undefined;
+}
+
 function parseRootRecord(
   value: unknown,
   fingerprint: string,
 ): EditorSettingsRootRecord | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, recordKeys("root"))) return undefined;
   if (value.kind !== "root" || value.rootFingerprint !== fingerprint) return undefined;
+  const rootIdentityDigest = parsedRootIdentityBinding(value.rootIdentityDigest);
   const base = parseBase(value, "workspace");
-  return base === undefined ? undefined : { kind: "root", rootFingerprint: fingerprint, ...base };
+  return base === undefined || rootIdentityDigest === undefined
+    ? undefined
+    : { kind: "root", rootFingerprint: fingerprint, rootIdentityDigest, ...base };
 }
 
 function recordKeys(kind: "user" | "workspace" | "root"): readonly string[] {
   const keys = ["kind", "schemaVersion", "revision", "values", "idempotency", "events"];
   if (kind === "workspace") return [...keys, "workspaceFingerprint"];
-  return kind === "root" ? [...keys, "rootFingerprint"] : keys;
+  return kind === "root" ? [...keys, "rootFingerprint", "rootIdentityDigest"] : keys;
 }
 
 function safeUserRecordPath(path: string): boolean {
@@ -429,9 +480,20 @@ function loadRootRecord(
     if (raw.kind === "missing") return { state: "absent", record: empty };
     if (raw.kind === "oversized") return { state: "unavailable", record: empty };
     const record = parseRootRecord(raw.value, empty.rootFingerprint);
-    return record === undefined
-      ? { state: "unavailable", record: empty }
-      : { state: "ready", record };
+    if (record === undefined) return { state: "unavailable", record: empty };
+    // Ready demands BOTH a readable live identity and an exact match. Comparing against the empty
+    // record's digest alone would let a record claiming no identity read as ready whenever the live
+    // root is unreadable, because both collapse to the same sentinel — "claims no identity" and
+    // "identity cannot be read" are different facts and must not alias.
+    //
+    // Anything else is ABSENT, not unavailable, and the distinction is load-bearing: `unavailable`
+    // rejects every settings mutation carrying this root, user and workspace scope included, with
+    // no way back through the API. `absent` contributes nothing and lets the next write supersede
+    // the stale record with a correctly bound one (#2620, ADR-0147 D9 keeps the two tags distinct).
+    const live = editorSettingsRootIdentityDigest(realRoot);
+    return live !== undefined && record.rootIdentityDigest === live
+      ? { state: "ready", record }
+      : { state: "absent", record: empty };
   } catch {
     return { state: "unavailable", record: empty };
   }
@@ -448,7 +510,9 @@ function recordForWrite(
     idempotency: record.idempotency,
     events: record.events,
     ...(record.kind === "workspace" ? { workspaceFingerprint: record.workspaceFingerprint } : {}),
-    ...(record.kind === "root" ? { rootFingerprint: record.rootFingerprint } : {}),
+    ...(record.kind === "root"
+      ? { rootFingerprint: record.rootFingerprint, rootIdentityDigest: record.rootIdentityDigest }
+      : {}),
   };
 }
 
@@ -478,6 +542,16 @@ export function createEditorSettingsStore(
     commitRoot: (realRoot, record): void => {
       if (record.rootFingerprint !== editorSettingsWorkspaceFingerprint(realRoot)) {
         throw new Error("editor settings root identity mismatch");
+      }
+      // Refuse to persist a record bound to a root that is no longer the one on disk. Without this
+      // a mutation racing a root replacement would write the new directory's file with the old
+      // directory's binding, re-creating the very carry-over the binding exists to prevent.
+      //
+      // Both sides fall back to the same unreadable sentinel, so clearing the record of a root that
+      // has left the disk stays possible. That sentinel is inert on load: readiness demands a
+      // READABLE live identity, so a record carrying it applies to nothing.
+      if (record.rootIdentityDigest !== (editorSettingsRootIdentityDigest(realRoot) ?? "")) {
+        throw new EditorSettingsRootIdentityError();
       }
       if (containsPath(realRoot, options.stateDir)) {
         throw new Error("editor settings state directory must remain outside the workspace");
