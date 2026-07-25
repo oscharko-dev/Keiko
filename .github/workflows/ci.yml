@@ -86,7 +86,17 @@ jobs:
         env:
           KEIKO_CHANGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           KEIKO_CHANGE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: node scripts/check-documentation-only-change.mjs
+        # The base revision may predate the classifier itself — it does on the pull request that
+        # introduces it. Absent trusted code, the honest answer is the fail-open one: classify
+        # nothing and run the full matrix. Self-healing, since every later base has the script.
+        run: |
+          set -euo pipefail
+          if [ -f scripts/check-documentation-only-change.mjs ]; then
+            node scripts/check-documentation-only-change.mjs
+          else
+            echo "documentation-only-change: false — the base revision has no classifier yet"
+            echo "documentation-only=false" >> "${GITHUB_OUTPUT}"
+          fi
 
   core-quality:
     name: Core quality
