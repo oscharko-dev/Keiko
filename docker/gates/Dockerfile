@@ -56,15 +56,16 @@ ENV npm_config_cache=/opt/npm-cache
 # to operate on it ("dubious ownership") since 2.35.2, which makes every gate that inspects the
 # index — dependency hygiene, the i18n guard, the D12 subject digest — fail with a status 128 that
 # says nothing about the real cause.
-RUN git config --global --add safe.directory /repo
-
+#
 # The gate suite runs unprivileged (S6471). The `node` image ships a non-root `node` user; the three
-# named volumes are pre-created here so Docker copies this ownership into them on first use, and the
-# git safe.directory entry is repeated for that user's own global config — the one above belongs to
-# root and is not read by `node`.
-RUN mkdir -p /repo/node_modules /opt/playwright /opt/npm-cache \
+# named volumes are pre-created here so Docker copies this ownership into them on first use. One RUN
+# for the whole root stage: consecutive RUN instructions belong in a single layer (docker:S7031).
+RUN git config --global --add safe.directory /repo \
+    && mkdir -p /repo/node_modules /opt/playwright /opt/npm-cache \
     && chown -R node:node /repo/node_modules /opt/playwright /opt/npm-cache
 USER node
+# Repeated for the `node` user's own global config — the entry above belongs to root and is not
+# read by `node`.
 RUN git config --global --add safe.directory /repo \
     && git config --global --add safe.directory '*'
 

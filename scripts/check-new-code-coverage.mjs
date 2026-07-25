@@ -118,8 +118,9 @@ export function evaluate({ argv = [], env = {}, run, exists, read, paths = LCOV_
   };
 }
 
-function main(argv = process.argv.slice(2), env = process.env) {
-  const verdict = evaluate({ argv, env, run: git });
+/** Exported, with injectable collaborators, so every branch is reachable from a test (#2699). */
+export function main(argv = process.argv.slice(2), env = process.env, deps = {}) {
+  const verdict = evaluate({ argv, env, run: git, ...deps });
   if (verdict.summary !== undefined) console.log(verdict.summary);
   for (const failure of verdict.failures) console.error(failure);
   if (!verdict.ok) process.exit(1);

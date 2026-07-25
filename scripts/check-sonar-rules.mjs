@@ -65,29 +65,10 @@ export function summarise(results) {
   return findings;
 }
 
-async function main(argv = process.argv.slice(2), env = process.env) {
-  const baseRef = resolveBaseRef(argv, env);
-  let base;
-  try {
-    base = git(["merge-base", baseRef, "HEAD"]).trim();
-  } catch {
-    console.error(
-      `sonar-rules: FAIL - cannot resolve "${baseRef}" against HEAD. Fetch the base ` +
-        "(`git fetch origin dev`) or name another one with `--base=<ref>`.",
-    );
-    process.exit(1);
-    return;
-  }
-  const files = changedLintableFiles(git(["diff", "--name-only", `${base}..HEAD`, "--"]), (path) =>
-    existsInTree(path),
-  );
-  if (files.length === 0) {
-    console.log("sonar-rules: PASS — no changed source files in Sonar's main scope.");
-    return;
-  }
-  // The repository's own flat config still applies; these rules are layered on top, so parsing,
-  // globals and type information stay exactly as `npm run lint` sees them.
-  const eslint = new ESLint({
+// The repository's own flat config still applies; these rules are layered on top, so parsing,
+// globals and type information stay exactly as `npm run lint` sees them.
+export function createEngine() {
+  return new ESLint({
     overrideConfig: [
       {
         files: ["**/*.{ts,tsx,mjs,cjs,js,jsx}"],
@@ -96,25 +77,73 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       },
     ],
   });
-  const findings = summarise(await eslint.lintFiles(files));
-  if (findings.length === 0) {
-    console.log(
-      `sonar-rules: PASS — ${String(files.length)} changed file(s), no SonarCloud rule violations.`,
-    );
-    return;
-  }
-  for (const finding of findings) {
-    console.error(
-      `sonar-rules: FAIL - ${finding.path}:${String(finding.line)} ${finding.rule} — ${finding.message}`,
-    );
-  }
-  console.error(
-    `sonar-rules: ${String(findings.length)} violation(s) SonarCloud would report on new code.`,
-  );
-  process.exit(1);
 }
 
-function existsInTree(path) {
+function lintChangedFiles(files) {
+  return createEngine().lintFiles(files);
+}
+
+/**
+ * The whole verdict as data: what to print and how to exit. Exported, with injectable
+ * collaborators, so every branch — unresolvable base, empty diff, clean lint, violations — is
+ * reachable from a test without spawning git or loading the rule engine (#2699).
+ */
+export async function evaluate({
+  argv = [],
+  env = {},
+  run = git,
+  exists = existsInTree,
+  lint = lintChangedFiles,
+}) {
+  const baseRef = resolveBaseRef(argv, env);
+  let base;
+  try {
+    base = run(["merge-base", baseRef, "HEAD"]).trim();
+  } catch {
+    return {
+      failures: [
+        `sonar-rules: FAIL - cannot resolve "${baseRef}" against HEAD. Fetch the base ` +
+          "(`git fetch origin dev`) or name another one with `--base=<ref>`.",
+      ],
+      ok: false,
+    };
+  }
+  const files = changedLintableFiles(run(["diff", "--name-only", `${base}..HEAD`, "--"]), exists);
+  if (files.length === 0) {
+    return {
+      failures: [],
+      ok: true,
+      summary: "sonar-rules: PASS — no changed source files in Sonar's main scope.",
+    };
+  }
+  const findings = summarise(await lint(files));
+  if (findings.length === 0) {
+    return {
+      failures: [],
+      ok: true,
+      summary: `sonar-rules: PASS — ${String(files.length)} changed file(s), no SonarCloud rule violations.`,
+    };
+  }
+  return {
+    failures: [
+      ...findings.map(
+        (finding) =>
+          `sonar-rules: FAIL - ${finding.path}:${String(finding.line)} ${finding.rule} — ${finding.message}`,
+      ),
+      `sonar-rules: ${String(findings.length)} violation(s) SonarCloud would report on new code.`,
+    ],
+    ok: false,
+  };
+}
+
+async function main(argv = process.argv.slice(2), env = process.env) {
+  const verdict = await evaluate({ argv, env });
+  if (verdict.summary !== undefined) console.log(verdict.summary);
+  for (const failure of verdict.failures) console.error(failure);
+  if (!verdict.ok) process.exit(1);
+}
+
+export function existsInTree(path) {
   try {
     git(["cat-file", "-e", `HEAD:${path}`]);
     return true;

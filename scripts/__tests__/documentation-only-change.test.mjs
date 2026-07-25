@@ -130,6 +130,14 @@ describe("the change-scope entry point", () => {
     expect(verdict.reason).toContain("could not resolve the change set");
   });
 
+  it("labels a non-Error failure as unknown instead of crashing", () => {
+    const verdict = resolveVerdict("HEAD", "HEAD", () => {
+      throw "not an Error instance";
+    });
+    expect(verdict.documentationOnly).toBe(false);
+    expect(verdict.reason).toContain("unknown");
+  });
+
   it("writes the verdict to the step output when GitHub supplies one", () => {
     const outputPath = join(mkdtempSync(join(tmpdir(), "keiko-doc-scope-")), "output.txt");
     process.env.GITHUB_OUTPUT = outputPath;

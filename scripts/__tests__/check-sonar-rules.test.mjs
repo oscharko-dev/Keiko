@@ -1,6 +1,14 @@
+import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
 
-import { changedLintableFiles, resolveBaseRef, summarise } from "../check-sonar-rules.mjs";
+import {
+  changedLintableFiles,
+  createEngine,
+  evaluate,
+  existsInTree,
+  resolveBaseRef,
+  summarise,
+} from "../check-sonar-rules.mjs";
 
 describe("resolveBaseRef", () => {
   it("prefers an explicit --base argument", () => {
@@ -75,5 +83,96 @@ describe("summarise", () => {
       result([{ line: 9, message: "super-linear runtime", ruleId: "sonarjs/super-linear-regex" }]),
     ]);
     expect(findings[0].message).toBe("super-linear runtime");
+  });
+});
+
+describe("evaluate", () => {
+  const run = (args) => (args[0] === "merge-base" ? "base\n" : "scripts/x.mjs\n");
+  const anyFile = () => true;
+  const neverLint = () => {
+    throw new Error("the rule engine must never load for this input");
+  };
+
+  it("fails, with the fetch hint, when the base ref cannot be resolved", async () => {
+    const verdict = await evaluate({
+      exists: anyFile,
+      lint: neverLint,
+      run: () => {
+        throw new Error("fatal: Not a valid object name");
+      },
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.failures[0]).toContain('cannot resolve "origin/dev"');
+    expect(verdict.failures[0]).toContain("--base=");
+  });
+
+  it("passes without loading the rule engine when the diff holds no lintable source", async () => {
+    const verdict = await evaluate({
+      exists: anyFile,
+      lint: neverLint,
+      run: (args) => (args[0] === "merge-base" ? "base\n" : "README.md\ndocs/adr/x.md\n"),
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.summary).toContain("no changed source files");
+  });
+
+  it("passes and counts the files when the rules find nothing", async () => {
+    const verdict = await evaluate({
+      exists: anyFile,
+      lint: async () => [{ filePath: "scripts/x.mjs", messages: [] }],
+      run,
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.failures).toEqual([]);
+    expect(verdict.summary).toContain("1 changed file(s)");
+  });
+
+  it("fails with one line per finding and a closing count", async () => {
+    const verdict = await evaluate({
+      exists: anyFile,
+      lint: async () => [
+        {
+          filePath: "scripts/x.mjs",
+          messages: [{ line: 3, message: "too complex", ruleId: "sonarjs/cognitive-complexity" }],
+        },
+      ],
+      run,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.summary).toBeUndefined();
+    expect(verdict.failures[0]).toContain("scripts/x.mjs:3 sonarjs/cognitive-complexity");
+    expect(verdict.failures[1]).toContain("1 violation(s)");
+  });
+
+  it("honours an explicit --base over the environment", async () => {
+    const seen = [];
+    await evaluate({
+      argv: ["--base=feat/x"],
+      env: { KEIKO_NEW_CODE_BASE_REF: "origin/main" },
+      exists: anyFile,
+      lint: neverLint,
+      run: (args) => {
+        seen.push(args.join(" "));
+        return args[0] === "merge-base" ? "base\n" : "";
+      },
+    });
+    expect(seen[0]).toBe("merge-base feat/x HEAD");
+  });
+});
+
+// Real-git checks in the documentation-only entry point's style: HEAD's own tree is deterministic.
+describe("existsInTree", () => {
+  it("sees a file HEAD tracks", () => {
+    expect(existsInTree("scripts/check-sonar-rules.mjs")).toBe(true);
+  });
+
+  it("rejects a path HEAD does not track", () => {
+    expect(existsInTree("scripts/keiko-no-such-file.mjs")).toBe(false);
+  });
+});
+
+describe("createEngine", () => {
+  it("builds the engine the entry point lints with", () => {
+    expect(createEngine()).toBeInstanceOf(ESLint);
   });
 });

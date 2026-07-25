@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   coverageVerdict,
@@ -8,6 +8,7 @@ import {
 } from "../lib/new-code-coverage.mjs";
 import {
   evaluate,
+  main,
   normaliseLcovPaths,
   readReports,
   resolveBaseRef,
@@ -44,6 +45,11 @@ describe("parseDiffAddedLines", () => {
 
   it("returns an empty map for an empty diff", () => {
     expect(parseDiffAddedLines("")).toEqual(new Map());
+  });
+
+  it("merges hunks for a path the diff opens twice", () => {
+    const diff = ["+++ b/x.ts", "@@ -0,0 +1,1 @@", "+a", "+++ b/x.ts", "@@ -8,0 +9,1 @@", "+b"];
+    expect(parseDiffAddedLines(diff.join("\n"))).toEqual(new Map([["x.ts", new Set([1, 9])]]));
   });
 });
 
@@ -104,6 +110,22 @@ describe("parseLcov", () => {
     expect(parseLcov(["DA:1,1", "SF:y.ts", "DA:notanumber,1", "BRDA:x,0,0,1"].join("\n"))).toEqual(
       new Map([["y.ts", { branches: new Map(), lines: new Map() }]]),
     );
+  });
+
+  it("counts a DA record without a hit count as zero hits", () => {
+    expect(parseLcov(["SF:x.ts", "DA:5"].join("\n")).get("x.ts").lines.get(5)).toBe(0);
+  });
+
+  it("treats a BRDA record with missing identity parts as one zero-take branch", () => {
+    expect(parseLcov(["SF:x.ts", "BRDA:5"].join("\n")).get("x.ts").branches.get(5)).toEqual(
+      new Map([[",", 0]]),
+    );
+  });
+
+  it("records a non-numeric branch take as not taken", () => {
+    expect(
+      parseLcov(["SF:x.ts", "BRDA:7,0,0,junk"].join("\n")).get("x.ts").branches.get(7),
+    ).toEqual(new Map([["0,0", 0]]));
   });
 });
 
@@ -271,6 +293,18 @@ describe("readReports", () => {
       ),
     ).toBeUndefined();
   });
+
+  // The default collaborators read the real filesystem. Any tracked file is a deterministic
+  // fixture: text without SF: records parses to an empty report set.
+  it("reads through the real filesystem when no collaborators are injected", () => {
+    const reports = readReports(["scripts/check-new-code-coverage.mjs"]);
+    expect(reports.sources).toEqual(["scripts/check-new-code-coverage.mjs"]);
+    expect(reports.lcov.size).toBe(0);
+  });
+
+  it("is undefined through the real filesystem when the report is absent", () => {
+    expect(readReports(["coverage/keiko-no-such-report.info"])).toBeUndefined();
+  });
 });
 
 describe("evaluate", () => {
@@ -327,5 +361,38 @@ describe("evaluate", () => {
       },
     });
     expect(seen[0]).toBe("merge-base feat/x HEAD");
+  });
+});
+
+describe("the coverage entry point", () => {
+  // Exercises the production `git` collaborator the way the documentation-only entry point does:
+  // HEAD against itself is an empty diff, which is deterministic in any checkout.
+  it("runs the real git path and passes on an empty change set", () => {
+    const logs = [];
+    const log = vi.spyOn(console, "log").mockImplementation((line) => logs.push(line));
+    try {
+      main(["--base=HEAD"], {}, { exists: () => true, read: () => "SF:src/a.ts\nDA:1,1" });
+    } finally {
+      log.mockRestore();
+    }
+    expect(logs.join("\n")).toContain("no measurable new code");
+  });
+
+  it("exits non-zero, naming the command to run, when no report exists", () => {
+    const errors = [];
+    const exitCodes = [];
+    const exit = vi.spyOn(process, "exit").mockImplementation((code) => {
+      exitCodes.push(code);
+      return undefined;
+    });
+    const error = vi.spyOn(console, "error").mockImplementation((line) => errors.push(line));
+    try {
+      main(undefined, undefined, { exists: () => false });
+    } finally {
+      error.mockRestore();
+      exit.mockRestore();
+    }
+    expect(exitCodes).toEqual([1]);
+    expect(errors.join("\n")).toContain("no LCOV report found");
   });
 });
