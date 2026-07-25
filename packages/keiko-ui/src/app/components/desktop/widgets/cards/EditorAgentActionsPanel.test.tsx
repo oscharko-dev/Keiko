@@ -70,7 +70,7 @@ describe("EditorAgentActionsPanel", () => {
   it("lists recent agent actions with action type, target, and disposition label (AC4)", async () => {
     fetchEditorAgentAudit.mockResolvedValue({ records: [record()] });
     render(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />);
-    await waitFor(() => expect(screen.getByTestId("agent-action-row")).toBeInTheDocument());
+    expect(await screen.findByTestId("agent-action-row")).toBeInTheDocument();
     expect(screen.getByText("applyTextEdits")).toBeInTheDocument();
     expect(screen.getByText("src/a.ts")).toBeInTheDocument();
     // Disposition is a text label, not colour alone (WCAG 1.4.1).
@@ -93,22 +93,20 @@ describe("EditorAgentActionsPanel", () => {
       ],
     });
     render(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />);
-    await waitFor(() => expect(screen.getByText("Denied")).toBeInTheDocument());
+    expect(await screen.findByText("Denied")).toBeInTheDocument();
     expect(screen.getByText(/denied-sensitive-path/)).toBeInTheDocument();
   });
 
   it("shows an empty state when there is no recent activity", async () => {
     fetchEditorAgentAudit.mockResolvedValue({ records: [] });
     render(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />);
-    await waitFor(() =>
-      expect(screen.getByText("No recent agent editor actions.")).toBeInTheDocument(),
-    );
+    expect(await screen.findByText("No recent agent editor actions.")).toBeInTheDocument();
   });
 
   it("distinguishes a load failure from an empty feed (AC4)", async () => {
     fetchEditorAgentAudit.mockRejectedValue(new Error("network down"));
     render(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />);
-    await waitFor(() => expect(screen.getByTestId("agent-actions-error")).toBeInTheDocument());
+    expect(await screen.findByTestId("agent-actions-error")).toBeInTheDocument();
     expect(screen.getByText("Unable to load recent agent actions.")).toBeInTheDocument();
     expect(screen.queryByText("No recent agent editor actions.")).not.toBeInTheDocument();
   });
@@ -130,14 +128,14 @@ describe("EditorAgentActionsPanel", () => {
     const { container } = render(
       <EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />,
     );
-    await waitFor(() => expect(screen.getByTestId("agent-action-row")).toBeInTheDocument());
+    expect(await screen.findByTestId("agent-action-row")).toBeInTheDocument();
     expect(container.textContent ?? "").not.toContain("newText");
   });
 
   it("exposes independent accessible filters that default to all records", async () => {
     fetchEditorAgentAudit.mockResolvedValue({ records: [record()] });
     render(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />);
-    await waitFor(() => expect(screen.getByTestId("agent-action-row")).toBeInTheDocument());
+    expect(await screen.findByTestId("agent-action-row")).toBeInTheDocument();
 
     expect(screen.getByRole("combobox", { name: "Action type" })).toHaveValue("all");
     expect(screen.getByRole("combobox", { name: "Disposition" })).toHaveValue("all");
@@ -330,7 +328,7 @@ describe("EditorAgentActionsPanel", () => {
     const user = userEvent.setup();
     fetchEditorAgentAudit.mockResolvedValue({ records: [record()] });
     render(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />);
-    await waitFor(() => expect(screen.getByTestId("agent-action-row")).toBeInTheDocument());
+    expect(await screen.findByTestId("agent-action-row")).toBeInTheDocument();
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Action type" }), "applyPatch");
 
@@ -359,7 +357,7 @@ describe("EditorAgentActionsPanel", () => {
     const { rerender } = render(
       <EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />,
     );
-    await waitFor(() => expect(screen.getByTestId("agent-action-row")).toBeInTheDocument());
+    expect(await screen.findByTestId("agent-action-row")).toBeInTheDocument();
     await user.selectOptions(screen.getByRole("combobox", { name: "Action type" }), "save");
 
     const liveList = screen.getByRole("list");
@@ -367,7 +365,7 @@ describe("EditorAgentActionsPanel", () => {
     expect(liveList).toHaveAttribute("aria-relevant", "additions");
 
     rerender(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={1} />);
-    await waitFor(() => expect(within(liveList).getByText("succeeded")).toBeInTheDocument());
+    expect(await within(liveList).findByText("succeeded")).toBeInTheDocument();
     expect(screen.getAllByTestId("agent-action-row")).toHaveLength(1);
     expect(within(liveList).queryByText("applyPatch")).not.toBeInTheDocument();
 

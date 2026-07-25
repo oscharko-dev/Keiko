@@ -268,9 +268,7 @@ describe("ChatWindow dictation integration", () => {
     stubCaptureBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("button", { name: "Dictate a message" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
   });
 
@@ -376,9 +374,7 @@ describe("ChatWindow voice dialogue availability", () => {
 
     await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
     // Dictation button appears for STT, but NOT the full dialogue switch.
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("button", { name: "Dictate a message" })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
   });
 
@@ -389,9 +385,7 @@ describe("ChatWindow voice dialogue availability", () => {
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
   });
 
@@ -437,9 +431,7 @@ describe("ChatWindow assistant speech-output integration (Issue #501)", () => {
     stubCaptureBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("button", { name: "Dictate a message" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /assistant voice/iu })).toBeNull();
   });
 
@@ -462,9 +454,7 @@ describe("ChatWindow assistant speech-output integration (Issue #501)", () => {
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Mute assistant voice" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("button", { name: "Mute assistant voice" })).toBeInTheDocument();
   });
 
   it("does not replay an already-settled assistant response on mount and renders no playback status panel", async () => {
@@ -477,9 +467,7 @@ describe("ChatWindow assistant speech-output integration (Issue #501)", () => {
 
     renderWindow(makeSessionWithAssistantMessage());
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Mute assistant voice" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("button", { name: "Mute assistant voice" })).toBeInTheDocument();
     expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalled();
     expect(screen.queryByText("Preparing the spoken response…")).toBeNull();
     expect(screen.queryByText("The assistant is speaking.")).toBeNull();
@@ -500,9 +488,7 @@ describe("ChatWindow assistant speech-output integration (Issue #501)", () => {
       </ChatSessionProvider>,
     );
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Mute assistant voice" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("button", { name: "Mute assistant voice" })).toBeInTheDocument();
 
     rerender(
       <ChatSessionProvider
@@ -512,9 +498,7 @@ describe("ChatWindow assistant speech-output integration (Issue #501)", () => {
       </ChatSessionProvider>,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText("Hello, how can I help you today?")).toBeInTheDocument(),
-    );
+    expect(await screen.findByText("Hello, how can I help you today?")).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
     expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalled();
     expect(screen.queryByText("Spoken response finished.")).toBeNull();
@@ -595,9 +579,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     stubCaptureBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("button", { name: "Dictate a message" })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
   });
 
@@ -624,9 +606,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
     // aria-checked=false before entering.
     expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
       "aria-checked",
@@ -639,9 +619,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession({ activeChat: makeGroundedKnowledgeChat() }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
     expect(
       vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
@@ -661,9 +639,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession({ activeChat: makeGroundedKnowledgeChat() }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
     expect(
       vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
@@ -684,9 +660,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
 
     const box = getComposerBox();
     expect(box).not.toHaveAttribute("data-voice-aura");
@@ -700,9 +674,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
 
     // Click the switch to enter dialogue mode.
     await userEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
@@ -831,9 +803,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
   });
 
   it("hides the dialogue switch for full-realtime WITHOUT browser WebRTC", async () => {

@@ -124,7 +124,7 @@ async function openEligibleManual(opts?: { readonly onOpenKnowledgePods?: () => 
     "https://intranet/handbook/index.html",
   );
   await user.click(screen.getByRole("button", { name: "Open" }));
-  await waitFor(() => expect(screen.getByText("Opened for inspection")).toBeInTheDocument());
+  expect(await screen.findByText("Opened for inspection")).toBeInTheDocument();
   return { user, container };
 }
 
@@ -168,7 +168,7 @@ describe("DocumentationBrowserWidget — navigation", () => {
       "https://intranet/handbook",
     );
     await user.click(screen.getByRole("button", { name: "Open" }));
-    await waitFor(() => expect(screen.getByText("Opened for inspection")).toBeInTheDocument());
+    expect(await screen.findByText("Opened for inspection")).toBeInTheDocument();
     expect(document.querySelector(".db-state")).toHaveTextContent(
       /nothing has been crawled, indexed/i,
     );
@@ -181,7 +181,7 @@ describe("DocumentationBrowserWidget — navigation", () => {
     render(<DocumentationBrowserWidget />);
     await user.type(screen.getByRole("textbox", { name: "Documentation address" }), "https://x");
     await user.click(screen.getByRole("button", { name: "Open" }));
-    await waitFor(() => expect(screen.getByText("Blocked by network policy")).toBeInTheDocument());
+    expect(await screen.findByText("Blocked by network policy")).toBeInTheDocument();
     expect(document.querySelector(".db-state")).toHaveTextContent(/will not route around it/i);
   });
 
@@ -194,7 +194,7 @@ describe("DocumentationBrowserWidget — navigation", () => {
     const input = screen.getByRole("textbox", { name: "Documentation address" });
     await user.type(input, "https://intranet/handbook");
     await user.click(screen.getByRole("button", { name: "Open" }));
-    await waitFor(() => expect(screen.getByText("Opened for inspection")).toBeInTheDocument());
+    expect(await screen.findByText("Opened for inspection")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Server error."));
     expect(screen.queryByText("Opened for inspection")).not.toBeInTheDocument();
@@ -208,9 +208,7 @@ describe("DocumentationBrowserWidget — indexing consent (#1868)", () => {
     const prepare = screen.getByRole("button", { name: "Prepare for indexing" });
     expect(prepare).not.toBeDisabled();
     await user.click(prepare);
-    await waitFor(() =>
-      expect(screen.getByText("Looks like an indexable manual")).toBeInTheDocument(),
-    );
+    expect(await screen.findByText("Looks like an indexable manual")).toBeInTheDocument();
     expect(mockPropose).toHaveBeenCalledWith(
       "https://intranet/handbook/index.html",
       "rendering-deferred",
@@ -224,11 +222,9 @@ describe("DocumentationBrowserWidget — indexing consent (#1868)", () => {
     mockPropose.mockResolvedValue(proposal("likely-manual", true));
     mockApprove.mockResolvedValue(approval());
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() =>
-      expect(screen.getByText("Looks like an indexable manual")).toBeInTheDocument(),
-    );
+    expect(await screen.findByText("Looks like an indexable manual")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Create Knowledge Pod from this manual" }));
-    await waitFor(() => expect(screen.getByText("Approved for indexing")).toBeInTheDocument());
+    expect(await screen.findByText("Approved for indexing")).toBeInTheDocument();
     expect(mockApprove).toHaveBeenCalledWith(
       "https://intranet/handbook/index.html",
       "rendering-deferred",
@@ -240,9 +236,7 @@ describe("DocumentationBrowserWidget — indexing consent (#1868)", () => {
     const { user } = await openEligibleManual();
     mockPropose.mockResolvedValue(proposal("likely-manual", true));
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() =>
-      expect(screen.getByText("Looks like an indexable manual")).toBeInTheDocument(),
-    );
+    expect(await screen.findByText("Looks like an indexable manual")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByText("Looks like an indexable manual")).not.toBeInTheDocument();
     expect(mockApprove).not.toHaveBeenCalled();
@@ -252,7 +246,7 @@ describe("DocumentationBrowserWidget — indexing consent (#1868)", () => {
     const { user } = await openEligibleManual();
     mockPropose.mockRejectedValue(new ApiError("INTERNAL", "Proposal failed.", 500));
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() => expect(screen.getByText(/Proposal failed\./)).toBeInTheDocument());
+    expect(await screen.findByText(/Proposal failed\./)).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Create Knowledge Pod from this manual" }),
     ).not.toBeInTheDocument();
@@ -269,7 +263,7 @@ describe("DocumentationBrowserWidget — authentication-required (#1869)", () =>
       "https://intranet/handbook/index.html",
     );
     await user.click(screen.getByRole("button", { name: "Open" }));
-    await waitFor(() => expect(screen.getByText("Sign-in required")).toBeInTheDocument());
+    expect(await screen.findByText("Sign-in required")).toBeInTheDocument();
     const prepare = screen.getByRole("button", { name: "Prepare for indexing" });
     expect(prepare).toBeDisabled();
     await user.click(prepare);
@@ -282,7 +276,7 @@ describe("DocumentationBrowserWidget — denied/degraded/already-indexed (#1869)
     const { user } = await openEligibleManual();
     mockPropose.mockResolvedValue(proposal("degraded", false));
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() => expect(screen.getByText("Not a static manual")).toBeInTheDocument());
+    expect(await screen.findByText("Not a static manual")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Create Knowledge Pod from this manual" }),
     ).not.toBeInTheDocument();
@@ -294,7 +288,7 @@ describe("DocumentationBrowserWidget — denied/degraded/already-indexed (#1869)
     const { user } = await openEligibleManual({ onOpenKnowledgePods });
     mockPropose.mockResolvedValue(proposal("already-indexed", false, "capsule-7"));
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() => expect(screen.getByText("Already in a Knowledge Pod")).toBeInTheDocument());
+    expect(await screen.findByText("Already in a Knowledge Pod")).toBeInTheDocument();
     expect(screen.getByText(/Open the existing pod/i)).toBeInTheDocument();
     // The concrete pod reference is surfaced so the user can locate it.
     expect(screen.getByText("capsule-7")).toBeInTheDocument();
@@ -309,7 +303,7 @@ describe("DocumentationBrowserWidget — denied/degraded/already-indexed (#1869)
     const { user } = await openEligibleManual();
     mockPropose.mockResolvedValue(proposal("denied", false));
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() => expect(screen.getByText("Cannot index this target")).toBeInTheDocument());
+    expect(await screen.findByText("Cannot index this target")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Create Knowledge Pod from this manual" }),
     ).not.toBeInTheDocument();
@@ -320,7 +314,7 @@ describe("DocumentationBrowserWidget — denied/degraded/already-indexed (#1869)
     const { user } = await openEligibleManual();
     mockPropose.mockResolvedValue(proposal("unsupported", false));
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() => expect(screen.getByText("Not offered for indexing")).toBeInTheDocument());
+    expect(await screen.findByText("Not offered for indexing")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Create Knowledge Pod from this manual" }),
     ).not.toBeInTheDocument();
@@ -340,19 +334,17 @@ describe("DocumentationBrowserWidget — consent re-entry guard (#1868)", () => 
         }),
     );
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() =>
-      expect(screen.getByText("Looks like an indexable manual")).toBeInTheDocument(),
-    );
+    expect(await screen.findByText("Looks like an indexable manual")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Create Knowledge Pod from this manual" }));
     // While the approval is in flight the consent panel is replaced by a busy state, so no second
     // approve can be triggered; the re-entry guard keeps the call count at one.
-    await waitFor(() => expect(screen.getByText("Recording your consent…")).toBeInTheDocument());
+    expect(await screen.findByText("Recording your consent…")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Create Knowledge Pod from this manual" }),
     ).not.toBeInTheDocument();
     expect(mockApprove).toHaveBeenCalledTimes(1);
     resolveApprove(approval());
-    await waitFor(() => expect(screen.getByText("Approved for indexing")).toBeInTheDocument());
+    expect(await screen.findByText("Approved for indexing")).toBeInTheDocument();
   });
 });
 
@@ -375,7 +367,7 @@ describe("DocumentationBrowserWidget — cross-target navigation race (#1868)", 
         }),
     );
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() => expect(screen.getByText("Checking for a manual…")).toBeInTheDocument());
+    expect(await screen.findByText("Checking for a manual…")).toBeInTheDocument();
 
     expect(screen.getByRole("button", { name: "Open" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Reload" })).toHaveAttribute("aria-disabled", "true");
@@ -391,9 +383,7 @@ describe("DocumentationBrowserWidget — cross-target navigation race (#1868)", 
     // Once the in-flight propose resolves, the proposal for the still-current target A is applied
     // and navigation is unblocked again.
     resolvePropose(proposal("likely-manual", true));
-    await waitFor(() =>
-      expect(screen.getByText("Looks like an indexable manual")).toBeInTheDocument(),
-    );
+    expect(await screen.findByText("Looks like an indexable manual")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open" })).toHaveAttribute("aria-disabled", "false");
   });
 });
@@ -408,9 +398,7 @@ describe("DocumentationBrowserWidget — a11y (jest-axe)", () => {
     const { user, container } = await openEligibleManual();
     mockPropose.mockResolvedValue(proposal("likely-manual", true));
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() =>
-      expect(screen.getByText("Looks like an indexable manual")).toBeInTheDocument(),
-    );
+    expect(await screen.findByText("Looks like an indexable manual")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -419,11 +407,9 @@ describe("DocumentationBrowserWidget — a11y (jest-axe)", () => {
     mockPropose.mockResolvedValue(proposal("likely-manual", true));
     mockApprove.mockResolvedValue(approval());
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    await waitFor(() =>
-      expect(screen.getByText("Looks like an indexable manual")).toBeInTheDocument(),
-    );
+    expect(await screen.findByText("Looks like an indexable manual")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Create Knowledge Pod from this manual" }));
-    await waitFor(() => expect(screen.getByText("Approved for indexing")).toBeInTheDocument());
+    expect(await screen.findByText("Approved for indexing")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 });
