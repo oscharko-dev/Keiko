@@ -48,6 +48,8 @@ const CAP_SAMPLE_COUNT = 10;
 // ADR-0139 D1: shared CI runners cannot schedule reliably enough for single-shot wall-clock
 // assertions. The D12 producer and the scheduled performance workflow set this flag and enforce
 // the budgets; required-runner executions still record the measured values into the evidence.
+// NOTE: the official producer no longer sets this — it measures at full depth and leaves the
+// verdict to check-perf-evidence.mjs. The flag remains for a deliberately controlled local run.
 const ENFORCE_WALL_CLOCK_BUDGETS = process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1";
 // Sample depth and budget verdict are separate concerns. The producer needs the full sample loop to
 // compute meaningful percentiles, but it must NOT also be the judge: asserting a wall-clock budget

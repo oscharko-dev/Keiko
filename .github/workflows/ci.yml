@@ -658,7 +658,10 @@ jobs:
         # only the "was this measured with the current toolchain" question is the responsibility of
         # the change that altered it, not of every other open pull request (ADR-0139 D10).
         env:
-          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha }}
+          # merge_group carries no pull_request payload; its base sha lives under merge_group.
+          # Without this the merge queue would see an empty base ref, fall back to evaluating the
+          # digest unconditionally, and reintroduce exactly the cross-PR blocking this removes.
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: npm run check:perf-evidence:editor
       - name: Performance evidence freshness + budget gate
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}

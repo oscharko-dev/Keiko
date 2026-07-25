@@ -228,8 +228,14 @@ export function toolchainTouchedAgainst(baseRef, root = repoRoot) {
       ["diff", "--name-only", "-z", `${baseRef}...HEAD`, "--"],
       { cwd: root, encoding: "utf8" },
     );
-  } catch {
+  } catch (error) {
     // An unresolvable base ref must not silently disable the check: fail towards evaluating it.
+    // Say so, redacted — an operator otherwise cannot tell an unknown base ref apart from a broken
+    // git invocation, and both look like "the toolchain digest ran for no reason".
+    console.error(
+      `perf-evidence: could not resolve the change set against the base ref; evaluating the ` +
+        `measurement-toolchain digest unconditionally (${error instanceof Error ? error.name : "unknown error"})`,
+    );
     return true;
   }
   const changed = new Set(output.split("\0").filter((entry) => entry.length > 0));
