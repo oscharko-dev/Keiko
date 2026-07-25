@@ -1488,15 +1488,26 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
   });
 
   // Issue #2727 — the switch appears in the capability-probe commit, and React schedules that
-  // commit's passive effects as a separate task. This waits for the switch WITHOUT running inside
-  // `act`: RTL's `waitFor` / `findBy*` flush those pending effects, which settles the exact race the
-  // pin below exists for. A bare macrotask poll leaves them queued, as they are on a loaded runner.
-  async function awaitDialogSwitchWithPendingEffects(): Promise<void> {
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      if (screen.queryByRole("switch", { name: "Voice dialogue mode" }) !== null) return;
-      await new Promise((resolve) => setTimeout(resolve, 0));
+  // commit's passive effects as a separate scheduler task. This resolves on the MutationObserver
+  // microtask that the commit's own DOM insertion delivers, which always precedes that task, so the
+  // effects are still queued when it returns — deterministically, with no polling and no timer.
+  // RTL's `findBy*` / `waitFor` observe the same mutation but run inside `act`, which flushes those
+  // effects and settles the exact race the pin below exists for; vitest's `vi.waitFor` polls on a
+  // 50ms interval and would let them run too. An unbounded wait here is intentional: if the switch
+  // never appears the suite's own 15s timeout reports it, and any bound short enough to be useful
+  // would reintroduce the delay this must not have.
+  function whenDialogSwitchAppears(): Promise<void> {
+    if (screen.queryByRole("switch", { name: "Voice dialogue mode" }) !== null) {
+      return Promise.resolve();
     }
-    throw new Error("the dialogue switch never appeared");
+    return new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (screen.queryByRole("switch", { name: "Voice dialogue mode" }) === null) return;
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
   }
 
   // Issue #2727 — regression pin. The teardown effect used to re-read `voiceDialogSessionChatIdRef`
@@ -1513,10 +1524,12 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
       voice: FULL_REALTIME_WITH_PERSONAS,
     });
-    stubRealtimeBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    // The realtime controller is mocked, so nothing consumes the stream; `stubRealtimeBrowser`
+    // supplies the `getTracks` shape itself. Matches the single-assertion form the sibling tests use.
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await awaitDialogSwitchWithPendingEffects();
+    await whenDialogSwitchAppears();
     fireEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
 
     expect(realtimeVoiceMock.start).toHaveBeenCalledOnce();
