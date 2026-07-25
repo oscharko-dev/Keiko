@@ -114,6 +114,18 @@ There is a convenience aggregate that chains the core of the above:
 npm run conversation:release-check
 ```
 
+To run the common failure classes in CI's own Linux userland before pushing — the same image for
+every contributor and agent:
+
+```bash
+npm run gates:local
+```
+
+Two thirds of recent required-CI failures were reproducible this way, each otherwise costing a full
+CI cycle to discover. What the container may and may not answer (measurement evidence is
+architecture-bound and stays with the nightly lane) is in
+[`docs/qa/local-gates.md`](docs/qa/local-gates.md).
+
 For PR-bound work there is deliberately **no aggregate pre-PR wrapper** (ADR-0145 retired
 `agent:pre-pr` by owner decision): run the minimum-loop commands that can see your change, plus
 any touched-area gate from the table below, and let the required CI run on the pull request be
@@ -283,8 +295,11 @@ These cost real time when rediscovered. They are all real and current.
   re-measures `dev` daily. Regenerate in-flight (`npm run perf:evidence:regen`,
   Linux-authoritative; see [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md)) only when your
   change edits the D12 measurement toolchain itself (`scripts/d12-measurement-toolchain.mjs`
-  list) — changing the ruler requires re-measuring with it. Real per-PR perf protection lives in
-  the deterministic bundle gates (`check:editor-release-evidence`, `check:editor-bundle-size`).
+  list) — changing the ruler requires re-measuring with it, and since ADR-0156 the pull-request gate
+  asks that question only of a diff that actually touches the list. Real per-PR perf protection
+  lives in the deterministic bundle gates (`check:editor-release-evidence`,
+  `check:editor-bundle-size`). If the nightly lane is itself broken, it now opens a tracking issue —
+  while it is down, a toolchain edit has no route to green, so fix the lane first.
 - **New package exports drift `check:package-surface`.** Adding a public export changes the
   packaged surface contract; run `npm run check:package-surface:assembled` and update the expected
   surface. The aggregate builds the product, prepares the CLI mode, builds the UI, removes
