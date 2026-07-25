@@ -7,6 +7,8 @@
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { isDocumentationOnlyChange } from "./lib/documentation-only-change.mjs";
 
@@ -22,30 +24,46 @@ function changedPaths(baseSha, headSha) {
   return output.split("\0").filter((entry) => entry.length > 0);
 }
 
-function main() {
-  const baseSha = process.env.KEIKO_CHANGE_BASE_SHA ?? "";
-  const headSha = process.env.KEIKO_CHANGE_HEAD_SHA ?? "HEAD";
-  let verdict = false;
-  let reason = "";
-  if (baseSha.length === 0) {
-    reason = "no base sha supplied";
-  } else {
-    try {
-      const paths = changedPaths(baseSha, headSha);
-      verdict = isDocumentationOnlyChange(paths);
-      reason = `${String(paths.length)} changed path(s)`;
-    } catch (error) {
-      reason = `could not resolve the change set (${error instanceof Error ? error.name : "unknown"})`;
-    }
+/**
+ * Resolves the verdict for a change set. Exported so the decision — including every path that must
+ * answer "false" — is testable without spawning git or writing to $GITHUB_OUTPUT.
+ */
+export function resolveVerdict(baseSha, headSha, listChangedPaths = changedPaths) {
+  if (typeof baseSha !== "string" || baseSha.length === 0) {
+    return { documentationOnly: false, reason: "no base sha supplied" };
   }
-  console.log(
-    `documentation-only-change: ${String(verdict)} — ${reason}` +
-      (verdict ? "" : " (running the full matrix)"),
-  );
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (outputPath !== undefined && outputPath.length > 0) {
-    appendFileSync(outputPath, `documentation-only=${String(verdict)}\n`, "utf8");
+  try {
+    const paths = listChangedPaths(baseSha, headSha);
+    return {
+      documentationOnly: isDocumentationOnlyChange(paths),
+      reason: `${String(paths.length)} changed path(s)`,
+    };
+  } catch (error) {
+    return {
+      documentationOnly: false,
+      reason: `could not resolve the change set (${error instanceof Error ? error.name : "unknown"})`,
+    };
   }
 }
 
-main();
+export function verdictLine({ documentationOnly, reason }) {
+  return (
+    `documentation-only-change: ${String(documentationOnly)} — ${reason}` +
+    (documentationOnly ? "" : " (running the full matrix)")
+  );
+}
+
+function main() {
+  const verdict = resolveVerdict(
+    process.env.KEIKO_CHANGE_BASE_SHA ?? "",
+    process.env.KEIKO_CHANGE_HEAD_SHA ?? "HEAD",
+  );
+  console.log(verdictLine(verdict));
+  const outputPath = process.env.GITHUB_OUTPUT;
+  if (outputPath !== undefined && outputPath.length > 0) {
+    appendFileSync(outputPath, `documentation-only=${String(verdict.documentationOnly)}\n`, "utf8");
+  }
+}
+
+const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
+if (invokedPath === fileURLToPath(import.meta.url)) main();

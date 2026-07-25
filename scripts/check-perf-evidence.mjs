@@ -219,15 +219,24 @@ export function computePerformanceSubjectDigestAtCommit(options = {}) {
 // True when the change under test edits the D12 measurement toolchain itself. Only then does the
 // pull-request lane owe a re-measurement: a diff that leaves the ruler alone cannot be responsible
 // for evidence measured with a different one, and must not be blocked by it (ADR-0139 D10).
-export function toolchainTouchedAgainst(baseRef, root = repoRoot) {
+function changedPathsAgainst(baseRef, root) {
+  const output = execFileSync(
+    resolveHostExecutable("git"),
+    ["diff", "--name-only", "-z", `${baseRef}...HEAD`, "--"],
+    { cwd: root, encoding: "utf8" },
+  );
+  return output.split("\0").filter((entry) => entry.length > 0);
+}
+
+export function toolchainTouchedAgainst(
+  baseRef,
+  root = repoRoot,
+  listChangedPaths = changedPathsAgainst,
+) {
   if (typeof baseRef !== "string" || baseRef.length === 0) return false;
-  let output;
+  let changed;
   try {
-    output = execFileSync(
-      resolveHostExecutable("git"),
-      ["diff", "--name-only", "-z", `${baseRef}...HEAD`, "--"],
-      { cwd: root, encoding: "utf8" },
-    );
+    changed = new Set(listChangedPaths(baseRef, root));
   } catch (error) {
     // An unresolvable base ref must not silently disable the check: fail towards evaluating it.
     // Say so, redacted — an operator otherwise cannot tell an unknown base ref apart from a broken
@@ -238,7 +247,6 @@ export function toolchainTouchedAgainst(baseRef, root = repoRoot) {
     );
     return true;
   }
-  const changed = new Set(output.split("\0").filter((entry) => entry.length > 0));
   return D12_MEASUREMENT_TOOLCHAIN_PATHS.some((entry) => changed.has(entry));
 }
 

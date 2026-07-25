@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { isDocumentationOnlyChange } from "../lib/documentation-only-change.mjs";
+import { resolveVerdict, verdictLine } from "../check-documentation-only-change.mjs";
 
 describe("isDocumentationOnlyChange", () => {
   it("accepts prose, ADRs and root markdown", () => {
@@ -40,5 +41,54 @@ describe("isDocumentationOnlyChange", () => {
     expect(isDocumentationOnlyChange(undefined)).toBe(false);
     expect(isDocumentationOnlyChange(["README.md", ""])).toBe(false);
     expect(isDocumentationOnlyChange([null])).toBe(false);
+  });
+});
+
+describe("resolveVerdict", () => {
+  it("reports documentation-only for a prose change set", () => {
+    const verdict = resolveVerdict("base", "head", () => ["README.md", "docs/qa/local-gates.md"]);
+    expect(verdict.documentationOnly).toBe(true);
+    expect(verdict.reason).toContain("2 changed path(s)");
+  });
+
+  it("reports false when the change set contains code", () => {
+    const verdict = resolveVerdict("base", "head", () => ["README.md", "src/index.ts"]);
+    expect(verdict.documentationOnly).toBe(false);
+  });
+
+  // Every way the decision can go wrong must land on "run everything".
+  it("refuses without a base sha", () => {
+    expect(resolveVerdict("", "head", () => ["README.md"])).toEqual({
+      documentationOnly: false,
+      reason: "no base sha supplied",
+    });
+  });
+
+  it("refuses on a non-string base sha", () => {
+    expect(resolveVerdict(undefined, "head", () => ["README.md"]).documentationOnly).toBe(false);
+  });
+
+  it("refuses when the change set cannot be resolved", () => {
+    const verdict = resolveVerdict("base", "head", () => {
+      throw new TypeError("git exploded");
+    });
+    expect(verdict.documentationOnly).toBe(false);
+    expect(verdict.reason).toContain("TypeError");
+  });
+
+  it("refuses on an empty change set rather than assuming prose", () => {
+    expect(resolveVerdict("base", "head", () => []).documentationOnly).toBe(false);
+  });
+});
+
+describe("verdictLine", () => {
+  it("names the full matrix whenever the answer is false", () => {
+    expect(verdictLine({ documentationOnly: false, reason: "x" })).toContain(
+      "running the full matrix",
+    );
+  });
+
+  it("stays quiet about the matrix when the answer is true", () => {
+    expect(verdictLine({ documentationOnly: true, reason: "x" })).not.toContain("full matrix");
   });
 });

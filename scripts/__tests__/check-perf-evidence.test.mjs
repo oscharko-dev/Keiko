@@ -18,6 +18,7 @@ import {
   isPerformanceSubjectPath,
   listDirtyPerformanceSubjectPaths,
   readEvidence,
+  toolchainTouchedAgainst,
 } from "../check-perf-evidence.mjs";
 
 const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
@@ -2087,5 +2088,36 @@ describe("evaluateFreshness — pull-request mode (source freshness owned by the
     );
     expect(result.passed).toBe(false);
     expect(result.failures.join("\n")).toMatch(/measuredAtIso/u);
+  });
+});
+
+describe("toolchainTouchedAgainst", () => {
+  const toolchainFile = "scripts/d12-measurement-toolchain.mjs";
+
+  it("is true when the change set edits a toolchain member", () => {
+    expect(toolchainTouchedAgainst("base", ".", () => ["README.md", toolchainFile])).toBe(true);
+  });
+
+  it("is false when the change set leaves the toolchain alone", () => {
+    expect(toolchainTouchedAgainst("base", ".", () => ["README.md", "src/index.ts"])).toBe(false);
+  });
+
+  // Without a base ref there is no change set to scope by; runGate then evaluates the digest
+  // unconditionally, so answering false here narrows nothing.
+  it("is false without a base ref", () => {
+    expect(toolchainTouchedAgainst("", ".", () => [toolchainFile])).toBe(false);
+    expect(toolchainTouchedAgainst(undefined, ".", () => [toolchainFile])).toBe(false);
+  });
+
+  it("evaluates rather than skips when the change set cannot be resolved", () => {
+    expect(
+      toolchainTouchedAgainst("base", ".", () => {
+        throw new Error("unknown revision");
+      }),
+    ).toBe(true);
+  });
+
+  it("resolves the real change set through git when no lister is injected", () => {
+    expect(toolchainTouchedAgainst("HEAD")).toBe(false);
   });
 });
