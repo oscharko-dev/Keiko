@@ -195,6 +195,14 @@
     "smoke:registry-install": "node scripts/registry-install-smoke.mjs",
     "provision:sqlite-vec": "node scripts/provision-sqlite-vec.mjs",
     "demo:clean-checkout": "npm run build:packages && npm run provision:sqlite-vec && node scripts/knowledge-m2-clean-checkout-demo.mjs",
+    "gates:local": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh",
+    "gates:local:tests": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh tests",
+    "gates:local:e2e": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh e2e",
+    "gates:local:full": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh full",
+    "gates:local:shell": "docker compose -f docker/gates/docker-compose.yml run --rm gates bash",
+    "check:documentation-only-change": "node scripts/check-documentation-only-change.mjs",
+    "check:coverage:new-code": "node scripts/check-new-code-coverage.mjs",
+    "check:sonar-rules": "node scripts/check-sonar-rules.mjs",
     "check:osv-waiver-scope": "node scripts/check-osv-waiver-scope.mjs"
   },
   "overrides": {
@@ -223,6 +231,7 @@
     "dependency-cruiser": "^18.0.0",
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-sonarjs": "^4.2.0",
     "knip": "6.27.0",
     "prettier": "^3.0.0",
     "typescript-eslint": "^8.64.0",

@@ -121,7 +121,9 @@ describe("D12 performance comparison runner", () => {
       ),
     ).toEqual({
       HOME: "/home/keiko",
-      KEIKO_ENFORCE_WALL_CLOCK_BUDGETS: "1",
+      // The producer measures at full depth; it does not assert the budgets it measures. That
+      // verdict is check-perf-evidence.mjs's, against the committed document.
+      KEIKO_D12_FULL_SAMPLE_DEPTH: "1",
       KEIKO_PERF_RUNS: "10",
       LANG: "C.UTF-8",
       LC_ALL: "C.UTF-8",

@@ -48,12 +48,22 @@ const CAP_SAMPLE_COUNT = 10;
 // ADR-0139 D1: shared CI runners cannot schedule reliably enough for single-shot wall-clock
 // assertions. The D12 producer and the scheduled performance workflow set this flag and enforce
 // the budgets; required-runner executions still record the measured values into the evidence.
+// NOTE: the official producer no longer sets this — it measures at full depth and leaves the
+// verdict to check-perf-evidence.mjs. The flag remains for a deliberately controlled local run.
 const ENFORCE_WALL_CLOCK_BUDGETS = process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1";
+// Sample depth and budget verdict are separate concerns. The producer needs the full sample loop to
+// compute meaningful percentiles, but it must NOT also be the judge: asserting a wall-clock budget
+// inside the measurement aborts the run, so a single noisy-neighbour spike on the shared runner
+// yields no evidence at all instead of evidence showing the overrun. check-perf-evidence.mjs owns
+// that verdict against the committed document (`outputFlood maxLongTaskMs > budget`,
+// D12_CAP_LONG_TASK_BUDGET_MS = 50), where an overrun is reported rather than swallowed.
+const FULL_SAMPLE_DEPTH =
+  ENFORCE_WALL_CLOCK_BUDGETS || process.env.KEIKO_D12_FULL_SAMPLE_DEPTH === "1";
 // The repeated stop-latency sample loops exist to feed the wall-clock percentiles. Outside the
 // controlled measurement context they only need to exercise the stop path deterministically, so
 // required CI runs a small fixed count — the full ten-sample loop timed out on shared runners
 // while the bounded-cap composition (bytes, markers, retained caps, variables) is unaffected.
-const STOP_SAMPLE_COUNT = ENFORCE_WALL_CLOCK_BUDGETS ? CAP_SAMPLE_COUNT : 2;
+const STOP_SAMPLE_COUNT = FULL_SAMPLE_DEPTH ? CAP_SAMPLE_COUNT : 2;
 const CAP_STACK_FRAMES = 128;
 const CAP_SCOPES = 32;
 const CAP_VARIABLES = 200;

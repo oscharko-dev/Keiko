@@ -29,6 +29,20 @@ describe("dependency security configuration", () => {
     expect(dependencyReview).not.toContain("deny-licenses:");
   });
 
+  // `allow-licenses` is not scope-aware: an entry there admits the licence for runtime dependencies
+  // too. The build-time exception ADR-0002 records must therefore be taken per package, or the policy
+  // text would promise more than the workflow enforces.
+  it("keeps the license allowlist free of copyleft and takes the exception per package", () => {
+    for (const copyleft of ["GPL-2.0", "GPL-3.0", "AGPL", "LGPL-2.1", "LGPL-3.0"]) {
+      expect(
+        dependencyReview.slice(0, dependencyReview.indexOf("allow-dependencies-licenses")),
+      ).not.toContain(`${copyleft},`);
+    }
+    expect(dependencyReview).toContain(
+      "allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs",
+    );
+  });
+
   it("retries incomplete snapshots and exposes remediation and Scorecard context", () => {
     expect(dependencyReview).toContain("retry-on-snapshot-warnings: true");
     expect(dependencyReview).toContain("show-openssf-scorecard: true");

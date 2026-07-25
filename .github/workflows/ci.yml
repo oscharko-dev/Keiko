@@ -62,6 +62,42 @@ jobs:
               ;;
           esac
 
+  # Classifies the change set so the expensive cross-platform matrix can be skipped for changes that
+  # cannot affect it. Allow-listed and fail-open: an unrecognised path, an unresolvable base, or any
+  # error yields false and the full matrix runs (#2699).
+  change-scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      documentation-only: ${{ steps.classify.outputs.documentation-only }}
+    steps:
+      # The classifier decides whether the cross-platform matrix runs, so a pull request must not be
+      # able to edit its own classifier and suppress the native install checks (CWE-807). The code
+      # that decides therefore comes from the BASE revision, which the pull request cannot influence;
+      # only the SHA range it is asked about comes from the event. Full history so the range resolves.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        env:
+          KEIKO_CHANGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          KEIKO_CHANGE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        # The base revision may predate the classifier itself — it does on the pull request that
+        # introduces it. Absent trusted code, the honest answer is the fail-open one: classify
+        # nothing and run the full matrix. Self-healing, since every later base has the script.
+        run: |
+          set -euo pipefail
+          if [ -f scripts/check-documentation-only-change.mjs ]; then
+            node scripts/check-documentation-only-change.mjs
+          else
+            echo "documentation-only-change: false — the base revision has no classifier yet"
+            echo "documentation-only=false" >> "${GITHUB_OUTPUT}"
+          fi
+
   core-quality:
     name: Core quality
     runs-on: ubuntu-latest
@@ -327,6 +363,7 @@ jobs:
     name: ci
     if: ${{ always() }}
     needs:
+      - change-scope
       - protected-branch-gate
       - core-quality
       - coverage-sonar
@@ -339,14 +376,28 @@ jobs:
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
+          DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
         run: |
-          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$CROSS_PLATFORM_RESULT"; do
+          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
             fi
           done
+          # The cross-platform matrix is the only dependency allowed to be skipped, and only when the
+          # change-scope job classified this change set as documentation-only. Any other skip — a
+          # cancellation, a dependency failure, a mistaken condition — still fails closed.
+          if [ "$CROSS_PLATFORM_RESULT" = "skipped" ]; then
+            if [ "$DOCUMENTATION_ONLY" != "true" ]; then
+              echo "Cross-platform smoke was skipped without a documentation-only change set."
+              exit 1
+            fi
+            echo "Cross-platform smoke skipped: documentation-only change set."
+          elif [ "$CROSS_PLATFORM_RESULT" != "success" ]; then
+            echo "Required CI dependency did not succeed: $CROSS_PLATFORM_RESULT"
+            exit 1
+          fi
           echo "All required CI dependencies succeeded."
 
   actionlint:
@@ -496,6 +547,15 @@ jobs:
 
   cross-platform-smoke:
     name: Cross-platform smoke (${{ matrix.os }})
+    # Roughly half of a run's weighted runner minutes (macOS bills 10x, Windows 2x). A change that
+    # touches no code, manifest, lockfile, workflow or test cannot alter how the product builds and
+    # installs on another operating system.
+    needs: change-scope
+    # `always()` is load-bearing: without it a change-scope job that fails for its own reasons —
+    # checkout, runner, a broken script — skips this matrix, and the `ci` aggregate then rejects a
+    # skip no documentation-only verdict authorized. The classifier is fail-open by construction, so
+    # its own failure must mean "run everything", never "run nothing and block the merge".
+    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
     # The Node.js 24 baseline must execute, typecheck, build, and install on every supported desktop
     # OS. The complete hermetic suite remains in the Linux `ci` job because many security fixtures
     # intentionally model POSIX paths, Bash, and symlinks. Keep fail-fast:false so one platform
@@ -656,6 +716,15 @@ jobs:
       # make it valid across the signed squash and across merge-queue integration.
       - name: Validate immutable editor D12 performance evidence
         if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        # The base ref scopes the measurement-toolchain freshness check to diffs that actually move
+        # the ruler. Integrity, budgets and the pinned-baseline anchor are checked unconditionally;
+        # only the "was this measured with the current toolchain" question is the responsibility of
+        # the change that altered it, not of every other open pull request (ADR-0139 D10).
+        env:
+          # merge_group carries no pull_request payload; its base sha lives under merge_group.
+          # Without this the merge queue would see an empty base ref, fall back to evaluating the
+          # digest unconditionally, and reintroduce exactly the cross-PR blocking this removes.
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: npm run check:perf-evidence:editor
       - name: Performance evidence freshness + budget gate
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}

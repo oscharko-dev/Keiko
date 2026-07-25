@@ -23,9 +23,11 @@ re-measuring with it. The regeneration wrapper validates its own output with the
 source-freshness contract (`--enforce-source-freshness`), which additionally requires exact
 source-tree equality, the current lockfile, and a clean subject working tree.
 
-The scheduled workflow `nightly-perf-evidence` re-measures `dev` every night and opens a bot
-pull request when the committed documents drifted, so timing evidence lags `dev` by at most one
-nightly cycle and corrects itself without agent involvement.
+The scheduled workflow `nightly-perf-evidence` asks that same deterministic question against `dev`
+every night and files a tracking issue when the committed documents stop binding it. It does not
+re-measure and does not open a bot pull request: only the reference environment below can produce
+comparable numbers, so drift detection is automatic and repair is a deliberate local run
+(ADR-0156 D6).
 
 ## How to regenerate (one command)
 
@@ -34,8 +36,8 @@ npm run perf:evidence:regen
 ```
 
 On Linux this provisions two clean checkouts (pinned baseline `18750d079e2a61c7d7044f3f6ec977a104b9884f`, candidate = your
-HEAD), runs the official D12 producer (warm-ups, six alternating Common runs, three cap runs,
-wall-clock budgets enforced via `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`), refreshes the bundle
+HEAD), runs the official D12 producer (warm-ups, six alternating Common runs, three cap runs, at full
+sample depth via `KEIKO_D12_FULL_SAMPLE_DEPTH=1`), refreshes the bundle
 evidence from a fresh production build, validates everything with the independent checker, and
 copies both documents back — review and commit them as your final commit (the documents are not
 subject paths, so committing them does not invalidate what they bind).
@@ -54,17 +56,30 @@ throwaway clone below; only after mounting your working checkout directly re-run
   so Spotlight does not index-storm the host during the run.
 - **Single occupancy.** Measurement is exclusive: before starting, check
   `docker ps` for any other `node:24*` measurement container (other agents measure too) and do
-  not run builds/tests/gates on the host for the duration. A wall-clock budget failure on a
-  loaded host is an environment verdict, not a product regression — fix the load, not the code.
+  not run builds/tests/gates on the host for the duration. A budget verdict measured on a loaded
+  host is an environment verdict, not a product regression — fix the load, not the code. Since
+  ADR-0156 D5 the run still completes and writes its document, so you can read the numbers and
+  decide; before that, an overrun destroyed the evidence that would have shown it.
 - **VM sizing (macOS Docker Desktop).** The default VM allocation (~8 GiB) is marginal for the
   cap budgets; the dev machine's VM is configured at 48 GiB / 14 CPUs
   (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`).
 
-**Known lane status:** the scheduled `nightly-perf-evidence` run is expected RED on the absolute
-cap budgets on free hosted runners (measured 250.4 ms vs the 200 ms cap) until
-[#2587](https://github.com/oscharko-dev/Keiko/issues/2587) lands a reference-environment
-decision; the user-namespace provisioning fix removes the first of the two stacked
-failure causes. The PR lane is unaffected either way.
+**Reference environment.** These budgets are absolute numbers, calibrated on the pinned container as
+run on a developer machine: `platform: linux`, `architecture: arm64`, >=14 logical cores. Every
+committed editor evidence document records exactly that, and each one carries its own provenance so
+the claim is checkable rather than folklore. A hosted GitHub runner is x86_64 with 4 logical cores;
+the same stopped-projection scenario measures 250-257 ms there against a 200 ms budget. That gap is a
+machine class, not a regression — across two weeks and eighteen documents, including the M11 merge,
+the reference environment measured 122.8-142.2 ms. Nothing needs to assert the environment: a
+document measured on an under-provisioned machine fails its own budget check, so the requirement is
+self-enforcing. Changing the reference class is
+[#2587](https://github.com/oscharko-dev/Keiko/issues/2587).
+
+**Scheduled lane.** `nightly-perf-evidence` detects drift; it does not measure (ADR-0156 D6). It runs
+the deterministic freshness contract — digests, plus every budget re-derived from the committed
+samples — and files a tracking issue naming this command when the committed evidence stops binding
+`dev`. It used to run the full producer on a hosted runner, which failed 12 of 12 times and published
+nothing. Repair is yours to run here.
 
 ## Invariants
 
@@ -72,8 +87,10 @@ failure causes. The PR lane is unaffected either way.
   provisions both checkouts with `npm ci --ignore-scripts` under a deterministic environment
   allowlist. A dependency change is therefore measured as part of the candidate instead of making
   evidence generation impossible or silently substituting dependency state.
-- Wall-clock budgets are enforced only in this controlled context and in the scheduled workflow
-  (ADR-0139 D1); required CI runners record but do not assert them. The committed comparison
-  still enforces every budget deterministically at PR time.
+- Budgets are enforced in exactly one place: `check-perf-evidence.mjs`, reading the committed
+  document on every pull request (ADR-0156 D1/D5). Measurement lanes — this one and the scheduled
+  workflow — measure and record; they never abort on a budget verdict, because the document that
+  would report the regression must survive it. A failure that says the measurement cannot be
+  trusted still aborts the producer, and a defect never rides along with a verdict.
 - Never hand-edit the documents: schemas are exact-key closed, canonical-byte checked, and every
   aggregate is independently recomputed from the raw samples.

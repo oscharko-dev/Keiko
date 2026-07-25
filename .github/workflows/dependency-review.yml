@@ -35,6 +35,18 @@ jobs:
           allow-licenses: >-
             0BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, BlueOak-1.0.0, CC-BY-4.0,
             CC0-1.0, ISC, MIT, Python-2.0, Unlicense, WTFPL
+          # The licence allowlist stays permissive-only: every copyleft licence is refused by
+          # default, and `allow-licenses` is NOT scope-aware, so admitting LGPL there would admit it
+          # for runtime dependencies too. The exception is therefore taken per PACKAGE, which is what
+          # the decision actually was (owner, 2026-07-25, Issue #2699; ADR-0002).
+          #
+          # `eslint-plugin-sonarjs` is LGPL-3.0-only and makes SonarCloud's rule engine runnable on a
+          # developer machine — without it every rule violation arrived as a red required check, so
+          # the gate discovered requirements instead of confirming them (ADR-0156). LGPL copyleft
+          # attaches to the library and to works that link it; a linter executed in CI and locally is
+          # neither linked into Keiko nor distributed with it. Any other LGPL package still fails,
+          # and this one would have to be re-decided if it ever became a runtime dependency.
+          allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs
           retry-on-snapshot-warnings: true
           retry-on-snapshot-warnings-timeout: 120
           show-openssf-scorecard: true

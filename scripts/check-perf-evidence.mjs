@@ -22,7 +22,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import { computeD12MeasurementToolchainDigest } from "./d12-measurement-toolchain.mjs";
+import {
+  computeD12MeasurementToolchainDigest,
+  D12_MEASUREMENT_TOOLCHAIN_PATHS,
+} from "./d12-measurement-toolchain.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
@@ -79,6 +82,7 @@ const D12_MIN_REPETITIONS = 3;
 const D12_MIN_PERF_RUNS = 10;
 const D12_BYTE_BUDGETS = { b1: 0, b2: 2_621_440, b3: 768_000, b10: 102_400 };
 const D12_CAP_SAMPLE_COUNT = 10;
+const D12_REFERENCE_ARCHITECTURE = "arm64";
 const D12_CAP_TIMING_BUDGET_MS = 200;
 const D12_CAP_LONG_TASK_BUDGET_MS = 50;
 const D12_CAP_OUTPUT_BYTES = 1_048_576;
@@ -213,6 +217,40 @@ export function computePerformanceSubjectDigestAtCommit(options = {}) {
   return computePerformanceSubjectDigest({ trackedPaths, readTrackedFile });
 }
 
+// True when the change under test edits the D12 measurement toolchain itself. Only then does the
+// pull-request lane owe a re-measurement: a diff that leaves the ruler alone cannot be responsible
+// for evidence measured with a different one, and must not be blocked by it (ADR-0139 D10).
+function changedPathsAgainst(baseRef, root) {
+  const output = execFileSync(
+    resolveHostExecutable("git"),
+    ["diff", "--name-only", "-z", `${baseRef}...HEAD`, "--"],
+    { cwd: root, encoding: "utf8" },
+  );
+  return output.split("\0").filter((entry) => entry.length > 0);
+}
+
+export function toolchainTouchedAgainst(
+  baseRef,
+  root = repoRoot,
+  listChangedPaths = changedPathsAgainst,
+) {
+  if (typeof baseRef !== "string" || baseRef.length === 0) return false;
+  let changed;
+  try {
+    changed = new Set(listChangedPaths(baseRef, root));
+  } catch (error) {
+    // An unresolvable base ref must not silently disable the check: fail towards evaluating it.
+    // Say so, redacted — an operator otherwise cannot tell an unknown base ref apart from a broken
+    // git invocation, and both look like "the toolchain digest ran for no reason".
+    console.error(
+      `perf-evidence: could not resolve the change set against the base ref; evaluating the ` +
+        `measurement-toolchain digest unconditionally (${error instanceof Error ? error.name : "unknown error"})`,
+    );
+    return true;
+  }
+  return D12_MEASUREMENT_TOOLCHAIN_PATHS.some((entry) => changed.has(entry));
+}
+
 export function listDirtyPerformanceSubjectPaths(root = repoRoot) {
   const trackedOutput = execFileSync(
     resolveHostExecutable("git"),
@@ -335,7 +373,9 @@ function checkFrameGapP75(gesture, label) {
     isFiniteNumber(gesture.frameGapBudgetP75Ms) &&
     gesture.frameGapP75Ms > gesture.frameGapBudgetP75Ms
   ) {
-    return `${label}: frame-gap p75 ${gesture.frameGapP75Ms}ms > budget ${gesture.frameGapBudgetP75Ms}ms`;
+    return performanceBudgetFailure(
+      `${label}: frame-gap p75 ${gesture.frameGapP75Ms}ms > budget ${gesture.frameGapBudgetP75Ms}ms`,
+    );
   }
   return undefined;
 }
@@ -346,7 +386,9 @@ function checkFrameGapMax(gesture, label) {
     isFiniteNumber(gesture.frameGapBudgetMaxMs) &&
     gesture.frameGapMaxMs > gesture.frameGapBudgetMaxMs
   ) {
-    return `${label}: frame-gap max ${gesture.frameGapMaxMs}ms > budget ${gesture.frameGapBudgetMaxMs}ms`;
+    return performanceBudgetFailure(
+      `${label}: frame-gap max ${gesture.frameGapMaxMs}ms > budget ${gesture.frameGapBudgetMaxMs}ms`,
+    );
   }
   return undefined;
 }
@@ -357,7 +399,9 @@ function checkLongTask(gesture, label) {
     isFiniteNumber(gesture.maxLongTaskMs) &&
     gesture.maxLongTaskMs > GESTURE_LONG_TASK_BUDGET_MS
   ) {
-    return `${label}: long task ${gesture.maxLongTaskMs}ms > ${GESTURE_LONG_TASK_BUDGET_MS}ms budget`;
+    return performanceBudgetFailure(
+      `${label}: long task ${gesture.maxLongTaskMs}ms > ${GESTURE_LONG_TASK_BUDGET_MS}ms budget`,
+    );
   }
   return undefined;
 }
@@ -432,16 +476,38 @@ export function evaluateWorkspaceEvidence(evidence) {
 // helper below; evaluateEditorEvidence only wires the object guard and the section results
 // together, so a single evidence file still yields all breaches at once.
 
+// A performance-budget verdict says the measured product got slower or heavier. Every other
+// failure in this file says the measurement itself cannot be trusted — a malformed bundle, a wrong
+// provenance, a digest that does not match its inputs. Only the second kind may abort a measurement
+// lane: a producer that dies on a budget verdict destroys the very document that would have
+// reported the regression (ADR-0156). Both kinds are equally fatal at the gate, which is where a
+// verdict can be read.
+//
+// Membership is established by CONSTRUCTION, not by matching message text. Every budget verdict is
+// registered as it is formatted, so a message can only be in the class if a budget comparison
+// produced it. A site that forgets the wrapper stays fatal — the fail-closed direction — and no
+// message reporting an untrustworthy measurement can ever be mistaken for a verdict.
+const PERFORMANCE_BUDGET_FAILURES = new Set();
+
+function performanceBudgetFailure(message) {
+  PERFORMANCE_BUDGET_FAILURES.add(message);
+  return message;
+}
+
+export function isPerformanceBudgetFailure(failure) {
+  return typeof failure === "string" && PERFORMANCE_BUDGET_FAILURES.has(failure);
+}
+
 function checkColdStartP50Budget(b4) {
   if (isFiniteNumber(b4.p50) && isFiniteNumber(b4.budgetP50) && b4.p50 > b4.budgetP50) {
-    return `b4 cold-start p50 ${b4.p50}ms > budget ${b4.budgetP50}ms`;
+    return performanceBudgetFailure(`b4 cold-start p50 ${b4.p50}ms > budget ${b4.budgetP50}ms`);
   }
   return undefined;
 }
 
 function checkColdStartP95Budget(b4) {
   if (isFiniteNumber(b4.p95) && isFiniteNumber(b4.budgetP95) && b4.p95 > b4.budgetP95) {
-    return `b4 cold-start p95 ${b4.p95}ms > budget ${b4.budgetP95}ms`;
+    return performanceBudgetFailure(`b4 cold-start p95 ${b4.p95}ms > budget ${b4.budgetP95}ms`);
   }
   return undefined;
 }
@@ -476,7 +542,11 @@ function evaluateB5Keystroke(b5) {
     isFiniteNumber(b5.budgetMax) &&
     b5.maxLongTaskMs > b5.budgetMax
   ) {
-    return [`b5 keystroke long task ${b5.maxLongTaskMs}ms > budget ${b5.budgetMax}ms`];
+    return [
+      performanceBudgetFailure(
+        `b5 keystroke long task ${b5.maxLongTaskMs}ms > budget ${b5.budgetMax}ms`,
+      ),
+    ];
   }
   return [];
 }
@@ -554,7 +624,9 @@ function evaluateIdleDebugP95(b5) {
     }
   }
   if (isFiniteNumber(b5.budgetMax) && b5.p95 >= b5.budgetMax) {
-    failures.push(`b5 idle-debug p95 ${b5.p95}ms >= budget ${b5.budgetMax}ms`);
+    failures.push(
+      performanceBudgetFailure(`b5 idle-debug p95 ${b5.p95}ms >= budget ${b5.budgetMax}ms`),
+    );
   }
   return failures;
 }
@@ -566,7 +638,9 @@ function evaluateIdleDebugSampleCeiling(b5) {
     isFiniteNumber(b5.budgetMax) &&
     samples.some((sample) => isFiniteNumber(sample) && sample >= b5.budgetMax)
   ) {
-    return [`b5 idle-debug processing sample reached budget ${b5.budgetMax}ms`];
+    return [
+      performanceBudgetFailure(`b5 idle-debug processing sample reached budget ${b5.budgetMax}ms`),
+    ];
   }
   return [];
 }
@@ -613,7 +687,7 @@ function evaluateB6Interaction(b6) {
     return ["b6 interaction evidence not captured"];
   }
   if (isFiniteNumber(b6.p75) && isFiniteNumber(b6.budgetP75) && b6.p75 > b6.budgetP75) {
-    return [`b6 interaction p75 ${b6.p75}ms > budget ${b6.budgetP75}ms`];
+    return [performanceBudgetFailure(`b6 interaction p75 ${b6.p75}ms > budget ${b6.budgetP75}ms`)];
   }
   return [];
 }
@@ -635,12 +709,16 @@ function evaluateB11Memory(b11) {
   const residualGrowth = b11.residualBytes - b11.baselineBytes;
   if (peakGrowth > B11_PEAK_GROWTH_BUDGET_BYTES) {
     failures.push(
-      `b11 peak growth ${peakGrowth} bytes > budget ${B11_PEAK_GROWTH_BUDGET_BYTES} bytes`,
+      performanceBudgetFailure(
+        `b11 peak growth ${peakGrowth} bytes > budget ${B11_PEAK_GROWTH_BUDGET_BYTES} bytes`,
+      ),
     );
   }
   if (residualGrowth > B11_RESIDUAL_GROWTH_BUDGET_BYTES) {
     failures.push(
-      `b11 residual growth ${residualGrowth} bytes > budget ${B11_RESIDUAL_GROWTH_BUDGET_BYTES} bytes`,
+      performanceBudgetFailure(
+        `b11 residual growth ${residualGrowth} bytes > budget ${B11_RESIDUAL_GROWTH_BUDGET_BYTES} bytes`,
+      ),
     );
   }
   return failures;
@@ -898,7 +976,11 @@ function evaluateD12CapPercentile(samples, recorded, label) {
     }
   }
   if (isFiniteNumber(recorded) && recorded > D12_CAP_TIMING_BUDGET_MS) {
-    failures.push(`${label}: p75 ${recorded}ms > budget ${D12_CAP_TIMING_BUDGET_MS}ms`);
+    failures.push(
+      performanceBudgetFailure(
+        `${label}: p75 ${recorded}ms > budget ${D12_CAP_TIMING_BUDGET_MS}ms`,
+      ),
+    );
   }
   return failures;
 }
@@ -932,7 +1014,9 @@ function evaluateD12StoppedProjection(projection, label) {
     failures.push(`${label}: stoppedProjection maxLongTaskMs is invalid`);
   } else if (projection.maxLongTaskMs > D12_CAP_LONG_TASK_BUDGET_MS) {
     failures.push(
-      `${label}: stoppedProjection maxLongTaskMs ${projection.maxLongTaskMs}ms > budget ${D12_CAP_LONG_TASK_BUDGET_MS}ms`,
+      performanceBudgetFailure(
+        `${label}: stoppedProjection maxLongTaskMs ${projection.maxLongTaskMs}ms > budget ${D12_CAP_LONG_TASK_BUDGET_MS}ms`,
+      ),
     );
   }
   return failures;
@@ -978,7 +1062,9 @@ function evaluateD12OutputTiming(output, label) {
     failures.push(`${label}: outputFlood maxLongTaskMs is invalid`);
   } else if (output.maxLongTaskMs > D12_CAP_LONG_TASK_BUDGET_MS) {
     failures.push(
-      `${label}: outputFlood maxLongTaskMs ${output.maxLongTaskMs}ms > budget ${D12_CAP_LONG_TASK_BUDGET_MS}ms`,
+      performanceBudgetFailure(
+        `${label}: outputFlood maxLongTaskMs ${output.maxLongTaskMs}ms > budget ${D12_CAP_LONG_TASK_BUDGET_MS}ms`,
+      ),
     );
   }
   if (
@@ -2028,7 +2114,9 @@ function computeD12Deltas(baseline, candidate) {
 function evaluateD12Regression(candidate, baseline, field, floor, label) {
   const delta = candidate[field] - baseline[field];
   const allowed = Math.max(floor, baseline[field] * 0.1);
-  return delta > allowed ? [`d12 ${label} regression ${delta}ms > allowed ${allowed}ms`] : [];
+  return delta > allowed
+    ? [performanceBudgetFailure(`d12 ${label} regression ${delta}ms > allowed ${allowed}ms`)]
+    : [];
 }
 
 function evaluateD12Thresholds(baseline, candidate) {
@@ -2037,9 +2125,15 @@ function evaluateD12Thresholds(baseline, candidate) {
     ...evaluateD12Regression(candidate, baseline, "b4P95Ms", 100, "B4 p95"),
     ...evaluateD12Regression(candidate, baseline, "b6P75Ms", 10, "B6 p75"),
   ];
-  if (candidate.b6P75Ms > 200) failures.push(`d12 B6 p75 ${candidate.b6P75Ms}ms > budget 200ms`);
+  if (candidate.b6P75Ms > 200) {
+    failures.push(performanceBudgetFailure(`d12 B6 p75 ${candidate.b6P75Ms}ms > budget 200ms`));
+  }
   if (candidate.b5IdleDebugP95Ms >= 50) {
-    failures.push(`d12 B5 idle-debug p95 ${candidate.b5IdleDebugP95Ms}ms >= budget 50ms`);
+    failures.push(
+      performanceBudgetFailure(
+        `d12 B5 idle-debug p95 ${candidate.b5IdleDebugP95Ms}ms >= budget 50ms`,
+      ),
+    );
   }
   if (candidate.b5IdleDebugLongTaskCount !== 0 || candidate.b5IdleDebugMaxLongTaskMs !== 0) {
     failures.push("d12 B5 idle-debug candidate added one or more long tasks");
@@ -2303,6 +2397,17 @@ function evaluateD12BundleRuntime(value, label) {
     `${label} runtime`,
   );
   if (runtime.platform !== "linux") failures.push(`${label} runtime platform must be linux`);
+  // ADR-0156 D6: the wall-clock budgets are absolute numbers calibrated on one machine class, so the
+  // architecture is part of what makes a number comparable — not incidental metadata. Accepting it by
+  // omission meant a document measured anywhere could redefine the baseline, and only a SLOWER
+  // machine would be caught (by its own budget check). A faster one would have passed silently.
+  // Changing the reference class is #2587, and it is a decision, not a side effect of a measurement.
+  if (runtime.architecture !== D12_REFERENCE_ARCHITECTURE) {
+    failures.push(
+      `${label} runtime architecture must be ${D12_REFERENCE_ARCHITECTURE} ` +
+        "(the declared D12 reference environment; see docs/qa/perf-evidence.md)",
+    );
+  }
   if (runtime.nodeVersion !== "24.18.0") {
     failures.push(`${label} runtime Node.js version must be 24.18.0`);
   }
@@ -2471,8 +2576,11 @@ export function evaluateD12Comparison(evidence) {
   }
   const failures = evaluateD12Header(evidence, comparison);
   failures.push(...evaluateD12Repetitions(comparison));
-  if (failures.length > 0) return failures;
-  return evaluateCompleteD12Comparison(evidence, comparison);
+  // Stage 1 short-circuits because stage 2 reads values stage 1 proved well-formed. A budget verdict
+  // proves nothing ill-formed, so it must not stop stage 2 — otherwise a slow measurement would mask
+  // a genuine defect from the producer, which treats budget verdicts as advisory (ADR-0156 D5).
+  if (failures.some((failure) => !isPerformanceBudgetFailure(failure))) return failures;
+  return [...failures, ...evaluateCompleteD12Comparison(evidence, comparison)];
 }
 
 function evaluateD12HeaderIdentity(evidence, comparison) {
@@ -2794,13 +2902,14 @@ function evaluateFreshnessBinding(evidence, isAncestor, computeSourceTreeSha256,
 //     exact source-tree equality, the current lockfile, and a clean subject working tree. Used by
 //     the regeneration wrapper right after producing evidence (where the tree matches by
 //     construction) and available to the nightly lane for drift diagnosis.
-// The always-on integrity set: stamps, binding shape, pinned-baseline anchor, toolchain digest.
+// The always-on integrity set: stamps, binding shape, and the pinned-baseline anchor.
 function integrityFreshnessFailures(evidence, options, enforceSourceFreshness) {
   const {
     computeBaselineSourceTreeSha256 = defaultComputeBaselineSourceTreeSha256,
     computeMeasurementHarnessSha256 = defaultComputeMeasurementHarnessSha256,
     computeSourceTreeSha256 = computePerformanceSubjectDigest,
     isAncestor = defaultIsAncestor,
+    toolchainTouched = false,
   } = options;
   return [
     ...evaluateCommitStamp(evidence.commit),
@@ -2813,7 +2922,15 @@ function integrityFreshnessFailures(evidence, options, enforceSourceFreshness) {
       enforceSourceFreshness,
     ),
     ...evaluateCurrentD12BaselineDigest(evidence, computeBaselineSourceTreeSha256),
-    ...evaluateCurrentD12ToolchainDigest(evidence, computeMeasurementHarnessSha256),
+    // Changing the ruler still requires re-measuring with it — but only the change that moved the
+    // ruler answers for that. This digest compares the evidence against the CURRENT tree, so an
+    // unconditional check here fails every OTHER open pull request the moment one of them edits a
+    // D12_MEASUREMENT_TOOLCHAIN_PATHS member: a required check gone red with no fix available
+    // inside the diff that trips it. The enforcing lane always evaluates it; the pull-request lane
+    // evaluates it exactly when the diff touches the toolchain (ADR-0139 D10).
+    ...(enforceSourceFreshness || toolchainTouched
+      ? evaluateCurrentD12ToolchainDigest(evidence, computeMeasurementHarnessSha256)
+      : []),
   ];
 }
 
@@ -2899,9 +3016,13 @@ function evaluateGateTarget(target, freshnessOptions, okLine) {
 
 function runGate(targetName = "all", enforceSourceFreshness = false) {
   const lines = gateModeLines(enforceSourceFreshness);
+  // KEIKO_PERF_EVIDENCE_BASE_REF is the pull request's merge base. When it is absent — the nightly
+  // and regeneration lanes — the toolchain digest is evaluated unconditionally anyway.
+  const baseRef = process.env.KEIKO_PERF_EVIDENCE_BASE_REF ?? "";
   const freshnessOptions = {
     dirtySubjectPaths: enforceSourceFreshness ? listDirtyPerformanceSubjectPaths() : [],
     enforceSourceFreshness,
+    toolchainTouched: enforceSourceFreshness || baseRef === "" || toolchainTouchedAgainst(baseRef),
   };
   const allFailures = selectGateTargets(targetName).flatMap((target) =>
     evaluateGateTarget(target, freshnessOptions, lines.ok),

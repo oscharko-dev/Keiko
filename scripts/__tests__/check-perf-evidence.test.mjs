@@ -17,7 +17,9 @@ import {
   evaluateWorkspaceEvidence,
   isPerformanceSubjectPath,
   listDirtyPerformanceSubjectPaths,
+  isPerformanceBudgetFailure,
   readEvidence,
+  toolchainTouchedAgainst,
 } from "../check-perf-evidence.mjs";
 
 const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
@@ -125,7 +127,7 @@ const D12_LOCKFILE_SHA_256_BY_REVISION = {
 function d12Provenance(revision = "candidate") {
   return {
     platform: "linux",
-    architecture: "x64",
+    architecture: "arm64",
     osRelease: "6.8.0-test",
     nodeVersion: "24.18.0",
     npmVersion: "11.16.0",
@@ -480,7 +482,7 @@ function d12BundleBinding(revision) {
     measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
     producerCommit: CANDIDATE_COMMIT,
     runtime: {
-      architecture: "x64",
+      architecture: "arm64",
       nodeVersion: "24.18.0",
       npmVersion: "11.16.0",
       osRelease: "6.8.0-test",
@@ -1958,13 +1960,45 @@ describe("evaluateFreshness — pull-request mode (source freshness owned by the
     expect(result).toEqual({ passed: true, failures: [] });
   });
 
-  it("still rejects measurement-toolchain drift (changing the ruler always requires re-measuring)", () => {
+  it("still rejects measurement-toolchain drift when the diff moved the ruler", () => {
     const failures = evaluateFreshness(editorEvidence(), {
       computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
       computeLockfileSha256: () => "a".repeat(64),
       computeMeasurementHarnessSha256: () => "e".repeat(64),
       computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
       isAncestor,
+      toolchainTouched: true,
+    }).failures;
+
+    expect(failures.join("\n")).toMatch(/stale D12 measurement toolchain evidence/u);
+  });
+
+  // The other half of the same invariant: a diff that leaves the toolchain alone cannot be the
+  // reason evidence was measured with a different ruler, and must not be failed for it. Without
+  // this, one pull request editing a D12_MEASUREMENT_TOOLCHAIN_PATHS member turns the required
+  // check red on every other open pull request, with no fix available inside those diffs.
+  it("does not fail a diff that leaves the measurement toolchain untouched", () => {
+    const failures = evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => "a".repeat(64),
+      computeMeasurementHarnessSha256: () => "e".repeat(64),
+      computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+      isAncestor,
+      toolchainTouched: false,
+    }).failures;
+
+    expect(failures.join("\n")).not.toMatch(/stale D12 measurement toolchain evidence/u);
+  });
+
+  it("still enforces toolchain freshness in the regeneration lane regardless of the diff", () => {
+    const failures = evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => D12_LOCKFILE_SHA_256_BY_REVISION.candidate,
+      computeMeasurementHarnessSha256: () => "e".repeat(64),
+      computeSourceTreeSha256: computeMatchingSourceTreeSha256,
+      enforceSourceFreshness: true,
+      isAncestor,
+      toolchainTouched: false,
     }).failures;
 
     expect(failures.join("\n")).toMatch(/stale D12 measurement toolchain evidence/u);
@@ -2006,6 +2040,7 @@ describe("evaluateFreshness — pull-request mode (source freshness owned by the
       computeMeasurementHarnessSha256: () => currentDigest,
       computeSourceTreeSha256: computeMatchingSourceTreeSha256,
       isAncestor,
+      toolchainTouched: true,
     });
 
     expect(result.failures).toContain(
@@ -2054,5 +2089,144 @@ describe("evaluateFreshness — pull-request mode (source freshness owned by the
     );
     expect(result.passed).toBe(false);
     expect(result.failures.join("\n")).toMatch(/measuredAtIso/u);
+  });
+});
+
+describe("toolchainTouchedAgainst", () => {
+  const toolchainFile = "scripts/d12-measurement-toolchain.mjs";
+
+  it("is true when the change set edits a toolchain member", () => {
+    expect(toolchainTouchedAgainst("base", ".", () => ["README.md", toolchainFile])).toBe(true);
+  });
+
+  it("is false when the change set leaves the toolchain alone", () => {
+    expect(toolchainTouchedAgainst("base", ".", () => ["README.md", "src/index.ts"])).toBe(false);
+  });
+
+  // Without a base ref there is no change set to scope by; runGate then evaluates the digest
+  // unconditionally, so answering false here narrows nothing.
+  it("is false without a base ref", () => {
+    expect(toolchainTouchedAgainst("", ".", () => [toolchainFile])).toBe(false);
+    expect(toolchainTouchedAgainst(undefined, ".", () => [toolchainFile])).toBe(false);
+  });
+
+  it("evaluates rather than skips when the change set cannot be resolved", () => {
+    expect(
+      toolchainTouchedAgainst("base", ".", () => {
+        throw new Error("unknown revision");
+      }),
+    ).toBe(true);
+  });
+
+  it("resolves the real change set through git when no lister is injected", () => {
+    expect(toolchainTouchedAgainst("HEAD")).toBe(false);
+  });
+});
+
+// ADR-0156 D5: only a producer may treat these two classes differently, and only if it can tell
+// them apart reliably. Membership is established when a budget comparison formats its verdict, so
+// these cases drive the REAL evaluators and classify what they actually produced. A literal typed
+// here would not be a member — correctly, because no budget comparison produced it — which is the
+// property that makes the whole partition fail closed.
+describe("isPerformanceBudgetFailure", () => {
+  const breaches = [
+    [
+      "b4 cold-start p50",
+      () =>
+        editorEvidence({
+          b4ColdStartMs: { budgetP50: 1500, budgetP95: 2500, p50: 1600, p95: 1250 },
+        }),
+      /b4 cold-start p50 1600ms > budget 1500ms/u,
+    ],
+    [
+      "b4 cold-start p95",
+      () =>
+        editorEvidence({
+          b4ColdStartMs: { budgetP50: 1500, budgetP95: 2500, p50: 1050, p95: 2600 },
+        }),
+      /b4 cold-start p95 2600ms > budget 2500ms/u,
+    ],
+    [
+      "b5 keystroke long task",
+      () =>
+        editorEvidence({
+          b5KeystrokeMs: { budgetMax: 50, captured: true, longTaskCount: 1, maxLongTaskMs: 64 },
+        }),
+      /b5 keystroke long task 64ms > budget 50ms/u,
+    ],
+    [
+      "b6 interaction p75",
+      () => editorEvidence({ b6InteractionMs: { budgetP75: 200, captured: true, p75: 257 } }),
+      /b6 interaction p75 257ms > budget 200ms/u,
+    ],
+    [
+      "b11 peak growth",
+      () =>
+        editorEvidence({
+          b11Memory: {
+            supported: true,
+            baselineBytes: 12_000_000,
+            peakBytes: 900_000_000,
+            residualBytes: 13_000_000,
+            cycles: 2,
+          },
+        }),
+      /b11 peak growth \d+ bytes > budget/u,
+    ],
+  ];
+
+  it.each(breaches)("classifies the %s verdict it produced", (_name, build, expected) => {
+    const failures = evaluateEditorEvidence(build()).failures;
+    const verdict = failures.find((failure) => expected.test(failure));
+    expect(verdict, failures.join("\n")).toBeDefined();
+    expect(isPerformanceBudgetFailure(verdict)).toBe(true);
+  });
+
+  it("classifies the workspace frame-gap verdicts it produced", () => {
+    const failures = evaluateWorkspaceEvidence(
+      workspaceEvidence({ frameGapP75Ms: 41.5, frameGapMaxMs: 400 }),
+    ).failures;
+    const gaps = failures.filter((failure) => /frame-gap/u.test(failure));
+    expect(gaps.length, failures.join("\n")).toBeGreaterThan(0);
+    for (const gap of gaps) expect(isPerformanceBudgetFailure(gap)).toBe(true);
+  });
+
+  // Negative control: every failure that reports an untrustworthy measurement must stay outside the
+  // class, or the producer would write a document it cannot vouch for.
+  it("never classifies a structural defect as a budget verdict", () => {
+    const defects = [
+      ...evaluateEditorEvidence(editorEvidence({ d12Comparison: undefined })).failures,
+      ...evaluateEditorEvidence(editorEvidence({ b6InteractionMs: { captured: false } })).failures,
+      ...evaluateD12Comparison({ d12Comparison: { schemaVersion: "1" } }),
+    ];
+    expect(defects.length).toBeGreaterThan(0);
+    for (const defect of defects) expect(isPerformanceBudgetFailure(defect)).toBe(false);
+  });
+
+  it.each([undefined, null, 42, {}, ["b6 interaction p75 257ms > budget 200ms"]])(
+    "does not classify the non-string %s",
+    (value) => {
+      expect(isPerformanceBudgetFailure(value)).toBe(false);
+    },
+  );
+
+  it("does not classify a message no budget comparison produced", () => {
+    expect(isPerformanceBudgetFailure("b6 interaction p75 999ms > budget 200ms")).toBe(false);
+  });
+});
+
+// ADR-0156 D6 negative control. Accepting the architecture by omission meant only a SLOWER machine
+// was caught, by its own budget check; a faster one would have redefined the baseline in silence.
+describe("the declared D12 reference environment", () => {
+  it("rejects evidence measured on another architecture", () => {
+    // Rewritten wholesale so the provenance/bundle consistency checks stay satisfied and the
+    // architecture verdict itself is what surfaces — a partial edit trips a mismatch first.
+    const evidence = JSON.parse(JSON.stringify(editorEvidence()).replaceAll('"arm64"', '"x64"'));
+
+    expect(evaluateD12Comparison(evidence).join("\n")).toMatch(/architecture must be arm64/u);
+  });
+
+  it("accepts the reference architecture", () => {
+    expect(evaluateD12Comparison(editorEvidence())).toEqual([]);
   });
 });
