@@ -6,7 +6,13 @@ import {
   parseDiffAddedLines,
   parseLcov,
 } from "../lib/new-code-coverage.mjs";
-import { normaliseLcovPaths, resolveBaseRef } from "../check-new-code-coverage.mjs";
+import {
+  evaluate,
+  normaliseLcovPaths,
+  readReports,
+  resolveBaseRef,
+  resolveMergeBase,
+} from "../check-new-code-coverage.mjs";
 
 const DIFF = [
   "diff --git a/src/a.ts b/src/a.ts",
@@ -57,7 +63,12 @@ describe("parseLcov", () => {
     const report = parseLcov(LCOV).get("src/a.ts");
     expect(report.lines.get(3)).toBe(0);
     expect(report.lines.get(4)).toBe(5);
-    expect(report.branches.get(2)).toEqual([1, 0]);
+    expect(report.branches.get(2)).toEqual(
+      new Map([
+        ["0,0", 1],
+        ["0,1", 0],
+      ]),
+    );
   });
 
   it("sums hits when a line appears in several concatenated reports", () => {
@@ -65,6 +76,28 @@ describe("parseLcov", () => {
       ["SF:x.ts", "DA:1,0", "end_of_record", "SF:x.ts", "DA:1,3"].join("\n"),
     );
     expect(merged.get("x.ts").lines.get(1)).toBe(3);
+  });
+
+  // Overlapping reports are the normal case: coverage/lcov.info and coverage/ui/lcov.info can both
+  // carry the same file. Appending instead of merging double-counted every condition.
+  it("merges branch identities across concatenated reports instead of appending", () => {
+    const merged = parseLcov(
+      [
+        "SF:x.ts",
+        "BRDA:1,0,0,0",
+        "BRDA:1,0,1,2",
+        "end_of_record",
+        "SF:x.ts",
+        "BRDA:1,0,0,3",
+        "BRDA:1,0,1,0",
+      ].join("\n"),
+    );
+    expect(merged.get("x.ts").branches.get(1)).toEqual(
+      new Map([
+        ["0,0", 3],
+        ["0,1", 2],
+      ]),
+    );
   });
 
   it("ignores records before any source header and malformed lines", () => {
@@ -179,5 +212,120 @@ describe("normaliseLcovPaths", () => {
     expect([...normaliseLcovPaths(new Map([["src/b.ts", entry]]), "/repo").keys()]).toEqual([
       "src/b.ts",
     ]);
+  });
+});
+
+// A file present in two reports must not have its conditions counted twice: the same diff, the same
+// coverage, must yield the same percentage no matter how many reports mention the file.
+describe("newCodeCoverage is idempotent across overlapping reports", () => {
+  const LINES = ["SF:src/a.ts", "DA:2,1", "BRDA:2,0,0,1", "BRDA:2,0,1,-"].join("\n");
+
+  it("counts each condition once", () => {
+    const single = newCodeCoverage({
+      addedLinesByFile: new Map([["src/a.ts", new Set([2])]]),
+      inScope: () => true,
+      lcov: parseLcov(LINES),
+    });
+    const duplicated = newCodeCoverage({
+      addedLinesByFile: new Map([["src/a.ts", new Set([2])]]),
+      inScope: () => true,
+      lcov: parseLcov([LINES, "end_of_record", LINES].join("\n")),
+    });
+    expect(duplicated.conditions).toBe(single.conditions);
+    expect(duplicated.percent).toBe(single.percent);
+  });
+});
+
+describe("resolveMergeBase", () => {
+  it("returns the resolved base", () => {
+    expect(resolveMergeBase("origin/dev", () => "abc123\n")).toEqual({ base: "abc123" });
+  });
+
+  it("returns an actionable message instead of a git stack trace", () => {
+    const resolved = resolveMergeBase("origin/nope", () => {
+      throw new Error("fatal: Not a valid object name");
+    });
+    expect(resolved.base).toBeUndefined();
+    expect(resolved.error).toContain('cannot resolve "origin/nope"');
+    expect(resolved.error).toContain("--base=");
+  });
+});
+
+describe("readReports", () => {
+  it("merges every present report and names its sources", () => {
+    const reports = readReports(
+      ["a/lcov.info", "b/lcov.info", "missing/lcov.info"],
+      (path) => !path.startsWith("missing"),
+      (path) => (path.startsWith("a") ? "SF:src/x.ts\nDA:1,1" : "SF:src/y.ts\nDA:2,0"),
+    );
+    expect(reports.sources).toEqual(["a/lcov.info", "b/lcov.info"]);
+    expect([...reports.lcov.keys()].sort()).toEqual(["src/x.ts", "src/y.ts"]);
+  });
+
+  it("is undefined when no report exists, so the caller can say what to run", () => {
+    expect(
+      readReports(
+        ["a/lcov.info"],
+        () => false,
+        () => "",
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe("evaluate", () => {
+  const lcov = "SF:src/a.ts\nDA:2,1\nDA:3,0";
+  const diff = ["--- a/src/a.ts", "+++ b/src/a.ts", "@@ -1,0 +2,2 @@", "+one", "+two"].join("\n");
+  const run = (args) => (args[0] === "merge-base" ? "base\n" : diff);
+  const present = { exists: () => true, read: () => lcov };
+
+  it("fails, with the command to run, when no coverage report exists", () => {
+    const verdict = evaluate({ exists: () => false, read: () => "", run });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.failures[0]).toContain("no LCOV report found");
+    expect(verdict.failures[0]).toContain("test:coverage:scripts");
+  });
+
+  it("fails on an unresolvable base ref before it reads any diff", () => {
+    const verdict = evaluate({
+      ...present,
+      run: (args) => {
+        if (args[0] === "merge-base") throw new Error("fatal");
+        throw new Error("the diff must never be reached");
+      },
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.failures[0]).toContain("cannot resolve");
+  });
+
+  it("reports the ratio and names every uncovered position when under the bar", () => {
+    const verdict = evaluate({ ...present, run });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.summary).toContain("50.0%");
+    expect(verdict.failures.join("\n")).toContain("src/a.ts:3 uncovered new line");
+  });
+
+  it("passes when the added lines are covered", () => {
+    const verdict = evaluate({
+      exists: () => true,
+      read: () => "SF:src/a.ts\nDA:2,1\nDA:3,4",
+      run,
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.failures).toEqual([]);
+    expect(verdict.summary).toContain("100.0%");
+  });
+
+  it("honours an explicit --base", () => {
+    const seen = [];
+    evaluate({
+      ...present,
+      argv: ["--base=feat/x"],
+      run: (args) => {
+        seen.push(args.join(" "));
+        return args[0] === "merge-base" ? "base\n" : diff;
+      },
+    });
+    expect(seen[0]).toBe("merge-base feat/x HEAD");
   });
 });

@@ -45,15 +45,21 @@ function recordLine(entry, payload) {
   entry.lines.set(line, (entry.lines.get(line) ?? 0) + Number(rawHits ?? 0));
 }
 
+// Keyed by block and branch, not appended. The same `SF:` path can legitimately appear in more than
+// one of the concatenated reports, and appending would then count each condition twice and leave a
+// branch covered in one report looking uncovered from the other — inflating the denominator and
+// depressing the percentage against what Sonar computes. Summing per identity makes the merge
+// idempotent, exactly as `recordLine` already is.
 function recordBranch(entry, payload) {
   const parts = payload.split(",");
   const line = Number(parts[0]);
   if (!Number.isInteger(line)) return;
+  const identity = `${parts[1] ?? ""},${parts[2] ?? ""}`;
   const taken = parts[3];
   const hits = taken === "-" ? 0 : Number(taken);
-  const existing = entry.branches.get(line) ?? [];
-  existing.push(Number.isFinite(hits) ? hits : 0);
-  entry.branches.set(line, existing);
+  const branches = entry.branches.get(line) ?? new Map();
+  branches.set(identity, (branches.get(identity) ?? 0) + (Number.isFinite(hits) ? hits : 0));
+  entry.branches.set(line, branches);
 }
 
 /** Parses one or more concatenated LCOV reports into per-file line and branch hit counts. */
@@ -85,7 +91,7 @@ function tallyFile(addedLines, report, path, tally) {
       if (hits > 0) tally.coveredLines += 1;
       else tally.uncovered.push({ kind: "line", line, path });
     }
-    for (const taken of report.branches.get(line) ?? []) {
+    for (const taken of (report.branches.get(line) ?? new Map()).values()) {
       tally.conditions += 1;
       if (taken > 0) tally.coveredConditions += 1;
       else tally.uncovered.push({ kind: "condition", line, path });

@@ -127,7 +127,7 @@ const D12_LOCKFILE_SHA_256_BY_REVISION = {
 function d12Provenance(revision = "candidate") {
   return {
     platform: "linux",
-    architecture: "x64",
+    architecture: "arm64",
     osRelease: "6.8.0-test",
     nodeVersion: "24.18.0",
     npmVersion: "11.16.0",
@@ -482,7 +482,7 @@ function d12BundleBinding(revision) {
     measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
     producerCommit: CANDIDATE_COMMIT,
     runtime: {
-      architecture: "x64",
+      architecture: "arm64",
       nodeVersion: "24.18.0",
       npmVersion: "11.16.0",
       osRelease: "6.8.0-test",
@@ -2212,5 +2212,21 @@ describe("isPerformanceBudgetFailure", () => {
 
   it("does not classify a message no budget comparison produced", () => {
     expect(isPerformanceBudgetFailure("b6 interaction p75 999ms > budget 200ms")).toBe(false);
+  });
+});
+
+// ADR-0156 D6 negative control. Accepting the architecture by omission meant only a SLOWER machine
+// was caught, by its own budget check; a faster one would have redefined the baseline in silence.
+describe("the declared D12 reference environment", () => {
+  it("rejects evidence measured on another architecture", () => {
+    // Rewritten wholesale so the provenance/bundle consistency checks stay satisfied and the
+    // architecture verdict itself is what surfaces — a partial edit trips a mismatch first.
+    const evidence = JSON.parse(JSON.stringify(editorEvidence()).replaceAll('"arm64"', '"x64"'));
+
+    expect(evaluateD12Comparison(evidence).join("\n")).toMatch(/architecture must be arm64/u);
+  });
+
+  it("accepts the reference architecture", () => {
+    expect(evaluateD12Comparison(editorEvidence())).toEqual([]);
   });
 });

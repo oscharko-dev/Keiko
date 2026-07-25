@@ -82,6 +82,7 @@ const D12_MIN_REPETITIONS = 3;
 const D12_MIN_PERF_RUNS = 10;
 const D12_BYTE_BUDGETS = { b1: 0, b2: 2_621_440, b3: 768_000, b10: 102_400 };
 const D12_CAP_SAMPLE_COUNT = 10;
+const D12_REFERENCE_ARCHITECTURE = "arm64";
 const D12_CAP_TIMING_BUDGET_MS = 200;
 const D12_CAP_LONG_TASK_BUDGET_MS = 50;
 const D12_CAP_OUTPUT_BYTES = 1_048_576;
@@ -2396,6 +2397,17 @@ function evaluateD12BundleRuntime(value, label) {
     `${label} runtime`,
   );
   if (runtime.platform !== "linux") failures.push(`${label} runtime platform must be linux`);
+  // ADR-0156 D6: the wall-clock budgets are absolute numbers calibrated on one machine class, so the
+  // architecture is part of what makes a number comparable — not incidental metadata. Accepting it by
+  // omission meant a document measured anywhere could redefine the baseline, and only a SLOWER
+  // machine would be caught (by its own budget check). A faster one would have passed silently.
+  // Changing the reference class is #2587, and it is a decision, not a side effect of a measurement.
+  if (runtime.architecture !== D12_REFERENCE_ARCHITECTURE) {
+    failures.push(
+      `${label} runtime architecture must be ${D12_REFERENCE_ARCHITECTURE} ` +
+        "(the declared D12 reference environment; see docs/qa/perf-evidence.md)",
+    );
+  }
   if (runtime.nodeVersion !== "24.18.0") {
     failures.push(`${label} runtime Node.js version must be 24.18.0`);
   }

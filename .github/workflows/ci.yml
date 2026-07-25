@@ -73,8 +73,13 @@ jobs:
     outputs:
       documentation-only: ${{ steps.classify.outputs.documentation-only }}
     steps:
+      # The classifier decides whether the cross-platform matrix runs, so a pull request must not be
+      # able to edit its own classifier and suppress the native install checks (CWE-807). The code
+      # that decides therefore comes from the BASE revision, which the pull request cannot influence;
+      # only the SHA range it is asked about comes from the event. Full history so the range resolves.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - id: classify

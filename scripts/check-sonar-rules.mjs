@@ -66,7 +66,18 @@ export function summarise(results) {
 }
 
 async function main(argv = process.argv.slice(2), env = process.env) {
-  const base = git(["merge-base", resolveBaseRef(argv, env), "HEAD"]).trim();
+  const baseRef = resolveBaseRef(argv, env);
+  let base;
+  try {
+    base = git(["merge-base", baseRef, "HEAD"]).trim();
+  } catch {
+    console.error(
+      `sonar-rules: FAIL - cannot resolve "${baseRef}" against HEAD. Fetch the base ` +
+        "(`git fetch origin dev`) or name another one with `--base=<ref>`.",
+    );
+    process.exit(1);
+    return;
+  }
   const files = changedLintableFiles(git(["diff", "--name-only", `${base}..HEAD`, "--"]), (path) =>
     existsInTree(path),
   );

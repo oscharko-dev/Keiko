@@ -128,7 +128,7 @@ function bundleEvidence(revision) {
     measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
     producerCommit: CANDIDATE_COMMIT,
     runtime: {
-      architecture: "x64",
+      architecture: "arm64",
       nodeVersion: "24.18.0",
       npmVersion: "11.16.0",
       osRelease: "6.8.0-test",
@@ -194,7 +194,7 @@ function capEvidence(index, sequence) {
 function provenance(revision) {
   return {
     platform: "linux",
-    architecture: "x64",
+    architecture: "arm64",
     osRelease: "6.8.0-test",
     nodeVersion: "24.18.0",
     npmVersion: "11.16.0",

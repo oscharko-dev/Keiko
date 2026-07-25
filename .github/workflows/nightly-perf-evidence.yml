@@ -51,12 +51,16 @@ jobs:
         run: npm run check:perf-evidence:editor -- --enforce-source-freshness
       # A repair lane that fails silently is worse than no lane: twelve consecutive failures went
       # unnoticed between 2026-07-19 and 2026-07-25, until pull requests deadlocked on evidence
-      # nothing was refreshing. The drift step is `continue-on-error` so this one can read its
-      # outcome and still report. A hard job timeout cancels every remaining step and no `if:` can
-      # change that — which is why the lane no longer measures: a ~2-minute deterministic check
-      # under a 20-minute ceiling has no realistic timeout to hide behind.
+      # nothing was refreshing. The drift step is `continue-on-error`, so this one reads its outcome
+      # and reports whatever it was.
+      #
+      # A job that hits `timeout-minutes` is concluded as cancelled, and every remaining step is
+      # skipped — `!cancelled()` would not help and is deliberately absent rather than misleading.
+      # The reason that is acceptable here and was not before: this lane no longer measures. A
+      # deterministic digest check finishes in about two minutes under a 20-minute ceiling, so a
+      # timeout means the runner itself is broken, which the failed workflow run reports on its own.
       - name: Report drift that only the reference environment can repair
-        if: ${{ !cancelled() && steps.drift.outcome == 'failure' }}
+        if: ${{ steps.drift.outcome == 'failure' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

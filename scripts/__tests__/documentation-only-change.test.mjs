@@ -48,6 +48,20 @@ describe("isDocumentationOnlyChange", () => {
   });
 });
 
+// Governance configuration may never buy a reduced matrix, however prose-like the file looks.
+describe("governance configuration is not documentation", () => {
+  it.each([
+    ".github/CODEOWNERS",
+    ".github/workflows/ci.yml",
+    ".github/dependabot.yml",
+    "docs/qa/package-coverage-baseline.json",
+    "docs/release/1209-perf-evidence.json",
+  ])("rejects %s", (path) => {
+    expect(isDocumentationOnlyChange([path])).toBe(false);
+    expect(isDocumentationOnlyChange(["README.md", path])).toBe(false);
+  });
+});
+
 describe("resolveVerdict", () => {
   it("reports documentation-only for a prose change set", () => {
     const verdict = resolveVerdict("base", "head", () => ["README.md", "docs/qa/local-gates.md"]);

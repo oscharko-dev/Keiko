@@ -10,7 +10,9 @@ const DOCUMENTATION_PATTERNS = Object.freeze([
   /^docs\/(?!qa\/package-coverage-baseline\.json$)(?!release\/).*\.md$/u,
   /^docs\/adr\/.*\.md$/u,
   /^[^/]*\.md$/u,
-  /^\.github\/(?:ISSUE_TEMPLATE\/.*|pull_request_template\.md|CODEOWNERS)$/u,
+  // CODEOWNERS is deliberately NOT here. It is governance configuration: a change to it changes who
+  // must approve what, so it must never buy a reduced check matrix.
+  /^\.github\/(?:ISSUE_TEMPLATE\/.*|pull_request_template\.md)$/u,
   /^LICENSE$/u,
 ]);
 

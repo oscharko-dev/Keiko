@@ -46,8 +46,19 @@ export function resolveBaseRef(argv, env) {
   return env.KEIKO_NEW_CODE_BASE_REF ?? "origin/dev";
 }
 
-function mergeBase(baseRef) {
-  return git(["merge-base", baseRef, "HEAD"]).trim();
+// A fresh clone or the gate container may have no `origin/dev`. The decision is returned rather than
+// thrown so the operator gets the one-line fix instead of a git stack trace, and so every branch of
+// it is reachable from a test without spawning git.
+export function resolveMergeBase(baseRef, run) {
+  try {
+    return { base: run(["merge-base", baseRef, "HEAD"]).trim() };
+  } catch {
+    return {
+      error:
+        `new-code-coverage: FAIL - cannot resolve "${baseRef}" against HEAD. Fetch the base ` +
+        "(`git fetch origin dev`) or name another one with `--base=<ref>`.",
+    };
+  }
 }
 
 /** LCOV paths may be absolute or relative to a workspace; normalise to repo-relative. */
@@ -60,30 +71,39 @@ export function normaliseLcovPaths(lcov, root = repoRoot) {
   return normalised;
 }
 
-function readReports(paths) {
-  const present = paths.filter((path) => existsSync(join(repoRoot, path)));
+export function readReports(
+  paths,
+  exists = (path) => existsSync(join(repoRoot, path)),
+  read = (path) => readFileSync(join(repoRoot, path), "utf8"),
+) {
+  const present = paths.filter((path) => exists(path));
   if (present.length === 0) return undefined;
   return {
-    lcov: normaliseLcovPaths(
-      parseLcov(present.map((path) => readFileSync(join(repoRoot, path), "utf8")).join("\n")),
-    ),
+    lcov: normaliseLcovPaths(parseLcov(present.map((path) => read(path)).join("\n"))),
     sources: present,
   };
 }
 
-function main(argv = process.argv.slice(2), env = process.env) {
-  const reports = readReports(LCOV_CANDIDATES);
+/**
+ * The whole verdict as data: which reports were read, what the ratio is, and what to print. Exported
+ * so every failure path — no report, unresolvable base, under the bar — is testable without git, the
+ * filesystem, or `process.exit`.
+ */
+export function evaluate({ argv = [], env = {}, run, exists, read, paths = LCOV_CANDIDATES }) {
+  const reports = readReports(paths, exists, read);
   if (reports === undefined) {
-    console.error(
-      "new-code-coverage: FAIL - no LCOV report found. Run a coverage suite first, e.g. " +
-        "`npm run test:coverage:scripts`.",
-    );
-    process.exit(1);
+    return {
+      failures: [
+        "new-code-coverage: FAIL - no LCOV report found. Run a coverage suite first, e.g. " +
+          "`npm run test:coverage:scripts`.",
+      ],
+      ok: false,
+    };
   }
-  const base = mergeBase(resolveBaseRef(argv, env));
-  const added = parseDiffAddedLines(git(["diff", "-U0", `${base}..HEAD`, "--"]));
+  const resolved = resolveMergeBase(resolveBaseRef(argv, env), run);
+  if (resolved.error !== undefined) return { failures: [resolved.error], ok: false };
   const result = newCodeCoverage({
-    addedLinesByFile: added,
+    addedLinesByFile: parseDiffAddedLines(run(["diff", "-U0", `${resolved.base}..HEAD`, "--"])),
     inScope: (path) => isCoverableProductSource(path),
     lcov: reports.lcov,
   });
@@ -91,10 +111,18 @@ function main(argv = process.argv.slice(2), env = process.env) {
     result,
     KEIKO_REPOSITORY_GATE_CONTRACT.newCodeCoverageMinimum,
   );
-  console.log(`new-code-coverage: ${summary} [reports: ${reports.sources.join(", ")}]`);
-  if (failures.length === 0) return;
-  for (const failure of failures) console.error(`new-code-coverage: FAIL - ${failure}`);
-  process.exit(1);
+  return {
+    failures: failures.map((failure) => `new-code-coverage: FAIL - ${failure}`),
+    ok: failures.length === 0,
+    summary: `new-code-coverage: ${summary} [reports: ${reports.sources.join(", ")}]`,
+  };
+}
+
+function main(argv = process.argv.slice(2), env = process.env) {
+  const verdict = evaluate({ argv, env, run: git });
+  if (verdict.summary !== undefined) console.log(verdict.summary);
+  for (const failure of verdict.failures) console.error(failure);
+  if (!verdict.ok) process.exit(1);
 }
 
 const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
