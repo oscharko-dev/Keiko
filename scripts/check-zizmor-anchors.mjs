@@ -84,17 +84,26 @@ export function anchorFailures(anchors, readWorkflow) {
   return failures;
 }
 
-function main() {
-  if (!existsSync(CONFIG)) {
+// Exported so the reporting layer is reachable from a test. It is the half that decides the exit
+// code, so leaving it unexercised would mean the gate's verdict — not just its analysis — is the
+// part nothing proves.
+export function main(io = {}) {
+  const readConfig =
+    io.readConfig ?? (() => (existsSync(CONFIG) ? readFileSync(CONFIG, "utf8") : undefined));
+  const readWorkflow =
+    io.readWorkflow ??
+    ((file) => {
+      const path = join(WORKFLOWS, file);
+      return existsSync(path) ? readFileSync(path, "utf8") : undefined;
+    });
+  const config = readConfig();
+  if (config === undefined) {
     console.error("zizmor-anchors: FAIL — .github/zizmor.yml is missing.");
     process.exitCode = 1;
     return;
   }
-  const anchors = parseAnchors(readFileSync(CONFIG, "utf8"));
-  const failures = anchorFailures(anchors, (file) => {
-    const path = join(WORKFLOWS, file);
-    return existsSync(path) ? readFileSync(path, "utf8") : undefined;
-  });
+  const anchors = parseAnchors(config);
+  const failures = anchorFailures(anchors, readWorkflow);
 
   if (failures.length > 0) {
     for (const failure of failures) console.error(`zizmor-anchors: FAIL — ${failure}`);

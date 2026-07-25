@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { anchorFailures, parseAnchors } from "../check-zizmor-anchors.mjs";
+import { anchorFailures, main, parseAnchors } from "../check-zizmor-anchors.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -83,5 +83,60 @@ describe("zizmor ignore anchors", () => {
         readFileSync(join(repoRoot, ".github", "workflows", file), "utf8"),
       ),
     ).toEqual([]);
+  });
+});
+
+// The verdict half of the gate: which exit code it reaches and what it says. A gate that analyses
+// correctly but reports silently is indistinguishable from a passing one.
+describe("main", () => {
+  let out;
+  let err;
+  let restore;
+
+  function capture() {
+    const previousExitCode = process.exitCode;
+    const log = console.log;
+    const error = console.error;
+    out = [];
+    err = [];
+    console.log = (message) => out.push(String(message));
+    console.error = (message) => err.push(String(message));
+    restore = () => {
+      console.log = log;
+      console.error = error;
+      process.exitCode = previousExitCode;
+    };
+    process.exitCode = undefined;
+  }
+
+  afterEach(() => {
+    restore?.();
+    restore = undefined;
+  });
+
+  it("passes and counts the anchors it verified", () => {
+    capture();
+    main({ readConfig: () => CONFIG, readWorkflow: read });
+
+    expect(process.exitCode).toBeUndefined();
+    expect(out.join("\n")).toContain("zizmor-anchors: PASS");
+    expect(err).toEqual([]);
+  });
+
+  it("fails closed when the configuration is missing rather than reporting nothing to check", () => {
+    capture();
+    main({ readConfig: () => undefined, readWorkflow: () => undefined });
+
+    expect(process.exitCode).toBe(1);
+    expect(err.join("\n")).toContain(".github/zizmor.yml is missing");
+  });
+
+  it("fails and names every drifted anchor", () => {
+    capture();
+    main({ readConfig: () => CONFIG, readWorkflow: () => "      run: echo not-a-cache" });
+
+    expect(process.exitCode).toBe(1);
+    expect(err.join("\n")).toContain("zizmor-anchors: FAIL");
+    expect(out.join("\n")).not.toContain("PASS");
   });
 });
