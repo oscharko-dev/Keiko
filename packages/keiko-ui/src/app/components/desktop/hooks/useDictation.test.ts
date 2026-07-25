@@ -539,7 +539,7 @@ describe("useDictation — unmount safety (no dispatch / no mic left open)", () 
     // the first thing behind it — so an emitted `upload_end` is exactly the observable trace of a
     // dispatch onto an unmounted hook. Asserting its absence pins the guard; the previous
     // `expect(true).toBe(true)` stayed green with the guard deleted.
-    const marks = onMark.mock.calls.map(([sample]) => sample.mark);
+    const marks = onMark.mock.calls.map(([sample]): string => sample.mark);
     expect(marks).not.toContain("upload_end");
     expect(onInsert).not.toHaveBeenCalled();
   });
