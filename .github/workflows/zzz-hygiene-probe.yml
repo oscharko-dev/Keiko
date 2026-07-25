@@ -1,0 +1,20 @@
+name: Hygiene probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  probe:
+    name: probe
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Probe
+        run: echo "${{ inputs.label }}"
