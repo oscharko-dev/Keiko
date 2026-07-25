@@ -199,7 +199,8 @@
     "gates:local:tests": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh tests",
     "gates:local:e2e": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh e2e",
     "gates:local:full": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh full",
-    "gates:local:shell": "docker compose -f docker/gates/docker-compose.yml run --rm gates bash"
+    "gates:local:shell": "docker compose -f docker/gates/docker-compose.yml run --rm gates bash",
+    "check:documentation-only-change": "node scripts/check-documentation-only-change.mjs"
   },
   "overrides": {
     "undici": "7.28.0",

@@ -62,6 +62,27 @@ jobs:
               ;;
           esac
 
+  # Classifies the change set so the expensive cross-platform matrix can be skipped for changes that
+  # cannot affect it. Allow-listed and fail-open: an unrecognised path, an unresolvable base, or any
+  # error yields false and the full matrix runs (#2699).
+  change-scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      documentation-only: ${{ steps.classify.outputs.documentation-only }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        env:
+          KEIKO_CHANGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          KEIKO_CHANGE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/check-documentation-only-change.mjs
+
   core-quality:
     name: Core quality
     runs-on: ubuntu-latest
@@ -324,6 +345,7 @@ jobs:
     name: ci
     if: ${{ always() }}
     needs:
+      - change-scope
       - protected-branch-gate
       - core-quality
       - coverage-sonar
@@ -336,14 +358,28 @@ jobs:
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
+          DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
         run: |
-          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$CROSS_PLATFORM_RESULT"; do
+          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
             fi
           done
+          # The cross-platform matrix is the only dependency allowed to be skipped, and only when the
+          # change-scope job classified this change set as documentation-only. Any other skip — a
+          # cancellation, a dependency failure, a mistaken condition — still fails closed.
+          if [ "$CROSS_PLATFORM_RESULT" = "skipped" ]; then
+            if [ "$DOCUMENTATION_ONLY" != "true" ]; then
+              echo "Cross-platform smoke was skipped without a documentation-only change set."
+              exit 1
+            fi
+            echo "Cross-platform smoke skipped: documentation-only change set."
+          elif [ "$CROSS_PLATFORM_RESULT" != "success" ]; then
+            echo "Required CI dependency did not succeed: $CROSS_PLATFORM_RESULT"
+            exit 1
+          fi
           echo "All required CI dependencies succeeded."
 
   actionlint:
@@ -493,6 +529,11 @@ jobs:
 
   cross-platform-smoke:
     name: Cross-platform smoke (${{ matrix.os }})
+    # Roughly half of a run's weighted runner minutes (macOS bills 10x, Windows 2x). A change that
+    # touches no code, manifest, lockfile, workflow or test cannot alter how the product builds and
+    # installs on another operating system.
+    needs: change-scope
+    if: ${{ needs.change-scope.outputs.documentation-only != 'true' }}
     # The Node.js 24 baseline must execute, typecheck, build, and install on every supported desktop
     # OS. The complete hermetic suite remains in the Linux `ci` job because many security fixtures
     # intentionally model POSIX paths, Bash, and symlinks. Keep fail-fast:false so one platform
