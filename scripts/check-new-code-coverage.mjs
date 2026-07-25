@@ -25,11 +25,16 @@ import { isCoverableProductSource } from "./sonar-analysis-scope.mjs";
 import { KEIKO_REPOSITORY_GATE_CONTRACT } from "./sonar-quality-gate-contract.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// ADR-0158: every LCOV report SonarCloud ingests, and only those. The list must stay identical to
+// `sonar.javascript.lcov.reportPaths` in sonar-project.properties, or this mirror answers a
+// different question than the gate it exists to predict. It listed `coverage/ui/lcov.info` — a path
+// no vitest configuration writes — and omitted the real keiko-ui report, so it silently measured
+// zero keiko-ui new code while still reporting a verdict.
 const LCOV_CANDIDATES = [
   "coverage/lcov.info",
   "coverage/scripts/lcov.info",
   "coverage/packages/lcov.info",
-  "coverage/ui/lcov.info",
+  "packages/keiko-ui/coverage/lcov.info",
 ];
 
 function git(args) {

@@ -1,6 +1,11 @@
 # ADR-0157 — Coverage shards produce evidence; one finalizing job judges it
 
-- Status: Accepted
+- Status: Accepted — D1's **mechanism** amended by
+  [ADR-0158](ADR-0158-one-coverage-ruler-per-question.md) D5: with the last `coverage.thresholds`
+  block removed from the repository, no vitest configuration judges anything, so the derived
+  `vitest.coverage.packages.shard.config.ts` was retired and the shards run against
+  `vitest.coverage.packages.config.ts`. D1's property — a shard must not reach a verdict on its
+  partial view — is unchanged and now holds structurally. D2 through D5 below stand as written.
 - Amends: [ADR-0131](ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md) (D1, the
   topology of the `coverage-sonar` job; every other ADR-0131 decision stands)
 - Extends: [ADR-0156](ADR-0156-measurement-and-verdict-separation.md) (D1, the producer/judge

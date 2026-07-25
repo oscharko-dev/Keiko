@@ -4,15 +4,48 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  CONSTITUTIONAL_COVERAGE_MINIMUM,
+  COVERAGE_BASELINE_SCHEMA_VERSION,
   aggregatePackageCoverage,
+  baselineSchemaFailures,
   buildCoverageBaseline,
   buildFileFloors,
-  collectFileLinePercents,
+  collectFilePercents,
   evaluateFileFloors,
   evaluatePackageCoverage,
+  evaluateReleaseTargets,
   listPackages,
   parseArgs,
+  selectedMetrics,
 } from "../check-package-coverage.mjs";
+import { KEIKO_REPOSITORY_GATE_CONTRACT } from "../sonar-quality-gate-contract.mjs";
+
+const COMMITTED_BASELINE = "docs/qa/package-coverage-baseline.json";
+
+// The ten gate scripts whose per-file floors moved out of the vitest `coverage.thresholds` block
+// (retired by ADR-0158 D1) into the single floor store. Values are verbatim from the retired block.
+const MIGRATED_GATE_SCRIPT_FLOORS = {
+  branches: 85,
+  functions: 90,
+  lines: 90,
+  statements: 90,
+};
+const MIGRATED_GATE_SCRIPTS = [
+  "scripts/check-lcov-source-mapping.mjs",
+  "scripts/check-mutation-quality.mjs",
+  "scripts/check-mutation-scope.mjs",
+  "scripts/check-sonar-analysis-log.mjs",
+  "scripts/check-sonar-main-quality-gate.mjs",
+  "scripts/check-sonar-pr-quality-gate.mjs",
+  "scripts/keiko-for-quality-core.mjs",
+  "scripts/keiko-for-quality-worker.mjs",
+  "scripts/sonar-analysis-scope.mjs",
+  "scripts/sonar-quality-gate-contract.mjs",
+];
+
+function readCommittedBaseline() {
+  return JSON.parse(readFileSync(COMMITTED_BASELINE, "utf8"));
+}
 
 function makeRoot() {
   return mkdtempSync(join(tmpdir(), "keiko-coverage-"));
@@ -100,7 +133,7 @@ describe("check-package-coverage", () => {
         lowFiles: [],
       },
     ];
-    const baseline = buildCoverageBaseline({ target: 85, metric: "lines", packages: current });
+    const baseline = buildCoverageBaseline({ metric: "lines", packages: current });
 
     expect(
       evaluatePackageCoverage({
@@ -124,7 +157,6 @@ describe("check-package-coverage", () => {
       lowFiles: [],
     };
     const baseline = buildCoverageBaseline({
-      target: 85,
       metric: "lines",
       packages: [baselinePackage],
     });
@@ -154,7 +186,6 @@ describe("check-package-coverage", () => {
       lowFiles: [],
     };
     const baseline = buildCoverageBaseline({
-      target: 85,
       metric: "branches",
       packages: [baselinePackage],
     });
@@ -184,7 +215,6 @@ describe("check-package-coverage", () => {
       lowFiles: [],
     };
     const baseline = buildCoverageBaseline({
-      target: 85,
       metric: "branches",
       packages: [baselinePackage],
     });
@@ -215,7 +245,7 @@ describe("check-package-coverage", () => {
         lowFiles: [],
       },
     ];
-    const baseline = buildCoverageBaseline({ target: 85, metric: "lines", packages: current });
+    const baseline = buildCoverageBaseline({ metric: "lines", packages: current });
 
     expect(
       evaluatePackageCoverage({
@@ -239,7 +269,6 @@ describe("check-package-coverage", () => {
       lowFiles: [],
     };
     const baseline = buildCoverageBaseline({
-      target: 85,
       metric: "branches",
       packages: [baselinePackage],
     });
@@ -311,70 +340,135 @@ describe("coverage baseline reality guard", () => {
 // verification monitor, workspace fs, governed-handoff, memory-handlers) that hide behind green
 // PACKAGE averages. The floors ratchet those files so they cannot regress further.
 describe("per-file coverage floors", () => {
-  it("collects normalized per-file line percentages from raw v8 summaries", () => {
+  const ratcheted = (lines) => ({ governance: "ratcheted", tolerance: 0.5, lines });
+  const absolute = (metrics) => ({ governance: "absolute", tolerance: 0, ...metrics });
+
+  it("collects all four per-file metrics from raw v8 summaries", () => {
     const root = "/repo";
-    const percents = collectFileLinePercents(root, [
+    const percents = collectFilePercents(root, [
       {
         total: file(0, 0),
         [join(root, "packages/keiko-a/src/hot.ts")]: file(3, 100),
         [join(root, "packages/keiko-a/src/covered.ts")]: file(95, 100),
       },
     ]);
-    expect(percents["packages/keiko-a/src/hot.ts"]).toBe(3);
-    expect(percents["packages/keiko-a/src/covered.ts"]).toBe(95);
+    expect(percents["packages/keiko-a/src/hot.ts"]).toEqual({
+      lines: 3,
+      statements: 3,
+      branches: 3,
+      functions: 3,
+    });
+    expect(percents["packages/keiko-a/src/covered.ts"].lines).toBe(95);
     expect(percents.total).toBeUndefined();
   });
 
-  it("records floors only for files at or below the threshold, with headroom", () => {
+  // ADR-0158 D1: the comparison basis is the UNROUNDED percentage. A zero-tolerance floor must not
+  // be satisfiable by a rounding step — 89.996% is below a 90 floor and has to stay below it.
+  it("keeps percentages unrounded so a zero-tolerance floor cannot be rounded into compliance", () => {
+    const root = "/repo";
+    const percents = collectFilePercents(root, [
+      { [join(root, "packages/keiko-a/src/edge.ts")]: file(89_996, 100_000) },
+    ]);
+    expect(percents["packages/keiko-a/src/edge.ts"].lines).toBeCloseTo(89.996, 5);
+    const evaluations = evaluateFileFloors({
+      filePercents: percents,
+      fileFloors: { "packages/keiko-a/src/edge.ts": absolute({ lines: 90 }) },
+    });
+    expect(evaluations[0]).toMatchObject({ passes: false, reason: "regressed" });
+  });
+
+  it("records ratcheted floors only for files at or below the threshold, with headroom", () => {
     const floors = buildFileFloors(
       {
-        "packages/keiko-a/src/hot.ts": 40,
-        "packages/keiko-a/src/ok.ts": 90,
-        "packages/keiko-a/src/zero.ts": 0,
+        "packages/keiko-a/src/hot.ts": { lines: 40 },
+        "packages/keiko-a/src/ok.ts": { lines: 90 },
+        "packages/keiko-a/src/zero.ts": { lines: 0 },
       },
       50,
     );
     expect(floors).toEqual({
-      "packages/keiko-a/src/hot.ts": 39.5,
-      "packages/keiko-a/src/zero.ts": 0,
+      "packages/keiko-a/src/hot.ts": ratcheted(39.5),
+      "packages/keiko-a/src/zero.ts": ratcheted(0),
     });
     expect(floors["packages/keiko-a/src/ok.ts"]).toBeUndefined();
   });
 
+  // The regeneration path is how a floor could silently disappear: the ten gate scripts sit far
+  // above the ratchet threshold, so re-deriving the store from measurement alone would drop every
+  // one of them. Absolute entries encode policy, not measurement, and survive regeneration.
+  it("carries absolute floors through a regeneration that would otherwise drop them", () => {
+    const floors = buildFileFloors(
+      {
+        "scripts/sonar-analysis-scope.mjs": { lines: 97 },
+        "packages/keiko-a/src/hot.ts": { lines: 40 },
+      },
+      50,
+      { "scripts/sonar-analysis-scope.mjs": absolute(MIGRATED_GATE_SCRIPT_FLOORS) },
+    );
+    expect(floors["scripts/sonar-analysis-scope.mjs"]).toEqual(
+      absolute(MIGRATED_GATE_SCRIPT_FLOORS),
+    );
+    expect(floors["packages/keiko-a/src/hot.ts"]).toEqual(ratcheted(39.5));
+  });
+
   it("passes when a floored file holds or improves and tolerates platform noise", () => {
     const evaluations = evaluateFileFloors({
-      fileLinePercents: { "packages/keiko-a/src/hot.ts": 40.1 },
-      fileFloors: { "packages/keiko-a/src/hot.ts": 40 },
+      filePercents: { "packages/keiko-a/src/hot.ts": { lines: 40.1 } },
+      fileFloors: { "packages/keiko-a/src/hot.ts": ratcheted(40) },
     });
     expect(evaluations).toEqual([
-      { file: "packages/keiko-a/src/hot.ts", floor: 40, current: 40.1, passes: true, reason: "ok" },
+      {
+        file: "packages/keiko-a/src/hot.ts",
+        metric: "lines",
+        floor: 40,
+        tolerance: 0.5,
+        current: 40.1,
+        passes: true,
+        reason: "ok",
+      },
     ]);
   });
 
-  it("fails a floored file that regresses beyond the epsilon", () => {
+  it("fails a floored file that regresses beyond the tolerance", () => {
     const evaluations = evaluateFileFloors({
-      fileLinePercents: { "packages/keiko-a/src/hot.ts": 30 },
-      fileFloors: { "packages/keiko-a/src/hot.ts": 40 },
+      filePercents: { "packages/keiko-a/src/hot.ts": { lines: 30 } },
+      fileFloors: { "packages/keiko-a/src/hot.ts": ratcheted(40) },
     });
     expect(evaluations[0]).toMatchObject({ passes: false, reason: "regressed", current: 30 });
   });
 
   it("fails a floored file that vanished from the summary (rename/delete without floor update)", () => {
     const evaluations = evaluateFileFloors({
-      fileLinePercents: {},
-      fileFloors: { "packages/keiko-a/src/gone.ts": 40 },
+      filePercents: {},
+      fileFloors: { "packages/keiko-a/src/gone.ts": ratcheted(40) },
     });
     expect(evaluations[0]).toMatchObject({ passes: false, reason: "missing", current: null });
   });
 
+  // The reason the vitest `thresholds` block could be retired: the surviving engine expresses all
+  // four metrics per file, and each one is judged independently.
+  it("enforces every governed metric of an absolute entry independently", () => {
+    const evaluations = evaluateFileFloors({
+      filePercents: {
+        "scripts/gate.mjs": { lines: 99, statements: 99, branches: 84.9, functions: 99 },
+      },
+      fileFloors: { "scripts/gate.mjs": absolute(MIGRATED_GATE_SCRIPT_FLOORS) },
+    });
+    expect(evaluations).toHaveLength(4);
+    expect(evaluations.filter((entry) => !entry.passes)).toMatchObject([
+      { metric: "branches", floor: 85, tolerance: 0, passes: false },
+    ]);
+  });
+
   it("embeds recorded file floors in a regenerated baseline", () => {
     const baseline = buildCoverageBaseline({
-      target: 85,
       metric: "lines",
       packages: [],
-      fileFloors: { "packages/keiko-a/src/hot.ts": 39.5 },
+      fileFloors: { "packages/keiko-a/src/hot.ts": ratcheted(39.5) },
     });
-    expect(baseline.fileFloors).toEqual({ "packages/keiko-a/src/hot.ts": 39.5 });
+    expect(baseline.fileFloors).toEqual({ "packages/keiko-a/src/hot.ts": ratcheted(39.5) });
+    expect(baseline.schemaVersion).toBe(COVERAGE_BASELINE_SCHEMA_VERSION);
+    expect(baseline.target).toBe(CONSTITUTIONAL_COVERAGE_MINIMUM);
   });
 
   it("parses a boolean flag, an inline `--flag=value` assignment, and space-separated value flags in one pass", () => {
@@ -419,5 +513,173 @@ describe("per-file coverage floors", () => {
       enforceFileFloors: true,
       coverage: ["coverage-a.json", "coverage-b.json"],
     });
+  });
+
+  it("parses the consolidated evaluation's own flags", () => {
+    const parsed = parseArgs([
+      "--all-metrics",
+      "--enforce-file-floors",
+      "--release-target",
+      "keiko-ui=88",
+      "--release-target=keiko-cli=87",
+    ]);
+
+    expect(parsed).toMatchObject({
+      allMetrics: true,
+      enforceFileFloors: true,
+      releaseTargets: [
+        { packageName: "keiko-ui", target: 88 },
+        { packageName: "keiko-cli", target: 87 },
+      ],
+    });
+    expect(selectedMetrics(parsed)).toEqual(["lines", "statements", "branches", "functions"]);
+    expect(selectedMetrics({ allMetrics: false, metric: "branches" })).toEqual(["branches"]);
+  });
+
+  it("rejects a malformed release target instead of silently governing nothing", () => {
+    expect(() => parseArgs(["--release-target", "keiko-ui"])).toThrow(/Invalid --release-target/u);
+    expect(() => parseArgs(["--release-target", "keiko-ui=120"])).toThrow(
+      /Invalid --release-target/u,
+    );
+    expect(() => parseArgs(["--release-target", "=88"])).toThrow(/Invalid --release-target/u);
+  });
+});
+
+// ADR-0158 D2: the 85-lines ratchet evaluations for keiko-ui and keiko-cli were removed because the
+// strict 88/87 release targets dominate them on the same metric. That argument holds only while the
+// strict targets actually execute AND actually fail below their number — which is what these pin.
+describe("strict release lines targets", () => {
+  const packages = [
+    { packageName: "keiko-ui", coverage: { lines: 88.91 } },
+    { packageName: "keiko-cli", coverage: { lines: 89.74 } },
+  ];
+
+  it("passes when both packages hold their release targets", () => {
+    expect(
+      evaluateReleaseTargets({
+        packages,
+        releaseTargets: [
+          { packageName: "keiko-ui", target: 88 },
+          { packageName: "keiko-cli", target: 87 },
+        ],
+      }),
+    ).toMatchObject([
+      { packageName: "keiko-ui", passes: true, reason: "ok" },
+      { packageName: "keiko-cli", passes: true, reason: "ok" },
+    ]);
+  });
+
+  // The negative probe the consolidation's dominance argument rests on.
+  it("fails keiko-ui below 88 and keiko-cli below 87", () => {
+    const evaluations = evaluateReleaseTargets({
+      packages: [
+        { packageName: "keiko-ui", coverage: { lines: 87.99 } },
+        { packageName: "keiko-cli", coverage: { lines: 86.99 } },
+      ],
+      releaseTargets: [
+        { packageName: "keiko-ui", target: 88 },
+        { packageName: "keiko-cli", target: 87 },
+      ],
+    });
+    expect(evaluations.every((entry) => entry.passes)).toBe(false);
+    expect(evaluations).toMatchObject([
+      { packageName: "keiko-ui", passes: false, reason: "below-target", current: 87.99 },
+      { packageName: "keiko-cli", passes: false, reason: "below-target", current: 86.99 },
+    ]);
+  });
+
+  // A summary that never arrived must not read as "target met". The keiko-ui summary now reaches the
+  // judging job as a downloaded artifact, so "not measured" is a real, reachable state.
+  it("fails closed when the targeted package was not measured at all", () => {
+    expect(
+      evaluateReleaseTargets({
+        packages: [],
+        releaseTargets: [{ packageName: "keiko-ui", target: 88 }],
+      }),
+    ).toMatchObject([{ passes: false, reason: "not-measured", current: null }]);
+  });
+});
+
+// ADR-0158 D1: the schemaVersion bump exists so a mixed old/new state fails closed rather than
+// enforcing half the floors. Every rejection below is a state that would otherwise pass silently.
+describe("coverage baseline schema (fail-closed)", () => {
+  const valid = {
+    schemaVersion: COVERAGE_BASELINE_SCHEMA_VERSION,
+    target: CONSTITUTIONAL_COVERAGE_MINIMUM,
+    fileFloors: { "a.ts": { governance: "ratcheted", tolerance: 0.5, lines: 40 } },
+  };
+
+  it("accepts the governed shape and an absent baseline", () => {
+    expect(baselineSchemaFailures(valid)).toEqual([]);
+    expect(baselineSchemaFailures(undefined)).toEqual([]);
+  });
+
+  it("rejects the retired schema-1 bare-number file floor", () => {
+    expect(baselineSchemaFailures({ ...valid, fileFloors: { "a.ts": 40 } })).toEqual([
+      expect.stringContaining("retired schema-1 shape"),
+    ]);
+  });
+
+  it("rejects a stale schemaVersion", () => {
+    expect(baselineSchemaFailures({ ...valid, schemaVersion: 1 })).toEqual([
+      expect.stringContaining("schemaVersion 1 is not the governed 2"),
+    ]);
+  });
+
+  it("rejects a target that drifted from the one constitutional minimum", () => {
+    expect(baselineSchemaFailures({ ...valid, target: 80 })).toEqual([
+      expect.stringContaining("drifted from the one governed minimum"),
+    ]);
+  });
+
+  it("rejects an entry with no governance, no tolerance, no metric or an out-of-range floor", () => {
+    const reject = (entry) => baselineSchemaFailures({ ...valid, fileFloors: { "a.ts": entry } });
+    expect(reject({ tolerance: 0.5, lines: 40 })).toEqual([expect.stringContaining("governance")]);
+    expect(reject({ governance: "ratcheted", lines: 40 })).toEqual([
+      expect.stringContaining("tolerance"),
+    ]);
+    expect(reject({ governance: "ratcheted", tolerance: 0.5 })).toEqual([
+      expect.stringContaining("governs no metric"),
+    ]);
+    expect(reject({ governance: "absolute", tolerance: 0, lines: 140 })).toEqual([
+      expect.stringContaining("invalid lines floor"),
+    ]);
+  });
+});
+
+// Issue #2705: these pins are RELOCATED from `scripts/__tests__/vitest-config-parity.test.mjs`,
+// which pinned the same ten floors while they lived in the vitest `coverage.thresholds` block. The
+// store moved; the numbers did not, and this is the layer that now owns them.
+describe("committed coverage baseline governs the migrated floors", () => {
+  it("is exactly the governed schema", () => {
+    expect(baselineSchemaFailures(readCommittedBaseline())).toEqual([]);
+  });
+
+  it("keeps the constitutional minimum in ONE place", () => {
+    expect(readCommittedBaseline().target).toBe(CONSTITUTIONAL_COVERAGE_MINIMUM);
+    expect(CONSTITUTIONAL_COVERAGE_MINIMUM).toBe(
+      KEIKO_REPOSITORY_GATE_CONTRACT.newCodeCoverageMinimum,
+    );
+  });
+
+  it("keeps every migrated gate-script floor at its governed value with zero tolerance", () => {
+    const { fileFloors } = readCommittedBaseline();
+    for (const script of MIGRATED_GATE_SCRIPTS) {
+      expect(fileFloors[script], `${script} lost its per-file floor`).toEqual({
+        governance: "absolute",
+        tolerance: 0,
+        ...MIGRATED_GATE_SCRIPT_FLOORS,
+      });
+    }
+  });
+
+  // "No tolerance widens anywhere" is the charter of this consolidation, so it is asserted over the
+  // whole store rather than only over the entries a diff happens to touch.
+  it("holds every entry at or below its governance's tolerance ceiling", () => {
+    const ceilings = { ratcheted: 0.5, absolute: 0 };
+    const widened = Object.entries(readCommittedBaseline().fileFloors).filter(
+      ([, entry]) => entry.tolerance > ceilings[entry.governance],
+    );
+    expect(widened).toEqual([]);
   });
 });

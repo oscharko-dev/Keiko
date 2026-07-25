@@ -1010,10 +1010,11 @@ jobs:
       - name: Generate UI CycloneDX SBOM
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui > ui-sbom.cdx.json
-      - name: Test UI with coverage (jsdom + axe a11y)
-        run: npm run test:coverage:ui
-      - name: UI coverage ratchet
-        run: npm run check:coverage:ui
+      # ADR-0158 D4: the keiko-ui coverage suite is measured exactly once per run, by the
+      # `coverage-ui` job, whose evidence `coverage-sonar` judges and SonarCloud ingests. This job
+      # used to run the same jsdom suite a second time and throw the result away — its ratchet read a
+      # summary no other step ever saw. The 85 lines ratchet it applied is strictly dominated by the
+      # 88-strict release target that `check:coverage:quality` still evaluates on every pull request.
       - name: Install Playwright browser
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # chromium is the reference browser for the smoke + perf-evidence suites. The
