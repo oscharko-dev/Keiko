@@ -3063,8 +3063,8 @@ describe("handleGroundedAsk", () => {
     );
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    expect(answer.citations.length).toBe(0);
-    expect(answer.uncertainty.length).toBe(1);
+    expect(answer.citations).toHaveLength(0);
+    expect(answer.uncertainty).toHaveLength(1);
     expect(answer.uncertainty[0]?.kind).toBe("no-evidence");
   });
 

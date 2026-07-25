@@ -29,7 +29,7 @@ describe("JsonSyntaxBlock size cutoff (GEN-PERF-WIDGET-002)", () => {
 
     const { container } = render(<JsonSyntaxBlock text={big} className="json" />);
     const tokens = container.querySelectorAll('[class^="json-token"]');
-    expect(tokens.length).toBe(0);
+    expect(tokens).toHaveLength(0);
     expect(container.querySelector('[data-highlight-disabled="true"]')).not.toBeNull();
     // Full content is still present.
     expect(container.textContent).toContain("node-19999");

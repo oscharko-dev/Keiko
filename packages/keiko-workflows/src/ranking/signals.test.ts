@@ -194,8 +194,8 @@ describe("extractSignals", () => {
 
   it("clamps baseScore into [0,1] even when penalties dominate", () => {
     const result = extractSignals([atom("src/dist/foo.js", 0.05)], [], REQUIRED_HINTS);
-    expect(result.baseScore >= 0).toBe(true);
-    expect(result.baseScore <= 1).toBe(true);
+    expect(result.baseScore).toBeGreaterThanOrEqual(0);
+    expect(result.baseScore).toBeLessThanOrEqual(1);
     expect(result.generatedHint).toBe(true);
   });
 });
@@ -267,8 +267,8 @@ describe("extractSignals — intent context (M4)", () => {
       { retrievalIntent: "targeted-code-search" },
     );
     expect(result.signals.find((s) => s.name === "structural-edge")?.value).toBe(1);
-    expect(result.baseScore >= 0).toBe(true);
-    expect(result.baseScore <= 1).toBe(true);
+    expect(result.baseScore).toBeGreaterThanOrEqual(0);
+    expect(result.baseScore).toBeLessThanOrEqual(1);
   });
 
   it("records semantic-score only for approved semantic evidence atoms", () => {

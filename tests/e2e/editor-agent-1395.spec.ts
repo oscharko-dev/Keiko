@@ -146,7 +146,7 @@ test("governs and audits agent editor actions end to end (AC1, AC2, AC3, AC4)", 
 
     // AC1/AC4: both governed actions are visible in the real audit feed the panel consumes.
     const records = await fetchAudit(request, sessionId);
-    expect(records.length).toBe(2);
+    expect(records).toHaveLength(2);
     const review = records.find((r) => r.disposition === "review-required");
     const block = records.find((r) => r.disposition === "denied");
     expect(review?.outcome).toBe("queued");

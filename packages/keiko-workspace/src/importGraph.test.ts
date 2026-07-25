@@ -55,7 +55,7 @@ describe("importGraphAdapter", () => {
     const atoms = await importGraphAdapter.lookup(scope, nlq("./bar"), DEFAULT_SEARCH_LIMITS, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(atoms.length).toBe(1);
+    expect(atoms).toHaveLength(1);
     expect(atoms[0]?.scopePath).toBe("src/a.ts");
     expect(atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 2 });
     expect(atoms[0]?.provenance.tool).toBe("code-intelligence-index");
@@ -91,7 +91,7 @@ describe("importGraphAdapter", () => {
     const atoms = await importGraphAdapter.lookup(scope, nlq("./bar"), DEFAULT_SEARCH_LIMITS, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(atoms.length).toBe(2);
+    expect(atoms).toHaveLength(2);
     expect(atoms.map((a) => a.lineRange?.startLine).sort()).toEqual([1, 2]);
   });
 
@@ -138,7 +138,7 @@ describe("importGraphAdapter", () => {
     const atoms = await importGraphAdapter.lookup(scope, nlq("./bar"), capped, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(atoms.length).toBe(2);
+    expect(atoms).toHaveLength(2);
   });
 
   it("rejects unsupported query kinds with RepoSearchInvalidQueryError", async () => {

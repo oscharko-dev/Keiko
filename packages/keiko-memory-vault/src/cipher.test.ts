@@ -48,7 +48,7 @@ describe("resolveVaultKey — keyfile tier", () => {
   it("generates a 32-byte keyfile at 0600 on first use", () => {
     const resolved = resolveVaultKey({}, dir, NO_KEYCHAIN);
     expect(resolved.source).toBe("keyfile");
-    expect(resolved.key.length).toBe(32);
+    expect(resolved.key).toHaveLength(32);
     const keyfile = join(dir, "vault.key");
     const decoded = Buffer.from(readFileSync(keyfile, "utf8").trim(), "base64");
     expect(decoded.equals(resolved.key)).toBe(true);

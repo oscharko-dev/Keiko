@@ -523,7 +523,7 @@ describe("createLspProcessManager", () => {
     controllers[0]?.emitLateExit(1);
     await settle();
 
-    expect(events.filter((e) => e.status === "CRASHED").length).toBe(crashedAfterRestart);
+    expect(events.filter((e) => e.status === "CRASHED")).toHaveLength(crashedAfterRestart);
     expect(manager.getLspProcessStatus()).toBe("READY");
     // The throttle budget is intact: a second genuine crash still restarts (not throttled).
     controllers[controllers.length - 1]?.crash(1);
@@ -831,7 +831,7 @@ describe("createLspProcessManager", () => {
 
     // Only one CRASHED event should exist for the first controller (double crash is guarded).
     const crashedEvents = events.filter((e) => e.status === "CRASHED");
-    expect(crashedEvents.length).toBe(1);
+    expect(crashedEvents).toHaveLength(1);
     await manager.dispose();
   });
 

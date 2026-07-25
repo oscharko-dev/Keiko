@@ -433,7 +433,7 @@ describe("desktop files browser", () => {
     const tree = await readFilesTree(store, root, "wide");
 
     expect(tree.truncated).toBe(true);
-    expect(tree.entries.length).toBe(1_000);
+    expect(tree.entries).toHaveLength(1_000);
     expect(tree.entries.every((entry) => entry.path.startsWith("wide/"))).toBe(true);
   });
 

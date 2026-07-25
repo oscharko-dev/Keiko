@@ -15,7 +15,7 @@ describe("runEnhancement", () => {
     expect(obs.prompt.taskDecomposition.length).toBeGreaterThanOrEqual(2);
     expect(obs.prompt.groundingPlan.untrustedContent).toBe(true);
     expect(obs.prompt.safetyRules.length).toBeGreaterThanOrEqual(2);
-    expect(obs.critic.dimensionScores.length).toBe(6);
+    expect(obs.critic.dimensionScores).toHaveLength(6);
     expect(obs.safety.leastPrivilege.length).toBeGreaterThanOrEqual(4);
     expect(obs.estimatedTokens).toBeGreaterThan(0);
   });

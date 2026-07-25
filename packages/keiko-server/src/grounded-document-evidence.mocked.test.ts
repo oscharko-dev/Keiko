@@ -144,7 +144,7 @@ describe("collectConnectedDocumentEvidence with a mocked extractor", () => {
     );
     const result = await run(["docs/a.docx", "docs/b.docx", "docs/c.docx"]);
     const budgetExhausted = result.omitted.filter((entry) => entry.reason === "budget-exhausted");
-    expect(result.candidates.length).toBe(2);
+    expect(result.candidates).toHaveLength(2);
     expect(budgetExhausted).toEqual([
       { scopePath: "docs/c.docx", reason: "budget-exhausted", omittedAtMs: 1_000 },
     ]);

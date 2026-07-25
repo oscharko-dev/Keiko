@@ -82,7 +82,7 @@ describe("gitHistoryAdapter.lookup", () => {
     const atoms = await gitHistoryAdapter.lookup(scope, nlq("recent"), DEFAULT_SEARCH_LIMITS, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(atoms.length).toBe(1);
+    expect(atoms).toHaveLength(1);
     expect(atoms[0]?.scopePath).toBe(".git/HEAD");
     expect(atoms[0]?.provenance.kind).toBe("git-history");
     expect(atoms[0]?.provenance.tool).toBe("git-reflog");
@@ -170,7 +170,7 @@ describe("gitHistoryAdapter — worktree pointer support (Finding 7)", () => {
     const atoms = await gitHistoryAdapter.lookup(scope, nlq("recent"), DEFAULT_SEARCH_LIMITS, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(atoms.length).toBe(1);
+    expect(atoms).toHaveLength(1);
   });
 
   it("resolves HEAD via a valid worktree pointer and returns an atom", async () => {
@@ -185,7 +185,7 @@ describe("gitHistoryAdapter — worktree pointer support (Finding 7)", () => {
     const atoms = await gitHistoryAdapter.lookup(scope, nlq("recent"), DEFAULT_SEARCH_LIMITS, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(atoms.length).toBe(1);
+    expect(atoms).toHaveLength(1);
     expect(atoms[0]?.provenance.tool).toBe("git-reflog");
   });
 
@@ -225,7 +225,7 @@ describe("gitHistoryAdapter — worktree pointer support (Finding 7)", () => {
       nodeWorkspaceFs,
       { nowMs: FIXED_NOW },
     );
-    expect(atoms.length).toBe(1);
+    expect(atoms).toHaveLength(1);
     expect(atoms[0]?.scopePath).toBe(".git/HEAD");
   });
 

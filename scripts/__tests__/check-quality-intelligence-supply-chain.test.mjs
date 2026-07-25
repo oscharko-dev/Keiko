@@ -1116,7 +1116,7 @@ describe("checkWorkspaceManifestForbidden", () => {
       dependencies: { "@oscharko-dev/test-intelligence": "*" },
     });
     const hits = checkWorkspaceManifestForbidden(join(root, "packages"));
-    expect(hits.length).toBe(1);
+    expect(hits).toHaveLength(1);
     expect(hits[0]?.name).toBe("@oscharko-dev/test-intelligence");
   });
 
@@ -1127,7 +1127,7 @@ describe("checkWorkspaceManifestForbidden", () => {
       devDependencies: { "@oscharko-dev/ti-runner": "^1.0.0" },
     });
     const hits = checkWorkspaceManifestForbidden(join(root, "packages"));
-    expect(hits.length).toBe(1);
+    expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ section: "devDependencies", name: "@oscharko-dev/ti-runner" });
   });
 
@@ -1138,7 +1138,7 @@ describe("checkWorkspaceManifestForbidden", () => {
       optionalDependencies: { "@oscharko-dev/ti-native": "^1.0.0" },
     });
     const hits = checkWorkspaceManifestForbidden(join(root, "packages"));
-    expect(hits.length).toBe(1);
+    expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({
       section: "optionalDependencies",
       name: "@oscharko-dev/ti-native",
@@ -1256,7 +1256,7 @@ describe("checkTelemetryStrings", () => {
       dependencies: { "@sentry/node": "^7.0.0" },
     });
     const hits = checkTelemetryStrings(join(root, "package.json"), join(root, "packages"));
-    expect(hits.length).toBe(1);
+    expect(hits).toHaveLength(1);
     expect(hits[0]?.needle).toBe("@sentry/");
   });
 

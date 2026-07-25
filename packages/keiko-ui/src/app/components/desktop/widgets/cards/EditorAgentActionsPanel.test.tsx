@@ -389,7 +389,7 @@ describe("EditorAgentActionsPanel", () => {
     const { container } = render(
       <EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />,
     );
-    await waitFor(() => expect(screen.getAllByTestId("agent-action-row").length).toBe(2));
+    await waitFor(() => expect(screen.getAllByTestId("agent-action-row")).toHaveLength(2));
     expect(await axe(container)).toHaveNoViolations();
   });
 

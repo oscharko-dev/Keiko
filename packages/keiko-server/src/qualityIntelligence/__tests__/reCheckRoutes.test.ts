@@ -1985,7 +1985,7 @@ describe("handleQiReCheck — workspace file order changes do NOT false-orphan u
         registeredAt: "2026-06-09T10:00:00.000Z",
       });
       const atomIds = seeded.ingestedAtoms.map((entry) => String(entry.atom.id));
-      expect(atomIds.length).toBe(2);
+      expect(atomIds).toHaveLength(2);
       seedRunFromSources({
         runId,
         sources: [{ kind: "workspace", label: "Repo", path: dir }],

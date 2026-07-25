@@ -259,9 +259,7 @@ describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
     // future refactor that collapses them to one identifier breaks this assertion.
-    expect((LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION as unknown) !== LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe(
-      true,
-    );
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION as unknown).not.toBe(LOCAL_KNOWLEDGE_SCHEMA_VERSION);
   });
 });
 
@@ -281,7 +279,7 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       for (const expected of KNOWLEDGE_CAPSULE_INDEX_NAMES) {
         expect(indexes).toContain(expected);
       }
-      expect(KNOWLEDGE_CAPSULE_INDEXES.length).toBe(KNOWLEDGE_CAPSULE_INDEX_NAMES.length);
+      expect(KNOWLEDGE_CAPSULE_INDEXES).toHaveLength(KNOWLEDGE_CAPSULE_INDEX_NAMES.length);
     } finally {
       db.close();
     }
@@ -1138,7 +1136,7 @@ describe("redactPathInDiagnostic", () => {
   it("caps the output at the documented length and appends an ellipsis on overflow", () => {
     const huge = "x".repeat(4096);
     const out = redactPathInDiagnostic(huge);
-    expect(out.length).toBe(1025);
+    expect(out).toHaveLength(1025);
     expect(out.endsWith("…")).toBe(true);
   });
 

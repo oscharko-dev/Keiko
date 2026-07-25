@@ -408,7 +408,7 @@ describe("buildCoverageMap — coverage is not diluted by run size (regression f
     const statuses = buildAtomCoverageStatuses(atoms, map);
     expect(runCoveragePercentage(statuses)).toBe(100);
     statuses.forEach((s) => {
-      expect(s.coveringCandidateIds.length).toBe(1);
+      expect(s.coveringCandidateIds).toHaveLength(1);
     });
   });
 

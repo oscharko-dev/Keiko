@@ -53,7 +53,7 @@ describe("EDITOR_LANGUAGE_MODE_MAP", () => {
     } catch {
       // strict-mode throw is acceptable
     }
-    expect(EDITOR_LANGUAGE_MODE_MAP.length).toBe(originalLength);
+    expect(EDITOR_LANGUAGE_MODE_MAP).toHaveLength(originalLength);
   });
 
   it("deeply freezes every entry and its fileExtensions array (no consumer can mutate an entry)", () => {
@@ -66,7 +66,7 @@ describe("EDITOR_LANGUAGE_MODE_MAP", () => {
       } catch {
         // strict-mode throw is acceptable
       }
-      expect(mode.fileExtensions.length).toBe(originalExtensionCount);
+      expect(mode.fileExtensions).toHaveLength(originalExtensionCount);
     }
   });
 });

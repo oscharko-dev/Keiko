@@ -399,7 +399,7 @@ describe("sanitizeSignatureHelp", () => {
     expect(result.signatures).toEqual([
       { label: "callT", documentation: "docum", parameters: [{ label: "value" }] },
     ]);
-    expect(result.activeSignature).toBe(null);
+    expect(result.activeSignature).toBeNull();
     expect(result.returnedCount).toBe(1);
     expect(result.truncated).toBe(true);
   });

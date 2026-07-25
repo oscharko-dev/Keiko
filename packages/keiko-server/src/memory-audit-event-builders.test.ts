@@ -70,7 +70,7 @@ describe("safeSummary", () => {
       (s) => s.replace(secret, "[redacted]"),
     );
     expect(summary).not.toContain(secret);
-    expect(summary.length).toBe(MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS);
+    expect(summary).toHaveLength(MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS);
   });
 });
 

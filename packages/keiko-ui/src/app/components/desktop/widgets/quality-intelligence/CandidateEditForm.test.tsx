@@ -39,8 +39,8 @@ describe("CandidateEditForm", () => {
     const saveButton = screen.getByRole("button", { name: /^save$/i });
     const preconditions = screen.getByRole("textbox", { name: /preconditions/i });
     expect(
-      (saveButton.compareDocumentPosition(preconditions) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-    ).toBe(true);
+      saveButton.compareDocumentPosition(preconditions) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
   });
 
   it("submits only the changed fields (minimal diff)", async () => {

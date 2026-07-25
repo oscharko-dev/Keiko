@@ -168,7 +168,7 @@ describe("handleListQiRuns", () => {
         truncated: boolean;
       };
       expect(body.limit).toBe(QI_RUN_LIST_DEFAULT_LIMIT);
-      expect(body.runs.length).toBe(QI_RUN_LIST_DEFAULT_LIMIT);
+      expect(body.runs).toHaveLength(QI_RUN_LIST_DEFAULT_LIMIT);
       expect(body.totalRunIds).toBe(QI_RUN_LIST_DEFAULT_LIMIT + 25);
       expect(body.truncated).toBe(true);
       // The route must NOT call load for ids past the limit.

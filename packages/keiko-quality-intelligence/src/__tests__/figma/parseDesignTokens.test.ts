@@ -37,9 +37,9 @@ describe("parseDesignTokens", () => {
     const reparsed = parseDesignTokens(JSON.parse(JSON.stringify(extracted)));
     expect(reparsed).toEqual(extracted);
     expect(reparsed.colors.length).toBeGreaterThan(0);
-    expect(reparsed.typography.length).toBe(1);
+    expect(reparsed.typography).toHaveLength(1);
     expect(reparsed.spacing.length).toBeGreaterThan(0);
-    expect(reparsed.radius.length).toBe(1);
+    expect(reparsed.radius).toHaveLength(1);
   });
 
   it("drops malformed rows in a family rather than crashing", () => {

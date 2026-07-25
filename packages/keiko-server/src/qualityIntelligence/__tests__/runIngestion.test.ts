@@ -207,7 +207,7 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
       "# Funds Transfer\nThe system shall validate the IBAN before submitting a transfer.\n",
     );
     const result = ingest(input([fileSource("Fachkonzept", path)]));
-    expect(result.ingestedAtoms.length).toBe(1);
+    expect(result.ingestedAtoms).toHaveLength(1);
     expect(result.envelopes).toHaveLength(1);
     expect(result.envelopes[0]?.kind).toBe("repository-context");
     expect(result.envelopes[0]?.provenance.origin).toBe("file");
@@ -908,7 +908,7 @@ describe("ingestInlineSources — multiple sources", () => {
           { kind: "workspace", label: "Repo", path: dir },
         ]),
       );
-      expect(result.envelopes.length).toBe(2);
+      expect(result.envelopes).toHaveLength(2);
       expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["requirements", "workspace"]);
       expect(result.ingestedAtoms.length).toBeGreaterThan(1);
     } finally {
@@ -934,7 +934,7 @@ describe("ingestInlineSources — fair per-source budget (Issue #730)", () => {
   it("splits the global atom budget evenly across sources (3 large sources → 40 each)", () => {
     const result = ingest(input([manyReqs("A", 100), manyReqs("B", 100), manyReqs("C", 100)]));
     // floor(120/3) = 40 per source.
-    expect(result.ingestedAtoms.length).toBe(MAX_TOTAL_ATOMS);
+    expect(result.ingestedAtoms).toHaveLength(MAX_TOTAL_ATOMS);
     expect(result.sourceSummaries.map((s) => s.atomCount)).toEqual([40, 40, 40]);
   });
 
@@ -953,23 +953,23 @@ describe("ingestInlineSources — fair per-source budget (Issue #730)", () => {
 
   it("keeps the whole budget for a single source", () => {
     const result = ingest(input([manyReqs("Solo", 200)]));
-    expect(result.ingestedAtoms.length).toBe(MAX_TOTAL_ATOMS);
+    expect(result.ingestedAtoms).toHaveLength(MAX_TOTAL_ATOMS);
     expect(result.droppedSourceCount).toBe(0);
   });
 
   it("caps the source count at 16 and reports the dropped overflow", () => {
     const sources = Array.from({ length: 17 }, (_, i) => manyReqs(`S${String(i)}`, 5));
     const result = ingest(input(sources));
-    expect(result.sourceSummaries.length).toBe(16);
+    expect(result.sourceSummaries).toHaveLength(16);
     expect(result.droppedSourceCount).toBe(1);
     // Every ingested atom stays source-tagged via its envelope.
-    expect(result.envelopes.length).toBe(16);
+    expect(result.envelopes).toHaveLength(16);
   });
 
   it("reports droppedSourceCount = 0 when at the cap exactly", () => {
     const sources = Array.from({ length: 16 }, (_, i) => manyReqs(`S${String(i)}`, 3));
     const result = ingest(input(sources));
-    expect(result.sourceSummaries.length).toBe(16);
+    expect(result.sourceSummaries).toHaveLength(16);
     expect(result.droppedSourceCount).toBe(0);
   });
 
@@ -1042,7 +1042,7 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
     ];
     const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
     const result = ingest(inputWithResolver([capsuleSource("Spec Capsule", "cap-spec")], resolver));
-    expect(result.ingestedAtoms.length).toBe(2);
+    expect(result.ingestedAtoms).toHaveLength(2);
     expect(result.ingestedAtoms[0]?.atom.kind).toBe("document-excerpt");
     expect(result.ingestedAtoms[1]?.atom.kind).toBe("document-excerpt");
   });
@@ -1102,7 +1102,7 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
       ),
     );
     // floor(120/2) = 60 each — capsule must not dominate.
-    expect(result.ingestedAtoms.length).toBe(MAX_TOTAL_ATOMS);
+    expect(result.ingestedAtoms).toHaveLength(MAX_TOTAL_ATOMS);
     expect(result.sourceSummaries[0]?.atomCount).toBe(60);
     expect(result.sourceSummaries[1]?.atomCount).toBe(60);
   });
@@ -1239,7 +1239,7 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
       { documentId: "after", text: "The system shall record every login attempt." },
     ];
     const result = ingest(inputWithResolver([capsuleSource("Mixed", "cap-mixed")], () => docs));
-    expect(result.ingestedAtoms.length).toBe(2);
+    expect(result.ingestedAtoms).toHaveLength(2);
     const firstLines = result.ingestedAtoms.map((a) => a.canonicalText.split("\n")[0]);
     expect(firstLines).toContain("before");
     expect(firstLines).toContain("after");
@@ -1309,7 +1309,7 @@ describe("ingestInlineSources — capsule-set source (Issue #716/#718)", () => {
     const result = ingest(
       inputWithResolver([capsuleSetSource("Set", "set-x")], undefined, () => docs),
     );
-    expect(result.ingestedAtoms.length).toBe(2);
+    expect(result.ingestedAtoms).toHaveLength(2);
     expect(result.envelopes[0]?.kind).toBe("local-knowledge-capsule");
     expect(result.envelopes[0]?.provenance.origin).toBe("local-knowledge-capsule-set:set-x");
     expect(result.sourceSummaries[0]?.kind).toBe("capsule-set");
@@ -1360,7 +1360,7 @@ describe("ingestInlineSources — capsule-set source (Issue #716/#718)", () => {
     const result = ingest(
       inputWithResolver([capsuleSetSource("SecSet", "set-secret")], undefined, () => setDocs),
     );
-    expect(result.ingestedAtoms.length).toBe(2);
+    expect(result.ingestedAtoms).toHaveLength(2);
     const joined = result.ingestedAtoms.map((a) => a.canonicalText).join("\n");
     expect(joined).not.toContain(bearerToken);
     expect(joined).not.toContain(awsAccessKeyId);
@@ -1482,7 +1482,7 @@ describe("ingestInlineSources — global byte budget split (Issue #730 containme
       );
       // Old behaviour: 3 × 150KB = 450KB → QI_PROMPT_TOO_LARGE. Now the merged evidence stays bounded.
       expect(totalBytes).toBeLessThan(MAX_PROMPT_BYTES);
-      expect(result.sourceSummaries.length).toBe(3);
+      expect(result.sourceSummaries).toHaveLength(3);
     } finally {
       for (const t of [a, b, c]) rmSync(t.dir, { recursive: true, force: true });
     }
@@ -1574,7 +1574,7 @@ describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #73
         ),
       );
       // Three sources → three envelopes, each tagged with its own provenance origin.
-      expect(result.envelopes.length).toBe(3);
+      expect(result.envelopes).toHaveLength(3);
       expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["workspace", "file", "capsule"]);
       expect(result.envelopes.map((e) => e.provenance.origin)).toEqual([
         "workspace",
@@ -1630,7 +1630,7 @@ describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #73
       );
 
       // (1) Three sources → three envelopes in source order.
-      expect(result.envelopes.length).toBe(3);
+      expect(result.envelopes).toHaveLength(3);
       expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["workspace", "file", "capsule"]);
       expect(result.envelopes.map((e) => e.provenance.origin)).toEqual([
         "workspace",
@@ -1640,7 +1640,7 @@ describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #73
 
       // (2) Per-source atomCount must be [1, 1, 2] and the sum must match ingestedAtoms.length.
       expect(result.sourceSummaries.map((s) => s.atomCount)).toEqual([1, 1, 2]);
-      expect(result.ingestedAtoms.length).toBe(
+      expect(result.ingestedAtoms).toHaveLength(
         result.sourceSummaries.reduce((sum, s) => sum + s.atomCount, 0),
       );
 
@@ -1659,19 +1659,19 @@ describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #73
           .map((a) => a.canonicalText);
 
       const wsTexts = atomsFor(wsEnv?.id);
-      expect(wsTexts.length).toBe(1);
+      expect(wsTexts).toHaveLength(1);
       expect(wsTexts.every((t) => t.includes("WORKSPACEONLYMARKER"))).toBe(true);
       expect(wsTexts.some((t) => t.includes("FILEONLYMARKER"))).toBe(false);
       expect(wsTexts.some((t) => t.includes("CAPSULEONLYMARKER"))).toBe(false);
 
       const fileTexts = atomsFor(fileEnv?.id);
-      expect(fileTexts.length).toBe(1);
+      expect(fileTexts).toHaveLength(1);
       expect(fileTexts.every((t) => t.includes("FILEONLYMARKER"))).toBe(true);
       expect(fileTexts.some((t) => t.includes("WORKSPACEONLYMARKER"))).toBe(false);
       expect(fileTexts.some((t) => t.includes("CAPSULEONLYMARKER"))).toBe(false);
 
       const capTexts = atomsFor(capEnv?.id);
-      expect(capTexts.length).toBe(2);
+      expect(capTexts).toHaveLength(2);
       expect(capTexts.every((t) => t.includes("CAPSULEONLYMARKER"))).toBe(true);
       expect(capTexts.some((t) => t.includes("WORKSPACEONLYMARKER"))).toBe(false);
       expect(capTexts.some((t) => t.includes("FILEONLYMARKER"))).toBe(false);
@@ -1712,7 +1712,7 @@ describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #73
       expect(result.ingestedAtoms.length).toBeGreaterThanOrEqual(2);
 
       // (2) Only the two healthy sources have envelopes.
-      expect(result.envelopes.length).toBe(2);
+      expect(result.envelopes).toHaveLength(2);
       expect(result.envelopes.map((e) => e.provenance.origin)).toEqual(["workspace", "file"]);
 
       // (3) Every atom's envelopeId ∈ the 2-envelope set, and both are cited.
@@ -1724,7 +1724,7 @@ describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #73
       expect(cited.size).toBe(2);
 
       // (4) The capsule appears in skippedSources with the right kind and code.
-      expect(result.skippedSources.length).toBe(1);
+      expect(result.skippedSources).toHaveLength(1);
       expect(result.skippedSources[0]?.kind).toBe("capsule");
       expect(result.skippedSources[0]?.code).toBe("QI_CAPSULE_UNAVAILABLE");
 
@@ -1871,7 +1871,7 @@ describe("ingestInlineSources — AC3 Chat-parity source cap (Issue #730)", () =
     const result = ingest(input(sources));
 
     // Exactly `cap` sources ingested — the overflow is silently dropped (not an error).
-    expect(result.sourceSummaries.length).toBe(cap);
+    expect(result.sourceSummaries).toHaveLength(cap);
     // Exactly 1 dropped — mutation check: a cap of `cap+1` would give droppedSourceCount=0.
     expect(result.droppedSourceCount).toBe(1);
   });
@@ -1916,7 +1916,7 @@ describe("envelopeIdFor — injective pre-image (pipe-injection hardening)", () 
         (_id: string): readonly { documentId: string; text: string }[] => docs,
       ),
     );
-    expect(result.envelopes.length).toBe(2);
+    expect(result.envelopes).toHaveLength(2);
     const ids = new Set(result.envelopes.map((e) => String(e.id)));
     expect(ids.size).toBe(2);
     for (const atom of result.ingestedAtoms) {

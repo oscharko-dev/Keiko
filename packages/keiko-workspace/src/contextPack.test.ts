@@ -42,7 +42,7 @@ function pack(
 describe("buildContextPack", () => {
   it("includes path, excerpt, size, and selection reason for each entry", () => {
     const result = pack({ "src/index.ts": "export const x = 1;\n", "README.md": "# Demo\n" });
-    expect(result.selected.length).toBe(2);
+    expect(result.selected).toHaveLength(2);
     for (const entry of result.selected) {
       expect(entry.path.length).toBeGreaterThan(0);
       expect(entry.excerpt.length).toBeGreaterThan(0);
@@ -126,7 +126,7 @@ describe("buildContextPack", () => {
       { "src/index.ts": "a".repeat(40), "src/b.ts": "b".repeat(40), "src/c.ts": "c".repeat(40) },
       request({ budgetBytes: 40, maxBytesPerFile: 40 }),
     );
-    expect(result.selected.length).toBe(1);
+    expect(result.selected).toHaveLength(1);
     expect(result.usedBytes).toBe(40);
     expect(result.droppedForBudget).toBe(2);
   });
@@ -134,7 +134,7 @@ describe("buildContextPack", () => {
   it("reports zero candidates for an empty workspace", () => {
     const result = pack({});
     expect(result.totalCandidates).toBe(0);
-    expect(result.selected.length).toBe(0);
+    expect(result.selected).toHaveLength(0);
     expect(result.usedBytes).toBe(0);
   });
 
@@ -147,7 +147,7 @@ describe("buildContextPack", () => {
       request({ budgetBytes: 1_000, maxBytesPerFile: 200 }),
     );
     expect(result.droppedForBudget).toBe(0);
-    expect(result.selected.length).toBe(2);
+    expect(result.selected).toHaveLength(2);
   });
 
   it("counts only budget-exhausted files in droppedForBudget, not unreadable ones", () => {
@@ -158,7 +158,7 @@ describe("buildContextPack", () => {
       { "src/index.ts": "x".repeat(40), "src/b.ts": "y".repeat(40), "src/c.ts": "z".repeat(40) },
       request({ budgetBytes: 40, maxBytesPerFile: 40 }),
     );
-    expect(result.selected.length).toBe(1);
+    expect(result.selected).toHaveLength(1);
     expect(result.droppedForBudget).toBe(2);
   });
 });

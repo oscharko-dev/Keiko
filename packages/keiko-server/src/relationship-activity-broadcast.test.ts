@@ -86,7 +86,7 @@ describe("subscribeActivityBroadcast", () => {
     const unsub = subscribeActivityBroadcast(scope, "ws-a", subscriberFor(a), source);
     const afterJoin = a.written.length;
     vi.advanceTimersByTime(REFRESH_MS * 3);
-    expect(a.written.length).toBe(afterJoin);
+    expect(a.written).toHaveLength(afterJoin);
     unsub();
   });
 
@@ -129,7 +129,7 @@ describe("subscribeActivityBroadcast", () => {
     const slowWrites = slow.written.length;
     revision = 2;
     vi.advanceTimersByTime(REFRESH_MS);
-    expect(slow.written.length).toBe(slowWrites);
+    expect(slow.written).toHaveLength(slowWrites);
     expect(healthy.written.filter((w) => w.includes('"rev":2'))).toHaveLength(1);
     unsubHealthy();
   });

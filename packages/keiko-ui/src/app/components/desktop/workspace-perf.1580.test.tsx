@@ -232,7 +232,7 @@ describe("Issue #1580 — workspace re-render performance", () => {
     const { rerender } = renderWorkspace(ws);
 
     // Exactly one body render per window at mount (no cascading rebuilds).
-    expect(bodyRenders.length).toBe(50);
+    expect(bodyRenders).toHaveLength(50);
     expect(new Set(bodyRenders).size).toBe(50);
     bodyRenders.length = 0;
 

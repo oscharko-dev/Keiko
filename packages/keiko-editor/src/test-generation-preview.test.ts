@@ -40,7 +40,7 @@ describe("buildTestGenerationPreview", () => {
   it("projects the generated candidate into the diff-review model", () => {
     const preview = buildTestGenerationPreview({ result: result(), assurance: "unverified" });
     expect(preview.model.patchId).toBe("patch-1");
-    expect(preview.model.files.length).toBe(1);
+    expect(preview.model.files).toHaveLength(1);
     expect(preview.assurance).toBe("unverified");
   });
 

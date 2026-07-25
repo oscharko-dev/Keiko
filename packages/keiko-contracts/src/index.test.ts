@@ -569,7 +569,7 @@ describe("keiko-contracts package surface", () => {
   it("memory workflow port subpath is importable (#213)", async () => {
     const subpath = await import("./memory-workflow-port.js");
     // Pure type-only module: it should import cleanly with no runtime exports.
-    expect(Object.keys(subpath).length).toBe(0);
+    expect(Object.keys(subpath)).toHaveLength(0);
   });
 
   it("memory audit event surface re-exports are reachable through the barrel (#214)", async () => {
@@ -589,7 +589,7 @@ describe("keiko-contracts package surface", () => {
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-used");
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-omitted");
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-write-candidate");
-    expect(mod.MEMORY_AUDIT_EVENT_KINDS.length).toBe(13);
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toHaveLength(13);
     const pin = <T>(_value?: T): T | undefined => undefined;
     type _MemoryAuditEvent = import("./index.js").MemoryAuditEvent;
     type _MemoryAuditEventKind = import("./index.js").MemoryAuditEventKind;
@@ -600,7 +600,7 @@ describe("keiko-contracts package surface", () => {
   it("memory audit event subpath is importable as @oscharko-dev/keiko-contracts/memory-audit-events (#214)", async () => {
     const subpath = await import("./memory-audit-events.js");
     expect(subpath.MEMORY_AUDIT_EVENT_SCHEMA_VERSION).toBe("1");
-    expect(subpath.MEMORY_AUDIT_EVENT_KINDS.length).toBe(13);
+    expect(subpath.MEMORY_AUDIT_EVENT_KINDS).toHaveLength(13);
     expect(subpath.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
   });
 
@@ -776,8 +776,8 @@ describe("keiko-contracts package surface", () => {
     const mod = await import("./index.js");
     expect(mod.CODE_TASK_ACCEPTANCE_SCHEMA_VERSION).toBe(1);
     expect(mod.CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND).toBe("code-task-acceptance-contribution");
-    expect(mod.CODE_TASK_EVIDENCE_CLASSES.length).toBe(5);
-    expect(mod.CODE_TASK_EVIDENCE_PLATFORMS.length).toBe(4);
+    expect(mod.CODE_TASK_EVIDENCE_CLASSES).toHaveLength(5);
+    expect(mod.CODE_TASK_EVIDENCE_PLATFORMS).toHaveLength(4);
     expect(mod.CODE_TASK_SCENARIO_OUTCOMES).toEqual(["passed", "failed", "blocked"]);
     expect(mod.CODE_TASK_SALVAGE_DISPOSITIONS).toEqual(["taken-verbatim", "reshaped", "rejected"]);
     expect(mod.validateCodeTaskAcceptanceContribution({}).ok).toBe(false);
@@ -864,17 +864,17 @@ describe("keiko-contracts package surface", () => {
     expect(GIT_DELIVERY_PROVIDER_SCHEMA_VERSION).toBe("1");
 
     // Count assertions are intentional surface pins; bump deliberately when #472+ extends the surface.
-    expect(GIT_DELIVERY_ACTION_KINDS.length).toBe(11);
-    expect(GIT_DELIVERY_RISK_CLASSES.length).toBe(4);
-    expect(GIT_DELIVERY_BLOCK_REASONS.length).toBe(6);
-    expect(GIT_DELIVERY_PROVIDER_CAPABILITIES.length).toBe(5);
-    expect(GIT_DELIVERY_RULE_DECISIONS.length).toBe(4);
-    expect(GIT_DELIVERY_CHECKS_OVERALL_STATUSES.length).toBe(4);
-    expect(GIT_DELIVERY_PULL_REQUEST_STATUSES.length).toBe(3);
-    expect(GIT_DELIVERY_BRANCH_MATCH_KINDS.length).toBe(2);
-    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES.length).toBe(6);
-    expect(GIT_DELIVERY_EXECUTION_OUTCOMES.length).toBe(4);
-    expect(GIT_DELIVERY_MERGE_BLOCK_REASONS.length).toBe(6);
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
+    expect(GIT_DELIVERY_RISK_CLASSES).toHaveLength(4);
+    expect(GIT_DELIVERY_BLOCK_REASONS).toHaveLength(6);
+    expect(GIT_DELIVERY_PROVIDER_CAPABILITIES).toHaveLength(5);
+    expect(GIT_DELIVERY_RULE_DECISIONS).toHaveLength(4);
+    expect(GIT_DELIVERY_CHECKS_OVERALL_STATUSES).toHaveLength(4);
+    expect(GIT_DELIVERY_PULL_REQUEST_STATUSES).toHaveLength(3);
+    expect(GIT_DELIVERY_BRANCH_MATCH_KINDS).toHaveLength(2);
+    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES).toHaveLength(6);
+    expect(GIT_DELIVERY_EXECUTION_OUTCOMES).toHaveLength(4);
+    expect(GIT_DELIVERY_MERGE_BLOCK_REASONS).toHaveLength(6);
 
     // Risk severity and per-kind defaults cover every kind.
     expect(GIT_DELIVERY_RISK_CLASS_SEVERITY["local-mutation"]).toBe(1);
@@ -906,15 +906,15 @@ describe("keiko-contracts package surface", () => {
   it("governed Git action-sheet contracts are reachable through the barrel (#473)", () => {
     expect(GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION).toBe("1");
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
-    expect(GIT_DELIVERY_ACTION_SHEET_STATES.length).toBe(3);
-    expect(GIT_DELIVERY_APPROVAL_NECESSITIES.length).toBe(3);
-    expect(GIT_DELIVERY_BLOCKED_CAUSES.length).toBe(3);
-    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS.length).toBe(9);
+    expect(GIT_DELIVERY_ACTION_SHEET_STATES).toHaveLength(3);
+    expect(GIT_DELIVERY_APPROVAL_NECESSITIES).toHaveLength(3);
+    expect(GIT_DELIVERY_BLOCKED_CAUSES).toHaveLength(3);
+    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS).toHaveLength(9);
 
     expect(typeof isGitDeliveryActionSheet).toBe("function");
     expect(typeof buildGitDeliveryActionSheet).toBe("function");
     expect(gitDeliverySuggestedRecoveryStrategy("commit", false)).toBe("soft-reset");
-    expect(GIT_DELIVERY_POLICY_DECISION_OUTCOMES.length).toBe(4);
+    expect(GIT_DELIVERY_POLICY_DECISION_OUTCOMES).toHaveLength(4);
     expect(isGitDeliveryPolicyDecisionOutcome("approval-gated")).toBe(true);
     expect(isGitDeliveryPolicyDecisionOutcome("nonsense")).toBe(false);
 
@@ -950,10 +950,10 @@ describe("keiko-contracts package surface", () => {
     const m = await import("./index.js");
     expect(m.GIT_PULL_REQUEST_SCHEMA_VERSION).toBe("1");
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
-    expect(m.GIT_PR_CHANGE_TYPES.length).toBe(7);
-    expect(m.GIT_PR_READINESS_BLOCKER_CODES.length).toBe(9);
-    expect(m.GIT_PR_RECOMMENDATIONS.length).toBe(5);
-    expect(m.GIT_PR_REJECTION_REASONS.length).toBe(9);
+    expect(m.GIT_PR_CHANGE_TYPES).toHaveLength(7);
+    expect(m.GIT_PR_READINESS_BLOCKER_CODES).toHaveLength(9);
+    expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(5);
+    expect(m.GIT_PR_REJECTION_REASONS).toHaveLength(9);
 
     expect(typeof m.synthesizePullRequestMetadata).toBe("function");
     expect(typeof m.gitPullRequestReadinessFor).toBe("function");

@@ -111,7 +111,7 @@ describe("evidenceAtomStableId", () => {
   });
 
   it("returns a 66-character string", () => {
-    expect(evidenceAtomStableId(atomInput()).length).toBe(66);
+    expect(evidenceAtomStableId(atomInput())).toHaveLength(66);
   });
 
   it("returns lowercase hex characters after the prefix", () => {
@@ -147,7 +147,7 @@ describe("connectedContextPackStableId", () => {
   it("returns the 'p-' prefix and 66 chars", () => {
     const id = connectedContextPackStableId(packInput());
     expect(id.startsWith("p-")).toBe(true);
-    expect(id.length).toBe(66);
+    expect(id).toHaveLength(66);
   });
 
   it("returns lowercase hex characters after the prefix", () => {
@@ -188,7 +188,7 @@ describe("importEdgeStableId", () => {
   it("returns the 'ie-' prefix and 67 chars", () => {
     const id = importEdgeStableId(input);
     expect(id.startsWith("ie-")).toBe(true);
-    expect(id.length).toBe(67);
+    expect(id).toHaveLength(67);
   });
 });
 
@@ -221,6 +221,6 @@ describe("symbolGraphRecordStableId", () => {
   it("returns the 'sg-' prefix and 67 chars", () => {
     const id = symbolGraphRecordStableId(input);
     expect(id.startsWith("sg-")).toBe(true);
-    expect(id.length).toBe(67);
+    expect(id).toHaveLength(67);
   });
 });

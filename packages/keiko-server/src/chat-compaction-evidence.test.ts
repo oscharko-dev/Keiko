@@ -287,7 +287,7 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
     await sendBuffered(deps(bufferedModel("answer"), evidenceStore, true), chatId);
 
     const entries = listEvidence(evidenceStore);
-    expect(entries.length).toBe(1);
+    expect(entries).toHaveLength(1);
     const runId = entries[0]?.runId ?? "";
     expect(() => {
       assertValidRunId(runId);
@@ -319,7 +319,7 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
     await sendStreaming(deps(streamingModel("answer"), evidenceStore, true), chatId);
 
     const entries = listEvidence(evidenceStore);
-    expect(entries.length).toBe(1);
+    expect(entries).toHaveLength(1);
     expect(entries[0]?.runId).toBe(`chat-${sha256Hex(chatId).slice(0, 16)}-t${String(count)}`);
   });
 
@@ -328,7 +328,7 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
     seedHistory(chatId, 10);
     const evidenceStore = createInMemoryEvidenceStore();
     await sendBuffered(deps(bufferedModel("answer"), evidenceStore, true), chatId);
-    expect(listEvidence(evidenceStore).length).toBe(0);
+    expect(listEvidence(evidenceStore)).toHaveLength(0);
   });
 
   it("no profile persists NOTHING even on a long history", async () => {
@@ -336,7 +336,7 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
     seedHistory(chatId, 30);
     const evidenceStore = createInMemoryEvidenceStore();
     await sendBuffered(deps(bufferedModel("answer"), evidenceStore, false), chatId);
-    expect(listEvidence(evidenceStore).length).toBe(0);
+    expect(listEvidence(evidenceStore)).toHaveLength(0);
   });
 
   it("a throwing evidence store does NOT fail the send (best-effort)", async () => {
