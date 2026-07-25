@@ -45,8 +45,15 @@ function manifestReference(workspaceId: string): WorkspaceManifestRef {
   return `mf-${digest.slice(0, REFERENCE_HEX_CHARS)}` as WorkspaceManifestRef;
 }
 
-function workspaceIdentity(canonicalRoot: string): string {
-  const digest = framedDigest("keiko.m11.workspace-id.v1", [canonicalRoot]);
+/**
+ * A workspace keeps the identity derived from the root that founded it even after that root leaves,
+ * so restoring a departed founding root would otherwise claim an id its own former workspace still
+ * holds (#2620). The discriminator gives the restored workspace an identity of its own. Zero frames
+ * exactly the original single-element tuple, so every existing workspace id is byte-identical.
+ */
+function workspaceIdentity(canonicalRoot: string, discriminator: number): string {
+  const parts = discriminator === 0 ? [canonicalRoot] : [canonicalRoot, String(discriminator)];
+  const digest = framedDigest("keiko.m11.workspace-id.v1", parts);
   return `workspace-${digest.slice(0, REFERENCE_HEX_CHARS)}`;
 }
 
@@ -102,9 +109,10 @@ export function inspectWorkspaceRootDescriptor(
 export function createSingleRootWorkspaceManifest(
   projectPath: string,
   projectName: string,
+  discriminator = 0,
 ): WorkspaceManifest {
   const root = inspectWorkspaceRootDescriptor(projectPath, projectName);
-  const workspaceId = workspaceIdentity(root.canonicalRoot);
+  const workspaceId = workspaceIdentity(root.canonicalRoot, discriminator);
   return checkedManifest({
     kind: "workspace-manifest",
     schemaVersion: WORKSPACE_MANIFEST_SCHEMA_VERSION,

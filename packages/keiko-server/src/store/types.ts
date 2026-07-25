@@ -195,6 +195,18 @@ export interface WorkspaceManifestMutationInput {
   readonly expectedRevision: number;
   readonly absorbedWorkspaceIds: readonly string[];
   readonly rootProjects: readonly WorkspaceManifestRootProject[];
+  /**
+   * Projects whose root leaves the workspace in this mutation. Each is restored to a standalone
+   * single-root workspace inside the same transaction, which is the inverse of
+   * `absorbedWorkspaceIds` and what makes membership changes reversible (#2620).
+   */
+  readonly releasedProjectPaths: readonly string[];
+  /**
+   * Reports a released project whose standalone workspace could not be re-created. The restore is
+   * deliberately best-effort so a root that is already gone stays removable, but the reason must
+   * still reach the caller rather than dying inside the transaction (#2620).
+   */
+  readonly onReleasedRestoreFailure?: ((projectPath: string, error: unknown) => void) | undefined;
 }
 
 export interface WorkspaceManifestRootProject {

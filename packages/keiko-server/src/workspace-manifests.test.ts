@@ -60,6 +60,31 @@ function recompute(roots: readonly string[]): readonly string[] {
   return worker(roots);
 }
 
+function alphaWorkspace(): WorkspaceManifest {
+  const alpha = service.list().find((manifest) => manifest.roots[0]?.canonicalRoot === rootA);
+  if (alpha === undefined) throw new Error("missing alpha workspace");
+  return alpha;
+}
+
+function rootRefAt(manifest: WorkspaceManifest, index: number): string {
+  const root = manifest.roots[index];
+  if (root === undefined) throw new Error("missing fixture root");
+  return root.rootRef;
+}
+
+/**
+ * The membership invariant #2620 exists to protect: every registered project resolves to a
+ * workspace manifest. A project that survives a membership change with no workspace of its own is
+ * silently orphaned — it keeps its registration but can never be dispatched against again.
+ */
+function expectNoOrphanedProjects(): void {
+  const orphans = store
+    .listProjects()
+    .filter((project) => store.findWorkspaceManifestRecordByProject(project.path) === undefined)
+    .map((project) => project.path);
+  expect(orphans).toEqual([]);
+}
+
 beforeEach(() => {
   tmp = realpathSync(mkdtempSync(join(tmpdir(), "keiko-workspace-manifest-")));
   rootA = join(tmp, "alpha");
@@ -184,32 +209,215 @@ describe("WorkspaceManifestService", () => {
     expect(trust.trustLevelForRoot(rootA)).toBe("restricted");
   });
 
-  it("projects a still-registered project that lost its manifest as unavailable instead of throwing", () => {
-    // ADR-0147 D9 migrates a one-root manifest for the current active project only, and removeRoot
-    // deletes the removed root's manifest row while its projects row stays registered. Both leave a
-    // registered project with no workspace manifest, and D9 requires that state to fail closed to
-    // unavailable/restricted. It used to escape manifestForCanonicalRoot as an uncoded Error, which
-    // the server turns into an opaque 500 on the trust status, grant, revoke and catalog routes.
-    const alpha = service.list().find((manifest) => manifest.roots[0]?.canonicalRoot === rootA);
-    if (alpha === undefined) throw new Error("missing alpha workspace");
-    const twoRoots = service.addRoot(dispatch(alpha, 0), rootB).manifest;
+  it("returns a removed root to its own standalone single-root workspace", () => {
+    // #2620: addRoot absorbs the joining root's single-root manifest and deletes it, so before this
+    // removeRoot left the project registered with no workspace of its own — permanently orphaned
+    // and undispatchable. Membership changes must be reversible (ADR-0147 D8).
+    const twoRoots = service.addRoot(dispatch(alphaWorkspace(), 0), rootB).manifest;
+    const betaRef = rootRefAt(twoRoots, 1);
+    expect(trust.grant(rootB)).toEqual({ trusted: true });
+
+    const removed = service.removeRoot(dispatch(twoRoots, 0), betaRef);
+
+    expect(removed.manifest.roots.map((root) => root.canonicalRoot)).toEqual([rootA]);
+    const restored = store.findWorkspaceManifestRecordByProject(rootB);
+    expect(restored?.workspaceId).toBeDefined();
+    expect(removed.restoredWorkspaceIds).toEqual([restored?.workspaceId]);
+
+    const standalone = service.get(restored?.workspaceId ?? "");
+    expect(standalone.roots.map((root) => root.canonicalRoot)).toEqual([rootB]);
+    expect(standalone.focusedRootRef).toBe(standalone.roots[0]?.rootRef);
+    expect(validateWorkspaceBinding(service.binding(standalone.workspaceId))).toEqual({ ok: true });
+
+    // Restoration returns membership, never authority. The departed grant stays revoked in the same
+    // committed transition (ADR-0155), so the human must grant the standalone workspace again.
+    expect(store.readWorkspaceTrustRecord(betaRef)).toBeUndefined();
+    expect(trust.trustLevelForRoot(rootB)).toBe("restricted");
+    expectNoOrphanedProjects();
+  });
+
+  it("restores the founding root, whose identity the workspace it founded still carries", () => {
+    // A workspace keeps the workspaceId and manifestRef derived from the root that founded it, even
+    // after that root leaves. Restoring the founding root therefore collides with its own former
+    // workspace, which is still alive under the remaining members. The first cut of #2620 swallowed
+    // that UNIQUE violation and orphaned exactly the root the restore exists to rescue.
+    const twoRoots = service.addRoot(dispatch(alphaWorkspace(), 0), rootB).manifest;
+    const foundingRef = rootRefAt(twoRoots, 0);
+    expect(twoRoots.workspaceId).toBe(alphaWorkspace().workspaceId);
+
+    const removed = service.removeRoot(dispatch(twoRoots, 1), foundingRef);
+
+    expect(removed.manifest.roots.map((root) => root.canonicalRoot)).toEqual([rootB]);
+    expect(removed.unrestoredProjectPaths).toEqual([]);
+    expect(removed.restoredWorkspaceIds).toHaveLength(1);
+    expectNoOrphanedProjects();
+
+    // The restored workspace is a genuinely separate one, not a second claim on the surviving id.
+    const restored = store.findWorkspaceManifestRecordByProject(rootA);
+    expect(restored?.workspaceId).not.toBe(removed.manifest.workspaceId);
+    const standalone = service.get(restored?.workspaceId ?? "");
+    expect(standalone.roots.map((root) => root.canonicalRoot)).toEqual([rootA]);
+    expect(service.list()).toHaveLength(2);
+  });
+
+  it("reports an unrestorable removal instead of silently orphaning the project", () => {
+    // A root whose directory is gone cannot be re-inspected, so its standalone workspace cannot be
+    // minted. Two things must still hold: the removal itself succeeds — a root that vanished from
+    // disk has to stay removable, or the workspace is stuck with it forever — and the loss is
+    // explicit rather than silent, which is what the empty `restoredWorkspaceIds` reports (#2620).
+    const twoRoots = service.addRoot(dispatch(alphaWorkspace(), 0), rootB).manifest;
     const beta = twoRoots.roots[1];
     if (beta === undefined) throw new Error("missing beta root");
-    service.removeRoot(dispatch(twoRoots, 0), beta.rootRef);
+    rmSync(rootB, { recursive: true, force: true });
+    const removed = service.removeRoot(dispatch(twoRoots, 0), beta.rootRef);
 
+    expect(removed.manifest.roots.map((root) => root.canonicalRoot)).toEqual([rootA]);
+    expect(removed.restoredWorkspaceIds).toEqual([]);
     expect(store.findWorkspaceManifestRecordByRoot(beta.rootRef)).toBeUndefined();
     expect(store.listProjects().some((project) => project.path === rootB)).toBe(true);
+    // The failed restore rolled back to its savepoint without taking the membership change with it.
+    expect(store.readWorkspaceManifestRecord(twoRoots.workspaceId)?.revision).toBe(
+      removed.manifest.revision,
+    );
 
-    expect(trust.status(rootB)).toMatchObject({
-      projectId: rootB,
-      trust: "restricted",
-      decidedBy: "server",
-      reason: "state-unavailable",
-    });
-    expect(trust.trustLevelForRoot(rootB)).toBe("restricted");
-    for (const worker of [(): unknown => trust.grant(rootB), (): unknown => trust.revoke(rootB)]) {
+    // Every trust entry point still fails closed with a coded error rather than an uncoded one the
+    // server would turn into an opaque 500. The pre-manifest projection itself is pinned at the
+    // layer that owns it, in workspace-script-trust.test.ts.
+    for (const worker of [
+      (): unknown => trust.status(rootB),
+      (): unknown => trust.grant(rootB),
+      (): unknown => trust.revoke(rootB),
+    ]) {
       expect(worker).toThrow(WorkspaceScriptTrustError);
     }
+  });
+
+  it("proves reorder authority: invalid, non-mutating, stale, and non-member dispatch all fail", () => {
+    // #2620: reorderRoots was a named #2524 deliverable with zero server-side coverage, so nothing
+    // pinned that it re-proves authority the way addRoot/removeRoot do (ADR-0147 D4).
+    const twoRoots = service.addRoot(dispatch(alphaWorkspace(), 0), rootB).manifest;
+    const order = [rootRefAt(twoRoots, 1), rootRefAt(twoRoots, 0)];
+
+    expect(errorCode(() => service.reorderRoots(undefined, order))).toBe(
+      "WORKSPACE_DISPATCH_INVALID",
+    );
+    expect(
+      errorCode(() =>
+        service.reorderRoots({ ...dispatch(twoRoots, 0), operationClass: "executing" }, order),
+      ),
+    ).toBe("WORKSPACE_DISPATCH_INVALID");
+    expect(
+      errorCode(() =>
+        service.reorderRoots(
+          { ...dispatch(twoRoots, 0), manifestRevision: twoRoots.revision + 1 },
+          order,
+        ),
+      ),
+    ).toBe("WORKSPACE_DISPATCH_STALE");
+    expect(
+      errorCode(() =>
+        service.reorderRoots({ ...dispatch(twoRoots, 0), manifestDigest: "f".repeat(64) }, order),
+      ),
+    ).toBe("WORKSPACE_DISPATCH_STALE");
+    expect(
+      errorCode(() =>
+        service.reorderRoots(
+          { ...dispatch(twoRoots, 0), rootRef: "root-foreign", rootIdentityDigest: "f".repeat(64) },
+          order,
+        ),
+      ),
+    ).toBe("WORKSPACE_ROOT_NOT_MEMBER");
+
+    // The ordered set must name every current root exactly once: a short, duplicated, or foreign
+    // list is a root-set change smuggled through a view-only operation.
+    for (const invalidOrder of [
+      [rootRefAt(twoRoots, 0)],
+      [rootRefAt(twoRoots, 0), rootRefAt(twoRoots, 0)],
+      [rootRefAt(twoRoots, 0), "root-foreign"],
+      [...order, "root-foreign"],
+    ]) {
+      expect(errorCode(() => service.reorderRoots(dispatch(twoRoots, 0), invalidOrder))).toBe(
+        "WORKSPACE_ROOT_SET_INVALID",
+      );
+    }
+    // Every rejection is inert: the stored manifest never moved off its revision.
+    expect(service.get(twoRoots.workspaceId).revision).toBe(twoRoots.revision);
+  });
+
+  it("proves focus authority: invalid, non-mutating, stale, and non-member dispatch all fail", () => {
+    // #2620: focusRoot shipped with the same coverage gap as reorderRoots.
+    const twoRoots = service.addRoot(dispatch(alphaWorkspace(), 0), rootB).manifest;
+    const target = rootRefAt(twoRoots, 1);
+
+    expect(errorCode(() => service.focusRoot(undefined, target))).toBe(
+      "WORKSPACE_DISPATCH_INVALID",
+    );
+    expect(
+      errorCode(() =>
+        service.focusRoot({ ...dispatch(twoRoots, 0), operationClass: "reading" }, target),
+      ),
+    ).toBe("WORKSPACE_DISPATCH_INVALID");
+    expect(
+      errorCode(() =>
+        service.focusRoot(
+          { ...dispatch(twoRoots, 0), manifestRevision: twoRoots.revision + 1 },
+          target,
+        ),
+      ),
+    ).toBe("WORKSPACE_DISPATCH_STALE");
+    expect(
+      errorCode(() =>
+        service.focusRoot({ ...dispatch(twoRoots, 0), manifestDigest: "f".repeat(64) }, target),
+      ),
+    ).toBe("WORKSPACE_DISPATCH_STALE");
+    // Authority is proven for the dispatching root...
+    expect(
+      errorCode(() =>
+        service.focusRoot(
+          { ...dispatch(twoRoots, 0), rootRef: "root-foreign", rootIdentityDigest: "f".repeat(64) },
+          target,
+        ),
+      ),
+    ).toBe("WORKSPACE_ROOT_NOT_MEMBER");
+    // ...and separately for the root the caller asks to focus.
+    expect(errorCode(() => service.focusRoot(dispatch(twoRoots, 0), "root-foreign"))).toBe(
+      "WORKSPACE_ROOT_NOT_MEMBER",
+    );
+    expect(service.get(twoRoots.workspaceId).revision).toBe(twoRoots.revision);
+  });
+
+  it("keeps every project bound to a workspace across add, reorder, focus, remove and re-add", () => {
+    // #2620 AC4: the full membership round trip. The invariant checked after every single step is
+    // that no registered project is left without a workspace of its own.
+    expectNoOrphanedProjects();
+    const added = service.addRoot(dispatch(alphaWorkspace(), 0), rootB).manifest;
+    expect(added.roots.map((root) => root.canonicalRoot)).toEqual([rootA, rootB]);
+    expectNoOrphanedProjects();
+
+    const reordered = service.reorderRoots(dispatch(added, 0), [
+      rootRefAt(added, 1),
+      rootRefAt(added, 0),
+    ]).manifest;
+    expect(reordered.roots.map((root) => root.canonicalRoot)).toEqual([rootB, rootA]);
+    expectNoOrphanedProjects();
+
+    const focused = service.focusRoot(dispatch(reordered, 0), rootRefAt(reordered, 1)).manifest;
+    expect(focused.focusedRootRef).toBe(rootRefAt(reordered, 1));
+    expectNoOrphanedProjects();
+
+    const removed = service.removeRoot(dispatch(focused, 0), rootRefAt(focused, 0));
+    expect(removed.manifest.roots.map((root) => root.canonicalRoot)).toEqual([rootA]);
+    expect(removed.restoredWorkspaceIds).toHaveLength(1);
+    expectNoOrphanedProjects();
+    // Focus followed the survivor rather than dangling on the departed root.
+    expect(removed.manifest.focusedRootRef).toBe(removed.manifest.roots[0]?.rootRef);
+
+    // Re-adding absorbs the restored standalone workspace again, which is the round trip the
+    // orphaning bug made impossible: rootB had no workspace left to absorb.
+    const readded = service.addRoot(dispatch(removed.manifest, 0), rootB).manifest;
+    expect(readded.roots.map((root) => root.canonicalRoot)).toEqual([rootA, rootB]);
+    expectNoOrphanedProjects();
+    expect(service.list().map((manifest) => manifest.workspaceId)).toEqual([readded.workspaceId]);
   });
 
   it("rejects stale, incomplete, and non-member mutation authority content-free", () => {

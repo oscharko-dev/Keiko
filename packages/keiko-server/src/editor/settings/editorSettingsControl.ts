@@ -45,6 +45,8 @@ import { debugActivationWorkspaceFingerprint } from "../dap/debugActivationEvide
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 import {
   editorSettingsWorkspaceFingerprint,
+  EditorSettingsRootIdentityError,
+  emptyEditorSettingsRootRecord,
   formatEditorSettingsEtag,
   type EditorSettingsChangeEvent,
   type EditorSettingsIdempotencyRecord,
@@ -104,6 +106,12 @@ export interface EditorSettingsControlService {
   readonly applyProfileImport?:
     | ((mutation: EditorProfileImportControlMutation) => Promise<EditorProfileImportApplyResult>)
     | undefined;
+  /**
+   * Drops the per-root settings binding for a root that left its workspace or was replaced
+   * (ADR-0147, #2620). Optional so existing injected doubles stay valid, mirroring how the trust
+   * service carries `recomputeForRoots`.
+   */
+  readonly invalidateRoot?: ((realRoot: string) => Promise<void>) | undefined;
 }
 
 export type EditorProfilesControlMutation = Omit<
@@ -689,9 +697,19 @@ async function mutateLocked(
   if (loaded.kind !== "ok") return loaded.result;
   const snapshot = await loadSnapshot(mutation.realRoot, options);
   const precondition = mutationPrecondition(mutation, loaded, snapshot);
-  return precondition.kind === "failed"
-    ? precondition.result
-    : commitMutation(mutation, options, precondition.target);
+  if (precondition.kind === "failed") return precondition.result;
+  try {
+    return await commitMutation(mutation, options, precondition.target);
+  } catch (error) {
+    // Losing the race against a root replacement is a recoverable condition, not a server fault:
+    // the record was built for the directory that stood here when the mutation started. Answer with
+    // the same tagged unavailability an unreadable root already produces, so the caller retries
+    // against current state instead of receiving an opaque 500 (Qodo review, PR #2714).
+    if (error instanceof EditorSettingsRootIdentityError) {
+      return { kind: "unavailable", code: "STATE_UNAVAILABLE" };
+    }
+    throw error;
+  }
 }
 
 type MutationPrecondition =
@@ -1539,6 +1557,43 @@ async function mutateProfileLocked(
   return profileMutationOk(mutation, record, idempotency, options);
 }
 
+/**
+ * Invalidation rewrites the record empty at the next revision rather than deleting the file.
+ * Deleting would drop `rootRevision` back to 0, so a stale ETag a client still holds would re-match
+ * once the human rebuilt the same number of revisions and serve a 304 for different content. This
+ * is the same reason workspace trust persists a demoted record at a newer revision instead of
+ * removing the row (ADR-0155).
+ *
+ * The bump is monotonic for a `ready` record, which is the departing-root case this exists for.
+ * `absent` covers both a root that never had per-root settings and a record bound to a different
+ * filesystem identity: neither contributes a value, so there is nothing to invalidate and no state
+ * is materialized. Only a genuinely `unavailable` record restarts at revision 1 — its stored
+ * revision is unreadable by definition, so no better value exists.
+ */
+function invalidateRootLocked(realRoot: string, options: EditorSettingsControlOptions): void {
+  const loaded = options.store.loadRoot(realRoot);
+  if (loaded.state === "absent") return;
+  options.store.commitRoot(realRoot, {
+    ...emptyEditorSettingsRootRecord(realRoot),
+    revision: loaded.record.revision + 1,
+  });
+}
+
+function invalidateRootBinding(
+  realRoot: string,
+  options: EditorSettingsControlOptions,
+): Promise<void> {
+  // The same lock key `mutate` takes for root scope, so invalidation cannot interleave with a patch
+  // and lose either write.
+  return options.mutex.runExclusive(
+    [`editor-settings:root:${editorSettingsWorkspaceFingerprint(realRoot)}`],
+    (): Promise<void> => {
+      invalidateRootLocked(realRoot, options);
+      return Promise.resolve();
+    },
+  );
+}
+
 export function createEditorSettingsControlService(
   options: EditorSettingsControlOptions,
 ): EditorSettingsControlService {
@@ -1578,5 +1633,6 @@ export function createEditorSettingsControlService(
       options.mutex.runExclusive(["editor-settings:user:global"], () =>
         applyProfileImportLocked(mutation, options, profileImportSigningKey),
       ),
+    invalidateRoot: (realRoot): Promise<void> => invalidateRootBinding(realRoot, options),
   };
 }
