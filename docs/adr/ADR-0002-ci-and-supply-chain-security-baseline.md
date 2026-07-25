@@ -4,7 +4,7 @@
 
 Accepted
 
-Superseded in part by ADR-0020 (the architecture gate was folded into the existing `ci` job rather than a new job). Amended in part by ADR-0156: the `npm audit` gates now run with `--omit=dev`, so a devDependency advisory no longer fails the build — the consequence anticipated below as "noise on zero-day disclosure days" became a repository-wide delivery block on 2026-07-24. Coverage of build-time tooling moved to the OSV scan, which was widened to every branch target the audit gates run on. Production-dependency thresholds are unchanged. The required-check count is now 8 per CONTRIBUTING.md (adds `ui`) and the workflow-file count has grown from 3 to 7 (ci.yml, codeql.yml, dependency-review.yml, e2e-extended.yml, main-promotion.yml, portable-assets.yml, release.yml). The SHA-pinning and deny-all-permissions mechanism itself is unchanged and still live.
+Superseded in part by ADR-0020 (the architecture gate was folded into the existing `ci` job rather than a new job). Amended by #2696/#2699: the `npm audit` gates now run with `--omit=dev`, so a devDependency advisory no longer fails the build — the consequence anticipated below as "noise on zero-day disclosure days" became a repository-wide delivery block on 2026-07-24 (GHSA-mh99-v99m-4gvg, no upstream fix for the 1.x line the ESLint stack pins). Coverage of build-time tooling moved to the OSV scan, which was widened from `dev` alone to every branch target the audit gates run on, so `release/**` and the integration branches are no longer left without any dependency scanner. Production-dependency thresholds are unchanged. The required-check count is now 8 per CONTRIBUTING.md (adds `ui`) and the workflow-file count has grown from 3 to 7 (ci.yml, codeql.yml, dependency-review.yml, e2e-extended.yml, main-promotion.yml, portable-assets.yml, release.yml). The SHA-pinning and deny-all-permissions mechanism itself is unchanged and still live.
 
 ## Context
 
@@ -130,9 +130,10 @@ This avoids introducing an unpinnable `uses:` reference.
   form, not the content. Actual action provenance verification requires SLSA Level 3 / Sigstore, which
   is deferred.
 - `npm audit --audit-level=high` will fail the build if a high-severity CVE exists in a devDependency.
-  This is intentional but may create noise on zero-day disclosure days. **Amended by ADR-0156**: that
-  noise materialised as a full delivery stop for an advisory with no upstream fix, so the audit gates
-  now scope to shipped dependencies and the OSV scan carries build-time tooling.
+  This is intentional but may create noise on zero-day disclosure days. **Amended (#2696/#2699)**:
+  that noise materialised as a full delivery stop for an advisory with no upstream fix, so the audit
+  gates now scope to shipped dependencies and the OSV scan — widened to every branch target those
+  gates run on — carries build-time tooling.
 - actionlint binary download adds ~3s to the `actionlint` job on every run (binary is not cached).
   Acceptable for the current check cadence.
 
