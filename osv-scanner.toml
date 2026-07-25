@@ -26,6 +26,20 @@ exports `exports.expand` (a named export), while minimatch@3 consumes it as a ca
 published no 1.x/2.x/3.x/4.x backport and left the `maintenance-v1` tag on the vulnerable 1.1.16.
 Substituting minimatch@10 fails for the same reason -- it, too, exports only named bindings.
 
+Scope, and why it is bound to the ID rather than the package: this entry suppresses exactly one
+advisory. A future, unrelated brace-expansion advisory still fails this gate (verified by a negative
+control -- with the id changed, the scan reports the finding again and exits 1). A
+`[[PackageOverrides]]` rule with `group = "dev"` and `vulnerability.ignore` was considered and
+rejected: it would narrow the waiver to dev dependencies but widen it to EVERY present and future
+vulnerability in brace-expansion, and since both `npm audit` steps now run with `--omit=dev`,
+nothing else would catch such a finding. osv-scanner cannot express "this id AND only in the dev
+group" -- `IgnoredVulns` matches on id only, `PackageOverrides` has no id field -- so the id bound is
+the half that fails closed on the unknown.
+Residual gap, stated deliberately: this entry does not re-check the dependency group, so it would
+also apply if brace-expansion entered the PRODUCTION graph while still vulnerable. That case is
+covered by the audit steps instead -- `npm audit --omit=dev` would then see it, because it would no
+longer be a dev dependency.
+
 Revisit condition: drop this entry as soon as brace-expansion ships a patched 1.x, or once eslint
 and eslint-plugin-import move off minimatch@3. Recorded during #2696 (PR #2700); the advisory was
 published 2026-07-24, after the last green scan on dev.
