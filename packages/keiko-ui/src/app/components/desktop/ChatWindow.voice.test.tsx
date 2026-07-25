@@ -812,14 +812,23 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
   async function enterDialogue(): Promise<void> {
     const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
     await userEvent.click(dialogSwitch);
-    // Issue #2727 — every test below builds on "we are in dialogue mode". Asserting it here turns a
-    // lost toggle into a failure at its own cause instead of a confusing one several steps later.
-    await waitFor(() =>
+    // Wait for the ENTERED state, not just for the click to return. Entering swaps the composer's
+    // normal layer for the dialogue layer, and `userEvent.click` only flushes what React scheduled
+    // during the event itself — a later render is not covered. Every test here that says "after
+    // entering" was reading whatever the DOM happened to hold at that moment, and a second click
+    // landing mid-swap toggles from an unsettled state. This is an ADDED assertion: it now also
+    // proves entering succeeded, which no caller checked before.
+    //
+    // Issue #2727 — measurement since narrowed the cause: entering could genuinely fail, because the
+    // teardown effect stopped the session the very same click had just started (see the regression
+    // pin at the end of this describe). Waiting here surfaces that as a failure at its own cause
+    // rather than three assertions later; with the cause fixed it is a guard, not a workaround.
+    await waitFor((): void => {
       expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
         "aria-checked",
         "true",
-      ),
-    );
+      );
+    });
   }
 
   it("offers the dialogue switch for full-realtime WITH browser audio capture (AC4)", async () => {
