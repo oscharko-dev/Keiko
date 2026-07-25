@@ -388,9 +388,19 @@ export function resolveVoiceCapabilityFromCapabilities(
       voiceCapabilities.length > 0 ? "provider-unreachable" : "no-voice-provider",
     );
   }
-  const speechToText = reachable.some(modelSupportsSpeechInput);
-  const speechOutput = reachable.some(modelSupportsSpeechOutput);
-  const realtimeVoice = reachable.some(modelSupportsRealtimeVoice);
+  // Called through an explicit arrow rather than passed by reference (typescript:S7727): `.some`
+  // hands its callback (element, index, array), so a reference silently binds the extra arguments.
+  // These three predicates take one parameter today; the day one grows an options argument, the
+  // index would land in it and this resolution would go wrong with no diff to point at.
+  const speechToText = reachable.some((capability): boolean =>
+    modelSupportsSpeechInput(capability),
+  );
+  const speechOutput = reachable.some((capability): boolean =>
+    modelSupportsSpeechOutput(capability),
+  );
+  const realtimeVoice = reachable.some((capability): boolean =>
+    modelSupportsRealtimeVoice(capability),
+  );
   const profile = voiceProfileFor(speechToText, speechOutput, realtimeVoice);
   if (profile === "none") {
     // Defensive: a voice capability advertises ≥1 sub-capability by config invariant, so this is
