@@ -1,0 +1,37 @@
+# OSV scan scope (ADR-0156).
+#
+# The scan deliberately covers the COMPLETE lockfile, build-time tooling included, so no dependency
+# advisory is invisible here. An entry below suppresses a finding only while it is provably
+# unfixable, and only with an expiry that forces it back into view.
+#
+# An entry is not a way to turn a red scan green. All three must hold, and be stated in `reason`:
+#   1. no fixed version is reachable from this dependency graph;
+#   2. the package is absent from every shipped artifact;
+#   3. an `ignoreUntil` expiry is recorded.
+
+[[IgnoredVulns]]
+id = "GHSA-mh99-v99m-4gvg"
+ignoreUntil = 2026-10-25T00:00:00Z
+reason = """
+brace-expansion DoS via unbounded expansion (published 2026-07-24). No fixed version exists for the
+1.x line: the advisory patches 5.0.8 only, and 5.x is not API-compatible — it exports { expand }
+where 1.x exported a callable module, so minimatch@3's `require("brace-expansion")(pattern)` throws
+outright.
+
+Four vulnerable 1.1.16 copies exist here, all via minimatch@^3.1.x: eslint@9, @eslint/eslintrc@3,
+@eslint/config-array@0.21.2, and eslint-plugin-import@2 (through eslint-config-next). An ESLint 9->10
+upgrade would clear the first three — eslint@10 uses minimatch@^10.2.5, pins config-array@^0.23.5 and
+drops eslintrc — but is itself blocked by eslint-plugin-import@2.32.0's peer range (eslint ^2..^9).
+The fourth survives that upgrade regardless: eslint-plugin-import is at its current release and still
+requires minimatch@3.
+
+Not reachable in anything Keiko ships — devDependencies only, and the CycloneDX SBOM plus the npm
+audit gates are scoped with --omit=dev. The expansion inputs are this repository's own lint glob
+patterns, never workspace, model or connector data.
+
+The fixable half is fixed rather than ignored: brace-expansion 5.0.7 -> 5.0.8 landed in the lockfile.
+
+Revisit by 2026-10-25. It can be dropped earlier only once eslint-plugin-import moves to minimatch@10
+— that is the copy no version selection removes. Take the ESLint 9->10 upgrade as soon as
+eslint-plugin-import widens its peer range: it shrinks this entry from four copies to one.
+"""

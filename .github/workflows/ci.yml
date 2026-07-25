@@ -441,8 +441,10 @@ jobs:
         run: npm run smoke:install:memory
       - name: Smoke - offline evaluate exits 0
         run: KEIKO_EVIDENCE_DIR="$(mktemp -d)" node dist/cli/index.js evaluate --suite all
-      - name: Security audit (high and above)
-        run: npm audit --audit-level=high
+      # ADR-0156: scoped to what Keiko ships, matching the SBOM step below. Build-time tooling stays
+      # fully covered by the OSV scan over the complete lockfile, so no advisory becomes invisible.
+      - name: Security audit (high and above, shipped dependencies)
+        run: npm audit --audit-level=high --omit=dev
       - name: Generate CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
       - name: Workspace SBOM and license gate (Issue #169 AC4)
@@ -600,8 +602,9 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Build internal packages so contracts dist resolves for UI tsc
         run: npm run build:packages
-      - name: Security audit UI dependencies (moderate and above)
-        run: npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui
+      # ADR-0156: same shipped-dependency scope as the root audit and the UI SBOM below.
+      - name: Security audit UI dependencies (moderate and above, shipped dependencies)
+        run: npm audit --audit-level=moderate --omit=dev --workspace @oscharko-dev/keiko-ui
       - name: Lint UI
         run: npm run lint --workspace @oscharko-dev/keiko-ui
       - name: Typecheck UI

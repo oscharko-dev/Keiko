@@ -4,6 +4,8 @@ node_modules/
 package-lock.json
 # Qodo Merge repository config; TOML has no Prettier parser.
 .pr_agent.toml
+# OSV scanner scope config (ADR-0156); TOML has no Prettier parser.
+osv-scanner.toml
 .playwright-mcp/
 test-results/
 playwright-report/

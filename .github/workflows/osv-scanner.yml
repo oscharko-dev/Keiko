@@ -1,9 +1,25 @@
 name: OSV dependency scan
 
 on:
+  # ADR-0156 D2: this scan is the compensating control for the shipped-dependency scope of the npm
+  # audit gates, so it must cover every branch target those gates run on — not dev alone.
   pull_request:
     branches:
       - dev
+      - feat/dev
+      - feat/epic-open-code-engine-in-keiko-2473
+      - feat/keiko-editor
+      - feat/keiko-agent-native-editor-foundation-and-runtime
+      - feat/prompt-enhancer-1307
+      - feat/keiko-establish-governed-end-to-end-git-delivery
+      - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
+      - feat/keiko-colleague-like-voice-dialogue-mode
+      - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
+      - feat/epic-memoria-viva-2538
+      - epic/coding-workbench-opencode-codex
+      - "release/**"
     types:
       - opened
       - ready_for_review
@@ -12,6 +28,20 @@ on:
   push:
     branches:
       - dev
+      - feat/dev
+      - feat/epic-open-code-engine-in-keiko-2473
+      - feat/keiko-editor
+      - feat/keiko-agent-native-editor-foundation-and-runtime
+      - feat/prompt-enhancer-1307
+      - feat/keiko-establish-governed-end-to-end-git-delivery
+      - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
+      - feat/keiko-colleague-like-voice-dialogue-mode
+      - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
+      - feat/epic-memoria-viva-2538
+      - epic/coding-workbench-opencode-codex
+      - "release/**"
   schedule:
     - cron: "37 3 * * *"
   workflow_dispatch:
