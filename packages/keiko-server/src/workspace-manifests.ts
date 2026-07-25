@@ -60,7 +60,11 @@ export interface WorkspaceManifestMutationResult {
   readonly restoredWorkspaceIds: readonly string[];
   /** Released projects left with no workspace of their own — the loss the caller must report. */
   readonly unrestoredProjectPaths: readonly string[];
-  /** Why each restore failed, as content-free error-class names, in report order. */
+  /**
+   * Content-free error-class names for the restores that threw. Independent of
+   * `unrestoredProjectPaths` and NOT index-aligned with it: a restore can leave a project without a
+   * workspace without throwing, so the two lists may differ in length. Report both; never zip them.
+   */
   readonly restoreFailureClasses: readonly string[];
 }
 
