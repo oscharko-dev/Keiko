@@ -331,6 +331,15 @@ jobs:
         # local shard run still prints its failures; the annotation reporter is added here, where
         # `GITHUB_ACTIONS` is what makes it meaningful, so a failing shard still annotates the diff
         # instead of showing nothing but a nonzero exit code.
+        # A coverage shard worker was measured at 4471 MB RSS against Node's ~4288 MB default
+        # old-space limit on this class of host, and a fork that crosses it dies silently — vitest
+        # reports only "Worker exited unexpectedly" after every test has already passed, and
+        # `coverage-sonar` then fails the lane closed (ADR-0157 D3, correctly: a dead worker may have
+        # dropped the coverage it held). v8 instrumentation is what puts this suite over the edge,
+        # which is why `core-quality` runs the same tests without needing it. Same value the lint step
+        # already uses.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
       - name: Upload package coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
@@ -576,6 +585,10 @@ jobs:
         # are regenerated rather than concatenated. The summary carries only covered/total counts
         # with no line identity and is not losslessly concatenable. This run uses the JUDGING
         # configuration, so the per-file floors are evaluated here, once, on complete coverage.
+        # Same ceiling as the shards: the merge re-runs every reporter over the reassembled
+        # coverage map of all three shards, which is the largest single object in the lane.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npm run test:coverage:packages:merge
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
