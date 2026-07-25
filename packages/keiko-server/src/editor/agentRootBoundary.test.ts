@@ -44,6 +44,7 @@ import {
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { handleEditorAgentProducerTurn } from "./agentProducerRoute.js";
 import { handleEditorAgentVerificationRun } from "./agentVerificationRoute.js";
+import type { VerificationRunnerManager } from "./verificationRunner.js";
 import {
   editorAgentPathBoundaryReason,
   resolveEditorAgentActionRoot,
@@ -242,6 +243,62 @@ function action(
   };
 }
 
+// Issue #2624 — THE assertion for "a root-boundary denial produced content-free, server-attributed
+// evidence". The actions route and the verification route reach the same ledger through different
+// admission paths, and they drifted: one suppressed the target path and read attribution from the
+// server-held session, the other recorded the path and let the caller's supplied root stand in.
+// Routing both through one assertion is what keeps them from drifting apart again — a route that
+// starts trusting caller input, or starts recording a path it never authorized, fails here.
+function expectRootBoundaryDenialEvidence(
+  record: unknown,
+  expected: {
+    readonly reason: string;
+    readonly rootBinding?: EditorAgentRootBinding | undefined;
+  },
+): void {
+  expect(record).toMatchObject({ disposition: "denied", denyReason: expected.reason });
+  expect(record).not.toHaveProperty("targetPath");
+  expect(record).not.toHaveProperty("targetBasename");
+  expect(record).not.toHaveProperty("targetPathHash");
+  if (expected.rootBinding === undefined) {
+    expect(record).not.toHaveProperty("rootAttribution");
+    return;
+  }
+  expect(record).toMatchObject({
+    rootAttribution: {
+      rootRef: expected.rootBinding.rootRef,
+      rootIdentityDigest: expected.rootBinding.rootIdentityDigest,
+    },
+  });
+}
+
+// A complete VerificationRunnerManager whose every entry point throws. Typed rather than cast, so
+// the "a denial never reaches the runner" claim binds to the real interface: a method added to the
+// manager becomes a compile error here instead of an undefined the route would call at runtime.
+const deniedVerificationRunner: VerificationRunnerManager = {
+  discover: (): never => {
+    throw new Error("discover not exercised");
+  },
+  execute: (): never => {
+    throw new Error("execute not exercised");
+  },
+  abort: (): never => {
+    throw new Error("abort not exercised");
+  },
+  inFlightCount: (): number => 0,
+  subscribe: (): (() => void) => (): void => undefined,
+  runToReport: (): never => {
+    throw new Error("a denied verification must never reach the runner");
+  },
+};
+
+// One widening assertion, not `as unknown as`: UiHandlerDeps is the app-wide dependency bag and a
+// unit test cannot construct all of it, but every field this route reads is supplied with its real
+// type, so a wrong-shaped stub still fails to compile.
+function verificationDeps(): UiHandlerDeps {
+  return { ...routeDeps(), verificationRunner: deniedVerificationRunner } as UiHandlerDeps;
+}
+
 beforeEach(() => {
   authoritySequence = 0;
   temporaryRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-agent-root-boundary-")));
@@ -428,13 +485,44 @@ describe("editor agent root boundary", () => {
     });
     expect(JSON.stringify(rejected.body)).not.toContain(rootA);
     expect(JSON.stringify(rejected.body)).not.toContain(rootB);
-    const evidence = listEditorAgentActionAudit("session-a").at(-1);
-    expect(evidence).toMatchObject({
-      disposition: "denied",
-      denyReason: "decompose-per-root",
-      rootAttribution: { rootRef: binding(0).rootRef },
+    expectRootBoundaryDenialEvidence(listEditorAgentActionAudit("session-a").at(-1), {
+      reason: "decompose-per-root",
+      rootBinding: binding(0),
     });
-    expect(evidence).not.toHaveProperty("targetPath");
+  });
+
+  // Issue #2624 — the same dispatch on the verification route. This is the branch the Wave-2 audit
+  // found untested: a cross-root `targetPath` reaches `editorAgentPathBoundaryReason` only once a
+  // real manifest is resolved, which the route's own store-less suite cannot set up. The target is
+  // the symlink alias rather than a `..` traversal — the request parser rejects a lexical escape
+  // before admission, so only a path that is contained ON PAPER exercises the real-path guard.
+  it("rejects an A-to-B verification target with the same content-free evidence", async () => {
+    const sessionA = snapshot(rootA, binding(0), "session-verify-a");
+    await registerLive(sessionA);
+    const rejected = await handleEditorAgentVerificationRun(
+      requestContext(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          sessionId: sessionA.sessionId,
+          rootBinding: binding(0),
+          kind: "targeted-test",
+          targetPath: "linked-beta/src/file.ts",
+          authorityRef: authorityRef(rootA),
+        },
+        "/api/editor/verification/agent-runs",
+      ),
+      verificationDeps(),
+    );
+    expect(rejected).toMatchObject({
+      status: 200,
+      body: { result: { outcome: "not-run", disposition: "denied", reason: "decompose-per-root" } },
+    });
+    expect(JSON.stringify(rejected.body)).not.toContain(rootA);
+    expect(JSON.stringify(rejected.body)).not.toContain(rootB);
+    expectRootBoundaryDenialEvidence(listEditorAgentActionAudit(sessionA.sessionId).at(-1), {
+      reason: "decompose-per-root",
+      rootBinding: binding(0),
+    });
   });
 
   it("classifies a cross-root patch path before patch preflight", async () => {
@@ -704,12 +792,11 @@ describe("root-binding-required across every server consumer (#2619)", () => {
       status: 403,
       body: { result: { conflict: { code: "POLICY_DENIED" } } },
     });
-    const audited = listEditorAgentActionAudit("session-required-action")[0];
-    expect(audited).toMatchObject({ disposition: "denied", denyReason: "root-binding-required" });
     // A root-boundary denial never resolved a root, so it must not report a target it could not
-    // have authorized (`isRootBoundaryDenial` suppression).
-    expect(audited).not.toHaveProperty("targetPath");
-    expect(audited).not.toHaveProperty("targetBasename");
+    // have authorized, and the unrooted session leaves nothing to attribute it to.
+    expectRootBoundaryDenialEvidence(listEditorAgentActionAudit("session-required-action")[0], {
+      reason: "root-binding-required",
+    });
   });
 
   it("hides the unrooted session from scoped discovery", async () => {
@@ -748,14 +835,7 @@ describe("root-binding-required across every server consumer (#2619)", () => {
         },
         "/api/editor/verification/agent-runs",
       ),
-      {
-        ...routeDeps(),
-        verificationRunner: {
-          run: (): never => {
-            throw new Error("a denied verification must never reach the runner");
-          },
-        },
-      } as unknown as Parameters<typeof handleEditorAgentVerificationRun>[1],
+      verificationDeps(),
     );
     expect(response).toMatchObject({
       status: 200,
@@ -763,5 +843,11 @@ describe("root-binding-required across every server consumer (#2619)", () => {
         result: { outcome: "not-run", disposition: "denied", reason: "root-binding-required" },
       },
     });
+    // Issue #2624 strengthened this pin from response-only. The route audited the denial the whole
+    // time; nothing asserted that the record it wrote was content-free and server-attributed.
+    expectRootBoundaryDenialEvidence(
+      listEditorAgentActionAudit("session-required-verification")[0],
+      { reason: "root-binding-required" },
+    );
   });
 });
