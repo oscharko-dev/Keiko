@@ -1,4 +1,4 @@
-# ADR-0160 — A run that never executed a step may be re-run once; a run that did, never
+# ADR-0161 — A run that never executed a step may be re-run once; a run that did, never
 
 - Status: Accepted — Issue #2707, delivered on the `dev` integration branch.
 - Extends: [ADR-0139](ADR-0139-agent-first-deterministic-quality-gates.md) D6 from bounded retry
@@ -87,7 +87,12 @@ summary — never annotation text, log bodies, branch, commit, actor or title (A
 classifier acts only under `--mode enforce`; the default is `--mode dry-run`, which classifies and
 logs without calling any API, so a dropped mode argument produces observation rather than action.
 
-**D6 — The observer holds `actions: write` and nothing else, and never runs the observed code.**
+**D6 — The observer holds one write permission and never runs the observed code.** `actions: write`
+is what `rerun-failed-jobs` requires and is the only write grant; `checks: read` is what the
+annotations the classifier reads require, since they live on the Checks API and `actions: *` does not
+reach them; `contents: read` is the checkout. Omitting the Checks grant would not fail loudly — every
+job would classify `genuine` for want of a signature it could not see, and the lane would quietly do
+nothing. That is the fail-closed direction, and it is still a defect.
 `workflow_run` executes the default branch's definition, and the checkout pins `ref` to
 `github.event.repository.default_branch` explicitly rather than relying on that default — checking
 out `workflow_run.head_sha` would run a pull request's own code under the elevated token, which is

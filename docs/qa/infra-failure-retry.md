@@ -2,7 +2,7 @@
 
 The operating record for `.github/workflows/infra-failure-retry.yml` and
 `scripts/check-infra-failure-signature.mjs`. The decision behind them is
-[ADR-0160](../adr/ADR-0160-bounded-re-run-for-infrastructure-signature-failures.md).
+[ADR-0161](../adr/ADR-0161-bounded-re-run-for-infrastructure-signature-failures.md).
 
 ## What this lane is, and what it is not
 
@@ -63,7 +63,7 @@ The sweep classified every failed run, which is deliberately wider than what the
 production: only `CI`, `Workflow hygiene`, `Nightly performance evidence`, `Mutation security` and
 `OSV dependency scan` are named in the trigger's `workflows:` list. Runs of the other lanes above
 would reach the same `excluded-lane` verdict, but no observer job would run to record it. That is the
-two-list separation in ADR-0160 D4, measured.
+two-list separation in ADR-0161 D4, measured.
 
 Named evidence rows:
 
@@ -83,7 +83,7 @@ Named evidence rows:
 All four occurrences of the zero-step signature in the observable history landed in lanes the initial
 eligible set excludes. **As scoped, this observer would not have avoided the three manual re-runs of
 2026-07-25** — those were `keiko-for-quality-action.yml` runs, and that lane is a required external
-aggregate whose eligibility is a separate decision (ADR-0160 D4, Consequences). The mechanism, its
+aggregate whose eligibility is a separate decision (ADR-0161 D4, Consequences). The mechanism, its
 bounds and its proof are complete; the eligible set is the initial one Issue #2707 names. Widen it
 only with evidence, and record the widening here.
 

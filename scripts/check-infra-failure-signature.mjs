@@ -22,7 +22,7 @@
 //     keyed on workflow file path, and only `--mode enforce` acts at all - so drift, a rename and a
 //     misconfiguration all degrade to today's manual re-run rather than to over-retrying.
 //
-// See docs/adr/ADR-0160-bounded-re-run-for-infrastructure-signature-failures.md.
+// See docs/adr/ADR-0161-bounded-re-run-for-infrastructure-signature-failures.md.
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";

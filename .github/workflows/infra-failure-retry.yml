@@ -1,6 +1,6 @@
 name: Infrastructure failure re-run
 
-# ADR-0160: a completed run that failed is classified once, and re-run at most once, and only when
+# ADR-0161: a completed run that failed is classified once, and re-run at most once, and only when
 # EVERY failed job of that run executed zero steps under a pinned runner-failure signature. All of
 # that judgement lives in scripts/check-infra-failure-signature.mjs, which is unit-tested against
 # committed payloads from the 2026-07-25 GitHub Actions incident; this file only supplies the run id
@@ -75,9 +75,14 @@ jobs:
     timeout-minutes: 5
     permissions:
       # `actions: write` is what `POST /actions/runs/{run_id}/rerun-failed-jobs` requires, and it is
-      # the only elevated permission here. No token is written to the workspace, no artifact is
+      # the only WRITE permission here. No token is written to the workspace, no artifact is
       # published, and nothing is checked out from the observed run.
       actions: write
+      # The annotations the classifier reads live on the Checks API
+      # (`GET /check-runs/{id}/annotations`), which `actions: *` does not cover. Without it the
+      # classifier cannot see the pinned signature, every job would classify `genuine`, and the lane
+      # would silently degrade to doing nothing - so this read is what makes the gate able to see.
+      checks: read
       contents: read
     steps:
       - name: Check out the default branch

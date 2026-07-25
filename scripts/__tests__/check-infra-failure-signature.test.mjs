@@ -668,7 +668,12 @@ describe("observer workflow wiring", () => {
     const grants = workflow.split("\n").filter((line) => /^\s+[a-z-]+: (write|read)$/u.test(line));
 
     expect(workflow).toContain("\npermissions: {}\n");
-    expect(grants).toEqual(["      actions: write", "      contents: read"]);
+    // `checks: read` is not optional: the annotations the classifier matches live on the Checks API,
+    // which `actions: *` does not reach. Without it every job classifies `genuine` for want of a
+    // signature it could not see - fail-closed, and still a defect. `actions: write` stays the only
+    // write grant.
+    expect(grants).toEqual(["      actions: write", "      checks: read", "      contents: read"]);
+    expect(grants.filter((line) => line.endsWith(": write"))).toHaveLength(1);
   });
 
   it("observes completed runs and skips its own file path with the classifier's own key", () => {
