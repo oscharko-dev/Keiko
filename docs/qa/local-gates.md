@@ -52,8 +52,14 @@ add the parent checkout as a second mount.
 
 **Reliable in this container.** Anything deterministic: type checking, linting, formatting,
 architecture rules, ADR index, dependency hygiene, the waiver-scope gate, `npm audit` over the
-shipped graph, unit and UI suites, coverage ratchets, the release smoke E2E, builds and the package
-surface. These behave identically to CI because they depend on the source tree, not on the machine.
+shipped graph, unit and UI suites, the release smoke E2E, builds and the package surface. These
+behave identically to CI because they depend on the source tree, not on the machine.
+
+The **coverage ratchet** is deterministic too, but it is not in the list above, because it is
+evaluated exactly once against all three suites' summaries at once (ADR-0158 D2) and this container
+deliberately does not run the twenty-minute package suite. Run it where its inputs exist:
+`npm run test:coverage:quality` measures all three suites and then judges them in one pass. What
+each ruler answers is in [`coverage-truth-model.md`](coverage-truth-model.md).
 
 **Not authoritative here.**
 

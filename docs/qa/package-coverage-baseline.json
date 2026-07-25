@@ -1,9 +1,9 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "target": 85,
   "metric": "lines",
   "generatedBy": "scripts/check-package-coverage.mjs",
-  "policy": "Packages below target are ratcheted at their recorded baseline until domain tests raise them; non-strict ratchet floors allow 0.10 percentage points of platform noise.",
+  "policy": "Packages below target are ratcheted at their recorded baseline until domain tests raise them; non-strict ratchet floors allow 0.10 percentage points of platform noise. Per-file floors are governed per entry: \"ratcheted\" floors are re-derived from measurement and allow 0.50 points, \"absolute\" floors encode policy, survive regeneration and allow none.",
   "packages": {
     "keiko-cli": {
       "files": 28,
@@ -307,51 +307,315 @@
     }
   },
   "fileFloors": {
-    "packages/keiko-contracts/src/debug/debug-lifecycle.ts": 95,
-    "packages/keiko-contracts/src/editor-hot-exit.ts": 20.93,
-    "packages/keiko-contracts/src/update-remediation.ts": 13.58,
-    "packages/keiko-contracts/src/update-session.ts": 32.83,
-    "packages/keiko-contracts/src/workspace-ui.ts": 2.73,
-    "packages/keiko-contracts/src/qualityIntelligence/assertNever.ts": 49.5,
-    "packages/keiko-editor/src/monaco/worker-entries.ts": 49.5,
-    "packages/keiko-harness/src/tasks/verify.ts": 0,
-    "packages/keiko-memory-capture/src/version.ts": 0,
-    "packages/keiko-model-gateway/src/readiness-probe.ts": 0,
-    "packages/keiko-quality-intelligence/src/generation/requirementsIngestion.ts": 0,
-    "packages/keiko-security/src/errors/harness.ts": 0,
-    "packages/keiko-security/src/errors/verification.ts": 24.5,
-    "packages/keiko-server/src/local-knowledge-remediation-store.ts": 49.5,
-    "packages/keiko-server/src/local-knowledge-remediation.ts": 6.08,
-    "packages/keiko-server/src/editor/assuredPreFilterRunner.ts": 49.5,
-    "packages/keiko-server/src/editor/builtinLanguageProviders.ts": 16.64,
-    "packages/keiko-server/src/editor/dap/dapCapsuleSupervisor.ts": 95,
-    "packages/keiko-server/src/editor/dap/dapEvidenceProjector.ts": 95,
-    "packages/keiko-server/src/editor/dap/dapFrameCodec.ts": 90,
-    "packages/keiko-server/src/editor/dap/dapLifecycleLedger.ts": 90,
-    "packages/keiko-server/src/editor/dap/dapNodeAdapter.ts": 95,
-    "packages/keiko-server/src/editor/dap/dapPrivateEndpoint.ts": 85,
-    "packages/keiko-server/src/editor/dap/dapProcessManager.ts": 95,
-    "packages/keiko-server/src/editor/dap/dapProtocolClient.ts": 92,
-    "packages/keiko-server/src/editor/dap/dapRestartThrottle.ts": 95,
-    "packages/keiko-server/src/editor/dap/debugCapsulePlan.ts": 95,
-    "packages/keiko-sandbox/src/debug-capsule.ts": 90,
-    "packages/keiko-tools/src/debug-launch-policy.ts": 95,
-    "packages/keiko-server/src/editor/dap/debugLaunchCatalog.ts": 90,
-    "packages/keiko-server/src/editor/dap/debugLaunchPlan.ts": 90,
-    "packages/keiko-server/src/editor/dap/testing/debugLaunchTopology.ts": 80,
-    "packages/keiko-server/src/editor/dap/debugSessionRegistry.ts": 85,
-    "packages/keiko-server/src/editor/dap/providers/dapAdapterProviders.ts": 95,
-    "packages/keiko-server/src/editor/dap/providers/nodeDebugAdapter.ts": 95,
-    "packages/keiko-server/src/editor/processHardening.ts": 95,
-    "packages/keiko-server/src/editor/postApplyVerification.ts": 36.46,
-    "packages/keiko-server/src/qualityIntelligence/capsuleAdapter.ts": 7.83,
-    "packages/keiko-server/src/qualityIntelligence/connectorRoutes.ts": 14.31,
-    "packages/keiko-verification/src/monitor.ts": 19.5,
-    "packages/keiko-workspace/src/fs.ts": 36.54,
-    "packages/keiko-ui/src/app/components/desktop/hooks/assistant-speech-streaming.ts": 47.98,
-    "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorDiffSurface.tsx": 0,
-    "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorCommands.ts": 36.64,
-    "packages/keiko-ui/src/lib/commands-api.ts": 0,
-    "packages/keiko-ui/src/lib/container-api.ts": 0
+    "packages/keiko-contracts/src/debug/debug-lifecycle.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-contracts/src/editor-hot-exit.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 20.93
+    },
+    "packages/keiko-contracts/src/qualityIntelligence/assertNever.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 49.5
+    },
+    "packages/keiko-contracts/src/update-remediation.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 13.58
+    },
+    "packages/keiko-contracts/src/update-session.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 32.83
+    },
+    "packages/keiko-contracts/src/workspace-ui.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 2.73
+    },
+    "packages/keiko-editor/src/monaco/worker-entries.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 49.5
+    },
+    "packages/keiko-harness/src/tasks/verify.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 0
+    },
+    "packages/keiko-memory-capture/src/version.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 0
+    },
+    "packages/keiko-model-gateway/src/readiness-probe.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 0
+    },
+    "packages/keiko-quality-intelligence/src/generation/requirementsIngestion.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 0
+    },
+    "packages/keiko-sandbox/src/debug-capsule.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 90
+    },
+    "packages/keiko-security/src/errors/harness.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 0
+    },
+    "packages/keiko-security/src/errors/verification.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 24.5
+    },
+    "packages/keiko-server/src/editor/assuredPreFilterRunner.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 49.5
+    },
+    "packages/keiko-server/src/editor/builtinLanguageProviders.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 16.64
+    },
+    "packages/keiko-server/src/editor/dap/dapCapsuleSupervisor.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-server/src/editor/dap/dapEvidenceProjector.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-server/src/editor/dap/dapFrameCodec.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 90
+    },
+    "packages/keiko-server/src/editor/dap/dapLifecycleLedger.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 90
+    },
+    "packages/keiko-server/src/editor/dap/dapNodeAdapter.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-server/src/editor/dap/dapPrivateEndpoint.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 85
+    },
+    "packages/keiko-server/src/editor/dap/dapProcessManager.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-server/src/editor/dap/dapProtocolClient.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 92
+    },
+    "packages/keiko-server/src/editor/dap/dapRestartThrottle.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-server/src/editor/dap/debugCapsulePlan.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-server/src/editor/dap/debugLaunchCatalog.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 90
+    },
+    "packages/keiko-server/src/editor/dap/debugLaunchPlan.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 90
+    },
+    "packages/keiko-server/src/editor/dap/debugSessionRegistry.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 85
+    },
+    "packages/keiko-server/src/editor/dap/providers/dapAdapterProviders.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-server/src/editor/dap/providers/nodeDebugAdapter.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-server/src/editor/dap/testing/debugLaunchTopology.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 80
+    },
+    "packages/keiko-server/src/editor/postApplyVerification.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 36.46
+    },
+    "packages/keiko-server/src/editor/processHardening.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-server/src/local-knowledge-remediation-store.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 49.5
+    },
+    "packages/keiko-server/src/local-knowledge-remediation.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 6.08
+    },
+    "packages/keiko-server/src/qualityIntelligence/capsuleAdapter.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 7.83
+    },
+    "packages/keiko-server/src/qualityIntelligence/connectorRoutes.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 14.31
+    },
+    "packages/keiko-tools/src/debug-launch-policy.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 95
+    },
+    "packages/keiko-ui/src/app/components/desktop/hooks/assistant-speech-streaming.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 47.98
+    },
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorCommands.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 36.64
+    },
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorDiffSurface.tsx": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 0
+    },
+    "packages/keiko-ui/src/lib/commands-api.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 0
+    },
+    "packages/keiko-ui/src/lib/container-api.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 0
+    },
+    "packages/keiko-verification/src/monitor.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 19.5
+    },
+    "packages/keiko-workspace/src/fs.ts": {
+      "governance": "ratcheted",
+      "tolerance": 0.5,
+      "lines": 36.54
+    },
+    "scripts/check-lcov-source-mapping.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    },
+    "scripts/check-mutation-quality.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    },
+    "scripts/check-mutation-scope.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    },
+    "scripts/check-sonar-analysis-log.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    },
+    "scripts/check-sonar-main-quality-gate.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    },
+    "scripts/check-sonar-pr-quality-gate.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    },
+    "scripts/keiko-for-quality-core.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    },
+    "scripts/keiko-for-quality-worker.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    },
+    "scripts/sonar-analysis-scope.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    },
+    "scripts/sonar-quality-gate-contract.mjs": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90,
+      "statements": 90,
+      "branches": 85,
+      "functions": 90
+    }
   }
 }
