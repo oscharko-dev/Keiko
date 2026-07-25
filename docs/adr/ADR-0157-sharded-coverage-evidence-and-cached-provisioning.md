@@ -49,14 +49,28 @@ kind of evidence.
 ## Decision
 
 **D1 — A coverage shard measures; the finalizing job judges.** The package coverage suite runs as
-three parallel shards against `vitest.coverage.packages.shard.config.ts`, which is
-`vitest.coverage.packages.config.ts` with `coverage.thresholds` removed and nothing else changed.
-Each shard writes a vitest blob report and reaches no verdict. The `coverage-sonar` job merges the
-blobs with vitest's own `--mergeReports` — which merges the shards' coverage maps and re-runs the
-reporters — using the judging configuration, so every floor is evaluated
-exactly once, on complete coverage. `scripts/__tests__/vitest-config-parity.test.mjs` fails if the
-two configurations differ in anything but `thresholds`, and pins the ten floors' numeric values so a
-later topology change cannot drop one while the diff still looks like plumbing.
+three parallel shards that each write a vitest blob report and reach no verdict. The
+`coverage-sonar` job merges the blobs with vitest's own `--mergeReports` — which merges the shards'
+coverage maps and re-runs the reporters — so every floor is evaluated exactly once, on complete
+coverage.
+
+> **Amended by [ADR-0158](ADR-0158-one-coverage-ruler-per-question.md) D5 — read this before the
+> paragraph below.** As adopted, this decision achieved "a shard must not judge" with a second
+> configuration file: the shards ran against `vitest.coverage.packages.shard.config.ts`, which was
+> `vitest.coverage.packages.config.ts` with `coverage.thresholds` removed and nothing else changed,
+> and `scripts/__tests__/vitest-config-parity.test.mjs` failed if the two drifted in anything but
+> `thresholds` while pinning the ten floors' numeric values.
+>
+> ADR-0158 D1 moved those ten per-file floors into
+> `docs/qa/package-coverage-baseline.json`, leaving no `coverage.thresholds` block anywhere in the
+> repository. The derived configuration then transformed nothing, so it was deleted and the shards
+> run against `vitest.coverage.packages.config.ts` directly. **The decision's property is unchanged
+> and now holds structurally** — there is no threshold for any run to evaluate — and the parity test
+> asserts that structurally instead, over every vitest configuration. The floors' numeric values are
+> pinned at their new home in `scripts/__tests__/check-package-coverage.test.mjs`.
+
+The obstacle that made the split necessary is recorded in Context above and remains the reason no
+vitest configuration may declare `coverage.thresholds` again.
 
 The keiko-ui and script suites declare no thresholds and therefore need no measure/judge split. They
 run as their own jobs and hand their finished LCOV and summary to the finalizer unchanged.

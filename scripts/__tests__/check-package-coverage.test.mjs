@@ -412,6 +412,19 @@ describe("per-file coverage floors", () => {
     expect(floors["packages/keiko-a/src/hot.ts"]).toEqual(ratcheted(39.5));
   });
 
+  // A ratchet only turns one way. Deriving from the current measurement alone meant regenerating
+  // after a regression wrote a LOWER floor — the one operation the truth model forbids, reachable as
+  // a side effect of the command it recommends.
+  it("never lowers a ratcheted floor when regenerating after a regression", () => {
+    const floors = buildFileFloors({ "a.ts": { lines: 20 } }, 50, { "a.ts": ratcheted(39.5) });
+    expect(floors["a.ts"]).toEqual(ratcheted(39.5));
+  });
+
+  it("still raises a ratcheted floor when the file improved", () => {
+    const floors = buildFileFloors({ "a.ts": { lines: 48 } }, 50, { "a.ts": ratcheted(39.5) });
+    expect(floors["a.ts"]).toEqual(ratcheted(47.5));
+  });
+
   it("passes when a floored file holds or improves and tolerates platform noise", () => {
     const evaluations = evaluateFileFloors({
       filePercents: { "packages/keiko-a/src/hot.ts": { lines: 40.1 } },
@@ -757,7 +770,11 @@ describe("runCli", () => {
   });
 
   it("passes, prints the four-metric table and leaves the exit code clean", async () => {
-    fixture();
+    fixture({
+      floors: {
+        "packages/keiko-a/src/a.ts": { governance: "ratcheted", tolerance: 0.5, lines: 80 },
+      },
+    });
     capture();
     await run("--all-metrics", "--enforce-file-floors", "--release-target", "keiko-a=88");
 
@@ -802,7 +819,6 @@ describe("runCli", () => {
     capture();
     await run(
       "--all-metrics",
-      "--enforce-file-floors",
       "--file-floor-threshold",
       "50",
       "--write-baseline",
@@ -824,6 +840,35 @@ describe("runCli", () => {
     expect(report.metrics).toEqual(["lines", "statements", "branches", "functions"]);
     expect(report.results.lines[0].packageName).toBe("keiko-a");
     expect(report.fileFloors).toEqual([]);
+  });
+
+  // An enforcement pass that governs nothing must not read as a satisfied one: a dropped --baseline
+  // in CI wiring would otherwise retire the per-file gate in silence.
+  it("refuses to report file-floor PASS when the store governs nothing", async () => {
+    fixture();
+    capture();
+
+    await expect(run("--enforce-file-floors")).rejects.toThrow(
+      /--enforce-file-floors governs no file/u,
+    );
+  });
+
+  // Judging a run against floors derived from that same run is a tautology, not a gate.
+  it("refuses to enforce against a self-generated baseline", async () => {
+    fixture({ lines: 30 });
+    capture();
+
+    await expect(
+      runCli([
+        "--root",
+        root,
+        "--enforce-file-floors",
+        "--file-floor-threshold",
+        "50",
+        "--write-baseline",
+        join(root, "written.json"),
+      ]),
+    ).rejects.toThrow(/--enforce-file-floors governs no file/u);
   });
 
   it("refuses to run against a baseline that is not the governed schema", async () => {

@@ -398,10 +398,22 @@ export function buildFileFloors(filePercents, threshold, carriedOver = {}) {
     floors[file] = {
       governance: "ratcheted",
       tolerance: RATCHETED_FILE_FLOOR_TOLERANCE,
-      lines: Math.max(0, round(lines - RATCHETED_FILE_FLOOR_TOLERANCE)),
+      lines: ratchetedFloor(lines, carriedOver[file]),
     };
   }
   return sortedByKey(floors);
+}
+
+// A ratchet only turns one way. Deriving the floor purely from the current measurement meant that
+// regenerating the baseline AFTER a regression wrote a LOWER floor and called it a new baseline —
+// the one operation `docs/qa/coverage-truth-model.md` tells an operator never to perform, available
+// as a side effect of the command that document recommends. A file that improved still raises its
+// floor; a file that regressed keeps the one it has to earn back.
+function ratchetedFloor(current, carriedOverEntry) {
+  const derived = Math.max(0, round(current - RATCHETED_FILE_FLOOR_TOLERANCE));
+  const previous =
+    carriedOverEntry?.governance === "ratcheted" ? carriedOverEntry.lines : undefined;
+  return typeof previous === "number" ? Math.max(previous, derived) : derived;
 }
 
 function evaluateFileFloorMetric({ file, metric, floor, tolerance, measured }) {
@@ -653,9 +665,26 @@ function loadEvaluationContext(root, options) {
   });
   // No baseline on disk means no ratchet: every package is then judged against the bare target.
   // The generated baseline stands in ONLY while writing one, never as a self-referential floor that
-  // every package would satisfy by construction.
+  // every package would satisfy by construction. `existing` is carried separately because per-file
+  // enforcement must read the committed store and nothing else (see requireFileFloorStore).
   const baseline = existing ?? (options.writeBaseline === undefined ? undefined : generated);
-  return { packages, filePercents, generated, baseline };
+  return { packages, filePercents, generated, existing, baseline };
+}
+
+// ADR-0158 D1: an enforcement pass that governs nothing must not be indistinguishable from a
+// satisfied one. `--enforce-file-floors` against a missing or empty store used to print
+// "file-floors: PASS", so a dropped `--baseline` in CI wiring would have retired the per-file gate
+// in silence — and pointing it at a self-generated baseline would have judged the run against floors
+// derived from that same run. Both now fail closed, which is the whole reason this store is single.
+function requireFileFloorStore(existingBaseline) {
+  const floors = existingBaseline?.fileFloors;
+  if (floors === undefined || Object.keys(floors).length === 0) {
+    throw new Error(
+      "--enforce-file-floors governs no file: pass --baseline <committed baseline> that carries a " +
+        "non-empty fileFloors store. Enforcing nothing must not report PASS.",
+    );
+  }
+  return floors;
 }
 
 function evaluateAll(options, context) {
@@ -681,7 +710,7 @@ function evaluateAll(options, context) {
     fileFloors: options.enforceFileFloors
       ? evaluateFileFloors({
           filePercents: context.filePercents,
-          fileFloors: context.baseline?.fileFloors ?? {},
+          fileFloors: requireFileFloorStore(context.existing),
         })
       : undefined,
   };

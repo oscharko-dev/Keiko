@@ -25,16 +25,17 @@ import { isCoverableProductSource } from "./sonar-analysis-scope.mjs";
 import { KEIKO_REPOSITORY_GATE_CONTRACT } from "./sonar-quality-gate-contract.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// ADR-0158: every LCOV report SonarCloud ingests, and only those. The list must stay identical to
-// `sonar.javascript.lcov.reportPaths` in sonar-project.properties, or this mirror answers a
-// different question than the gate it exists to predict. It listed `coverage/ui/lcov.info` — a path
-// no vitest configuration writes — and omitted the real keiko-ui report, so it silently measured
-// zero keiko-ui new code while still reporting a verdict.
-const LCOV_CANDIDATES = [
-  "coverage/lcov.info",
-  "coverage/scripts/lcov.info",
+// ADR-0158: every LCOV report SonarCloud ingests, and ONLY those. Identical to
+// `sonar.javascript.lcov.reportPaths` in sonar-project.properties — a mirror that reads a different
+// set answers a different question than the gate it exists to predict, in either direction. It
+// listed `coverage/ui/lcov.info` (a path no vitest configuration writes) and omitted the real
+// keiko-ui report, so it silently measured zero keiko-ui new code while still reporting a verdict;
+// it also read a `coverage/lcov.info` that Sonar does not ingest. Lockstep is pinned by
+// `scripts/__tests__/new-code-coverage.test.mjs`.
+export const LCOV_CANDIDATES = [
   "coverage/packages/lcov.info",
   "packages/keiko-ui/coverage/lcov.info",
+  "coverage/scripts/lcov.info",
 ];
 
 function git(args) {
