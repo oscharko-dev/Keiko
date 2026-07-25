@@ -18,11 +18,16 @@ vi.mock("@oscharko-dev/keiko-editor", () => ({
   disposeEditorModelRegistryRoot: (...args: unknown[]) => disposeRoot(...args),
 }));
 
+// Issue #2619 — every mounted editor instance records the root identity it was handed, so a test can
+// prove the host binds each root explicitly instead of leaning on the focused one.
+const mountedBindings: { root: string | undefined; rootRef: string | undefined }[] = [];
+
 vi.mock("next/dynamic", () => ({
   default: () => {
     function EditorProbe(props: EditorWidgetProps): ReactNode {
       const [dirty, setDirty] = useState(false);
       const { layoutJson, onWorkspaceChange, root, sessionActive } = props;
+      mountedBindings.push({ root, rootRef: props.agentRootBinding?.rootRef });
       useEffect(() => {
         if (sessionActive === false) return;
         onWorkspaceChange?.({
@@ -141,7 +146,43 @@ function Harness({ current }: { readonly current: WorkspaceManifest }): ReactNod
   );
 }
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  mountedBindings.length = 0;
+});
+
+// Issue #2619 (ADR-0147 D1) — `selectedRoot()` in this host also falls back to the focused root, and
+// that is the deliberate exception, not an oversight: the host mounts EVERY root with its own
+// explicit `root` and `agentRootBinding`, so focus only decides which already-bound tab is visible.
+// No mutation ever borrows a root it was not given. Named here so the distinction stays deliberate
+// rather than assumed.
+describe("MultiRootEditorHost focused-root exception (#2619)", () => {
+  it("binds every root explicitly, so focus only selects the visible tab", () => {
+    render(
+      <I18nProvider>
+        <MultiRootEditorHost
+          manifest={manifest()}
+          workspace={workspace(manifest())}
+          // No configured root at all — the case where `selectedRoot()` consults focus.
+          configuredRoot={undefined}
+          cfg={{}}
+          buildBaseProps={() => ({ windowId: "editor-window" })}
+          updateCfg={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    const bindings = new Map(mountedBindings.map((entry) => [entry.root, entry.rootRef]));
+    // Both roots are mounted, each carrying its OWN identity — never the focused root's.
+    expect(bindings.get("/repo-a")).toBe("root-a");
+    expect(bindings.get("/repo-b")).toBe("root-b");
+    // Nothing mounted without a root, and nothing inherited another root's binding.
+    for (const entry of mountedBindings) {
+      expect(entry.root).toBeDefined();
+      expect(entry.rootRef).toBeDefined();
+    }
+  });
+});
 
 describe("MultiRootEditorHost", () => {
   it("retains dirty host and layout state while switching roots", async () => {
