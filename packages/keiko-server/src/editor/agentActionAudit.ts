@@ -17,6 +17,7 @@ import {
   type EditorAgentConflictCode,
   type EditorAgentFailureCode,
   type EditorAgentRootAttribution,
+  type EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import { deepRedactStrings, redact } from "@oscharko-dev/keiko-security";
 
@@ -39,6 +40,26 @@ export interface EditorAgentAuditInput {
   readonly targetPathHash?: string | undefined;
   readonly editCount?: number | undefined;
   readonly patchByteLength?: number | undefined;
+}
+
+// Issue #2624 — the ONE projection from server-held session state to a record's root attribution,
+// owned by the module that defines the record's input shape. Every agent route that writes to this
+// ledger calls it, because attribution must answer "which root did the SERVER authorize", never
+// "which root did the caller name": a caller supplies `rootBinding` as an assertion to be checked,
+// so filing its own denial against it would let the denied party choose the attribution. A session
+// with no authorized root therefore contributes no attribution rather than borrowing the caller's.
+export function editorAgentAuditRootAttribution(snapshot: EditorAgentSessionSnapshot | undefined): {
+  readonly rootAttribution?: EditorAgentRootAttribution | undefined;
+} {
+  const binding = snapshot?.rootBinding;
+  return binding === undefined
+    ? {}
+    : {
+        rootAttribution: {
+          rootRef: binding.rootRef,
+          rootIdentityDigest: binding.rootIdentityDigest,
+        },
+      };
 }
 
 interface AuditLedgerState {

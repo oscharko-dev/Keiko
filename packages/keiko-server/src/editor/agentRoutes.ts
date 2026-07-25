@@ -76,7 +76,6 @@ import {
   type GitRepositoryStatusResponse,
   type EditorAgentFailureCode,
   type EditorAgentSessionSnapshot,
-  type EditorAgentRootAttribution,
   type EditorAgentSessionsRequest,
   type EditorAgentSnapshotRequest,
   type EditorAgentSnapshotTextMode,
@@ -132,12 +131,14 @@ import {
 import { EDITOR_AGENT_MAX_SESSIONS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentAuditForTests,
+  editorAgentAuditRootAttribution,
   listEditorAgentActionAudit,
   recordEditorAgentActionAudit,
 } from "./agentActionAudit.js";
 import {
   EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE,
   editorAgentPathBoundaryReason,
+  isEditorAgentRootBoundaryDenial,
   resolveEditorAgentActionRoot,
   resolveEditorAgentSessionRoot,
   type EditorAgentRootBoundaryReason,
@@ -1677,7 +1678,7 @@ function auditAction(
     sessionId: action.sessionId,
     actionId: action.actionId,
     actionType: action.type,
-    ...auditRootAttribution(snapshot),
+    ...editorAgentAuditRootAttribution(snapshot),
     decision,
     outcome: result.status,
     conflictCode: result.conflict?.code,
@@ -1686,20 +1687,6 @@ function auditAction(
     editCount: action.type === "applyTextEdits" ? action.textEdits?.length : undefined,
     patchByteLength: actionPatchByteLength(action),
   });
-}
-
-function auditRootAttribution(snapshot: EditorAgentSessionSnapshot | undefined): {
-  readonly rootAttribution?: EditorAgentRootAttribution | undefined;
-} {
-  const binding = snapshot?.rootBinding;
-  return binding === undefined
-    ? {}
-    : {
-        rootAttribution: {
-          rootRef: binding.rootRef,
-          rootIdentityDigest: binding.rootIdentityDigest,
-        },
-      };
 }
 
 function auditTargetFields(
@@ -1714,7 +1701,7 @@ function auditTargetFields(
   | { readonly targetBasename: string; readonly targetPathHash: string }
   | Record<never, never> {
   if (runtimeOrigin) return {};
-  if (isRootBoundaryDenial(decision.denyReason)) return {};
+  if (isEditorAgentRootBoundaryDenial(decision.denyReason)) return {};
   if (queryPath !== undefined) {
     return {
       targetBasename: redactedQueryGitBasename(queryPath, metadataRedactor),
@@ -1722,15 +1709,6 @@ function auditTargetFields(
     };
   }
   return { targetPath: governedActionTarget(action, snapshot).targetPath };
-}
-
-function isRootBoundaryDenial(reason: EditorAgentActionDenyReason | undefined): boolean {
-  return (
-    reason === "root-binding-required" ||
-    reason === "root-binding-invalid" ||
-    reason === "decompose-per-root" ||
-    reason === "workspace-boundary-escape"
-  );
 }
 
 function redactedQueryGitBasename(
@@ -2163,7 +2141,7 @@ function resultForAction(
   result: EditorAgentActionResult,
   snapshot: EditorAgentSessionSnapshot | undefined,
 ): EditorAgentActionResult {
-  const rootAttribution = auditRootAttribution(snapshot).rootAttribution;
+  const rootAttribution = editorAgentAuditRootAttribution(snapshot).rootAttribution;
   if (rootAttribution !== undefined) return { ...result, rootAttribution };
   return result.rootAttribution === undefined ? result : { ...result, rootAttribution: undefined };
 }
