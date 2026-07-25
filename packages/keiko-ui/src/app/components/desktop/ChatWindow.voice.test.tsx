@@ -818,12 +818,12 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     // entering" was reading whatever the DOM happened to hold at that moment, and a second click
     // landing mid-swap toggles from an unsettled state. This is an ADDED assertion: it now also
     // proves entering succeeded, which no caller checked before.
-    await waitFor(() =>
+    await waitFor((): void => {
       expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
         "aria-checked",
         "true",
-      ),
-    );
+      );
+    });
   }
 
   it("offers the dialogue switch for full-realtime WITH browser audio capture (AC4)", async () => {
