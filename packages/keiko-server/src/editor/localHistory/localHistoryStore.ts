@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import {
-  createLocalSecretVault,
+  createShardedLocalSecretVault,
   resolveLocalVaultKey,
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
@@ -39,7 +39,9 @@ import { assertNoSymlinkedPathSegments, savePrivateJson } from "../../private-js
 
 const HISTORY_SUBDIR = "editor-local-history";
 const HISTORY_INDEX_FILE = "index.json";
-const HISTORY_VAULT_FILE = "checkpoints.vault";
+// One sealed file per checkpoint, not one vault file holding every checkpoint: capture is a
+// keystroke-adjacent path and must not pay for the whole store on each save (#2616).
+const HISTORY_BODIES_DIR = "checkpoints";
 const HISTORY_KEYFILE = "editor-local-history-vault.key";
 const HISTORY_KEY_ENV = "KEIKO_EDITOR_LOCAL_HISTORY_KEY";
 const HISTORY_KEYCHAIN_SERVICE = "keiko-editor-local-history-vault";
@@ -198,6 +200,26 @@ function workspaceDirectory(rootDir: string, workspaceId: string): string {
   return join(rootDir, `workspace-${ref}`);
 }
 
+/**
+ * The history workspace a root's checkpoints belong to — derived from the root, never from the
+ * manifest (#2616).
+ *
+ * A manifest `workspaceId` is derived from the workspace's FOUNDING root, so it is not stable
+ * under membership: joining absorbs and deletes the joiner's own workspace, and a founding root
+ * that leaves is re-minted under a discriminator. Either way the id moves while the root does not,
+ * and history keyed by it silently strands under the previous id.
+ *
+ * `rootRef` is the stable dimension — derived from the canonical root path alone and globally
+ * unique across manifests — so a history workspace IS a root here. This is the same narrowing
+ * ADR-0155 applied to Workspace Trust, and it is what the index contract requires: every entry's
+ * `workspaceId` must equal its index's, so a store a root carries across workspaces cannot hold
+ * two different manifest ids and stay valid.
+ */
+export function editorLocalHistoryWorkspaceId(rootRef: WorkspaceRootRef): string {
+  const ref = digest("keiko.editor-local-history.root-workspace.v1", [rootRef]).slice(0, 40);
+  return `local-history-${ref}`;
+}
+
 function boundedPositive(value: number | undefined, fallback: number): number {
   if (value === undefined || !Number.isSafeInteger(value) || value <= 0) return fallback;
   return Math.min(value, fallback);
@@ -272,7 +294,10 @@ function createVault(options: CreateEditorLocalHistoryStoreOptions, dir: string)
     keyfileName: HISTORY_KEYFILE,
     keychainAccess: options.keychainAccess,
   });
-  return createLocalSecretVault({ key: resolved.key, storePath: join(dir, HISTORY_VAULT_FILE) });
+  return createShardedLocalSecretVault({
+    key: resolved.key,
+    storeDir: join(dir, HISTORY_BODIES_DIR),
+  });
 }
 
 function indexWithEntries(
@@ -678,17 +703,27 @@ export function createEditorLocalHistoryStore(
     state.index = index;
   };
 
-  const removeVaultEntries = (
-    state: WorkspaceState,
-    entries: readonly EditorLocalHistoryEntry[],
-  ): void => {
-    for (const entry of entries) {
+  // Retention reconciles the stored bodies AGAINST the index rather than deleting the references it
+  // believes it just evicted (#2616). Deleting by belief leaves ciphertext behind whenever a delete
+  // fails once, or a crash lands between the body write and the index commit: the index stays
+  // bounded, the vault does not, and no reader can ever reach or reclaim the difference. Driving it
+  // from the index makes every pruning pass self-healing — the committed metadata is the only thing
+  // that decides which bodies may exist.
+  const reconcileBodies = (state: WorkspaceState): number => {
+    const referenced = new Set<string>(
+      state.index.entries.map((entry): string => entry.encryptedContent.vaultEntryRef),
+    );
+    let removed = 0;
+    for (const reference of state.vault.list()) {
+      if (referenced.has(reference)) continue;
       try {
-        state.vault.delete(entry.encryptedContent.vaultEntryRef);
+        state.vault.delete(reference);
+        removed += 1;
       } catch {
-        // The committed metadata no longer references this body; orphan cleanup is best effort.
+        // A body that resists deletion is reclaimed by the next reconciliation pass.
       }
     }
+    return removed;
   };
 
   const pruneExpired = (state: WorkspaceState, nowMs: number): void => {
@@ -699,7 +734,7 @@ export function createEditorLocalHistoryStore(
     const refs = new Set(removed.map((entry): WorkspaceHistoryEntryRef => entry.entryRef));
     const retained = state.index.entries.filter((entry): boolean => !refs.has(entry.entryRef));
     persist(state, indexWithEntries(state.index, retained));
-    removeVaultEntries(state, removed);
+    reconcileBodies(state);
   };
 
   const requireEntry = (
@@ -735,9 +770,6 @@ export function createEditorLocalHistoryStore(
         return { entry: coalesced, coalesced: true, prunedEntryCount: 0 };
       }
       const evictedRefs = new Set(retentionEvictions(state.index.entries, built.entry, limits));
-      const evicted = state.index.entries.filter((entry): boolean =>
-        evictedRefs.has(entry.entryRef),
-      );
       const retained = state.index.entries.filter(
         (entry): boolean => !evictedRefs.has(entry.entryRef),
       );
@@ -760,8 +792,8 @@ export function createEditorLocalHistoryStore(
         }
         throw error;
       }
-      removeVaultEntries(state, evicted);
-      return { entry: built.entry, coalesced: false, prunedEntryCount: evicted.length };
+      reconcileBodies(state);
+      return { entry: built.entry, coalesced: false, prunedEntryCount: evictedRefs.size };
     },
 
     list(scope, relativePath, nowMs = Date.now()): readonly EditorLocalHistoryEntry[] {
@@ -852,6 +884,7 @@ export function createEditorLocalHistoryStore(
         );
       }
       persist(state, indexWithEntries(state.index, entries));
+      reconcileBodies(state);
     },
   };
 }

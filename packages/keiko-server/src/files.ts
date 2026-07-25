@@ -1582,6 +1582,65 @@ export async function resolveEditorFileIdentity(
   };
 }
 
+/**
+ * Containment for a workspace-relative path that does NOT require the file to be there (#2616).
+ *
+ * `resolveEditorFileIdentity` realpaths the candidate and 404s when it is gone — correct for a read
+ * of live bytes, wrong for a record ABOUT a file. Local history's whole purpose is surviving the
+ * file: recovering a deleted or renamed one is the case that matters most, and re-resolving the
+ * stored path against the live filesystem is exactly what denied it.
+ *
+ * The guards that do not depend on existence still run in full: normalization (absolute, NUL, `..`
+ * escape), metadata redaction, and the deny list — on the relative path, and again on the resolved
+ * path whenever the candidate still resolves, so a path that has since become a symlink out of the
+ * root stays denied.
+ */
+export async function resolveContainedEditorFilePath(
+  store: UiStore,
+  rootInput: string | null,
+  pathInput: string | null,
+  redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+): Promise<ResolvedEditorFileIdentity> {
+  const root = await resolveRoot(store, rootInput, redactor);
+  const relativePath = normalizeRelativePath(pathInput);
+  assertMetadataSafe(relativePath, redactor);
+  if (relativePath.length === 0) {
+    throw new FilesError(400, "BAD_PATH", "The path must be relative to the selected root.");
+  }
+  if (pathIsDenied(relativePath)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  const candidate = nativePath(root.realRoot, relativePath);
+  if (!isContained(root.realRoot, candidate)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected root.");
+  }
+  await assertResolvedPathContained(root.realRoot, candidate, redactor);
+  return { realRoot: root.realRoot, relativePath, absolutePath: candidate };
+}
+
+// A candidate that still resolves is held to the same realpath containment a live read gets; one
+// that no longer resolves has already passed every existence-independent guard above.
+async function assertResolvedPathContained(
+  realRoot: string,
+  candidate: string,
+  redactor: FilesMetadataRedactor,
+): Promise<void> {
+  let resolved: string;
+  try {
+    resolved = await realpath(candidate);
+  } catch {
+    return;
+  }
+  if (!isContained(realRoot, resolved)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected root.");
+  }
+  const resolvedRelativePath = rootRelativePosixPath(realRoot, resolved);
+  assertMetadataSafe(resolvedRelativePath, redactor);
+  if (pathIsDenied(resolvedRelativePath)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+}
+
 async function writeResolvedFilesContent(args: {
   readonly target: ResolvedTarget;
   readonly content: string;

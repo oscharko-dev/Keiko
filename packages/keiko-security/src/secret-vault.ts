@@ -29,6 +29,7 @@ import {
   lstatSync,
   openSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   unlinkSync,
@@ -358,6 +359,135 @@ function writeStore(storePath: string, entries: Record<string, string>): void {
       }
     }
   }
+}
+
+// Sharded layout (#2616): one sealed file per reference instead of one JSON map for the whole
+// vault. Same key, same AES-256-GCM envelope, same namespace — only the placement differs, so a
+// caller writing one entry pays for that entry rather than for every entry it has ever written.
+// The single-file layout above stays the default: it is right for a handful of long-lived
+// credentials, and wrong for an append-heavy store on an interactive path.
+const SHARD_PREFIX = "entry-";
+const SHARD_EXTENSION = ".sealed";
+// Keeps the encoded filename inside the 255-byte limit every supported filesystem guarantees.
+const SHARD_REFERENCE_MAX_BYTES = 96;
+
+export interface ShardedLocalSecretVaultDeps {
+  readonly key: Buffer;
+  // Directory that holds this vault's sealed entry files. It is created hardened on first write.
+  readonly storeDir: string;
+}
+
+// References are opaque, NON-SECRET identifiers, so the filename may carry one — the single-file
+// layout already stores them as plaintext JSON keys. Hex keeps the mapping total and reversible
+// (so list() can recover the reference) and makes a separator or traversal segment unrepresentable.
+function shardFileName(reference: string): string {
+  const encoded = Buffer.from(reference, "utf8");
+  if (encoded.length > SHARD_REFERENCE_MAX_BYTES) {
+    throw new Error("secret vault reference is too long for a sharded entry");
+  }
+  return `${SHARD_PREFIX}${encoded.toString("hex")}${SHARD_EXTENSION}`;
+}
+
+function shardReference(fileName: string): string | undefined {
+  if (!fileName.startsWith(SHARD_PREFIX) || !fileName.endsWith(SHARD_EXTENSION)) return undefined;
+  const hex = fileName.slice(SHARD_PREFIX.length, fileName.length - SHARD_EXTENSION.length);
+  if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/u.test(hex)) return undefined;
+  return Buffer.from(hex, "hex").toString("utf8");
+}
+
+// Atomic, crash-safe single-entry write. Mirrors writeStore's temp-then-rename discipline; the
+// difference is that the temp file holds ONE envelope, so the cost does not grow with the vault.
+function writeShard(dir: string, filePath: string, envelope: string): void {
+  assertNoSymlinkedPathSegments(filePath);
+  ensureDirHardened(dir);
+  assertNoSymlinkedPathSegments(filePath);
+  const tempPath = join(
+    dir,
+    `.secret-vault-shard.${String(process.pid)}.${randomBytes(8).toString("hex")}.tmp`,
+  );
+  try {
+    writeDurableTextFile(tempPath, envelope, FILE_MODE);
+    chmodIfPresent(tempPath, FILE_MODE);
+    renameSync(tempPath, filePath);
+    chmodIfPresent(filePath, FILE_MODE);
+    fsyncDirectory(dir);
+  } finally {
+    if (existsSync(tempPath)) {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+  }
+}
+
+function readShardEnvelope(filePath: string): string | undefined {
+  assertNoSymlinkedPathSegments(filePath);
+  if (!existsSync(filePath)) return undefined;
+  const envelope = readFileSync(filePath, "utf8");
+  return isSealed(envelope) ? envelope : undefined;
+}
+
+function listShardReferences(dir: string): readonly string[] {
+  let names: readonly string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const references: string[] = [];
+  for (const name of names) {
+    const reference = shardReference(name);
+    if (reference !== undefined) references.push(reference);
+  }
+  return references;
+}
+
+/**
+ * A {@link LocalSecretVault} whose entries live in one sealed file each, under `storeDir`.
+ *
+ * Identical guarantees to {@link createLocalSecretVault} — AES-256-GCM per entry, 0600 files in a
+ * 0700 directory, atomic temp-then-rename, symlink-refusing paths, plaintext only ever returned by
+ * `get`. The reason to choose it is write cost: `set` and `delete` touch a single entry file, so an
+ * append-heavy store stops paying for its own history on every write.
+ *
+ * `list` reads only filenames and never decrypts, which is what lets a caller reconcile stored
+ * bodies against its own index.
+ */
+export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps): LocalSecretVault {
+  const { key } = deps;
+  const storeDir = resolve(deps.storeDir);
+  const shardPath = (reference: string): string => join(storeDir, shardFileName(reference));
+
+  const remove = (reference: string): void => {
+    const filePath = shardPath(reference);
+    assertNoSymlinkedPathSegments(filePath);
+    rmSync(filePath, { force: true });
+  };
+
+  const replaceAll = (next: ReadonlyMap<string, string>): void => {
+    for (const [reference, secret] of next) {
+      writeShard(storeDir, shardPath(reference), sealString(key, secret));
+    }
+    for (const reference of listShardReferences(storeDir)) {
+      if (!next.has(reference)) remove(reference);
+    }
+  };
+
+  return {
+    get: (reference): string | undefined => {
+      const envelope = readShardEnvelope(shardPath(reference));
+      return envelope === undefined ? undefined : openString(key, envelope);
+    },
+    set: (reference, secret): void => {
+      writeShard(storeDir, shardPath(reference), sealString(key, secret));
+    },
+    replaceAll,
+    delete: remove,
+    has: (reference): boolean => readShardEnvelope(shardPath(reference)) !== undefined,
+    list: (): readonly string[] => listShardReferences(storeDir),
+  };
 }
 
 export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretVault {

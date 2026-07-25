@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  createLocalSecretVault,
+  createShardedLocalSecretVault,
   type LocalSecretVault,
 } from "@oscharko-dev/keiko-security/secret-vault";
 import type { EditorLocalHistoryOrigin } from "@oscharko-dev/keiko-contracts";
@@ -29,6 +29,18 @@ const tmpDirs: string[] = [];
 afterEach(() => {
   for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+function readAllFiles(dir: string): readonly string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"));
+}
+
+function bodyFiles(stateDir: string): readonly string[] {
+  const historyRoot = join(stateDir, "editor-local-history");
+  const workspaceDir = join(historyRoot, readdirSync(historyRoot)[0] ?? "missing");
+  return readdirSync(join(workspaceDir, "checkpoints"));
+}
 
 function tempDir(prefix: string): string {
   const dir = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), prefix)));
@@ -111,10 +123,14 @@ describe("editor local-history store", () => {
     ]);
     expect(refs.map((ref) => reopened.read(fx.scope, ref, 10_000).content)).toEqual(contents);
 
-    const historyRoot = join(fx.stateDir, "editor-local-history");
-    const workspaceDir = join(historyRoot, readdirSync(historyRoot)[0] ?? "missing");
-    const vaultBytes = readFileSync(join(workspaceDir, "checkpoints.vault"), "utf8");
-    for (const content of contents) expect(vaultBytes).not.toContain(content.trim());
+    // Encryption-at-rest pin, widened from the single vault file to EVERY file the store writes:
+    // sharding checkpoint bodies (#2616) multiplied the places a plaintext leak could hide, so the
+    // pin now walks the whole history tree instead of naming one path.
+    const stored = readAllFiles(join(fx.stateDir, "editor-local-history"));
+    expect(stored.length).toBeGreaterThan(contents.length);
+    for (const bytes of stored) {
+      for (const content of contents) expect(bytes).not.toContain(content.trim());
+    }
   });
 
   it("coalesces only rapid identical saves", () => {
@@ -162,6 +178,69 @@ describe("editor local-history store", () => {
     ]);
   });
 
+  it("reclaims ciphertext bodies a failed eviction stranded once the store is past its bound", () => {
+    const fx = fixture();
+    for (const path of ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts", "f.ts"]) {
+      writeFileSync(join(fx.root, path), "x");
+    }
+    let refuseDeletes = true;
+    const store = createEditorLocalHistoryStore({
+      ...storeOptions(fx),
+      limits: { maxEntries: 3, coalesceMs: 0 },
+      vaultFactory: (workspaceDir) => {
+        const inner = createShardedLocalSecretVault({
+          key: Buffer.from(VAULT_KEY, "base64"),
+          storeDir: join(workspaceDir, "checkpoints"),
+        });
+        return {
+          ...inner,
+          delete: (reference): void => {
+            if (refuseDeletes) throw new Error("transient vault failure");
+            inner.delete(reference);
+          },
+        };
+      },
+    });
+
+    const paths = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"];
+    paths.forEach((path, index) => {
+      store.capture(captureInput(fx, `v${String(index)}`, "user-save", 1_000 + index * 10, path));
+    });
+    // The index is bounded the whole time; the vault is not, because every eviction's delete threw.
+    expect(store.list(fx.scope, undefined, 2_000)).toHaveLength(3);
+    expect(bodyFiles(fx.stateDir).length).toBeGreaterThan(3);
+
+    refuseDeletes = false;
+    store.capture(captureInput(fx, "v5", "user-save", 1_060, "f.ts"));
+
+    // Retention now reconciles bodies against the index, so one pruning pass reclaims everything
+    // the earlier failures stranded — not just the entry it evicted this time.
+    expect(bodyFiles(fx.stateDir)).toHaveLength(3);
+    expect(store.list(fx.scope, undefined, 2_000)).toHaveLength(3);
+  });
+
+  it("reclaims a body stranded between the encrypted write and the index commit", () => {
+    const fx = fixture();
+    writeFileSync(join(fx.root, "b.ts"), "x");
+    const store = createEditorLocalHistoryStore({ ...storeOptions(fx), limits: { coalesceMs: 0 } });
+    store.capture(captureInput(fx, "first\n", "user-save", 1_000));
+
+    // A capture that wrote its sealed body and then died before persisting the index leaves exactly
+    // this: ciphertext no index entry references, and no eviction will ever name it.
+    const historyRoot = join(fx.stateDir, "editor-local-history");
+    const workspaceDir = join(historyRoot, readdirSync(historyRoot)[0] ?? "missing");
+    createShardedLocalSecretVault({
+      key: Buffer.from(VAULT_KEY, "base64"),
+      storeDir: join(workspaceDir, "checkpoints"),
+    }).set("vault-orphaned-body", "{}");
+    expect(bodyFiles(fx.stateDir)).toHaveLength(2);
+
+    store.capture(captureInput(fx, "second\n", "user-save", 2_000, "b.ts"));
+
+    expect(bodyFiles(fx.stateDir)).toHaveLength(2);
+    expect(store.list(fx.scope, undefined, 2_001)).toHaveLength(2);
+  });
+
   it("refuses a checkpoint whose resolved file escapes the workspace root", () => {
     const fx = fixture();
     const outside = tempDir("keiko-local-history-outside-");
@@ -184,9 +263,9 @@ describe("editor local-history store", () => {
     const store = createEditorLocalHistoryStore({
       ...storeOptions(fx),
       vaultFactory: (workspaceDir) => {
-        vault = createLocalSecretVault({
+        vault = createShardedLocalSecretVault({
           key: Buffer.alloc(32, 0x44),
-          storePath: join(workspaceDir, "checkpoints.vault"),
+          storeDir: join(workspaceDir, "checkpoints"),
         });
         return vault;
       },
