@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import type { ReactElement } from "react";
@@ -27,6 +27,7 @@ import {
   buildEditorHistoryDiffModel,
   editorLocalHistorySizeDelta,
   EditorFileHistoryPanel,
+  historyFocusTarget,
   historyVirtualWindow,
 } from "./EditorFileHistoryPanel";
 
@@ -260,7 +261,95 @@ describe("EditorFileHistoryPanel failure surfaces", () => {
   });
 });
 
+/**
+ * Wave-2 audit of epic #2285, findings 1-4 (issue #2617): the confirm dialog claimed `aria-modal`
+ * without Tab containment or focus restoration, and roving focus stopped at the edge of the
+ * virtualized window while still swallowing the key.
+ */
+describe("EditorFileHistoryPanel keyboard and dialog focus", () => {
+  it("contains Tab inside the confirm dialog and returns focus to the invoking action", async () => {
+    const user = userEvent.setup();
+    renderPanel({ entries: [entry(3, "user-save")] });
+    const invoker = await screen.findByRole("button", { name: /^restore$/iu });
+    await user.click(invoker);
+
+    await screen.findByRole("alertdialog");
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const confirm = screen.getByRole("button", { name: "Restore version" });
+    expect(cancel).toHaveFocus();
+    await user.tab();
+    expect(confirm).toHaveFocus();
+    await user.tab();
+    expect(cancel).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+
+    fireEvent.click(cancel);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(invoker).toHaveFocus();
+  });
+
+  it("stays axe-clean while the confirm dialog is open", async () => {
+    const user = userEvent.setup();
+    const view = renderPanel({ entries: [entry(4, "user-save")] });
+    await user.click(await screen.findByRole("button", { name: /^delete$/iu }));
+    await screen.findByRole("alertdialog");
+    expect(await axe(view.container)).toHaveNoViolations();
+  });
+
+  it("traverses the whole chain with Home and End, not only the virtualized window", async () => {
+    const entries = Array.from({ length: 60 }, (_, index) => entry(59 - index));
+    renderPanel({ entries });
+    const newest = await screen.findByRole("button", { name: /^Restore point 59,/u });
+    expect(screen.queryByRole("button", { name: /^Restore point 0,/u })).toBeNull();
+
+    newest.focus();
+    fireEvent.keyDown(newest, { key: "End" });
+    const oldest = await screen.findByRole("button", { name: /^Restore point 0,/u });
+    await waitFor(() => expect(oldest).toHaveFocus());
+
+    fireEvent.keyDown(oldest, { key: "Home" });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Restore point 59,/u })).toHaveFocus(),
+    );
+  });
+
+  it("leaves a key it does not act on to the browser", async () => {
+    renderPanel({ entries: [entry(3), entry(2)] });
+    const rows = await screen.findAllByRole("button", { name: /^Restore point/u });
+    const first = rows[0] as HTMLElement;
+    first.focus();
+
+    const atEdge = createEvent.keyDown(first, { key: "ArrowUp" });
+    fireEvent(first, atEdge);
+    expect(atEdge.defaultPrevented).toBe(false);
+    expect(first).toHaveFocus();
+
+    const unknown = createEvent.keyDown(first, { key: "PageDown" });
+    fireEvent(first, unknown);
+    expect(unknown.defaultPrevented).toBe(false);
+
+    const moving = createEvent.keyDown(first, { key: "ArrowDown" });
+    fireEvent(first, moving);
+    expect(moving.defaultPrevented).toBe(true);
+    expect(rows[1]).toHaveFocus();
+  });
+});
+
 describe("file-history bounded projections", () => {
+  it("resolves roving-focus targets over the full chain and reports unhandled keys", () => {
+    expect(historyFocusTarget(0, "ArrowDown", 60)).toBe(1);
+    expect(historyFocusTarget(59, "ArrowUp", 60)).toBe(58);
+    expect(historyFocusTarget(0, "End", 60)).toBe(59);
+    expect(historyFocusTarget(59, "Home", 60)).toBe(0);
+    expect(historyFocusTarget(0, "ArrowUp", 60)).toBeNull();
+    expect(historyFocusTarget(59, "ArrowDown", 60)).toBeNull();
+    expect(historyFocusTarget(0, "Home", 60)).toBeNull();
+    expect(historyFocusTarget(59, "End", 60)).toBeNull();
+    expect(historyFocusTarget(0, "Enter", 60)).toBeNull();
+    expect(historyFocusTarget(0, "End", 0)).toBeNull();
+  });
+
   it("virtualizes a long chain with bounded overscan and honest padding", () => {
     const windowed = historyVirtualWindow(50, 148 * 30, 148 * 3);
     expect(windowed).toEqual({ start: 27, end: 36, paddingStart: 3996, paddingEnd: 2072 });

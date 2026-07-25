@@ -511,6 +511,16 @@ const UTF8_ENCODER = new TextEncoder();
  */
 export const DEFAULT_DEBUG_CAPABILITY_ENABLED = false;
 
+/**
+ * Out-parameter for `persist`: records the last text it optimistically adopted into the buffer.
+ * A save owns the text it wrote, but a restore has to be able to undo an adoption that no write
+ * ever justified (#2617), and format-on-save means the adopted text is not always the text passed
+ * in. Scoped to a single `persist` call so a concurrent buffer mutation cannot be mistaken for it.
+ */
+interface BufferAdoptionSink {
+  text: string | null;
+}
+
 interface FormatOnSaveState {
   readonly enabled: boolean;
   readonly canFormat: boolean;
@@ -2192,6 +2202,10 @@ function EditorRuntimeWidget({
   // buffer moved while the save was in flight so it never clobbers mid-flight edits.
   const contentRef = useRef("");
   contentRef.current = content;
+  // Companion to `contentRef`: a restore has to be able to put the dirty-state bookkeeping back
+  // exactly as it found it, not merely recompute a plausible one.
+  const fileModelRef = useRef<EditorFileModel | null>(null);
+  fileModelRef.current = fileModel;
   const formatOnSaveStateRef = useRef<FormatOnSaveState>({
     enabled: false,
     canFormat: false,
@@ -2771,12 +2785,22 @@ function EditorRuntimeWidget({
   );
 
   const persist = useCallback(
-    async (text: string, historyOrigin?: "pre-restore"): Promise<boolean> => {
+    async (
+      text: string,
+      historyOrigin?: "pre-restore",
+      adoption?: BufferAdoptionSink,
+    ): Promise<boolean> => {
       if (!hasTarget || savingRef.current) return false;
       const saveSessionKey = documentSessionKey(root, file);
       const textChangedBeforeReactCommitted = text !== contentRef.current;
       if (!dirtyRef.current && !textChangedBeforeReactCommitted) return true;
-      if (textChangedBeforeReactCommitted) markBufferEdited(text);
+      // Format-on-save can adopt a SECOND, different text before the write, so a caller that has to
+      // undo the adoption cannot assume the buffer holds what it passed in (#2617).
+      const adopt = (next: string): void => {
+        markBufferEdited(next);
+        if (adoption !== undefined) adoption.text = next;
+      };
+      if (textChangedBeforeReactCommitted) adopt(text);
       savingRef.current = true;
       setSaveStatus((status) => saveStatusReducer(status, { type: "request" }));
       setSaveError(undefined);
@@ -2786,7 +2810,7 @@ function EditorRuntimeWidget({
         if (preparedText === null) return false;
         const textToSave = preparedText;
         attemptedSaveText = textToSave;
-        if (textToSave !== contentRef.current) markBufferEdited(textToSave);
+        if (textToSave !== contentRef.current) adopt(textToSave);
         const response = await saveFilesContent({
           root,
           path: file,
@@ -2831,6 +2855,18 @@ function EditorRuntimeWidget({
     ],
   );
 
+  // A restore is atomic from the buffer's point of view (#2617). `persist` adopts the text into the
+  // buffer before the write so the save reconciles against it — correct for a save of the user's own
+  // edits, but for a restore that text was never in the buffer, so every failure path would leave
+  // the checkpoint content sitting there marked dirty while the history panel reports "not
+  // restored". Roll the buffer back to the exact pre-restore state whenever no write landed; the
+  // save error itself stays visible through saveStatus/saveError.
+  const revertRestoredBuffer = useCallback((text: string, model: EditorFileModel | null): void => {
+    contentRef.current = text;
+    setContent(text);
+    setFileModel(model);
+  }, []);
+
   const restoreHistoryContent = useCallback(
     async (checkpointContent: string): Promise<boolean> => {
       if (dirtyRef.current) {
@@ -2840,9 +2876,23 @@ function EditorRuntimeWidget({
         });
         return false;
       }
-      return persist(checkpointContent, "pre-restore");
+      const restoreSessionKey = editorSessionKeyOrNull(root, file);
+      const bufferBeforeRestore = contentRef.current;
+      const modelBeforeRestore = fileModelRef.current;
+      const adoption: BufferAdoptionSink = { text: null };
+      const restored = await persist(checkpointContent, "pre-restore", adoption);
+      // Undo exactly the adoption this restore made — which is the formatted text, not the raw
+      // checkpoint, once format-on-save transformed it. If the pane moved on (file switch, a later
+      // edit, an agent patch) the buffer no longer holds that text, so the newer state is left alone.
+      const sameDocument =
+        restoreSessionKey !== null && activeSessionKeyRef.current === restoreSessionKey;
+      const adopted = adoption.text;
+      if (!restored && sameDocument && adopted !== null && contentRef.current === adopted) {
+        revertRestoredBuffer(bufferBeforeRestore, modelBeforeRestore);
+      }
+      return restored;
     },
-    [commonT, persist],
+    [commonT, file, persist, revertRestoredBuffer, root],
   );
 
   const onContentChange = useCallback(

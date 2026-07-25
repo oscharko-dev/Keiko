@@ -27,6 +27,7 @@ import {
   setEditorLocalHistoryPinned,
 } from "../../../../../lib/api";
 import { useLocale, useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { Icons } from "../../Icons";
 
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
@@ -66,6 +67,34 @@ export function historyVirtualWindow(
     paddingStart: start * HISTORY_ROW_HEIGHT,
     paddingEnd: Math.max(0, (safeCount - end) * HISTORY_ROW_HEIGHT),
   };
+}
+
+/**
+ * Resolve the row a roving-focus key should move to, over the WHOLE history chain rather than the
+ * virtualized window (#2617). Returns `null` when the key moves nothing — an unknown key, or an
+ * edge the caller is already sitting on — so the caller can leave that key to the browser instead
+ * of swallowing it with `preventDefault` and giving the user neither movement nor a fallback.
+ */
+function historyFocusKeyTarget(key: string, index: number, last: number): number | null {
+  switch (key) {
+    case "ArrowDown":
+      return index + 1;
+    case "ArrowUp":
+      return index - 1;
+    case "Home":
+      return 0;
+    case "End":
+      return last;
+    default:
+      return null;
+  }
+}
+
+export function historyFocusTarget(index: number, key: string, entryCount: number): number | null {
+  const last = entryCount - 1;
+  const target = historyFocusKeyTarget(key, index, last);
+  if (target === null || target === index || target < 0 || target > last) return null;
+  return target;
 }
 
 export function editorLocalHistorySizeDelta(
@@ -287,7 +316,7 @@ interface HistoryRowProps {
   readonly index: number;
   readonly delta: number;
   readonly compareBaseRef: string | null;
-  readonly onFocusRelative: (index: number, key: string) => void;
+  readonly onFocusRelative: (index: number, key: string) => boolean;
   readonly onCompareCurrent: (entry: EditorLocalHistoryEntry) => void;
   readonly onSelectCompare: (entry: EditorLocalHistoryEntry) => void;
   readonly onCompareSelected: (entry: EditorLocalHistoryEntry) => void;
@@ -321,10 +350,9 @@ function HistoryRow(props: HistoryRowProps): ReactNode {
         title={t("editor.fileHistory.selectCompare")}
         onClick={() => props.onSelectCompare(props.entry)}
         onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => {
-          if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-            event.preventDefault();
-            props.onFocusRelative(props.index, event.key);
-          }
+          // Only a key that actually moved focus is consumed; anything else keeps its default
+          // behaviour (the list still scrolls at the edges) instead of dying silently.
+          if (props.onFocusRelative(props.index, event.key)) event.preventDefault();
         }}
       >
         <span className={styles.rowTitle}>
@@ -374,6 +402,9 @@ function HistoryList(props: HistoryListProps): ReactNode {
   const t = useTranslate();
   const viewportRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+  // A traversal target outside the mounted window has no element to focus yet; remember it so the
+  // row claims focus from `registerRow` at the moment the virtualizer mounts it.
+  const pendingFocusRef = useRef<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(HISTORY_ROW_HEIGHT * 3);
   useEffect(() => {
@@ -387,15 +418,40 @@ function HistoryList(props: HistoryListProps): ReactNode {
   }, []);
   const windowed = historyVirtualWindow(props.entries.length, scrollTop, viewportHeight);
   const visible = props.entries.slice(windowed.start, windowed.end);
-  const focusRelative = (index: number, key: string): void => {
-    let targetIndex = index + (key === "ArrowDown" ? 1 : -1);
-    if (key === "Home") targetIndex = 0;
-    else if (key === "End") targetIndex = props.entries.length - 1;
-    const entry = props.entries[Math.min(Math.max(targetIndex, 0), props.entries.length - 1)];
-    if (entry === undefined) return;
-    const button = rowRefs.current.get(entry.entryRef);
-    button?.focus();
-    button?.scrollIntoView?.({ block: "nearest" });
+  const focusMounted = (button: HTMLButtonElement): void => {
+    pendingFocusRef.current = null;
+    button.focus();
+    button.scrollIntoView?.({ block: "nearest" });
+  };
+  const focusRelative = (index: number, key: string): boolean => {
+    const targetIndex = historyFocusTarget(index, key, props.entries.length);
+    if (targetIndex === null) return false;
+    const entry = props.entries[targetIndex];
+    if (entry === undefined) return false;
+    const mounted = rowRefs.current.get(entry.entryRef);
+    if (mounted !== undefined) {
+      focusMounted(mounted);
+      return true;
+    }
+    // Scroll the target into the virtual window using the same clamp the browser applies, so the
+    // committed scroll offset and the window this component derives from it cannot disagree.
+    pendingFocusRef.current = entry.entryRef;
+    const maxScrollTop = Math.max(
+      0,
+      props.entries.length * HISTORY_ROW_HEIGHT - Math.max(0, viewportHeight),
+    );
+    const offset = Math.min(targetIndex * HISTORY_ROW_HEIGHT, maxScrollTop);
+    if (viewportRef.current !== null) viewportRef.current.scrollTop = offset;
+    setScrollTop(offset);
+    return true;
+  };
+  const registerRow = (entryRef: string, element: HTMLButtonElement | null): void => {
+    if (element === null) {
+      rowRefs.current.delete(entryRef);
+      return;
+    }
+    rowRefs.current.set(entryRef, element);
+    if (pendingFocusRef.current === entryRef) focusMounted(element);
   };
   return (
     <div
@@ -414,10 +470,7 @@ function HistoryList(props: HistoryListProps): ReactNode {
             index={windowed.start + offset}
             delta={editorLocalHistorySizeDelta(props.entries, windowed.start + offset)}
             onFocusRelative={focusRelative}
-            registerRow={(entryRef, element) => {
-              if (element === null) rowRefs.current.delete(entryRef);
-              else rowRefs.current.set(entryRef, element);
-            }}
+            registerRow={registerRow}
           />
         ))}
         <li aria-hidden="true" style={{ height: windowed.paddingEnd }} />
@@ -438,9 +491,21 @@ function ConfirmAction({
   readonly onConfirm: () => void;
 }): ReactNode {
   const t = useTranslate();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  // `aria-modal="true"` is a promise that focus stays inside; honour it with the shared containment
+  // primitive instead of a second implementation, and hand focus back to the invoking row action on
+  // unmount so a cancelled confirm does not strand the user on <body> (#2617). Same contract as the
+  // workspace-trust decision dialog.
+  useDialogTabTrap(dialogRef);
   useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     cancelRef.current?.focus();
+    return () => {
+      if (opener?.isConnected === true) opener.focus();
+    };
+  }, []);
+  useEffect(() => {
     const cancelOnEscape = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape" && !busy) onCancel();
     };
@@ -449,14 +514,16 @@ function ConfirmAction({
   }, [busy, onCancel]);
   const restore = pending.kind === "restore";
   return (
-    <div
-      className={styles.confirmBackdrop}
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="file-history-confirm-title"
-      aria-describedby="file-history-confirm-body"
-    >
-      <div className={styles.confirm}>
+    <div className={styles.confirmBackdrop}>
+      <div
+        ref={dialogRef}
+        className={styles.confirm}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="file-history-confirm-title"
+        aria-describedby="file-history-confirm-body"
+        tabIndex={-1}
+      >
         <h3 id="file-history-confirm-title">
           {t(restore ? "editor.fileHistory.restoreTitle" : "editor.fileHistory.deleteTitle")}
         </h3>
