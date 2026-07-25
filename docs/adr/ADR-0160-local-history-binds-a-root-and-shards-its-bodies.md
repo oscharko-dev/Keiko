@@ -1,4 +1,4 @@
-# ADR-0159 — Local history binds a root, and shards its checkpoint bodies
+# ADR-0160 — Local history binds a root, and shards its checkpoint bodies
 
 - Status: Accepted
 - Amends: [ADR-0147](ADR-0147-multi-root-workspaces-trust-profiles-local-history.md) (D7 body
