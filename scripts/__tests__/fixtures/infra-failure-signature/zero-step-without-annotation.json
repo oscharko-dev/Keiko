@@ -1,0 +1,32 @@
+{
+  "provenance": {
+    "source": "GitHub REST, repository run 30157824170",
+    "observed": "2026-07-25",
+    "note": "Same incident, same zero-step shape, but the annotations API returns nothing. Fail closed: without a pinned signature this classifies genuine."
+  },
+  "run": {
+    "id": 30157824170,
+    "path": ".github/workflows/keiko-for-quality-action.yml",
+    "event": "check_run",
+    "run_attempt": 1,
+    "conclusion": "failure"
+  },
+  "jobsTotal": 2,
+  "jobs": [
+    {
+      "id": 89678428149,
+      "name": "Evaluate quality aggregate",
+      "conclusion": "failure",
+      "steps": []
+    },
+    {
+      "id": 89678428343,
+      "name": "Preview quality aggregate (dry-run)",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "annotations": {
+    "89678428149": []
+  }
+}

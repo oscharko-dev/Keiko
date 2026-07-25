@@ -1,0 +1,341 @@
+{
+  "provenance": {
+    "source": "GitHub REST, repository run 30173151751",
+    "observed": "2026-07-25",
+    "note": "A genuinely red ci.yml run on an allowlisted lane. Every failed job executed steps, so no re-run is ever eligible. Reduced to the four failed jobs plus one successful job."
+  },
+  "run": {
+    "id": 30173151751,
+    "path": ".github/workflows/ci.yml",
+    "event": "pull_request",
+    "run_attempt": 1,
+    "conclusion": "failure"
+  },
+  "jobsTotal": 5,
+  "jobs": [
+    {
+      "id": 89717495681,
+      "name": "Core quality",
+      "conclusion": "success",
+      "steps": [
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 89717495703,
+      "name": "workflow hygiene",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "failure"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 89717495714,
+      "name": "zizmor",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "failure"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 89718423694,
+      "name": "Coverage and SonarCloud",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "skipped"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "failure"
+        },
+        {
+          "conclusion": "skipped"
+        },
+        {
+          "conclusion": "skipped"
+        },
+        {
+          "conclusion": "skipped"
+        },
+        {
+          "conclusion": "skipped"
+        },
+        {
+          "conclusion": "skipped"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 89718949472,
+      "name": "ci",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "failure"
+        },
+        {
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "89717495703": [
+      {
+        "annotation_level": "failure",
+        "message": "Process completed with exit code 14."
+      },
+      {
+        "annotation_level": "failure",
+        "message": "zzz-hygiene-probe.yml:20: code injection via template expansion: may expand into attacker-controllable code"
+      }
+    ],
+    "89717495714": [
+      {
+        "annotation_level": "failure",
+        "message": "Process completed with exit code 14."
+      },
+      {
+        "annotation_level": "failure",
+        "message": "zzz-hygiene-probe.yml:20: code injection via template expansion: may expand into attacker-controllable code"
+      }
+    ],
+    "89718423694": [
+      {
+        "annotation_level": "failure",
+        "message": "Process completed with exit code 3."
+      }
+    ],
+    "89718949472": [
+      {
+        "annotation_level": "failure",
+        "message": "Process completed with exit code 1."
+      }
+    ]
+  }
+}

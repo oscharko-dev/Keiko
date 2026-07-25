@@ -1,0 +1,81 @@
+{
+  "provenance": {
+    "source": "GitHub REST, repository runs 30157827347 and 30173151751",
+    "observed": "2026-07-25",
+    "note": "One run envelope carrying both real jobs: the zero-step incident job and a genuinely failed gate job. `rerun-failed-jobs` is run-granular, so re-running here would re-execute the genuine failure - the whole run must classify genuine."
+  },
+  "run": {
+    "id": 30100000001,
+    "path": ".github/workflows/ci.yml",
+    "event": "check_run",
+    "run_attempt": 1,
+    "conclusion": "failure"
+  },
+  "jobsTotal": 2,
+  "jobs": [
+    {
+      "id": 89678551433,
+      "name": "Evaluate quality aggregate",
+      "conclusion": "failure",
+      "steps": []
+    },
+    {
+      "id": 89717495703,
+      "name": "workflow hygiene",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "failure"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        },
+        {
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "89678551433": [
+      {
+        "annotation_level": "failure",
+        "message": "GitHub Actions has encountered an internal error when running your job."
+      }
+    ],
+    "89717495703": [
+      {
+        "annotation_level": "failure",
+        "message": "Process completed with exit code 14."
+      },
+      {
+        "annotation_level": "failure",
+        "message": "zzz-hygiene-probe.yml:20: code injection via template expansion: may expand into attacker-controllable code"
+      }
+    ]
+  }
+}

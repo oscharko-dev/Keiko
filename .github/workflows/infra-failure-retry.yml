@@ -1,0 +1,106 @@
+name: Infrastructure failure re-run
+
+# ADR-0160: a completed run that failed is classified once, and re-run at most once, and only when
+# EVERY failed job of that run executed zero steps under a pinned runner-failure signature. All of
+# that judgement lives in scripts/check-infra-failure-signature.mjs, which is unit-tested against
+# committed payloads from the 2026-07-25 GitHub Actions incident; this file only supplies the run id
+# and the mode.
+#
+# Two different lists are at work here, and conflating them is the mistake to avoid.
+#
+#   * `workflows:` below is the OBSERVATION scope - which runs get a redacted decision record at all.
+#     GitHub keys this trigger on the workflow DISPLAY NAME and the schema requires the key, so the
+#     excluded lanes are named here on purpose: that is what makes their `excluded-lane / no action`
+#     verdict visible instead of silent.
+#   * RERUN_ELIGIBLE_WORKFLOW_PATHS in the classifier is the ACTION scope, keyed on workflow FILE
+#     PATH exactly as Issue #2707 requires. Nothing here can widen it.
+#
+# Both directions of drift therefore fail toward no re-run: a renamed workflow stops matching this
+# trigger (no observation), and a workflow that reaches the classifier under an unknown path is
+# excluded (no action). scripts/__tests__/check-infra-failure-signature.test.mjs pins the two lists
+# against each other so a rename cannot silently unhook an allowlisted lane.
+#
+# This workflow is not a required check and nothing required depends on it (ADR-0135 D3). Deleting
+# this file fully restores manual re-runs; the classifier script is inert without it.
+on:
+  workflow_run:
+    workflows:
+      # Re-run eligible (deterministic for a given tree, ADR-0139 D1).
+      - CI
+      - Workflow hygiene
+      # Observed but never re-run: every one of these re-reads live external state or measures
+      # wall-clock, so a second execution would not assert what the first one did. ADR-0156 rejects
+      # retrying a measurement, so these exist here only to produce their exclusion record.
+      - Nightly performance evidence
+      - Mutation security
+      - OSV dependency scan
+    types:
+      - completed
+  # Classify any completed run on demand. The default mode is `dry-run`, which logs the decision and
+  # never calls the re-run API - this is how an observation window is recorded without acting.
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Completed workflow run id to classify
+        required: true
+        type: string
+      mode:
+        description: dry-run logs the decision only; enforce may re-run the failed jobs
+        required: false
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - enforce
+
+permissions: {}
+
+# One observation per observed run, and never cancelled: a superseded observer would leave the run it
+# was classifying without a decision record.
+concurrency:
+  group: infra-failure-retry-${{ github.event_name == 'workflow_dispatch' && inputs.run_id || github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    name: Classify infrastructure-signature failure
+    # A successful run has nothing to re-run, and the observer never observes itself. The self-skip is
+    # by workflow FILE PATH, the same key the classifier uses, and it is duplicated there so the rule
+    # survives this guard being edited (fixture-tested: an observer payload produces no action).
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.workflow_run.conclusion == 'failure'
+      && github.event.workflow_run.path != '.github/workflows/infra-failure-retry.yml')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # `actions: write` is what `POST /actions/runs/{run_id}/rerun-failed-jobs` requires, and it is
+      # the only elevated permission here. No token is written to the workspace, no artifact is
+      # published, and nothing is checked out from the observed run.
+      actions: write
+      contents: read
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # `workflow_run` always executes the default branch's definition of this file, so the
+          # classifier it runs must come from the same place. Checking out
+          # `github.event.workflow_run.head_sha` would run a pull request's own code with
+          # `actions: write` - that is the risk `workflow_run` carries, and this pins it shut.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Classify the observed run and re-run it once if it is infrastructure weather
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Interpolated into `env:` rather than into `run:`; both values are then re-validated by the
+          # classifier (a run id must be a positive integer, a mode must be one of two literals).
+          OBSERVED_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.run_id || github.event.workflow_run.id }}
+          OBSERVER_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'enforce' }}
+        run: |
+          set -euo pipefail
+          node scripts/check-infra-failure-signature.mjs \
+            --run-id "$OBSERVED_RUN_ID" \
+            --mode "$OBSERVER_MODE" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --github-output "$GITHUB_OUTPUT"
