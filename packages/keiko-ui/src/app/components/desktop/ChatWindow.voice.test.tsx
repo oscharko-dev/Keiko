@@ -4,7 +4,7 @@
 // gating, and that a denied permission surfaces a non-blocking error while the composer stays usable
 // (AC4). The deep capture/transcribe flow is covered at the hook level (useDictation.test.ts).
 
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
@@ -790,6 +790,11 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     // entering" was reading whatever the DOM happened to hold at that moment, and a second click
     // landing mid-swap toggles from an unsettled state. This is an ADDED assertion: it now also
     // proves entering succeeded, which no caller checked before.
+    //
+    // Issue #2727 — measurement since narrowed the cause: entering could genuinely fail, because the
+    // teardown effect stopped the session the very same click had just started (see the regression
+    // pin at the end of this describe). Waiting here surfaces that as a failure at its own cause
+    // rather than three assertions later; with the cause fixed it is a guard, not a workaround.
     await waitFor((): void => {
       expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
         "aria-checked",
@@ -1444,6 +1449,9 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     await userEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
 
     expect(realtimeVoiceMock.stop).toHaveBeenCalledOnce();
+    // Issue #2727 — exactly one session was ever opened. Without this, an enter that was silently
+    // torn down and re-entered by the second click reads the same as a clean enter/leave pair.
+    expect(realtimeVoiceMock.start).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
     // The switch is back to off and the composer remains usable.
@@ -1456,6 +1464,61 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mute assistant voice" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send message" })).toBeInTheDocument();
+  });
+
+  // Issue #2727 — the switch appears in the capability-probe commit, and React schedules that
+  // commit's passive effects as a separate scheduler task. This resolves on the MutationObserver
+  // microtask that the commit's own DOM insertion delivers, which always precedes that task, so the
+  // effects are still queued when it returns — deterministically, with no polling and no timer.
+  // RTL's `findBy*` / `waitFor` observe the same mutation but run inside `act`, which flushes those
+  // effects and settles the exact race the pin below exists for; vitest's `vi.waitFor` polls on a
+  // 50ms interval and would let them run too. An unbounded wait here is intentional: if the switch
+  // never appears the suite's own 15s timeout reports it, and any bound short enough to be useful
+  // would reintroduce the delay this must not have.
+  function whenDialogSwitchAppears(): Promise<void> {
+    if (screen.queryByRole("switch", { name: "Voice dialogue mode" }) !== null) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (screen.queryByRole("switch", { name: "Voice dialogue mode" }) === null) return;
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  }
+
+  // Issue #2727 — regression pin. The teardown effect used to re-read `voiceDialogSessionChatIdRef`
+  // live instead of the snapshot its own render took. When a pending passive effect flushed after
+  // the toggle handler had already bound the session but before its `setActive(true)` was committed,
+  // it paired that older render's "not active" with the freshly bound ref, concluded the session was
+  // orphaned, and stopped the realtime transport the very same click had just started — its queued
+  // `setActive(false)` then swallowed the enter. The switch stayed OFF while `start()` and `stop()`
+  // had both run, and the NEXT click entered instead of leaving. That is what reddened CI on run
+  // 30171506106. Clicking through `fireEvent` while those effects are still pending reproduces the
+  // interleaving deterministically; `userEvent` reaches the handler a macrotask later, by which time
+  // the effects have settled and the race is gone.
+  it("keeps the session the entering click started when a pending effect flushes (#2727)", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    // The realtime controller is mocked, so nothing consumes the stream; `stubRealtimeBrowser`
+    // supplies the `getTracks` shape itself. Matches the single-assertion form the sibling tests use.
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession());
+
+    await whenDialogSwitchAppears();
+    fireEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
+
+    expect(realtimeVoiceMock.start).toHaveBeenCalledOnce();
+    expect(realtimeVoiceMock.stop).not.toHaveBeenCalled();
+    // The switch agrees with the session it just opened — the two may never disagree.
+    expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(getComposerBox()).toHaveAttribute("data-voice-aura", "on");
   });
 });
 

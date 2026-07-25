@@ -2722,9 +2722,14 @@ function ComposerCoreImpl({
   const activeChatIdRef = useRef(activeChat?.id);
   activeChatIdRef.current = activeChat?.id;
   const voiceDialogSessionChatIdRef = useRef<string | undefined>(undefined);
-  const voiceDialogLifecycleActiveRef = useRef(false);
-  const voiceDialogActive =
-    voiceDialog.active && voiceDialogSessionChatIdRef.current === activeChat?.id;
+  // Issue #2727 — ONE snapshot of the session binding per render. The toggle handler advances this
+  // ref, and a ref write schedules no render, so every consumer must read it exactly once here and
+  // then judge that snapshot. A consumer that re-reads `.current` later (the teardown effect below
+  // used to) pairs an older render's `voiceDialog.active` with an already-advanced ref, concludes a
+  // session was orphaned, and tears down the session the click just started.
+  const voiceDialogSessionChatId = voiceDialogSessionChatIdRef.current;
+  const voiceDialogSessionBound = voiceDialogSessionChatId !== undefined;
+  const voiceDialogActive = voiceDialog.active && voiceDialogSessionChatId === activeChat?.id;
   const voiceDialogGenerationRef = useRef(0);
   const previousVoiceDialogChatIdRef = useRef(activeChat?.id);
   useEffect(() => {
@@ -2882,14 +2887,14 @@ function ComposerCoreImpl({
     }
     setPendingVoiceAnswer(null);
     voiceDialogSessionChatIdRef.current = activeChat?.id;
-    voiceDialogLifecycleActiveRef.current = true;
     voiceDialog.enter();
     realtimeVoice.start();
   }, [activeChat?.id, voiceDialog, voiceDialogAvailable, realtimeVoice]);
   const leaveVoiceDialog = useCallback(() => {
+    // The live ref read here is the one-shot teardown latch, not a rendering decision: a second
+    // leave for the same session finds it already cleared and skips the transport teardown.
     const hadActiveSession = voiceDialogSessionChatIdRef.current !== undefined;
     voiceDialogSessionChatIdRef.current = undefined;
-    voiceDialogLifecycleActiveRef.current = false;
     if (hadActiveSession) {
       voiceDialogGenerationRef.current += 1;
       realtimeVoice.stop();
@@ -2898,15 +2903,15 @@ function ComposerCoreImpl({
     }
     voiceDialog.leave();
   }, [playback, realtimeVoice, voiceDialog]);
+  // Tear a live session down as soon as a render stops showing it as active — the chat was switched
+  // away or the deployment stopped offering dialogue. Every input is a snapshot of the render this
+  // effect belongs to, so a passive effect flushed after a later toggle can no longer act on a
+  // session that did not exist in its own render (#2727).
   useEffect(() => {
-    if (voiceDialogActive) {
-      voiceDialogLifecycleActiveRef.current = true;
-      return;
-    }
-    if (!voiceDialogLifecycleActiveRef.current && !voiceDialog.active) return;
-    voiceDialogLifecycleActiveRef.current = false;
+    if (voiceDialogActive) return;
+    if (!voiceDialogSessionBound && !voiceDialog.active) return;
     leaveVoiceDialog();
-  }, [leaveVoiceDialog, voiceDialog.active, voiceDialogActive]);
+  }, [leaveVoiceDialog, voiceDialog.active, voiceDialogActive, voiceDialogSessionBound]);
   // The normal and dialogue layers use distinct controls so each state can cross-fade without
   // moving layout. Flag a user-driven toggle and hand focus to the newly active layer (WCAG 2.4.3).
   // Programmatic auto-leave never sets the flag, so it never steals focus from the user.
