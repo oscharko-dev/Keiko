@@ -1,9 +1,9 @@
 # ADR-0159 — One required context for workflow hygiene
 
 - Status: Accepted
-- Amends: [ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) (D3, the
-  enumerated required-check set; the direct-bounded-check principle D3 exists to state is untouched
-  and is precisely what this record executes)
+- Amends: [ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) (D3's
+  enumerated required-check set; its direct-bounded-check principle is untouched and is precisely
+  what this record executes)
 - Amends: [ADR-0002](ADR-0002-ci-and-supply-chain-security-baseline.md) (the job topology of
   `actionlint` and `Verify pinned action SHAs` only; every tool, invocation, checksum, permission
   and fail-closed semantic it specifies is carried over character for character)
@@ -216,9 +216,10 @@ where a check is unexecuted.
 
 Two structural pins in `scripts/__tests__/` slice `ci.yml` by job key and will need relocation in
 phase 3, not relaxation (AGENTS.md §7). `dev-quality-workflows.test.mjs` bounds the `ci` aggregate
-block with a lookahead on the literal `  actionlint:` key, and `zizmor-workflow.test.mjs` anchors on
-the `  zizmor:` key to assert `advanced-security: false`, `annotations: true`, read-only permissions
-and `persist-credentials: false`. The first is relocated to the generic next-top-level-key bound its
+block with a lookahead on the literal `actionlint:` key at its two-space job indentation, and
+`zizmor-workflow.test.mjs` anchors on `zizmor:` at that same indentation to assert
+`advanced-security: false`, `annotations: true`, read-only permissions and
+`persist-credentials: false`. The first is relocated to the generic next-top-level-key bound its
 own sibling test already documents as the stricter idiom; the second moves to the
 `workflow-hygiene` block, where the same four assertions must continue to hold.
 
