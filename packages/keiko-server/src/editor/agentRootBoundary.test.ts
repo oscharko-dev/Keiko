@@ -44,6 +44,7 @@ import {
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { handleEditorAgentProducerTurn } from "./agentProducerRoute.js";
 import { handleEditorAgentVerificationRun } from "./agentVerificationRoute.js";
+import type { VerificationRunnerManager } from "./verificationRunner.js";
 import {
   editorAgentPathBoundaryReason,
   resolveEditorAgentActionRoot,
@@ -271,15 +272,31 @@ function expectRootBoundaryDenialEvidence(
   });
 }
 
+// A complete VerificationRunnerManager whose every entry point throws. Typed rather than cast, so
+// the "a denial never reaches the runner" claim binds to the real interface: a method added to the
+// manager becomes a compile error here instead of an undefined the route would call at runtime.
+const deniedVerificationRunner: VerificationRunnerManager = {
+  discover: (): never => {
+    throw new Error("discover not exercised");
+  },
+  execute: (): never => {
+    throw new Error("execute not exercised");
+  },
+  abort: (): never => {
+    throw new Error("abort not exercised");
+  },
+  inFlightCount: (): number => 0,
+  subscribe: (): (() => void) => (): void => undefined,
+  runToReport: (): never => {
+    throw new Error("a denied verification must never reach the runner");
+  },
+};
+
+// One widening assertion, not `as unknown as`: UiHandlerDeps is the app-wide dependency bag and a
+// unit test cannot construct all of it, but every field this route reads is supplied with its real
+// type, so a wrong-shaped stub still fails to compile.
 function verificationDeps(): UiHandlerDeps {
-  return {
-    ...routeDeps(),
-    verificationRunner: {
-      runToReport: (): never => {
-        throw new Error("a denied verification must never reach the runner");
-      },
-    },
-  } as unknown as UiHandlerDeps;
+  return { ...routeDeps(), verificationRunner: deniedVerificationRunner } as UiHandlerDeps;
 }
 
 beforeEach(() => {

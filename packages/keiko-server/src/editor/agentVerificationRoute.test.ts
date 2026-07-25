@@ -24,7 +24,11 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import type { WorkspaceManifestRecordRow } from "../store/index.js";
+import {
+  createInMemoryUiStore,
+  type UiStore,
+  type WorkspaceManifestRecordRow,
+} from "../store/index.js";
 import { _resetEditorAgentAuditForTests, listEditorAgentActionAudit } from "./agentActionAudit.js";
 import {
   editorAgentAuthorityRegistry,
@@ -765,34 +769,42 @@ describe("handleEditorAgentVerificationRun root-binding guards (#2624)", () => {
         maxPatchBytes: 65_536,
       },
     });
+    // A real store with exactly one method overridden — a typed UiStore, not a coerced fragment, so
+    // the manifest lookup this test steers still answers the interface the route actually calls.
+    const backing = createInMemoryUiStore();
     let admitted = false;
-    const store = {
+    const store: UiStore = {
+      ...backing,
       findWorkspaceManifestRecordByProject: (): WorkspaceManifestRecordRow | undefined =>
         admitted ? unparseableManifestRow() : undefined,
     };
     const request = { schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef };
 
-    const denied = await handleEditorAgentVerificationRun(
-      ctx(request),
-      { ...deps(manager), store } as unknown as UiHandlerDeps,
-      {
-        decide: (): EditorAgentActionPolicyDecision => {
-          admitted = true;
-          return { disposition: "allowed", effectClass: "execution", origin: "agent" };
+    try {
+      const denied = await handleEditorAgentVerificationRun(
+        ctx(request),
+        { ...deps(manager), store },
+        {
+          decide: (): EditorAgentActionPolicyDecision => {
+            admitted = true;
+            return { disposition: "allowed", effectClass: "execution", origin: "agent" };
+          },
         },
-      },
-    );
-    const retry = await handleEditorAgentVerificationRun(ctx(request), deps(manager));
+      );
+      const retry = await handleEditorAgentVerificationRun(ctx(request), deps(manager));
 
-    expect(resultBody(denied)).toMatchObject({
-      outcome: "not-run",
-      disposition: "denied",
-      reason: "root-binding-invalid",
-    });
-    // The one tool call the envelope grants must be back: without the rollback the retry below would
-    // be refused for an exhausted budget rather than run.
-    expect(resultBody(retry)).toMatchObject({ outcome: "completed" });
-    expect(manager.calls).toBe(1);
+      expect(resultBody(denied)).toMatchObject({
+        outcome: "not-run",
+        disposition: "denied",
+        reason: "root-binding-invalid",
+      });
+      // The one tool call the envelope grants must be back: without the rollback the retry below
+      // would be refused for an exhausted budget rather than run.
+      expect(resultBody(retry)).toMatchObject({ outcome: "completed" });
+      expect(manager.calls).toBe(1);
+    } finally {
+      backing.close();
+    }
   });
 
   it("denies and audits a request whose budget is gone by reservation time", async () => {
