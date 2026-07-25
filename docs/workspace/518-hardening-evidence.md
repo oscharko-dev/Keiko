@@ -153,6 +153,8 @@ PASS. No new runtime, devtime, or vendored code dependency introduced. No `bundl
 
 The final epic PR to `dev` was [#563](https://github.com/oscharko-dev/Keiko/pull/563). That merge ran the repository's required `dev` checks:
 
+> Since [ADR-0159](../adr/ADR-0159-one-required-context-for-workflow-hygiene.md) (2026-07-25), `actionlint` and pinned-action SHA verification are no longer separate required contexts: they run as steps of the single required `workflow hygiene` context, together with zizmor and the OSV lockfile scan. The names below are what was required when this record was written and are kept as written; `CONTRIBUTING.md` is authoritative for the current set.
+
 | Required check                      | Notes                                                  |
 | ----------------------------------- | ------------------------------------------------------ |
 | `ci`                                | Includes lint + typecheck + tests + arch:check + build |

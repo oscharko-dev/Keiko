@@ -51,7 +51,7 @@ env:
   RELEASE_BASE_BRANCH: release/0.2
   # Dependency Review is enforced on release PRs. It is intentionally omitted here because
   # the check is pull_request-only and is not emitted on the tagged squash commit.
-  RELEASE_REQUIRED_CHECKS: '["ci","actionlint","Verify pinned action SHAs","zizmor","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
+  RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:
   release-verify:

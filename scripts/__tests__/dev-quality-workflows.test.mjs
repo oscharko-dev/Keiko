@@ -183,7 +183,11 @@ describe("dev quality workflows", () => {
   });
 
   it("aggregates required CI fail closed", () => {
-    const aggregateJob = ci.match(/ {2}ci:\n[\s\S]*?(?=\n {2}actionlint:\n)/u)?.[0];
+    // Sliced to the NEXT top-level key rather than to the `actionlint:` job, which ADR-0159 moved
+    // into the `workflow hygiene` context. Same idiom as the coverage-suite test above, and it can
+    // no longer be silently re-scoped by removing or reordering whatever job happens to follow.
+    const aggregateJob = ci.match(/ {2}ci:\n[\s\S]*?(?=\n {2}\S|$)/u)?.[0];
+    expect(aggregateJob, "ci aggregate job block must exist").toBeDefined();
     expect(aggregateJob).toContain("if: ${{ always() }}");
     expect(aggregateJob).toContain("- core-quality");
     expect(aggregateJob).toContain("- coverage-sonar");

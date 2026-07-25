@@ -76,6 +76,7 @@ step "lint (keiko-ui)" npm run lint --workspace @oscharko-dev/keiko-ui
 step "format:check" npm run format:check
 step "arch:check" npm run arch:check
 step "adr-index" npm run check:adr-index
+step_script "zizmor-anchors" check:zizmor-anchors
 step_git "dependency-hygiene" check:dependency-hygiene
 step_script "osv-waiver-scope" check:osv-waiver-scope
 step "audit (shipped graph)" npm audit --audit-level=high --omit=dev

@@ -331,6 +331,22 @@ jobs:
         # local shard run still prints its failures; the annotation reporter is added here, where
         # `GITHUB_ACTIONS` is what makes it meaningful, so a failing shard still annotates the diff
         # instead of showing nothing but a nonzero exit code.
+        # BOUNDS each worker fork; it does not give it room. Sampling a local `--shard=2/3` run put a
+        # single worker at 7260 MB RSS and all node processes together at 17425 MB — more than a
+        # 16 GB hosted runner has. A fork then dies to the kernel OOM killer with no message, which is
+        # exactly what CI saw: "Worker exited unexpectedly" after all 8006 tests had passed, and no
+        # `JavaScript heap out of memory` anywhere in the log. That absence is the tell — a V8 limit
+        # crash announces itself and names the file; a kernel kill says nothing.
+        #
+        # Most of that RSS is not live heap. The same shard passes at a 3072 MB cap (500 files, 8038
+        # tests, exit 0), so V8 was holding memory only because the default ~4288 MB limit let it. The
+        # cap keeps two forks plus the parent well inside the runner, and if the suite ever genuinely
+        # needs more, V8 fails with a diagnosable error naming the file instead of vanishing.
+        #
+        # Raising the limit would have been the wrong direction: it lets each worker grow further
+        # before collecting, which increases the pressure that causes the kill.
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
         run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
       - name: Upload package coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
@@ -576,6 +592,11 @@ jobs:
         # are regenerated rather than concatenated. The summary carries only covered/total counts
         # with no line identity and is not losslessly concatenable. This run uses the JUDGING
         # configuration, so the per-file floors are evaluated here, once, on complete coverage.
+        # Same bound as the shards, for the same reason. The merge re-runs every reporter over the
+        # reassembled coverage map of all three shards — the largest single object in the lane — in
+        # a job that also holds the downloaded artifacts.
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
         run: npm run test:coverage:packages:merge
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
@@ -726,65 +747,6 @@ jobs:
             exit 1
           fi
           echo "All required CI dependencies succeeded."
-
-  actionlint:
-    name: actionlint
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Download and verify actionlint
-        run: |
-          curl --proto '=https' -sSfL "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" -o actionlint.tar.gz
-          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum --check
-          tar -xzf actionlint.tar.gz actionlint
-          chmod +x actionlint
-      - name: Run actionlint
-        run: ./actionlint -color .github/workflows/*.yml
-
-  verify-pinned-shas:
-    name: Verify pinned action SHAs
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Assert all action references are pinned to 40-hex SHAs
-        run: |
-          set -euo pipefail
-          violations=$(grep -rnE '^\s*-?\s*uses:' .github/workflows/ \
-            | grep -vE 'uses:\s*\./' \
-            | grep -vE 'uses:\s*docker://' \
-            | grep -vE 'uses:\s*[A-Za-z0-9._/-]+@[0-9a-f]{40}([[:space:]]|$|#)' || true)
-          if [ -n "$violations" ]; then
-            echo "Unpinned action references (must pin to a full 40-hex commit SHA):"
-            echo "$violations"
-            exit 1
-          fi
-          echo "All action references are pinned to full commit SHAs."
-
-  zizmor:
-    name: zizmor
-    if: ${{ (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'merge_group' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Run zizmor
-        uses: zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02 # v0.6.0
-        with:
-          version: "1.26.1"
-          config: .github/zizmor.yml
-          advanced-security: false
-          annotations: true
 
   build-scan-sbom-smoke:
     name: Build, scan, SBOM, smoke
