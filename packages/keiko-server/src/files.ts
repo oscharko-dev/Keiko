@@ -488,6 +488,11 @@ function extensionOf(name: string): string | null {
 
 type FilesTreeEntryBase = Omit<FilesTreeEntry, "kind" | "readable">;
 
+function resolvedEntryKind(stats: Stats): FilesEntryKind {
+  if (stats.isDirectory()) return "directory";
+  return stats.isFile() ? "file" : "symlink";
+}
+
 async function classifySymlinkEntry(
   root: string,
   entryPath: string,
@@ -498,12 +503,7 @@ async function classifySymlinkEntry(
     const targetStats = await stat(target);
     const contained = isContained(root, target);
     const denied = contained && pathIsDenied(rootRelativePosixPath(root, target));
-    const kind: FilesEntryKind = targetStats.isDirectory()
-      ? "directory"
-      : targetStats.isFile()
-        ? "file"
-        : "symlink";
-    return { ...base, kind, readable: contained && !denied };
+    return { ...base, kind: resolvedEntryKind(targetStats), readable: contained && !denied };
   } catch {
     return { ...base, kind: "symlink", readable: false };
   }
@@ -2509,6 +2509,11 @@ export async function handleFilesContent(
 // Bounded body for a mutation request: a path plus a few short fields, never file content.
 const MAX_FILES_MUTATION_BODY_BYTES = 16_384;
 
+function requestedEntryKind(value: unknown): "directory" | "file" | null {
+  if (value === "directory") return "directory";
+  return value === "file" ? "file" : null;
+}
+
 export async function handleFilesCreate(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2518,7 +2523,7 @@ export async function handleFilesCreate(
     if (isRouteResult(body)) return body;
     const rootInput = typeof body.root === "string" ? body.root : null;
     const pathInput = typeof body.path === "string" ? body.path : null;
-    const kind = body.kind === "directory" ? "directory" : body.kind === "file" ? "file" : null;
+    const kind = requestedEntryKind(body.kind);
     if (rootInput === null || pathInput === null || kind === null) {
       return {
         status: 400,
