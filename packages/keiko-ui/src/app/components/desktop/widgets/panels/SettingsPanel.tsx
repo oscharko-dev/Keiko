@@ -14,6 +14,7 @@ import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./sett
 import { DebuggingSettings } from "./DebuggingSettings";
 import { EditorSettingsPanel } from "./EditorSettingsPanel";
 import { ManagedLanguageSettings } from "./ManagedLanguageSettings";
+import { AutonomySettings } from "./AutonomySettings";
 import { OPEN_EDITOR_SETTINGS_EVENT } from "./settingsPanelEvents";
 import type {
   ConversationIneligibilityReason,
@@ -1292,7 +1293,8 @@ export function SettingsPanel({
         )}
         {tab === "debugging" && <DebuggingSettings root={root} />}
         {tab === "security" && (
-          <div>
+          <div className="set-list">
+            <AutonomySettings />
             <div className="set-sec-h">
               <div>
                 <div className="set-sec-t">{workspaceT("workspaceTrust.title")}</div>

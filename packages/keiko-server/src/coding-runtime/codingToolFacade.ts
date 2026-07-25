@@ -198,7 +198,7 @@ function projectPayload(
   request: CodingToolActionRequest,
   value: unknown,
 ): CodingToolReadResult | CodingToolEgressReadResult | undefined {
-  if (request.action === "read") return projectRead(value);
+  if (request.action === "read" || request.action === "discover") return projectRead(value);
   if (request.action === "egress") return projectEgressRead(value);
   return undefined;
 }

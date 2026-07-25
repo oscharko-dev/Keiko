@@ -87,6 +87,7 @@ function governedPorts(
     Promise.resolve({ status: "failed" });
   return {
     repositoryRead: { execute: failed },
+    repositoryDiscover: { execute: failed },
     editorChangeset: { execute: () => Promise.resolve({ status: editorOutcome }) },
     commandRunner: { execute: failed },
     verificationRunner: { execute: failed },

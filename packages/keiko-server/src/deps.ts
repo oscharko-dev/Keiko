@@ -1575,6 +1575,21 @@ function resolveManagedWorktreeRoot(uiDbPath: string): string {
   return join(dirname(uiDbPath), "task-workspaces");
 }
 
+function composedManagedWorktreeRoot(
+  provisioning: WorkspaceProvisioningService | undefined,
+  resolvedUiDbPath: string,
+): string | undefined {
+  if (provisioning === undefined) return undefined;
+  const managedRoot = resolveManagedWorktreeRoot(resolvedUiDbPath);
+  // Canonical managed-root classification is a shared Files/Git trust boundary even before the
+  // first Coding run. Materialize the directory with the persistence services so an idle/fresh
+  // installation can classify ordinary roots without treating an absent boundary as authority.
+  if (!materializedManagedRoot(managedRoot)) {
+    throw new Error("Managed task-workspace boundary initialization failed.");
+  }
+  return managedRoot;
+}
+
 function buildWorkspaceProvisioning(
   options: BuildHandlerDepsOptions,
   store: WorkspaceInstanceStore | undefined,
@@ -2585,6 +2600,12 @@ function buildPersistenceBundle(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
 ): PersistenceBundle {
+  const persistence = composePersistence(
+    options.store,
+    resolvedUiDbPath,
+    redactString,
+    options.env,
+  );
   const {
     store,
     dispose,
@@ -2592,27 +2613,33 @@ function buildPersistenceBundle(
     workspaceInstanceStore,
     activeWorkspacePointerStore,
     codingRuntimeSnapshotStore,
-  } = composePersistence(options.store, resolvedUiDbPath, redactString, options.env);
-  const services = composeTaskWorkspaceServices(
-    options,
-    workspaceInstanceStore,
-    activeWorkspacePointerStore,
-    resolvedUiDbPath,
-    evidenceStore,
-    redactString,
-  );
-  return {
-    uiStore: store,
-    dispose,
-    relationship,
-    codingRuntimeSnapshotStore,
-    ...services,
-    managedTaskWorkspaceRoot:
-      services.workspaceProvisioning === undefined
-        ? undefined
-        : resolveManagedWorktreeRoot(resolvedUiDbPath),
-    preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
-  };
+  } = persistence;
+  try {
+    const services = composeTaskWorkspaceServices(
+      options,
+      workspaceInstanceStore,
+      activeWorkspacePointerStore,
+      resolvedUiDbPath,
+      evidenceStore,
+      redactString,
+    );
+    const managedTaskWorkspaceRoot = composedManagedWorktreeRoot(
+      services.workspaceProvisioning,
+      resolvedUiDbPath,
+    );
+    return {
+      uiStore: store,
+      dispose,
+      relationship,
+      codingRuntimeSnapshotStore,
+      ...services,
+      managedTaskWorkspaceRoot,
+      preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
+    };
+  } catch (error) {
+    dispose?.();
+    throw error;
+  }
 }
 
 // The optional persistence services (relationship engine + the #445/#446/#447 task-workspace
@@ -3385,6 +3412,16 @@ function runtimeWorkspaceAuthority(
   };
 }
 
+function runtimeStartConfirmationConsumer(
+  args: UiHandlerDepsAssemblyArgs,
+  activated: boolean,
+): CodingRuntimeStartConfirmationConsumer | undefined {
+  if (args.options.codingRuntimeStartConfirmationConsumer !== undefined) {
+    return args.options.codingRuntimeStartConfirmationConsumer;
+  }
+  return activated ? createAuthenticatedSessionStartConfirmationPlane() : undefined;
+}
+
 function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
   verificationRunner: PeripheralManagers["verificationRunner"],
@@ -3409,9 +3446,7 @@ function productionRuntimeResolver(
   if (!materializedManagedRoot(managedTaskWorkspaceRoot)) {
     return unqualifiedComposition("runtime-unqualified");
   }
-  const confirmationConsumer =
-    args.options.codingRuntimeStartConfirmationConsumer ??
-    (resolution.activated ? createAuthenticatedSessionStartConfirmationPlane() : undefined);
+  const confirmationConsumer = runtimeStartConfirmationConsumer(args, resolution.activated);
   const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
   const resolver = createProductionCodingRuntimeResolver({
     workspaceAuthority: runtimeWorkspaceAuthority(
@@ -3430,6 +3465,7 @@ function productionRuntimeResolver(
     // coding-safe PROVIDER model id the sidecar gateway maps the runtime's "coding" alias onto.
     // Resolved per call because the gateway config can change while the server is up.
     childModelId: (): string | undefined => codingSafeChildModelId(args.runtimeConfig),
+    ...(args.options.diagnostics ? { diagnostics: args.options.diagnostics } : {}),
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
   return qualifiedProductionRuntimeComposition(resolver, readiness, runtimeMutationLeaseBroker);

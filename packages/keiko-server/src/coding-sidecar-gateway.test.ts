@@ -229,6 +229,26 @@ const WORKSPACE_READ_SCHEMA = {
   required: ["relativePath", "startLine", "maxLines"],
 } as const;
 
+const WORKSPACE_DISCOVER_SCHEMA = {
+  type: "object",
+  properties: {
+    query: {
+      type: "string",
+      minLength: 1,
+      maxLength: 256,
+      description:
+        "Case-insensitive filename/path keywords. Use a short distinctive term such as safeActivity, timeline, or composer. Use * only when a bounded repository overview is necessary.",
+    },
+    maxResults: {
+      type: "integer",
+      minimum: 1,
+      maximum: 100,
+      description: "Maximum number of matching workspace-relative file paths to return.",
+    },
+  },
+  required: ["query", "maxResults"],
+} as const;
+
 const CHANGESET_EDIT_SCHEMA = {
   type: "object",
   properties: {
@@ -365,6 +385,7 @@ const CHILD_AGENT_SCHEMA = {
 
 const PINNED_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
+  { name: "keiko_workspace_discover", parameters: WORKSPACE_DISCOVER_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_PROJECTED_SCHEMA },
@@ -518,6 +539,10 @@ describe("coding-sidecar gateway", () => {
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([
       ["question", "4f618d23c27d7147ab8564c3ec1050c508762a19b9a4858951a9cd3089b52df3"],
+      [
+        "keiko_workspace_discover",
+        "43c78833caee7bb83f746ae45cacd44d3b8cc07fc7a3b298a24caae993ba2978",
+      ],
       ["keiko_workspace_read", "56d2649a7a308efdc47db2899922c9889822a17b9d9bd081ee0c099a066411ac"],
       ["keiko_changeset_edit", "59902a2dd9af28ed8b97d1108215c6e88bbe0fba017a4756a99e833b9af48952"],
       ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
@@ -920,6 +945,14 @@ describe("coding-sidecar gateway", () => {
         messages: [{ role: "user", content: "continue" }],
         tools: modelVisibleTools([
           { name: "question", parameters: { ...QUESTION_SCHEMA, required: ["questions"] } },
+          {
+            name: "keiko_workspace_discover",
+            parameters: {
+              required: ["query", "maxResults"],
+              properties: { ...WORKSPACE_DISCOVER_SCHEMA.properties },
+              type: "object",
+            },
+          },
           {
             name: "keiko_workspace_read",
             parameters: {

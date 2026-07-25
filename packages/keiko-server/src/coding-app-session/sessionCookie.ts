@@ -1,8 +1,8 @@
 // Session cookie serialization and reading for the authenticated app-session channel (ADR-0141 D4).
 //
 // The cookie is the only bearer. It is `HttpOnly` (unreadable by page script, so not extractable
-// browser storage), `SameSite=Strict` (never sent cross-site), and scoped to the two API surfaces
-// that consume it. It is
+// browser storage), `SameSite=Strict` (never sent cross-site), and scoped only to API surfaces that
+// consume it. It is
 // marked `Secure` only when the request arrived over TLS, because loopback HTTP — a browser-designated
 // secure context — cannot carry a `Secure` cookie. The value never appears in a URL or any log.
 
@@ -11,19 +11,17 @@ import type { IncomingMessage } from "node:http";
 /** Cookie name for the app session. Kept stable so it can be cleared reliably. */
 export const APP_SESSION_COOKIE_NAME = "keiko_coding_app_session";
 /**
- * Path scopes: the coding-workbench, Git, and editor local-history API surfaces. W1.9 (#2482)
- * issues the same bearer on least-privilege paths rather than their broader `/api` ancestor, so
- * each consuming surface receives it without presenting it to unrelated BFF routes. ADR-0147 D7
- * (M11, #2532) adds the third surface: editor local-history reads under
- * `/api/editor/local-history` are authenticated content reads through the same
- * `resolveAppSessionReadAuthority` gate, and an unpaired read yields the content-free empty
- * projection by design — without this projection the history panel silently lists nothing.
- * `Path` is browser hygiene, not a security boundary (RFC 6265 §8.6); `HttpOnly`,
+ * Path scopes: only API families that consume protected coding-session authority. W1.9 (#2482)
+ * first added Git; the managed-worktree integration adds Files, Editor (including ADR-0147 D7
+ * local-history reads), and runtime capabilities without returning to their broader `/api`
+ * ancestor. `Path` is browser hygiene, not a security boundary (RFC 6265 §8.6); `HttpOnly`,
  * `SameSite=Strict`, and loopback host scope carry bearer protection.
  */
 export const APP_SESSION_COOKIE_PATH = "/api/coding-workbench";
 export const APP_SESSION_GIT_COOKIE_PATH = "/api/git";
-export const APP_SESSION_EDITOR_LOCAL_HISTORY_COOKIE_PATH = "/api/editor/local-history";
+export const APP_SESSION_FILES_COOKIE_PATH = "/api/files";
+export const APP_SESSION_EDITOR_COOKIE_PATH = "/api/editor";
+export const APP_SESSION_RUNTIME_COOKIE_PATH = "/api/runtime";
 
 export interface SessionCookieOptions {
   readonly secure: boolean;
@@ -49,21 +47,31 @@ export function serializeSessionCookie(cookieToken: string, options: SessionCook
  * Every issuance and every clear therefore also emits an expired projection for it.
  */
 const APP_SESSION_LEGACY_COOKIE_PATH = "/api";
+const APP_SESSION_RETIRED_LOCAL_HISTORY_COOKIE_PATH = "/api/editor/local-history";
 
-function expiredLegacyCookie(secure: boolean): string {
-  return `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure, APP_SESSION_LEGACY_COOKIE_PATH)}; Max-Age=0`;
+function expiredCookie(secure: boolean, path: string): string {
+  return `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure, path)}; Max-Age=0`;
 }
 
-/** Serialize every least-privilege cookie projection consumed by authenticated Code reads. */
+/** Serialize least-privilege cookie projections consumed by authenticated Code reads. */
 export function serializeSessionCookies(
   cookieToken: string,
   options: SessionCookieOptions,
 ): readonly string[] {
-  const codingCookie = serializeSessionCookie(cookieToken, options);
   const maxAge = Math.max(0, Math.floor(options.maxAgeSeconds));
-  const gitCookie = `${APP_SESSION_COOKIE_NAME}=${cookieToken}; ${baseAttributes(options.secure, APP_SESSION_GIT_COOKIE_PATH)}; Max-Age=${String(maxAge)}`;
-  const historyCookie = `${APP_SESSION_COOKIE_NAME}=${cookieToken}; ${baseAttributes(options.secure, APP_SESSION_EDITOR_LOCAL_HISTORY_COOKIE_PATH)}; Max-Age=${String(maxAge)}`;
-  return [codingCookie, gitCookie, historyCookie, expiredLegacyCookie(options.secure)];
+  const projection = (path: string): string =>
+    `${APP_SESSION_COOKIE_NAME}=${cookieToken}; ${baseAttributes(options.secure, path)}; Max-Age=${String(maxAge)}`;
+  return [
+    serializeSessionCookie(cookieToken, options),
+    projection(APP_SESSION_GIT_COOKIE_PATH),
+    projection(APP_SESSION_FILES_COOKIE_PATH),
+    projection(APP_SESSION_EDITOR_COOKIE_PATH),
+    projection(APP_SESSION_RUNTIME_COOKIE_PATH),
+    // Retire both predecessor projections. Otherwise a browser may send the old, narrower cookie
+    // alongside the new editor projection under the same name and leave ordering browser-dependent.
+    expiredCookie(options.secure, APP_SESSION_RETIRED_LOCAL_HISTORY_COOKIE_PATH),
+    expiredCookie(options.secure, APP_SESSION_LEGACY_COOKIE_PATH),
+  ];
 }
 
 /** Serialize the `Set-Cookie` value that clears a session on sign-out. */
@@ -73,11 +81,16 @@ export function clearSessionCookie(secure: boolean): string {
 
 /** Clear every scoped browser projection when the shared server-side session is revoked. */
 export function clearSessionCookies(secure: boolean): readonly string[] {
+  const expire = (path: string): string =>
+    `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure, path)}; Max-Age=0`;
   return [
     clearSessionCookie(secure),
-    `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure, APP_SESSION_GIT_COOKIE_PATH)}; Max-Age=0`,
-    `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure, APP_SESSION_EDITOR_LOCAL_HISTORY_COOKIE_PATH)}; Max-Age=0`,
-    expiredLegacyCookie(secure),
+    expire(APP_SESSION_GIT_COOKIE_PATH),
+    expire(APP_SESSION_FILES_COOKIE_PATH),
+    expire(APP_SESSION_EDITOR_COOKIE_PATH),
+    expire(APP_SESSION_RUNTIME_COOKIE_PATH),
+    expire(APP_SESSION_RETIRED_LOCAL_HISTORY_COOKIE_PATH),
+    expire(APP_SESSION_LEGACY_COOKIE_PATH),
   ];
 }
 

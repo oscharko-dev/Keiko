@@ -70,6 +70,17 @@ function launcherPairingFragment(): string {
   );
 }
 
+// #2644 moved the product-wide autonomy modes into Settings -> Security. The control is
+// server-confirmed, so this waits for the selection to settle rather than assuming it applied.
+async function requestAutonomyMode(page: Page, label: RegExp): Promise<void> {
+  await page.getByRole("button", { name: "Settings" }).click();
+  const settings = page.getByRole("region", { name: /^Settings/u });
+  await settings.getByRole("button", { name: "Security" }).click();
+  await page.getByRole("radio", { name: label }).click();
+  await expect(page.getByRole("radio", { name: label })).toBeChecked();
+  await page.getByRole("button", { name: "Close Settings window" }).click();
+}
+
 async function openWorkbench(page: Page, pairingFragment?: string): Promise<void> {
   await page.goto(pairingFragment === undefined ? "/" : `/${pairingFragment}`);
   if (pairingFragment !== undefined) {
@@ -475,13 +486,14 @@ test("#2386 authority: the workbench readiness surface is live, not static", asy
   );
   await openWorkbench(page);
 
-  await expect(page.getByText("Runtime not confirmed", { exact: true })).toBeVisible();
   // #2476 AC4 — the setup surface stays reachable and honestly explains why start is unavailable
   // instead of disappearing behind the unconfirmed runtime.
   await expect(page.getByRole("region", { name: "Code setup" })).toBeVisible();
   await expect(page.getByTestId("coding-workbench-setup-runtime-note")).toBeVisible();
-  await page.getByLabel("Task instructions").fill("Must stay blocked without a confirmed runtime");
-  await expect(page.getByRole("button", { name: "Start coding run" })).toBeDisabled();
+  // #2644 put the task composer behind the binding step, so an unconfirmed runtime cannot be
+  // started at all here — a stronger guarantee than the disabled control this used to assert.
+  await expect(page.getByLabel("Task instructions")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Start coding run" })).toHaveCount(0);
 });
 
 test("#2386 authority: question, sticky pause, widening rejection, follow-up, settle", async ({
@@ -493,8 +505,13 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   await openWorkbench(page, launcherPairingFragment());
   await bindFixtureWorkspace(page);
 
-  // #2386 changed the workbench default from full access to the supervised middle mode.
-  await expect(page.getByRole("radio", { name: /Supervised workspace/u })).toBeChecked();
+  // #2386 moved the default off full access; #2644 made the mode product-wide, so the default now
+  // comes from the autonomy policy and lands one step NARROWER still — the Workbench reports the
+  // server-confirmed mode instead of owning the selector. Never full access on a fresh install.
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "governed-assist",
+  );
   await page.getByLabel("Task instructions").fill("Rename the authority constant under src/");
   const start = page.getByRole("button", { name: "Start coding run" });
   await expect(start).toBeEnabled();
@@ -518,16 +535,16 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   await page.getByRole("button", { name: "Pause run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "paused");
 
-  // Widening past the server-confirmed effective mode while the run is live is rejected; the
-  // paused run keeps its authority. Restoring the supervised request clears the rejection.
-  await page.getByRole("radio", { name: /Full access/u }).check();
-  await expect(
-    page.getByText("The server rejected this change: widening authority requires stopping", {
-      exact: false,
-    }),
-  ).toBeVisible();
+  // Widening past the server-confirmed effective mode while the run is live must not take effect;
+  // the paused run keeps its authority. The selector now lives in Settings (#2644), so the proof is
+  // that requesting Full access there leaves the live run's confirmed mode untouched.
+  await requestAutonomyMode(page, /Full access/u);
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "governed-assist",
+  );
   await expect(workbench(page)).toHaveAttribute("data-state", "paused");
-  await page.getByRole("radio", { name: /Supervised workspace/u }).check();
+  await requestAutonomyMode(page, /Ask for approval/u);
 
   // A follow-up drafted while paused is admitted as a new task turn — and must NOT auto-resume.
   const taskSubmitted = timeline.getByText("Task submitted", { exact: true });

@@ -27,7 +27,7 @@ import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { FilesError, readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
+import { FilesError, readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
 import { describeLanguageCapabilities, runLanguageOperation } from "./languageService.js";
 import type { LanguageServiceOutcome } from "./languageService.js";
@@ -186,7 +186,7 @@ export async function handleEditorLanguage(
   }
   const request = parsed.value;
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
     const outcome = await runEditorLanguageOperation(
       request,
@@ -221,7 +221,7 @@ export async function handleEditorLanguageSemanticTokens(
   }
   return runFilesHandler(async () => {
     const request = parsed.value;
-    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, request.root);
     const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
     const authorization = await managedActivationAuthorization(
       deps,
@@ -579,7 +579,7 @@ export async function handleEditorLanguageCapabilitiesForRoute(
     };
   }
   return runFilesHandler(async () => {
-    const resolved = await resolveRoot(deps.store, root, deps.redactor);
+    const resolved = await resolveRequestRoot(ctx, deps, root);
     const detected =
       deps.managedLspControl === undefined
         ? detectHostLanguageProviderDescriptors({

@@ -7,8 +7,14 @@ test("opens a live Coding Workbench and starts a server-bound run @smoke", async
   await fixture.open();
 
   await expect(page.getByText("task-2257 · issue/2257-live-runtime · healthy")).toBeVisible();
-  // #2386 changed the workbench default from full access to the supervised middle mode.
-  await expect(page.getByText(/Server effective mode:/u)).toContainText("Supervised workspace");
+  // #2386 changed the workbench default from full access to the supervised middle mode. #2644 moved
+  // the selector into Settings, so the Workbench now reports the server-confirmed effective mode in
+  // its session context bar instead of owning the control.
+  await expect(fixture.workbench.locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "supervised-coding",
+  );
+  await expect(fixture.workbench.locator("[data-mode]")).toContainText("Supervised workspace");
   await page.getByLabel("Task instructions").fill("Investigate a failing test");
   await page.getByRole("button", { name: "Start coding run" }).click();
   await expect(fixture.workbench).toHaveAttribute("data-state", "awaiting-approval");

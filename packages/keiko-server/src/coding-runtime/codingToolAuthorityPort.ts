@@ -246,6 +246,7 @@ const STATIC_REQUIRED_CLASSES: Readonly<
   Record<Exclude<CodingToolActionRequest["action"], "git">, readonly RuntimeActionClass[]>
 > = {
   read: ["workspace-read"],
+  discover: ["workspace-read"],
   edit: ["workspace-write"],
   command: ["command-execution"],
   verification: ["verification"],
@@ -274,6 +275,7 @@ function additionalPolicyAllowed(
 ): boolean {
   switch (request.action) {
     case "read":
+    case "discover":
     case "edit":
     case "verification":
       return true;

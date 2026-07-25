@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  CODING_TOOL_DISCOVER_MAX_RESULTS,
   CODING_TOOL_READ_MAX_START_LINE,
   CODING_TOOL_READ_MAX_WINDOW_LINES,
 } from "./codingToolIpc.js";
@@ -67,6 +68,26 @@ const WORKSPACE_READ_SCHEMA = {
   // OpenCode v1.17.17 declares every custom-tool argument as required in its provider
   // projection, so the pinned model-visible contract must require the window fields too.
   required: ["relativePath", "startLine", "maxLines"],
+} as const;
+
+const WORKSPACE_DISCOVER_SCHEMA = {
+  type: "object",
+  properties: {
+    query: {
+      type: "string",
+      minLength: 1,
+      maxLength: 256,
+      description:
+        "Case-insensitive filename/path keywords. Use a short distinctive term such as safeActivity, timeline, or composer. Use * only when a bounded repository overview is necessary.",
+    },
+    maxResults: {
+      type: "integer",
+      minimum: 1,
+      maximum: CODING_TOOL_DISCOVER_MAX_RESULTS,
+      description: "Maximum number of matching workspace-relative file paths to return.",
+    },
+  },
+  required: ["query", "maxResults"],
 } as const;
 
 const CHANGESET_EDIT_SCHEMA = {
@@ -225,6 +246,7 @@ const CHILD_AGENT_SCHEMA = {
 
 export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
+  { name: "keiko_workspace_discover", parameters: WORKSPACE_DISCOVER_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_SCHEMA },
@@ -239,6 +261,14 @@ export const OPENCODE_MODEL_VISIBLE_TOOL_NAMES = OPENCODE_MODEL_VISIBLE_TOOLS.ma
 );
 
 export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
+  {
+    name: "keiko_workspace_discover",
+    action: "discover",
+    arguments: {
+      query: WORKSPACE_DISCOVER_SCHEMA.properties.query,
+      maxResults: WORKSPACE_DISCOVER_SCHEMA.properties.maxResults,
+    },
+  },
   {
     name: "keiko_workspace_read",
     action: "read",

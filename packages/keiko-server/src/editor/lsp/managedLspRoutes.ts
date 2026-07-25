@@ -10,7 +10,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../../deps.js";
-import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
+import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../../routes.js";
 import { listHostLspHealthSnapshotsForRoot } from "./hostLanguageOperation.js";
 import { managedLspConfigurationDefaults } from "./managedLspConfigurationDefaults.js";
@@ -113,7 +113,7 @@ export async function handleGetManagedLspControl(
     };
   }
   return runFilesHandler(async () => {
-    const resolved = await resolveRoot(deps.store, ctx.url.searchParams.get("root"), deps.redactor);
+    const resolved = await resolveRequestRoot(ctx, deps, ctx.url.searchParams.get("root"));
     const snapshot = await deps.managedLspControl?.read(resolved.realRoot);
     if (snapshot === undefined) throw new Error("managed LSP control disappeared");
     const health = listHostLspHealthSnapshotsForRoot(resolved.realRoot);
@@ -236,7 +236,7 @@ export async function handlePutManagedLspControl(
     };
   }
   return runFilesHandler(async () => {
-    const resolved = await resolveRoot(deps.store, body.root, deps.redactor);
+    const resolved = await resolveRequestRoot(ctx, deps, body.root);
     const mutation: ManagedLspControlMutation = {
       ...body,
       root: resolved.realRoot,

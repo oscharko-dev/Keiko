@@ -5,7 +5,7 @@ import {
   FilesError,
   normalizeRelativePath,
   readJsonObject,
-  resolveRoot,
+  resolveRequestRoot,
   runFilesHandler,
 } from "../files.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
@@ -27,12 +27,13 @@ function stringField(raw: Record<string, unknown>, field: string): string | Rout
 }
 
 async function expectedSnapshotRef(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   store: EditorHotExitStore,
   root: string,
   relativePath: string,
 ): Promise<string> {
-  const resolvedRoot = await resolveRoot(deps.store, root, deps.redactor);
+  const resolvedRoot = await resolveRequestRoot(ctx, deps, root);
   const normalizedPath = normalizeRelativePath(relativePath);
   if (pathIsDenied(normalizedPath)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
@@ -41,13 +42,14 @@ async function expectedSnapshotRef(
 }
 
 async function validateSnapshotBinding(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   store: EditorHotExitStore,
   root: string,
   relativePath: string,
   snapshotRef: string,
 ): Promise<boolean> {
-  return (await expectedSnapshotRef(deps, store, root, relativePath)) === snapshotRef;
+  return (await expectedSnapshotRef(ctx, deps, store, root, relativePath)) === snapshotRef;
 }
 
 function unavailableStore(): RouteResult {
@@ -95,6 +97,7 @@ export async function handleEditorHotExitWrite(
     const snapshot = snapshotFromBody(body);
     if (isRouteResult(snapshot)) return snapshot;
     const snapshotRef = await expectedSnapshotRef(
+      ctx,
       deps,
       deps.editorHotExitStore,
       snapshot.workspaceRoot,
@@ -128,6 +131,7 @@ export async function handleEditorHotExitRead(
     if (typeof snapshotRef !== "string") return snapshotRef;
     if (
       !(await validateSnapshotBinding(
+        ctx,
         deps,
         deps.editorHotExitStore,
         root,
@@ -158,6 +162,7 @@ export async function handleEditorHotExitDelete(
     if (typeof snapshotRef !== "string") return snapshotRef;
     if (
       !(await validateSnapshotBinding(
+        ctx,
         deps,
         deps.editorHotExitStore,
         root,

@@ -38,7 +38,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assembleGroundedContext } from "@oscharko-dev/keiko-local-knowledge";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { FilesError, readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
+import { FilesError, readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
 import { openStoreForDeps } from "../local-knowledge-grounded-qa.js";
 import { assembleCodingContext } from "./codingContext.js";
@@ -173,7 +173,7 @@ export async function handleEditorContext(
   }
   const rootInput = rootFieldOf(body);
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, rootInput, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, rootInput);
     const request = sanitizeCodingContextRequest(buildInternalRequest(body));
     if (isRouteResult(request)) {
       return request;
@@ -485,7 +485,7 @@ export async function handleEditorRepoSearch(
     return input;
   }
   return runFilesHandler(async () => {
-    const root = await resolveRoot(deps.store, input.root, deps.redactor);
+    const root = await resolveRequestRoot(ctx, deps, input.root);
     const invalid = validateRepoSearchPaths(root.realRoot, input);
     if (invalid !== undefined) {
       return invalid;

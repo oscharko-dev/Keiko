@@ -21,10 +21,6 @@ export function modeLabel(mode: CodingWorkbenchMode, t: CodingWorkbenchTranslate
   return t(`codingWorkbench.mode.${mode}.label`);
 }
 
-export function modeDescription(mode: CodingWorkbenchMode, t: CodingWorkbenchTranslate): string {
-  return t(`codingWorkbench.mode.${mode}.description`);
-}
-
 export function modelSourceLabel(
   source: CodingWorkbenchModelSource,
   t: CodingWorkbenchTranslate,
@@ -226,6 +222,7 @@ function eventOutcomeDetail(
 export function visibleAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
+  setupVisible: boolean,
 ): string | null {
   if (state.mutation.error) return t("codingWorkbench.alert.actionFailed");
   for (const [resource, value] of [
@@ -238,6 +235,18 @@ export function visibleAlert(
     ["eventStream", state.stream],
   ] as const) {
     if (value.status === "error") return t(`codingWorkbench.alert.${resource}RefreshFailed`);
+  }
+  // Last, because the surface shows one alert at a time: a refresh failure is actionable (retry),
+  // an unqualified runtime is a standing condition. Reporting the condition first would swallow the
+  // recoverable error. Only while the bootstrap setup section is off screen — it states the same
+  // condition itself, and duplicating it would announce it twice to assistive technology. This
+  // wording is its own: the setup copy invites binding a workspace, which is already done here.
+  if (
+    !setupVisible &&
+    state.runtime.status === "ready" &&
+    state.runtime.value?.runtimeAvailable === false
+  ) {
+    return t("codingWorkbench.alert.runtimeUnqualified");
   }
   return null;
 }

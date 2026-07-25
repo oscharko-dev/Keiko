@@ -1,7 +1,9 @@
 import { detectWorkspaceAt, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { resolveRoot, runFilesHandler } from "../files.js";
+import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
+import { resolveRequestRoot, runFilesHandler } from "../files.js";
+import { resolveManagedTaskWorkspaceRoot } from "../task-workspace/authorization.js";
 import {
   detectRuntimeCapabilities,
   type RuntimeCapabilityDetectorOptions,
@@ -49,11 +51,18 @@ export async function handleRuntimeCapabilities(
   if (root.length === 0) {
     return badRoot();
   }
-  if (!deps.store.listProjects().some((project) => project.path === root)) {
+  const registered = deps.store.listProjects().some((project) => project.path === root);
+  // Preserve the route's existing content-free rejection for arbitrary unregistered roots. A
+  // launcher-paired caller may additionally present a persisted managed task worktree, which is
+  // re-proven below by the shared request-root boundary.
+  if (!registered && resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
     return workspaceNotRegistered();
   }
   return runFilesHandler(async () => {
-    const resolved = await resolveRoot(deps.store, root, deps.redactor);
+    const resolved = await resolveRequestRoot(ctx, deps, root);
+    if (!registered && resolveManagedTaskWorkspaceRoot(deps, root) === undefined) {
+      return workspaceNotRegistered();
+    }
     const workspace = (options.detectWorkspace ?? detectWorkspaceAt)(resolved.realRoot);
     const body = detectRuntimeCapabilities({
       env: deps.env,

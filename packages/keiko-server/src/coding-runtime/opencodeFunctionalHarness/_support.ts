@@ -529,6 +529,7 @@ interface PendingFakeQuestion {
 const FAKE_TOOL_ACTIONS: Readonly<
   Record<string, { readonly action: string; readonly arguments: readonly string[] }>
 > = {
+  keiko_workspace_discover: { action: "discover", arguments: ["query", "maxResults"] },
   keiko_workspace_read: { action: "read", arguments: ["relativePath"] },
   keiko_changeset_edit: { action: "edit", arguments: ["changeset"] },
   keiko_verification: { action: "verification", arguments: ["verifierId"] },

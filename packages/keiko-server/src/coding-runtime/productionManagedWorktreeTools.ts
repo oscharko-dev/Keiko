@@ -15,6 +15,7 @@ import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import type {
@@ -62,6 +63,7 @@ export interface ProductionManagedWorktreeToolInput {
   readonly childModelPortFactory?: ((modelId: string) => ModelPort | undefined) | undefined;
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   // Present only when read-only public research (#2387) is activated for this run: the run-bound
   // grant registry and the gateway's outbound egress config (proxy/CA). When absent, the egress
   // authority stays the fail-closed stub, so a run without research can never reach the internet.
@@ -118,9 +120,11 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
       workspaceRootDigest: input.liveFacts().binding.workspaceRootDigest,
       expiresAt: input.authorityExpiresAt,
     }),
+    resolveWorkspaceRoot: () => input.workspaceRoot,
     requiresEditorReview: () =>
       codingWorkbenchPolicyEffectFor(input.effectiveMode, "workspace-contained", "high") !==
       "allowed",
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.mutationLeaseCoordinator
       ? { mutationLeaseCoordinator: input.mutationLeaseCoordinator }
       : {}),
