@@ -468,9 +468,19 @@ function fileFloorEntryFailures(file, entry) {
   if (governed.length === 0) {
     return [`file floor "${file}" governs no metric.`];
   }
-  return governed
-    .filter((metric) => !isPercent(entry[metric]))
-    .map((metric) => `file floor "${file}" has an invalid ${metric} floor.`);
+  // An unrecognised key is rejected rather than ignored. `docs/qa/coverage-truth-model.md` tells an
+  // operator to add "absolute" entries by hand, and a typo such as `lnes: 90` would otherwise leave
+  // the file looking governed on that metric while nothing evaluated it — the silent under-governance
+  // this whole consolidation exists to make impossible.
+  const unknown = Object.keys(entry).filter(
+    (key) => key !== "governance" && key !== "tolerance" && !METRICS.includes(key),
+  );
+  return [
+    ...unknown.map((key) => `file floor "${file}" declares unknown key "${key}".`),
+    ...governed
+      .filter((metric) => !isPercent(entry[metric]))
+      .map((metric) => `file floor "${file}" has an invalid ${metric} floor.`),
+  ];
 }
 
 // ADR-0158 D1: a baseline that is not exactly the governed schema fails the gate closed. The

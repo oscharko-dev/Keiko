@@ -646,6 +646,19 @@ describe("coverage baseline schema (fail-closed)", () => {
       expect.stringContaining("invalid lines floor"),
     ]);
   });
+
+  // The truth model tells operators to add "absolute" entries by hand, so a mistyped metric key is
+  // a realistic way to end up with a file that LOOKS governed on a metric nothing evaluates.
+  it("rejects an unknown key rather than silently governing less than it appears to", () => {
+    expect(
+      baselineSchemaFailures({
+        ...valid,
+        fileFloors: {
+          "a.ts": { governance: "absolute", tolerance: 0, lines: 90, lnes: 90 },
+        },
+      }),
+    ).toEqual([expect.stringContaining('unknown key "lnes"')]);
+  });
 });
 
 // Issue #2705: these pins are RELOCATED from `scripts/__tests__/vitest-config-parity.test.mjs`,
