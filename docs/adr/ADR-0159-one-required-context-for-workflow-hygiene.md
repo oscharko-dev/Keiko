@@ -138,8 +138,15 @@ consolidation the issue asks for — four contexts into one, same tools, same ru
 exactly; only the file hosting it differs, and the check context, its App id and the
 branch-protection entry are identical either way.
 
-`.github/workflows/osv-scanner.yml` keeps its `push`, `schedule` and `workflow_dispatch` lanes. Its
-`pull_request` and `merge_group` lanes move into the bundle, which covers both.
+`.github/workflows/osv-scanner.yml` keeps `schedule` and `workflow_dispatch`. Every event-driven
+lane — `pull_request`, `merge_group` and `push` — moves into the bundle. The `push` lane goes too,
+against this record's first draft and against the issue text, because the bundle's `push` branch
+list is byte-identical to the one `osv-scanner.yml` carried: keeping both would scan every pushed
+commit twice, which is precisely the duplicate evaluation ADR-0158's charter admits removing when a
+strictly dominating check keeps executing in a required context. What cannot move is `schedule`: it
+re-reads a live vulnerability database against an unchanged tree, so a newly published advisory is
+detected without anyone pushing. That cadence is the reason the workflow still exists, and it is
+untouched — which is what the issue's "the scheduled detection cadence is unchanged" was protecting.
 
 **D3 — A required context is bounded.** `workflow-hygiene` declares `timeout-minutes: 15`, which no
 `ci.yml` job does today. ADR-0135 D4 requires a repository-owned timeout of anything that is
@@ -174,12 +181,10 @@ required context.
 The ordering is not a preference. Removing the jobs before the owner's update would leave branch
 protection requiring four contexts that no workflow produces, which blocks every pull request in the
 repository — including the one that would fix it — and converts a scheduling choice into an incident
-under time pressure. The `osv-scanner.yml` `push`, `schedule` (`37 3 * * *`) and
-`workflow_dispatch` lanes stay where they are in all three phases, so branch coverage and the
-scheduled detection cadence are unchanged. Its `pull_request` and `merge_group` lanes move into the
-bundle, which covers both — `merge_group` was not named here before phase 3 established that the
-bundle owns its own trigger surface, and a record that is wrong about what moved is worse than one
-that says less.
+under time pressure. The `osv-scanner.yml` `schedule` (`37 3 * * *`) and `workflow_dispatch` lanes
+stay where they are in all three phases, so the scheduled detection cadence is unchanged; its three
+event-driven lanes move into the bundle, whose branch lists are byte-identical, so branch coverage is
+unchanged too. See D2 for why `push` moved rather than staying as the issue text says.
 
 The documentation lists move in phase 3 rather than phase 1 for the same reason the jobs do.
 `CONTRIBUTING.md` is authoritative for what branch protection actually requires (ADR-0002), and an

@@ -53,12 +53,15 @@ describe("OSV Scanner workflow", () => {
   // scan skips has NO dependency coverage. The pin now enforces the stronger property.
   // Each event is checked against its OWN list: a branch present under `push` must not satisfy the
   // `pull_request` expectation, which a whole-document search would have allowed.
-  // Unchanged property, re-pointed at the owner of each event: `push` is still this workflow's, and
-  // `pull_request` is the bundled context's since ADR-0159. A branch either lane skips has NO
-  // dependency coverage, which is what makes this stricter than "scans dev".
+  // Unchanged property, re-pointed at its owner: since ADR-0159 both event-driven lanes belong to
+  // the bundled context. A branch it skips has NO dependency coverage, which is what makes this
+  // stricter than "scans dev". The `push` case is also the only thing standing between a tidy-up and
+  // a hung release: `workflow hygiene` is a RELEASE_REQUIRED_CHECKS entry, and
+  // verify-release-required-checks.mjs reads it off a release commit - evidence only a push run
+  // produces.
   it.each([
     { event: "pull_request", owner: "workflow-hygiene.yml", source: hygiene },
-    { event: "push", owner: "osv-scanner.yml", source: workflow },
+    { event: "push", owner: "workflow-hygiene.yml", source: hygiene },
   ])("covers every $event target the audit gates run on", ({ event, owner, source }) => {
     const expected = branchList(ci, event, "ci.yml");
     const actual = branchList(source, event, owner);
@@ -67,15 +70,14 @@ describe("OSV Scanner workflow", () => {
     for (const branch of expected) expect(actual).toContain(branch);
   });
 
-  // The bundled context is a RELEASE_REQUIRED_CHECKS entry, and verify-release-required-checks.mjs
-  // reads it off a release commit - evidence only the push lane produces. Without this, deleting
-  // that lane as a "duplicate" of the pull-request one keeps the whole suite green and hangs the
-  // next release on a check nothing emits.
-  it("keeps the bundled context reporting on every branch the audit gates push to", () => {
-    const expected = branchList(ci, "push", "ci.yml");
-    const actual = branchList(hygiene, "push", "workflow-hygiene.yml");
-    expect(expected).toContain("dev");
-    for (const branch of expected) expect(actual).toContain(branch);
+  it("keeps exactly the lane an event-driven workflow cannot replace", () => {
+    // `schedule` re-reads a live vulnerability database against an unchanged tree, so a newly
+    // published advisory is found without anyone pushing. Every event-driven lane moved to the
+    // bundled context, whose push branch list is byte-identical - running both would scan every
+    // pushed commit twice, which is the duplication ADR-0158's charter exists to remove.
+    expect(() => branchList(workflow, "push", "osv-scanner.yml")).toThrow();
+    expect(() => branchList(workflow, "pull_request", "osv-scanner.yml")).toThrow();
+    expect(workflow).toContain('cron: "37 3 * * *"');
   });
 
   it("validates merge-queue groups like the audit gates do", () => {
@@ -85,8 +87,8 @@ describe("OSV Scanner workflow", () => {
   });
 
   it("scans every dev push without a path filter", () => {
-    expect(workflow).toMatch(/push:\n\s+branches:\n\s+- dev/u);
-    expect(workflow).not.toMatch(/push:[\s\S]*?paths:/u);
+    expect(hygiene).toMatch(/push:\n\s+branches:\n\s+- dev/u);
+    expect(hygiene).not.toMatch(/push:[\s\S]*?paths:/u);
   });
 
   it("runs daily and supports a manual scan", () => {

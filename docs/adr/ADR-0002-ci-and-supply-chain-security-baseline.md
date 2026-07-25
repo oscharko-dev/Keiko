@@ -6,6 +6,17 @@ Accepted
 
 Superseded in part by ADR-0020 (the architecture gate was folded into the existing `ci` job rather than a new job). Amended by #2696/#2699: the `npm audit` gates now run with `--omit=dev`, so a devDependency advisory no longer fails the build — the consequence anticipated below as "noise on zero-day disclosure days" became a repository-wide delivery block on 2026-07-24 (GHSA-mh99-v99m-4gvg, no upstream fix for the 1.x line the ESLint stack pins). Coverage of build-time tooling moved to the OSV scan, which was widened from `dev` alone to every branch target the audit gates run on, so `release/**` and the integration branches are no longer left without any dependency scanner. Production-dependency thresholds are unchanged. The required-check count is now 8 per CONTRIBUTING.md (adds `ui`) and the workflow-file count has grown from 3 to 7 (ci.yml, codeql.yml, dependency-review.yml, e2e-extended.yml, main-promotion.yml, portable-assets.yml, release.yml). The SHA-pinning and deny-all-permissions mechanism itself is unchanged and still live.
 
+Superseded in part again by [ADR-0159](ADR-0159-one-required-context-for-workflow-hygiene.md) on
+2026-07-25: the `actionlint` and `Verify pinned action SHAs` **jobs** described below no longer
+exist as separate jobs or as separate required contexts. Both tools, and zizmor and the OSV lockfile
+scan, now run as serial steps of one `workflow-hygiene` job in
+`.github/workflows/workflow-hygiene.yml`, producing the single required context `workflow hygiene`.
+Every tool, pinned version, checksum, argument, exemption and `contents: read` permission specified
+below is carried over character for character — what changed is the job topology, not the checks.
+The name-fidelity constraint this record states remains the binding one, now applied to
+`workflow hygiene`, and `CONTRIBUTING.md` remains authoritative for the current required-check set
+(11, not the 8 named above).
+
 Amended again by #2699 on 2026-07-25, by owner decision: **`eslint-plugin-sonarjs` is exempted from
 the licence allowlist as build-time tooling.** It is LGPL-3.0-only and the first package of the GPL
 family in the tree. The trigger was that SonarCloud's rule engine was invisible on a developer
