@@ -18,35 +18,80 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = join(repoRoot, "osv-scanner.toml");
 
+const MULTILINE_DELIMITER = '"""';
+
 // Minimal reader for the one construct this gate cares about. A TOML parser is not a dependency
 // worth adding for `id = "..."` lines inside [[IgnoredVulns]] blocks.
+function opensMultilineString(line) {
+  if (!/^[A-Za-z_][\w-]*\s*=\s*"""/u.test(line)) return false;
+  return !line.slice(line.indexOf(MULTILINE_DELIMITER) + 3).includes(MULTILINE_DELIMITER);
+}
+
+// TOML basic and literal strings, with or without a trailing inline comment. Returns undefined
+// when the line is not an id assignment at all.
+function parseIdLine(line) {
+  const match = /^id\s*=\s*(?:"([^"]+)"|'([^']+)')\s*(?:#.*)?$/u.exec(line);
+  if (match !== null) return match[1] ?? match[2];
+  // An `id` this reader cannot decode must not be dropped silently: an unread suppression is one
+  // this gate would never validate against the shipped graph.
+  if (/^id\s*=/u.test(line)) throw new Error(`unsupported id syntax in osv-scanner.toml: ${line}`);
+  return undefined;
+}
+
 export function readSuppressedIds(toml) {
   const ids = [];
-  let inBlock = false;
+  const state = { inBlock: false, inMultiline: false };
   for (const raw of toml.split("\n")) {
     const line = raw.trim();
-    // Any section header ends the current block — a plain [Section] as much as a [[Table]] one.
-    // Only checking for "[[" left a following `id =` attributed to the previous IgnoredVulns entry.
-    if (line.startsWith("[")) {
-      inBlock = line === "[[IgnoredVulns]]";
+    if (state.inMultiline) {
+      if (line.includes(MULTILINE_DELIMITER)) state.inMultiline = false;
       continue;
     }
-    if (!inBlock) continue;
-    const match = /^id\s*=\s*"([^"]+)"/u.exec(line);
-    if (match !== null) ids.push(match[1]);
+    if (opensMultilineString(line)) {
+      state.inMultiline = true;
+      continue;
+    }
+    if (line.length === 0 || line.startsWith("#")) continue;
+    // Any section header ends the current block — a plain [Section] as much as a [[Table]] one.
+    if (line.startsWith("[")) {
+      state.inBlock = line.replace(/\s*#.*$/u, "").trim() === "[[IgnoredVulns]]";
+      continue;
+    }
+    if (!state.inBlock) continue;
+    const id = parseIdLine(line);
+    if (id !== undefined) ids.push(id);
   }
   return ids;
 }
 
-export function shippedAdvisoryIds(auditJson) {
+// A malformed report must not read as "no advisories in the shipped graph" — that is precisely the
+// answer that would let every waiver pass. npm always emits a vulnerabilities object.
+function vulnerabilityMap(auditJson) {
   const report = JSON.parse(auditJson);
+  if (typeof report !== "object" || report === null || Array.isArray(report)) {
+    throw new Error("npm audit did not return a JSON object");
+  }
+  if (typeof report.vulnerabilities !== "object" || report.vulnerabilities === null) {
+    throw new Error("npm audit output has no vulnerabilities map");
+  }
+  return report.vulnerabilities;
+}
+
+// npm reports each advisory as a GitHub advisory URL; its last segment is the GHSA id.
+function advisoryIdFrom(via) {
+  if (typeof via !== "object" || via === null) return undefined;
+  if (typeof via.url !== "string") return undefined;
+  const identifier = via.url.split("/").pop();
+  return identifier !== undefined && identifier.length > 0 ? identifier : undefined;
+}
+
+export function shippedAdvisoryIds(auditJson) {
   const ids = new Set();
-  for (const advisory of Object.values(report.vulnerabilities ?? {})) {
-    for (const via of advisory.via ?? []) {
-      if (typeof via !== "object" || via === null) continue;
-      // npm reports the advisory as a GitHub advisory URL; its last segment is the GHSA id.
-      const identifier = typeof via.url === "string" ? via.url.split("/").pop() : undefined;
-      if (identifier !== undefined && identifier.length > 0) ids.add(identifier);
+  for (const advisory of Object.values(vulnerabilityMap(auditJson))) {
+    if (typeof advisory !== "object" || advisory === null) continue;
+    for (const via of Array.isArray(advisory.via) ? advisory.via : []) {
+      const identifier = advisoryIdFrom(via);
+      if (identifier !== undefined) ids.add(identifier);
     }
   }
   return ids;
