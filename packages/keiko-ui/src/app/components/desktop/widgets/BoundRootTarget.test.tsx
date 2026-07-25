@@ -99,9 +99,13 @@ describe("BoundRootTarget", () => {
 // shell commands there, and re-focusing the other root retargeted the running window.
 describe("root identity is explicit for execution surfaces (#2619)", () => {
   it("denies an execution surface that was given no root in a multi-root workspace", () => {
+    expect(EXECUTION_SURFACES.length).toBeGreaterThan(0);
     for (const surface of EXECUTION_SURFACES) {
+      // Read the class back out of the table per surface — passing a literal here would make every
+      // iteration the same call and the loop decorative.
+      const { surfaceClass } = BOUND_ROOT_SURFACES[surface];
       expect(
-        resolveExplicitWindowRoot(manifest(), undefined, "/repo/a", false, "execution"),
+        resolveExplicitWindowRoot(manifest(), undefined, "/repo/a", false, surfaceClass),
         surface,
       ).toEqual({ status: "denied", reason: "root-binding-required" });
     }
@@ -112,24 +116,34 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
   // diagnostics store and jumps to a file; it dispatches nothing.
   it("names the read-only surfaces that may still follow the focused root", () => {
     expect(READ_ONLY_SURFACES).toEqual(["problems"]);
-    expect(resolveExplicitWindowRoot(manifest(), undefined, "/repo/a", false, "read-only")).toEqual(
-      {
-        status: "bound",
-        root: "/repo/b",
-      },
-    );
+    for (const surface of READ_ONLY_SURFACES) {
+      const { surfaceClass } = BOUND_ROOT_SURFACES[surface];
+      expect(
+        resolveExplicitWindowRoot(manifest(), undefined, "/repo/a", false, surfaceClass),
+        surface,
+      ).toEqual({ status: "bound", root: "/repo/b" });
+    }
   });
 
-  // A surface added to the union without a class does not compile, so this only has to prove the
-  // table still answers the question for every member.
-  it("classifies every bound-root surface", () => {
-    expect(SURFACE_TYPES.length).toBeGreaterThan(0);
-    for (const surface of SURFACE_TYPES) {
-      expect(BOUND_ROOT_SURFACES[surface].surfaceClass, surface).toMatch(
-        /^(execution|read-only)$/u,
-      );
-      expect(BOUND_ROOT_SURFACES[surface].label, surface).not.toBe("");
-    }
+  // Pins the classification itself by value. A regex over the union member would be satisfied by the
+  // type system alone and could never fail while the file compiles; reclassifying `terminal` as
+  // read-only must break a test, not pass one.
+  it("pins the class of every bound-root surface by value", () => {
+    expect(
+      Object.fromEntries(
+        SURFACE_TYPES.map((surface) => [surface, BOUND_ROOT_SURFACES[surface].surfaceClass]),
+      ),
+    ).toEqual({
+      problems: "read-only",
+      debug: "execution",
+      terminal: "execution",
+      commands: "execution",
+      runtime: "execution",
+      governedGit: "execution",
+      governedPullRequest: "execution",
+      governedMerge: "execution",
+      containerStatus: "execution",
+    });
   });
 
   // AC2 — the property, enumerated exhaustively rather than sampled: for a workspace of N roots, no
@@ -282,10 +296,13 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
     expect(child).toHaveBeenCalledWith("/repo/a");
   });
 
-  // The surfaces that resolve a root WITHOUT this component (files, editor, search, settings) go
-  // through `resolveBoundRoot`. They are in scope for "no execution surface derives its root from
-  // focus" too, and they satisfy it structurally: the chain never sees the manifest, so no focused
-  // root can enter it.
+  // The surfaces that resolve a root WITHOUT this component go through `resolveBoundRoot`, whose
+  // chain is `activeRoot → cfg → linkedRoot` — no focus term, so no focused root can enter it.
+  //
+  // This is NOT the whole story for `editor`: `SelectionAwareWorkspaceHosts` additionally hands the
+  // manifest to `MultiRootEditorHost`, which does consult `focusedRootRef`. That use is covered by
+  // its own named exception test, which proves every root is mounted with its own explicit binding
+  // so focus only selects the visible tab.
   it("keeps the non-manifest chain free of any focus term", () => {
     expect(resolveBoundRoot({ activeRoot: "/task/root", linkedRoot: "/linked" }, "/cfg")).toBe(
       "/task/root",

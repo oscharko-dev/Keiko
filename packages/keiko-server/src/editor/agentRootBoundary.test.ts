@@ -727,7 +727,12 @@ describe("root-binding-required across every server consumer (#2619)", () => {
       ),
       routeDeps(),
     );
-    expect(response).toMatchObject({ status: 200 });
+    // Positive control first: without it, a regression that returned NO sessions at all would
+    // satisfy the absence assertion below and look like correct filtering.
+    expect(response).toMatchObject({
+      status: 200,
+      body: { sessions: [{ sessionId: "session-required-visible" }] },
+    });
     expect(JSON.stringify(response.body)).not.toContain("session-required-discovery");
   });
 
