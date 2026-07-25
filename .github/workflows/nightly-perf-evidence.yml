@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 180
     permissions:
       contents: write
+      issues: write
       pull-requests: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -72,6 +73,33 @@ jobs:
         run: node node_modules/playwright/cli.js install --with-deps chromium
       - name: Regenerate both editor evidence documents
         run: npm run perf:evidence:regen
+      # This lane is the ONLY route that can refresh committed D12 evidence, and the pull-request
+      # freshness gate delegates to it. When it breaks, the sole symptom used to be evidence that
+      # quietly stopped being refreshed — twelve consecutive failures went unnoticed between
+      # 2026-07-19 and 2026-07-25 until pull requests deadlocked on stale evidence. A repair lane
+      # that fails silently is worse than no lane, so it now says so on the first failure.
+      # `!cancelled()` rather than `failure()`: a timeout on this 180-minute job must report too.
+      - name: Report a broken regeneration lane
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="D12 regeneration lane is failing"
+          existing=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')
+          body="The nightly D12 regeneration lane failed on \`${GITHUB_REF_NAME}\`.
+
+Run: ${RUN_URL}
+
+While this lane is down, committed performance evidence cannot be refreshed, and any pull request
+that touches a \`D12_MEASUREMENT_TOOLCHAIN_PATHS\` member has no route to green. Treat it as a
+delivery blocker, not a nightly nuisance."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${GITHUB_REPOSITORY}" --body "$body"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "$title" --body "$body"
+          fi
       - name: Open a bot pull request when the evidence drifted
         env:
           GH_TOKEN: ${{ github.token }}
