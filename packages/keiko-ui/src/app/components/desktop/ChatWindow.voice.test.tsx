@@ -812,6 +812,18 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
   async function enterDialogue(): Promise<void> {
     const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
     await userEvent.click(dialogSwitch);
+    // Wait for the ENTERED state, not just for the click to return. Entering swaps the composer's
+    // normal layer for the dialogue layer, and `userEvent.click` only flushes what React scheduled
+    // during the event itself — a later render is not covered. Every test here that says "after
+    // entering" was reading whatever the DOM happened to hold at that moment, and a second click
+    // landing mid-swap toggles from an unsettled state. This is an ADDED assertion: it now also
+    // proves entering succeeded, which no caller checked before.
+    await waitFor((): void => {
+      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+    });
   }
 
   it("offers the dialogue switch for full-realtime WITH browser audio capture (AC4)", async () => {

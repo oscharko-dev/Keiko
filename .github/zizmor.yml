@@ -24,16 +24,21 @@ rules:
       # Only the save-capable `actions/cache` needs an entry; the three `actions/cache/restore`
       # steps in the measuring jobs are not flagged, because a job that cannot write a cache cannot
       # poison one.
+      # These anchors are LINE NUMBERS, so any edit that inserts a line above one of them silently
+      # invalidates it and the required `zizmor` job goes red on an unrelated pull request. That is
+      # not hypothetical - it is how this file last broke. `npm run check:zizmor-anchors` verifies
+      # every anchor still points at a save-capable cache step and prints the corrected numbers,
+      # locally, before the push.
       # The two anchors this block previously carried (ci.yml:63, ci.yml:172) were verified dead
       # before removal: `zizmor` reports zero cache-poisoning findings for the pre-#2704 ci.yml with
       # no ignore list at all.
       # sqlite-vec extension: coverage-packages, coverage-ui, coverage-scripts
       - ci.yml:308
-      - ci.yml:382
-      - ci.yml:448
+      - ci.yml:398
+      - ci.yml:464
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:527
-      - ci.yml:606
+      - ci.yml:543
+      - ci.yml:629
   misfeature:
     ignore:
       # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are
