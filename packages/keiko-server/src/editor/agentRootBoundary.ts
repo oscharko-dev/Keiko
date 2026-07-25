@@ -44,6 +44,18 @@ export const EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE: Readonly<
   "workspace-boundary-escape": "EDITOR_AGENT_ROOT_BINDING_INVALID",
 };
 
+// Issue #2624 — one predicate for "this denial came from the root boundary", owned beside the reason
+// union rather than re-listed per route. A boundary denial never resolved a root, so the evidence it
+// produces must not report a target the server could not have authorized; both the actions route and
+// the verification route suppress target fields on exactly these reasons. Membership is derived from
+// the exhaustive `Record<EditorAgentRootBoundaryReason, string>` above, so a reason added to the union
+// forces a table entry and is covered on every route at once instead of silently opting out of one.
+export function isEditorAgentRootBoundaryDenial(
+  reason: EditorAgentActionDenyReason | undefined,
+): boolean {
+  return reason !== undefined && Object.hasOwn(EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE, reason);
+}
+
 export interface EditorAgentResolvedRoot {
   readonly workspaceRoot: string;
   readonly rootRef?: WorkspaceRootDescriptor["rootRef"] | undefined;

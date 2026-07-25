@@ -33,7 +33,10 @@ import {
   type WorkspaceTrustLevel,
 } from "@oscharko-dev/keiko-contracts";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
-import { recordEditorAgentActionAudit } from "./agentActionAudit.js";
+import {
+  editorAgentAuditRootAttribution,
+  recordEditorAgentActionAudit,
+} from "./agentActionAudit.js";
 import { editorAgentAuthorityRegistry } from "./agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
@@ -43,6 +46,7 @@ import { readJsonObject } from "../files.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   editorAgentPathBoundaryReason,
+  isEditorAgentRootBoundaryDenial,
   resolveEditorAgentActionRoot,
   type EditorAgentRootBoundaryReason,
 } from "./agentRootBoundary.js";
@@ -195,12 +199,26 @@ function rollbackVerificationReservation(request: EditorAgentVerificationRunRequ
   return editorAgentAuthorityRegistry.rollbackActionReservation(request.authorityRef, 0);
 }
 
+// Issue #2624 — a root-boundary denial resolved no root, so it must not report a target it could not
+// have authorized. The sibling actions route suppresses the target fields on exactly these reasons
+// (`auditTargetFields`); both routes now ask the one owning predicate so they cannot diverge again.
+function verificationAuditTarget(
+  request: EditorAgentVerificationRunRequest,
+  decision: EditorAgentActionPolicyDecision,
+): { readonly targetPath?: string | undefined } {
+  if (request.targetPath === undefined) return {};
+  return isEditorAgentRootBoundaryDenial(decision.denyReason)
+    ? {}
+    : { targetPath: request.targetPath };
+}
+
 // One content-free audit record per request (AC5). The ledger records execution-class actions when
 // admitted and any action when denied; the record carries only enums, identifiers, and the
 // workspace-relative targetPath — never the verification's own pass/fail counts (those live in the
 // returned report, not the ledger).
 function auditVerification(
   request: EditorAgentVerificationRunRequest,
+  snapshot: EditorAgentSessionSnapshot,
   decision: EditorAgentActionPolicyDecision,
   outcome: EditorAgentActionStatus,
   writer: AuditWriter,
@@ -211,17 +229,11 @@ function auditVerification(
       sessionId: request.sessionId,
       actionId: syntheticVerificationAction(request).actionId,
       actionType: "requestVerification",
-      ...(request.rootBinding === undefined
-        ? {}
-        : {
-            rootAttribution: {
-              rootRef: request.rootBinding.rootRef,
-              rootIdentityDigest: request.rootBinding.rootIdentityDigest,
-            },
-          }),
+      // Attribution comes from the server-held session, never from `request` — see the helper.
+      ...editorAgentAuditRootAttribution(snapshot),
       decision,
       outcome,
-      ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
+      ...verificationAuditTarget(request, decision),
     }) !== null
   );
 }
@@ -309,13 +321,13 @@ async function admitAndRun(
   request = rooted.request;
   const decision = (ports.decide ?? decideVerificationPolicy)(request, snapshot, deps);
   if (decision.disposition !== "allowed") {
-    return auditVerification(request, decision, "conflict", audit)
+    return auditVerification(request, snapshot, decision, "conflict", audit)
       ? notRunResult(decision)
       : auditFailure();
   }
   if (!reserveVerification(request, snapshot, deps)) {
     const denied = denyByAuthority(decision, "authority-budget-exceeded");
-    return auditVerification(request, denied, "conflict", audit)
+    return auditVerification(request, snapshot, denied, "conflict", audit)
       ? notRunResult(denied)
       : auditFailure();
   }
@@ -325,7 +337,7 @@ async function admitAndRun(
     return rejectVerificationRoot(request, snapshot, finalRoot.reason, audit);
   }
   request = finalRoot.request;
-  if (!auditVerification(request, decision, "queued", audit)) {
+  if (!auditVerification(request, snapshot, decision, "queued", audit)) {
     rollbackVerificationReservation(request);
     return auditFailure();
   }
@@ -358,11 +370,7 @@ function rejectVerificationRoot(
   audit: AuditWriter,
 ): RouteResult {
   const denied = verificationRootDenial(request, reason);
-  const attributed =
-    snapshot.rootBinding === undefined
-      ? request
-      : { ...request, rootBinding: snapshot.rootBinding };
-  return auditVerification(attributed, denied, "conflict", audit)
+  return auditVerification(request, snapshot, denied, "conflict", audit)
     ? notRunResult(denied)
     : auditFailure();
 }
