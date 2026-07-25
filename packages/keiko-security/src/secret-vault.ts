@@ -397,16 +397,17 @@ function shardFileName(reference: string): string | undefined {
     : undefined;
 }
 
-// Only a filename this vault could itself have written yields a reference. The round-trip check is
-// what makes that true: hex that decodes to bytes UTF-8 cannot represent exactly (a planted file
-// carrying a lone surrogate, say) would otherwise be reported as a reference that maps back to a
-// DIFFERENT filename, so a caller reconciling against `list()` could never reclaim it.
+// Only a filename this vault could itself have written yields a reference, and `shardFileName` is
+// the single authority on that. Deciding both directions with one encoder is what keeps `list`,
+// `get` and `delete` agreeing: a name that decodes to a reference the vault would store elsewhere —
+// or would refuse outright, being over the byte bound or not UTF-8 round-trippable — must not be
+// reported, or a caller reconciling against `list()` would name bodies it can never reclaim.
 function shardReference(fileName: string): string | undefined {
   if (!fileName.startsWith(SHARD_PREFIX) || !fileName.endsWith(SHARD_EXTENSION)) return undefined;
   const hex = fileName.slice(SHARD_PREFIX.length, fileName.length - SHARD_EXTENSION.length);
   if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/u.test(hex)) return undefined;
   const reference = Buffer.from(hex, "hex").toString("utf8");
-  return Buffer.from(reference, "utf8").toString("hex") === hex ? reference : undefined;
+  return shardFileName(reference) === fileName ? reference : undefined;
 }
 
 // Atomic, crash-safe single-entry write. Mirrors writeStore's temp-then-rename discipline; the
@@ -441,9 +442,16 @@ function writeShard(dir: string, filePath: string, envelope: string): void {
 }
 
 function readShardEnvelope(filePath: string): string | undefined {
+  // The symlink refusal is a guarantee and still throws. A read that fails for any other reason
+  // (EISDIR, EACCES, EIO) is one unreadable entry, which says nothing about the others — reporting
+  // it as absent is what this layout documents, and what `get`/`has` promise their callers.
   assertNoSymlinkedPathSegments(filePath);
-  if (!existsSync(filePath)) return undefined;
-  const envelope = readFileSync(filePath, "utf8");
+  let envelope: string;
+  try {
+    envelope = readFileSync(filePath, "utf8");
+  } catch {
+    return undefined;
+  }
   return isSealed(envelope) ? envelope : undefined;
 }
 

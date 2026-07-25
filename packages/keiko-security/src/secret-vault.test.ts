@@ -702,6 +702,32 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     expect(vault.get("\uFFFD")).toBe("replacement-character-is-storable");
   });
 
+  it("reports an unreadable entry as absent instead of throwing a raw fs error", () => {
+    const storeDir = join(dir, "sharded");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "secret-A");
+    const [name] = readdirSync(storeDir);
+    // A directory where the entry file belongs makes readFileSync raise EISDIR. One unreadable
+    // entry says nothing about the others, so it reports absent — which is what get/has promise.
+    rmSync(join(storeDir, name ?? "missing"));
+    mkdirSync(join(storeDir, name ?? "missing"), { recursive: true });
+
+    expect(vault.get("cred:a")).toBeUndefined();
+    expect(vault.has("cred:a")).toBe(false);
+  });
+
+  it("never lists a filename it would refuse to read or delete under that reference", () => {
+    const storeDir = join(dir, "sharded");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "secret-A");
+    // Well-formed hex, but the reference it decodes to is past the byte bound, so this vault would
+    // never store it under this name. Listing it would name a body no caller could ever reclaim.
+    const overLong = Buffer.from("r".repeat(97), "utf8").toString("hex");
+    writeFileSync(join(storeDir, `entry-${overLong}.sealed`), "unreachable", "utf8");
+
+    expect(vault.list()).toEqual(["cred:a"]);
+  });
+
   it("refuses to enumerate through a symlinked store directory", () => {
     const storeDir = join(dir, "sharded-list");
     mkdirSync(join(dir, "foreign"), { recursive: true });

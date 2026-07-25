@@ -1621,12 +1621,10 @@ async function assertResolvedPathContained(
 ): Promise<void> {
   let current = candidate;
   while (isContained(realRoot, current)) {
-    let resolved: string;
-    try {
-      resolved = await realpath(current);
-    } catch {
+    const resolved = await resolvedIfPresent(current);
+    if (resolved === undefined) {
       const parent = dirname(current);
-      if (parent === current) return;
+      if (parent === current) break;
       current = parent;
       continue;
     }
@@ -1639,6 +1637,22 @@ async function assertResolvedPathContained(
       throw new FilesError(403, "DENIED", DENIED_MESSAGE);
     }
     return;
+  }
+  // The walk ran past the root without resolving anything, so containment was never actually
+  // verified. Absence of proof is not proof of containment: refuse.
+  throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+}
+
+// `undefined` means the path is definitively NOT THERE — the only condition under which walking to
+// the parent is sound. Every other failure (EACCES, EPERM, ELOOP, EIO) means the answer could not
+// be obtained, and a guard that cannot obtain an answer must not supply a permissive one.
+async function resolvedIfPresent(path: string): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
 }
 

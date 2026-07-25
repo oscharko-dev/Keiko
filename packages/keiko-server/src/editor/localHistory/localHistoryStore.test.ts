@@ -270,6 +270,41 @@ describe("editor local-history store", () => {
     expect(bodyFiles(fx.stateDir)).toHaveLength(1);
   });
 
+  it("reclaims every other orphan even when one body refuses to be deleted", () => {
+    const fx = fixture();
+    for (const path of ["a.ts", "b.ts", "c.ts", "d.ts"]) writeFileSync(join(fx.root, path), "x");
+    const stuck: { ref?: string } = {};
+    const store = createEditorLocalHistoryStore({
+      ...storeOptions(fx),
+      limits: { maxEntries: 1, coalesceMs: 0 },
+      vaultFactory: (workspaceDir) => {
+        const inner = createShardedLocalSecretVault({
+          key: Buffer.from(VAULT_KEY, "base64"),
+          storeDir: join(workspaceDir, "checkpoints"),
+        });
+        return {
+          ...inner,
+          delete: (reference): void => {
+            if (reference === stuck.ref) throw new Error("permanently stuck shard");
+            inner.delete(reference);
+          },
+        };
+      },
+    });
+
+    // Evict one body and make exactly that one undeletable for the rest of the run.
+    const first = store.capture(captureInput(fx, "v0", "user-save", 1_000, "a.ts")).entry;
+    stuck.ref = first.encryptedContent.vaultEntryRef;
+    store.capture(captureInput(fx, "v1", "user-save", 1_010, "b.ts"));
+    store.capture(captureInput(fx, "v2", "user-save", 1_020, "c.ts"));
+    store.capture(captureInput(fx, "v3", "user-save", 1_030, "d.ts"));
+
+    // One body that will never go must not shield the orphans behind it: the index holds one entry,
+    // so only the stuck body may remain beside it.
+    expect(store.list(fx.scope, undefined, 1_040)).toHaveLength(1);
+    expect(bodyFiles(fx.stateDir)).toHaveLength(2);
+  });
+
   it("refuses a checkpoint whose resolved file escapes the workspace root", () => {
     const fx = fixture();
     const outside = tempDir("keiko-local-history-outside-");

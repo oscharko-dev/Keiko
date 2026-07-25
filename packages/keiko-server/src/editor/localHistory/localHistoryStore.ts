@@ -715,14 +715,22 @@ export function createEditorLocalHistoryStore(
     );
     // Reclamation is opportunistic: the committed index is already correct when this runs, so a
     // pass that cannot enumerate or cannot unlink must not turn a successful capture or delete into
-    // a failure. Whatever it leaves behind is retried by the next pass.
+    // a failure. The two failures are caught separately on purpose — a single body that refuses to
+    // go must not stop the pass from reclaiming every other orphan, or one permanently stuck shard
+    // would keep the vault growing behind it.
+    let stored: readonly string[];
     try {
-      for (const reference of state.vault.list()) {
-        if (referenced.has(reference)) continue;
-        state.vault.delete(reference);
-      }
+      stored = state.vault.list();
     } catch {
-      // Nothing reclaimed this pass; the index remains the sole authority on what may exist.
+      return;
+    }
+    for (const reference of stored) {
+      if (referenced.has(reference)) continue;
+      try {
+        state.vault.delete(reference);
+      } catch {
+        // Retried by the next pass; the index remains the sole authority on what may exist.
+      }
     }
   };
 

@@ -283,6 +283,27 @@ describe("editor local-history routes", () => {
     expect(read).toMatchObject({ status: 403, body: { error: { code: "PATH_ESCAPE" } } });
   });
 
+  it("refuses a stored path whose containment cannot be verified at all", async () => {
+    // realpath failing is not the same as the path being absent. An unsearchable ancestor answers
+    // EACCES, and a guard that reads every failure as "missing" walks past the root and accepts a
+    // path it never actually checked. Absence of proof is not proof of containment.
+    const entryRef = capture();
+    // A symlink cycle answers ELOOP for every user, root included — unlike a permission trigger,
+    // which a root-running container would simply walk through.
+    rmSync(join(root, "src", "app.ts"));
+    symlinkSync(join(root, "src", "loop.ts"), join(root, "src", "app.ts"));
+    symlinkSync(join(root, "src", "app.ts"), join(root, "src", "loop.ts"));
+
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`, {
+        entryRef,
+      }),
+      deps,
+    );
+
+    expect(read).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
+  });
+
   it("refuses a stored path that now resolves onto a denied location inside the root", async () => {
     const entryRef = capture();
     mkdirSync(join(root, ".ssh"));
