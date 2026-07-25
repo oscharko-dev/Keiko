@@ -9,6 +9,10 @@ const workflow = readFileSync(resolve(repoRoot, ".github/workflows/osv-scanner.y
 
 const OSV_SCANNER_RELEASE_SHA = "9a498708959aeaef5ef730655706c5a1df1edbc2";
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+// ADR-0159: the pull-request and merge-queue executions of this scan moved into the single required
+// `workflow hygiene` context. The branch-coverage property below did not move with them - it is
+// asserted against whichever workflow now owns each event.
+const hygiene = readFileSync(resolve(repoRoot, ".github/workflows/workflow-hygiene.yml"), "utf8");
 
 // Branch targets the npm audit gates run on. Since those gates scope to `--omit=dev` (#2696), this
 // scan is the ONLY vulnerability coverage build-time dependencies get, so it has to reach every
@@ -32,11 +36,16 @@ function branchList(source, event, label) {
 
 describe("OSV Scanner workflow", () => {
   it("always emits a scan for pull requests targeting dev", () => {
-    expect(workflow).toMatch(/pull_request:\n\s+branches:\n\s+- dev/u);
-    expect(workflow).toMatch(
+    // Relocated to the bundled context, which is where the pull-request execution lives now. The
+    // `ready_for_review` type is the reason the bundle owns its own workflow file: ci.yml takes
+    // GitHub's default types, so hosting the job there would have dropped this trigger entirely.
+    expect(hygiene).toMatch(/pull_request:\n\s+branches:\n\s+- dev/u);
+    expect(hygiene).toMatch(
       /types:\n\s+- opened\n\s+- ready_for_review\n\s+- reopened\n\s+- synchronize/u,
     );
-    expect(workflow).not.toMatch(/pull_request:[\s\S]*?paths:/u);
+    expect(hygiene).not.toMatch(/pull_request:[\s\S]*?paths:/u);
+    // And it is gone from here rather than running twice.
+    expect(workflow).not.toMatch(/\n {2}pull_request:/u);
   });
 
   // Replaces an earlier pin that asserted the scan stayed dev-only. That held while `npm audit`
@@ -44,23 +53,45 @@ describe("OSV Scanner workflow", () => {
   // scan skips has NO dependency coverage. The pin now enforces the stronger property.
   // Each event is checked against its OWN list: a branch present under `push` must not satisfy the
   // `pull_request` expectation, which a whole-document search would have allowed.
-  it.each(["pull_request", "push"])("covers every %s target the audit gates run on", (event) => {
+  // Unchanged property, re-pointed at its owner: since ADR-0159 both event-driven lanes belong to
+  // the bundled context. A branch it skips has NO dependency coverage, which is what makes this
+  // stricter than "scans dev". The `push` case is also the only thing standing between a tidy-up and
+  // a hung release: `workflow hygiene` is a RELEASE_REQUIRED_CHECKS entry, and
+  // verify-release-required-checks.mjs reads it off a release commit - evidence only a push run
+  // produces.
+  it.each([
+    { event: "pull_request", owner: "workflow-hygiene.yml", source: hygiene },
+    { event: "push", owner: "workflow-hygiene.yml", source: hygiene },
+  ])("covers every $event target the audit gates run on", ({ event, owner, source }) => {
     const expected = branchList(ci, event, "ci.yml");
-    const actual = branchList(workflow, event, "osv-scanner.yml");
+    const actual = branchList(source, event, owner);
     expect(expected).toContain("dev");
     expect(expected.length).toBeGreaterThan(1);
     for (const branch of expected) expect(actual).toContain(branch);
   });
 
+  it("keeps exactly the lane an event-driven workflow cannot replace", () => {
+    // `schedule` re-reads a live vulnerability database against an unchanged tree, so a newly
+    // published advisory is found without anyone pushing. Every event-driven lane moved to the
+    // bundled context, whose push branch list is byte-identical - running both would scan every
+    // pushed commit twice, which is the duplication ADR-0158's charter exists to remove.
+    expect(() => branchList(workflow, "push", "osv-scanner.yml")).toThrow();
+    expect(() => branchList(workflow, "pull_request", "osv-scanner.yml")).toThrow();
+    expect(workflow).toContain('cron: "37 3 * * *"');
+    // Both halves, or this pins nothing: a `schedule` added to the bundle would scan daily twice
+    // and still satisfy an assertion that only checks this file kept its own.
+    expect(hygiene).not.toMatch(/\n {2}schedule:/u);
+  });
+
   it("validates merge-queue groups like the audit gates do", () => {
-    expect(branchList(workflow, "merge_group", "osv-scanner.yml")).toEqual(
+    expect(branchList(hygiene, "merge_group", "workflow-hygiene.yml")).toEqual(
       branchList(ci, "merge_group", "ci.yml"),
     );
   });
 
   it("scans every dev push without a path filter", () => {
-    expect(workflow).toMatch(/push:\n\s+branches:\n\s+- dev/u);
-    expect(workflow).not.toMatch(/push:[\s\S]*?paths:/u);
+    expect(hygiene).toMatch(/push:\n\s+branches:\n\s+- dev/u);
+    expect(hygiene).not.toMatch(/push:[\s\S]*?paths:/u);
   });
 
   it("runs daily and supports a manual scan", () => {
@@ -68,11 +99,14 @@ describe("OSV Scanner workflow", () => {
     expect(workflow).toMatch(/workflow_dispatch:\s*\n/u);
   });
 
-  it("uses the verified OSV Scanner release commit and fails on vulnerabilities", () => {
-    expect(workflow).toContain(
+  it.each([
+    { lane: "scheduled and push", source: workflow },
+    { lane: "pull request", source: hygiene },
+  ])("uses the verified OSV Scanner release commit on the $lane lane", ({ source }) => {
+    expect(source).toContain(
       `google/osv-scanner-action/osv-scanner-action@${OSV_SCANNER_RELEASE_SHA}`,
     );
-    expect(workflow).not.toContain("continue-on-error: true");
+    expect(source).not.toContain("continue-on-error: true");
   });
 
   it("uses read-only repository permissions and disables checkout credentials", () => {
