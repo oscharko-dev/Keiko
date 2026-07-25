@@ -18,6 +18,7 @@ import {
   deriveD12CapRawArtifact,
   deriveD12CommonRawArtifact,
   evaluateD12Comparison,
+  isPerformanceBudgetFailure,
   evaluateEditorEvidence,
   evaluateFreshness,
   isPerformanceSubjectPath,
@@ -566,6 +567,20 @@ function validateCapMeasuredAt(raw, record, label) {
   return measuredAtIso;
 }
 
+// Budget verdicts found while deriving raw artifacts. The derivation runs long before the
+// self-check and long before the document is written, so a verdict discovered here must be carried
+// out rather than thrown — throwing is what destroyed the evidence the verdict describes.
+const derivedBudgetVerdicts = [];
+
+function defectsOnly(failures) {
+  const defects = [];
+  for (const failure of failures) {
+    if (isPerformanceBudgetFailure(failure)) derivedBudgetVerdicts.push(failure);
+    else defects.push(failure);
+  }
+  return defects;
+}
+
 function buildCapScenarios(rawValue, record, run, commit, label) {
   const raw = object(rawValue, `${label} cap evidence`);
   validateCommit(raw.commit, commit, `${label} cap evidence`);
@@ -573,7 +588,8 @@ function buildCapScenarios(rawValue, record, run, commit, label) {
   validateCapRecordBindings(record, run, label);
   const measuredAtIso = validateCapMeasuredAt(raw, record, label);
   const derived = deriveD12CapRawArtifact(raw, { label });
-  if (derived.failures.length > 0) fail(derived.failures.join("; "));
+  const capDefects = defectsOnly(derived.failures);
+  if (capDefects.length > 0) fail(capDefects.join("; "));
   const normalized = {
     artifactSha256: record.artifactSha256,
     commit,
@@ -650,7 +666,8 @@ function buildMeasurement(rawValue, capRawValue, run, revision, commit, { bytes,
     revision,
     warmUp,
   });
-  if (derived.failures.length > 0) fail(derived.failures.join("; "));
+  const commonDefects = defectsOnly(derived.failures);
+  if (commonDefects.length > 0) fail(commonDefects.join("; "));
   if (
     !isDeepStrictEqual(derived.metrics, metrics) ||
     !isDeepStrictEqual(derived.provenance, provenance)
@@ -1447,24 +1464,54 @@ function selfCheckFailureMessages(result, label) {
     return [];
   }
   if (!Array.isArray(result?.failures)) return [`${label} returned an invalid result`];
-  return result.failures.map((failure) => `${label}: ${failure}`);
+  return result.failures;
+}
+
+// Class membership belongs to the message a budget comparison produced, so it must be read before
+// the self-check labels the message with its source. Labelling first would strip every verdict of
+// its identity and make the whole partition silently fail closed.
+function classified(failures, label) {
+  return failures.map((failure) => ({
+    budget: isPerformanceBudgetFailure(failure),
+    message: `${label}: ${failure}`,
+  }));
 }
 
 function runSelfCheck(output, checkout, dependencies) {
   const editorEvaluator = dependencies.evaluateEditorEvidence ?? evaluateEditorEvidence;
   const freshnessEvaluator = dependencies.evaluateFreshness ?? evaluateFreshness;
-  const failures = [
-    ...evaluateD12Comparison(output).map((failure) => `d12: ${failure}`),
-    ...selfCheckFailureMessages(editorEvaluator(output), "editor"),
-    ...selfCheckFailureMessages(
-      freshnessEvaluator(output, checkout.getFreshnessOptions()),
+  const findings = [
+    ...classified(evaluateD12Comparison(output), "d12"),
+    ...classified(selfCheckFailureMessages(editorEvaluator(output), "editor"), "editor"),
+    ...classified(
+      selfCheckFailureMessages(
+        freshnessEvaluator(output, checkout.getFreshnessOptions()),
+        "freshness",
+      ),
       "freshness",
     ),
   ];
-  if (failures.length > 0) fail(`validator self-check failed: ${failures.join("; ")}`);
+  // A budget verdict describes the product that was measured, not a broken measurement. Aborting on
+  // one destroys the only document that could have reported it, and leaves every lane that needs
+  // fresh evidence with nothing at all — the deadlock ADR-0156 was written to end. The gate enforces
+  // the identical verdict on the pull request, where it is attributable and readable.
+  const defects = findings.filter((finding) => !finding.budget).map((finding) => finding.message);
+  if (defects.length > 0) fail(`validator self-check failed: ${defects.join("; ")}`);
+  return findings.map((finding) => finding.message);
+}
+
+function reportBudgetVerdicts(verdicts) {
+  const all = [...new Set([...derivedBudgetVerdicts, ...verdicts])];
+  derivedBudgetVerdicts.length = 0;
+  if (all.length === 0) return;
+  console.error(
+    `D12 performance comparison: evidence written with ${String(all.length)} performance ` +
+      `budget verdict(s); the gate enforces them on the pull request — ${all.join("; ")}`,
+  );
 }
 
 export function runD12Builder(argv, dependencies = {}) {
+  derivedBudgetVerdicts.length = 0;
   const options = parseArguments(argv);
   const checkout = resolveCheckoutEvidence(options, dependencies);
   const manifestPath = resolve(options.manifest);
@@ -1484,7 +1531,7 @@ export function runD12Builder(argv, dependencies = {}) {
     checkout.expectedSourceDigests.candidate,
     selectCandidateRawInputs(manifest, rawInputs),
   );
-  if (options.selfCheck) runSelfCheck(output, checkout, dependencies);
+  reportBudgetVerdicts(options.selfCheck ? runSelfCheck(output, checkout, dependencies) : []);
   writeFileSync(resolve(options.output), `${JSON.stringify(output, null, 2)}\n`, "utf8");
   return output;
 }

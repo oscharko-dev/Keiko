@@ -14,6 +14,7 @@ import {
 } from "../build-d12-perf-comparison.mjs";
 import {
   computePerformanceSubjectDigest,
+  evaluateD12Comparison,
   evaluateEditorEvidence,
   evaluateFreshness,
 } from "../check-perf-evidence.mjs";
@@ -1027,13 +1028,6 @@ describe("D12 performance comparison builder", () => {
       /fewer than KEIKO_PERF_RUNS/u,
     ],
     [
-      "stopped p75",
-      (value) => {
-        value.stoppedProjection.samples = repeatedSamples(201);
-      },
-      /p75 201ms > budget 200ms/u,
-    ],
-    [
       "output bytes",
       (value) => (value.outputFlood.adapterOutputBytes = 1_048_575),
       /adapterOutputBytes/u,
@@ -1052,13 +1046,6 @@ describe("D12 performance comparison builder", () => {
       /stop: raw samples are missing or fewer than KEIKO_PERF_RUNS/u,
     ],
     [
-      "stop p75",
-      (value) => {
-        value.outputFlood.stopSamples = repeatedSamples(201);
-      },
-      /stop: p75 201ms > budget 200ms/u,
-    ],
-    [
       "residual heap",
       (value) => (value.outputFlood.residualHeapBytes = 16_777_217),
       /residualHeapBytes/u,
@@ -1069,6 +1056,49 @@ describe("D12 performance comparison builder", () => {
     expect(() => run(root, { selfCheck: true })).toThrow(expected);
     expect(existsSync(join(root, "d12-overlay.json"))).toBe(false);
   });
+
+  // RELOCATED PIN (ADR-0156 D5). These two cases used to sit in the table above, asserting that the
+  // producer throws on a cap budget overrun and writes nothing. That behaviour is what deadlocked
+  // the regeneration lane: the document describing the regression was destroyed by the regression,
+  // so no lane could ever publish it and no toolchain-touching pull request had a route to green.
+  //
+  // The invariant the pin protects — a cap budget overrun is never silently accepted — is preserved
+  // and strengthened. It is no longer enough that the producer refuses; the overrun must now survive
+  // into the written document, be named on the way out, AND be rejected by the gate that reads it.
+  it.each([
+    [
+      "stopped projection",
+      (value) => {
+        value.stoppedProjection.samples = repeatedSamples(201);
+      },
+      /stoppedProjection: p75 201ms > budget 200ms/u,
+    ],
+    [
+      "output flood stop",
+      (value) => {
+        value.outputFlood.stopSamples = repeatedSamples(201);
+      },
+      /stop: p75 201ms > budget 200ms/u,
+    ],
+  ])(
+    "records a %s budget overrun instead of destroying the evidence",
+    (_name, mutate, expected) => {
+      const { root } = createFixture();
+      mutateJson(root, "candidate-cap-2.json", mutate);
+      const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      try {
+        expect(() => run(root, { selfCheck: true })).not.toThrow();
+        const overlayPath = join(root, "d12-overlay.json");
+        expect(existsSync(overlayPath)).toBe(true);
+        expect(errors).toHaveBeenCalledWith(expect.stringMatching(expected));
+        const written = JSON.parse(readFileSync(overlayPath, "utf8"));
+        expect(evaluateD12Comparison(written).some((failure) => expected.test(failure))).toBe(true);
+      } finally {
+        errors.mockRestore();
+      }
+    },
+  );
 
   it("rejects dirty candidate subject inputs without overwriting an existing output", () => {
     const { root } = createFixture();
@@ -1125,6 +1155,28 @@ describe("D12 performance comparison builder", () => {
     expect(listExactDirtyPerformanceSubjectPaths(root)).toEqual([
       "packages/keiko-ui/src/untracked.ts",
     ]);
+  });
+
+  // A defect must never hide behind a slow measurement: a self-check that reports both still
+  // refuses to write. The verdict is produced by the real evaluator so it carries genuine class
+  // membership — a literal typed here was never produced by a budget comparison and is correctly
+  // not a verdict.
+  it("still refuses to write when a defect accompanies a budget verdict", () => {
+    const { root } = createFixture();
+    mutateJson(root, "candidate-cap-2.json", (value) => {
+      value.stoppedProjection.samples = repeatedSamples(201);
+    });
+
+    expect(() =>
+      run(root, {
+        selfCheck: true,
+        evaluateEditorEvidence: () => ({
+          passed: false,
+          failures: ["b4 cold-start evidence is missing"],
+        }),
+      }),
+    ).toThrow(/validator self-check failed/u);
+    expect(existsSync(join(root, "d12-overlay.json"))).toBe(false);
   });
 
   it("rejects validator self-check failures before writing", () => {

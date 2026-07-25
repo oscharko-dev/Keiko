@@ -53,7 +53,7 @@ export function verdictLine({ documentationOnly, reason }) {
   );
 }
 
-function main() {
+export function main() {
   const verdict = resolveVerdict(
     process.env.KEIKO_CHANGE_BASE_SHA ?? "",
     process.env.KEIKO_CHANGE_HEAD_SHA ?? "HEAD",

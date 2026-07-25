@@ -17,6 +17,7 @@ import {
   evaluateWorkspaceEvidence,
   isPerformanceSubjectPath,
   listDirtyPerformanceSubjectPaths,
+  isPerformanceBudgetFailure,
   readEvidence,
   toolchainTouchedAgainst,
 } from "../check-perf-evidence.mjs";
@@ -2119,5 +2120,97 @@ describe("toolchainTouchedAgainst", () => {
 
   it("resolves the real change set through git when no lister is injected", () => {
     expect(toolchainTouchedAgainst("HEAD")).toBe(false);
+  });
+});
+
+// ADR-0156 D5: only a producer may treat these two classes differently, and only if it can tell
+// them apart reliably. Membership is established when a budget comparison formats its verdict, so
+// these cases drive the REAL evaluators and classify what they actually produced. A literal typed
+// here would not be a member — correctly, because no budget comparison produced it — which is the
+// property that makes the whole partition fail closed.
+describe("isPerformanceBudgetFailure", () => {
+  const breaches = [
+    [
+      "b4 cold-start p50",
+      () =>
+        editorEvidence({
+          b4ColdStartMs: { budgetP50: 1500, budgetP95: 2500, p50: 1600, p95: 1250 },
+        }),
+      /b4 cold-start p50 1600ms > budget 1500ms/u,
+    ],
+    [
+      "b4 cold-start p95",
+      () =>
+        editorEvidence({
+          b4ColdStartMs: { budgetP50: 1500, budgetP95: 2500, p50: 1050, p95: 2600 },
+        }),
+      /b4 cold-start p95 2600ms > budget 2500ms/u,
+    ],
+    [
+      "b5 keystroke long task",
+      () =>
+        editorEvidence({
+          b5KeystrokeMs: { budgetMax: 50, captured: true, longTaskCount: 1, maxLongTaskMs: 64 },
+        }),
+      /b5 keystroke long task 64ms > budget 50ms/u,
+    ],
+    [
+      "b6 interaction p75",
+      () => editorEvidence({ b6InteractionMs: { budgetP75: 200, captured: true, p75: 257 } }),
+      /b6 interaction p75 257ms > budget 200ms/u,
+    ],
+    [
+      "b11 peak growth",
+      () =>
+        editorEvidence({
+          b11Memory: {
+            supported: true,
+            baselineBytes: 12_000_000,
+            peakBytes: 900_000_000,
+            residualBytes: 13_000_000,
+            cycles: 2,
+          },
+        }),
+      /b11 peak growth \d+ bytes > budget/u,
+    ],
+  ];
+
+  it.each(breaches)("classifies the %s verdict it produced", (_name, build, expected) => {
+    const failures = evaluateEditorEvidence(build()).failures;
+    const verdict = failures.find((failure) => expected.test(failure));
+    expect(verdict, failures.join("\n")).toBeDefined();
+    expect(isPerformanceBudgetFailure(verdict)).toBe(true);
+  });
+
+  it("classifies the workspace frame-gap verdicts it produced", () => {
+    const failures = evaluateWorkspaceEvidence(
+      workspaceEvidence({ frameGapP75Ms: 41.5, frameGapMaxMs: 400 }),
+    ).failures;
+    const gaps = failures.filter((failure) => /frame-gap/u.test(failure));
+    expect(gaps.length, failures.join("\n")).toBeGreaterThan(0);
+    for (const gap of gaps) expect(isPerformanceBudgetFailure(gap)).toBe(true);
+  });
+
+  // Negative control: every failure that reports an untrustworthy measurement must stay outside the
+  // class, or the producer would write a document it cannot vouch for.
+  it("never classifies a structural defect as a budget verdict", () => {
+    const defects = [
+      ...evaluateEditorEvidence(editorEvidence({ d12Comparison: undefined })).failures,
+      ...evaluateEditorEvidence(editorEvidence({ b6InteractionMs: { captured: false } })).failures,
+      ...evaluateD12Comparison({ d12Comparison: { schemaVersion: "1" } }),
+    ];
+    expect(defects.length).toBeGreaterThan(0);
+    for (const defect of defects) expect(isPerformanceBudgetFailure(defect)).toBe(false);
+  });
+
+  it.each([undefined, null, 42, {}, ["b6 interaction p75 257ms > budget 200ms"]])(
+    "does not classify the non-string %s",
+    (value) => {
+      expect(isPerformanceBudgetFailure(value)).toBe(false);
+    },
+  );
+
+  it("does not classify a message no budget comparison produced", () => {
+    expect(isPerformanceBudgetFailure("b6 interaction p75 999ms > budget 200ms")).toBe(false);
   });
 });

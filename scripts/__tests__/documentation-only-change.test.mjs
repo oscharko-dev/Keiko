@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import { isDocumentationOnlyChange } from "../lib/documentation-only-change.mjs";
-import { resolveVerdict, verdictLine } from "../check-documentation-only-change.mjs";
+import { main, resolveVerdict, verdictLine } from "../check-documentation-only-change.mjs";
 
 describe("isDocumentationOnlyChange", () => {
   it("accepts prose, ADRs and root markdown", () => {
@@ -90,5 +94,45 @@ describe("verdictLine", () => {
 
   it("stays quiet about the matrix when the answer is true", () => {
     expect(verdictLine({ documentationOnly: true, reason: "x" })).not.toContain("full matrix");
+  });
+});
+
+describe("the change-scope entry point", () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it("resolves a real change set through git when no lister is injected", () => {
+    // Exercises the production git path: HEAD against itself is empty, so the answer is "run
+    // everything" for a reason the injected tests above cannot reach.
+    expect(resolveVerdict("HEAD", "HEAD").documentationOnly).toBe(false);
+  });
+
+  it("reports false for an unresolvable ref rather than skipping the matrix", () => {
+    const verdict = resolveVerdict("refs/keiko/no-such-ref-for-tests", "HEAD");
+    expect(verdict.documentationOnly).toBe(false);
+    expect(verdict.reason).toContain("could not resolve the change set");
+  });
+
+  it("writes the verdict to the step output when GitHub supplies one", () => {
+    const outputPath = join(mkdtempSync(join(tmpdir(), "keiko-doc-scope-")), "output.txt");
+    process.env.GITHUB_OUTPUT = outputPath;
+    process.env.KEIKO_CHANGE_BASE_SHA = "HEAD";
+    process.env.KEIKO_CHANGE_HEAD_SHA = "HEAD";
+
+    main();
+
+    expect(readFileSync(outputPath, "utf8")).toBe("documentation-only=false\n");
+  });
+
+  it("stays silent when no step output is configured", () => {
+    delete process.env.GITHUB_OUTPUT;
+    delete process.env.KEIKO_CHANGE_BASE_SHA;
+
+    expect(() => {
+      main();
+    }).not.toThrow();
   });
 });

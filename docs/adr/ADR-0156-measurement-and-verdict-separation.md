@@ -54,9 +54,48 @@ the Linux gate environment so contributors and agents run the common failure cla
 Architecture-bound measurement, hosted analysis, other operating systems and attestations stay
 CI-owned; `docs/qa/local-gates.md` records which is which.
 
+**D5 — D1 applies to every judge in the producer, not only the innermost one.** Removing the budget
+assertion from the measurement spec was not enough: `build-d12-perf-comparison.mjs` ran the complete
+gate — `evaluateD12Comparison`, `evaluateEditorEvidence`, `evaluateFreshness` — over its own freshly
+built document *before* writing it, and aborted on any failure. So the first thing the repaired lane
+did was measure successfully for the first time in twelve attempts and then throw the result away.
+
+The producer therefore partitions its own findings, at both places it judges: the raw-artifact
+derivation that runs while the document is still being assembled, and the self-check that runs just
+before it is written. A failure that says the measurement cannot be trusted — a malformed bundle,
+wrong provenance, a digest that does not match its inputs — stays fatal at both, because writing
+that document would poison the gate. A performance-budget verdict says the measured product got
+slower or heavier; it is written into the evidence, reported on stderr, and enforced by
+`check-perf-evidence.mjs` on the pull request.
+
+**Membership in the verdict class is established by construction, never by matching message text.**
+`performanceBudgetFailure` registers each verdict as it formats it, and `isPerformanceBudgetFailure`
+answers by membership. A classifier that pattern-matched free text would be wrong in both
+directions: five different message shapes exist (`> budget`, `>= budget`, `> allowed`,
+`> N ms budget`, `reached budget`), and a genuine defect whose text happened to fit would be
+silently downgraded. With membership, a site that forgets the wrapper simply stays fatal — the
+fail-closed direction — and no message reporting an untrustworthy measurement can ever be mistaken
+for a verdict. The class covers all seventeen budget comparisons in the file, wall-clock and memory
+alike; releasing only the ones that happen to be flaking would leave the same deadlock behind a
+different metric.
+
+Two consequences follow and are pinned. A defect accompanying a verdict is still fatal — a real
+defect may never hide behind a slow measurement. And `evaluateD12Comparison` no longer lets a verdict
+short-circuit its second stage: stage 1 stops on ill-formed input because stage 2 reads what stage 1
+proved, but a budget verdict proves nothing ill-formed, so stopping there would hide exactly the
+defects the producer still treats as fatal.
+
 ## Consequences
 
 - A noisy neighbour on a shared runner costs one measurement, not the ability to measure.
+- A performance regression is now reportable. Under D1 alone the measurement itself completed for
+  the first time in twelve attempts (`nightly-perf-evidence` run 30146295959, "2 passed") and the
+  comparison then discarded it: stopped-projection p75 256.9 ms against the 200 ms budget, on a tree
+  that already contained the #2698 fix for
+  [#2695](https://github.com/oscharko-dev/Keiko/issues/2695) — a fix accepted on a source inspection
+  precisely because no lane could measure it. That number lives in the run log, not in this
+  repository, and that is the point: evidence that cannot be produced cannot contradict an
+  assumption. Under D5 the same run publishes a document instead, and the gate rejects it by name.
 - A toolchain change is answered for by its own pull request, and by no other.
 - A broken repair lane is visible on day one instead of being inferred weeks later from deadlocked
   pull requests.
