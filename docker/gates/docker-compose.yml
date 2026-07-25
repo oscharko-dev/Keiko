@@ -1,0 +1,36 @@
+# Local gate environment (Issue #2699). See docs/qa/local-gates.md.
+#
+#   npm run gates:local          # the checks that most often turn required CI red
+#   npm run gates:local:shell    # interactive session in the same environment
+#
+# node_modules is a named volume, not a bind mount: the host tree may be macOS/arm64 while this
+# container is Linux, and sharing one install swaps platform-native binaries under both.
+services:
+  gates:
+    build:
+      context: ../..
+      dockerfile: docker/gates/Dockerfile
+    working_dir: /repo
+    # The sandbox proof and the verification E2E create user namespaces. Docker Desktop blocks that
+    # under the default profile; unconfined applies to this local gate container only and never to
+    # anything Keiko ships or runs in CI.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    # Chromium exhausts the 64MB default and crashes mid-suite with no useful diagnostic.
+    shm_size: 2gb
+    environment:
+      CI: "true"
+      # Marks evidence produced here as local. Nothing downstream may treat it as authoritative:
+      # this container is not the reference architecture for wall-clock measurement.
+      KEIKO_LOCAL_GATE_CONTAINER: "1"
+    volumes:
+      - ../..:/repo
+      - gates-node-modules:/repo/node_modules
+      - gates-playwright:/opt/playwright
+      - gates-npm-cache:/opt/npm-cache
+
+volumes:
+  gates-node-modules:
+  gates-playwright:
+  gates-npm-cache:

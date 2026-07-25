@@ -194,7 +194,12 @@
     "check:publish-manifests": "node scripts/check-publish-manifests.mjs",
     "smoke:registry-install": "node scripts/registry-install-smoke.mjs",
     "provision:sqlite-vec": "node scripts/provision-sqlite-vec.mjs",
-    "demo:clean-checkout": "npm run build:packages && npm run provision:sqlite-vec && node scripts/knowledge-m2-clean-checkout-demo.mjs"
+    "demo:clean-checkout": "npm run build:packages && npm run provision:sqlite-vec && node scripts/knowledge-m2-clean-checkout-demo.mjs",
+    "gates:local": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh",
+    "gates:local:tests": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh tests",
+    "gates:local:e2e": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh e2e",
+    "gates:local:full": "docker compose -f docker/gates/docker-compose.yml run --rm gates ./docker/gates/run-gates.sh full",
+    "gates:local:shell": "docker compose -f docker/gates/docker-compose.yml run --rm gates bash"
   },
   "overrides": {
     "undici": "7.28.0",
