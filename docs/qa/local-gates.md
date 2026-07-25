@@ -66,8 +66,12 @@ surface. These behave identically to CI because they depend on the source tree, 
   `sonar-quality-gate-contract.mjs`, and names the exact uncovered lines. Run it before pushing:
   arriving at SonarCloud to learn that a diff is under the coverage bar is a wasted CI cycle, and
   the answer was always available locally. `npm run check:sonar-rules` does the same for the rules —
-  `eslint-plugin-sonarjs` is the same engine SonarCloud runs, layered on this repository's own ESLint
-  configuration and scoped to the files the branch changed, matching Sonar's new-code period.
+  `eslint-plugin-sonarjs` carries 279 of SonarCloud's rules, layered on this repository's own ESLint
+  configuration and scoped to the files the branch changed, matching Sonar's new-code period. It is
+  not the complete analyser — SonarCloud implements some rules server-side only (S7781 among them) —
+  so a clean local run is a strong signal, not a guarantee. It does cover the classes that have
+  actually blocked us: cognitive complexity (S3776), super-linear regexes (S8786), and executables
+  resolved through `PATH` (S4036).
 - **Windows and macOS smoke.** A Linux container cannot answer them.
 - **Build provenance attestations.** Require the workflow's OIDC identity.
 

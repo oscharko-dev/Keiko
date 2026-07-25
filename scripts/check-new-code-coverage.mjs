@@ -55,7 +55,7 @@ export function normaliseLcovPaths(lcov, root = repoRoot) {
   const normalised = new Map();
   for (const [path, entry] of lcov) {
     const key = path.startsWith("/") ? relative(root, path) : path;
-    normalised.set(key.split("\\").join("/"), entry);
+    normalised.set(key.replaceAll("\\", "/"), entry);
   }
   return normalised;
 }
