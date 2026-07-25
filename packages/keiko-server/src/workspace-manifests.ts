@@ -52,7 +52,20 @@ export class WorkspaceManifestError extends Error {
 
 export interface WorkspaceManifestMutationResult {
   readonly manifest: WorkspaceManifest;
+  /** Roots whose composed authority must be recomputed, because the workspace changed shape. */
   readonly affectedRoots: readonly string[];
+  /** Roots that left the workspace or were replaced, whose per-root bindings must be dropped. */
+  readonly invalidatedRoots: readonly string[];
+  /** Standalone workspaces re-materialized for the roots that left, read back from the store. */
+  readonly restoredWorkspaceIds: readonly string[];
+  /** Released projects left with no workspace of their own — the loss the caller must report. */
+  readonly unrestoredProjectPaths: readonly string[];
+  /**
+   * Content-free error-class names for the restores that threw. Independent of
+   * `unrestoredProjectPaths` and NOT index-aligned with it: a restore can leave a project without a
+   * workspace without throwing, so the two lists may differ in length. Report both; never zip them.
+   */
+  readonly restoreFailureClasses: readonly string[];
 }
 
 function unavailable(): never {
@@ -241,6 +254,59 @@ function affectedRootPaths(before: WorkspaceManifest, after: WorkspaceManifest):
   return [...new Set([...before.roots, ...after.roots].map((root) => root.canonicalRoot))];
 }
 
+/**
+ * The roots whose per-root bindings stop being valid: a root that left the workspace, and a root
+ * whose filesystem identity was replaced under the same reference (ADR-0147 — root
+ * removal/replacement invalidates grants, settings bindings, sessions, and envelopes).
+ *
+ * Deliberately narrower than `affectedRootPaths`, which names the whole workspace because composed
+ * authority changed. Dropping a surviving root's per-root settings because a sibling was removed
+ * would destroy state the human never touched. A joining root is absent from `before` and therefore
+ * keeps its own bindings — it brings its identity with it.
+ */
+function invalidatedRootPaths(
+  before: WorkspaceManifest,
+  after: WorkspaceManifest,
+): readonly string[] {
+  const afterByRef = new Map(after.roots.map((root) => [root.rootRef, root.identityDigest]));
+  return before.roots
+    .filter((root) => afterByRef.get(root.rootRef) !== root.identityDigest)
+    .map((root) => root.canonicalRoot);
+}
+
+function releasedProjectPaths(
+  before: WorkspaceManifest,
+  after: WorkspaceManifest,
+  projects: ReadonlyMap<string, string>,
+): readonly string[] {
+  const remaining = new Set(after.roots.map((root) => root.rootRef));
+  return before.roots
+    .filter((root) => !remaining.has(root.rootRef))
+    .flatMap((root) => {
+      const projectPath = projects.get(root.rootRef);
+      return projectPath === undefined ? [] : [projectPath];
+    });
+}
+
+/**
+ * Read back which standalone workspaces actually exist after the commit rather than trusting a flag
+ * from the write. A released project with no manifest here stays pre-manifest and fails closed; it
+ * is reported separately so the caller can surface the loss instead of leaving it silent (#2620).
+ */
+function restoreOutcome(
+  store: UiStore,
+  releasedPaths: readonly string[],
+): Pick<WorkspaceManifestMutationResult, "restoredWorkspaceIds" | "unrestoredProjectPaths"> {
+  const restoredWorkspaceIds: string[] = [];
+  const unrestoredProjectPaths: string[] = [];
+  for (const projectPath of releasedPaths) {
+    const row = store.findWorkspaceManifestRecordByProject(projectPath);
+    if (row === undefined) unrestoredProjectPaths.push(projectPath);
+    else restoredWorkspaceIds.push(row.workspaceId);
+  }
+  return { restoredWorkspaceIds, unrestoredProjectPaths };
+}
+
 function persistRevision(
   store: UiStore,
   row: WorkspaceManifestRecordRow,
@@ -251,11 +317,17 @@ function persistRevision(
   absorbedWorkspaceIds: readonly string[] = [],
 ): WorkspaceManifestMutationResult {
   authorizeDispatch(store, dispatch);
+  const released = releasedProjectPaths(current, next, projects);
+  const restoreFailureClasses: string[] = [];
   const replaced = store.replaceWorkspaceManifest({
     manifest: next,
     expectedRevision: current.revision,
     absorbedWorkspaceIds,
     rootProjects: rootProjects(next.roots, projects),
+    releasedProjectPaths: released,
+    onReleasedRestoreFailure: (_projectPath, error): void => {
+      restoreFailureClasses.push(error instanceof Error ? error.name : "UnknownError");
+    },
   });
   if (!replaced || row.revision !== current.revision) {
     throw new WorkspaceManifestError(
@@ -263,7 +335,13 @@ function persistRevision(
       "Workspace manifest changed concurrently.",
     );
   }
-  return { manifest: next, affectedRoots: affectedRootPaths(current, next) };
+  return {
+    manifest: next,
+    affectedRoots: affectedRootPaths(current, next),
+    invalidatedRoots: invalidatedRootPaths(current, next),
+    ...restoreOutcome(store, released),
+    restoreFailureClasses,
+  };
 }
 
 export class WorkspaceManifestService {

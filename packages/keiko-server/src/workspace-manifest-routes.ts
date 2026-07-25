@@ -3,9 +3,11 @@
 
 import type { IncomingMessage } from "node:http";
 import type { UiHandlerDeps } from "./deps.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { errorBody } from "./routes.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "./routes.js";
 import { WorkspaceManifestError, WorkspaceManifestService } from "./workspace-manifests.js";
+import type { WorkspaceManifestMutationResult } from "./workspace-manifests.js";
 
 const MAX_BODY_BYTES = 65_536;
 
@@ -100,8 +102,70 @@ function dispatchForWorkspace(body: Record<string, unknown>, workspaceId: string
   return dispatch;
 }
 
-function recomputeTrust(deps: UiHandlerDeps, roots: readonly string[]): void {
-  deps.workspaceScriptTrust?.recomputeForRoots?.(roots);
+/** Redacted operator signal for a post-commit propagation step that could not complete. */
+function reportRootBindingFailure(
+  deps: UiHandlerDeps,
+  workspaceId: string,
+  operation: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: workspaceId,
+      operation,
+      source: "workspace-manifest-routes",
+      error,
+      redact: (message): string => {
+        const redacted = deps.redactor(message);
+        return typeof redacted === "string" ? redacted : "[REDACTED]";
+      },
+    }),
+  );
+}
+
+/**
+ * The one seam where a membership change is turned into binding invalidation. ADR-0147 requires
+ * root removal and replacement to invalidate grants, settings bindings, sessions, and envelopes;
+ * before #2620 only trust listened here, so per-root settings survived their root.
+ *
+ * The two inputs are deliberately different sets. `affectedRoots` is the whole workspace, because
+ * changing membership changes every member's composed authority. `invalidatedRoots` is only the
+ * roots that left or were replaced — dropping a surviving root's per-root settings because a
+ * sibling was removed would destroy state the human never touched.
+ */
+async function applyRootBindingChanges(
+  deps: UiHandlerDeps,
+  result: WorkspaceManifestMutationResult,
+): Promise<void> {
+  const workspaceId = result.manifest.workspaceId;
+  deps.workspaceScriptTrust?.recomputeForRoots?.(result.affectedRoots);
+  // A root that left with no workspace of its own stays registered and undispatchable. The
+  // membership change is already committed and must not be undone for it, but the loss is a real
+  // degradation and is surfaced here rather than dying inside the store transaction.
+  if (result.unrestoredProjectPaths.length > 0) {
+    reportRootBindingFailure(
+      deps,
+      workspaceId,
+      "workspace.root.restore",
+      new Error(
+        `WORKSPACE_ROOT_NOT_RESTORED count=${String(result.unrestoredProjectPaths.length)}`,
+      ),
+    );
+  }
+  const invalidate = deps.editorSettingsControl?.invalidateRoot;
+  if (invalidate === undefined) return;
+  for (const root of result.invalidatedRoots) {
+    // The membership change is already committed, so a propagation failure must not be reported as
+    // a failed mutation: the caller would see a 500 for a removal that did happen, and retrying it
+    // would then fail as a non-member. It is reported as a redacted operator diagnostic instead,
+    // the same shape managed-LSP restriction propagation uses. This stays defence in depth — the
+    // record binds the root's filesystem identity, so a replaced root cannot inherit it even when
+    // this rewrite never lands.
+    await invalidate(root).catch((error: unknown): void => {
+      reportRootBindingFailure(deps, workspaceId, "workspace.root.settings.invalidate", error);
+    });
+  }
 }
 
 export function handleListWorkspaceManifests(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -133,7 +197,7 @@ export async function handleAddWorkspaceRoot(
       dispatchForWorkspace(body, workspaceId),
       requiredString(body, "projectPath"),
     );
-    recomputeTrust(deps, result.affectedRoots);
+    await applyRootBindingChanges(deps, result);
     return { status: 200, body: { manifest: result.manifest } };
   } catch (error) {
     return failure(error);
@@ -151,7 +215,7 @@ export async function handleRemoveWorkspaceRoot(
       dispatchForWorkspace(body, workspaceId),
       ctx.params.rootRef ?? "",
     );
-    recomputeTrust(deps, result.affectedRoots);
+    await applyRootBindingChanges(deps, result);
     return { status: 200, body: { manifest: result.manifest } };
   } catch (error) {
     return failure(error);
@@ -169,7 +233,7 @@ export async function handleReorderWorkspaceRoots(
       dispatchForWorkspace(body, workspaceId),
       requiredStringArray(body, "orderedRootRefs"),
     );
-    recomputeTrust(deps, result.affectedRoots);
+    await applyRootBindingChanges(deps, result);
     return { status: 200, body: { manifest: result.manifest } };
   } catch (error) {
     return failure(error);
@@ -187,7 +251,7 @@ export async function handleFocusWorkspaceRoot(
       dispatchForWorkspace(body, workspaceId),
       requiredString(body, "focusedRootRef"),
     );
-    recomputeTrust(deps, result.affectedRoots);
+    await applyRootBindingChanges(deps, result);
     return { status: 200, body: { manifest: result.manifest } };
   } catch (error) {
     return failure(error);
