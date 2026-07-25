@@ -533,7 +533,11 @@ jobs:
     # touches no code, manifest, lockfile, workflow or test cannot alter how the product builds and
     # installs on another operating system.
     needs: change-scope
-    if: ${{ needs.change-scope.outputs.documentation-only != 'true' }}
+    # `always()` is load-bearing: without it a change-scope job that fails for its own reasons —
+    # checkout, runner, a broken script — skips this matrix, and the `ci` aggregate then rejects a
+    # skip no documentation-only verdict authorized. The classifier is fail-open by construction, so
+    # its own failure must mean "run everything", never "run nothing and block the merge".
+    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
     # The Node.js 24 baseline must execute, typecheck, build, and install on every supported desktop
     # OS. The complete hermetic suite remains in the Linux `ci` job because many security fixtures
     # intentionally model POSIX paths, Bash, and symlinks. Keep fail-fast:false so one platform

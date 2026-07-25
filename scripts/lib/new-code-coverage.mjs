@@ -16,25 +16,24 @@ const LCOV_LINE_PREFIX = "DA:";
 const LCOV_BRANCH_PREFIX = "BRDA:";
 const HUNK = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/u;
 
+// `+++ /dev/null` is a deletion: no new side, so nothing to cover.
+function openedFile(line, files) {
+  const path = line.slice(4).replace(/^b\//u, "");
+  if (path === "/dev/null") return undefined;
+  if (!files.has(path)) files.set(path, new Set());
+  return path;
+}
+
 /** Added/modified line numbers on the new side of a `git diff -U0`, per file. */
 export function parseDiffAddedLines(diff) {
   const files = new Map();
-  let current;
-  let next = 0;
+  const cursor = { next: 0, path: undefined };
   for (const line of diff.split("\n")) {
-    if (line.startsWith("+++ ")) {
-      const path = line.slice(4).replace(/^b\//u, "");
-      current = path === "/dev/null" ? undefined : path;
-      if (current !== undefined && !files.has(current)) files.set(current, new Set());
-      continue;
+    if (line.startsWith("+++ ")) cursor.path = openedFile(line, files);
+    else if (HUNK.test(line)) cursor.next = Number(HUNK.exec(line)?.[1]);
+    else if (cursor.path !== undefined && line.startsWith("+")) {
+      files.get(cursor.path)?.add(cursor.next++);
     }
-    const hunk = HUNK.exec(line);
-    if (hunk !== null) {
-      next = Number(hunk[1]);
-      continue;
-    }
-    if (current === undefined) continue;
-    if (line.startsWith("+")) files.get(current)?.add(next++);
   }
   return files;
 }

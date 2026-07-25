@@ -60,12 +60,14 @@ surface. These behave identically to CI because they depend on the source tree, 
   `npm run perf:evidence:regen` (which refuses to run outside that container and prints the exact
   `docker run` line), not this suite, and not a `workflow_dispatch` of the scheduled lane — that lane
   detects drift and no longer measures. See [`perf-evidence.md`](perf-evidence.md).
-- **SonarCloud's rule engine.** Needs `SONAR_TOKEN` and the hosted analysis; the verdict on rule
-  violations is CI's. Its **new-code coverage condition** is not — `npm run check:coverage:new-code`
+- **SonarCloud's duplication and hotspot metrics.** Need `SONAR_TOKEN` and the hosted analysis.
+  Its **rule engine** and its **new-code coverage condition** are not — `npm run check:coverage:new-code`
   computes the same metric here, from the same LCOV artefacts, against the same threshold pinned in
   `sonar-quality-gate-contract.mjs`, and names the exact uncovered lines. Run it before pushing:
   arriving at SonarCloud to learn that a diff is under the coverage bar is a wasted CI cycle, and
-  the answer was always available locally.
+  the answer was always available locally. `npm run check:sonar-rules` does the same for the rules —
+  `eslint-plugin-sonarjs` is the same engine SonarCloud runs, layered on this repository's own ESLint
+  configuration and scoped to the files the branch changed, matching Sonar's new-code period.
 - **Windows and macOS smoke.** A Linux container cannot answer them.
 - **Build provenance attestations.** Require the workflow's OIDC identity.
 

@@ -89,6 +89,9 @@ if [[ "$suite" != "fast" ]]; then
   # confirmation. Same threshold, same LCOV artefacts, same main-scope rules, run here first.
   step "scripts tests with coverage" npm run test:coverage:scripts
   step_git "new-code coverage (Sonar threshold)" check:coverage:new-code
+  # SonarCloud's rule engine, over the same changed files its new-code period covers. Until this
+  # gate existed the rules were invisible locally and every violation arrived as a red required run.
+  step_git "sonar rules on changed files" check:sonar-rules
 fi
 
 if [[ "$suite" == "e2e" || "$suite" == "full" ]]; then
