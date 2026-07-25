@@ -709,21 +709,21 @@ export function createEditorLocalHistoryStore(
   // bounded, the vault does not, and no reader can ever reach or reclaim the difference. Driving it
   // from the index makes every pruning pass self-healing — the committed metadata is the only thing
   // that decides which bodies may exist.
-  const reconcileBodies = (state: WorkspaceState): number => {
+  const reconcileBodies = (state: WorkspaceState): void => {
     const referenced = new Set<string>(
       state.index.entries.map((entry): string => entry.encryptedContent.vaultEntryRef),
     );
-    let removed = 0;
-    for (const reference of state.vault.list()) {
-      if (referenced.has(reference)) continue;
-      try {
+    // Reclamation is opportunistic: the committed index is already correct when this runs, so a
+    // pass that cannot enumerate or cannot unlink must not turn a successful capture or delete into
+    // a failure. Whatever it leaves behind is retried by the next pass.
+    try {
+      for (const reference of state.vault.list()) {
+        if (referenced.has(reference)) continue;
         state.vault.delete(reference);
-        removed += 1;
-      } catch {
-        // A body that resists deletion is reclaimed by the next reconciliation pass.
       }
+    } catch {
+      // Nothing reclaimed this pass; the index remains the sole authority on what may exist.
     }
-    return removed;
   };
 
   const pruneExpired = (state: WorkspaceState, nowMs: number): void => {
@@ -871,18 +871,16 @@ export function createEditorLocalHistoryStore(
 
     delete(scope, entryRef): void {
       const state = stateFor(scope.workspaceId);
-      const entry = requireEntry(state, scope, entryRef);
+      requireEntry(state, scope, entryRef);
       const entries = state.index.entries.filter(
         (candidate): boolean => candidate.entryRef !== entryRef,
       );
-      try {
-        state.vault.delete(entry.encryptedContent.vaultEntryRef);
-      } catch {
-        throw new EditorLocalHistoryError(
-          "VAULT_WRITE_FAILED",
-          "Local-history encrypted content could not be deleted.",
-        );
-      }
+      // Commit the index first, then let reconciliation reclaim the body it no longer references.
+      // Unlinking first inverted the invariant this store is built on: a failing index write left a
+      // committed entry whose body was already gone — permanently unreadable and, because the index
+      // still named it, permanently beyond reconciliation's reach — while a body that resisted
+      // deletion made the entry permanently undeletable. Persist-then-reconcile has neither window,
+      // and a body that resists deletion is retried by the next pass.
       persist(state, indexWithEntries(state.index, entries));
       reconcileBodies(state);
     },

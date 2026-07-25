@@ -378,26 +378,44 @@ export interface ShardedLocalSecretVaultDeps {
 }
 
 // References are opaque, NON-SECRET identifiers, so the filename may carry one — the single-file
-// layout already stores them as plaintext JSON keys. Hex keeps the mapping total and reversible
-// (so list() can recover the reference) and makes a separator or traversal segment unrepresentable.
-function shardFileName(reference: string): string {
+// layout already stores them as plaintext JSON keys. Hex makes a separator or traversal segment
+// unrepresentable and lets list() recover the reference.
+//
+// `undefined` means "no file can represent this reference", which is exactly the set of references
+// this vault refuses to store. Both rejections are load-bearing:
+//   - over the byte bound, the encoded name would exceed what a filesystem accepts;
+//   - not UTF-8 round-trippable (a lone surrogate), `Buffer.from` substitutes U+FFFD, so two
+//     DISTINCT references would map onto ONE file and silently serve each other's secret.
+// Rejecting on the way in is what keeps the mapping injective, and therefore keeps a stored secret
+// reachable only under the reference it was stored with.
+function shardFileName(reference: string): string | undefined {
   const encoded = Buffer.from(reference, "utf8");
-  if (encoded.length > SHARD_REFERENCE_MAX_BYTES) {
-    throw new Error("secret vault reference is too long for a sharded entry");
-  }
-  return `${SHARD_PREFIX}${encoded.toString("hex")}${SHARD_EXTENSION}`;
+  if (encoded.length > SHARD_REFERENCE_MAX_BYTES) return undefined;
+  const hex = encoded.toString("hex");
+  return Buffer.from(hex, "hex").toString("utf8") === reference
+    ? `${SHARD_PREFIX}${hex}${SHARD_EXTENSION}`
+    : undefined;
 }
 
+// Only a filename this vault could itself have written yields a reference. The round-trip check is
+// what makes that true: hex that decodes to bytes UTF-8 cannot represent exactly (a planted file
+// carrying a lone surrogate, say) would otherwise be reported as a reference that maps back to a
+// DIFFERENT filename, so a caller reconciling against `list()` could never reclaim it.
 function shardReference(fileName: string): string | undefined {
   if (!fileName.startsWith(SHARD_PREFIX) || !fileName.endsWith(SHARD_EXTENSION)) return undefined;
   const hex = fileName.slice(SHARD_PREFIX.length, fileName.length - SHARD_EXTENSION.length);
   if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/u.test(hex)) return undefined;
-  return Buffer.from(hex, "hex").toString("utf8");
+  const reference = Buffer.from(hex, "hex").toString("utf8");
+  return Buffer.from(reference, "utf8").toString("hex") === hex ? reference : undefined;
 }
 
 // Atomic, crash-safe single-entry write. Mirrors writeStore's temp-then-rename discipline; the
 // difference is that the temp file holds ONE envelope, so the cost does not grow with the vault.
 function writeShard(dir: string, filePath: string, envelope: string): void {
+  // Checked twice on purpose, exactly as writeStore does: the first call guards an already
+  // symlinked path, the second narrows the window where a parent could be swapped between
+  // directory creation and the rename. The atomic temp-then-rename below remains the real
+  // guarantee — neither call is redundant.
   assertNoSymlinkedPathSegments(filePath);
   ensureDirHardened(dir);
   assertNoSymlinkedPathSegments(filePath);
@@ -430,6 +448,10 @@ function readShardEnvelope(filePath: string): string | undefined {
 }
 
 function listShardReferences(dir: string): readonly string[] {
+  // The single-file layout's list() reads through readStore, which refuses a symlinked path; the
+  // sharded one asserts here so the same hostile redirect cannot make it enumerate a foreign
+  // directory's references.
+  assertNoSymlinkedPathSegments(dir);
   let names: readonly string[];
   try {
     names = readdirSync(dir);
@@ -447,10 +469,18 @@ function listShardReferences(dir: string): readonly string[] {
 /**
  * A {@link LocalSecretVault} whose entries live in one sealed file each, under `storeDir`.
  *
- * Identical guarantees to {@link createLocalSecretVault} — AES-256-GCM per entry, 0600 files in a
- * 0700 directory, atomic temp-then-rename, symlink-refusing paths, plaintext only ever returned by
- * `get`. The reason to choose it is write cost: `set` and `delete` touch a single entry file, so an
- * append-heavy store stops paying for its own history on every write.
+ * Carries {@link createLocalSecretVault}'s protective guarantees unchanged — AES-256-GCM per entry,
+ * 0600 files in a 0700 directory, atomic temp-then-rename, symlink-refusing paths, plaintext only
+ * ever returned by `get`. The reason to choose it is write cost: `set` and `delete` touch a single
+ * entry file, so an append-heavy store stops paying for its own history on every write.
+ *
+ * Two behaviours deliberately differ, and a caller storing credentials should weigh them:
+ *   - a store the layout cannot read reports EMPTY (`list` returns `[]`, `get` returns `undefined`)
+ *     where the single-file layout raises `SecretVaultStoreError` rather than treat a damaged store
+ *     as empty. Per entry there is nothing to conflate — one unreadable file says nothing about the
+ *     others — but a caller that rewrites its own config from `list` must not adopt this layout;
+ *   - a reference no filename can represent is refused by `set`, where the single-file layout
+ *     accepts any string as a JSON key.
  *
  * `list` reads only filenames and never decrypts, which is what lets a caller reconcile stored
  * bodies against its own index.
@@ -458,34 +488,53 @@ function listShardReferences(dir: string): readonly string[] {
 export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps): LocalSecretVault {
   const { key } = deps;
   const storeDir = resolve(deps.storeDir);
-  const shardPath = (reference: string): string => join(storeDir, shardFileName(reference));
+  // A reference with no representable filename can hold no entry, so reads and deletes report
+  // "absent" rather than throwing — matching the single-file layout, where an unknown reference is
+  // never an error. Only storing one is refused, and loudly.
+  const readPath = (reference: string): string | undefined => {
+    const name = shardFileName(reference);
+    return name === undefined ? undefined : join(storeDir, name);
+  };
+  const writePath = (reference: string): string => {
+    const name = shardFileName(reference);
+    if (name === undefined) {
+      throw new Error("secret vault reference cannot be stored as a sharded entry");
+    }
+    return join(storeDir, name);
+  };
 
   const remove = (reference: string): void => {
-    const filePath = shardPath(reference);
+    const filePath = readPath(reference);
+    if (filePath === undefined) return;
     assertNoSymlinkedPathSegments(filePath);
     rmSync(filePath, { force: true });
   };
 
   const replaceAll = (next: ReadonlyMap<string, string>): void => {
     for (const [reference, secret] of next) {
-      writeShard(storeDir, shardPath(reference), sealString(key, secret));
+      writeShard(storeDir, writePath(reference), sealString(key, secret));
     }
     for (const reference of listShardReferences(storeDir)) {
       if (!next.has(reference)) remove(reference);
     }
   };
 
+  const envelopeFor = (reference: string): string | undefined => {
+    const filePath = readPath(reference);
+    return filePath === undefined ? undefined : readShardEnvelope(filePath);
+  };
+
   return {
     get: (reference): string | undefined => {
-      const envelope = readShardEnvelope(shardPath(reference));
+      const envelope = envelopeFor(reference);
       return envelope === undefined ? undefined : openString(key, envelope);
     },
     set: (reference, secret): void => {
-      writeShard(storeDir, shardPath(reference), sealString(key, secret));
+      writeShard(storeDir, writePath(reference), sealString(key, secret));
     },
     replaceAll,
     delete: remove,
-    has: (reference): boolean => readShardEnvelope(shardPath(reference)) !== undefined,
+    has: (reference): boolean => envelopeFor(reference) !== undefined,
     list: (): readonly string[] => listShardReferences(storeDir),
   };
 }

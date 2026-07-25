@@ -127,6 +127,9 @@ describe("editor local-history store", () => {
     // sharding checkpoint bodies (#2616) multiplied the places a plaintext leak could hide, so the
     // pin now walks the whole history tree instead of naming one path.
     const stored = readAllFiles(join(fx.stateDir, "editor-local-history"));
+    // Bind the walk to the ciphertext files themselves: a total-file count would still pass if a
+    // body went unread and some other metadata file made up the number.
+    expect(bodyFiles(fx.stateDir)).toHaveLength(contents.length);
     expect(stored.length).toBeGreaterThan(contents.length);
     for (const bytes of stored) {
       for (const content of contents) expect(bytes).not.toContain(content.trim());
@@ -239,6 +242,32 @@ describe("editor local-history store", () => {
 
     expect(bodyFiles(fx.stateDir)).toHaveLength(2);
     expect(store.list(fx.scope, undefined, 2_001)).toHaveLength(2);
+  });
+
+  it("reclaims every body once the index is gone, because none of them is readable any more", () => {
+    const fx = fixture();
+    writeFileSync(join(fx.root, "b.ts"), "x");
+    const store = createEditorLocalHistoryStore({ ...storeOptions(fx), limits: { coalesceMs: 0 } });
+    store.capture(captureInput(fx, "first\n", "user-save", 1_000));
+    store.capture(captureInput(fx, "second\n", "user-save", 2_000, "b.ts"));
+    expect(bodyFiles(fx.stateDir)).toHaveLength(2);
+
+    // Losing the index is the worst input reconciliation can be handed. Reclaiming is correct
+    // rather than destructive: a body is reachable only through the index entry whose metadata its
+    // payload must re-validate against, so a body with no entry is already unreadable — this pins
+    // the direction so a future change cannot quietly make it a partial wipe of a LIVE index.
+    const historyRoot = join(fx.stateDir, "editor-local-history");
+    const workspaceDir = join(historyRoot, readdirSync(historyRoot)[0] ?? "missing");
+    rmSync(join(workspaceDir, "index.json"));
+
+    const reopened = createEditorLocalHistoryStore({
+      ...storeOptions(fx),
+      limits: { coalesceMs: 0 },
+    });
+    reopened.capture(captureInput(fx, "third\n", "user-save", 3_000, "b.ts"));
+
+    expect(reopened.list(fx.scope, undefined, 3_001)).toHaveLength(1);
+    expect(bodyFiles(fx.stateDir)).toHaveLength(1);
   });
 
   it("refuses a checkpoint whose resolved file escapes the workspace root", () => {

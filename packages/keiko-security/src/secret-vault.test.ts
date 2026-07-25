@@ -653,6 +653,9 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     writeFileSync(join(storeDir, "entry-zz.sealed"), "not hex", "utf8");
     writeFileSync(join(storeDir, "entry-616.sealed"), "odd length", "utf8");
     writeFileSync(join(storeDir, "entry-.sealed"), "empty", "utf8");
+    // Valid hex that UTF-8 cannot represent: it would decode to a reference whose own filename is
+    // a different one, so it is not a reference this vault could have written.
+    writeFileSync(join(storeDir, "entry-eda080.sealed"), "lone surrogate", "utf8");
 
     expect(vault.list()).toEqual(["cred:a"]);
   });
@@ -668,13 +671,61 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     expect(vault.has("cred:a")).toBe(false);
   });
 
-  it("lists nothing before the first write and refuses an over-long reference", () => {
+  it("lists nothing before the first write", () => {
     const vault = shardedVaultAt(join(dir, "sharded"));
     expect(vault.list()).toEqual([]);
     expect(vault.get("cred:a")).toBeUndefined();
+  });
+
+  it("refuses to STORE a reference no filename can represent, and treats it as absent on read", () => {
+    const vault = shardedVaultAt(join(dir, "sharded"));
+    // A lone surrogate is not UTF-8 encodable: Buffer substitutes U+FFFD, so two distinct
+    // references would land on ONE file and silently serve each other's secret. Over-long
+    // references cannot be named at all. Both are refused on the way in.
+    for (const reference of ["\uD800", "\uDC00", "r".repeat(97)]) {
+      expect(() => {
+        vault.set(reference, "unstorable");
+      }).toThrow(/cannot be stored/u);
+      expect(() => {
+        vault.replaceAll(new Map([[reference, "unstorable"]]));
+      }).toThrow(/cannot be stored/u);
+    }
+
+    // A reference that can hold no entry reports absent rather than throwing, exactly as the
+    // single-file layout does for any unknown reference.
+    vault.set("\uFFFD", "replacement-character-is-storable");
+    expect(vault.get("\uD800")).toBeUndefined();
+    expect(vault.has("\uD800")).toBe(false);
     expect(() => {
-      vault.set("r".repeat(97), "too long");
-    }).toThrow(/too long/u);
+      vault.delete("\uD800");
+    }).not.toThrow();
+    expect(vault.get("\uFFFD")).toBe("replacement-character-is-storable");
+  });
+
+  it("refuses to enumerate through a symlinked store directory", () => {
+    const storeDir = join(dir, "sharded-list");
+    mkdirSync(join(dir, "foreign"), { recursive: true });
+    shardedVaultAt(join(dir, "foreign")).set("cred:foreign", "not mine");
+    symlinkSync(join(dir, "foreign"), storeDir);
+
+    // The single-file list() reads through readStore, which refuses a symlinked path; the sharded
+    // one must not become the one operation a hostile redirect can enumerate.
+    expect(() => shardedVaultAt(storeDir).list()).toThrow(/symlinked path/u);
+  });
+
+  it("leaves no temp file behind when the commit rename fails", () => {
+    const storeDir = join(dir, "sharded");
+    const reference = "cred:blocked";
+    const shardName = `entry-${Buffer.from(reference, "utf8").toString("hex")}.sealed`;
+    // A non-empty directory sitting on the entry's own path makes renameSync fail after the temp
+    // file is written and fsynced, which is the only way into the cleanup branch.
+    mkdirSync(join(storeDir, shardName), { recursive: true });
+    writeFileSync(join(storeDir, shardName, "occupant"), "blocks the rename", "utf8");
+
+    expect(() => {
+      shardedVaultAt(storeDir).set(reference, "secret-A");
+    }).toThrow();
+    expect(readdirSync(storeDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
   it("refuses to write through a symlinked path segment", () => {

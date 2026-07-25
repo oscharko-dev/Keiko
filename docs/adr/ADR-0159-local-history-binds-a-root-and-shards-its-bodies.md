@@ -29,8 +29,11 @@ does not change, not one that is merely recorded.
 **Write cost.** D8 places checkpoint bodies in a `LocalSecretVault` namespace, and D7 says the
 store uses "its own vault file". `LocalSecretVault`'s single-file layout re-reads, re-serialises
 and re-writes the whole store on every `set`. Capture runs on the interactive save path, so each
-save paid for every checkpoint ever taken — measured at 694 KB committed per capture against a
-512 KB store where the checkpoint itself was 512 bytes.
+save paid for every checkpoint ever taken. `localHistoryStore.scale.test.ts` measures the bytes each
+capture commits by sizing every temp file at its rename; run against the single-file layout it
+reports 694 KB committed for a 512-byte checkpoint into a 512 KB store, and 12 KB against the
+sharded one. The test asserts the mechanism rather than either number: the body commit for a fixed
+checkpoint must not differ between a store holding 512 bytes and one holding 512 KB.
 
 **Orphans.** Retention was bounded over index metadata only, and bodies were deleted by naming the
 references an eviction believed it had just removed. A delete that failed once, or a crash between
@@ -74,6 +77,13 @@ Every property D7 asserts about a body survives verbatim: AES-256-GCM under the 
 0600 files in a 0700 directory, atomic temp-then-rename, symlink-refusing paths, plaintext returned
 only by `get`. What changes is that a capture commits its own checkpoint rather than the store.
 
+Two behaviours are NOT identical to the single-file layout and are recorded here so the difference
+is a decision rather than a discovery. A store the layout cannot read reports empty instead of
+raising, which is why the single-file layout remains the one credentials use: per entry there is
+nothing to conflate, but a caller that rewrites config from an enumeration must not adopt this. And
+a reference no filename can represent is refused on write — the mapping from reference to filename
+must stay injective, or two references would share one file and serve each other's secret.
+
 The single-file layout remains the default for `LocalSecretVault` and stays right where it is
 right: a handful of long-lived credentials (ADR-0046). It is wrong for an append-heavy store on an
 interactive path.
@@ -86,19 +96,30 @@ exist, which makes each pruning pass self-healing: a delete that failed earlier,
 by a capture that died before its index commit, are both reclaimed by the next pass rather than
 never.
 
-Ordering is unchanged and remains crash-safe — body write, then index commit, then reconciliation —
-so a reconciliation can never remove a body the committed index still names.
+Every operation commits the index before reclaiming, so a reconciliation can never remove a body
+the committed index still names: capture is body write, index commit, reconcile; deleting an entry
+is index commit, then reconcile. Unlinking before the commit — which is what deletion used to do —
+inverts the invariant in both directions: a failing index write leaves a committed entry whose body
+is gone, permanently unreadable and beyond reconciliation's reach because the index still names it,
+and a body that resists deletion makes the entry permanently undeletable.
+
+Reclamation is opportunistic. The committed index is already correct when it runs, so a pass that
+cannot enumerate or cannot unlink leaves the work to the next pass instead of failing an operation
+that has already succeeded.
 
 ### D4 — A checkpoint outlives the file it records
 
 Entry-scoped routes assert containment with the guards that do not depend on the file existing:
 path normalization (absolute, NUL, `..` escape), metadata redaction, and the deny list, applied to
-the relative path and again to the resolved path whenever the candidate still resolves. Bytes are
-served from this store's own encrypted body and never from the workspace file, so existence was
-never what made the read safe.
+the relative path and again to the deepest part of the path that still resolves. Bytes are served
+from this store's own encrypted body and never from the workspace file, so existence was never what
+made the read safe.
 
-A path that has since become a symlink out of the root is still refused, and a denied or escaping
-path is refused whether or not it exists.
+Resolving only the leaf would not be enough. `realpath` fails on a missing leaf, so a dangling entry
+under a directory symlinked OUT of the root would skip the check entirely; walking up to the first
+segment that does resolve catches an escaping ancestor even when nothing exists at the requested
+path. A denied or escaping path is refused whether or not it exists, and the assertion returns no
+absolute path — an unresolved candidate must not be handed back in the shape a realpathed one has.
 
 ## Consequences
 
@@ -119,8 +140,11 @@ workspace still cannot reach each other's checkpoints, because selection is per-
 
 D3 deletes more than the previous implementation did, so the fail-safe direction matters: it only
 ever removes bodies the committed index does not name. An index that cannot be read fails closed
-with `INDEX_UNAVAILABLE` before any reconciliation runs, so a corrupt index can never be read as
-"no entries are referenced" and used to empty the vault.
+with `INDEX_UNAVAILABLE` while the store is opened, before any reconciliation runs, so a corrupt
+index can never be read as "no entries are referenced" and used to empty the vault. An index that
+is simply absent opens empty and its bodies are reclaimed — correctly, because a body is reachable
+only through the index entry whose metadata its payload must re-validate against, so a body with no
+entry is already unreadable rather than merely unreferenced.
 
 D4 does not widen the route surface. Filename-bearing metadata and checkpoint content still require
 the authenticated app session, and unauthenticated projections stay content-free.

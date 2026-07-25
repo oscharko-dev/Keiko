@@ -41,6 +41,7 @@ import {
 const VAULT_KEY = Buffer.alloc(32, 0x29).toString("base64");
 let root: string;
 let stateDir: string;
+let outside: string;
 let store: UiStore;
 let history: EditorLocalHistoryStore;
 let deps: UiHandlerDeps;
@@ -68,6 +69,7 @@ function context(
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-route-root-")));
   stateDir = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-route-state-")));
+  outside = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-route-out-")));
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "app.ts"), "checkpoint marker\n", "utf8");
   store = createInMemoryUiStore();
@@ -95,6 +97,7 @@ afterEach(() => {
   store.close();
   rmSync(root, { recursive: true, force: true });
   rmSync(stateDir, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
 });
 
 function capture(): string {
@@ -248,7 +251,6 @@ describe("editor local-history routes", () => {
 
   it("refuses a stored path that now resolves outside the root through a symlink", async () => {
     const entryRef = capture();
-    const outside = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-out-")));
     writeFileSync(join(outside, "secret.txt"), "outside marker\n", "utf8");
     rmSync(join(root, "src", "app.ts"));
     symlinkSync(join(outside, "secret.txt"), join(root, "src", "app.ts"));
@@ -260,8 +262,43 @@ describe("editor local-history routes", () => {
       deps,
     );
 
-    rmSync(outside, { recursive: true, force: true });
     expect(read).toMatchObject({ status: 403, body: { error: { code: "PATH_ESCAPE" } } });
+  });
+
+  it("refuses a stored path whose directory leaves the root even with the leaf gone", async () => {
+    // The escape hides one level up. realpath fails on the missing leaf, so a guard that only ever
+    // resolves the full path skips containment entirely and accepts a path sitting under a
+    // directory symlinked out of the root.
+    const entryRef = capture();
+    rmSync(join(root, "src"), { recursive: true });
+    symlinkSync(outside, join(root, "src"));
+
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`, {
+        entryRef,
+      }),
+      deps,
+    );
+
+    expect(read).toMatchObject({ status: 403, body: { error: { code: "PATH_ESCAPE" } } });
+  });
+
+  it("refuses a stored path that now resolves onto a denied location inside the root", async () => {
+    const entryRef = capture();
+    mkdirSync(join(root, ".ssh"));
+    writeFileSync(join(root, ".ssh", "id_rsa"), "private key\n", "utf8");
+    rmSync(join(root, "src", "app.ts"));
+    symlinkSync(join(root, ".ssh", "id_rsa"), join(root, "src", "app.ts"));
+
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`, {
+        entryRef,
+      }),
+      deps,
+    );
+
+    expect(read).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
+    expect(JSON.stringify(read.body)).not.toContain("private key");
   });
 
   it("keeps route failures content-free", async () => {

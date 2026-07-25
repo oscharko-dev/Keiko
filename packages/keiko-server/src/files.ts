@@ -183,15 +183,19 @@ interface ResolvedTarget {
   readonly symlink: boolean;
 }
 
-export interface ResolvedEditorFileIdentity {
-  readonly realRoot: string;
-  readonly relativePath: string;
-  readonly absolutePath: string;
-}
-
 // Exported for reuse by the editor language-service route (#1198): the same realpath +
 // deny-list-guarded workspace-root resolution backs file reads and deterministic analysis so
 // containment is single-sourced.
+/**
+ * Where a workspace file BELONGS, whether or not it is there (#2616). It deliberately carries no
+ * absolute path: the candidate was never realpathed, so it must not be handed out in a shape that
+ * a realpathed one would also fit.
+ */
+export interface ContainedEditorFilePath {
+  readonly realRoot: string;
+  readonly relativePath: string;
+}
+
 export interface ResolvedProjectRoot {
   readonly root: string;
   readonly realRoot: string;
@@ -488,11 +492,6 @@ function extensionOf(name: string): string | null {
 
 type FilesTreeEntryBase = Omit<FilesTreeEntry, "kind" | "readable">;
 
-function resolvedEntryKind(stats: Stats): FilesEntryKind {
-  if (stats.isDirectory()) return "directory";
-  return stats.isFile() ? "file" : "symlink";
-}
-
 async function classifySymlinkEntry(
   root: string,
   entryPath: string,
@@ -503,7 +502,9 @@ async function classifySymlinkEntry(
     const targetStats = await stat(target);
     const contained = isContained(root, target);
     const denied = contained && pathIsDenied(rootRelativePosixPath(root, target));
-    return { ...base, kind: resolvedEntryKind(targetStats), readable: contained && !denied };
+    const leafKind: FilesEntryKind = targetStats.isFile() ? "file" : "symlink";
+    const kind: FilesEntryKind = targetStats.isDirectory() ? "directory" : leafKind;
+    return { ...base, kind, readable: contained && !denied };
   } catch {
     return { ...base, kind: "symlink", readable: false };
   }
@@ -1565,42 +1566,29 @@ export async function readFilesContent(
   return editableTextContent(target);
 }
 
-export async function resolveEditorFileIdentity(
-  store: UiStore,
-  rootInput: string | null,
-  pathInput: string | null,
-  redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
-): Promise<ResolvedEditorFileIdentity> {
-  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor);
-  if (!target.stats.isFile()) {
-    throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
-  }
-  return {
-    realRoot: target.realRoot,
-    relativePath: target.relativePath,
-    absolutePath: target.path,
-  };
-}
-
 /**
  * Containment for a workspace-relative path that does NOT require the file to be there (#2616).
  *
- * `resolveEditorFileIdentity` realpaths the candidate and 404s when it is gone — correct for a read
- * of live bytes, wrong for a record ABOUT a file. Local history's whole purpose is surviving the
- * file: recovering a deleted or renamed one is the case that matters most, and re-resolving the
+ * The route path this replaced realpathed the candidate and 404d when it was gone — correct for a
+ * read of live bytes, wrong for a record ABOUT a file. Local history's whole purpose is surviving
+ * the file: recovering a deleted or renamed one is the case that matters most, and re-resolving the
  * stored path against the live filesystem is exactly what denied it.
  *
  * The guards that do not depend on existence still run in full: normalization (absolute, NUL, `..`
- * escape), metadata redaction, and the deny list — on the relative path, and again on the resolved
- * path whenever the candidate still resolves, so a path that has since become a symlink out of the
- * root stays denied.
+ * escape), metadata redaction, and the deny list — on the relative path, and again on the deepest
+ * part of the path that still resolves, so a path that has since become a symlink out of the root
+ * stays denied whether or not its leaf survived.
+ *
+ * It deliberately returns no absolute path. A caller that wants bytes must resolve them itself
+ * through a live read; handing back an unresolved candidate under the same shape a realpathed
+ * identity uses is how a symlink out of the root would eventually get written through.
  */
 export async function resolveContainedEditorFilePath(
   store: UiStore,
   rootInput: string | null,
   pathInput: string | null,
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
-): Promise<ResolvedEditorFileIdentity> {
+): Promise<ContainedEditorFilePath> {
   const root = await resolveRoot(store, rootInput, redactor);
   const relativePath = normalizeRelativePath(pathInput);
   assertMetadataSafe(relativePath, redactor);
@@ -1615,29 +1603,42 @@ export async function resolveContainedEditorFilePath(
     throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected root.");
   }
   await assertResolvedPathContained(root.realRoot, candidate, redactor);
-  return { realRoot: root.realRoot, relativePath, absolutePath: candidate };
+  return { realRoot: root.realRoot, relativePath };
 }
 
-// A candidate that still resolves is held to the same realpath containment a live read gets; one
-// that no longer resolves has already passed every existence-independent guard above.
+/**
+ * Holds the deepest existing part of the candidate to the realpath containment a live read gets.
+ *
+ * Resolving only the leaf is not enough: `realpath` fails on a missing leaf, so a dangling entry
+ * under a directory symlinked OUT of the root would skip every check below. Walking up to the first
+ * segment that does resolve means an escaping ancestor is caught even when nothing exists at the
+ * requested path.
+ */
 async function assertResolvedPathContained(
   realRoot: string,
   candidate: string,
   redactor: FilesMetadataRedactor,
 ): Promise<void> {
-  let resolved: string;
-  try {
-    resolved = await realpath(candidate);
-  } catch {
+  let current = candidate;
+  while (isContained(realRoot, current)) {
+    let resolved: string;
+    try {
+      resolved = await realpath(current);
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return;
+      current = parent;
+      continue;
+    }
+    if (!isContained(realRoot, resolved)) {
+      throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected root.");
+    }
+    const resolvedRelativePath = rootRelativePosixPath(realRoot, resolved);
+    assertMetadataSafe(resolvedRelativePath, redactor);
+    if (pathIsDenied(resolvedRelativePath)) {
+      throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+    }
     return;
-  }
-  if (!isContained(realRoot, resolved)) {
-    throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected root.");
-  }
-  const resolvedRelativePath = rootRelativePosixPath(realRoot, resolved);
-  assertMetadataSafe(resolvedRelativePath, redactor);
-  if (pathIsDenied(resolvedRelativePath)) {
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
 }
 
@@ -2509,11 +2510,6 @@ export async function handleFilesContent(
 // Bounded body for a mutation request: a path plus a few short fields, never file content.
 const MAX_FILES_MUTATION_BODY_BYTES = 16_384;
 
-function requestedEntryKind(value: unknown): "directory" | "file" | null {
-  if (value === "directory") return "directory";
-  return value === "file" ? "file" : null;
-}
-
 export async function handleFilesCreate(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2523,7 +2519,7 @@ export async function handleFilesCreate(
     if (isRouteResult(body)) return body;
     const rootInput = typeof body.root === "string" ? body.root : null;
     const pathInput = typeof body.path === "string" ? body.path : null;
-    const kind = requestedEntryKind(body.kind);
+    const kind = body.kind === "file" || body.kind === "directory" ? body.kind : null;
     if (rootInput === null || pathInput === null || kind === null) {
       return {
         status: 400,
