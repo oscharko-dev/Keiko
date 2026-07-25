@@ -67,6 +67,17 @@ describe("OSV Scanner workflow", () => {
     for (const branch of expected) expect(actual).toContain(branch);
   });
 
+  // The bundled context is a RELEASE_REQUIRED_CHECKS entry, and verify-release-required-checks.mjs
+  // reads it off a release commit - evidence only the push lane produces. Without this, deleting
+  // that lane as a "duplicate" of the pull-request one keeps the whole suite green and hangs the
+  // next release on a check nothing emits.
+  it("keeps the bundled context reporting on every branch the audit gates push to", () => {
+    const expected = branchList(ci, "push", "ci.yml");
+    const actual = branchList(hygiene, "push", "workflow-hygiene.yml");
+    expect(expected).toContain("dev");
+    for (const branch of expected) expect(actual).toContain(branch);
+  });
+
   it("validates merge-queue groups like the audit gates do", () => {
     expect(branchList(hygiene, "merge_group", "workflow-hygiene.yml")).toEqual(
       branchList(ci, "merge_group", "ci.yml"),

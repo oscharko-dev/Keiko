@@ -174,9 +174,12 @@ required context.
 The ordering is not a preference. Removing the jobs before the owner's update would leave branch
 protection requiring four contexts that no workflow produces, which blocks every pull request in the
 repository — including the one that would fix it — and converts a scheduling choice into an incident
-under time pressure. The `osv-scanner.yml` `push`, `schedule` (`37 3 * * *`), `merge_group` and
-`workflow_dispatch` lanes stay where they are in all three phases; only the pull-request lane moves,
-so scheduled detection cadence is unchanged.
+under time pressure. The `osv-scanner.yml` `push`, `schedule` (`37 3 * * *`) and
+`workflow_dispatch` lanes stay where they are in all three phases, so branch coverage and the
+scheduled detection cadence are unchanged. Its `pull_request` and `merge_group` lanes move into the
+bundle, which covers both — `merge_group` was not named here before phase 3 established that the
+bundle owns its own trigger surface, and a record that is wrong about what moved is worse than one
+that says less.
 
 The documentation lists move in phase 3 rather than phase 1 for the same reason the jobs do.
 `CONTRIBUTING.md` is authoritative for what branch protection actually requires (ADR-0002), and an
