@@ -8,10 +8,12 @@ Superseded in part by ADR-0020 (the architecture gate was folded into the existi
 
 ## Context
 
-The `dev` branch has protection rules requiring 7 named status checks before any PR can merge
-(`enforce_admins: true`, no bypass). The check names are fixed — they are derived from GitHub Actions job
-names (or job IDs when no `name:` field is present) — and must match byte-for-byte or the check never
-reports, leaving the PR permanently blocked. The 7 required contexts are:
+The `dev` branch has protection rules requiring a fixed set of named status checks before any PR can
+merge (`enforce_admins: true`, no bypass). The check names are derived from GitHub Actions job names
+(or job IDs when no `name:` field is present) and must match byte-for-byte, or the check never
+reports and the PR stays permanently blocked. The set below is the one this record was written
+against; it has grown since, and [`CONTRIBUTING.md`](../../CONTRIBUTING.md) is authoritative for the
+current list:
 
 1. `ci`
 2. `actionlint`
