@@ -1,4 +1,12 @@
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +41,7 @@ import {
 const VAULT_KEY = Buffer.alloc(32, 0x29).toString("base64");
 let root: string;
 let stateDir: string;
+let outside: string;
 let store: UiStore;
 let history: EditorLocalHistoryStore;
 let deps: UiHandlerDeps;
@@ -60,6 +69,7 @@ function context(
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-route-root-")));
   stateDir = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-route-state-")));
+  outside = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-route-out-")));
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "app.ts"), "checkpoint marker\n", "utf8");
   store = createInMemoryUiStore();
@@ -87,6 +97,7 @@ afterEach(() => {
   store.close();
   rmSync(root, { recursive: true, force: true });
   rmSync(stateDir, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
 });
 
 function capture(): string {
@@ -163,6 +174,152 @@ describe("editor local-history routes", () => {
       deps,
     );
     expect(missing).toMatchObject({ status: 404, body: { error: { code: "ENTRY_NOT_FOUND" } } });
+  });
+
+  it("keeps a checkpoint readable, pinnable and deletable after its file is deleted", async () => {
+    const entryRef = capture();
+    rmSync(join(root, "src", "app.ts"));
+    const query = `?root=${encodeURIComponent(root)}`;
+    const routeParams = { entryRef };
+
+    const listed = await handleListEditorLocalHistory(
+      context("GET", `/api/editor/local-history${query}&path=src/app.ts`),
+      deps,
+    );
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}${query}`, routeParams),
+      deps,
+    );
+    const pinned = await handlePinEditorLocalHistory(
+      context("PATCH", `/api/editor/local-history/${entryRef}${query}`, routeParams, {
+        pinned: true,
+      }),
+      deps,
+    );
+    const deleted = await handleDeleteEditorLocalHistory(
+      context("DELETE", `/api/editor/local-history/${entryRef}${query}`, routeParams),
+      deps,
+    );
+
+    expect(listed).toMatchObject({ status: 200, body: { entries: [{ entryRef }] } });
+    expect(read).toMatchObject({ status: 200, body: { content: "checkpoint marker\n" } });
+    expect(pinned).toMatchObject({ status: 200, body: { entry: { pinned: true } } });
+    expect(deleted).toEqual({ status: 200, body: { deleted: true } });
+  });
+
+  it("keeps a checkpoint readable after its file is renamed away", async () => {
+    const entryRef = capture();
+    renameSync(join(root, "src", "app.ts"), join(root, "src", "renamed.ts"));
+
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`, {
+        entryRef,
+      }),
+      deps,
+    );
+
+    expect(read).toMatchObject({
+      status: 200,
+      body: { entry: { relativePath: "src/app.ts" }, content: "checkpoint marker\n" },
+    });
+  });
+
+  it("still refuses escaping and denied history paths that do not exist", async () => {
+    capture();
+    const query = `?root=${encodeURIComponent(root)}`;
+
+    const escaping = await handleListEditorLocalHistory(
+      context(
+        "GET",
+        `/api/editor/local-history${query}&path=${encodeURIComponent("../escape.ts")}`,
+      ),
+      deps,
+    );
+    const denied = await handleListEditorLocalHistory(
+      context("GET", `/api/editor/local-history${query}&path=${encodeURIComponent(".ssh/id_rsa")}`),
+      deps,
+    );
+    const rootItself = await handleListEditorLocalHistory(
+      context("GET", `/api/editor/local-history${query}&path=`),
+      deps,
+    );
+
+    expect(escaping).toMatchObject({ status: 400, body: { error: { code: "PATH_ESCAPE" } } });
+    expect(denied).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
+    expect(rootItself).toMatchObject({ status: 400, body: { error: { code: "BAD_PATH" } } });
+  });
+
+  it("refuses a stored path that now resolves outside the root through a symlink", async () => {
+    const entryRef = capture();
+    writeFileSync(join(outside, "secret.txt"), "outside marker\n", "utf8");
+    rmSync(join(root, "src", "app.ts"));
+    symlinkSync(join(outside, "secret.txt"), join(root, "src", "app.ts"));
+
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`, {
+        entryRef,
+      }),
+      deps,
+    );
+
+    expect(read).toMatchObject({ status: 403, body: { error: { code: "PATH_ESCAPE" } } });
+  });
+
+  it("refuses a stored path whose directory leaves the root even with the leaf gone", async () => {
+    // The escape hides one level up. realpath fails on the missing leaf, so a guard that only ever
+    // resolves the full path skips containment entirely and accepts a path sitting under a
+    // directory symlinked out of the root.
+    const entryRef = capture();
+    rmSync(join(root, "src"), { recursive: true });
+    symlinkSync(outside, join(root, "src"));
+
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`, {
+        entryRef,
+      }),
+      deps,
+    );
+
+    expect(read).toMatchObject({ status: 403, body: { error: { code: "PATH_ESCAPE" } } });
+  });
+
+  it("refuses a stored path whose containment cannot be verified at all", async () => {
+    // realpath failing is not the same as the path being absent. An unsearchable ancestor answers
+    // EACCES, and a guard that reads every failure as "missing" walks past the root and accepts a
+    // path it never actually checked. Absence of proof is not proof of containment.
+    const entryRef = capture();
+    // A symlink cycle answers ELOOP for every user, root included — unlike a permission trigger,
+    // which a root-running container would simply walk through.
+    rmSync(join(root, "src", "app.ts"));
+    symlinkSync(join(root, "src", "loop.ts"), join(root, "src", "app.ts"));
+    symlinkSync(join(root, "src", "app.ts"), join(root, "src", "loop.ts"));
+
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`, {
+        entryRef,
+      }),
+      deps,
+    );
+
+    expect(read).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
+  });
+
+  it("refuses a stored path that now resolves onto a denied location inside the root", async () => {
+    const entryRef = capture();
+    mkdirSync(join(root, ".ssh"));
+    writeFileSync(join(root, ".ssh", "id_rsa"), "private key\n", "utf8");
+    rmSync(join(root, "src", "app.ts"));
+    symlinkSync(join(root, ".ssh", "id_rsa"), join(root, "src", "app.ts"));
+
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`, {
+        entryRef,
+      }),
+      deps,
+    );
+
+    expect(read).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
+    expect(JSON.stringify(read.body)).not.toContain("private key");
   });
 
   it("keeps route failures content-free", async () => {

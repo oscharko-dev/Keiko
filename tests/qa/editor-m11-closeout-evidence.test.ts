@@ -81,7 +81,10 @@ const ADVERSARIAL_ROWS: readonly EvidenceRow[] = [
   {
     id: "HISTORY-PLAINTEXT-LEAK",
     file: "packages/keiko-server/src/editor/localHistory/localHistoryStore.test.ts",
-    marker: "vaultBytes).not.toContain",
+    // Sharding checkpoint bodies (#2616) retired the single `checkpoints.vault` this marker used to
+    // name. The proof it pins was widened, not moved: it now walks EVERY file the store writes
+    // rather than one, so the marker follows it to the assertion that does the walking.
+    marker: "expect(bytes).not.toContain(content.trim())",
   },
   {
     id: "HISTORY-APP-SESSION-BYPASS",
