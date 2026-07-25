@@ -12,6 +12,13 @@ const config = readFileSync(resolve(repoRoot, ".github/zizmor.yml"), "utf8");
 
 const ZIZMOR_ACTION_SHA = "6599ee8b7a49aef6a770f63d261d214911a7ce02";
 
+// The job these assertions moved from contained zizmor and nothing else; the one they moved to runs
+// four tools. Scoping to the step keeps the pin as tight as it was: another step carrying
+// `annotations: true` must not be able to satisfy an assertion about zizmor's invocation.
+function zizmorStep(source) {
+  return /( {6}- name: Run zizmor\n(?: {8}.*\n| {10}.*\n)*)/u.exec(source)?.[1] ?? "";
+}
+
 describe("zizmor workflow job", () => {
   it("uses the verified zizmor-action release commit and a pinned zizmor version", () => {
     expect(workflow).toContain(`zizmorcore/zizmor-action@${ZIZMOR_ACTION_SHA}`);
@@ -26,9 +33,10 @@ describe("zizmor workflow job", () => {
     // non-zero exit code (SARIF consumers read the report, not the process exit code) - so the
     // job would stay green even with findings. annotations: true keeps the job's own exit code
     // as the gate, matching every other check in this repository.
-    const jobBlock = workflow.match(/ {2}workflow-hygiene:\n(?:.*\n)*?(?= {2}\S|$)/u)?.[0] ?? "";
-    expect(jobBlock).toMatch(/advanced-security:\s*false/u);
-    expect(jobBlock).toMatch(/annotations:\s*true/u);
+    const step = zizmorStep(workflow);
+    expect(step, "the Run zizmor step must exist").not.toBe("");
+    expect(step).toMatch(/advanced-security:\s*false/u);
+    expect(step).toMatch(/annotations:\s*true/u);
   });
 
   it("uses read-only repository permissions and disables checkout credentials", () => {

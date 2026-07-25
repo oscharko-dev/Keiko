@@ -78,6 +78,9 @@ describe("OSV Scanner workflow", () => {
     expect(() => branchList(workflow, "push", "osv-scanner.yml")).toThrow();
     expect(() => branchList(workflow, "pull_request", "osv-scanner.yml")).toThrow();
     expect(workflow).toContain('cron: "37 3 * * *"');
+    // Both halves, or this pins nothing: a `schedule` added to the bundle would scan daily twice
+    // and still satisfy an assertion that only checks this file kept its own.
+    expect(hygiene).not.toMatch(/\n {2}schedule:/u);
   });
 
   it("validates merge-queue groups like the audit gates do", () => {
