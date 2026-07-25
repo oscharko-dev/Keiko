@@ -168,7 +168,15 @@ async function openBridge(page: Page, sessionId: string): Promise<void> {
       `/api/editor/agent/events?sessionId=${encodeURIComponent(sid)}`,
     );
   }, sessionId);
-  await page.waitForTimeout(750);
+  // The bridge is usable once the EventSource reports OPEN. Waiting a fixed 750ms instead
+  // both slowed every call and raced a slow connect — synchronising on readyState is the
+  // observable condition (AGENTS.md §9: await a condition rather than sleeping).
+  await page.waitForFunction(
+    (k) =>
+      (window as unknown as Record<string, EventSource | undefined>)[k]?.readyState ===
+      EventSource.OPEN,
+    "__keiko1394Bridge",
+  );
 }
 
 // ─── AC3: Conflict banner appears and is non-destructive ─────────────────────
