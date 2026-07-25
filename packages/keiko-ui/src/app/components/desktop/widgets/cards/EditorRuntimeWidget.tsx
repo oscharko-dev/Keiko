@@ -2192,6 +2192,10 @@ function EditorRuntimeWidget({
   // buffer moved while the save was in flight so it never clobbers mid-flight edits.
   const contentRef = useRef("");
   contentRef.current = content;
+  // Companion to `contentRef`: a restore has to be able to put the dirty-state bookkeeping back
+  // exactly as it found it, not merely recompute a plausible one.
+  const fileModelRef = useRef<EditorFileModel | null>(null);
+  fileModelRef.current = fileModel;
   const formatOnSaveStateRef = useRef<FormatOnSaveState>({
     enabled: false,
     canFormat: false,
@@ -2831,6 +2835,18 @@ function EditorRuntimeWidget({
     ],
   );
 
+  // A restore is atomic from the buffer's point of view (#2617). `persist` adopts the text into the
+  // buffer before the write so the save reconciles against it — correct for a save of the user's own
+  // edits, but for a restore that text was never in the buffer, so every failure path would leave
+  // the checkpoint content sitting there marked dirty while the history panel reports "not
+  // restored". Roll the buffer back to the exact pre-restore state whenever no write landed; the
+  // save error itself stays visible through saveStatus/saveError.
+  const revertRestoredBuffer = useCallback((text: string, model: EditorFileModel | null): void => {
+    contentRef.current = text;
+    setContent(text);
+    setFileModel(model);
+  }, []);
+
   const restoreHistoryContent = useCallback(
     async (checkpointContent: string): Promise<boolean> => {
       if (dirtyRef.current) {
@@ -2840,9 +2856,20 @@ function EditorRuntimeWidget({
         });
         return false;
       }
-      return persist(checkpointContent, "pre-restore");
+      const restoreSessionKey = editorSessionKeyOrNull(root, file);
+      const bufferBeforeRestore = contentRef.current;
+      const modelBeforeRestore = fileModelRef.current;
+      const restored = await persist(checkpointContent, "pre-restore");
+      // Only the optimistic adoption can have put the checkpoint text into this document's buffer;
+      // if the pane moved on (file switch, later edit) leave the newer state alone.
+      const sameDocument =
+        restoreSessionKey !== null && activeSessionKeyRef.current === restoreSessionKey;
+      if (!restored && sameDocument && contentRef.current === checkpointContent) {
+        revertRestoredBuffer(bufferBeforeRestore, modelBeforeRestore);
+      }
+      return restored;
     },
-    [commonT, persist],
+    [commonT, file, persist, revertRestoredBuffer, root],
   );
 
   const onContentChange = useCallback(
