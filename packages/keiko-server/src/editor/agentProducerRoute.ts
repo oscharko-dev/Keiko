@@ -33,7 +33,10 @@ import { readJsonObject } from "../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { editorAgentAuthorityRegistry } from "./agentAuthorityRegistry.js";
-import { resolveEditorAgentActionRoot } from "./agentRootBoundary.js";
+import {
+  EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE,
+  resolveEditorAgentActionRoot,
+} from "./agentRootBoundary.js";
 
 // Scope IN (#2489): the first Keiko-native producer is restricted to the four tools whose
 // dispatch is server-resolved (navigateSymbol/searchWorkspace/queryGit) or synchronously governed
@@ -266,9 +269,7 @@ function producerAdmission(
       response: {
         status: 403,
         body: errorBody(
-          rooted.reason === "decompose-per-root"
-            ? "EDITOR_AGENT_DECOMPOSE_PER_ROOT"
-            : "EDITOR_AGENT_ROOT_BINDING_INVALID",
+          EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE[rooted.reason],
           "The producer turn is not authorized for this workspace root.",
         ),
       },

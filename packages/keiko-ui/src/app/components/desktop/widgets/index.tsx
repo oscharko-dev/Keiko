@@ -21,7 +21,7 @@ import {
 import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets } from "../workspaceRootTargets";
-import { BoundRootTarget } from "./BoundRootTarget";
+import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
 
 function WindowChunkFallback(): ReactNode {
   const t = useTranslate();
@@ -225,16 +225,19 @@ export function resolveBoundRoot(
   return ctx.activeRoot ?? cfgRoot ?? ctx.linkedRoot ?? undefined;
 }
 
+// Issue #2619 — `surface` replaces the free-text label: it selects the window's entry in
+// BOUND_ROOT_SURFACES, which carries both the display label and whether the window may follow the
+// focused root (ADR-0147 D1). One key, so the label and the governance class cannot drift apart.
 function BoundRootSurface({
   ctx,
   configuredRoot,
-  label,
+  surface,
   onSelect,
   children,
 }: {
   readonly ctx: WindowRenderContext;
   readonly configuredRoot: string | undefined;
-  readonly label: string;
+  readonly surface: BoundRootSurfaceType;
   readonly onSelect: (root: string) => void;
   readonly children: (root: string | undefined) => ReactNode;
 }): ReactNode {
@@ -243,7 +246,7 @@ function BoundRootSurface({
       fallbackRoot={resolveBoundRoot(ctx, configuredRoot)}
       configuredRoot={configuredRoot}
       lockedToActiveRoot={ctx.activeBinding !== null}
-      label={label}
+      surface={surface}
       onSelect={onSelect}
     >
       {children}
@@ -379,7 +382,7 @@ registerWindowRender("problems", (cfg, ctx) => {
     <BoundRootSurface
       ctx={ctx}
       configuredRoot={configuredRoot}
-      label="Problems"
+      surface="problems"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(root) => <ProblemsPanel root={root ?? ""} openEditorFile={ctx.openEditorFile} />}
@@ -392,7 +395,7 @@ registerWindowRender("debug", (cfg, ctx) => {
     <BoundRootSurface
       ctx={ctx}
       configuredRoot={configuredRoot}
-      label="Debug"
+      surface="debug"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(root) => <DebugPanelSessionHost cfg={cfg} ctx={ctx} root={root} />}
@@ -493,7 +496,7 @@ registerWindowRender("terminal", (cfg, ctx) => {
     <BoundRootSurface
       ctx={ctx}
       configuredRoot={configuredRoot}
-      label="Terminal"
+      surface="terminal"
       onSelect={(root) => ctx.updateCfg({ projectPath: root, cwd: root })}
     >
       {(root) => {
@@ -512,7 +515,7 @@ registerWindowRender("commands", (cfg, ctx) => {
     <BoundRootSurface
       ctx={ctx}
       configuredRoot={configuredRoot}
-      label="Commands"
+      surface="commands"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(root) => (
@@ -536,7 +539,7 @@ registerWindowRender("runtime", (cfg, ctx) => {
     <BoundRootSurface
       ctx={ctx}
       configuredRoot={configuredRoot}
-      label="Runtime"
+      surface="runtime"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(projectPath) => (
@@ -580,7 +583,7 @@ registerWindowRender("governedGit", (cfg, ctx) => {
     <BoundRootSurface
       ctx={ctx}
       configuredRoot={configuredRoot}
-      label="Git"
+      surface="governedGit"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(projectId) => (
@@ -607,7 +610,7 @@ registerWindowRender("governedPullRequest", (cfg, ctx) => {
     <BoundRootSurface
       ctx={ctx}
       configuredRoot={configuredRoot}
-      label="Pull request"
+      surface="governedPullRequest"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(projectId) => (
@@ -625,7 +628,7 @@ registerWindowRender("governedMerge", (cfg, ctx) => {
     <BoundRootSurface
       ctx={ctx}
       configuredRoot={configuredRoot}
-      label="Merge"
+      surface="governedMerge"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(projectId) => <GovernedMergeCard projectId={projectId} headBranchName={headBranchName} />}
@@ -640,7 +643,7 @@ registerWindowRender("containerStatus", (cfg, ctx) => {
     <BoundRootSurface
       ctx={ctx}
       configuredRoot={configuredRoot}
-      label="Containers"
+      surface="containerStatus"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(projectPath) => (

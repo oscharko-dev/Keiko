@@ -32,3 +32,22 @@
   flex: 1;
   flex-direction: column;
 }
+
+.cmpDenied {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 14px;
+}
+
+.cmpDeniedTitle {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cmpDeniedBody {
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
