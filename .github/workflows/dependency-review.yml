@@ -32,9 +32,20 @@ jobs:
         with:
           fail-on-severity: moderate
           fail-on-scopes: development, runtime, unknown
+          # LGPL-3.0-only is admitted for BUILD-TIME TOOLING ONLY, decided by the owner on
+          # 2026-07-25 for `eslint-plugin-sonarjs` (Issue #2699). Its copyleft attaches to the
+          # library and to works that link it; a linter that runs in CI and on developer machines is
+          # neither linked into Keiko nor distributed with it, so no obligation reaches our source or
+          # our artifacts. `fail-on-scopes` deliberately keeps `runtime` in scope, so an LGPL package
+          # that ever became a runtime dependency would still have to be decided again, on its own
+          # merits — this entry is not a general licence widening.
+          #
+          # Why it was worth deciding: SonarCloud's rule engine was invisible on a developer machine,
+          # so every rule violation arrived as a red required check. `npm run check:sonar-rules` makes
+          # the gate confirm a known answer instead of discovering it (ADR-0156).
           allow-licenses: >-
             0BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, BlueOak-1.0.0, CC-BY-4.0,
-            CC0-1.0, ISC, MIT, Python-2.0, Unlicense, WTFPL
+            CC0-1.0, ISC, LGPL-3.0-only, MIT, Python-2.0, Unlicense, WTFPL
           retry-on-snapshot-warnings: true
           retry-on-snapshot-warnings-timeout: 120
           show-openssf-scorecard: true

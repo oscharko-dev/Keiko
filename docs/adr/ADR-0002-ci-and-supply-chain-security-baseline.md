@@ -6,6 +6,16 @@ Accepted
 
 Superseded in part by ADR-0020 (the architecture gate was folded into the existing `ci` job rather than a new job). Amended by #2696/#2699: the `npm audit` gates now run with `--omit=dev`, so a devDependency advisory no longer fails the build — the consequence anticipated below as "noise on zero-day disclosure days" became a repository-wide delivery block on 2026-07-24 (GHSA-mh99-v99m-4gvg, no upstream fix for the 1.x line the ESLint stack pins). Coverage of build-time tooling moved to the OSV scan, which was widened from `dev` alone to every branch target the audit gates run on, so `release/**` and the integration branches are no longer left without any dependency scanner. Production-dependency thresholds are unchanged. The required-check count is now 8 per CONTRIBUTING.md (adds `ui`) and the workflow-file count has grown from 3 to 7 (ci.yml, codeql.yml, dependency-review.yml, e2e-extended.yml, main-promotion.yml, portable-assets.yml, release.yml). The SHA-pinning and deny-all-permissions mechanism itself is unchanged and still live.
 
+Amended again by #2699 on 2026-07-25, by owner decision: **LGPL-3.0-only is admitted for build-time
+tooling only.** The trigger was `eslint-plugin-sonarjs`, which makes SonarCloud's rule engine
+runnable on a developer machine — without it every rule violation arrived as a red required check,
+so the gate was the discovery mechanism rather than the confirmation (ADR-0156). LGPL copyleft
+attaches to the library and to works that link it; a linter executed in CI and locally is neither
+linked into Keiko nor distributed with it, so no obligation reaches our source or our artifacts.
+`fail-on-scopes` deliberately keeps `runtime` in scope, so the same licence appearing as a runtime
+dependency would have to be decided again on its own merits. This is a scoped exception, not a
+general widening, and it is the first package of the GPL family in the tree.
+
 ## Context
 
 The `dev` branch has protection rules requiring a fixed set of named status checks before any PR can
@@ -91,8 +101,10 @@ to diff against; it cannot run on `push`).
 
 Jobs:
 - `Review dependency diff (dev/main)` (job `name:` field exactly): runs
-  `actions/dependency-review-action@v4` with `fail-on-severity: high` and `deny-licenses:` covering
-  known copyleft licenses (GPL-2.0, GPL-3.0, AGPL-3.0, LGPL-2.1, LGPL-3.0). Permissions:
+  `actions/dependency-review-action` with `fail-on-severity: moderate`, `fail-on-scopes: development,
+  runtime, unknown`, and an **allow**-list rather than a deny-list — every copyleft licence is
+  therefore refused by default, without needing to be enumerated. The one exception is
+  `LGPL-3.0-only`, admitted for build-time tooling by the 2026-07-25 amendment above. Permissions:
   `contents: read`.
 
 ### Workflow file permission policy
