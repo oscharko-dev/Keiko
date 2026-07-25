@@ -172,6 +172,7 @@
     "check:coverage:write-baseline": "node scripts/check-package-coverage.mjs --baseline docs/qa/package-coverage-baseline.json --write-baseline docs/qa/package-coverage-baseline.json --file-floor-threshold 50",
     "check:lcov-source-mapping": "node scripts/check-lcov-source-mapping.mjs --base origin/dev --head HEAD",
     "check:sonar-scope": "node scripts/sonar-analysis-scope.mjs",
+    "check:zizmor-anchors": "node scripts/check-zizmor-anchors.mjs",
     "check:native:macos": "./scripts/check-macos-native-quality.sh",
     "check:native:windows": "pwsh -NoProfile -NonInteractive -File scripts/check-windows-native-quality.ps1",
     "arch:check": "depcruise --validate .dependency-cruiser.cjs src \"packages/*/src\" && node scripts/check-import-policy.mjs && node scripts/check-contract-boundaries.mjs",
