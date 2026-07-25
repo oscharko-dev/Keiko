@@ -194,7 +194,8 @@
     "check:publish-manifests": "node scripts/check-publish-manifests.mjs",
     "smoke:registry-install": "node scripts/registry-install-smoke.mjs",
     "provision:sqlite-vec": "node scripts/provision-sqlite-vec.mjs",
-    "demo:clean-checkout": "npm run build:packages && npm run provision:sqlite-vec && node scripts/knowledge-m2-clean-checkout-demo.mjs"
+    "demo:clean-checkout": "npm run build:packages && npm run provision:sqlite-vec && node scripts/knowledge-m2-clean-checkout-demo.mjs",
+    "check:osv-waiver-scope": "node scripts/check-osv-waiver-scope.mjs"
   },
   "overrides": {
     "undici": "7.28.0",

@@ -101,6 +101,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run check:version-consistency
       - run: npm run check:dependency-hygiene
+      # Makes each OSV waiver's "not shipped" claim executable: an ID-wide suppression must never
+      # hide the same advisory once it reaches a dependency Keiko distributes.
+      - run: npm run check:osv-waiver-scope
       - run: npm run check:knip
       - run: npm run check:qodo-config
       - run: npm run check:release-required-workflows

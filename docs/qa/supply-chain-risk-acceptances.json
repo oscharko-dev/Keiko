@@ -16,7 +16,7 @@
       "registrySignatureKeyId": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
       "finding": "Socket high-severity obfuscated-code heuristic",
       "assessment": "The locked package is the official readable ESM distribution. The warning is treated as a heuristic false positive only for this exact artifact.",
-      "verification": "npm registry metadata contains a package signature; local npm signature verification was inconclusive because the Sigstore TUF certificate chain could not be fetched. Lockfile integrity, npm audit, OSV, Dependency Review, and Socket remain mandatory."
+      "verification": "npm registry metadata contains a package signature; local npm signature verification was inconclusive because the Sigstore TUF certificate chain could not be fetched. Lockfile integrity, OSV, Dependency Review, and Socket remain mandatory. Per ADR-0156 the npm audit gates scope to shipped dependencies, so for these development-only packages the OSV scan over the complete lockfile is the vulnerability control."
     },
     {
       "package": "underscore",
@@ -27,7 +27,7 @@
       "registrySignatureKeyId": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
       "finding": "Socket high-severity obfuscated-code heuristic",
       "assessment": "The locked package contains the upstream project's generated minified browser builds. The warning is treated as a minification heuristic false positive only for this exact artifact.",
-      "verification": "npm registry metadata contains a package signature; local npm signature verification was inconclusive because the Sigstore TUF certificate chain could not be fetched. Lockfile integrity, npm audit, OSV, Dependency Review, and Socket remain mandatory."
+      "verification": "npm registry metadata contains a package signature; local npm signature verification was inconclusive because the Sigstore TUF certificate chain could not be fetched. Lockfile integrity, OSV, Dependency Review, and Socket remain mandatory. Per ADR-0156 the npm audit gates scope to shipped dependencies, so for these development-only packages the OSV scan over the complete lockfile is the vulnerability control."
     }
   ]
 }
