@@ -115,7 +115,7 @@ describe("public barrel", () => {
     );
   });
 
-  it("pins the public type surface (compile-time only)", () => {
+  it("pins the public type surface (compile-time only)", async () => {
     pin<BuildCorrectionInput>();
     pin<BuildForgetOperationsOptions>();
     pin<ConflictPair>();
@@ -132,6 +132,10 @@ describe("public barrel", () => {
     pin<SuppressionOptions>();
     pin<SuppressionReason>();
     pin<SuppressionResult>();
-    expect(true).toBe(true);
+    // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
+    // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
+    // loads at all — a circular or broken re-export throws here. The previous
+    // `expect(true).toBe(true)` asserted neither.
+    await expect(import("./index.js")).resolves.toBeDefined();
   });
 });

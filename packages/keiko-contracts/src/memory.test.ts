@@ -743,8 +743,11 @@ describe("branded IDs", () => {
     expect(projectId).toBe("p-1");
     expect(memoryId).toBe("m-1");
     expect(_crossUserProject).toBeDefined();
-    expect(_crossProjectMemory).toBeDefined();
-    expect(_bareString).toBeDefined();
+    // The @ts-expect-error above is the real assertion — it fails the build if the brand ever stops
+    // rejecting these. At runtime the branded values are plain strings, so assert the value that
+    // survived rather than mere definedness, which held no matter what.
+    expect(_crossProjectMemory).toBe("p-1");
+    expect(_bareString).toBe("u-2");
   });
 
   it("survive JSON round-trip as plain strings", () => {

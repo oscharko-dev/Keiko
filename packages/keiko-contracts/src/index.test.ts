@@ -495,7 +495,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.hasStaleModelMetadata).toBe("function");
   });
 
-  it("memory contract type re-exports are reachable through the barrel (#205)", () => {
+  it("memory contract type re-exports are reachable through the barrel (#205)", async () => {
     type Mod = typeof import("./index.js");
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<Mod["MEMORY_SCOPE_KINDS"]>();
@@ -541,7 +541,11 @@ describe("keiko-contracts package surface", () => {
     pin<_MemoryModelIdentity>();
     pin<_MemoryStructuredPayload>();
     pin<_MemoryValidation>();
-    expect(true).toBe(true);
+    // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
+    // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
+    // loads at all — a circular or broken re-export throws here. The previous
+    // `expect(true).toBe(true)` asserted neither.
+    await expect(import("./index.js")).resolves.toBeDefined();
   });
 
   it("memory subpath barrel is importable as @oscharko-dev/keiko-contracts/memory (#205)", async () => {
@@ -551,7 +555,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof subpath.isScopeReachable).toBe("function");
   });
 
-  it("memory workflow port re-exports are reachable through the barrel (#213)", () => {
+  it("memory workflow port re-exports are reachable through the barrel (#213)", async () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     type _MemoryWorkflowPort = import("./index.js").MemoryWorkflowPort;
     type _MemoryWorkflowContext = import("./index.js").MemoryWorkflowContext;
@@ -563,7 +567,11 @@ describe("keiko-contracts package surface", () => {
     pin<_MemoryUsedEvent>();
     pin<_MemoryOmittedEvent>();
     pin<_MemoryWriteCandidateEvent>();
-    expect(true).toBe(true);
+    // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
+    // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
+    // loads at all — a circular or broken re-export throws here. The previous
+    // `expect(true).toBe(true)` asserted neither.
+    await expect(import("./index.js")).resolves.toBeDefined();
   });
 
   it("memory workflow port subpath is importable (#213)", async () => {
@@ -697,7 +705,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.editorAgentRootBindingDenyReason).toBe("function");
   });
 
-  it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {
+  it("editor-agent contract type re-exports are reachable through the barrel (#1391)", async () => {
     // Phantom generics pin the public contract types onto the barrel surface; a future refactor that
     // drops one of these names stops this test compiling (same guard pattern as #186/#205 above).
     const pin = <T>(_value?: T): T | undefined => undefined;
@@ -746,7 +754,11 @@ describe("keiko-contracts package surface", () => {
     pin<_ConflictDetail>();
     pin<_FileActionResult>();
     pin<_FileActionStatus>();
-    expect(true).toBe(true);
+    // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
+    // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
+    // loads at all — a circular or broken re-export throws here. The previous
+    // `expect(true).toBe(true)` asserted neither.
+    await expect(import("./index.js")).resolves.toBeDefined();
   });
 
   it("coding workbench mode-policy contracts are reachable through the barrel (#2091)", async () => {

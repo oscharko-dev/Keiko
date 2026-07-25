@@ -98,9 +98,7 @@ describe("MemoryFilters — query debounce (GEN-PERF-WIDGET-003)", () => {
 
     // Five distinct input events within one debounce window.
     for (const value of ["h", "he", "hel", "hell", "hello"]) {
-      act(() => {
-        fireEvent.change(input, { target: { value } });
-      });
+      fireEvent.change(input, { target: { value } });
     }
 
     // Before the debounce elapses, nothing has been committed downstream.
@@ -121,9 +119,7 @@ describe("MemoryFilters — query debounce (GEN-PERF-WIDGET-003)", () => {
     render(<MemoryFilters filters={EMPTY_FILTERS} onChange={onChange} />);
     const input = screen.getByRole("searchbox", { name: "Search" });
 
-    act(() => {
-      fireEvent.change(input, { target: { value: "draft" } });
-    });
+    fireEvent.change(input, { target: { value: "draft" } });
     // Debounce still pending.
     expect(onChange).not.toHaveBeenCalled();
 

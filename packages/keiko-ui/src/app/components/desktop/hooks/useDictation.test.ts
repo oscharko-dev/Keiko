@@ -514,12 +514,15 @@ describe("useDictation — unmount safety (no dispatch / no mic left open)", () 
           resolveTranscribe = resolve;
         }),
     );
+    const onInsert = vi.fn();
+    const onMark = vi.fn();
     const { result, unmount } = renderHook(() =>
       useDictation({
-        onInsert: vi.fn(),
+        onInsert,
         createRecorder: () => recorder.recorder,
         transcribe,
         postRollMs: 0,
+        latencySink: { onMark },
       }),
     );
     act(() => result.current.start());
@@ -531,8 +534,13 @@ describe("useDictation — unmount safety (no dispatch / no mic left open)", () 
       resolveTranscribe({ transcript: "late transcript" });
       await Promise.resolve();
     });
-    // No "state update on unmounted component" — the guard short-circuits the dispatch.
-    expect(true).toBe(true);
+    // The mounted guard sits directly in front of the post-transcription work, and `upload_end` is
+    // the first thing behind it — so an emitted `upload_end` is exactly the observable trace of a
+    // dispatch onto an unmounted hook. Asserting its absence pins the guard; the previous
+    // `expect(true).toBe(true)` stayed green with the guard deleted.
+    const marks = onMark.mock.calls.map(([sample]: [{ mark: string }]) => sample.mark);
+    expect(marks).not.toContain("upload_end");
+    expect(onInsert).not.toHaveBeenCalled();
   });
 });
 
