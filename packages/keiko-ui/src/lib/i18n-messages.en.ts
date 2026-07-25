@@ -94,6 +94,10 @@ export const EN_MESSAGES = {
   "settings.profiles.fileTooLarge": "The profile file exceeds the 64 KiB import limit.",
   "settings.profiles.invalid": "The profile import could not be validated or applied.",
   "settings.profiles.stale": "Profiles changed after the preview. Preview the file again.",
+  "boundRoot.denied.title": "Choose a workspace root",
+  "boundRoot.denied.rootBindingRequired":
+    "This window acts on one workspace root and none was chosen. The focused root is never used automatically, so choose a root above to continue.",
+  "boundRoot.denied.placeholder": "No root chosen",
   "workspaceTrust.title": "Workspace Trust",
   "workspaceTrust.restrictedMode": "Restricted Mode",
   "workspaceTrust.trustedMode": "Trusted workspace",

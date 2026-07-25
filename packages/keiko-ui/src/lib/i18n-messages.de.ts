@@ -98,6 +98,10 @@ export const DE_MESSAGES = {
   "settings.profiles.fileTooLarge": "Die Profildatei überschreitet das Importlimit von 64 KiB.",
   "settings.profiles.invalid": "Der Profilimport konnte nicht validiert oder angewendet werden.",
   "settings.profiles.stale": "Profile wurden nach der Vorschau geändert. Prüfe die Datei erneut.",
+  "boundRoot.denied.title": "Arbeitsbereichs-Root wählen",
+  "boundRoot.denied.rootBindingRequired":
+    "Dieses Fenster arbeitet auf genau einem Arbeitsbereichs-Root, und es wurde keiner gewählt. Der fokussierte Root wird nie automatisch verwendet — wähle oben einen Root, um fortzufahren.",
+  "boundRoot.denied.placeholder": "Kein Root gewählt",
   "workspaceTrust.title": "Arbeitsbereichsvertrauen",
   "workspaceTrust.restrictedMode": "Eingeschränkter Modus",
   "workspaceTrust.trustedMode": "Vertrauenswürdiger Arbeitsbereich",

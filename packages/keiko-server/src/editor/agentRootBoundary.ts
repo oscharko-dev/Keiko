@@ -23,6 +23,21 @@ export type EditorAgentRootBoundaryReason = Extract<
   | "workspace-boundary-escape"
 >;
 
+// Issue #2619 (ADR-0147 D1/D4) — one reason-to-wire-code table for every route that reports a root
+// boundary denial. Each reason keeps its own code: `root-binding-required` says the dispatch named no
+// root at all and is the contract expression of "the focused root is never a fallback", while
+// `root-binding-invalid` says a root WAS named and did not hold. Collapsing them makes the invariant
+// unobservable at the boundary, so the mapping lives beside the reason union rather than being
+// re-derived per route.
+export const EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE: Readonly<
+  Record<EditorAgentRootBoundaryReason, string>
+> = {
+  "root-binding-required": "EDITOR_AGENT_ROOT_BINDING_REQUIRED",
+  "root-binding-invalid": "EDITOR_AGENT_ROOT_BINDING_INVALID",
+  "decompose-per-root": "EDITOR_AGENT_DECOMPOSE_PER_ROOT",
+  "workspace-boundary-escape": "EDITOR_AGENT_ROOT_BINDING_INVALID",
+};
+
 export interface EditorAgentResolvedRoot {
   readonly workspaceRoot: string;
   readonly rootRef?: WorkspaceRootDescriptor["rootRef"] | undefined;

@@ -43,6 +43,7 @@ import {
 } from "./agentRoutes.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { handleEditorAgentProducerTurn } from "./agentProducerRoute.js";
+import { handleEditorAgentVerificationRun } from "./agentVerificationRoute.js";
 import {
   editorAgentPathBoundaryReason,
   resolveEditorAgentActionRoot,
@@ -64,7 +65,13 @@ function requestContext(body: unknown, path: string): RouteContext {
   ]) as unknown as IncomingMessage;
   return {
     req,
-    res: { writableEnded: false, on: (): void => undefined } as unknown as ServerResponse,
+    // `removeListener` is required by routes that install a request-lifecycle abort handler
+    // (the verification route disposes one on every exit path).
+    res: {
+      writableEnded: false,
+      on: (): void => undefined,
+      removeListener: (): void => undefined,
+    } as unknown as ServerResponse,
     params: {},
     url: new URL(`http://127.0.0.1${path}`),
   };
@@ -391,6 +398,12 @@ describe("editor agent root boundary", () => {
       );
 
       expect(multiRoot.status).toBe(403);
+      // Issue #2619: strengthened from status-only. Any 403 satisfied this pin, so a regression that
+      // reported the unrooted dispatch as `root-binding-invalid` — erasing the distinction the
+      // invariant rests on — stayed green.
+      expect((multiRoot.body as { error?: { code?: unknown } }).error?.code).toBe(
+        "EDITOR_AGENT_ROOT_BINDING_REQUIRED",
+      );
       expect(JSON.stringify(multiRoot.body)).not.toContain(rootA);
     } finally {
       singleStore.close();
@@ -607,5 +620,143 @@ describe("editor agent root boundary", () => {
     } finally {
       singleStore.close();
     }
+  });
+});
+
+// Issue #2619 (ADR-0147 D1/D4) — `root-binding-required` is the contract expression of "the focused
+// root is never a fallback": it fires exactly when a mutating or executing dispatch names no root in
+// a workspace that has more than one. Before this block the reason had three by-value assertions in
+// the whole repository, all against the pure contracts function; every server consumer and the wire
+// code `EDITOR_AGENT_ROOT_BINDING_REQUIRED` were unasserted, so a regression that collapsed it into
+// the neighbouring `root-binding-invalid` stayed green. Each test below pins one consumer.
+describe("root-binding-required across every server consumer (#2619)", () => {
+  // A session registered while the workspace still had one root keeps `rootBinding === undefined`.
+  // Growing the workspace is what turns that session into an unrooted dispatch.
+  function bindinglessSession(sessionId: string): EditorAgentSessionSnapshot {
+    const session = snapshot(rootA, undefined, sessionId);
+    expect(editorAgentRegistry.registerSnapshot(session)).toBe(true);
+    disconnects.push(editorAgentRegistry.connect(sessionId, () => undefined));
+    return session;
+  }
+
+  function errorCode(body: unknown): unknown {
+    return (body as { error?: { code?: unknown } }).error?.code;
+  }
+
+  it("resolves the reason at the producing boundary for a bindingless multi-root session", () => {
+    const session = snapshot(rootA, undefined, "session-required-unit");
+    expect(resolveEditorAgentSessionRoot(session, store)).toEqual({
+      ok: false,
+      reason: "root-binding-required",
+    });
+    // The focused root is a current member and would resolve cleanly — the boundary must still
+    // refuse rather than supply it. Focus is presentation state (ADR-0147 D1).
+    expect(manifest.roots.some((root) => root.rootRef === manifest.focusedRootRef)).toBe(true);
+  });
+
+  it("reports the required reason distinctly from invalid on the snapshot route", async () => {
+    bindinglessSession("session-required-snapshot");
+    const response = await handleEditorAgentSnapshot(
+      requestContext(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          sessionId: "session-required-snapshot",
+          textMode: "activeFile",
+        },
+        "/api/editor/agent/snapshot",
+      ),
+      routeDeps(),
+    );
+    expect(response.status).toBe(403);
+    expect(errorCode(response.body)).toBe("EDITOR_AGENT_ROOT_BINDING_REQUIRED");
+    expect(JSON.stringify(response.body)).not.toContain(rootA);
+  });
+
+  it("reports the required reason on the producer turn route", async () => {
+    bindinglessSession("session-required-producer");
+    const response = await handleEditorAgentProducerTurn(
+      requestContext(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          sessionId: "session-required-producer",
+          modelId: "model-2619",
+          goal: "summarise the workspace",
+          authorityRef: authorityRef(rootA),
+        },
+        "/api/editor/agent/producer/turn",
+      ),
+      routeDeps() as unknown as Parameters<typeof handleEditorAgentProducerTurn>[1],
+    );
+    expect(response.status).toBe(403);
+    // Regression: this route collapsed every non-decompose reason into ROOT_BINDING_INVALID, so a
+    // dispatch that named no root was reported as one that named a bad root.
+    expect(errorCode(response.body)).toBe("EDITOR_AGENT_ROOT_BINDING_REQUIRED");
+    expect(JSON.stringify(response.body)).not.toContain(rootA);
+  });
+
+  it("denies a mutating action and keeps its audit record target-free", async () => {
+    const session = bindinglessSession("session-required-action");
+    const response = await handleEditorAgentActions(
+      requestContext(action(session, "save", "required-save"), "/api/editor/agent/actions"),
+      routeDeps(),
+    );
+    expect(response).toMatchObject({
+      status: 403,
+      body: { result: { conflict: { code: "POLICY_DENIED" } } },
+    });
+    const audited = listEditorAgentActionAudit("session-required-action")[0];
+    expect(audited).toMatchObject({ disposition: "denied", denyReason: "root-binding-required" });
+    // A root-boundary denial never resolved a root, so it must not report a target it could not
+    // have authorized (`isRootBoundaryDenial` suppression).
+    expect(audited).not.toHaveProperty("targetPath");
+    expect(audited).not.toHaveProperty("targetBasename");
+  });
+
+  it("hides the unrooted session from scoped discovery", async () => {
+    bindinglessSession("session-required-discovery");
+    const rooted = snapshot(rootA, binding(0), "session-required-visible");
+    await registerLive(rooted);
+    const response = await handleEditorAgentScopedSessions(
+      requestContext(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          rootBinding: binding(0),
+          authorityRef: authorityRef(rootA),
+        },
+        "/api/editor/agent/sessions",
+      ),
+      routeDeps(),
+    );
+    expect(response).toMatchObject({ status: 200 });
+    expect(JSON.stringify(response.body)).not.toContain("session-required-discovery");
+  });
+
+  it("returns the required reason as a not-run verification disposition", async () => {
+    bindinglessSession("session-required-verification");
+    const response = await handleEditorAgentVerificationRun(
+      requestContext(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          sessionId: "session-required-verification",
+          kind: "typecheck",
+          authorityRef: authorityRef(rootA),
+        },
+        "/api/editor/verification/agent-runs",
+      ),
+      {
+        ...routeDeps(),
+        verificationRunner: {
+          run: (): never => {
+            throw new Error("a denied verification must never reach the runner");
+          },
+        },
+      } as unknown as Parameters<typeof handleEditorAgentVerificationRun>[1],
+    );
+    expect(response).toMatchObject({
+      status: 200,
+      body: {
+        result: { outcome: "not-run", disposition: "denied", reason: "root-binding-required" },
+      },
+    });
   });
 });
