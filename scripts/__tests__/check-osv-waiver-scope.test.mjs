@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { main } from "../check-osv-waiver-scope.mjs";
 import {
   evaluateWaiverScope,
   readSuppressedIds,
@@ -150,5 +151,72 @@ describe("shippedAdvisoryIds — malformed audit output must not read as 'nothin
       },
     });
     expect(shippedAdvisoryIds(report)).toEqual(new Set(["GHSA-good"]));
+  });
+});
+
+// The gate's decision paths, driven through the exported entry point. Each one is a distinct answer
+// the gate can give, and each one is the answer a real osv-scanner.toml can force.
+describe("the waiver-scope gate decision", () => {
+  const logs = [];
+  const errors = [];
+  const capture = {
+    log: (message) => logs.push(message),
+    error: (message) => errors.push(message),
+  };
+
+  function run(overrides) {
+    logs.length = 0;
+    errors.length = 0;
+    const exits = [];
+    const original = { error: console.error, log: console.log };
+    console.log = capture.log;
+    console.error = capture.error;
+    try {
+      main({ exit: (code) => exits.push(code), ...overrides });
+    } finally {
+      console.log = original.log;
+      console.error = original.error;
+    }
+    return { errors: [...errors], exits, logs: [...logs] };
+  }
+
+  it("passes when no configuration file exists", () => {
+    const result = run({ configExists: () => false });
+    expect(result.exits).toEqual([]);
+    expect(result.logs.join("\n")).toContain("no osv-scanner.toml");
+  });
+
+  it("passes when the configuration records no suppression", () => {
+    const result = run({ configExists: () => true, readConfig: () => "# nothing here\n" });
+    expect(result.exits).toEqual([]);
+    expect(result.logs.join("\n")).toContain("no suppressions recorded");
+  });
+
+  it("passes when a suppression covers only build-time dependencies", () => {
+    const result = run({
+      configExists: () => true,
+      readConfig: () => '[[IgnoredVulns]]\nid = "GHSA-build-only"\n',
+      runAudit: () => JSON.stringify({ vulnerabilities: {} }),
+    });
+    expect(result.exits).toEqual([]);
+    expect(result.logs.join("\n")).toContain("1 suppression(s), none reaching the shipped graph");
+  });
+
+  it("fails when a suppression reaches the shipped graph", () => {
+    const result = run({
+      configExists: () => true,
+      readConfig: () => '[[IgnoredVulns]]\nid = "GHSA-shipped"\n',
+      runAudit: () =>
+        JSON.stringify({
+          vulnerabilities: {
+            "some-package": {
+              via: [{ source: 1, url: "https://github.com/advisories/GHSA-shipped" }],
+            },
+          },
+        }),
+    });
+    expect(result.exits).toEqual([1]);
+    expect(result.errors.join("\n")).toContain("GHSA-shipped is suppressed");
+    expect(result.errors.join("\n")).toContain("reaches a SHIPPED");
   });
 });

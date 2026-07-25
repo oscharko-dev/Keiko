@@ -13,6 +13,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -38,27 +40,37 @@ function parseIdLine(line) {
   return undefined;
 }
 
+// A trailing inline comment, removed without a regex: an unanchored `\s*#.*$` re-tries every start
+// position on a line that has no `#` at all, which is quadratic on long lines (S8786).
+function withoutInlineComment(line) {
+  const hash = line.indexOf("#");
+  return (hash === -1 ? line : line.slice(0, hash)).trim();
+}
+
+// One line of the file, against the reader's state. Returns an id to collect, or undefined.
+function readLine(line, state) {
+  if (state.inMultiline) {
+    if (line.includes(MULTILINE_DELIMITER)) state.inMultiline = false;
+    return undefined;
+  }
+  if (opensMultilineString(line)) {
+    state.inMultiline = true;
+    return undefined;
+  }
+  if (line.length === 0 || line.startsWith("#")) return undefined;
+  // Any section header ends the current block — a plain [Section] as much as a [[Table]] one.
+  if (line.startsWith("[")) {
+    state.inBlock = withoutInlineComment(line) === "[[IgnoredVulns]]";
+    return undefined;
+  }
+  return state.inBlock ? parseIdLine(line) : undefined;
+}
+
 export function readSuppressedIds(toml) {
   const ids = [];
   const state = { inBlock: false, inMultiline: false };
   for (const raw of toml.split("\n")) {
-    const line = raw.trim();
-    if (state.inMultiline) {
-      if (line.includes(MULTILINE_DELIMITER)) state.inMultiline = false;
-      continue;
-    }
-    if (opensMultilineString(line)) {
-      state.inMultiline = true;
-      continue;
-    }
-    if (line.length === 0 || line.startsWith("#")) continue;
-    // Any section header ends the current block — a plain [Section] as much as a [[Table]] one.
-    if (line.startsWith("[")) {
-      state.inBlock = line.replace(/\s*#.*$/u, "").trim() === "[[IgnoredVulns]]";
-      continue;
-    }
-    if (!state.inBlock) continue;
-    const id = parseIdLine(line);
+    const id = readLine(raw.trim(), state);
     if (id !== undefined) ids.push(id);
   }
   return ids;
@@ -103,7 +115,7 @@ export function evaluateWaiverScope(suppressedIds, shippedIds) {
 
 function runAudit() {
   try {
-    return execFileSync("npm", ["audit", "--json", "--omit=dev"], {
+    return execFileSync(resolveHostExecutable("npm"), ["audit", "--json", "--omit=dev"], {
       cwd: repoRoot,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
@@ -115,17 +127,20 @@ function runAudit() {
   }
 }
 
-function main() {
-  if (!existsSync(configPath)) {
+export function main(deps = {}) {
+  const audit = deps.runAudit ?? runAudit;
+  const readConfig = deps.readConfig ?? (() => readFileSync(configPath, "utf8"));
+  const exists = deps.configExists ?? (() => existsSync(configPath));
+  if (!exists()) {
     console.log("osv-waiver-scope: PASS — no osv-scanner.toml, nothing suppressed.");
     return;
   }
-  const suppressed = readSuppressedIds(readFileSync(configPath, "utf8"));
+  const suppressed = readSuppressedIds(readConfig());
   if (suppressed.length === 0) {
     console.log("osv-waiver-scope: PASS — no suppressions recorded.");
     return;
   }
-  const shipped = shippedAdvisoryIds(runAudit());
+  const shipped = shippedAdvisoryIds(audit());
   const violations = evaluateWaiverScope(suppressed, shipped);
   if (violations.length > 0) {
     for (const id of violations) {
@@ -135,6 +150,7 @@ function main() {
           "escalate the advisory.",
       );
     }
+    if (deps.exit !== undefined) return deps.exit(1);
     process.exit(1);
   }
   console.log(
@@ -142,4 +158,5 @@ function main() {
   );
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
+if (invokedPath === fileURLToPath(import.meta.url)) main();
