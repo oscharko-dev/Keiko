@@ -413,6 +413,10 @@ jobs:
 
   coverage-scripts:
     name: Coverage suite (scripts)
+    # NEGATIVE CONTROL for Issue #2704, reverted in the next commit: forcing this suite to
+    # `skipped` must turn the `Coverage and SonarCloud` context RED, not let it pass with a
+    # coverage suite unexecuted.
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
