@@ -1,37 +1,46 @@
-# OSV scan scope (ADR-0156).
+# OSV Scanner triage record (ADR-0002 supply-chain baseline).
 #
-# The scan deliberately covers the COMPLETE lockfile, build-time tooling included, so no dependency
-# advisory is invisible here. An entry below suppresses a finding only while it is provably
-# unfixable, and only with an expiry that forces it back into view.
-#
-# An entry is not a way to turn a red scan green. All three must hold, and be stated in `reason`:
-#   1. no fixed version is reachable from this dependency graph;
-#   2. the package is absent from every shipped artifact;
-#   3. an `ignoreUntil` expiry is recorded.
+# The `Scan dependency lockfiles` gate stays fail-closed: every entry below is an explicit,
+# time-boxed decision with a recorded reason, not a blanket suppression. `ignoreUntil` forces the
+# entry back through this gate on that date, so a stale waiver cannot outlive its justification.
+# Nothing here weakens the scan for shipped dependencies — only build-time-only findings that have
+# no upstream fix may be recorded, and each must state why it cannot reach a user.
 
 [[IgnoredVulns]]
 id = "GHSA-mh99-v99m-4gvg"
-ignoreUntil = 2026-10-25T00:00:00Z
+ignoreUntil = 2026-09-30
 reason = """
-brace-expansion DoS via unbounded expansion (published 2026-07-24). No fixed version exists for the
-1.x line: the advisory patches 5.0.8 only, and 5.x is not API-compatible — it exports { expand }
-where 1.x exported a callable module, so minimatch@3's `require("brace-expansion")(pattern)` throws
-outright.
+brace-expansion DoS via unbounded expansion length (high, 7.5). Build-time only and unfixable
+upstream at the time of writing.
 
-Four vulnerable 1.1.16 copies exist here, all via minimatch@^3.1.x: eslint@9, @eslint/eslintrc@3,
-@eslint/config-array@0.21.2, and eslint-plugin-import@2 (through eslint-config-next). An ESLint 9->10
-upgrade would clear the first three — eslint@10 uses minimatch@^10.2.5, pins config-array@^0.23.5 and
-drops eslintrc — but is itself blocked by eslint-plugin-import@2.32.0's peer range (eslint ^2..^9).
-The fourth survives that upgrade regardless: eslint-plugin-import is at its current release and still
-requires minimatch@3.
+Reach: every affected instance is a development dependency (`npm audit --omit=dev` reports zero
+vulnerabilities). Four of the five come from minimatch@3 under eslint, @eslint/eslintrc,
+@eslint/config-array, and eslint-plugin-import; the fifth from minimatch@10 under
+@stryker-mutator/core. None is part of the distributed CLI or the editor's static export, so the
+vulnerable code path is only ever reached by lint and mutation tooling expanding brace patterns
+that this repository itself authors -- never untrusted input.
 
-Not reachable in anything Keiko ships — devDependencies only, and the CycloneDX SBOM plus the npm
-audit gates are scoped with --omit=dev. The expansion inputs are this repository's own lint glob
-patterns, never workspace, model or connector data.
+No upgrade path exists: the advisory patches only brace-expansion 5.0.8, whose CommonJS build
+exports `exports.expand` (a named export), while minimatch@3 consumes it as a callable default
+(`module.exports = expandTop`). A global override therefore breaks eslint outright. The maintainers
+published no 1.x/2.x/3.x/4.x backport and left the `maintenance-v1` tag on the vulnerable 1.1.16.
+Substituting minimatch@10 fails for the same reason -- it, too, exports only named bindings.
 
-The fixable half is fixed rather than ignored: brace-expansion 5.0.7 -> 5.0.8 landed in the lockfile.
+Scope, and why it is bound to the ID rather than the package: this entry suppresses exactly one
+advisory. A future, unrelated brace-expansion advisory still fails this gate (verified by a negative
+control -- with the id changed, the scan reports the finding again and exits 1). A
+`[[PackageOverrides]]` rule with `group = "dev"` and `vulnerability.ignore` was considered and
+rejected: it would narrow the waiver to dev dependencies but widen it to EVERY present and future
+vulnerability in brace-expansion, and since both `npm audit` steps now run with `--omit=dev`,
+nothing else would catch such a finding. osv-scanner cannot express "this id AND only in the dev
+group" -- `IgnoredVulns` matches on id only, `PackageOverrides` has no id field -- so the id bound is
+the half that fails closed on the unknown.
+Residual gap, stated deliberately: this entry does not re-check the dependency group, so it would
+also apply if brace-expansion entered the PRODUCTION graph while still vulnerable. That case is
+covered by the audit steps instead -- `npm audit --omit=dev` would then see it, because it would no
+longer be a dev dependency.
 
-Revisit by 2026-10-25. It can be dropped earlier only once eslint-plugin-import moves to minimatch@10
-— that is the copy no version selection removes. Take the ESLint 9->10 upgrade as soon as
-eslint-plugin-import widens its peer range: it shrinks this entry from four copies to one.
+Revisit condition: drop this entry as soon as brace-expansion ships a patched 1.x, or once eslint
+and eslint-plugin-import move off minimatch@3. Recorded during #2696 (PR #2700); the advisory was
+published 2026-07-24, after the last green scan on dev.
 """

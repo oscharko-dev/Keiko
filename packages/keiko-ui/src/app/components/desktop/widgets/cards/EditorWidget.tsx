@@ -54,7 +54,10 @@ import {
   type EditorOutlineSnapshot,
 } from "./editorOutlineModel";
 import { type EditorPaletteHost } from "./editorCommands";
-import { useEditorVerificationRun } from "./useEditorVerificationRun";
+import {
+  useEditorVerificationRun,
+  type EditorVerificationRunControls,
+} from "./useEditorVerificationRun";
 import { useEditorSettings } from "./useEditorSettings";
 import {
   WorkspaceTrustBanner,
@@ -385,6 +388,25 @@ function nonEmptyRoot(value: string): string | undefined {
   return value.length > 0 ? value : undefined;
 }
 
+/**
+ * #2696 — deterministic post-trust readiness signal for browser regression harnesses. Reports
+ * `"true"` only once the workspace-trust status for the bound root has resolved (or definitively
+ * failed to resolve) AND the initial-prompt decision has been committed, so an observer can read
+ * the prompt's presence in that same commit instead of racing it with a timeout. Derived outside
+ * the component so the widget's cognitive complexity is unaffected.
+ */
+function resolveTrustSettledAttribute(
+  verification: EditorVerificationRunControls,
+  promptedTrustRoot: string | null,
+  workspaceRoot: string,
+): "true" | "false" {
+  if (!verification.catalogSettled) return "false";
+  const initialPromptPending =
+    verification.catalog?.workspaceTrust.trust === "restricted" &&
+    promptedTrustRoot !== workspaceRoot;
+  return initialPromptPending ? "false" : "true";
+}
+
 export function EditorWidget({
   root,
   file,
@@ -447,7 +469,11 @@ export function EditorWidget({
   } | null>(null);
   const [trustMutationIssue, setTrustMutationIssue] = useState<"update">();
   const [trustMutationPending, setTrustMutationPending] = useState(false);
-  const promptedTrustRootRef = useRef<string | null>(null);
+  // The root whose initial trust prompt has already been raised. This is state rather than a ref
+  // because the `data-trust-settled` readiness attribute below is derived from it (#2696): the
+  // attribute has to flip in exactly the commit that mounts the initial prompt, so the value must
+  // participate in rendering.
+  const [promptedTrustRoot, setPromptedTrustRoot] = useState<string | null>(null);
   const [heldTab, setHeldTab] = useState<DraggedTab | null>(null);
   // GEN-PERF-EDITOR-003 — the tab-drag "held" visual is read from a ref inside the memoized
   // per-pane renderTabHandle closure, so that closure stays referentially stable (it no
@@ -541,7 +567,7 @@ export function EditorWidget({
       // the new root. Fail closed by dismissing everything trust-scoped.
       setTrustDecision(null);
       setTrustMutationIssue(undefined);
-      promptedTrustRootRef.current = null;
+      setPromptedTrustRoot(null);
     }
     if (nextRoot.length === 0 || onWorkspaceChange === undefined) return;
     const normalizedFileChanged = (file?.trim() ?? "") !== nextActivePane.activeFile;
@@ -1402,12 +1428,12 @@ export function EditorWidget({
     if (
       workspaceRoot.length > 0 &&
       status?.trust === "restricted" &&
-      promptedTrustRootRef.current !== workspaceRoot
+      promptedTrustRoot !== workspaceRoot
     ) {
-      promptedTrustRootRef.current = workspaceRoot;
+      setPromptedTrustRoot(workspaceRoot);
       setTrustDecision({ action: "grant", initialPrompt: true, root: workspaceRoot });
     }
-  }, [verification.catalog?.workspaceTrust, workspaceRoot]);
+  }, [promptedTrustRoot, verification.catalog?.workspaceTrust, workspaceRoot]);
 
   const confirmTrustDecision = useCallback(async (): Promise<boolean> => {
     if (trustDecision === null || trustMutationPending) return false;
@@ -1743,11 +1769,14 @@ export function EditorWidget({
       loading: false,
     } satisfies EditorOutlineSnapshot);
 
+  const trustSettled = resolveTrustSettledAttribute(verification, promptedTrustRoot, workspaceRoot);
+
   return (
     <div
       className={`editor-workspace${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}`}
       data-tab-dragging={draggedTab === null ? "false" : "true"}
       data-pane-count={paneCount}
+      data-trust-settled={trustSettled}
       ref={workspaceRef}
       style={{ "--ed-sidebar-width": `${String(layout.sidebarWidth)}px` } as CSSProperties}
     >

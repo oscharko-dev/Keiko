@@ -1,12 +1,15 @@
 import { act, renderHook } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EDITOR_VERIFICATION_SCHEMA_VERSION,
   WORKSPACE_TRUST_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
+import { WORKSPACE_TRUST_CHANGED_EVENT } from "../../../../../lib/workspace-trust-api";
 import {
   resetEditorVerificationRunStateForTests,
   useEditorVerificationRun,
+  type EditorVerificationRunControls,
 } from "./useEditorVerificationRun";
 import {
   getEditorProblems,
@@ -150,6 +153,61 @@ async function tick(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
+  });
+}
+
+interface DeferredResponse {
+  readonly promise: Promise<Response>;
+  readonly resolve: (value: Response) => void;
+}
+
+// A catalog request that stays in flight until the test releases it, so an "is it settled YET?"
+// assertion has a deterministic window instead of racing an already-resolved promise.
+function deferredResponse(): DeferredResponse {
+  let settle: (value: Response) => void = () => undefined;
+  const promise = new Promise<Response>((resolve) => {
+    settle = resolve;
+  });
+  return { promise, resolve: (value: Response): void => settle(value) };
+}
+
+function isCatalogRequest(url: string, projectId?: string): boolean {
+  const prefix = "/api/editor/verification/catalog";
+  return projectId === undefined
+    ? url.startsWith(prefix)
+    : url.startsWith(`${prefix}?projectId=${encodeURIComponent(projectId)}`);
+}
+
+// Records COMMITTED renders only (`${root}:${catalogSettled}`). The render-phase reset in the hook
+// discards its first pass, and the DOM an observer polls only ever reflects committed renders — so
+// a pin on "what did the commit that bound this root report" must be taken from an effect, never
+// from the render body.
+function useObservedRun(root: string, observed: string[]): EditorVerificationRunControls {
+  const controls = useEditorVerificationRun({ root, activeFile: null });
+  useEffect(() => {
+    observed.push(`${root}:${String(controls.catalogSettled)}`);
+  });
+  return controls;
+}
+
+interface CommittedCatalogObservation {
+  readonly root: string;
+  readonly catalogProjectId: string | null;
+  readonly settled: boolean;
+}
+
+// Same committed-render discipline as `useObservedRun`, but records WHICH catalog each commit paired
+// with the bound root. `catalog.workspaceTrust` is what the editor derives its initial trust prompt
+// from, so the pairing itself — not just the settled flag — is the thing a root switch must not get
+// wrong.
+function useObservedCatalog(root: string, observed: CommittedCatalogObservation[]): void {
+  const controls = useEditorVerificationRun({ root, activeFile: null });
+  useEffect(() => {
+    observed.push({
+      root,
+      catalogProjectId: controls.catalog?.projectId ?? null,
+      settled: controls.catalogSettled,
+    });
   });
 }
 
@@ -1022,5 +1080,228 @@ describe("useEditorVerificationRun", () => {
         String(url).startsWith("/api/editor/verification/catalog?projectId="),
       ),
     ).toHaveLength(3);
+  });
+
+  // Issue #2696 — `catalogSettled` is the deterministic readiness signal the editor's
+  // `data-trust-settled` attribute is derived from. It must latch on BOTH catalog outcomes, stay
+  // latched across a trust refetch, and never report a previous root's state for a new root.
+  it("reports catalogSettled only once the current root's catalog request has completed", async () => {
+    const pending = deferredResponse();
+    fetchMock.mockImplementation((url: string) =>
+      isCatalogRequest(url) ? pending.promise : Promise.resolve(response({ ok: true })),
+    );
+
+    const { result } = render();
+    await tick();
+    expect(result.current.catalog).toBeNull();
+    expect(result.current.catalogSettled).toBe(false);
+
+    await act(async () => {
+      pending.resolve(response(catalog()));
+    });
+    await tick();
+    expect(result.current.catalog?.projectId).toBe("/ws");
+    expect(result.current.catalogSettled).toBe(true);
+  });
+
+  it("settles catalogSettled when the catalog request is rejected (no registered project)", async () => {
+    fetchMock.mockImplementation((url: string) =>
+      isCatalogRequest(url)
+        ? Promise.resolve(response({ error: "unregistered project" }, false))
+        : Promise.resolve(response({ ok: true })),
+    );
+
+    const { result } = render();
+    await tick();
+
+    // A rejected catalog raises no trust prompt, so an observer must not keep waiting on it.
+    expect(result.current.catalog).toBeNull();
+    expect(result.current.catalogSettled).toBe(true);
+  });
+
+  it("settles catalogSettled when the catalog payload is malformed", async () => {
+    fetchMock.mockImplementation((url: string) =>
+      isCatalogRequest(url)
+        ? Promise.resolve(response({ schemaVersion: V, projectId: "/ws" }))
+        : Promise.resolve(response({ ok: true })),
+    );
+
+    const { result } = render();
+    await tick();
+
+    expect(result.current.catalog).toBeNull();
+    expect(result.current.catalogSettled).toBe(true);
+  });
+
+  it("reports the newly bound root as unsettled in the very render that binds it", async () => {
+    const pendingB = deferredResponse();
+    fetchMock.mockImplementation((url: string) => {
+      if (isCatalogRequest(url, "/project-b")) return pendingB.promise;
+      if (isCatalogRequest(url)) return Promise.resolve(response(catalog("/project-a")));
+      return Promise.resolve(response({ ok: true }));
+    });
+
+    const observed: string[] = [];
+    const { rerender } = renderHook(
+      ({ root }: { readonly root: string }) => useObservedRun(root, observed),
+      { initialProps: { root: "/project-a" } },
+    );
+    await tick();
+    expect(observed).toContain("/project-a:true");
+
+    observed.length = 0;
+    rerender({ root: "/project-b" });
+    // The switch must report "not settled" in the FIRST commit that already binds /project-b — a
+    // reset that lands one commit later would leak /project-a's settled state through exactly the
+    // window in which an observer would read a stale-true readiness signal.
+    expect(observed.length).toBeGreaterThan(0);
+    expect(observed.every((entry) => entry === "/project-b:false")).toBe(true);
+
+    await act(async () => {
+      pendingB.resolve(response(catalog("/project-b")));
+    });
+    await tick();
+    expect(observed).toContain("/project-b:true");
+  });
+
+  it("never pairs a newly bound root with the PREVIOUS root's catalog", async () => {
+    const pendingB = deferredResponse();
+    fetchMock.mockImplementation((url: string) => {
+      if (isCatalogRequest(url, "/project-b")) return pendingB.promise;
+      if (isCatalogRequest(url)) return Promise.resolve(response(catalog("/project-a")));
+      return Promise.resolve(response({ ok: true }));
+    });
+
+    const observed: CommittedCatalogObservation[] = [];
+    const { rerender } = renderHook(
+      ({ root }: { readonly root: string }) => {
+        useObservedCatalog(root, observed);
+      },
+      { initialProps: { root: "/project-a" } },
+    );
+    await tick();
+    expect(observed.at(-1)).toEqual({
+      root: "/project-a",
+      catalogProjectId: "/project-a",
+      settled: true,
+    });
+
+    observed.length = 0;
+    rerender({ root: "/project-b" });
+    // Invalidating the catalog in the effect instead of during render lands one commit late, and
+    // THAT commit pairs the newly bound root with the previous root's catalog. Since
+    // `catalog.workspaceTrust` drives the initial trust prompt, the pairing is enough to raise a
+    // prompt for /project-b off /project-a's trust state (#2696) — the settled flag being false in
+    // that commit does not prevent it, because the prompt is raised from the catalog, not from
+    // readiness. So every commit that binds the new root must already report a null catalog.
+    const staleFreeCommit = { root: "/project-b", catalogProjectId: null, settled: false };
+    expect(observed.length).toBeGreaterThan(0);
+    // Only the LENGTH is borrowed from the actual log: this asserts every committed render equals
+    // the stale-free shape, while still producing a per-entry diff when one of them does not.
+    expect(observed).toEqual(observed.map(() => staleFreeCommit));
+
+    await act(async () => {
+      pendingB.resolve(response(catalog("/project-b")));
+    });
+    await tick();
+    expect(observed.at(-1)).toEqual({
+      root: "/project-b",
+      catalogProjectId: "/project-b",
+      settled: true,
+    });
+  });
+
+  it("clears catalogSettled when the SAME root is re-bound after an unbound render", async () => {
+    const rebound = deferredResponse();
+    let catalogRequests = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (!isCatalogRequest(url)) return Promise.resolve(response({ ok: true }));
+      catalogRequests += 1;
+      return catalogRequests === 1
+        ? Promise.resolve(response(catalog("/project-a")))
+        : rebound.promise;
+    });
+
+    const observed: string[] = [];
+    const { rerender } = renderHook(
+      ({ root }: { readonly root: string }) => useObservedRun(root, observed),
+      { initialProps: { root: "/project-a" } },
+    );
+    await tick();
+    expect(observed).toContain("/project-a:true");
+
+    rerender({ root: "" });
+    await tick();
+
+    observed.length = 0;
+    rerender({ root: "/project-a" });
+    // Re-binding a root that ALREADY settled once is a NEW binding: its catalog request is back in
+    // flight, so the commit that re-binds it must not report the previous binding's settled state.
+    // Keying the marker on the root value alone cannot see this — the root string is unchanged.
+    expect(catalogRequests).toBe(2);
+    expect(observed.length).toBeGreaterThan(0);
+    expect(observed.every((entry) => entry === "/project-a:false")).toBe(true);
+
+    await act(async () => {
+      rebound.resolve(response(catalog("/project-a")));
+    });
+    await tick();
+    expect(observed).toContain("/project-a:true");
+  });
+
+  it("resets catalogSettled on a root switch and re-latches it for the new root", async () => {
+    const pendingB = deferredResponse();
+    fetchMock.mockImplementation((url: string) => {
+      if (isCatalogRequest(url, "/project-b")) return pendingB.promise;
+      if (isCatalogRequest(url)) return Promise.resolve(response(catalog("/project-a")));
+      return Promise.resolve(response({ ok: true }));
+    });
+
+    const { result, rerender } = renderHook(
+      ({ root }: { readonly root: string }) => useEditorVerificationRun({ root, activeFile: null }),
+      { initialProps: { root: "/project-a" } },
+    );
+    await tick();
+    expect(result.current.catalogSettled).toBe(true);
+
+    rerender({ root: "/project-b" });
+    expect(result.current.catalogSettled).toBe(false);
+
+    await act(async () => {
+      pendingB.resolve(response(catalog("/project-b")));
+    });
+    await tick();
+    expect(result.current.catalog?.projectId).toBe("/project-b");
+    expect(result.current.catalogSettled).toBe(true);
+  });
+
+  it("keeps catalogSettled latched while a workspace-trust change refetches the catalog", async () => {
+    const refetch = deferredResponse();
+    let catalogRequests = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (!isCatalogRequest(url)) return Promise.resolve(response({ ok: true }));
+      catalogRequests += 1;
+      return catalogRequests === 1 ? Promise.resolve(response(catalog())) : refetch.promise;
+    });
+
+    const { result } = render(null);
+    await tick();
+    expect(result.current.catalogSettled).toBe(true);
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(WORKSPACE_TRUST_CHANGED_EVENT, { detail: { projectId: "/ws" } }),
+      );
+    });
+    // The refetch is still in flight for the SAME root: the readiness signal must never fall back
+    // from true to false while the bound root is unchanged.
+    expect(catalogRequests).toBe(2);
+    expect(result.current.catalogSettled).toBe(true);
+
+    await act(async () => {
+      refetch.resolve(response(catalog()));
+    });
+    await tick();
+    expect(result.current.catalogSettled).toBe(true);
   });
 });

@@ -56,6 +56,9 @@ export interface EditorVerificationRunControls {
   readonly verifiableTarget: string | null;
   readonly statusBarRun: EditorVerificationStatusRun | null;
   readonly catalog: EditorVerificationCatalog | null;
+  // True once the catalog request for the CURRENT root has completed — successfully or not (#2696).
+  // A rejected request is a settled outcome, so an observer never waits on an unresolvable root.
+  readonly catalogSettled: boolean;
   // `forFile` targets that file's tests instead of the active pane's file (Issue #2212 fix-up).
   readonly runFileTests: (forFile?: string) => void;
   readonly runWorkspaceVerification: (kind: VerificationKind) => void;
@@ -694,15 +697,38 @@ export function useEditorVerificationRun(
   const state = useSyncExternalStore(rootSubscribe, rootGetSnapshot, rootGetSnapshot);
   const verifiableTarget = useMemo(() => resolveVerificationTarget(activeFile), [activeFile]);
   const [catalog, setCatalog] = useState<EditorVerificationCatalog | null>(null);
+  const [lastCatalogRoot, setLastCatalogRoot] = useState(root);
+  const [catalogSettled, setCatalogSettled] = useState(false);
+  if (lastCatalogRoot !== root) {
+    // React's documented "adjust state when a prop changes" idiom, deliberately during render.
+    // The catalog AND its settled flag are invalidated here rather than in the effect below,
+    // because an effect-based reset lands one commit late. That commit would pair the newly bound
+    // root with the PREVIOUS root's catalog, and `catalog.workspaceTrust` drives both the initial
+    // trust prompt and the `data-trust-settled` readiness signal — so a root switch could raise a
+    // prompt for the new root off the old root's trust state (#2696). Adjusting during render
+    // re-renders before commit, so no committed render can observe that pairing, and a re-bound
+    // root (A -> unbound -> A) cannot inherit the previous binding's "settled" either. It
+    // introduces no true -> false -> true flicker for a polling observer.
+    setLastCatalogRoot(root);
+    setCatalogSettled(false);
+    setCatalog(null);
+  }
 
   useEffect(() => {
-    setCatalog(null);
     if (root.length === 0) return undefined;
     const controller = new AbortController();
     void fetchVerificationCatalog(root, controller.signal)
-      .then(setCatalog)
+      .then((next) => {
+        if (controller.signal.aborted) return;
+        setCatalog(next);
+        setCatalogSettled(true);
+      })
       .catch(() => {
-        if (!controller.signal.aborted) setCatalog(null);
+        if (controller.signal.aborted) return;
+        setCatalog(null);
+        // A rejected catalog (unregistered project, malformed payload) is a settled outcome:
+        // no trust prompt will ever be raised for this root, so observers must not keep waiting.
+        setCatalogSettled(true);
       });
     return () => controller.abort();
   }, [root]);
@@ -780,6 +806,7 @@ export function useEditorVerificationRun(
     verifiableTarget,
     statusBarRun,
     catalog,
+    catalogSettled,
     runFileTests,
     runWorkspaceVerification,
     cancelVerification,
