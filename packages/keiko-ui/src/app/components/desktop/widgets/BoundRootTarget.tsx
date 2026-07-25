@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import type { EditorAgentActionDenyReason, WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
-import { workspaceRootTargets } from "../workspaceRootTargets";
+import { workspaceRootTargets, type WorkspaceRootTarget } from "../workspaceRootTargets";
 import styles from "./BoundRootTarget.module.css";
 
 // Issue #2619 (ADR-0147 D1/D4) — the focused root is presentation state. It may drive read-only
@@ -62,7 +62,9 @@ export const BOUND_ROOT_SURFACES: Readonly<
 
 // The reason is taken from the shared governance vocabulary rather than re-declared, so the browser
 // refusal and the server denial name the same fact (`keiko-contracts` is the leaf both depend on).
-export type BoundRootDenyReason = Extract<EditorAgentActionDenyReason, "root-binding-required">;
+// Deliberately module-local: it exists to bind this surface to the contract vocabulary, and callers
+// consume it through `BoundRootDecision` rather than naming it directly.
+type BoundRootDenyReason = Extract<EditorAgentActionDenyReason, "root-binding-required">;
 
 export type BoundRootDecision =
   // `root` stays optional: the legacy single-root/unbound chain may legitimately have no root yet,
@@ -127,6 +129,45 @@ function BoundRootDenied({ surface }: { readonly surface: BoundRootSurfaceType }
   );
 }
 
+// The remedy that sits beside a denial: naming a root here turns the implicit intent into an
+// explicit one. When denied nothing is preselected, so the control cannot imply a binding that the
+// window does not have.
+function BoundRootPicker({
+  label,
+  decision,
+  targets,
+  onSelect,
+}: {
+  readonly label: string;
+  readonly decision: BoundRootDecision;
+  readonly targets: readonly WorkspaceRootTarget[];
+  readonly onSelect: (root: string) => void;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <label className={styles.cmpPicker}>
+      <span>{label} root</span>
+      <select
+        className={styles.cmpSelect}
+        aria-label={`${label} root`}
+        value={boundRoot(decision) ?? ""}
+        onChange={(event) => onSelect(event.target.value)}
+      >
+        {decision.status === "denied" ? (
+          <option value="" disabled>
+            {t("boundRoot.denied.placeholder")}
+          </option>
+        ) : null}
+        {targets.map((target) => (
+          <option value={target.root} key={target.id}>
+            {target.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export function BoundRootTarget({
   fallbackRoot,
   configuredRoot,
@@ -135,7 +176,6 @@ export function BoundRootTarget({
   onSelect,
   children,
 }: BoundRootTargetProps): ReactNode {
-  const t = useTranslate();
   const { label, surfaceClass } = BOUND_ROOT_SURFACES[surface];
   const workspace = useWorkspaceManifest(fallbackRoot ?? configuredRoot);
   const manifest = lockedToActiveRoot ? null : workspace.manifest;
@@ -147,29 +187,14 @@ export function BoundRootTarget({
     surfaceClass,
   );
   if (manifest === null || manifest.roots.length < 2) return children(boundRoot(decision));
-  const targets = workspaceRootTargets(boundRoot(decision), manifest);
   return (
     <section className={styles.cmpHost} data-bound-root-target={label}>
-      <label className={styles.cmpPicker}>
-        <span>{label} root</span>
-        <select
-          className={styles.cmpSelect}
-          aria-label={`${label} root`}
-          value={boundRoot(decision) ?? ""}
-          onChange={(event) => onSelect(event.target.value)}
-        >
-          {decision.status === "denied" ? (
-            <option value="" disabled>
-              {t("boundRoot.denied.placeholder")}
-            </option>
-          ) : null}
-          {targets.map((target) => (
-            <option value={target.root} key={target.id}>
-              {target.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <BoundRootPicker
+        label={label}
+        decision={decision}
+        targets={workspaceRootTargets(boundRoot(decision), manifest)}
+        onSelect={onSelect}
+      />
       <div className={styles.cmpBody}>
         {decision.status === "denied" ? (
           <BoundRootDenied surface={surface} />
