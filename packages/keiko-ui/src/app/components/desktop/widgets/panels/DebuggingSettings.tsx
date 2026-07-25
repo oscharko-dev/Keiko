@@ -170,6 +170,9 @@ export function DebuggingSettings({ root }: { readonly root?: string | undefined
             aria-modal="true"
             aria-labelledby="debugging-confirm-title"
             aria-describedby="debugging-confirm-body"
+            // The shared tab trap re-enters the dialog on the container when focus has escaped and
+            // no control is focusable; that fallback needs the container to be focusable at all.
+            tabIndex={-1}
           >
             <div className={styles.dialogTitle} id="debugging-confirm-title">
               {t("confirmTitle")}

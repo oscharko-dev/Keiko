@@ -17,6 +17,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EDITOR_LOCAL_HISTORY_ENCRYPTION,
   EDITOR_LOCAL_HISTORY_SCHEMA_VERSION,
+  EDITOR_M7_SCHEMA_VERSION,
+  EDITOR_M7_SETTING_REGISTRY,
+  resolveEditorM7Settings,
+  type EditorM7SettingsSnapshot,
   isWorkspaceContentDigest,
   isWorkspaceHistoryEntryRef,
   isWorkspaceIsoInstant,
@@ -32,9 +36,11 @@ import {
   fetchEditorLanguageCapabilities,
   fetchEditorLocalHistory,
   fetchEditorLocalHistoryEntry,
+  fetchEditorSettings,
   fetchFilesContent,
   fetchGitStatus,
   postEditorAgentSessionSnapshot,
+  requestEditorFormatting,
   saveFilesContent,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -49,6 +55,7 @@ vi.mock("../../../../../lib/api", async () => {
     fetchEditorLanguageCapabilities: vi.fn(),
     fetchEditorLocalHistory: vi.fn(),
     fetchEditorLocalHistoryEntry: vi.fn(),
+    fetchEditorSettings: vi.fn(),
     fetchFilesContent: vi.fn(),
     fetchGitStatus: vi.fn(),
     postEditorAgentActionResult: vi.fn(),
@@ -104,8 +111,30 @@ const BASE_VERSION = { sizeBytes: 17, modifiedAt: 1, contentHash: "a".repeat(64)
 
 const LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   schemaVersion: "1",
-  providers: [],
+  providers: [
+    {
+      id: "typescript",
+      languages: ["typescript", "javascript"],
+      operations: ["diagnostics", "completion", "hover", "symbols", "formatting"],
+      availability: "available",
+    },
+  ],
 };
+
+function editorSettingsSnapshot(formatOnSave: boolean): EditorM7SettingsSnapshot {
+  return {
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    storeState: "ready",
+    userRevision: 1,
+    workspaceRevision: 0,
+    revision: 1_000_000,
+    etag: '"edm7-1-0-history-restore"',
+    root: "/repo",
+    definitions: EDITOR_M7_SETTING_REGISTRY,
+    settings: resolveEditorM7Settings({ user: { scope: "user", values: { formatOnSave } } }),
+    eventSequence: 1,
+  };
+}
 
 function checked<Value>(value: string, guard: (input: unknown) => input is Value): Value {
   if (!guard(value)) throw new Error(`Invalid test fixture: ${value}`);
@@ -176,6 +205,7 @@ beforeEach(() => {
     maxChanges: 500,
   });
   vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
+  vi.mocked(fetchEditorSettings).mockResolvedValue(editorSettingsSnapshot(false));
   vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse());
   vi.mocked(fetchEditorLocalHistory).mockResolvedValue({
     session: "active",
@@ -216,6 +246,28 @@ describe("EditorRuntimeWidget local-history restore", () => {
     vi.mocked(saveFilesContent).mockRejectedValue(new ApiError("CONFLICT", "stale", 409));
     await confirmRestore();
 
+    expect((await screen.findAllByText(/version was not restored/iu)).length).toBeGreaterThan(0);
+    expect(surface.props?.buffer.content.text).toBe(DISK_CONTENT);
+    expect(surface.props?.fileModel.dirty).toBe(false);
+  });
+
+  // Format-on-save adopts a SECOND text into the buffer before the write, so a rollback that keys
+  // on the checkpoint alone silently misses this path and leaves the formatted checkpoint behind.
+  it("leaves the buffer untouched when format-on-save transformed the checkpoint first", async () => {
+    vi.mocked(fetchEditorSettings).mockResolvedValue(editorSettingsSnapshot(true));
+    vi.mocked(requestEditorFormatting).mockResolvedValue({
+      edits: [
+        {
+          range: { start: { line: 0, character: 11 }, end: { line: 0, character: 12 } },
+          newText: "  ",
+        },
+      ],
+      truncated: false,
+    });
+    vi.mocked(saveFilesContent).mockRejectedValue(new Error("write denied"));
+    await confirmRestore();
+
+    await waitFor(() => expect(requestEditorFormatting).toHaveBeenCalled());
     expect((await screen.findAllByText(/version was not restored/iu)).length).toBeGreaterThan(0);
     expect(surface.props?.buffer.content.text).toBe(DISK_CONTENT);
     expect(surface.props?.fileModel.dirty).toBe(false);
