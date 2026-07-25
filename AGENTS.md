@@ -122,9 +122,10 @@ npm run gates:local
 ```
 
 Two thirds of recent required-CI failures were reproducible this way, each otherwise costing a full
-CI cycle to discover. What the container may and may not answer (measurement evidence is
-architecture-bound and stays with the nightly lane) is in
-[`docs/qa/local-gates.md`](docs/qa/local-gates.md).
+CI cycle to discover. What the container may and may not answer is in
+[`docs/qa/local-gates.md`](docs/qa/local-gates.md) — note that D12 measurement evidence is the
+opposite of CI-owned: its reference environment IS a developer-machine container, and no hosted
+runner matches it.
 
 For PR-bound work there is deliberately **no aggregate pre-PR wrapper** (ADR-0145 retired
 `agent:pre-pr` by owner decision): run the minimum-loop commands that can see your change, plus
@@ -290,16 +291,21 @@ These cost real time when rediscovered. They are all real and current.
   proof, turning CI red. Style components with **component-scoped classes** (e.g. `.cmp-*`), not
   by extending global CSS. See [`docs/design-system/`](docs/design-system/).
 - **Editor perf evidence does not need an in-flight regeneration — except for toolchain edits.**
-  The pull-request gate validates evidence integrity + budgets only (ADR-0139 D10); source-tree,
-  lockfile, and working-tree drift are owned by the nightly `nightly-perf-evidence` lane, which
-  re-measures `dev` daily. Regenerate in-flight (`npm run perf:evidence:regen`,
-  Linux-authoritative; see [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md)) only when your
-  change edits the D12 measurement toolchain itself (`scripts/d12-measurement-toolchain.mjs`
-  list) — changing the ruler requires re-measuring with it, and since ADR-0156 the pull-request gate
-  asks that question only of a diff that actually touches the list. Real per-PR perf protection
-  lives in the deterministic bundle gates (`check:editor-release-evidence`,
-  `check:editor-bundle-size`). If the nightly lane is itself broken, it now opens a tracking issue —
-  while it is down, a toolchain edit has no route to green, so fix the lane first.
+  The pull-request gate validates evidence integrity + budgets only (ADR-0139 D10), and since
+  ADR-0156 D2 it asks the toolchain-freshness question only of a diff that actually touches
+  `D12_MEASUREMENT_TOOLCHAIN_PATHS`. Regenerate in-flight (`npm run perf:evidence:regen`) only when
+  your change edits that list — changing the ruler requires re-measuring with it. Real per-PR perf
+  protection lives in the deterministic bundle gates (`check:editor-release-evidence`,
+  `check:editor-bundle-size`).
+- **The D12 reference environment is a developer machine, not CI (ADR-0156 D6).** The budgets are
+  absolute numbers calibrated on the pinned container at linux/arm64 with >=14 logical cores, which
+  is where every committed evidence document was measured. A hosted runner has 4 cores and measures
+  the same scenario at roughly twice the cost, so it cannot produce a passing document — the
+  scheduled `nightly-perf-evidence` lane therefore **detects drift and does not measure**, and files
+  a tracking issue when the committed evidence stops binding `dev`. If you see a 2x "regression",
+  check the provenance hardware in the document before believing it: comparing a local document
+  against a hosted run is comparing two machine classes. See
+  [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md).
 - **New package exports drift `check:package-surface`.** Adding a public export changes the
   packaged surface contract; run `npm run check:package-surface:assembled` and update the expected
   surface. The aggregate builds the product, prepares the CLI mode, builds the UI, removes

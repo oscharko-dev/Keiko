@@ -51,8 +51,9 @@ measurement toolchain has a route to green.
 
 **D4 — Gates that can be reproduced without CI should be, before pushing.** `docker/gates/` commits
 the Linux gate environment so contributors and agents run the common failure classes locally.
-Architecture-bound measurement, hosted analysis, other operating systems and attestations stay
-CI-owned; `docs/qa/local-gates.md` records which is which.
+Hosted analysis, other operating systems and build attestations stay CI-owned; D12 wall-clock
+measurement is the opposite case — it is owned by the developer-machine reference container (D6), not
+by CI. `docs/qa/local-gates.md` records which is which.
 
 **D5 — D1 applies to every judge in the producer, not only the innermost one.** Removing the budget
 assertion from the measurement spec was not enough: `build-d12-perf-comparison.mjs` ran the complete
@@ -85,6 +86,28 @@ short-circuit its second stage: stage 1 stops on ill-formed input because stage 
 proved, but a budget verdict proves nothing ill-formed, so stopping there would hide exactly the
 defects the producer still treats as fatal.
 
+**D6 — The reference environment is declared, and the lane that cannot meet it stops pretending.**
+The D12 wall-clock budgets are absolute numbers. Every one of the eighteen editor evidence documents
+committed between 2026-07-12 and 2026-07-25 records `platform: linux`, `architecture: arm64`, and 14
+or 16 logical cores — the pinned container on a developer machine, described in
+[`../qa/perf-evidence.md`](../qa/perf-evidence.md). Across those two weeks and across the M11 merge,
+stopped-projection p75 stayed between 122.8 ms and 142.2 ms. On `ubuntu-latest` — x86_64, 4 cores —
+the same scenario measures 250–257 ms. That is a machine class, not a regression: the numbers that
+looked like a 92% loss (#2695) were a local document compared against a hosted run.
+
+So the scheduled lane no longer measures. It cannot: absolute budgets calibrated for the reference
+class are unreachable on a quarter of the cores, which is why it failed 12 of 12 times and published
+nothing. What it can answer is environment-independent — source-tree, lockfile and
+measurement-toolchain digests are hashes — so it answers exactly that, files the tracking issue with
+the local regeneration command, and finishes in about two minutes instead of a hundred and eighty.
+Repair belongs to the reference environment, where every committed document has always come from.
+
+No new gate assertion is needed to keep a foreign document out: the absolute budgets already do it.
+Evidence measured on an under-provisioned machine fails its own budget check, so the environment
+requirement is self-enforcing and fail-closed. What was missing was saying so, and not running a
+lane that could only ever fail. Changing the reference class is
+[#2587](https://github.com/oscharko-dev/Keiko/issues/2587), and needs its own decision.
+
 ## Consequences
 
 - A noisy neighbour on a shared runner costs one measurement, not the ability to measure.
@@ -98,7 +121,9 @@ defects the producer still treats as fatal.
   assumption. Under D5 the same run publishes a document instead, and the gate rejects it by name.
 - A toolchain change is answered for by its own pull request, and by no other.
 - A broken repair lane is visible on day one instead of being inferred weeks later from deadlocked
-  pull requests.
+  pull requests — and the lane now reports something it can actually determine.
+- The scheduled lane costs ~2 runner-minutes a day instead of ~180, and its verdict is trustworthy
+  because it no longer depends on the hardware it happens to land on.
 - Budget enforcement is unchanged in strength and now lives in exactly one place — the gate that
   reads the committed evidence. Proven by negative control: with a toolchain file in the diff the
   gate still fails; with the same evidence and an untouched toolchain it passes.

@@ -4,10 +4,10 @@
 # Linux userland the runners use. Two thirds of our failing CI runs were reproducible locally —
 # each one cost a full ~123 weighted runner-minute cycle to discover.
 #
-# What this image is NOT: an authority for measurements. Wall-clock evidence (D12) is only
-# comparable on the same architecture as the reference runner, and on Apple Silicon this image is
-# arm64 while CI is x86_64. Emulation makes the numbers meaningless. Measurements stay CI-owned;
-# see docs/qa/local-gates.md.
+# What this image is NOT: the D12 measurement environment. That one is its own pinned container
+# (`npm run perf:evidence:regen`), and it is a developer machine rather than CI — the wall-clock
+# budgets are calibrated for linux/arm64 with >=14 logical cores, which no hosted runner offers
+# (ADR-0156 D6). This image runs the deterministic gates; see docs/qa/local-gates.md.
 FROM node:24.18.0-bookworm
 
 # Bubblewrap backs the mandatory network:none sandbox the egress proof and the #2215 verification

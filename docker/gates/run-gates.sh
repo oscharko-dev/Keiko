@@ -19,7 +19,8 @@ failed=()
 # Skips a gate whose npm script does not exist on this branch instead of reporting a failure: the
 # suite must stay usable while a branch is mid-way through adding or removing a check.
 has_script() {
-  node -e "process.exit(require('./package.json').scripts['$1'] ? 0 : 1)" 2>/dev/null
+  local script="$1"
+  node -e "process.exit(require('./package.json').scripts['${script}'] ? 0 : 1)" 2>/dev/null
 }
 
 step_script() {
@@ -56,14 +57,14 @@ fi
 
 step_git() {
   local label="$1" script="$2"
-  if [ "$git_usable" = "1" ]; then
+  if [[ "$git_usable" == "1" ]]; then
     step_script "$label" "$script"
   else
     printf '\n\033[2m– %s (skipped: git unavailable)\033[0m\n' "$label"
   fi
 }
 
-if [ ! -d node_modules ] || [ ! -x node_modules/.bin/vitest ]; then
+if [[ ! -d node_modules || ! -x node_modules/.bin/vitest ]]; then
   printf '\033[1m▶ installing workspaces (first run in this container)\033[0m\n'
   npm ci --ignore-scripts
 fi
@@ -79,13 +80,18 @@ step_git "dependency-hygiene" check:dependency-hygiene
 step_script "osv-waiver-scope" check:osv-waiver-scope
 step "audit (shipped graph)" npm audit --audit-level=high --omit=dev
 
-if [ "$suite" != "fast" ]; then
+if [[ "$suite" != "fast" ]]; then
   step "unit tests" npm test
   step "ui tests with coverage" npm run test:coverage:ui
   step "ui coverage ratchet" npm run check:coverage:ui
+  # SonarCloud blocks on new-code coverage, and until this gate existed that answer was only
+  # obtainable by pushing — which made a required check the discovery mechanism instead of the
+  # confirmation. Same threshold, same LCOV artefacts, same main-scope rules, run here first.
+  step "scripts tests with coverage" npm run test:coverage:scripts
+  step_git "new-code coverage (Sonar threshold)" check:coverage:new-code
 fi
 
-if [ "$suite" = "e2e" ] || [ "$suite" = "full" ]; then
+if [[ "$suite" == "e2e" || "$suite" == "full" ]]; then
   browsers="${PLAYWRIGHT_BROWSERS_PATH:-/opt/playwright}"
   if ! compgen -G "${browsers}/chromium-*" > /dev/null; then
     step "install chromium" npx --ignore-scripts playwright@1.61.1 install --with-deps chromium
@@ -93,14 +99,14 @@ if [ "$suite" = "e2e" ] || [ "$suite" = "full" ]; then
   step "release smoke E2E" npm run test:e2e:smoke
 fi
 
-if [ "$suite" = "full" ]; then
+if [[ "$suite" == "full" ]]; then
   step "build" npm run build
   step "build:ui" npm run build:ui
   step "package surface" npm run check:package-surface
 fi
 
 printf '\n'
-if [ ${#failed[@]} -gt 0 ]; then
+if [[ ${#failed[@]} -gt 0 ]]; then
   printf '\033[31m%d gate(s) failed:\033[0m\n' "${#failed[@]}"
   printf '  - %s\n' "${failed[@]}"
   printf '\nFix these before pushing — each one would have cost a full CI cycle.\n'

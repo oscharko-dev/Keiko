@@ -23,9 +23,11 @@ re-measuring with it. The regeneration wrapper validates its own output with the
 source-freshness contract (`--enforce-source-freshness`), which additionally requires exact
 source-tree equality, the current lockfile, and a clean subject working tree.
 
-The scheduled workflow `nightly-perf-evidence` re-measures `dev` every night and opens a bot
-pull request when the committed documents drifted, so timing evidence lags `dev` by at most one
-nightly cycle and corrects itself without agent involvement.
+The scheduled workflow `nightly-perf-evidence` asks that same deterministic question against `dev`
+every night and files a tracking issue when the committed documents stop binding it. It does not
+re-measure and does not open a bot pull request: only the reference environment below can produce
+comparable numbers, so drift detection is automatic and repair is a deliberate local run
+(ADR-0156 D6).
 
 ## How to regenerate (one command)
 
@@ -62,14 +64,22 @@ throwaway clone below; only after mounting your working checkout directly re-run
   cap budgets; the dev machine's VM is configured at 48 GiB / 14 CPUs
   (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`).
 
-**Known lane status:** free hosted runners have measured the stopped-projection cap above its
-200 ms budget (250.4 ms, later 256.9 ms). Until ADR-0156 that overrun aborted the producer, so the
-lane published nothing and every pull request touching a measurement-toolchain file was stranded on
-evidence that could not be refreshed. The lane now measures, writes its document, names the verdict,
-and lets the gate reject it on the resulting pull request — a single named regression instead of a
-dead lane. Whether the reference environment itself needs a decision is
-[#2587](https://github.com/oscharko-dev/Keiko/issues/2587); the current overrun is tracked as
-[#2695](https://github.com/oscharko-dev/Keiko/issues/2695). The PR lane is unaffected either way.
+**Reference environment.** These budgets are absolute numbers, calibrated on the pinned container as
+run on a developer machine: `platform: linux`, `architecture: arm64`, >=14 logical cores. Every
+committed editor evidence document records exactly that, and each one carries its own provenance so
+the claim is checkable rather than folklore. A hosted GitHub runner is x86_64 with 4 logical cores;
+the same stopped-projection scenario measures 250-257 ms there against a 200 ms budget. That gap is a
+machine class, not a regression — across two weeks and eighteen documents, including the M11 merge,
+the reference environment measured 122.8-142.2 ms. Nothing needs to assert the environment: a
+document measured on an under-provisioned machine fails its own budget check, so the requirement is
+self-enforcing. Changing the reference class is
+[#2587](https://github.com/oscharko-dev/Keiko/issues/2587).
+
+**Scheduled lane.** `nightly-perf-evidence` detects drift; it does not measure (ADR-0156 D6). It runs
+the deterministic freshness contract — digests, plus every budget re-derived from the committed
+samples — and files a tracking issue naming this command when the committed evidence stops binding
+`dev`. It used to run the full producer on a hosted runner, which failed 12 of 12 times and published
+nothing. Repair is yours to run here.
 
 ## Invariants
 

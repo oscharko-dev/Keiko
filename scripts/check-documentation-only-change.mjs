@@ -10,11 +10,12 @@ import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isDocumentationOnlyChange } from "./lib/documentation-only-change.mjs";
 
 function changedPaths(baseSha, headSha) {
   const output = execFileSync(
-    "git",
+    resolveHostExecutable("git"),
     ["diff", "--name-only", "-z", `${baseSha}...${headSha}`, "--"],
     {
       encoding: "utf8",

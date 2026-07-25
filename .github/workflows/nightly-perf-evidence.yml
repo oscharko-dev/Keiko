@@ -1,9 +1,14 @@
-# ADR-0139 D3: scheduled automation owns editor performance evidence drift. This workflow
-# re-runs the official D12 producer against the pinned baseline on a clean Linux environment,
-# enforces the wall-clock budgets (controlled measurement context), and — when the refreshed
-# documents differ from the committed ones — opens a bot pull request through the normal
-# required-check path. Commits are created through the GitHub API so they are signed; no gate
-# is bypassed and auto-merge follows ADR-0135.
+# ADR-0156 D6: scheduled automation owns DETECTION of editor performance evidence drift, not its
+# repair. It cannot own repair: the D12 wall-clock budgets are absolute numbers calibrated on the
+# declared reference environment (linux/arm64, >=14 logical cores — see docs/qa/perf-evidence.md),
+# and every one of the eighteen committed evidence documents was measured there. A hosted runner is
+# x86_64 with 4 cores, so the same work costs roughly twice as much and the budget can never be met.
+# This lane used to run the full producer there anyway; it failed 12 of 12 times, published nothing,
+# and left every toolchain-touching pull request stranded on evidence nothing could refresh.
+#
+# What is environment-independent is the drift question itself — source-tree, lockfile and
+# measurement-toolchain digests are hashes. So this lane answers exactly that, in ~2 minutes instead
+# of 180, and says out loud when the reference environment owes a re-measurement.
 name: Nightly performance evidence
 
 on:
@@ -18,111 +23,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  refresh-evidence:
-    name: Refresh Linux D12 evidence
+  detect-drift:
+    name: Detect D12 evidence drift
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
       issues: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
-          # Scheduled runs always measure dev; a manual dispatch measures the dispatched ref, so a
-          # branch that legitimately must re-measure (a toolchain change, ADR-0139 D10) can produce
-          # its evidence on the controlled hosted runner instead of a developer machine.
+          # Scheduled runs always inspect dev; a manual dispatch inspects the dispatched ref so a
+          # branch can ask the same question before it pays for a local re-measurement.
           ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || 'dev' }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
-      - name: Install Bubblewrap for the DAP cap runs
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
-      - name: Grant Bubblewrap user namespaces via its own AppArmor profile
-        # Ubuntu 24.04 restricts unprivileged user-namespace creation globally via AppArmor, so
-        # bwrap fails and the debug capability reports notProvisioned — every nightly run since
-        # the lane was created failed on exactly this assertion. The D12 cap runs need bwrap (the
-        # product's own sandbox) to create namespaces. On the runner image bwrap ships with NO
-        # AppArmor profile — it already runs unconfined, so this profile removes no confinement.
-        # `flags=(unconfined)` plus `userns,` is the distribution-documented per-application
-        # mechanism (the same profile shape Ubuntu 24.04 itself ships for sandboxing tools) whose
-        # only effect here is granting this one binary the user-namespace permission. The global
-        # restriction stays in force for every other process; no kernel-wide knob is changed. The
-        # verification step below fails the job immediately if the sandbox still cannot
-        # provision, instead of 30 minutes later inside the measurement.
-        shell: bash
-        run: |
-          if [ -d /etc/apparmor.d ] && command -v apparmor_parser >/dev/null 2>&1; then
-            printf '%s\n' \
-              'abi <abi/4.0>,' \
-              'include <tunables/global>' \
-              'profile bwrap /usr/bin/bwrap flags=(unconfined) {' \
-              '  userns,' \
-              '  include if exists <local/bwrap>' \
-              '}' | sudo tee /etc/apparmor.d/bwrap >/dev/null
-            sudo apparmor_parser -r /etc/apparmor.d/bwrap
-          else
-            echo "No AppArmor mediation on this runner; Bubblewrap needs no profile grant."
-          fi
-      - name: Verify the Bubblewrap sandbox can provision
-        run: bwrap --unshare-user --ro-bind / / true
       - run: npm ci --ignore-scripts
-      - name: Install Playwright browser
-        run: node node_modules/playwright/cli.js install --with-deps chromium
-      - name: Regenerate both editor evidence documents
-        run: npm run perf:evidence:regen
-      # This lane is the ONLY route that can refresh committed D12 evidence, and the pull-request
-      # freshness gate delegates to it. When it breaks, the sole symptom used to be evidence that
-      # quietly stopped being refreshed — twelve consecutive failures went unnoticed between
-      # 2026-07-19 and 2026-07-25 until pull requests deadlocked on stale evidence. A repair lane
-      # that fails silently is worse than no lane, so it now says so on the first failure.
-      # `!cancelled()` rather than `failure()`: a timeout on this 180-minute job must report too.
-      # This lane is the ONLY route that can refresh committed D12 evidence, and the pull-request
-      # freshness gate delegates to it. When it breaks, the sole symptom used to be evidence that
-      # quietly stopped being refreshed — twelve consecutive failures went unnoticed between
-      # 2026-07-19 and 2026-07-25, until pull requests deadlocked on stale evidence. A repair lane
-      # that fails silently is worse than no lane, so it now says so on the first failure.
-      - name: Report a broken regeneration lane
-        if: ${{ failure() }}
+      # The full source-freshness contract: recorded digests against the current tree, plus every
+      # budget re-derived from the committed samples. All deterministic, all hashes and arithmetic —
+      # nothing here measures, so the runner's hardware cannot change the answer.
+      - name: Check committed evidence against the current tree
+        id: drift
+        continue-on-error: true
+        run: npm run check:perf-evidence:editor -- --enforce-source-freshness
+      # A repair lane that fails silently is worse than no lane: twelve consecutive failures went
+      # unnoticed between 2026-07-19 and 2026-07-25, until pull requests deadlocked on evidence
+      # nothing was refreshing. `!cancelled()` rather than `failure()` so a timeout reports too.
+      - name: Report drift that only the reference environment can repair
+        if: ${{ !cancelled() && steps.drift.outcome == 'failure' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          title="D12 regeneration lane is failing"
+          title="D12 evidence has drifted from ${GITHUB_REF_NAME}"
           existing=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "in:title ${title}" --json number --jq '.[0].number // empty')
           # The format string is literal by design: values arrive as printf arguments.
           # shellcheck disable=SC2016
-          body=$(printf 'The nightly D12 regeneration lane failed on `%s`.\n\nRun: %s\n\nWhile this lane is down, committed performance evidence cannot be refreshed, and any pull request touching a `D12_MEASUREMENT_TOOLCHAIN_PATHS` member has no route to green. This is a delivery blocker, not a nightly nuisance.' "${GITHUB_REF_NAME}" "${RUN_URL}")
+          body=$(printf 'The committed editor performance evidence no longer binds `%s`.\n\nRun: %s\n\nOnly the declared reference environment can produce comparable numbers (linux/arm64, >=14 logical cores). Regenerate there and commit both documents as the final commit of the pull request that moved the ruler:\n\n```bash\nnpm run perf:evidence:regen\n```\n\nSee `docs/qa/perf-evidence.md`. Until then, pull requests that do NOT touch a `D12_MEASUREMENT_TOOLCHAIN_PATHS` member are unaffected (ADR-0156 D2); one that does has no route to green.' "${GITHUB_REF_NAME}" "${RUN_URL}")
           if [ -n "${existing}" ]; then
             gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
           else
             gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
           fi
-      - name: Open a bot pull request when the evidence drifted
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Fail the lane when drift is unrepaired
+        if: ${{ steps.drift.outcome == 'failure' }}
         run: |
-          if git diff --quiet -- docs/release/1209-perf-evidence.json docs/release/1209-bundle-evidence.json; then
-            echo "Committed evidence already matches the measured product; nothing to refresh."
-            exit 0
-          fi
-          head_sha=$(git rev-parse HEAD)
-          branch="bot/nightly-perf-evidence-$(git rev-parse --short HEAD)-${GITHUB_RUN_ID}"
-          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/heads/${branch}" -f sha="${head_sha}"
-          for file in docs/release/1209-perf-evidence.json docs/release/1209-bundle-evidence.json; do
-            if git diff --quiet -- "$file"; then continue; fi
-            existing_sha=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${file}?ref=${branch}" --jq .sha)
-            # API-created commits are signed by GitHub, satisfying the dev signed-commit rule.
-            gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${file}" \
-              -f branch="${branch}" \
-              -f message="docs(editor): refresh nightly Linux D12 evidence" \
-              -f sha="${existing_sha}" \
-              -f content="$(base64 -w0 "$file")"
-          done
-          gh pr create \
-            --base dev \
-            --head "${branch}" \
-            --title "docs(editor): refresh nightly Linux D12 evidence" \
-            --body "Scheduled ADR-0139 D3 refresh: the committed editor performance evidence drifted from the measured product on dev. Produced by the official Linux D12 producer (pinned baseline, wall-clock budgets enforced); integrates only through the normal required checks."
+          echo "Committed D12 evidence does not bind ${GITHUB_REF_NAME}; a tracking issue was filed."
+          exit 1

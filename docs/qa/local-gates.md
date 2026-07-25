@@ -13,7 +13,7 @@ Over the twelve most recent failing CI runs the causes were:
 | Cause                    | Runs | Reproducible locally  |
 | ------------------------ | ---: | --------------------- |
 | SonarCloud findings      |    5 | partially (see below) |
-| D12 performance evidence |    4 | no — measurement lane |
+| D12 performance evidence |    4 | yes — see below       |
 | Dependency audits        |    4 | yes                   |
 | Release smoke E2E        |    2 | yes                   |
 | Coverage quality gates   |    2 | yes                   |
@@ -53,13 +53,19 @@ surface. These behave identically to CI because they depend on the source tree, 
 
 **Not authoritative here.**
 
-- **D12 wall-clock performance evidence.** Timing is comparable only on the reference architecture.
-  On Apple Silicon this image is arm64 while CI is x86_64; forcing `--platform linux/amd64` runs
-  under emulation and produces numbers that mean nothing. Evidence is produced by the nightly Linux
-  lane or a `workflow_dispatch` of `nightly-perf-evidence.yml` on your branch — see
-  [`perf-evidence.md`](perf-evidence.md).
-- **SonarCloud.** Needs `SONAR_TOKEN` and the hosted analysis. Locally you can only pre-empt the
-  common rule classes by reading the diff; the verdict is CI's.
+- **D12 wall-clock performance evidence — not because it cannot be produced here, but because it is
+  produced somewhere else.** The declared reference environment for those budgets is the pinned
+  `node:24.18.0-bookworm` container on a developer machine: linux/arm64, >=14 logical cores. Every
+  committed evidence document was measured there, and no hosted runner matches it. Use
+  `npm run perf:evidence:regen` (which refuses to run outside that container and prints the exact
+  `docker run` line), not this suite, and not a `workflow_dispatch` of the scheduled lane — that lane
+  detects drift and no longer measures. See [`perf-evidence.md`](perf-evidence.md).
+- **SonarCloud's rule engine.** Needs `SONAR_TOKEN` and the hosted analysis; the verdict on rule
+  violations is CI's. Its **new-code coverage condition** is not — `npm run check:coverage:new-code`
+  computes the same metric here, from the same LCOV artefacts, against the same threshold pinned in
+  `sonar-quality-gate-contract.mjs`, and names the exact uncovered lines. Run it before pushing:
+  arriving at SonarCloud to learn that a diff is under the coverage bar is a wasted CI cycle, and
+  the answer was always available locally.
 - **Windows and macOS smoke.** A Linux container cannot answer them.
 - **Build provenance attestations.** Require the workflow's OIDC identity.
 
