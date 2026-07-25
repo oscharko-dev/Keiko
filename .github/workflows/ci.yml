@@ -797,6 +797,17 @@ jobs:
   # every gate reports on every run, so one CI round still surfaces every hygiene finding instead of
   # only the first. It never softens the verdict - a failed step fails the job whatever runs after it.
   #
+  # It is paired with `steps.checkout.outcome != 'failure'` because `!cancelled()` also overrides the
+  # default `success()` against the shared prerequisite. A gate must survive another GATE failing, not
+  # a missing workspace: the pinned-SHA grep ends in `|| true`, so on an empty checkout it would
+  # report "All action references are pinned" over a directory it never read. The job is red either
+  # way - the checkout failed - but a gate that cannot read its input must skip, not reassure.
+  #
+  # The condition is `!= 'failure'` rather than `== 'success'` so that it fails safe. An id that is
+  # renamed or dropped makes `steps.checkout.outcome` null; under `== 'success'` every guard would
+  # then be false, all four gates would skip, and the required context would report green having
+  # checked nothing. Under `!= 'failure'` that same mistake runs the gates instead.
+  #
   # Rollout phase 1 of three, no protection gap at any instant (ADR-0159 D4): this job is added
   # while `actionlint`, `Verify pinned action SHAs`, `zizmor`, and `Scan dependency lockfiles` keep
   # executing and keep being required. The old jobs are removed only in phase 3, strictly after the
@@ -812,11 +823,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check out repository
+        id: checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - name: Download and verify actionlint
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
         run: |
           curl --proto '=https' -sSfL "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" -o actionlint.tar.gz
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum --check
@@ -825,7 +838,7 @@ jobs:
       - name: Run actionlint
         run: ./actionlint -color .github/workflows/*.yml
       - name: Assert all action references are pinned to 40-hex SHAs
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
         run: |
           set -euo pipefail
           violations=$(grep -rnE '^\s*-?\s*uses:' .github/workflows/ \
@@ -843,7 +856,7 @@ jobs:
         # never skips because a sibling job failed, so `!cancelled()` is what makes the step-level
         # evaluation surface identical to the job-level one - the trigger condition itself is
         # unchanged, character for character.
-        if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'merge_group') }}
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' && ((github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'merge_group') }}
         uses: zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02 # v0.6.0
         with:
           version: "1.26.1"
@@ -851,7 +864,7 @@ jobs:
           advanced-security: false
           annotations: true
       - name: Scan dependency manifests with OSV Scanner
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
         uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
         with:
           # `--config` is passed explicitly rather than relying on directory auto-discovery, so the

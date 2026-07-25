@@ -44,9 +44,10 @@ function jobSteps(source, jobId) {
   return steps;
 }
 
-// The four gates, in the order the job runs them, and the one step that is not a gate: downloading
-// the actionlint binary is a prerequisite of `Run actionlint`, not a check of its own.
+// The four gates, in the order the job runs them, and the two steps that are not gates: the shared
+// checkout, and downloading the actionlint binary, which is a prerequisite of `Run actionlint`.
 const BUNDLED_JOB = "workflow-hygiene";
+const CHECKOUT_STEP = "Check out repository";
 const ACTIONLINT_PREREQUISITE = "Download and verify actionlint";
 const GATE_STEPS = [
   "Run actionlint",
@@ -54,6 +55,14 @@ const GATE_STEPS = [
   "Run zizmor",
   "Scan dependency manifests with OSV Scanner",
 ];
+
+// Every guard is exactly this, optionally followed by the step's own trigger. `!cancelled()` alone
+// would also override the default `success()` against the shared checkout, so a gate would run over
+// a workspace it never got - and the pinned-SHA grep, which ends in `|| true`, would report success
+// over a directory it never read. A gate must survive another GATE failing, not a missing workspace.
+// `!= 'failure'` rather than `== 'success'` so a renamed or dropped id runs the gates instead of
+// skipping all four and reporting a green required context that checked nothing.
+const GATE_GUARD = "!cancelled() && steps.checkout.outcome != 'failure'";
 
 // The exact trigger condition of the standalone `zizmor` job. Reproducing it character for
 // character at step level is the whole safety argument for moving zizmor into a job that runs
@@ -129,10 +138,10 @@ describe("bundled workflow hygiene job", () => {
 
   it("runs zizmor on exactly the events the standalone job ran it on", () => {
     const bundled = jobBlock(ci, BUNDLED_JOB);
-    // `!cancelled()` composes with the condition, it does not replace it: a job never skips because
-    // a sibling job failed, so this is what makes a step behave like the independent job it came
-    // from. It can only widen within the trigger, never narrow it.
-    expect(bundled).toContain(`if: \${{ !cancelled() && (${ZIZMOR_TRIGGER}) }}\n`);
+    // The guard composes with the trigger, it does not replace it: a job never skips because a
+    // sibling job failed, so this is what makes a step behave like the independent job it came
+    // from. It can only narrow the guard, never widen the trigger.
+    expect(bundled).toContain(`if: \${{ ${GATE_GUARD} && (${ZIZMOR_TRIGGER}) }}\n`);
   });
 
   it("reads exactly the one job it claims to read", () => {
@@ -149,12 +158,29 @@ describe("bundled workflow hygiene job", () => {
     // repair rounds. It never softens the verdict - a failed step fails the job regardless.
     const steps = jobSteps(ci, BUNDLED_JOB);
     // Order is pinned because the exemption below depends on it: `Run actionlint` needs no guard
-    // only while nothing but its own prerequisite runs ahead of it.
-    expect(steps.map((step) => step.name)).toEqual([ACTIONLINT_PREREQUISITE, ...GATE_STEPS]);
+    // only while nothing but the checkout and its own prerequisite run ahead of it.
+    expect(steps.map((step) => step.name)).toEqual([
+      CHECKOUT_STEP,
+      ACTIONLINT_PREREQUISITE,
+      ...GATE_STEPS,
+    ]);
     for (const gate of GATE_STEPS.slice(1)) {
       const step = steps.find((candidate) => candidate.name === gate);
       expect(step?.condition, `${gate} must run even when an earlier gate failed`).toContain(
-        "!cancelled()",
+        GATE_GUARD,
+      );
+    }
+  });
+
+  it("skips every gate that lost the workspace instead of reporting over an empty one", () => {
+    const steps = jobSteps(ci, BUNDLED_JOB);
+    // The guard names the checkout step, so the checkout has to carry that id or every guard is
+    // false and the whole job silently skips its gates while concluding success.
+    expect(jobBlock(ci, BUNDLED_JOB)).toMatch(/\n {8}id: checkout\n/u);
+    for (const step of steps) {
+      if (step.condition === null) continue;
+      expect(step.condition, `${step.name} must require the checkout it reads`).toContain(
+        "steps.checkout.outcome != 'failure'",
       );
     }
   });
