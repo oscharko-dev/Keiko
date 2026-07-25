@@ -82,8 +82,11 @@ step "audit (shipped graph)" npm audit --audit-level=high --omit=dev
 
 if [[ "$suite" != "fast" ]]; then
   step "unit tests" npm test
+  # The UI suite runs here for its jsdom + axe assertions and to produce the LCOV the new-code
+  # coverage gate below reads. It is NOT ratcheted here: ADR-0158 D2 evaluates every coverage floor
+  # exactly once, against all three suites' summaries at once, and this container deliberately does
+  # not run the twenty-minute package suite. Use `npm run test:coverage:quality` for the ratchet.
   step "ui tests with coverage" npm run test:coverage:ui
-  step "ui coverage ratchet" npm run check:coverage:ui
   # SonarCloud blocks on new-code coverage, and until this gate existed that answer was only
   # obtainable by pushing — which made a required check the discovery mechanism instead of the
   # confirmation. Same threshold, same LCOV artefacts, same main-scope rules, run here first.
