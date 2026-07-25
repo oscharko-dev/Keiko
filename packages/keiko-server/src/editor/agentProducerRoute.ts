@@ -22,6 +22,7 @@ import {
   createFetchEditorAgentHttpTransport,
   EditorAgentHttpClient,
   EditorAgentToolHost,
+  type EditorAgentToolOutput,
 } from "@oscharko-dev/keiko-tools";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
@@ -58,11 +59,32 @@ const MAX_GOAL_CHARS = 4_000;
 // missing live bridge connection (NO_ACTIVE_SESSION) still counts as an invoked, completed harness
 // tool call. `status` mirrors EditorAgentActionResult.status / EditorAgentVerificationResult.outcome,
 // already-exposed enums elsewhere (audit ledger, action responses) -- not new disclosure.
+// `failureKind` (Issue #2713) answers the same question on the failing side. Before it, `ok:false`
+// was the ONLY discriminator a failed call carried, collapsing a transport abort, a route rejection,
+// a malformed response, a cancellation, an invalid-arguments rejection and the producer's own
+// out-of-scope refusal into one indistinguishable value -- an agent could not decide whether to
+// retry, and a failing CI run named no cause at all. It is a closed union of OUR OWN literals,
+// never a value read back out of a response body, so it stays content-free.
 interface ProducerToolOutcome {
   readonly toolName: string;
   readonly ok: boolean;
   readonly status?: string;
+  readonly failureKind?: string;
 }
+
+// Derived from the tool output's own failure union rather than hand-mirrored, so a kind added at the
+// owning layer cannot silently start degrading to a cause-free `{ ok: false }` here: `Record` demands
+// every member, so the omission is a compile error in this file instead.
+type ProducerFailureKind = Extract<EditorAgentToolOutput, { readonly ok: false }>["error"]["kind"];
+
+const PRODUCER_FAILURE_KINDS: Readonly<Record<ProducerFailureKind, true>> = {
+  cancelled: true,
+  transport: true,
+  route: true,
+  "malformed-response": true,
+  "invalid-arguments": true,
+  host: true,
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -77,16 +99,37 @@ function resultStatusEnum(result: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+// Fail closed: only a known kind is surfaced, so a malformed or unexpected error shape degrades to
+// the previous content-free `{ toolName, ok: false }` rather than echoing whatever string it carried.
+function producerFailureKind(parsed: unknown): string | undefined {
+  const error: unknown = isRecord(parsed) ? parsed.error : undefined;
+  const kind: unknown = isRecord(error) ? error.kind : undefined;
+  return typeof kind === "string" && Object.hasOwn(PRODUCER_FAILURE_KINDS, kind) ? kind : undefined;
+}
+
+function producerFailureOutcome(toolName: string, parsed: unknown): ProducerToolOutcome {
+  const failureKind = producerFailureKind(parsed);
+  return failureKind === undefined ? { toolName, ok: false } : { toolName, ok: false, failureKind };
+}
+
 function producerToolOutcome(toolName: string, rawOutput: string): ProducerToolOutcome {
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(rawOutput);
-    if (!isRecord(parsed) || parsed.ok !== true) return { toolName, ok: false };
-    const status = isRecord(parsed.result) ? resultStatusEnum(parsed.result) : undefined;
-    return status === undefined ? { toolName, ok: true } : { toolName, ok: true, status };
+    parsed = JSON.parse(rawOutput);
   } catch {
     return { toolName, ok: false };
   }
+  if (!isRecord(parsed) || parsed.ok !== true) return producerFailureOutcome(toolName, parsed);
+  const status = isRecord(parsed.result) ? resultStatusEnum(parsed.result) : undefined;
+  return status === undefined ? { toolName, ok: true } : { toolName, ok: true, status };
 }
+
+// The fail-closed arms above cannot be reached through the route: every tool output the producer
+// ever parses is produced in-process by EditorAgentToolHost, so no real dispatch can hand it an
+// unknown kind or a non-record payload. Exposing the pure parser is the only way to prove the guards
+// actually degrade instead of echoing (AGENTS.md §9 -- both branches of every guard). Same
+// `_...ForTests` seam convention as `_resetEditorAgentAuditForTests` in agentActionAudit.ts.
+export const _producerToolOutcomeForTests = producerToolOutcome;
 
 // Fail-closed rejection for a tool call outside PRODUCER_TOOL_NAMES, in the SAME
 // EditorAgentToolOutput shape EditorAgentToolHost itself uses for invalid arguments -- a hostile
