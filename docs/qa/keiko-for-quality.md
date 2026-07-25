@@ -2,22 +2,19 @@
 
 ## Current enforcement
 
-Pull requests targeting `dev` are protected by 14 app-bound checks on the exact current head:
+Pull requests targeting `dev` are protected by 11 app-bound checks on the exact current head:
 
 1. `ci`
-2. `actionlint`
-3. `Verify pinned action SHAs`
-4. `zizmor`
-5. `Analyze (actions)`
-6. `Analyze (javascript-typescript)`
-7. `Build, scan, SBOM, smoke`
-8. `Review dependency diff (dev/main)`
-9. `ui`
-10. `Scan dependency lockfiles`
-11. `SonarCloud Code Analysis`
-12. `Socket Security: Project Report`
-13. `Socket Security: Pull Request Alerts`
-14. `Keiko for Quality`
+2. `workflow hygiene`
+3. `Analyze (actions)`
+4. `Analyze (javascript-typescript)`
+5. `Build, scan, SBOM, smoke`
+6. `Review dependency diff (dev/main)`
+7. `ui`
+8. `SonarCloud Code Analysis`
+9. `Socket Security: Project Report`
+10. `Socket Security: Pull Request Alerts`
+11. `Keiko for Quality`
 
 Branch protection requires linear history, signed commits, and resolved review conversations.
 GitHub Actions contexts are pinned to App ID `15368`, SonarQube Cloud to App ID `12526`, both

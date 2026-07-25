@@ -47,16 +47,13 @@ const defaultLabel = "kfq-action-poc";
 // not).
 const reevaluationCheckNames = new Set([
   "ci",
-  "actionlint",
-  "Verify pinned action SHAs",
-  "zizmor",
+  "workflow hygiene",
   "Analyze (actions)",
   "Analyze (javascript-typescript)",
   "Build, scan, SBOM, smoke",
   "Review dependency diff (dev/main)",
   "ui",
   "native",
-  "Scan dependency lockfiles",
   "SonarCloud Code Analysis",
   "Socket Security: Project Report",
   "Socket Security: Pull Request Alerts",

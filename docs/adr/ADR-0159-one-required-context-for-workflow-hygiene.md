@@ -1,6 +1,8 @@
 # ADR-0159 — One required context for workflow hygiene
 
-- Status: Accepted
+- Status: Accepted — amended in place by its own delivery: phase 3 moved the job out of `ci.yml`
+  into `.github/workflows/workflow-hygiene.yml`, because a workflow's `on:` block is per file and
+  D2's `ready_for_review` obligation could not be met inside `ci.yml` at an acceptable cost (D1, D4)
 - Amends: [ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) (D3's
   enumerated required-check set; its direct-bounded-check principle is untouched and is precisely
   what this record executes)
@@ -62,8 +64,16 @@ still executing on every pull request. What changes is how many check contexts r
 
 ## Decision
 
-**D1 — One job runs all four tools; nothing about the tools changes.** `.github/workflows/ci.yml`
-gains a `workflow-hygiene` job whose check context is `workflow hygiene`. It runs, on one runner
+**D1 — One job runs all four tools; nothing about the tools changes.**
+
+> **Amended by phase 3 — read this before the paragraph below.** The job was added to `ci.yml` in
+> phase 1 and moved to its own file, `.github/workflows/workflow-hygiene.yml`, in phase 3. Nothing
+> else about it changed: same job id, same `name:`, same steps, same pins, same permissions, same
+> timeout, and the same check context produced under the same App id (15368), so branch protection
+> never saw the move. The reason is D2's: a workflow's `on:` block is per file, and the trigger
+> surface this job owes is the union of four jobs across two files.
+
+A `workflow-hygiene` job whose check context is `workflow hygiene`. It runs, on one runner
 after one checkout: actionlint 1.7.12 downloaded from the same URL and verified against the same
 SHA-256 `8aca8db9…a3d8`, invoked as `./actionlint -color .github/workflows/*.yml`; the pinned-SHA
 grep verbatim, including its `./` and `docker://` exemptions and its 40-hex pattern; zizmor 1.26.1
@@ -114,11 +124,22 @@ in flight would cancel that run and restart the matrix from zero on the same hea
 20-second trigger with a cancelled 13-minute matrix is not a trade this epic can make.
 
 A workflow's `on:` block is per file, so preserving the trigger at its real cost means giving the
-bundle a trigger surface of its own — which may put the job in its own workflow file rather than in
-`ci.yml`. That is a change to what Issue #2706 scopes, so phase 3 does not decide it silently: the
-constraint is recorded here, and the mechanism is settled with the owner alongside the
-branch-protection swap. What is decided is the invariant — phase 3 lands only with the lockfile
-scan still running on `ready_for_review`.
+bundle a trigger surface of its own. Phase 3 therefore hosts the job in
+`.github/workflows/workflow-hygiene.yml`, declaring exactly the union: `ci.yml`'s `push` and
+`pull_request` branch lists verbatim, `pull_request` types `[opened, ready_for_review, reopened,
+synchronize]`, `merge_group` on `dev` (ADR-0139 D7), and `workflow_dispatch`. That is a strict
+superset of the four jobs' combined surface, and it costs one ~30-second job on a draft-to-ready
+transition instead of a cancelled matrix.
+
+Issue #2706 scopes the job to `ci.yml`, so this is a deliberate deviation from the issue text in
+service of the issue's own stop condition: a lost trigger is a stop, and the in-`ci.yml` options
+were "lose `ready_for_review`" or "pay a cancelled 13-minute matrix for a 20-second scan". The
+consolidation the issue asks for — four contexts into one, same tools, same rules — is delivered
+exactly; only the file hosting it differs, and the check context, its App id and the
+branch-protection entry are identical either way.
+
+`.github/workflows/osv-scanner.yml` keeps its `push`, `schedule` and `workflow_dispatch` lanes. Its
+`pull_request` and `merge_group` lanes move into the bundle, which covers both.
 
 **D3 — A required context is bounded.** `workflow-hygiene` declares `timeout-minutes: 15`, which no
 `ci.yml` job does today. ADR-0135 D4 requires a repository-owned timeout of anything that is
@@ -139,12 +160,16 @@ required context.
    `actionlint`, `Verify pinned action SHAs`, `zizmor` and `Scan dependency lockfiles` from the
    required list and adds `workflow hygiene`, atomically. Both shapes are still executing when it
    happens, so neither ordering within the update can expose a gap.
-3. **Phase 3 (the follow-up pull request).** The three micro-jobs are removed, the `osv-scanner.yml`
-   pull-request lane is migrated without losing the `ready_for_review` trigger D2 binds, and the
-   required-check list is updated in `CONTRIBUTING.md`, `AGENTS.md` §10,
-   `docs/qa/keiko-for-quality.md`, `RELEASE_REQUIRED_CHECKS` in `release.yml` and
-   `portable-assets.yml`, and `reevaluationCheckNames` in `scripts/keiko-for-quality-action.mjs`.
-   The two structural pins named in the Consequences below are relocated in the same change.
+3. **Phase 3 (the follow-up pull request).** The three micro-jobs are removed; the bundled job moves
+   to its own workflow file with the union trigger surface (D2), taking the `osv-scanner.yml`
+   pull-request and merge-queue lanes with it; and the required-check list is updated in
+   `CONTRIBUTING.md`, `AGENTS.md` §10, `docs/qa/keiko-for-quality.md`, `RELEASE_REQUIRED_CHECKS` in
+   `release.yml` and `portable-assets.yml`, and `reevaluationCheckNames` in
+   `scripts/keiko-for-quality-action.mjs`. Four structural pins are relocated, none relaxed: the
+   `ci` aggregate slice in `dev-quality-workflows.test.mjs` moves to the generic
+   next-top-level-key bound; `zizmor-workflow.test.mjs` re-anchors its four assertions on the
+   bundled step; `osv-scanner-workflow.test.mjs` re-points its branch-coverage property at whichever
+   workflow now owns each event; and `workflow-hygiene-job.test.mjs` follows the job to its new file.
 
 The ordering is not a preference. Removing the jobs before the owner's update would leave branch
 protection requiring four contexts that no workflow produces, which blocks every pull request in the
