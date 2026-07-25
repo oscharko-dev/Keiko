@@ -133,9 +133,10 @@ reproduces today's cold-install behaviour exactly, and no committed baseline, fl
 document moves, so there is no state to migrate back.
 
 Two properties the single job got for free are now explicit. All four jobs check out the run's
-immutable `github.sha` rather than the moving ref one checkout could safely use, because five
-checkouts of `refs/pull/N/merge` would otherwise let the shards measure one tree while the gates and
-the scanner judge another, with nothing to detect the skew. And blobs key coverage by absolute path,
+immutable `github.sha` rather than the moving ref one checkout could safely use: the lane now has
+six checkouts across four job definitions, and `refs/pull/N/merge` is rewritten whenever the head or
+base moves, so the shards could otherwise measure one tree while the gates and the scanner judge
+another, with nothing to detect the skew. And blobs key coverage by absolute path,
 so the design assumes all four jobs share a workspace root — true on GitHub-hosted runners, and
 worth re-checking before this lane ever moves to self-hosted ones.
 

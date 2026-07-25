@@ -48,7 +48,7 @@
     "test:coverage": "npm run test:coverage:quality",
     "test:coverage:packages": "npm run build:packages && vitest run --config vitest.coverage.packages.config.ts --coverage",
     "test:coverage:packages:shard": "npm run build:packages && vitest run --config vitest.coverage.packages.shard.config.ts --coverage --reporter=default --reporter=blob",
-    "test:coverage:packages:merge": "vitest run --config vitest.coverage.packages.config.ts --coverage --mergeReports=.vitest-reports/packages",
+    "test:coverage:packages:merge": "vitest run --config vitest.coverage.packages.config.ts --coverage --mergeReports=.vitest-reports",
     "test:coverage:ui": "vitest run --config packages/keiko-ui/vitest.coverage.config.ts --coverage",
     "test:coverage:scripts": "vitest run --config vitest.coverage.scripts.config.ts --coverage",
     "test:coverage:quality": "npm run test:coverage:packages && npm run test:coverage:ui && npm run test:coverage:scripts && npm run check:coverage:quality",

@@ -131,7 +131,9 @@ describe("dev quality workflows", () => {
   // never queuing behind the unrelated package, retrieval, editor and architecture gates — is now
   // asserted directly instead of through the proxy "this job has no dependencies at all".
   it("keeps Sonar off the unrelated gate queue and fails closed on every coverage suite", () => {
-    const coverageJob = ci.match(/ {2}coverage-sonar:\n[\s\S]*?(?=\n {2}ci:\n)/u)?.[0];
+    // Sliced to the next top-level key, not to `ci:` by name: a job inserted between the two
+    // would otherwise be pulled into this block and the ordering assertions would hold over it.
+    const coverageJob = ci.match(/ {2}coverage-sonar:\n[\s\S]*?(?=\n {2}\S)/u)?.[0];
     expect(coverageJob).toBeDefined();
     // Set equality, not a denylist: a job added to this `needs:` later must fail here rather than
     // slip through because nobody thought to enumerate it.
