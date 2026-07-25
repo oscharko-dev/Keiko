@@ -2,6 +2,7 @@ import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   DEFAULT_LSP_PROCESS_CONFIG,
   EDITOR_AGENT_SCHEMA_VERSION,
+  MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS,
   isEditorAgentActionResult,
   isEditorAgentRootAttribution,
   parseEditorAgentQueryGitData,
@@ -37,16 +38,24 @@ export const DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS = 25_000;
 // in-process TypeScript provider bounds itself with `deadlineMs` — cooperatively, polled at
 // cancellation checkpoints, so a cold project bootstrap (config discovery, parseJsonConfigFileContent,
 // the bounded directory walk, default-lib parsing) overruns it before the next checkpoint. A managed
-// LSP provider (python/go/java/rust/shell) is bounded instead by a cold spawn's
-// initializeTimeoutMs + requestTimeoutMs, which `deadlineMs` never applies to. The client cannot tell
-// which will serve a call — languageId and PATH probing decide that server-side — so it budgets for
-// the worse of the two.
+// LSP provider (python/go/java/rust/shell) is bounded instead by a cold spawn's initialize followed
+// by the request, and `deadlineMs` never applies to it. Its initialize budget is NOT the process
+// default: hostLanguageOperation.ts replaces initializeTimeoutMs with `resourceBudget.indexDeadlineMs`
+// whenever a provider supplies one, which managed Rust does — 30 s by default and up to
+// MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS by operator configuration. The contract ceiling is therefore
+// what bounds a cold managed call, not DEFAULT_LSP_PROCESS_CONFIG.initializeTimeoutMs.
+//
+// The client cannot tell which implementation will serve a call — languageId and server-side PATH
+// probing decide that — so it budgets once for the worst case rather than mirroring the server's
+// provider table, which would only re-create the drift this constant exists to remove.
 const LANGUAGE_SERVER_WORST_CASE_MS = Math.max(
   DEFAULT_LANGUAGE_SERVICE_LIMITS.deadlineMs,
-  DEFAULT_LSP_PROCESS_CONFIG.initializeTimeoutMs + DEFAULT_LSP_PROCESS_CONFIG.requestTimeoutMs,
+  MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS + DEFAULT_LSP_PROCESS_CONFIG.requestTimeoutMs,
 );
 // A backstop for a server that never answers, not a bound on the analysis — the server bounds that —
-// so it takes the same 5-second margin over the server's worst case that #2298 established.
+// so it takes the same 5-second margin over the server's worst case that #2298 established. Long, and
+// deliberately so: the verification budget (#2214) is 135 s for exactly this reason, and a caller
+// that wants to give up sooner aborts through its own `signal`, which is honoured immediately.
 export const DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS = LANGUAGE_SERVER_WORST_CASE_MS + 5_000;
 export const DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES = 256 * 1024;
 // Issue #2214 (AC7) — a verification run's own wall-time ceiling is DEFAULT_VERIFICATION_LIMITS.wallTimeMs
@@ -445,9 +454,15 @@ export class EditorAgentHttpClient {
     ]);
   }
 
-  // The action budget is per action type because the SERVER's own worst case is: queryGit is bounded
-  // by the git route's timeout (#2298), navigateSymbol by the language service deadline (#2713), and
-  // everything else answers from memory within the shared default.
+  // The action budget is per action type because the SERVER's own worst case differs: queryGit is
+  // bounded by the git route's timeout (#2298) and navigateSymbol by the language service or a
+  // managed LSP (#2713). Everything else keeps the shared default — the twelve bridge-queued types
+  // return 202 as soon as the action is enqueued rather than running the work inline. Note
+  // searchWorkspace is the one type that neither self-bounds nor merely enqueues: it runs a
+  // filesystem-backed scan with NO server-side wall-clock bound, so its client budget is its only
+  // bound. That is pre-existing and out of #2713's scope — unlike navigateSymbol there is no governed
+  // server verdict for the client to wait out, so a larger budget would change what is enforced
+  // rather than which layer reports it.
   private actionTimeoutMs(type: EditorAgentAction["type"]): number {
     if (type === "queryGit") return this.queryGitTimeoutMs;
     if (type === "navigateSymbol") return this.languageTimeoutMs;

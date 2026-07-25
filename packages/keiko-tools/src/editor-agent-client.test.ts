@@ -3,6 +3,7 @@ import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   DEFAULT_LSP_PROCESS_CONFIG,
   DEFAULT_VERIFICATION_LIMITS,
+  MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS,
   EDITOR_AGENT_SCHEMA_VERSION,
   type EditorAgentAction,
   type EditorAgentSessionSnapshot,
@@ -698,14 +699,16 @@ describe("EditorAgentHttpClient.action timeout selection", () => {
     expect(captured.timeouts).toEqual([DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS]);
     // Pinned absolutely, like the queryGit budget above: the relational assertions below would still
     // hold at `deadlineMs + 1`, which is arithmetically greater and practically just as racy.
-    expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBe(17_000);
+    expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBe(127_000);
     // Must outlast BOTH server implementations of navigateSymbol: the in-process TypeScript provider
-    // bounded by `deadlineMs`, and a managed LSP bounded by a cold spawn's initialize + request.
+    // bounded by `deadlineMs`, and a managed LSP whose cold initialize is bounded by the operator's
+    // `resourceBudget.indexDeadlineMs` (managed Rust: 30s default, contract ceiling 120s) rather than
+    // by DEFAULT_LSP_PROCESS_CONFIG.initializeTimeoutMs, which hostLanguageOperation.ts replaces.
     expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBeGreaterThan(
       DEFAULT_LANGUAGE_SERVICE_LIMITS.deadlineMs,
     );
     expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBeGreaterThan(
-      DEFAULT_LSP_PROCESS_CONFIG.initializeTimeoutMs + DEFAULT_LSP_PROCESS_CONFIG.requestTimeoutMs,
+      MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS + DEFAULT_LSP_PROCESS_CONFIG.requestTimeoutMs,
     );
     expect(DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS).toBeGreaterThan(
       DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
@@ -717,7 +720,7 @@ describe("EditorAgentHttpClient.action timeout selection", () => {
   // bound, which is the defect #2713 fixes. tests/editor-agent-managed-lsp.integration.test.ts
   // deliberately raises `timeoutMs` for exactly this race, so a plain default would discard it.
   it.each([
-    ["honours a generic budget above the floor", 30_000, 30_000],
+    ["honours a generic budget above the floor", 200_000, 200_000],
     [
       "holds the floor against a generic budget below it",
       50,
