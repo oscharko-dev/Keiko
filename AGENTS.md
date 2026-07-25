@@ -315,8 +315,13 @@ These cost real time when rediscovered. They are all real and current.
   the protected-branch-gate `case` allowlist (`refs/heads/<branch>:` and `*:<branch>` patterns) —
   miss the third and CI runs but the gate still rejects the merge.
 - **Coverage is ratcheted against a committed baseline** (`docs/qa/package-coverage-baseline.json`)
-  with per-file floors and a branch-metric floor. Lowering coverage fails the gate; if you add
-  code, add tests.
+  with per-file floors across all four metrics. Lowering coverage fails the gate; if you add code,
+  add tests. There is exactly ONE per-file floor store and ONE evaluation
+  (`npm run check:coverage:quality`) — do not add a `coverage.thresholds` block to a vitest config
+  to gate a file, and do not write the literal `85` into a coverage gate (import
+  `KEIKO_REPOSITORY_GATE_CONTRACT.newCodeCoverageMinimum`). Which ruler answers which question is
+  the one table in [`docs/qa/coverage-truth-model.md`](docs/qa/coverage-truth-model.md); the
+  reasoning is [ADR-0158](docs/adr/ADR-0158-one-coverage-ruler-per-question.md).
 - **Some agent harnesses run sub-agents in an isolated worktree at clean `HEAD`.** If you delegate
   edits, confirm they landed on _this_ working tree and not a throwaway checkout before you report
   the change as made.

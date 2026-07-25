@@ -31,6 +31,7 @@ const windowsRfc3161Source = readFileSync(
   "utf8",
 );
 const rootVitestConfig = readFileSync(resolve(repoRoot, "vitest.config.ts"), "utf8");
+const rootManifest = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8"));
 const uiManifest = JSON.parse(
   readFileSync(resolve(repoRoot, "packages/keiko-ui/package.json"), "utf8"),
 );
@@ -75,12 +76,17 @@ const REQUIRED_CI_COMMANDS = [
   // Issue #2704 / ADR-0157 split the serial `npm run test:coverage:quality` chain into parallel
   // measuring jobs plus one judging job. The pin follows the chain rather than the old entry point:
   // every link it used to cover is asserted individually, so no part of it can go missing.
+  //
+  // Issue #2705 / ADR-0158 D2 then collapsed the six per-run evaluations behind
+  // `check:coverage:quality` into ONE invocation covering all four metrics, the per-file floors and
+  // the strict release targets. The chain pin is unchanged; what it points at now evaluates more in
+  // a single parse. `check:coverage:ui` is gone with the duplicate UI execution it judged — the
+  // exactly-once assertion below is what replaced it.
   "npm run test:coverage:packages:shard",
   "npm run test:coverage:packages:merge",
   "npm run test:coverage:scripts",
   "npm run check:coverage:quality",
   "npm run test:coverage:ui",
-  "npm run check:coverage:ui",
   // Browser release proof.
   "npm run test:e2e:smoke",
   "npm run test:e2e:editor-debugging-2348",
@@ -242,9 +248,27 @@ describe("CI test/gate wiring guard", () => {
     expect(rootVitestConfig).toContain("packages/keiko-ui/**");
   });
 
-  it("runs the excluded UI suite in its own required CI job with a coverage ratchet", () => {
-    expect(ci).toContain("npm run test:coverage:ui");
-    expect(ci).toContain("npm run check:coverage:ui");
+  // Issue #2705 / ADR-0158 D4: the pin is relocated and tightened rather than dropped. Before, the
+  // UI suite ran twice — once in `coverage-ui`, once in `ui` — and the second run's ratchet judged a
+  // summary no other step ever read. "The UI job was removed" is still caught (count 0 fails), and
+  // "the UI suite is measured twice again" is now caught too (count 2 fails), which the previous
+  // `toContain` could not see. The ratchet half of the pin moved to the consolidated evaluation,
+  // asserted directly against its arguments below.
+  const runLineCount = (command) =>
+    ci.split("\n").filter((line) => line.trim() === `run: ${command}`).length;
+
+  it("measures each coverage suite exactly once per run", () => {
+    expect(runLineCount("npm run test:coverage:ui")).toBe(1);
+    expect(runLineCount("npm run test:coverage:scripts")).toBe(1);
+    expect(runLineCount("npm run check:coverage:quality")).toBe(1);
+  });
+
+  it("keeps the strict release lines targets inside the one consolidated evaluation", () => {
+    const consolidated = rootManifest.scripts["check:coverage:quality"];
+    expect(consolidated).toContain("--release-target keiko-ui=88");
+    expect(consolidated).toContain("--release-target keiko-cli=87");
+    expect(consolidated).toContain("--all-metrics");
+    expect(consolidated).toContain("--enforce-file-floors");
   });
 
   it("keeps the supported UI compiler and TypeScript 7 compatibility check separate", () => {

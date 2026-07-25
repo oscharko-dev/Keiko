@@ -59,69 +59,12 @@ export default defineConfig({
         "dist/**",
         "node_modules/**",
       ],
-      thresholds: {
-        perFile: true,
-        "scripts/keiko-for-quality-core.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/keiko-for-quality-worker.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/check-lcov-source-mapping.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/check-mutation-quality.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/check-mutation-scope.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/check-sonar-pr-quality-gate.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/check-sonar-analysis-log.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/check-sonar-main-quality-gate.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/sonar-analysis-scope.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/sonar-quality-gate-contract.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-      },
+      // ADR-0158 D1: this configuration declares NO `coverage.thresholds`. The ten gate-script
+      // per-file floors it used to hold live in `docs/qa/package-coverage-baseline.json` as
+      // `governance: "absolute"` entries — one per-file floor engine, one storage location. Keeping
+      // a second copy here would restore exactly the two-engine split this consolidation removed.
+      // Because no vitest configuration judges any more, a shard cannot reach a verdict on its
+      // partial view by construction rather than by a derived shard configuration (ADR-0157 D1).
     },
   },
 });
