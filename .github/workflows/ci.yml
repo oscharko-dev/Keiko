@@ -623,9 +623,6 @@ jobs:
           if [ ! -f "$scanner_zip" ]; then
             curl --proto '=https' -sSfL -o "$scanner_zip" "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-linux-x64.zip"
           fi
-          # NEGATIVE CONTROL for Issue #2704, reverted in the next commit: corrupt the archive so
-          # the pinned digest check below has a tampered artifact to catch.
-          printf 'tampered' >> "$scanner_zip"
           # Re-executed after every cache restore, and fail-closed by design: a restored archive
           # whose digest does not match the pinned value is a tampered artifact, not a stale one.
           # The remediation is to evict the cache entry, never to skip the verification.
