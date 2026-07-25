@@ -22,6 +22,9 @@ Post-merge audit update on 2026-07-05:
 - PR #1850 merged into `dev` at `bf00609e24843e734232e7c3cfc90acf358a7823` after required
   GitHub checks passed, including `ci`, `ui`, CodeQL, dependency review, protected branch gate,
   actionlint, pinned-action verification, and build/scan/SBOM/smoke.
+
+> Since [ADR-0159](../adr/ADR-0159-one-required-context-for-workflow-hygiene.md) (2026-07-25), `actionlint` and pinned-action SHA verification are no longer separate required contexts: they run as steps of the single required `workflow hygiene` context, together with zizmor and the OSV lockfile scan. The names below are what was required when this record was written and are kept as written; `CONTRIBUTING.md` is authoritative for the current set.
+
 - A follow-up audit branch `codex/epic-1816-audit-retrieval-activity` added expanded axe coverage
   for the retrieval activity panel because the original closed-disclosure axe tests did not scan
   the rendered activity region.

@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
+const hygiene = readFileSync(resolve(repoRoot, ".github/workflows/workflow-hygiene.yml"), "utf8");
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
-const osv = readFileSync(resolve(repoRoot, ".github/workflows/osv-scanner.yml"), "utf8");
 
 // ADR-0159: the four workflow-hygiene micro-gates run as serial steps of one job producing the
 // single required `workflow hygiene` context. The bundling is only legitimate while every tool runs
@@ -14,20 +14,14 @@ const osv = readFileSync(resolve(repoRoot, ".github/workflows/osv-scanner.yml"),
 // that is what this file pins, machine-checked rather than asserted in a pull-request description.
 
 // Sliced to the NEXT top-level job key rather than to a named follower, so reordering or removing
-// jobs in ci.yml cannot silently change what these assertions read (the idiom
-// dev-quality-workflows.test.mjs documents for the coverage jobs).
-// The `$` alternative is load-bearing: `scan` is the last job in osv-scanner.yml, so a bound that
-// only accepts a following top-level key reads it as absent and turns a real assertion vacuous.
+// jobs cannot silently change what these assertions read (the idiom dev-quality-workflows.test.mjs
+// documents for the coverage jobs). The `$` alternative is load-bearing: `workflow-hygiene` is the
+// only job in its file, so a bound that requires a following top-level key reads it as absent and
+// turns every assertion below vacuous.
 function jobBlock(source, jobId) {
   const block = new RegExp(` {2}${jobId}:\\n[\\s\\S]*?(?=\\n {2}\\S|$)`, "u").exec(source);
   if (block === null) throw new Error(`job ${jobId} not found`);
   return block[0];
-}
-
-function jobLevelCondition(source, jobId) {
-  const match = / {4}if: (.*)\n/u.exec(jobBlock(source, jobId));
-  if (match === null) throw new Error(`job ${jobId} has no job-level if:`);
-  return match[1];
 }
 
 // A job's steps in order, as { name, condition }. Parsing the steps is what lets an assertion bind
@@ -64,23 +58,22 @@ const GATE_STEPS = [
 // skipping all four and reporting a green required context that checked nothing.
 const GATE_GUARD = "!cancelled() && steps.checkout.outcome != 'failure'";
 
-// The exact trigger condition of the standalone `zizmor` job. Reproducing it character for
-// character at step level is the whole safety argument for moving zizmor into a job that runs
-// unconditionally: a dropped clause silently widens the surface, an added one silently narrows it,
-// and neither is visible in a green run.
+// The exact trigger condition the standalone `zizmor` job carried before ADR-0159 consolidated it.
+// With that job gone this constant is the only record of the shape outside the workflow itself, and
+// that is the point: a dropped clause silently widens zizmor's surface, an added one silently
+// narrows it, and neither is visible in a green run.
 const ZIZMOR_TRIGGER =
   "(github.event_name == 'pull_request' && github.base_ref == 'dev') || " +
   "(github.event_name == 'push' && github.ref == 'refs/heads/dev') || " +
   "github.event_name == 'merge_group'";
 
 // What each tool invocation IS, at the granularity that decides whether the check still checks the
-// same thing. Every fingerprint must appear in the bundled job; while the standalone jobs still
-// exist (ADR-0159 D4 phase 1) it must appear there too, which is what makes "same checks" a test
-// rather than a claim.
+// same thing. These are the four standalone jobs' invocations character for character; the jobs
+// themselves are gone (ADR-0159 phase 3), so this list is now the only record of what the context
+// promised to keep running, and every entry must appear in the bundled job.
 const TOOL_INVOCATIONS = [
   {
     tool: "actionlint",
-    standalone: { source: ci, jobId: "actionlint" },
     fingerprints: [
       "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz",
       "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz",
@@ -90,7 +83,6 @@ const TOOL_INVOCATIONS = [
   },
   {
     tool: "pinned-SHA grep",
-    standalone: { source: ci, jobId: "verify-pinned-shas" },
     fingerprints: [
       "grep -rnE '^\\s*-?\\s*uses:' .github/workflows/",
       "grep -vE 'uses:\\s*\\./'",
@@ -100,7 +92,6 @@ const TOOL_INVOCATIONS = [
   },
   {
     tool: "zizmor",
-    standalone: { source: ci, jobId: "zizmor" },
     fingerprints: [
       "zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02",
       'version: "1.26.1"',
@@ -111,7 +102,6 @@ const TOOL_INVOCATIONS = [
   },
   {
     tool: "OSV Scanner",
-    standalone: { source: osv, jobId: "scan" },
     fingerprints: [
       "google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2",
       "--config=osv-scanner.toml",
@@ -124,11 +114,11 @@ describe("bundled workflow hygiene job", () => {
   it("produces the check context named in the branch-protection required list", () => {
     // The context string is the job's `name:` byte for byte (ADR-0002). A typo here is not a failing
     // check, it is a required context that never reports and a pull request blocked forever.
-    expect(jobBlock(ci, BUNDLED_JOB)).toContain("name: workflow hygiene\n");
+    expect(jobBlock(hygiene, BUNDLED_JOB)).toContain("name: workflow hygiene\n");
   });
 
   it.each(TOOL_INVOCATIONS)("runs $tool at the pinned version it ran at before", (invocation) => {
-    const bundled = jobBlock(ci, BUNDLED_JOB);
+    const bundled = jobBlock(hygiene, BUNDLED_JOB);
     for (const fingerprint of invocation.fingerprints) {
       expect(bundled, `bundled job must invoke ${invocation.tool} unchanged`).toContain(
         fingerprint,
@@ -137,7 +127,7 @@ describe("bundled workflow hygiene job", () => {
   });
 
   it("runs zizmor on exactly the events the standalone job ran it on", () => {
-    const bundled = jobBlock(ci, BUNDLED_JOB);
+    const bundled = jobBlock(hygiene, BUNDLED_JOB);
     // The guard composes with the trigger, it does not replace it: a job never skips because a
     // sibling job failed, so this is what makes a step behave like the independent job it came
     // from. It can only narrow the guard, never widen the trigger.
@@ -145,9 +135,9 @@ describe("bundled workflow hygiene job", () => {
   });
 
   it("reads exactly the one job it claims to read", () => {
-    // In phase 1 the same fingerprints also live in the three standalone jobs of this same file, so
-    // an over-matching slice would satisfy every assertion above while reading a different job.
-    const [first, ...rest] = jobBlock(ci, BUNDLED_JOB).split("\n");
+    // An over-matching slice would satisfy every assertion above while reading something else; with
+    // `$` as a bound that is the failure mode to guard, not under-matching.
+    const [first, ...rest] = jobBlock(hygiene, BUNDLED_JOB).split("\n");
     expect(first).toBe(`  ${BUNDLED_JOB}:`);
     expect(rest.filter((line) => line !== "" && !line.startsWith("    "))).toEqual([]);
   });
@@ -156,7 +146,7 @@ describe("bundled workflow hygiene job", () => {
     // Four independent jobs gave this for free. Serial steps do not: without the guard an actionlint
     // finding hides a lockfile vulnerability until the next round, buying fewer contexts with more
     // repair rounds. It never softens the verdict - a failed step fails the job regardless.
-    const steps = jobSteps(ci, BUNDLED_JOB);
+    const steps = jobSteps(hygiene, BUNDLED_JOB);
     // Order is pinned because the exemption below depends on it: `Run actionlint` needs no guard
     // only while nothing but the checkout and its own prerequisite run ahead of it.
     expect(steps.map((step) => step.name)).toEqual([
@@ -173,10 +163,10 @@ describe("bundled workflow hygiene job", () => {
   });
 
   it("skips every gate that lost the workspace instead of reporting over an empty one", () => {
-    const steps = jobSteps(ci, BUNDLED_JOB);
+    const steps = jobSteps(hygiene, BUNDLED_JOB);
     // The guard names the checkout step, so the checkout has to carry that id or every guard is
     // false and the whole job silently skips its gates while concluding success.
-    expect(jobBlock(ci, BUNDLED_JOB)).toMatch(/\n {8}id: checkout\n/u);
+    expect(jobBlock(hygiene, BUNDLED_JOB)).toMatch(/\n {8}id: checkout\n/u);
     for (const step of steps) {
       if (step.condition === null) continue;
       expect(step.condition, `${step.name} must require the checkout it reads`).toContain(
@@ -186,17 +176,17 @@ describe("bundled workflow hygiene job", () => {
   });
 
   it("fails the single context closed on any step", () => {
-    expect(jobBlock(ci, BUNDLED_JOB)).not.toContain("continue-on-error");
+    expect(jobBlock(hygiene, BUNDLED_JOB)).not.toContain("continue-on-error");
   });
 
   it("bounds the required context with the timeout ADR-0159 D3 decides", () => {
     // Without it a stalled scanner sits on GitHub's six-hour default and the required context never
     // reports. The number is the ADR's, so tuning it is a decision-record change, not a test edit.
-    expect(jobBlock(ci, BUNDLED_JOB)).toMatch(/\n {4}timeout-minutes: 15\n/u);
+    expect(jobBlock(hygiene, BUNDLED_JOB)).toMatch(/\n {4}timeout-minutes: 15\n/u);
   });
 
   it("uses read-only repository permissions and disables checkout credentials", () => {
-    const bundled = jobBlock(ci, BUNDLED_JOB);
+    const bundled = jobBlock(hygiene, BUNDLED_JOB);
     // The whole mapping, not a substring hunt: `contents: read` is the only key, so the job cannot
     // quietly gain a write scope. Searching the block for "write" would instead fail on the word
     // appearing in a comment, and pass on a scope smuggled in above the first `permissions:`.
@@ -206,25 +196,24 @@ describe("bundled workflow hygiene job", () => {
 
   it("aggregates no check run, so no required check depends on another", () => {
     // ADR-0135 D3. This job executes tools directly; the `ci` aggregate must never wait on it, or
-    // one required context would gate another.
+    // one required context would gate another. Now cross-workflow, which `needs:` cannot express -
+    // so the assertion is that ci.yml never learns the name at all.
     expect(jobBlock(ci, "ci")).not.toContain(BUNDLED_JOB);
   });
 });
 
-// ADR-0159 D4 phase 1: the bundle is added while the four micro-gates keep executing and keep being
-// required, so both shapes produce green contexts on every pull request and the bundle can be
-// observed before it is trusted. Phase 3 removes these jobs - strictly after the owner's atomic
-// branch-protection swap - and this block goes with them; it is scoped to the phase by name and by
-// that ADR reference, not relaxed into vacuity.
-describe("workflow hygiene rollout phase 1 - no protection gap", () => {
-  it.each(TOOL_INVOCATIONS)("still runs $tool in its own required context", (invocation) => {
-    const standalone = jobBlock(invocation.standalone.source, invocation.standalone.jobId);
-    for (const fingerprint of invocation.fingerprints) {
-      expect(standalone).toContain(fingerprint);
-    }
+// ADR-0159 phase 3 closed the rollout: branch protection requires `workflow hygiene`, the four
+// micro-jobs are gone, and the bundle owns its own workflow file so its trigger surface can be the
+// union of the four it replaced instead of ci.yml's.
+describe("workflow hygiene trigger surface", () => {
+  it("keeps the deny-all default and a manual lane", () => {
+    expect(hygiene).toMatch(/\npermissions: \{\}\n/u);
+    expect(hygiene).toMatch(/\n {2}workflow_dispatch:\n/u);
   });
 
-  it("derives the bundled zizmor condition from the standalone job, not from a copy", () => {
-    expect(jobLevelCondition(ci, "zizmor")).toBe(`\${{ ${ZIZMOR_TRIGGER} }}`);
+  it("does not leave a second producer of the same context behind", () => {
+    // Two workflows emitting a job named `workflow hygiene` would race for one required context.
+    expect(ci).not.toContain("workflow-hygiene");
+    expect(ci).not.toContain("name: workflow hygiene");
   });
 });

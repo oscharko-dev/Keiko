@@ -101,6 +101,8 @@ Required GitHub `ci` remains the merge gate for the final PR. Relevant static an
 actionlint, pinned action SHA verification, npm audit, SBOM/license gates, build/package smoke, and
 platform smoke jobs.
 
+> Since [ADR-0159](../adr/ADR-0159-one-required-context-for-workflow-hygiene.md) (2026-07-25), `actionlint` and pinned-action SHA verification are no longer separate required contexts: they run as steps of the single required `workflow hygiene` context, together with zizmor and the OSV lockfile scan. The names below are what was required when this record was written and are kept as written; `CONTRIBUTING.md` is authoritative for the current set.
+
 Qodana is not configured as a separate repository gate. CodeQL is present as a workflow, but it is not
 configured as a required gate for `feat/keiko-repository-centered-desktop-workflow`; adding or changing
 CodeQL branch coverage is outside #1578 unless maintainers explicitly request it.
