@@ -16,6 +16,21 @@ set -euo pipefail
 suite="${1:-fast}"
 failed=()
 
+# Skips a gate whose npm script does not exist on this branch instead of reporting a failure: the
+# suite must stay usable while a branch is mid-way through adding or removing a check.
+has_script() {
+  node -e "process.exit(require('./package.json').scripts['$1'] ? 0 : 1)" 2>/dev/null
+}
+
+step_script() {
+  local label="$1" script="$2"
+  if has_script "$script"; then
+    step "$label" npm run "$script"
+  else
+    printf '\n\033[2m– %s (not present on this branch)\033[0m\n' "$label"
+  fi
+}
+
 step() {
   local label="$1"
   shift
@@ -25,6 +40,26 @@ step() {
   else
     printf '\033[31m✘ %s\033[0m\n' "$label"
     failed+=("$label")
+  fi
+}
+
+# A git worktree's .git file points at the parent checkout, which is outside this mount, so git
+# inside the container reports a path that does not exist. Detect it once and say so plainly rather
+# than letting each git-dependent gate fail with an opaque status 128.
+git_usable=1
+if ! git -C /repo rev-parse --git-dir > /dev/null 2>&1; then
+  git_usable=0
+  printf '\033[33m! git is not usable in this container (linked worktree or missing .git).\033[0m\n'
+  printf '  Gates that inspect the git index are skipped. Run them from a normal clone, or mount\n'
+  printf '  the parent checkout as well. Everything else below is unaffected.\n'
+fi
+
+step_git() {
+  local label="$1" script="$2"
+  if [ "$git_usable" = "1" ]; then
+    step_script "$label" "$script"
+  else
+    printf '\n\033[2m– %s (skipped: git unavailable)\033[0m\n' "$label"
   fi
 }
 
@@ -40,8 +75,8 @@ step "lint (keiko-ui)" npm run lint --workspace @oscharko-dev/keiko-ui
 step "format:check" npm run format:check
 step "arch:check" npm run arch:check
 step "adr-index" npm run check:adr-index
-step "dependency-hygiene" npm run check:dependency-hygiene
-step "osv-waiver-scope" npm run check:osv-waiver-scope
+step_git "dependency-hygiene" check:dependency-hygiene
+step_script "osv-waiver-scope" check:osv-waiver-scope
 step "audit (shipped graph)" npm audit --audit-level=high --omit=dev
 
 if [ "$suite" != "fast" ]; then

@@ -49,4 +49,10 @@ ENV NODE_OPTIONS=--max-old-space-size=8192
 # swapping platform-native binaries in a shared tree corrupts both sides.
 ENV npm_config_cache=/opt/npm-cache
 
+# The bind-mounted checkout belongs to the host user, not to root inside the container. Git refuses
+# to operate on it ("dubious ownership") since 2.35.2, which makes every gate that inspects the
+# index — dependency hygiene, the i18n guard, the D12 subject digest — fail with a status 128 that
+# says nothing about the real cause.
+RUN git config --global --add safe.directory /repo
+
 WORKDIR /repo

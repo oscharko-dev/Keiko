@@ -37,6 +37,13 @@ both. `node_modules` deliberately lives in that volume rather than a bind mount:
 and a Linux container cannot share one install without swapping platform-native binaries under each
 other.
 
+## Git worktrees
+
+A linked worktree's `.git` is a file pointing at the parent checkout, which is outside the mount, so
+git inside the container cannot resolve it. The suite detects this, says so, and skips only the
+gates that read the git index; everything else runs normally. Run those few from a normal clone, or
+add the parent checkout as a second mount.
+
 ## What is authoritative here — and what is not
 
 **Reliable in this container.** Anything deterministic: type checking, linting, formatting,
