@@ -1958,13 +1958,45 @@ describe("evaluateFreshness — pull-request mode (source freshness owned by the
     expect(result).toEqual({ passed: true, failures: [] });
   });
 
-  it("still rejects measurement-toolchain drift (changing the ruler always requires re-measuring)", () => {
+  it("still rejects measurement-toolchain drift when the diff moved the ruler", () => {
     const failures = evaluateFreshness(editorEvidence(), {
       computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
       computeLockfileSha256: () => "a".repeat(64),
       computeMeasurementHarnessSha256: () => "e".repeat(64),
       computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
       isAncestor,
+      toolchainTouched: true,
+    }).failures;
+
+    expect(failures.join("\n")).toMatch(/stale D12 measurement toolchain evidence/u);
+  });
+
+  // The other half of the same invariant: a diff that leaves the toolchain alone cannot be the
+  // reason evidence was measured with a different ruler, and must not be failed for it. Without
+  // this, one pull request editing a D12_MEASUREMENT_TOOLCHAIN_PATHS member turns the required
+  // check red on every other open pull request, with no fix available inside those diffs.
+  it("does not fail a diff that leaves the measurement toolchain untouched", () => {
+    const failures = evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => "a".repeat(64),
+      computeMeasurementHarnessSha256: () => "e".repeat(64),
+      computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+      isAncestor,
+      toolchainTouched: false,
+    }).failures;
+
+    expect(failures.join("\n")).not.toMatch(/stale D12 measurement toolchain evidence/u);
+  });
+
+  it("still enforces toolchain freshness in the regeneration lane regardless of the diff", () => {
+    const failures = evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => D12_LOCKFILE_SHA_256_BY_REVISION.candidate,
+      computeMeasurementHarnessSha256: () => "e".repeat(64),
+      computeSourceTreeSha256: computeMatchingSourceTreeSha256,
+      enforceSourceFreshness: true,
+      isAncestor,
+      toolchainTouched: false,
     }).failures;
 
     expect(failures.join("\n")).toMatch(/stale D12 measurement toolchain evidence/u);
@@ -2006,6 +2038,7 @@ describe("evaluateFreshness — pull-request mode (source freshness owned by the
       computeMeasurementHarnessSha256: () => currentDigest,
       computeSourceTreeSha256: computeMatchingSourceTreeSha256,
       isAncestor,
+      toolchainTouched: true,
     });
 
     expect(result.failures).toContain(

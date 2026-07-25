@@ -22,7 +22,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import { computeD12MeasurementToolchainDigest } from "./d12-measurement-toolchain.mjs";
+import {
+  computeD12MeasurementToolchainDigest,
+  D12_MEASUREMENT_TOOLCHAIN_PATHS,
+} from "./d12-measurement-toolchain.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
@@ -211,6 +214,26 @@ export function computePerformanceSubjectDigestAtCommit(options = {}) {
   const readTrackedFile =
     options.readTrackedFileAtCommit ?? ((path) => readTrackedFileAtCommit(root, commit, path));
   return computePerformanceSubjectDigest({ trackedPaths, readTrackedFile });
+}
+
+// True when the change under test edits the D12 measurement toolchain itself. Only then does the
+// pull-request lane owe a re-measurement: a diff that leaves the ruler alone cannot be responsible
+// for evidence measured with a different one, and must not be blocked by it (ADR-0139 D10).
+export function toolchainTouchedAgainst(baseRef, root = repoRoot) {
+  if (typeof baseRef !== "string" || baseRef.length === 0) return false;
+  let output;
+  try {
+    output = execFileSync(
+      resolveHostExecutable("git"),
+      ["diff", "--name-only", "-z", `${baseRef}...HEAD`, "--"],
+      { cwd: root, encoding: "utf8" },
+    );
+  } catch {
+    // An unresolvable base ref must not silently disable the check: fail towards evaluating it.
+    return true;
+  }
+  const changed = new Set(output.split("\0").filter((entry) => entry.length > 0));
+  return D12_MEASUREMENT_TOOLCHAIN_PATHS.some((entry) => changed.has(entry));
 }
 
 export function listDirtyPerformanceSubjectPaths(root = repoRoot) {
@@ -2794,13 +2817,14 @@ function evaluateFreshnessBinding(evidence, isAncestor, computeSourceTreeSha256,
 //     exact source-tree equality, the current lockfile, and a clean subject working tree. Used by
 //     the regeneration wrapper right after producing evidence (where the tree matches by
 //     construction) and available to the nightly lane for drift diagnosis.
-// The always-on integrity set: stamps, binding shape, pinned-baseline anchor, toolchain digest.
+// The always-on integrity set: stamps, binding shape, and the pinned-baseline anchor.
 function integrityFreshnessFailures(evidence, options, enforceSourceFreshness) {
   const {
     computeBaselineSourceTreeSha256 = defaultComputeBaselineSourceTreeSha256,
     computeMeasurementHarnessSha256 = defaultComputeMeasurementHarnessSha256,
     computeSourceTreeSha256 = computePerformanceSubjectDigest,
     isAncestor = defaultIsAncestor,
+    toolchainTouched = false,
   } = options;
   return [
     ...evaluateCommitStamp(evidence.commit),
@@ -2813,7 +2837,15 @@ function integrityFreshnessFailures(evidence, options, enforceSourceFreshness) {
       enforceSourceFreshness,
     ),
     ...evaluateCurrentD12BaselineDigest(evidence, computeBaselineSourceTreeSha256),
-    ...evaluateCurrentD12ToolchainDigest(evidence, computeMeasurementHarnessSha256),
+    // Changing the ruler still requires re-measuring with it — but only the change that moved the
+    // ruler answers for that. This digest compares the evidence against the CURRENT tree, so an
+    // unconditional check here fails every OTHER open pull request the moment one of them edits a
+    // D12_MEASUREMENT_TOOLCHAIN_PATHS member: a required check gone red with no fix available
+    // inside the diff that trips it. The enforcing lane always evaluates it; the pull-request lane
+    // evaluates it exactly when the diff touches the toolchain (ADR-0139 D10).
+    ...(enforceSourceFreshness || toolchainTouched
+      ? evaluateCurrentD12ToolchainDigest(evidence, computeMeasurementHarnessSha256)
+      : []),
   ];
 }
 
@@ -2899,9 +2931,13 @@ function evaluateGateTarget(target, freshnessOptions, okLine) {
 
 function runGate(targetName = "all", enforceSourceFreshness = false) {
   const lines = gateModeLines(enforceSourceFreshness);
+  // KEIKO_PERF_EVIDENCE_BASE_REF is the pull request's merge base. When it is absent — the nightly
+  // and regeneration lanes — the toolchain digest is evaluated unconditionally anyway.
+  const baseRef = process.env.KEIKO_PERF_EVIDENCE_BASE_REF ?? "";
   const freshnessOptions = {
     dirtySubjectPaths: enforceSourceFreshness ? listDirtyPerformanceSubjectPaths() : [],
     enforceSourceFreshness,
+    toolchainTouched: enforceSourceFreshness || baseRef === "" || toolchainTouchedAgainst(baseRef),
   };
   const allFailures = selectGateTargets(targetName).flatMap((target) =>
     evaluateGateTarget(target, freshnessOptions, lines.ok),

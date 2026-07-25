@@ -653,6 +653,12 @@ jobs:
       # make it valid across the signed squash and across merge-queue integration.
       - name: Validate immutable editor D12 performance evidence
         if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        # The base ref scopes the measurement-toolchain freshness check to diffs that actually move
+        # the ruler. Integrity, budgets and the pinned-baseline anchor are checked unconditionally;
+        # only the "was this measured with the current toolchain" question is the responsibility of
+        # the change that altered it, not of every other open pull request (ADR-0139 D10).
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: npm run check:perf-evidence:editor
       - name: Performance evidence freshness + budget gate
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
