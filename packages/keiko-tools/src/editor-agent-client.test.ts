@@ -166,18 +166,27 @@ describe("EditorAgentHttpClient", () => {
     { timeoutMs: 1, queryGitTimeoutMs: 0, maxResponseBytes: 1 },
     { timeoutMs: 1, maxResponseBytes: 0 },
     { timeoutMs: 1.5, maxResponseBytes: 1 },
-  ])("rejects invalid HTTP bounds %#", ({ timeoutMs, queryGitTimeoutMs, maxResponseBytes }) => {
-    expect(
-      () =>
-        new EditorAgentHttpClient({
-          baseUrl: "http://localhost:1983",
-          transport: transportWith("{}"),
-          timeoutMs,
-          queryGitTimeoutMs,
-          maxResponseBytes,
-        }),
-    ).toThrow("HTTP bounds must be positive");
-  });
+    // Issue #2713: languageTimeoutMs joined the same validation, so it belongs in the same table —
+    // an explicit override bypasses the floor, which is exactly when a bad value must still be caught.
+    { timeoutMs: 1, languageTimeoutMs: 0, maxResponseBytes: 1 },
+    { timeoutMs: 1, languageTimeoutMs: -1, maxResponseBytes: 1 },
+    { timeoutMs: 1, languageTimeoutMs: 1.5, maxResponseBytes: 1 },
+  ])(
+    "rejects invalid HTTP bounds %#",
+    ({ timeoutMs, queryGitTimeoutMs, languageTimeoutMs, maxResponseBytes }) => {
+      expect(
+        () =>
+          new EditorAgentHttpClient({
+            baseUrl: "http://localhost:1983",
+            transport: transportWith("{}"),
+            timeoutMs,
+            queryGitTimeoutMs,
+            languageTimeoutMs,
+            maxResponseBytes,
+          }),
+      ).toThrow("HTTP bounds must be positive");
+    },
+  );
 
   it("adds the BFF mutation guard only to POST requests", async () => {
     const seen: (RequestInit | undefined)[] = [];
