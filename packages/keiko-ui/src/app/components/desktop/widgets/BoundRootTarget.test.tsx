@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import {
@@ -234,6 +235,21 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
 
     expect(screen.queryByTestId("bound-root-denied-problems")).toBeNull();
     expect(child).toHaveBeenCalledWith("/repo/b");
+  });
+
+  it("keeps the denied surface accessible", async () => {
+    const { container } = render(
+      <BoundRootTarget
+        fallbackRoot="/repo/a"
+        configuredRoot={undefined}
+        lockedToActiveRoot={false}
+        surface="terminal"
+        onSelect={vi.fn()}
+      >
+        {(bound) => <div>child:{bound}</div>}
+      </BoundRootTarget>,
+    );
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("stops denying as soon as the human names a root", () => {
