@@ -55,9 +55,13 @@ describe("dev quality workflows", () => {
       /- name: Performance evidence freshness \+ budget gate\n[\s\S]*?(?=\n\s+- name: Build package and UI assets)/u,
     )?.[0];
     expect(uiJob).toBeDefined();
-    expect(uiJob).toContain("Test UI with coverage (jsdom + axe a11y)");
-    expect(uiJob).toContain("UI coverage ratchet");
     expect(uiJob).toContain("Release smoke E2E");
+    // Issue #2705 / ADR-0158 D4: the two jsdom coverage steps this job used to own were the second,
+    // discarded execution of a suite `coverage-ui` already measures for the whole lane. Their
+    // enforcement is asserted at its new home in the block below; here the pin is inverted, so the
+    // duplicate execution cannot quietly come back.
+    expect(uiJob).not.toContain("npm run test:coverage:ui");
+    expect(uiJob).not.toContain("npm run check:coverage");
     // ADR-0139 D7: hosted workspace-perf refresh and the freshness gate run post-merge only
     // (push/dispatch), while the immutable editor D12 evidence is validated on PRs and merge groups.
     expect(performanceStep).toContain(
@@ -152,6 +156,10 @@ describe("dev quality workflows", () => {
     expect(coverageJob).toContain("needs.coverage-ui.result");
     // Reassembly must precede every evaluation: a per-file floor read off a shard-local summary
     // under-reports.
+    // Issue #2705 / ADR-0158 D4: with the `ui` job's duplicate execution removed, this download is
+    // the ONLY way keiko-ui's summary reaches the ratchet, the strict 88 release target and Sonar.
+    // If it is dropped, the consolidated evaluation loses its keiko-ui input entirely.
+    expect(coverageJob).toContain("Download keiko-ui coverage evidence");
     const mergeAt = coverageJob.indexOf("npm run test:coverage:packages:merge");
     const judgeAt = coverageJob.indexOf("npm run check:coverage:quality");
     const scanAt = coverageJob.indexOf("SonarCloud CI-based analysis");

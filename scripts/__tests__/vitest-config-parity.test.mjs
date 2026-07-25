@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,34 +16,18 @@ const repoRoot = resolve(here, "..", "..");
 const EXPECTED_TIMEOUT_MS = 15_000;
 
 const JUDGING_COVERAGE_CONFIG = "vitest.coverage.packages.config.ts";
-const MEASURING_COVERAGE_CONFIG = "vitest.coverage.packages.shard.config.ts";
-
-// Issue #2704: the package coverage suite runs as parallel shards, each producing a blob report
-// that the finalizing job merges before any floor is evaluated. The shard configuration therefore
-// exists, and the ONE difference it is allowed to have from the judging configuration is the
-// absence of `coverage.thresholds` — the verdict a shard must not reach on a partial view.
-const GATE_SCRIPT_FLOOR = { branches: 85, functions: 90, lines: 90, statements: 90 };
-const EXPECTED_GATE_SCRIPT_FLOORS = {
-  "scripts/keiko-for-quality-core.mjs": GATE_SCRIPT_FLOOR,
-  "scripts/keiko-for-quality-worker.mjs": GATE_SCRIPT_FLOOR,
-  "scripts/check-lcov-source-mapping.mjs": GATE_SCRIPT_FLOOR,
-  "scripts/check-mutation-quality.mjs": GATE_SCRIPT_FLOOR,
-  "scripts/check-mutation-scope.mjs": GATE_SCRIPT_FLOOR,
-  "scripts/check-sonar-pr-quality-gate.mjs": GATE_SCRIPT_FLOOR,
-  "scripts/check-sonar-analysis-log.mjs": GATE_SCRIPT_FLOOR,
-  "scripts/check-sonar-main-quality-gate.mjs": GATE_SCRIPT_FLOOR,
-  "scripts/sonar-analysis-scope.mjs": GATE_SCRIPT_FLOOR,
-  "scripts/sonar-quality-gate-contract.mjs": GATE_SCRIPT_FLOOR,
-};
 
 const CONFIGS = [
   { name: "root suite", path: "vitest.config.ts" },
   { name: "package coverage gate", path: JUDGING_COVERAGE_CONFIG },
-  { name: "package coverage shard", path: MEASURING_COVERAGE_CONFIG },
   { name: "script coverage gate", path: "vitest.coverage.scripts.config.ts" },
   { name: "keiko-ui coverage gate", path: "packages/keiko-ui/vitest.coverage.config.ts" },
   { name: "keiko-ui suite", path: "packages/keiko-ui/vitest.config.ts" },
 ];
+
+function readPackageScripts() {
+  return JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")).scripts;
+}
 
 async function loadConfig(relativePath) {
   const mod = await import(resolve(repoRoot, relativePath));
@@ -82,57 +67,37 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
   });
 
   // GEN-TEST-FLAKE-002 is a per-process guarantee, and a shard is a process. Sharding across
-  // runners must not become a way to raise worker concurrency past the deliberate cap.
-  it("keeps every package coverage shard at the same bounded worker count", async () => {
-    expect(await loadMaxWorkers(MEASURING_COVERAGE_CONFIG)).toBe(2);
+  // runners must not become a way to raise worker concurrency past the deliberate cap. Issue #2705
+  // retired the separate shard configuration, so a shard inherits the pinned cap above by using the
+  // one package coverage configuration — which is what this now asserts.
+  it("keeps every package coverage shard at the same bounded worker count", () => {
+    const scripts = readPackageScripts();
+    expect(scripts["test:coverage:packages:shard"]).toContain(
+      `--config ${JUDGING_COVERAGE_CONFIG}`,
+    );
+    expect(scripts["test:coverage:packages:merge"]).toContain(
+      `--config ${JUDGING_COVERAGE_CONFIG}`,
+    );
   });
 });
 
-describe("package coverage shard configuration (Issue #2704)", () => {
-  // Scope, stated honestly: while the shard configuration derives itself by spreading the judging
-  // one, most of these comparisons hold by construction. They exist for the day someone replaces
-  // that derivation with a hand-written copy — which is exactly when drift becomes possible, and
-  // exactly when this fails. The unconditionally load-bearing assertion is the floor pin below.
-  it("differs from the judging configuration in nothing but the coverage thresholds", async () => {
-    const [judging, measuring] = await Promise.all([
-      loadConfig(JUDGING_COVERAGE_CONFIG),
-      loadConfig(MEASURING_COVERAGE_CONFIG),
-    ]);
-
-    expect(Object.keys(measuring).sort()).toEqual(Object.keys(judging).sort());
-    for (const key of Object.keys(judging).filter((entry) => entry !== "test")) {
-      expect(measuring[key], `top-level key "${key}" drifted`).toEqual(judging[key]);
-    }
-
-    expect(Object.keys(measuring.test).sort()).toEqual(Object.keys(judging.test).sort());
-    for (const key of Object.keys(judging.test).filter((entry) => entry !== "coverage")) {
-      expect(measuring.test[key], `test.${key} drifted`).toEqual(judging.test[key]);
-    }
-
-    const judgingCoverage = judging.test.coverage;
-    const measuringCoverage = measuring.test.coverage;
-    expect(Object.keys(measuringCoverage).sort()).toEqual(
-      Object.keys(judgingCoverage)
-        .filter((key) => key !== "thresholds")
-        .sort(),
-    );
-    for (const key of Object.keys(measuringCoverage)) {
-      expect(measuringCoverage[key], `test.coverage.${key} drifted`).toEqual(judgingCoverage[key]);
-    }
-  });
-
-  it("never lets a shard reach a coverage verdict on its partial view", async () => {
-    const measuring = await loadConfig(MEASURING_COVERAGE_CONFIG);
-    expect(measuring.test.coverage.thresholds).toBeUndefined();
-  });
-
-  // The floors themselves are the thing sharding must not touch. Pinning their numeric values here
-  // means a future topology change cannot quietly drop or lower one while the diff still looks like
-  // plumbing (Issue #2704 acceptance criterion "no threshold drops").
-  it("keeps the judged per-file floors at their governed values", async () => {
-    const judging = await loadConfig(JUDGING_COVERAGE_CONFIG);
-    const { perFile, ...gateScriptFloors } = judging.test.coverage.thresholds;
-    expect(perFile).toBe(true);
-    expect(gateScriptFloors).toEqual(EXPECTED_GATE_SCRIPT_FLOORS);
-  });
+// Issue #2704 introduced `vitest.coverage.packages.shard.config.ts` because vitest evaluates
+// `coverage.thresholds` at the end of EVERY run: a shard measuring a third of the test files would
+// judge its partial view against floors describing the whole suite. Issue #2705 moved those ten
+// per-file floors into the single floor store (`docs/qa/package-coverage-baseline.json`), so no
+// vitest configuration judges anything any more and the derived shard configuration was retired.
+//
+// ADR-0157 D1's property is therefore no longer maintained by a second configuration file — it is
+// structural, and this is the pin that keeps it structural. A `coverage.thresholds` block
+// reappearing in any configuration re-creates both the sharding hazard and the two-engine split.
+describe("no vitest configuration reaches a coverage verdict (ADR-0157 D1, ADR-0158 D1)", () => {
+  for (const { name, path } of CONFIGS) {
+    it(`${name} (${path}) declares no coverage thresholds`, async () => {
+      const config = await loadConfig(path);
+      expect(
+        config?.test?.coverage?.thresholds,
+        `${path} must not judge: per-file floors live in docs/qa/package-coverage-baseline.json`,
+      ).toBeUndefined();
+    });
+  }
 });

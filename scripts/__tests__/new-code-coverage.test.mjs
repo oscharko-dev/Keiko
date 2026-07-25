@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,6 +11,7 @@ import {
   parseLcov,
 } from "../lib/new-code-coverage.mjs";
 import {
+  LCOV_CANDIDATES,
   evaluate,
   main,
   normaliseLcovPaths,
@@ -84,8 +89,9 @@ describe("parseLcov", () => {
     expect(merged.get("x.ts").lines.get(1)).toBe(3);
   });
 
-  // Overlapping reports are the normal case: coverage/lcov.info and coverage/ui/lcov.info can both
-  // carry the same file. Appending instead of merging double-counted every condition.
+  // Overlapping reports are the normal case: coverage/packages/lcov.info and
+  // coverage/scripts/lcov.info can both carry the same file (the packages suite measures the gate
+  // scripts). Appending instead of merging double-counted every condition.
   it("merges branch identities across concatenated reports instead of appending", () => {
     const merged = parseLcov(
       [
@@ -394,5 +400,26 @@ describe("the coverage entry point", () => {
     }
     expect(exitCodes).toEqual([1]);
     expect(errors.join("\n")).toContain("no LCOV report found");
+  });
+});
+
+// ADR-0158: this script is the LOCAL MIRROR of SonarCloud's `new_coverage` condition, and a mirror
+// is only a mirror while it reads the same evidence. The two lists drifted once in each direction
+// at the same time — an extra `coverage/lcov.info` Sonar does not ingest, and a `coverage/ui/`
+// path nothing writes standing in for the real keiko-ui report, which silently measured zero
+// keiko-ui new code. Nothing compared them, so nothing failed. This is that comparison.
+describe("LCOV mirror stays identical to Sonar's ingested reports", () => {
+  it("reads exactly sonar.javascript.lcov.reportPaths, in no particular order", () => {
+    const properties = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "sonar-project.properties"),
+      "utf8",
+    );
+    const line = properties
+      .split(/\r?\n/u)
+      .find((candidate) => candidate.startsWith("sonar.javascript.lcov.reportPaths="));
+
+    expect(line, "sonar-project.properties declares no LCOV report paths").toBeDefined();
+    const sonarPaths = line.slice("sonar.javascript.lcov.reportPaths=".length).split(",");
+    expect([...LCOV_CANDIDATES].sort()).toEqual([...sonarPaths].sort());
   });
 });
