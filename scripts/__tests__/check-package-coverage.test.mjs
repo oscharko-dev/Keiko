@@ -16,6 +16,7 @@ import {
   evaluateReleaseTargets,
   listPackages,
   parseArgs,
+  runCli,
   selectedMetrics,
 } from "../check-package-coverage.mjs";
 import { KEIKO_REPOSITORY_GATE_CONTRACT } from "../sonar-quality-gate-contract.mjs";
@@ -681,5 +682,150 @@ describe("committed coverage baseline governs the migrated floors", () => {
       ([, entry]) => entry.tolerance > ceilings[entry.governance],
     );
     expect(widened).toEqual([]);
+  });
+});
+
+// ADR-0158 D2: one process now reaches every coverage verdict, so the CLI layer that composes and
+// reports them is load-bearing rather than plumbing. These drive `runCli` end to end over fixture
+// evidence: each failure class has to reach a nonzero exit code AND name itself on stderr, because
+// a gate that fails silently and a gate that passes are the same thing to CI.
+describe("runCli", () => {
+  let root;
+  let out;
+  let err;
+  let restore;
+
+  function capture() {
+    const previousExitCode = process.exitCode;
+    const log = console.log;
+    const error = console.error;
+    out = [];
+    err = [];
+    console.log = (message) => out.push(String(message));
+    console.error = (message) => err.push(String(message));
+    restore = () => {
+      console.log = log;
+      console.error = error;
+      process.exitCode = previousExitCode;
+    };
+    process.exitCode = undefined;
+  }
+
+  function fixture({ lines = 90, floors, extraFiles = {} } = {}) {
+    root = makeRoot();
+    writeJson(root, "packages/keiko-a/package.json", { name: "@oscharko-dev/keiko-a" });
+    writeJson(root, "coverage/packages/coverage-summary.json", {
+      total: file(0, 0),
+      [join(root, "packages/keiko-a/src/a.ts")]: file(lines, 100),
+      ...extraFiles,
+    });
+    writeJson(root, "packages/keiko-ui/coverage/coverage-summary.json", { total: file(0, 0) });
+    writeJson(root, "baseline.json", {
+      schemaVersion: COVERAGE_BASELINE_SCHEMA_VERSION,
+      target: CONSTITUTIONAL_COVERAGE_MINIMUM,
+      metric: "lines",
+      packages: {
+        "keiko-a": { coverage: { lines: 90, statements: 90, branches: 90, functions: 90 } },
+      },
+      ...(floors === undefined ? {} : { fileFloors: floors }),
+    });
+  }
+
+  const run = (...argv) =>
+    runCli(["--root", root, "--baseline", join(root, "baseline.json"), ...argv]);
+
+  afterEach(() => {
+    restore?.();
+    restore = undefined;
+    if (root !== undefined) {
+      rmSync(root, { recursive: true, force: true });
+      root = undefined;
+    }
+  });
+
+  it("passes, prints the four-metric table and leaves the exit code clean", async () => {
+    fixture();
+    capture();
+    await run("--all-metrics", "--enforce-file-floors", "--release-target", "keiko-a=88");
+
+    expect(process.exitCode).toBeUndefined();
+    expect(out.join("\n")).toContain("| Package | Lines | Statements | Branches | Functions |");
+    expect(out.filter((line) => line.startsWith("coverage: PASS"))).toHaveLength(4);
+    expect(out.join("\n")).toContain("release-target: PASS");
+    expect(out.join("\n")).toContain("file-floors: PASS");
+  });
+
+  it("fails and names the package when a metric falls below its ratchet floor", async () => {
+    fixture({ lines: 70 });
+    capture();
+    await run("--all-metrics");
+
+    expect(process.exitCode).toBe(1);
+    expect(err.join("\n")).toContain("coverage: FAIL — keiko-a lines is 70%");
+  });
+
+  it("fails and names the package when a strict release target is missed", async () => {
+    fixture();
+    capture();
+    await run("--release-target", "keiko-a=95");
+
+    expect(process.exitCode).toBe(1);
+    expect(err.join("\n")).toContain("release-target: FAIL — keiko-a lines is 90%");
+  });
+
+  it("fails and names the file when a governed floor regresses", async () => {
+    fixture({
+      floors: { "packages/keiko-a/src/a.ts": { governance: "absolute", tolerance: 0, lines: 95 } },
+    });
+    capture();
+    await run("--enforce-file-floors");
+
+    expect(process.exitCode).toBe(1);
+    expect(err.join("\n")).toContain("file-floors: FAIL — packages/keiko-a/src/a.ts lines is 90%");
+  });
+
+  it("writes a regenerated baseline and a machine-readable report", async () => {
+    fixture({ lines: 30 });
+    capture();
+    await run(
+      "--all-metrics",
+      "--enforce-file-floors",
+      "--file-floor-threshold",
+      "50",
+      "--write-baseline",
+      join(root, "written.json"),
+      "--json",
+      join(root, "report.json"),
+    );
+
+    const written = JSON.parse(readFileSync(join(root, "written.json"), "utf8"));
+    expect(written.schemaVersion).toBe(COVERAGE_BASELINE_SCHEMA_VERSION);
+    expect(written.target).toBe(CONSTITUTIONAL_COVERAGE_MINIMUM);
+    expect(written.fileFloors["packages/keiko-a/src/a.ts"]).toEqual({
+      governance: "ratcheted",
+      tolerance: 0.5,
+      lines: 29.5,
+    });
+
+    const report = JSON.parse(readFileSync(join(root, "report.json"), "utf8"));
+    expect(report.metrics).toEqual(["lines", "statements", "branches", "functions"]);
+    expect(report.results.lines[0].packageName).toBe("keiko-a");
+    expect(report.fileFloors).toEqual([]);
+  });
+
+  it("refuses to run against a baseline that is not the governed schema", async () => {
+    fixture();
+    writeJson(root, "baseline.json", { schemaVersion: 1, target: 85, packages: {} });
+    capture();
+
+    await expect(run()).rejects.toThrow(/coverage baseline is not the governed schema/u);
+  });
+
+  it("refuses to run when a coverage summary is missing rather than reporting on nothing", async () => {
+    fixture();
+    rmSync(join(root, "coverage/packages/coverage-summary.json"));
+    capture();
+
+    await expect(run()).rejects.toThrow(/Coverage summary not found/u);
   });
 });
