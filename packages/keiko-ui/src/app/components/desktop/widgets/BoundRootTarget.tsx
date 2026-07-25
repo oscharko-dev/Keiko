@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { EditorAgentActionDenyReason, WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets, type WorkspaceRootTarget } from "../workspaceRootTargets";
 import styles from "./BoundRootTarget.module.css";
@@ -31,7 +32,8 @@ export type BoundRootSurfaceType =
 export type BoundRootSurfaceClass = "execution" | "read-only";
 
 export interface BoundRootSurfaceDefinition {
-  readonly label: string;
+  // Catalog key, not a literal: the picker label is user-visible text and must be localizable.
+  readonly labelKey: MessageKey;
   readonly surfaceClass: BoundRootSurfaceClass;
 }
 
@@ -40,24 +42,27 @@ export const BOUND_ROOT_SURFACES: Readonly<
 > = {
   // Reads a per-root in-memory diagnostics store and jumps to a file. No dispatch of its own, so
   // following focus stays legitimate presentation behaviour.
-  problems: { label: "Problems", surfaceClass: "read-only" },
+  problems: { labelKey: "boundRoot.surface.problems", surfaceClass: "read-only" },
   // Starts a debuggee process via POST /api/editor/debug/sessions.
-  debug: { label: "Debug", surfaceClass: "execution" },
+  debug: { labelKey: "boundRoot.surface.debug", surfaceClass: "execution" },
   // Spawns host processes via POST /api/terminal/executions.
-  terminal: { label: "Terminal", surfaceClass: "execution" },
+  terminal: { labelKey: "boundRoot.surface.terminal", surfaceClass: "execution" },
   // Spawns package scripts via POST /api/commands/runs.
-  commands: { label: "Commands", surfaceClass: "execution" },
+  commands: { labelKey: "boundRoot.surface.commands", surfaceClass: "execution" },
   // Propagates its root into the executing windows below through openWindow, so an implicit root
   // here becomes an implicit root there.
-  runtime: { label: "Runtime", surfaceClass: "execution" },
+  runtime: { labelKey: "boundRoot.surface.runtime", surfaceClass: "execution" },
   // Stages, commits, switches branches, and pushes.
-  governedGit: { label: "Git", surfaceClass: "execution" },
+  governedGit: { labelKey: "boundRoot.surface.governedGit", surfaceClass: "execution" },
   // Opens and updates a pull request.
-  governedPullRequest: { label: "Pull request", surfaceClass: "execution" },
+  governedPullRequest: {
+    labelKey: "boundRoot.surface.governedPullRequest",
+    surfaceClass: "execution",
+  },
   // Merges a pull request into its base.
-  governedMerge: { label: "Merge", surfaceClass: "execution" },
+  governedMerge: { labelKey: "boundRoot.surface.governedMerge", surfaceClass: "execution" },
   // Starts containers via POST /api/containers/runs.
-  containerStatus: { label: "Containers", surfaceClass: "execution" },
+  containerStatus: { labelKey: "boundRoot.surface.containerStatus", surfaceClass: "execution" },
 };
 
 // The reason is taken from the shared governance vocabulary rather than re-declared, so the browser
@@ -114,14 +119,20 @@ function boundRoot(decision: BoundRootDecision): string | undefined {
 // Content-free by construction: a closed reason and two catalog strings. No root path, display name,
 // manifest reference, or digest reaches this render — the picker beside it is how the human turns the
 // implicit intent into an explicit one.
-function BoundRootDenied({ surface }: { readonly surface: BoundRootSurfaceType }): ReactNode {
+function BoundRootDenied({
+  surface,
+  reason,
+}: {
+  readonly surface: BoundRootSurfaceType;
+  readonly reason: BoundRootDenyReason;
+}): ReactNode {
   const t = useTranslate();
   return (
     <div
       className={styles.cmpDenied}
       role="note"
       data-testid={`bound-root-denied-${surface}`}
-      data-deny-reason="root-binding-required"
+      data-deny-reason={reason}
     >
       <p className={styles.cmpDeniedTitle}>{t("boundRoot.denied.title")}</p>
       <p className={styles.cmpDeniedBody}>{t("boundRoot.denied.rootBindingRequired")}</p>
@@ -133,23 +144,24 @@ function BoundRootDenied({ surface }: { readonly surface: BoundRootSurfaceType }
 // explicit one. When denied nothing is preselected, so the control cannot imply a binding that the
 // window does not have.
 function BoundRootPicker({
-  label,
+  labelKey,
   decision,
   targets,
   onSelect,
 }: {
-  readonly label: string;
+  readonly labelKey: MessageKey;
   readonly decision: BoundRootDecision;
   readonly targets: readonly WorkspaceRootTarget[];
   readonly onSelect: (root: string) => void;
 }): ReactNode {
   const t = useTranslate();
+  const label = t("boundRoot.pickerLabel", { surface: t(labelKey) });
   return (
     <label className={styles.cmpPicker}>
-      <span>{label} root</span>
+      <span>{label}</span>
       <select
         className={styles.cmpSelect}
-        aria-label={`${label} root`}
+        aria-label={label}
         value={boundRoot(decision) ?? ""}
         onChange={(event) => onSelect(event.target.value)}
       >
@@ -176,7 +188,7 @@ export function BoundRootTarget({
   onSelect,
   children,
 }: BoundRootTargetProps): ReactNode {
-  const { label, surfaceClass } = BOUND_ROOT_SURFACES[surface];
+  const { labelKey, surfaceClass } = BOUND_ROOT_SURFACES[surface];
   const workspace = useWorkspaceManifest(fallbackRoot ?? configuredRoot);
   const manifest = lockedToActiveRoot ? null : workspace.manifest;
   const decision = resolveExplicitWindowRoot(
@@ -188,16 +200,16 @@ export function BoundRootTarget({
   );
   if (manifest === null || manifest.roots.length < 2) return children(boundRoot(decision));
   return (
-    <section className={styles.cmpHost} data-bound-root-target={label}>
+    <section className={styles.cmpHost} data-bound-root-target={surface}>
       <BoundRootPicker
-        label={label}
+        labelKey={labelKey}
         decision={decision}
         targets={workspaceRootTargets(boundRoot(decision), manifest)}
         onSelect={onSelect}
       />
       <div className={styles.cmpBody}>
         {decision.status === "denied" ? (
-          <BoundRootDenied surface={surface} />
+          <BoundRootDenied surface={surface} reason={decision.reason} />
         ) : (
           children(decision.root)
         )}
