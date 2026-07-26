@@ -72,7 +72,8 @@ function validStateDir(value: string | undefined): value is string {
 
 function shellQuoteArg(value: string): string {
   if (SIMPLE_SHELL_ARG.test(value)) return value;
-  return `'${value.replaceAll("'", `'\\''`)}'`;
+  const escapedSingleQuote = String.raw`'\''`;
+  return `'${value.replaceAll("'", escapedSingleQuote)}'`;
 }
 
 function restartCommandPreview(env: NodeJS.ProcessEnv): UpdateRestartCommandPreview | undefined {

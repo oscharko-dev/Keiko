@@ -14,7 +14,7 @@
 // macOS: executed as `/usr/bin/osascript -l JavaScript -e <script>` (JXA). `choose file` /
 // `choose folder` are StandardAdditions user-interaction primitives — they require no TCC
 // automation grant because no Apple events target another application.
-export const MACOS_NATIVE_FILE_DIALOG_SCRIPT = String.raw`
+export const MACOS_NATIVE_FILE_DIALOG_SCRIPT = `
 function run() {
   ObjC.import("Foundation");
   const app = Application.currentApplication();
@@ -76,7 +76,7 @@ function run() {
 //
 // ConvertTo-Json on Windows PowerShell 5.1 escapes every non-ASCII character as \uXXXX, so the
 // stdout JSON is codepage-independent; OutputEncoding is still pinned to UTF-8 defensively.
-export const WINDOWS_NATIVE_FILE_DIALOG_SCRIPT = String.raw`
+export const WINDOWS_NATIVE_FILE_DIALOG_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

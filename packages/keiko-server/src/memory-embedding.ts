@@ -248,7 +248,7 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   if (normA === 0 || normB === 0) return 0;
   const cosine = dot / (Math.sqrt(normA) * Math.sqrt(normB));
   if (cosine <= 0) return 0;
-  return cosine > 1 ? 1 : cosine;
+  return Math.min(cosine, 1);
 }
 
 // ─── Semantic novelty gate at capture (#204, O-F1) ──────────────────────────────

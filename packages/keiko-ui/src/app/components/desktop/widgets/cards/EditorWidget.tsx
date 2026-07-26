@@ -1147,7 +1147,7 @@ export function EditorWidget({
     const escapeAttr = (value: string): string =>
       typeof CSS !== "undefined" && typeof CSS.escape === "function"
         ? CSS.escape(value)
-        : value.replace(/["\\]/g, "\\$&");
+        : value.replace(/["\\]/g, String.raw`\$&`);
     const selector = `[role="tab"][data-pane-id="${escapeAttr(paneId)}"][data-tab-file="${escapeAttr(file)}"]`;
     const focus = (): boolean => {
       const button = document.querySelector<HTMLElement>(selector);

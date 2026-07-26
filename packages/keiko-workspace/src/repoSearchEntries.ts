@@ -28,7 +28,7 @@ interface EntryWalk {
 const EXPLICIT_SCOPE_MAX_DEPTH = DEFAULT_DISCOVERY_OPTIONS.maxDepth;
 
 function normalizeScopePath(scopePath: string): string {
-  return scopePath.split("\\").join("/");
+  return scopePath.replaceAll("\\", "/");
 }
 
 function readDirSorted(fs: WorkspaceFs, absoluteDir: string): readonly WorkspaceDirEntry[] {

@@ -38,10 +38,10 @@ const DECISION_DIRECTIVE: DiscussionDirective = "offer-decision-with-tradeoffs";
 // The citation disciplines that REQUIRE the model to cite evidence (or explicitly state none). A
 // disagreement-capable mode must carry one of these; only the option-expanding `brainstorm` mode (which
 // mandates no uncertainty facet) is permitted the looser `best-effort` discipline.
-const STRICT_CITATION_DISCIPLINES: readonly DiscussionModePlan["citationDiscipline"][] = [
+const STRICT_CITATION_DISCIPLINES: ReadonlySet<DiscussionModePlan["citationDiscipline"]> = new Set([
   "require-citations",
   "require-citations-or-state-no-evidence",
-];
+]);
 
 interface Check {
   readonly label: string;
@@ -162,7 +162,7 @@ function scoreEvidenceCitationDiscipline(obs: DiscussionObservation): Discussion
     { label: "evidence facet mandated", ok: plan.mandatedFacets.includes("evidence") },
     {
       label: "disagreement-capable modes carry a strict citation discipline",
-      ok: !disagreementCapable || STRICT_CITATION_DISCIPLINES.includes(plan.citationDiscipline),
+      ok: !disagreementCapable || STRICT_CITATION_DISCIPLINES.has(plan.citationDiscipline),
     },
   ]);
 }

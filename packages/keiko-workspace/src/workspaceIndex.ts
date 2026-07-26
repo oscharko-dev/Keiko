@@ -243,7 +243,7 @@ function compareStrings(a: string, b: string): number {
 }
 
 function normalizeScopePath(scopePath: string): string {
-  return scopePath.split("\\").join("/");
+  return scopePath.replaceAll("\\", "/");
 }
 
 function isSafeIndexScopePath(scopePath: string): boolean {

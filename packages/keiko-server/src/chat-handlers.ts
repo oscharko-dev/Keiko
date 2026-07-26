@@ -1476,7 +1476,8 @@ function latestRegenerableTurn(
       body: errorBody("NOT_APPLIABLE", "Only the latest assistant response can be regenerated."),
     };
   }
-  const previousUser = [...messages.slice(0, targetIndex)]
+  const previousUser = messages
+    .slice(0, targetIndex)
     .reverse()
     .find((message) => message.role === "user");
   if (previousUser === undefined) {

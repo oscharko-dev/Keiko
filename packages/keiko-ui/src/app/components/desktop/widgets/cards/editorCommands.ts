@@ -214,7 +214,7 @@ export function availablePaletteCommands(host: EditorPaletteHost): readonly Edit
 // file, a non-code extension) resolves to null. Pure and path-based (no I/O), so it is unit-testable
 // deterministically and reused by both the palette's `isAvailable` and the widget's `verifiableTarget`.
 const VERIFICATION_TEST_MARKER = /\.(?:test|spec)\.[cm]?[jt]sx?$/u;
-const VERIFICATION_CODE_EXTENSIONS: readonly string[] = [
+const VERIFICATION_CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".ts",
   ".tsx",
   ".mts",
@@ -223,7 +223,7 @@ const VERIFICATION_CODE_EXTENSIONS: readonly string[] = [
   ".jsx",
   ".mjs",
   ".cjs",
-];
+]);
 
 // Shared with the debug-launch seam (`debugLaunchTarget.ts`, epic #2096/ADR-0136 D4): a recognized
 // test file prefers the discovered npm test script over a bare file launch, reusing this exact rule
@@ -238,7 +238,7 @@ export function resolveVerificationTarget(activeFile: string | null): string | n
   const dot = activeFile.lastIndexOf(".");
   if (dot <= 0) return null;
   const ext = activeFile.slice(dot);
-  if (!VERIFICATION_CODE_EXTENSIONS.includes(ext)) return null;
+  if (!VERIFICATION_CODE_EXTENSIONS.has(ext)) return null;
   return `${activeFile.slice(0, dot)}.test${ext}`;
 }
 

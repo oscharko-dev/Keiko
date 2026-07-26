@@ -765,15 +765,15 @@ function buildRerankedHybridUserMessage(
   ];
   for (const candidate of selected) {
     const kindLabel = candidate.kind === "folder" ? "Folder" : "Connector";
-    lines.push(`[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}`);
-    lines.push("```text");
     lines.push(
+      `[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}`,
+      "```text",
       candidate.redactedText.length > 0
         ? promptSafeExcerptText(candidate.redactedText)
         : "(No excerpt text available.)",
+      "```",
+      "",
     );
-    lines.push("```");
-    lines.push("");
   }
   return lines.join("\n");
 }

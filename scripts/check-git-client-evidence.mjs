@@ -224,8 +224,6 @@ function validateManifestIdentity(manifest, config) {
       relPath,
       "routesIntercepted",
     ),
-  );
-  failures.push(
     ...arrayIncludesAll(
       manifest.artifacts,
       ["manifest.json", ...config.artifacts],
@@ -337,8 +335,7 @@ export function checkGitClientEvidence(root = REPO_ROOT) {
 
   let totalPngBytes = 0;
   for (const [id, config] of Object.entries(EVIDENCE)) {
-    failures.push(...validateManifest(root, id, config));
-    failures.push(...validateArtifacts(root, config));
+    failures.push(...validateManifest(root, id, config), ...validateArtifacts(root, config));
     for (const artifact of config.artifacts) {
       const relPath = join(dirname(config.manifest), artifact);
       if (existsFile(root, relPath)) totalPngBytes += statSync(resolve(root, relPath)).size;

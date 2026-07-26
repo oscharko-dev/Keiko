@@ -14,7 +14,7 @@ export function lineNumberOf(text: string, charIndex: number): number {
 }
 
 export function normalizeScopePath(scopePath: string): string {
-  return path.normalize(scopePath.split("\\").join("/")).replace(/^\.\//u, "");
+  return path.normalize(scopePath.replaceAll("\\", "/")).replace(/^\.\//u, "");
 }
 
 function replaceTemplateExpressions(rawPath: string): string {

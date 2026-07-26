@@ -248,7 +248,7 @@ function findValueReplacementEvidence(
 
 function buildMultiWayItem(cluster: DuplicateCluster, options: ConflictsOptions): ReviewItem {
   const sorted = [...cluster.members].sort(compareRecordsByAge);
-  const winner = sorted[sorted.length - 1];
+  const winner = sorted.at(-1);
   const losers = sorted.slice(0, -1);
   if (winner === undefined) {
     // Caller guards on cluster.members.length > 2; this branch is unreachable structurally.

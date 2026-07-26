@@ -42,31 +42,24 @@ function yesNo(value: boolean): string {
 export function renderVoiceTwinSummary(scorecard: VoiceTwinScorecard): string {
   const summary = scorecard.summary;
   const lines: string[] = [];
-  lines.push(`Voice Digital Twin evaluation summary (schema v${scorecard.schemaVersion})`);
   lines.push(
+    `Voice Digital Twin evaluation summary (schema v${scorecard.schemaVersion})`,
     `Fixtures: ${String(summary.totalFixtures)} total, ${String(summary.fullyPassedFixtures)} fully passed`,
-  );
-  lines.push(
     `Capability coverage: no-voice=${yesNo(summary.coversNoVoice)} stt=${yesNo(summary.coversSttOnly)} full-realtime=${yesNo(summary.coversFullRealtime)}`,
-  );
-  lines.push(
     `Environment coverage: azure-foundry=${yesNo(summary.coversAzureFoundry)} customer-hosted=${yesNo(summary.coversCustomerHosted)}`,
-  );
-  lines.push(
     `Privacy: negative-egress-caught=${yesNo(summary.coversPrivacyNegative)}, matrix cells=${String(scorecard.coveredMatrixCells.length)}`,
+    "",
+    "Fixtures:",
   );
-  lines.push("");
-  lines.push("Fixtures:");
   for (const fixture of scorecard.fixtureResults) {
     lines.push(fixtureLine(fixture));
   }
-  lines.push("");
-  lines.push("Dimensions:");
+  lines.push("", "Dimensions:");
   for (const entry of scorecard.dimensions) {
     lines.push(dimensionLine(entry));
   }
-  lines.push("");
   lines.push(
+    "",
     summary.goNoGo === "GO"
       ? "Verdict: GO - every exercised dimension passed across the profile and environment matrix."
       : "Verdict: NO-GO - a dimension failed or a coverage gate was unmet (see table above).",

@@ -10,14 +10,7 @@
 // boundary so the four "things that look like text with provenance" do not collapse into
 // each other.
 
-import type {
-  MemoryEdge,
-  MemoryRecord,
-  MemoryStructuredPayload,
-  MemoryValidityInterval,
-} from "./memory-records.js";
-import type { MemoryProvenance } from "./memory-records.js";
-import type { MemoryScope, MemoryType } from "./memory.js";
+import type { MemoryEdge, MemoryRecord } from "./memory-records.js";
 import { MEMORY_SCHEMA_VERSION, MEMORY_STATUSES, MEMORY_TYPES } from "./memory.js";
 import {
   validateMemoryEdge,
@@ -141,12 +134,10 @@ export function assertNeverMemoryType(value: never): never {
 // Re-export the narrow types the public surface uses; this keeps a single import target
 // for the validator + record types so downstream packages do not have to chase two
 // module paths.
+export type { MemoryEdge, MemoryRecord };
 export type {
-  MemoryEdge,
   MemoryProvenance,
-  MemoryRecord,
-  MemoryScope,
   MemoryStructuredPayload,
-  MemoryType,
   MemoryValidityInterval,
-};
+} from "./memory-records.js";
+export type { MemoryScope, MemoryType } from "./memory.js";

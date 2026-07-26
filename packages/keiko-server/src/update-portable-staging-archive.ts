@@ -452,7 +452,7 @@ async function verifyLocalPlatform(input: {
     ...(input.layout.appBundlePath === undefined
       ? {}
       : { appBundlePath: input.layout.appBundlePath }),
-    ...(current ?? {}),
+    ...current,
     ...(input.session.signal === undefined ? {} : { signal: input.session.signal }),
   });
 }

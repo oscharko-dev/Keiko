@@ -77,7 +77,7 @@ export function positionToOffset(
   const line = clamp(position.line, 0, lineStarts.length - 1);
   const lineStart = lineStarts[line] ?? 0;
   const contentEnd = lineContentEnd(text, lineStarts, line);
-  const character = position.character < 0 ? 0 : position.character;
+  const character = Math.max(0, position.character);
   return clamp(lineStart + character, lineStart, contentEnd);
 }
 
@@ -111,13 +111,11 @@ export function offsetToPosition(
 export function spanToRange(
   text: string,
   lineStarts: readonly number[],
-  start: number | undefined,
-  length: number | undefined,
+  start: number | undefined = 0,
+  length: number | undefined = 0,
 ): LanguageRange {
-  const safeStart = start ?? 0;
-  const safeLength = length ?? 0;
   return {
-    start: offsetToPosition(text, lineStarts, safeStart),
-    end: offsetToPosition(text, lineStarts, safeStart + safeLength),
+    start: offsetToPosition(text, lineStarts, start),
+    end: offsetToPosition(text, lineStarts, start + length),
   };
 }

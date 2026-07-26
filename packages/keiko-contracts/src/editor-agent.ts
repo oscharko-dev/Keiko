@@ -647,7 +647,7 @@ export interface EditorAgentParseFail {
 
 export type EditorAgentParse<T> = EditorAgentParseOk<T> | EditorAgentParseFail;
 
-const EDITOR_AGENT_ACTION_TYPES: readonly EditorAgentActionType[] = [
+const EDITOR_AGENT_ACTION_TYPES: ReadonlySet<EditorAgentActionType> = new Set([
   "openFile",
   "focusTab",
   "moveTab",
@@ -662,7 +662,7 @@ const EDITOR_AGENT_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "navigateSymbol",
   "searchWorkspace",
   "queryGit",
-];
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1071,9 +1071,7 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
 }
 
 function isActionType(value: unknown): value is EditorAgentActionType {
-  return (
-    typeof value === "string" && EDITOR_AGENT_ACTION_TYPES.includes(value as EditorAgentActionType)
-  );
+  return typeof value === "string" && EDITOR_AGENT_ACTION_TYPES.has(value as EditorAgentActionType);
 }
 
 export function isEditorAgentActionOrigin(value: unknown): value is EditorAgentActionOrigin {

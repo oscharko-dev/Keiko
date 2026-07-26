@@ -148,7 +148,7 @@ export function AddRepositoryDialog({
     const focusable = focusableInside(dialog);
     if (focusable.length === 0) return;
     const first = focusable[0]!;
-    const last = focusable[focusable.length - 1]!;
+    const last = focusable.at(-1)!;
     const active = document.activeElement;
     // Keep focus inside the dialog. Wrap at the boundaries; and when focus has escaped the
     // dialog entirely (e.g. a disabled control was activated and left focus on <body>), pull

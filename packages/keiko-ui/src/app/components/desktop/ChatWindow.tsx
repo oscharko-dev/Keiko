@@ -1286,7 +1286,7 @@ function trimTrailingSlashes(value: string): string {
 export function rootDisplayName(root: string): string {
   const normalized = trimTrailingSlashes(root.replaceAll("\\", "/"));
   const parts = normalized.split("/").filter((part) => part.length > 0);
-  return parts[parts.length - 1] ?? root;
+  return parts.at(-1) ?? root;
 }
 
 function connectedRepositoryRoots(
@@ -3687,8 +3687,8 @@ function LocalKnowledgeScopeControl({
     setError(null);
     try {
       await applyLocalKnowledgeScopeChange(value, chat, t, onChatChanged);
-    } catch (caught) {
-      setError(formatScopeUpdateError(caught, t));
+    } catch (error_) {
+      setError(formatScopeUpdateError(error_, t));
     } finally {
       setBusy(false);
     }

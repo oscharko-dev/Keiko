@@ -1083,7 +1083,7 @@ export function NewWindowDialog({
     const f = focusableInside(e.currentTarget);
     if (f.length === 0) return;
     const first = f[0] as HTMLElement;
-    const last = f[f.length - 1] as HTMLElement;
+    const last = f.at(-1) as HTMLElement;
     if (e.shiftKey && document.activeElement === first) {
       e.preventDefault();
       last.focus();

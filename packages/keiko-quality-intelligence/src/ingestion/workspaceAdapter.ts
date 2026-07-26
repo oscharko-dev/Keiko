@@ -77,7 +77,7 @@ const assertRelativePath = (path: string): void => {
   }
   // Reject any `..` segment regardless of separator.
   const segments = path.split(/[\\/]/u);
-  if (segments.some((s) => s === "..")) {
+  if (segments.includes("..")) {
     throw new WorkspaceAdapterError(
       "PATH_TRAVERSAL",
       `Context entry path contains a ".." segment: "${path}"`,

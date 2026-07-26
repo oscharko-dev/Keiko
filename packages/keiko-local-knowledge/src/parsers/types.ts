@@ -7,8 +7,6 @@
 
 import type {
   DocumentId,
-  ParsedUnit,
-  ParserDiagnostic,
   ParserDependencyVersion,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -148,4 +146,5 @@ export const PARSER_ERROR_CODES: readonly ParserErrorCode[] = [
 
 // ─── Re-exports ──────────────────────────────────────────────────────────────
 // Re-export the contract types adapters return so consumers can stay on a single import.
-export type { ParserResult, ParsedUnit, ParserDiagnostic };
+export type { ParserResult };
+export type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";

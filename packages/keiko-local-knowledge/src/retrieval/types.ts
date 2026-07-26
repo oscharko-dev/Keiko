@@ -16,7 +16,6 @@
 
 import type {
   CapsuleSetId,
-  CitationReference,
   KnowledgeCapsuleId,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
@@ -161,4 +160,5 @@ export const DEFAULT_RETRIEVAL_TOP_K = 10;
 export const MAX_RETRIEVAL_TOP_K = 100;
 
 // Re-export so consumers can import the contract types from this barrel.
-export type { CitationReference, RetrievalReference };
+export type { RetrievalReference };
+export type { CitationReference } from "@oscharko-dev/keiko-contracts";

@@ -37,7 +37,6 @@ import {
   type RecordingWriter,
 } from "./runner-support.js";
 import { isManifestValid } from "./manifest-check.js";
-import { ALL_FIXTURES } from "./fixtures/index.js";
 import {
   EVAL_SCORECARD_SCHEMA_VERSION,
   type EvalScorecard,
@@ -330,4 +329,4 @@ export async function runEvaluationSuite(
   };
 }
 
-export { ALL_FIXTURES };
+export { ALL_FIXTURES } from "./fixtures/index.js";

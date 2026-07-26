@@ -312,7 +312,7 @@ function extension(scopePath: string): string {
 }
 
 function normalizedPath(scopePath: string): string {
-  return scopePath.split("\\").join("/").toLowerCase();
+  return scopePath.replaceAll("\\", "/").toLowerCase();
 }
 
 function stripDotSlashPrefix(path: string): string {
@@ -332,7 +332,7 @@ function stripTrailingSlashes(path: string): string {
 }
 
 function normalizedScopePath(scopePath: string): string | undefined {
-  const normalized = stripTrailingSlashes(stripDotSlashPrefix(scopePath.split("\\").join("/")));
+  const normalized = stripTrailingSlashes(stripDotSlashPrefix(scopePath.replaceAll("\\", "/")));
   if (normalized.length === 0 || !isValidScopePath(normalized, { mustBeRelative: true })) {
     return undefined;
   }

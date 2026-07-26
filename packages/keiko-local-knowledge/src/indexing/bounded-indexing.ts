@@ -209,7 +209,7 @@ export function chunkDocumentBounded(
 }
 
 function optionsWithBudget(options: ChunkingOptions | undefined, budget: number): ChunkingOptions {
-  return { ...(options ?? {}), maxChunks: budget };
+  return { ...options, maxChunks: budget };
 }
 
 // ─── Bounded embedding ────────────────────────────────────────────────────────
@@ -407,7 +407,7 @@ async function embedOneBatch(
   const result: EmbedBatchResult = await embedChunkBatch(batch, embedOptions(deps));
   acc.vectorCount += result.vectors.length;
   acc.errors.push(...result.errors);
-  const lastVector = result.vectors[result.vectors.length - 1];
+  const lastVector = result.vectors.at(-1);
   if (lastVector !== undefined) acc.lastChunkId = lastVector.chunkId;
   if (acc.lastChunkId !== null) deps.onBatch?.(embeddedChunkCount(db, deps), acc.lastChunkId);
   return result.errors.length === 0;

@@ -28,7 +28,7 @@ function createLcg(seed) {
   let state = seed >>> 0;
   return () => {
     state = (Math.imul(1_664_525, state) + 1_013_904_223) >>> 0;
-    return state / 0x1_0000_0000;
+    return state / 0x1_00_00_00_00;
   };
 }
 
@@ -446,7 +446,7 @@ function buildMainLanes(rng, repo) {
 }
 
 async function buildLongAgenticSessionScenario() {
-  const rng = createLcg(0x5eed_1234);
+  const rng = createLcg(0x5e_ed_12_34);
   const repo = await buildRepoEvidenceLane();
   const repoCriticalIds = repo.metas.filter((m) => m.critical).map((m) => m.id);
   const repoInjectionIds = repo.metas.filter((m) => m.injection).map((m) => m.id);
@@ -569,7 +569,7 @@ function buildPressureLanes(rng, repo, evict) {
 // A second, budget-PRESSURE scenario: the evictable lanes are oversized well past 116k so eviction
 // is forced, while every critical item still lives in a non-evictable or high-priority lane.
 async function buildBudgetPressureScenario() {
-  const rng = createLcg(0x0bad_c0de);
+  const rng = createLcg(0x0b_ad_c0_de);
   const repo = await buildRepoEvidenceLane();
   const evict = await buildRepoEvidenceLane(REPO_EVICT_SPECS);
   const repoInjectionIds = repo.metas.filter((m) => m.injection).map((m) => m.id);

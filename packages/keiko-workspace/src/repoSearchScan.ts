@@ -78,7 +78,7 @@ const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 function normalizeScopePath(scopePath: string): string {
-  return scopePath.split("\\").join("/");
+  return scopePath.replaceAll("\\", "/");
 }
 
 export function isImageScopePath(scopePath: string): boolean {

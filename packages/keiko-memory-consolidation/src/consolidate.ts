@@ -297,7 +297,7 @@ function mergeActionForCluster(
   cluster: DuplicateCluster,
 ): { readonly winner: MemoryRecord; readonly losers: readonly MemoryRecord[] } | null {
   const sorted = [...cluster.members].sort(compareRecordsByAge);
-  const winner = sorted[sorted.length - 1];
+  const winner = sorted.at(-1);
   if (winner === undefined || sorted.length < 2) return null;
   return { winner, losers: sorted.slice(0, -1) };
 }

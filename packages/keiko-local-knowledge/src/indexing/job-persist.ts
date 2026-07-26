@@ -103,7 +103,7 @@ export function insertJobRow(db: DatabaseSync, input: InsertJobInput): void {
   db.prepare(INSERT_JOB_SQL).run({
     id: input.id,
     capsule_id: String(input.capsuleId),
-    source_ids_json: JSON.stringify(input.sourceIds.map((s) => String(s))),
+    source_ids_json: JSON.stringify(input.sourceIds.map(String)),
     started_at: input.startedAt,
     status: "running" satisfies IndexingJobStatus,
   });

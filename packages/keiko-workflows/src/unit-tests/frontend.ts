@@ -280,12 +280,12 @@ const PLAYWRIGHT_ENTRY_DIRS: readonly string[] = [
   "app/",
   "pages/",
 ];
-const NEXT_ROUTE_BASENAMES: readonly string[] = [
+const NEXT_ROUTE_BASENAMES: ReadonlySet<string> = new Set([
   "page.tsx",
   "page.jsx",
   "layout.tsx",
   "layout.jsx",
-];
+]);
 
 // Whether a path is an application entry point a Playwright browser smoke can meaningfully target:
 // a Next.js route file (`page`/`layout`), a `*.page.*` module, or a file under a recognised end-to-end
@@ -293,7 +293,7 @@ const NEXT_ROUTE_BASENAMES: readonly string[] = [
 export function isPlaywrightEntryPath(path: string): boolean {
   const posix = toPosix(path);
   const base = lastSegment(posix);
-  if (NEXT_ROUTE_BASENAMES.includes(base)) {
+  if (NEXT_ROUTE_BASENAMES.has(base)) {
     return true;
   }
   if (base.includes(".page.")) {

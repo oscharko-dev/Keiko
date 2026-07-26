@@ -52,7 +52,6 @@ import {
   gitDeliveryRiskClassWithinCeiling,
   gitMergeReadinessFor,
   gitMergeRejectionFor,
-  gitMergeRejectionToErrorCode,
 } from "@oscharko-dev/keiko-contracts";
 import type { CommandRule } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
@@ -841,4 +840,4 @@ export async function runGitMerge(
 
 // Re-export the contract bridge so the server/UI consume the error-code mapping from this gateway,
 // keeping the publish/PR/merge gateway surfaces symmetric.
-export { gitMergeRejectionToErrorCode };
+export { gitMergeRejectionToErrorCode } from "@oscharko-dev/keiko-contracts";

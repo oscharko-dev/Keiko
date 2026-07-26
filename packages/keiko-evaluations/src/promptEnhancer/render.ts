@@ -38,20 +38,17 @@ function dimensionLine(entry: PromptQualityScorecardEntry): string {
 
 export function renderPromptEnhancerSummary(scorecard: PromptEnhancerScorecard): string {
   const lines: string[] = [];
-  lines.push(`Prompt Enhancer evaluation summary (schema v${scorecard.schemaVersion})`);
   lines.push(
+    `Prompt Enhancer evaluation summary (schema v${scorecard.schemaVersion})`,
     `Fixtures: ${String(scorecard.summary.totalFixtures)} total, ${String(scorecard.summary.fullyPassedFixtures)} fully passed`,
-  );
-  lines.push(
     `Task classes covered: ${String(scorecard.coveredTaskClasses.length)} (${scorecard.coveredTaskClasses.join(", ")})`,
+    "",
+    "Fixtures:",
   );
-  lines.push("");
-  lines.push("Fixtures:");
   for (const fixture of scorecard.fixtureResults) {
     lines.push(fixtureLine(fixture));
   }
-  lines.push("");
-  lines.push("Dimensions:");
+  lines.push("", "Dimensions:");
   for (const entry of scorecard.dimensions) {
     lines.push(dimensionLine(entry));
   }

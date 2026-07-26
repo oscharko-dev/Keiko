@@ -121,8 +121,8 @@ const buildSteps = (
   if (requirement !== undefined) {
     steps.push(`Bereite das Szenario vor, das hier beschrieben ist: ${requirement}`);
   }
-  steps.push("Führe die fachliche Aktion, Validierungsregel oder Entscheidungsstrecke aus.");
   steps.push(
+    "Führe die fachliche Aktion, Validierungsregel oder Entscheidungsstrecke aus.",
     `Dokumentiere Ergebnis, persistierten Zustand, Meldungen und Audit-Evidenz für Atom ${atom.id}.`,
   );
   return Object.freeze(steps);
@@ -146,8 +146,8 @@ const buildExpectedResults = (
   }
   results.push(
     "Widersprüchliche Ergebnisse, fehlende Validierung und stiller Datenverlust sind nicht akzeptabel.",
+    `Evidenz-Atom ${atom.canonicalHashSha256Hex.slice(0, 12)} bleibt kanonisch.`,
   );
-  results.push(`Evidenz-Atom ${atom.canonicalHashSha256Hex.slice(0, 12)} bleibt kanonisch.`);
   return Object.freeze(results);
 };
 

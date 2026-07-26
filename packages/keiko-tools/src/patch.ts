@@ -75,7 +75,11 @@ function isBinaryDiff(diff: string): boolean {
 }
 
 function hasEscapedDiffLineBreak(diff: string): boolean {
-  return diff.includes("\\n+") || diff.includes("\\n-") || diff.includes("\\n ");
+  return (
+    diff.includes(String.raw`\n+`) ||
+    diff.includes(String.raw`\n-`) ||
+    diff.includes(String.raw`\n `)
+  );
 }
 
 function enforcePath(workspace: WorkspaceInfo, fs: WorkspaceFs, path: string): string {

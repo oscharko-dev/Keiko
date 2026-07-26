@@ -38,7 +38,7 @@ export function resolveVoiceAcousticBudgets(fixture: VoiceAcousticFixture): Voic
   return {
     ...DEFAULT_VOICE_ACOUSTIC_BUDGETS,
     ...scenarioDefaults,
-    ...(fixture.budgets ?? {}),
+    ...fixture.budgets,
   };
 }
 

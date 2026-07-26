@@ -12,10 +12,6 @@
 import type {
   Project,
   Chat,
-  ChatConnectedScope,
-  ChatLocalKnowledgeScope,
-  ChatRole,
-  WorkflowStatus,
   ChatMessage,
   CreateChatOptions,
   GroundedAnswer,
@@ -32,10 +28,6 @@ import type {
 export type {
   Project,
   Chat,
-  ChatConnectedScope,
-  ChatLocalKnowledgeScope,
-  ChatRole,
-  WorkflowStatus,
   ChatMessage,
   CreateChatOptions,
   GroundedAnswer,
@@ -45,6 +37,12 @@ export type {
   UpdateChatMessagePatch,
   StoredPdfCitationPreviewCitation,
 };
+export type {
+  ChatConnectedScope,
+  ChatLocalKnowledgeScope,
+  ChatRole,
+  WorkflowStatus,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export type ChatTurnAdmission =
   | { readonly kind: "admitted"; readonly userMessage: ChatMessage }

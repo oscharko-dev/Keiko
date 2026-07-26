@@ -342,8 +342,10 @@ function sourceTurnLines(
     }
     const turn = dropped[index];
     if (turn !== undefined) {
-      lines.push(`Turn ${String(index + 1)}/${String(record.itemsBefore)} (${turn.role}):`);
-      lines.push(clampSourceTurn(turn.content));
+      lines.push(
+        `Turn ${String(index + 1)}/${String(record.itemsBefore)} (${turn.role}):`,
+        clampSourceTurn(turn.content),
+      );
     }
     previous = index;
   }

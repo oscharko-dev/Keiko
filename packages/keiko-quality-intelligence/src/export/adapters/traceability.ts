@@ -204,9 +204,13 @@ export function adaptToTraceabilityMarkdown(
       ]),
     );
   }
-  lines.push("", "## Tests → Requirements", "");
-  lines.push(`| ${TRACEABILITY_REVERSE_HEADERS.join(" | ")} |`);
-  lines.push(`| ${TRACEABILITY_REVERSE_HEADERS.map(() => "---").join(" | ")} |`);
+  lines.push(
+    "",
+    "## Tests → Requirements",
+    "",
+    `| ${TRACEABILITY_REVERSE_HEADERS.join(" | ")} |`,
+    `| ${TRACEABILITY_REVERSE_HEADERS.map(() => "---").join(" | ")} |`,
+  );
   const reverseRows = invertToReverseRows(sorted);
   if (reverseRows.length === 0) {
     lines.push(mdRow([ABSENT, ABSENT, ABSENT, "0"]));

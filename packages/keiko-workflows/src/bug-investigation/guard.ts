@@ -13,12 +13,12 @@
 
 import { toPosix } from "./path-utils.js";
 
-const LOCKFILE_BASENAMES: readonly string[] = [
+const LOCKFILE_BASENAMES: ReadonlySet<string> = new Set([
   "package-lock.json",
   "npm-shrinkwrap.json",
   "yarn.lock",
   "pnpm-lock.yaml",
-];
+]);
 
 const SENSITIVE_DIRS: readonly string[] = [".github", ".husky"];
 
@@ -61,7 +61,7 @@ export function isSensitivePath(relPath: string): boolean {
   if (underSensitiveDir(lower)) {
     return true;
   }
-  return LOCKFILE_BASENAMES.includes(basename(lower));
+  return LOCKFILE_BASENAMES.has(basename(lower));
 }
 
 // Manifest/config edits a fix may legitimately need. ALLOWED, but flagged so the report surfaces

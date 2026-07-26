@@ -214,10 +214,7 @@ function looksLikeLocalPath(value: string): boolean {
 }
 
 function containsTraversalSegment(value: string): boolean {
-  return value
-    .replaceAll("\\", "/")
-    .split("/")
-    .some((segment) => segment === "..");
+  return value.replaceAll("\\", "/").split("/").includes("..");
 }
 
 function isAllowedReferenceChar(char: string): boolean {

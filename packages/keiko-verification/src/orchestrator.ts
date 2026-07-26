@@ -223,8 +223,7 @@ function isGeneratedTargetPath(value: string): boolean {
     return false;
   }
   return value
-    .split("\\")
-    .join("/")
+    .replaceAll("\\", "/")
     .split("/")
     .every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }

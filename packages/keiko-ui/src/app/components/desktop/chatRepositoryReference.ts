@@ -60,11 +60,11 @@ export function repositoryReferenceId(root: string, path: string): string {
 }
 
 export function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 }
 
 export function repositoryReferenceMentionPattern(path: string): RegExp {
-  return new RegExp(`(^|\\s)@${escapeRegExp(path)}(?=$|\\s)`, "gu");
+  return new RegExp(String.raw`(^|\s)@${escapeRegExp(path)}(?=$|\s)`, "gu");
 }
 
 export function removeRepositoryReferenceFromDraft(draft: string, path: string): string {

@@ -231,9 +231,9 @@ export async function withStage<T>(
     checkCancelled(ctx);
     emit(ctx, { kind: "stage:completed", stageName });
     return result;
-  } catch (caught: unknown) {
-    if (caught instanceof StageCancelledError) {
-      throw caught;
+  } catch (error_: unknown) {
+    if (error_ instanceof StageCancelledError) {
+      throw error_;
     }
     if (isCancelled(ctx.signal)) {
       // The stage work threw because the run was cancelled mid-flight (e.g. the model call's
@@ -241,8 +241,8 @@ export async function withStage<T>(
       // do not emit stage:failed, and let the finaliser classify the run as "cancelled".
       throw new StageCancelledError();
     }
-    emit(ctx, { kind: "stage:failed", stageName, reasonSummary: safeReasonSummary(caught) });
-    throw caught;
+    emit(ctx, { kind: "stage:failed", stageName, reasonSummary: safeReasonSummary(error_) });
+    throw error_;
   } finally {
     handle.dispose();
   }

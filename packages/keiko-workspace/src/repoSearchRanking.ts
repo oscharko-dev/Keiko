@@ -43,7 +43,7 @@ function basename(scopePath: string): string {
 }
 
 function normalizedPath(scopePath: string): string {
-  return scopePath.split("\\").join("/").toLowerCase();
+  return scopePath.replaceAll("\\", "/").toLowerCase();
 }
 
 function pathSegments(scopePath: string): readonly string[] {

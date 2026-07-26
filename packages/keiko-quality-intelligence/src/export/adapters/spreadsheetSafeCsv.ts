@@ -115,7 +115,7 @@ function encodeSpreadsheetSafeCellWithDelimiter(value: string, delimiter: string
     return prefixed;
   }
   // Double every embedded quote per RFC 4180.
-  const doubled = prefixed.split('"').join('""');
+  const doubled = prefixed.replaceAll('"', '""');
   return `"${doubled}"`;
 }
 

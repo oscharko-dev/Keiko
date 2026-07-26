@@ -362,7 +362,7 @@ function trapDialogTab(container: HTMLElement, event: ReactKeyboardEvent): boole
     return true;
   }
   const first = focusables[0];
-  const last = focusables[focusables.length - 1];
+  const last = focusables.at(-1);
   const active = document.activeElement;
   if (event.shiftKey && (active === first || !container.contains(active))) {
     event.preventDefault();

@@ -2178,14 +2178,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           chats: replaceChatInList(previous.chats, result.chat),
         }));
       })
-      .catch((caught) => {
+      .catch((error_): void => {
         if (selectedModelPersistRef.current !== requestId) return;
         // MS-F1: skip the rollback when the user has navigated to a different
         // chat since this PATCH was issued — restoring this chat's old model
         // would clobber the now-active chat's selection. Not isStillActiveChat: this compares
         // against the captured-at-send-time local `activeChatId`, not a per-call chat.id.
         if (activeChatIdRef.current !== activeChatId) return;
-        setError(errorMessage(caught));
+        setError(errorMessage(error_));
         // Roll back optimistic update so UI stays consistent with the server.
         if (snapshot !== undefined) {
           const rollback = snapshot;
@@ -2527,14 +2527,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           signal,
           resolve,
         );
-        sendDesktopChatStream(requestBody, signal, handlers).catch((caught: unknown) => {
+        sendDesktopChatStream(requestBody, signal, handlers).catch((error_: unknown): void => {
           removeTempMessage(tempAssistantId);
-          if (caught instanceof StreamingUnavailableError) {
+          if (error_ instanceof StreamingUnavailableError) {
             // Pre-stream failure (e.g. STREAMING_UNSUPPORTED, or a JSON error before any SSE
             // header). Reject so sendUngrounded falls back to the buffered path instead of
             // surfacing a hard failure to the user.
-            reject(caught);
-          } else if (caught instanceof DOMException && caught.name === "AbortError") {
+            reject(error_);
+          } else if (error_ instanceof DOMException && error_.name === "AbortError") {
             resolve({ status: "cancelled" });
           } else if (isSupersededOrAborted(chat.id, signal)) {
             resolve({ status: "cancelled" });
@@ -2543,7 +2543,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             // UI does not silently swallow the failure. The server has already persisted the
             // user message at this point; removing it here is UI-only — it reappears on reload,
             // which matches the behaviour of sendUngroundedBuffered and sendGrounded.
-            handleStreamUngroundedTransportFailure(caught, setError, resolve);
+            handleStreamUngroundedTransportFailure(error_, setError, resolve);
           }
         });
       });
@@ -2607,13 +2607,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setLatestMemory(result.memory);
         if (outcome.status === "failed") setError(EMPTY_MODEL_RESPONSE_USER_MESSAGE);
         return outcome;
-      } catch (caught) {
-        if (caught instanceof DOMException && caught.name === "AbortError") {
+      } catch (error_) {
+        if (error_ instanceof DOMException && error_.name === "AbortError") {
           return { status: "cancelled" };
         }
         if (isSupersededOrAborted(chat.id, signal)) return { status: "cancelled" };
-        const failure = canonicalTurnInProgressFailure(caught);
-        if (failure.canonicalTurnInProgress !== true) setError(errorMessage(caught));
+        const failure = canonicalTurnInProgressFailure(error_);
+        if (failure.canonicalTurnInProgress !== true) setError(errorMessage(error_));
         return failure;
       }
     },
@@ -2706,16 +2706,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         );
         if (refreshedActive !== undefined) notifyChatUpsert(refreshedActive);
         return { status: "completed", assistantMessageId: result.assistantMessageId };
-      } catch (caught) {
+      } catch (error_) {
         // Issue #152 — abort preserves the user's optimistic message (AC#3:
         // no fake assistant content is persisted; the user's prompt remains
         // visible so they can edit & retry without retyping).
-        if (caught instanceof DOMException && caught.name === "AbortError") {
+        if (error_ instanceof DOMException && error_.name === "AbortError") {
           return { status: "cancelled" };
         }
         if (isSupersededOrAborted(chat.id, signal)) return { status: "cancelled" };
-        const failure = canonicalTurnInProgressFailure(caught);
-        if (failure.canonicalTurnInProgress !== true) setError(errorMessage(caught));
+        const failure = canonicalTurnInProgressFailure(error_);
+        if (failure.canonicalTurnInProgress !== true) setError(errorMessage(error_));
         return failure;
       }
     },

@@ -27,25 +27,22 @@ function fixtureLine(fixture: VoiceAcousticFixtureResult): string {
 export function renderVoiceAcousticSummary(scorecard: VoiceAcousticScorecard): string {
   const summary = scorecard.summary;
   const lines: string[] = [];
-  lines.push(`Voice acoustic evaluation summary (schema v${scorecard.schemaVersion})`);
   lines.push(
+    `Voice acoustic evaluation summary (schema v${scorecard.schemaVersion})`,
     `Fixtures: ${String(summary.totalFixtures)} total, positives=${String(summary.positiveFixtures)} passed=${String(summary.positivePassed)}, negatives=${String(summary.negativeFixtures)} caught=${String(summary.negativeCaught)}`,
-  );
-  lines.push(
     `Scenario coverage: ${summary.coveredScenarios.join(",")} coverage=${passFail(summary.scenarioCoverageMet)}`,
+    "",
+    "Fixtures:",
   );
-  lines.push("");
-  lines.push("Fixtures:");
   for (const fixture of scorecard.fixtureResults) {
     lines.push(fixtureLine(fixture));
   }
-  lines.push("");
-  lines.push("Metrics:");
+  lines.push("", "Metrics:");
   for (const metric of scorecard.metricSummary) {
     lines.push(metricLine(metric));
   }
-  lines.push("");
   lines.push(
+    "",
     summary.goNoGo === "GO"
       ? "Verdict: GO - positives passed, adversarial negatives were caught, and every scenario is covered."
       : "Verdict: NO-GO - a positive failed, a negative escaped, or scenario coverage is incomplete.",

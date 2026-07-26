@@ -7,10 +7,10 @@ import type {
   FilesystemPolicy,
   NetworkPolicy,
   SandboxAttestation,
-  SandboxBackend,
 } from "@oscharko-dev/keiko-contracts";
 
-export type { FilesystemPolicy, NetworkPolicy, SandboxAttestation, SandboxBackend };
+export type { FilesystemPolicy, NetworkPolicy, SandboxAttestation };
+export type { SandboxBackend } from "@oscharko-dev/keiko-contracts";
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE
 // selector so backend choice is deterministic and unit-testable without touching the filesystem.

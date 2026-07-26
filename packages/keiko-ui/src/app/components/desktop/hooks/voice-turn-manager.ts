@@ -25,15 +25,12 @@
 
 import type { VoiceProfile } from "@/lib/types";
 import { voiceMessageAllowedForProfile } from "@oscharko-dev/keiko-contracts";
-import {
-  type VoiceClock,
-  createBrowserVoiceClock,
-  resolutionToVoiceProfile,
-} from "./voice-timebase";
+import { type VoiceClock, createBrowserVoiceClock } from "./voice-timebase";
 
 // Re-export the clock seam and the capability adapter so consumers of the turn manager construct it
 // from the same primitives as the timing engine without importing two sibling modules.
-export { createBrowserVoiceClock, resolutionToVoiceProfile };
+export { createBrowserVoiceClock };
+export { resolutionToVoiceProfile } from "./voice-timebase";
 export type { VoiceClock };
 
 // ─── Turn states (D3) ───────────────────────────────────────────────────────────

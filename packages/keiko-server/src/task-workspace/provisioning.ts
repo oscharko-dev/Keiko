@@ -68,11 +68,11 @@ const RESUMABLE_STATES: readonly TaskWorkspaceLifecycleState[] = [
   "paused",
   "handoff-ready",
 ];
-const COMPLETABLE_STATES: readonly TaskWorkspaceLifecycleState[] = [
+const COMPLETABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
   "provisioning",
   "failed",
   "recovery-required",
-];
+]);
 
 interface ProvisioningCtx {
   readonly deps: WorkspaceProvisioningServiceDeps;
@@ -517,7 +517,7 @@ function reuseExistingOrUndefined(
       ? resumeExisting(ctx, repo, existing, nowMs)
       : flagResumableDrift(ctx, existing, nowMs);
   }
-  if (!COMPLETABLE_STATES.includes(existing.lifecycleState)) {
+  if (!COMPLETABLE_STATES.has(existing.lifecycleState)) {
     // Terminal state (archived/merged/abandoned/cleanup-pending): idempotent no-op, return as-is.
     assertPersistedManagedPath(ctx, existing);
     return { instance: existing, binding: buildBinding(existing), created: false };

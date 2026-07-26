@@ -205,7 +205,7 @@ function handleHunkContentLine(line: string, state: ParserState): boolean {
     state.oldLine++;
     return true;
   }
-  if (line.startsWith("\\ ")) {
+  if (line.startsWith(String.raw`\ `)) {
     // "\ No newline at end of file"
     const dl: DiffLine = { kind: "meta", oldLine: null, newLine: null, text: line };
     hunk.lines.push(dl);

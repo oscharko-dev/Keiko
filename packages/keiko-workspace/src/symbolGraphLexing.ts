@@ -25,39 +25,39 @@ const DEFINITION_PATTERNS: readonly {
 }[] = [
   {
     regex: new RegExp(
-      `^\\s*(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?function\\s+(${IDENTIFIER})\\b`,
+      String.raw`^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(${IDENTIFIER})\b`,
       "gmu",
     ),
     definitionKind: "function",
   },
   {
     regex: new RegExp(
-      `^\\s*(?:export\\s+)?(?:default\\s+)?(?:abstract\\s+)?class\\s+(${IDENTIFIER})\\b`,
+      String.raw`^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(${IDENTIFIER})\b`,
       "gmu",
     ),
     definitionKind: "class",
   },
   {
-    regex: new RegExp(`^\\s*(?:export\\s+)?interface\\s+(${IDENTIFIER})\\b`, "gmu"),
+    regex: new RegExp(String.raw`^\s*(?:export\s+)?interface\s+(${IDENTIFIER})\b`, "gmu"),
     definitionKind: "interface",
   },
   {
-    regex: new RegExp(`^\\s*(?:export\\s+)?type\\s+(${IDENTIFIER})\\b`, "gmu"),
+    regex: new RegExp(String.raw`^\s*(?:export\s+)?type\s+(${IDENTIFIER})\b`, "gmu"),
     definitionKind: "type",
   },
   {
-    regex: new RegExp(`^\\s*(?:export\\s+)?enum\\s+(${IDENTIFIER})\\b`, "gmu"),
+    regex: new RegExp(String.raw`^\s*(?:export\s+)?enum\s+(${IDENTIFIER})\b`, "gmu"),
     definitionKind: "enum",
   },
   {
-    regex: new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+(${IDENTIFIER})\\b`, "gmu"),
+    regex: new RegExp(String.raw`^\s*(?:export\s+)?(?:const|let|var)\s+(${IDENTIFIER})\b`, "gmu"),
     definitionKind: "variable",
   },
 ];
 
-export const IDENTIFIER_REGEX = new RegExp(`\\b(${IDENTIFIER})\\b`, "gu");
-export const CALL_REGEX = new RegExp(`\\b(${IDENTIFIER})\\s*\\(`, "gu");
-const IDENTIFIER_TERMS = new RegExp(`\\b${IDENTIFIER}\\b`, "gu");
+export const IDENTIFIER_REGEX = new RegExp(String.raw`\b(${IDENTIFIER})\b`, "gu");
+export const CALL_REGEX = new RegExp(String.raw`\b(${IDENTIFIER})\s*\(`, "gu");
+const IDENTIFIER_TERMS = new RegExp(String.raw`\b${IDENTIFIER}\b`, "gu");
 const KEYWORDS = new Set([
   "as",
   "async",
