@@ -370,11 +370,9 @@ export function EditorWindowSessionHost({
   const buildBaseProps = useCallback(
     (targetRoot: string): EditorSessionBaseProps => ({
       ...editorSessionBaseProps(targetRoot, cfg, ctx),
-      // Issue #2621 — the reveal names its target root in the same cfg patch that carries the line
-      // range, and the multi-root host mounts every root. Only the addressed root may act on it.
-      ...(targetRoot === configuredRoot ? revealSessionProps(cfg) : {}),
+      ...addressedRevealProps(cfg, targetRoot),
     }),
-    [cfg, configuredRoot, ctx],
+    [cfg, ctx],
   );
   if (workspace.manifest !== null && workspace.manifest.roots.length > 1) {
     return (
@@ -390,10 +388,7 @@ export function EditorWindowSessionHost({
   }
   const props: EditorWidgetProps = {
     ...editorSessionBaseProps(root, cfg, ctx),
-    // This branch renders exactly one editor, and it is handed the request unchanged from before —
-    // the root it displays is resolved by ADR-0090 binding and need not equal `cfg.root`, so the
-    // addressee comparison the multi-root branch makes has nothing to compare against here.
-    ...revealSessionProps(cfg),
+    ...addressedRevealProps(cfg, root),
     ...(root === undefined ? {} : { root }),
     ...(file === undefined ? {} : { file }),
     ...(openFiles === undefined ? {} : { openFiles }),
@@ -439,9 +434,20 @@ type EditorRevealSessionProps = Pick<
   "revealLineEnd" | "revealLineStart" | "revealRequestId"
 >;
 
-// Issue #2621 — the reveal triple is addressed to exactly one root, so it is built apart from the
-// props every root shares. Callers decide who is addressed; nothing here reads a root, so a caller
-// cannot accidentally hand the request to a root it was not written for.
+// Issue #2621 — a reveal names its addressee in the same cfg patch that carries the line range, so
+// exactly one editor may act on it: the one whose EFFECTIVE root is that addressee. One rule for
+// both branches, because both can misdeliver and they used to do it differently. The multi-root host
+// mounts every root, so an ungated request reached all of them at once. The single-root branch shows
+// whichever root ADR-0090 binding resolves, which need not be the addressee — and since that editor
+// is keyed by the effective root, a task-workspace switch remounts it and the mount wiring replays
+// the request in the wrong worktree's file. An addressee that matches no editor reaches nobody.
+function addressedRevealProps(
+  cfg: Record<string, unknown>,
+  effectiveRoot: string | undefined,
+): EditorRevealSessionProps {
+  return str(cfg, "root") === effectiveRoot ? revealSessionProps(cfg) : {};
+}
+
 function revealSessionProps(cfg: Record<string, unknown>): EditorRevealSessionProps {
   return {
     ...(num(cfg, "revealLineStart") === undefined

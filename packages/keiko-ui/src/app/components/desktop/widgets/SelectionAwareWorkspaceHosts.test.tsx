@@ -131,11 +131,17 @@ function context(): WindowRenderContext {
   } as unknown as WindowRenderContext;
 }
 
-function editorHost(cfg: Record<string, unknown>, ctx: WindowRenderContext): ReactNode {
+// `boundRoot` is what `resolveBoundRoot` hands the host: the ACTIVE task workspace overrides the
+// window's own cfg root (ADR-0090 D4), so the two differ exactly while a binding is in effect.
+function editorHost(
+  cfg: Record<string, unknown>,
+  ctx: WindowRenderContext,
+  boundRoot?: string,
+): ReactNode {
   const configuredRoot = typeof cfg["root"] === "string" ? cfg["root"] : undefined;
   return (
     <I18nProvider>
-      <EditorWindowSessionHost cfg={cfg} ctx={ctx} root={configuredRoot} />
+      <EditorWindowSessionHost cfg={cfg} ctx={ctx} root={boundRoot ?? configuredRoot} />
     </I18nProvider>
   );
 }
@@ -277,6 +283,28 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
     );
     await screen.findByTestId("editor-/repo-a");
 
+    expect(revealsFor("/repo-a")).toEqual(["7:10:reveal-1"]);
+  });
+
+  it("withholds a reveal from a bound root that is not its addressee", async () => {
+    // The last carrier of the stale-reveal class, and the one an active task workspace opens without
+    // any cfg write at all: `ctx.activeRoot` overrides `cfg.root` (ADR-0090 D4), the single-root
+    // editor is keyed by that effective root, so switching workspaces remounts it — and the reveal
+    // is applied from the Monaco mount wiring, not only when the request id changes. An unaddressed
+    // editor therefore replayed a jump-to-line in a different worktree's file.
+    const ctx = context();
+    manifestRef.current = null;
+    const reveal = { revealLineStart: 7, revealLineEnd: 10, revealRequestId: "reveal-1" };
+    const view = render(editorHost({ root: "/repo-a", ...reveal }, ctx));
+    await screen.findByTestId("editor-/repo-a");
+    expect(revealsFor("/repo-a")).toEqual(["7:10:reveal-1"]);
+
+    view.rerender(editorHost({ root: "/repo-a", ...reveal }, ctx, "/wt/b"));
+    await screen.findByTestId("editor-/wt/b");
+
+    // The bound root is not what the request was written for, so it never sees it.
+    expect(revealsFor("/wt/b")).toEqual(["::"]);
+    // And the addressee's own delivery is untouched by the rule.
     expect(revealsFor("/repo-a")).toEqual(["7:10:reveal-1"]);
   });
 
