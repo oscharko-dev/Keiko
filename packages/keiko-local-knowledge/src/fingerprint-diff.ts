@@ -28,8 +28,16 @@ export interface FingerprintDiffOptions {
 
 /**
  * The one ordering every run-fingerprint digest in this package sorts by: UTF-16 code units,
- * locale-independent by construction and identical to what a bare `Array.prototype.sort()` and
- * SQLite's BINARY collation produce.
+ * locale-independent by construction and identical to what a bare `Array.prototype.sort()`
+ * produces.
+ *
+ * Deliberately NOT claimed: agreement with SQLite's BINARY collation. That collation is `memcmp`
+ * over the stored UTF-8 bytes, which agrees with code-unit order throughout the BMP but inverts it
+ * for supplementary-plane characters — `U+10000` sorts above `U+E000` in UTF-8 and below it in
+ * UTF-16, because surrogates occupy `D800..DFFF`. The digest does not need the two to agree: it
+ * re-sorts whatever it is handed, so the ledger's `ORDER BY` is only ever an input order, never a
+ * premise. What it needs is what this comparator actually guarantees — a strict total order that is
+ * the same on every host.
  *
  * `String.localeCompare` must NOT be used for this. ICU collation reports 0 for pairs of distinct
  * strings — NFC vs NFD spellings of the same accented name, a zero-width space, a soft hyphen — and

@@ -72,7 +72,7 @@ describe("diffFingerprintSets", () => {
 // zero-width space, a soft hyphen), which leaves them in input order and cost two of the three run
 // digests their order-independence.
 //
-// What is asserted is deliberately only the comparator's own contract \u2014 a strict total order, never
+// What is asserted is deliberately only the comparator's own contract — a strict total order, never
 // 0 for distinct input. Whether THIS host's `localeCompare` actually collides on a given pair is a
 // property of the runtime's ICU build and default locale, not of the contract under test, so
 // measuring it here would make the suite fail on a small-icu Node while the production code stayed
@@ -96,9 +96,20 @@ describe("compareFingerprintKeys", () => {
     );
   });
 
-  it("is a total order agreeing with the default sort and SQLite BINARY collation", () => {
+  it("is a total order agreeing with the default code-unit sort", () => {
     const values = ["b", "A", "a", "B", "0"];
     expect([...values].sort(compareFingerprintKeys)).toEqual([...values].sort());
     expect(compareFingerprintKeys("a", "a")).toBe(0);
+  });
+
+  // Pins the limit of the claim above rather than leaving it to be over-read later: code-unit order
+  // is NOT byte order. `U+10000` encodes to four UTF-8 bytes and sorts above `U+E000` under SQLite's
+  // BINARY collation, but below it here, because its UTF-16 form starts in the surrogate range.
+  // Harmless for the digests — they re-sort their input, so no code path requires the two orderings
+  // to coincide — and worth pinning so nobody "simplifies" the comparator toward a byte comparison
+  // on the strength of an agreement that was never there.
+  it("does not claim byte order: supplementary-plane keys invert against UTF-8", () => {
+    expect(compareFingerprintKeys("\u{10000}", "\uE000")).toBeLessThan(0);
+    expect(Buffer.compare(Buffer.from("\u{10000}", "utf8"), Buffer.from("\uE000", "utf8"))).toBe(1);
   });
 });
