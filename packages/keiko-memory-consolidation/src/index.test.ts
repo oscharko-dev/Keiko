@@ -79,7 +79,7 @@ describe("public barrel", () => {
     );
   });
 
-  it("pins the public type surface (compile-time only)", async () => {
+  it("pins the public type surface and loads the barrel at runtime", async () => {
     pin<ConsolidationJob>();
     pin<ConsolidationJobState>();
     pin<ConsolidationAccessStat>();
