@@ -39,6 +39,21 @@ rules:
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
       - ci.yml:543
       - ci.yml:629
+  dangerous-triggers:
+    ignore:
+      # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and
+      # `workflow_run` is the only trigger GitHub offers for that. zizmor's warning is about the
+      # classic misuse - a `workflow_run` workflow that checks out the triggering run's head and
+      # executes it with the elevated token. This workflow does the opposite, by construction:
+      # it checks out `github.event.repository.default_branch` explicitly (never
+      # `workflow_run.head_sha`), it runs only committed repository code, its only write grant is
+      # `actions: write`, and the two attacker-influenced values it reads - the run id and the mode -
+      # go through `env:` indirection and are then re-validated against a positive-integer and a
+      # two-literal pattern before either reaches an API path. The one privileged call it can make,
+      # `rerun-failed-jobs`, re-executes the SAME tree that already ran and cannot introduce code.
+      # Verified with the pinned scanner version: zizmor 1.26.1 reports this one finding for this
+      # file and nothing else.
+      - infra-failure-retry.yml:25
   misfeature:
     ignore:
       # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are

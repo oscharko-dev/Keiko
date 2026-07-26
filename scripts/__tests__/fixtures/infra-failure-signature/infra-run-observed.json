@@ -1,0 +1,37 @@
+{
+  "provenance": {
+    "source": "GitHub REST, repository run 30157827347",
+    "observed": "2026-07-25",
+    "note": "2026-07-25 GitHub Actions incident: the failed job executed zero steps and carries the runner internal-error annotation. Its workflow file path is deliberately NOT on the re-run allowlist, so this bundle is also the real excluded-lane witness."
+  },
+  "run": {
+    "id": 30157827347,
+    "path": ".github/workflows/keiko-for-quality-action.yml",
+    "event": "check_run",
+    "run_attempt": 1,
+    "conclusion": "failure"
+  },
+  "jobsTotal": 2,
+  "jobs": [
+    {
+      "id": 89678551433,
+      "name": "Evaluate quality aggregate",
+      "conclusion": "failure",
+      "steps": []
+    },
+    {
+      "id": 89678560102,
+      "name": "Preview quality aggregate (dry-run)",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "annotations": {
+    "89678551433": [
+      {
+        "annotation_level": "failure",
+        "message": "GitHub Actions has encountered an internal error when running your job."
+      }
+    ]
+  }
+}

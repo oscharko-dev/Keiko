@@ -30,23 +30,29 @@ export function useDialogTabTrap(dialogRef: RefObject<HTMLElement | null>): void
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key !== "Tab") return;
-      const candidates = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-      if (candidates === undefined) return;
-      const focusable = Array.from(candidates).filter(isReachable);
-      if (focusable.length === 0) {
-        // Every control is disabled (e.g. mid-save) — nothing to move focus to, but Tab must still
-        // not escape the modal, so swallow it in place.
+      const dialog = dialogRef.current;
+      if (dialog === null) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        isReachable,
+      );
+      const active = document.activeElement;
+      // Focus can already sit OUTSIDE an open aria-modal dialog: disabling the focused control —
+      // which every confirm dialog here does while its action is in flight — drops focus to <body>.
+      // Swallowing Tab in place would then strand the user outside the modal, so re-enter the
+      // dialog instead: at the edge the direction points to, or on the container itself when every
+      // control is disabled. The container is the fallback, so a trapped dialog needs tabIndex={-1}.
+      if (focusable.length === 0 || !dialog.contains(active)) {
         event.preventDefault();
+        ((event.shiftKey ? focusable.at(-1) : focusable[0]) ?? dialog).focus();
         return;
       }
       const first = focusable[0];
       const last = focusable.at(-1);
       if (first === undefined || last === undefined) return;
-      const active = document.activeElement;
       // Initial focus lands on the dialog container itself, not on a button, so a Shift+Tab
       // pressed before ever pressing Tab must wrap the same as if focus were already on the first
       // element — otherwise it escapes to whatever was focusable before the dialog opened.
-      const onContainer = active === dialogRef.current;
+      const onContainer = active === dialog;
       if (event.shiftKey && (active === first || onContainer)) {
         event.preventDefault();
         last.focus();

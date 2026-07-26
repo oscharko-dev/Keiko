@@ -94,6 +94,37 @@ describe("useDialogTabTrap", () => {
     const notCanceled = fireEvent.keyDown(document, { key: "Tab" });
 
     expect(notCanceled).toBe(false);
+    expect(document.activeElement).toBe(dialog);
+  });
+
+  // Disabling the focused control drops focus to <body> — every confirm dialog in the shell does
+  // exactly that while its action is in flight. Swallowing Tab in place would leave the user
+  // stranded outside an aria-modal dialog, so the trap has to pull focus back in (Issue #2617).
+  it("re-enters the dialog when focus has already escaped to the body", () => {
+    render(<TestDialog />);
+    const first = screen.getByRole("button", { name: "First" });
+    const last = screen.getByRole("button", { name: "Last" });
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    const notCanceled = fireEvent.keyDown(document, { key: "Tab" });
+    expect(notCanceled).toBe(false);
+    expect(document.activeElement).toBe(first);
+
+    first.blur();
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("falls back to the container when focus escaped and every control is disabled", () => {
+    render(<TestDialog disabled />);
+    const dialog = screen.getByTestId("dialog");
+    expect(document.activeElement).toBe(document.body);
+
+    fireEvent.keyDown(document, { key: "Tab" });
+
+    expect(document.activeElement).toBe(dialog);
   });
 
   it("does not intercept non-Tab keys", () => {

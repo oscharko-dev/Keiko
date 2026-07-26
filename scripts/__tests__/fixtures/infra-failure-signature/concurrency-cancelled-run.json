@@ -1,0 +1,37 @@
+{
+  "provenance": {
+    "source": "GitHub REST, repository run 30157827822",
+    "observed": "2026-07-25",
+    "note": "Same incident window: a zero-step job cancelled by a higher-priority concurrency request. The annotation exists but is not a pinned runner-failure signature, so this classifies genuine."
+  },
+  "run": {
+    "id": 30157827822,
+    "path": ".github/workflows/keiko-for-quality-action.yml",
+    "event": "issue_comment",
+    "run_attempt": 1,
+    "conclusion": "failure"
+  },
+  "jobsTotal": 2,
+  "jobs": [
+    {
+      "id": 89678434880,
+      "name": "Evaluate quality aggregate",
+      "conclusion": "cancelled",
+      "steps": []
+    },
+    {
+      "id": 89678435164,
+      "name": "Preview quality aggregate (dry-run)",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "annotations": {
+    "89678434880": [
+      {
+        "annotation_level": "failure",
+        "message": "Canceling since a higher priority waiting request for kfq-action-eval-2702 exists"
+      }
+    ]
+  }
+}

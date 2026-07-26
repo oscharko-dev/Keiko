@@ -33,6 +33,15 @@ const ANCHOR_SUBJECT = new Map([
       matches: (line) => /uses:\s*actions\/cache@/u.test(line),
     },
   ],
+  [
+    "dangerous-triggers",
+    {
+      description: "a workflow's top-level `on:` block",
+      // zizmor reports this audit against the whole trigger block and anchors it at the `on:` key,
+      // so an anchor that no longer lands there is documenting a trigger surface that moved.
+      matches: (line) => /^on:\s*$/u.test(line),
+    },
+  ],
 ]);
 
 export function parseAnchors(config) {

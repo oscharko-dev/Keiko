@@ -1,0 +1,37 @@
+{
+  "provenance": {
+    "source": "GitHub REST, repository run 30157827347",
+    "observed": "2026-07-25",
+    "note": "Job and annotation payloads verbatim from the 2026-07-25 incident run; only the run envelope's workflow file path is rewritten to an allowlisted lane, because the observed incident run was in a lane that is deliberately excluded. This is the re-run-eligible witness."
+  },
+  "run": {
+    "id": 30157827347,
+    "path": ".github/workflows/ci.yml",
+    "event": "check_run",
+    "run_attempt": 1,
+    "conclusion": "failure"
+  },
+  "jobsTotal": 2,
+  "jobs": [
+    {
+      "id": 89678551433,
+      "name": "Evaluate quality aggregate",
+      "conclusion": "failure",
+      "steps": []
+    },
+    {
+      "id": 89678560102,
+      "name": "Preview quality aggregate (dry-run)",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "annotations": {
+    "89678551433": [
+      {
+        "annotation_level": "failure",
+        "message": "GitHub Actions has encountered an internal error when running your job."
+      }
+    ]
+  }
+}
