@@ -139,9 +139,12 @@ fi
 # into .scannerwork/report-task.txt. Observed fallback (this file does not always survive the
 # container): the CE task id visible BEFORE the scan — a new submission must show a DIFFERENT id.
 # A stale report-task.txt from an earlier run must not bind us to an old task, so clear it first.
+# On a never-analysed project (fresh server volume) this endpoint 404s; under `set -eo pipefail`
+# that must yield an empty baseline — any new task id then counts as this submission — instead of
+# silently killing the whole run before "Analysing".
 rm -rf "${repo_root}/.scannerwork"
 baseline_task="$(ask -u "${token}:" "${host}/api/ce/component?component=${project}" 2>/dev/null |
-  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).current?.id??"")}catch{process.stdout.write("")}})')"
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).current?.id??"")}catch{process.stdout.write("")}})' || true)"
 
 say "Analysing"
 # sonar.projectKey is deliberately NOT the real project key: nothing here may be mistaken for, or
