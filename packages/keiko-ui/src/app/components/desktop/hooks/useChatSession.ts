@@ -341,6 +341,23 @@ function replaceCanonicalTurnMessages(
   return result;
 }
 
+// AC2 (#2670) — the BFF persists the canonical user row at admission, before generation
+// completes. A fetched non-local user row with the projection's exact content stamped at or
+// after the projection therefore proves durable admission (the same proof shape as
+// hasNewCanonicalUserMessage); re-appending the held projection would render the transcript twice.
+function canonicalVoiceProjectionDurablyAdmitted(
+  messages: readonly ChatMessage[],
+  projection: CanonicalVoiceProjection,
+): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "user" &&
+      !message.id.startsWith("local-") &&
+      message.content === projection.content &&
+      message.timestamp >= projection.message.timestamp,
+  );
+}
+
 function mergeCanonicalVoiceProjections(
   messages: readonly ChatMessage[],
   chatId: string,
@@ -349,14 +366,22 @@ function mergeCanonicalVoiceProjections(
 ): ChatMessage[] {
   const ids = new Set(messages.map((message) => message.id));
   const excluded = new Set(excludedLocalIds);
-  const pending = [...projections.values()]
-    .filter(
-      (projection) =>
-        projection.chatId === chatId &&
-        !excluded.has(projection.message.id) &&
-        !ids.has(projection.message.id),
-    )
-    .map((projection) => projection.message);
+  const pending: ChatMessage[] = [];
+  for (const [key, projection] of [...projections.entries()]) {
+    if (
+      projection.chatId !== chatId ||
+      excluded.has(projection.message.id) ||
+      ids.has(projection.message.id)
+    ) {
+      continue;
+    }
+    if (canonicalVoiceProjectionDurablyAdmitted(messages, projection)) {
+      // Safe inside a state updater: releasing an already-released key is a no-op.
+      releaseCanonicalVoiceProjectionByKey(key);
+      continue;
+    }
+    pending.push(projection.message);
+  }
   return pending.length === 0 ? Array.from(messages) : [...messages, ...pending];
 }
 

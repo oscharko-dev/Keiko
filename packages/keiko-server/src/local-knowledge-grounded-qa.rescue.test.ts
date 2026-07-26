@@ -3056,3 +3056,130 @@ describe("local-knowledge embedding capability gate", () => {
     expect(embeddingRequests).toBe(1);
   });
 });
+
+// ─── AC6 fail-closed: uncited source-backed answers (#2670) ───────────────────
+// The folder, multi-source, and hybrid grounded paths fail closed via the shared
+// grounded-faithfulness markers when a source-backed answer carries no supported citation
+// (missingCitationMarker) or cites [n] markers outside the evidence set
+// (unsupportedNumericCitationMarker). The single-connector local-knowledge path must mirror that
+// mechanism: the #189 rescue mechanics (noEvidence stays false, citations stay empty) are
+// strengthened with an uncertainty marker, never relaxed.
+
+type FailClosedChat = ReturnType<UiStore["updateChat"]>;
+
+async function seedFailClosedChat(slug: string): Promise<FailClosedChat> {
+  const knowledgeStore = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+  });
+  const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+    displayName: `Fail Closed Capsule ${slug}`,
+    capsuleId: `cap-fail-closed-${slug}`,
+    sourceId: `src-fail-closed-${slug}`,
+    text: "alpha beta grounded evidence",
+    chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+  });
+  updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+  knowledgeStore.close();
+  const project = rescueStore.createProject(rescueTmp, `fail-closed-${slug}`);
+  const created = rescueStore.createChat(project.path, `Fail closed ${slug}`, "chat-model");
+  return rescueStore.updateChat(created.id, {
+    localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+  });
+}
+
+async function askFailClosedChat(
+  chat: FailClosedChat,
+  assistantAnswer: string,
+  requestId: string,
+): Promise<LocalKnowledgeAnswer> {
+  const embeddingModelId = "text-embedding-3-small";
+  const adapter = scriptedAdapter();
+  const deps: UiHandlerDeps = {
+    config: {
+      providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+    },
+    configPresent: true,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: (value: unknown): unknown => value,
+    registry: createRunRegistry(),
+    modelPortFactory: () => answerModel(assistantAnswer, requestId),
+    store: rescueStore,
+    uiDbPath: join(rescueTmp, "keiko-ui.db"),
+    localKnowledgeEmbeddingRequest: adapter.request,
+  };
+  const result = await handleLocalKnowledgeGroundedAsk(
+    chat,
+    { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+    deps,
+    new AbortController().signal,
+  );
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  return result.body as LocalKnowledgeAnswer;
+}
+
+describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
+  it("marks a substantive markerless answer over retrieved references as unsupported-citation", async () => {
+    const chat = await seedFailClosedChat("markerless");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "The capsule describes the alpha beta activation flow in detail.",
+      "fail-closed-markerless",
+    );
+
+    // #189 mechanics stay: not a no-evidence state, and nothing is cited after the fact.
+    expect(answer.noEvidence).toBe(false);
+    expect(answer.citations).toEqual([]);
+    // Fail closed like the sibling grounded paths: the shared missing-citation marker.
+    expect(answer.uncertainty).toHaveLength(1);
+    expect(answer.uncertainty[0]?.kind).toBe("unsupported-citation");
+    expect(answer.uncertainty[0]?.claim).toContain("without a supported inline citation");
+  });
+
+  it("marks out-of-range [n] markers as unsupported instead of silently dropping them", async () => {
+    const chat = await seedFailClosedChat("out-of-range");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "Alpha beta grounded evidence is decisive [7].",
+      "fail-closed-out-of-range",
+    );
+
+    expect(answer.noEvidence).toBe(false);
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty).toHaveLength(1);
+    expect(answer.uncertainty[0]?.kind).toBe("unsupported-citation");
+    expect(answer.uncertainty[0]?.claim).toContain("[7]");
+    expect(answer.uncertainty[0]?.claim).not.toContain("without a supported inline citation");
+  });
+
+  it("keeps a faithfully cited answer free of reconciliation markers", async () => {
+    const chat = await seedFailClosedChat("cited");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "Alpha beta grounded evidence [1].",
+      "fail-closed-cited",
+    );
+
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
+    expect(answer.uncertainty).toEqual([]);
+  });
+
+  it("does not double-mark the no-evidence path with a citation marker", async () => {
+    const chat = await seedFailClosedChat("no-evidence");
+
+    const answer = await askFailClosedChat(
+      chat,
+      LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
+      "fail-closed-no-evidence",
+    );
+
+    expect(answer.noEvidence).toBe(true);
+    expect(answer.uncertainty).toHaveLength(1);
+    expect(answer.uncertainty[0]?.kind).toBe("no-evidence");
+  });
+});
