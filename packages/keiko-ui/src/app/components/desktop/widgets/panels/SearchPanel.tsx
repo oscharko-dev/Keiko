@@ -46,6 +46,7 @@ import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import EditorDiffSurface, { buildWorkspaceReplacePatchModel } from "../cards/EditorDiffSurface";
 
 const SEARCH_DEBOUNCE_MS = 250;
+const SearchIcon = Icons.search;
 
 interface SearchPanelProps {
   readonly root?: string | undefined;
@@ -146,7 +147,13 @@ function statusMessage(args: {
   }
   if (args.response === null) return t("searchPanel.status.readyToSearch");
   if (args.response.results.length === 0) return t("searchPanel.status.noMatches");
-  const suffix = args.response.truncated ? t("searchPanel.status.resultsCappedSuffix") : "";
+  let suffix = "";
+  if (args.response.truncated) {
+    const key = args.multiRoot
+      ? "searchPanel.status.resultsCappedPerRootSuffix"
+      : "searchPanel.status.resultsCappedSuffix";
+    suffix = t(key);
+  }
   const roots = args.multiRoot
     ? t("searchPanel.status.acrossRootsSuffix", {
         count: args.response.successfulRootCount,
@@ -187,10 +194,40 @@ function symbolResponseToSearchResponse(
   };
 }
 
+function attributedResults(
+  outcome: Extract<WorkspaceRootRequestOutcome<WorkspaceSearchResponse>, { status: "success" }>,
+): readonly RootAwareSearchResult[] {
+  return outcome.value.results.map((result) => ({
+    ...result,
+    root: outcome.target.root,
+    rootLabel: outcome.target.label,
+  }));
+}
+
+function rootFairMerge(
+  resultsByRoot: readonly (readonly RootAwareSearchResult[])[],
+): readonly RootAwareSearchResult[] {
+  const merged: RootAwareSearchResult[] = [];
+  let resultIndex = 0;
+  let addedResult = true;
+  while (merged.length < WORKSPACE_SEARCH_MAX_RESULTS && addedResult) {
+    addedResult = false;
+    for (const rootResults of resultsByRoot) {
+      const result = rootResults[resultIndex];
+      if (result === undefined) continue;
+      merged.push(result);
+      addedResult = true;
+      if (merged.length === WORKSPACE_SEARCH_MAX_RESULTS) return merged;
+    }
+    resultIndex += 1;
+  }
+  return merged;
+}
+
 function aggregateSearch(
   outcomes: readonly WorkspaceRootRequestOutcome<WorkspaceSearchResponse>[],
 ): SearchAggregate {
-  const results: RootAwareSearchResult[] = [];
+  const resultsByRoot: Array<readonly RootAwareSearchResult[]> = [];
   const errors: RootSearchError[] = [];
   let filesScanned = 0;
   let elapsedMs = 0;
@@ -209,17 +246,13 @@ function aggregateSearch(
     filesScanned += outcome.value.filesScanned;
     elapsedMs = Math.max(elapsedMs, outcome.value.elapsedMs);
     truncated ||= outcome.value.truncated;
-    results.push(
-      ...outcome.value.results.map((result) => ({
-        ...result,
-        root: outcome.target.root,
-        rootLabel: outcome.target.label,
-      })),
-    );
+    resultsByRoot.push(attributedResults(outcome));
   }
-  if (results.length > WORKSPACE_SEARCH_MAX_RESULTS) truncated = true;
+  const availableResultCount = resultsByRoot.reduce((total, results) => total + results.length, 0);
+  const results = rootFairMerge(resultsByRoot);
+  if (availableResultCount > results.length) truncated = true;
   return {
-    results: results.slice(0, WORKSPACE_SEARCH_MAX_RESULTS),
+    results,
     errors,
     truncated,
     filesScanned,
@@ -685,7 +718,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
         }}
       >
         <div className="srch-box">
-          <Icons.search size={15} aria-hidden="true" />
+          <SearchIcon size={15} aria-hidden="true" />
           <input
             ref={queryInputRef}
             type="search"
