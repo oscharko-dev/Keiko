@@ -11,15 +11,14 @@ import type {
   GatewayStreamChunk,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import type {
+import type { HarnessEvent, HarnessLimits, TaskInput, TaskType } from "./types.js";
+
+export type {
   ToolCallMetadata,
   ToolCallRequest,
   ToolCallResult,
   ToolPort,
 } from "@oscharko-dev/keiko-contracts";
-import type { HarnessEvent, HarnessLimits, TaskInput, TaskType } from "./types.js";
-
-export type { ToolCallMetadata, ToolCallRequest, ToolCallResult, ToolPort };
 
 export interface ModelPort {
   readonly call: (request: GatewayRequest, signal: AbortSignal) => Promise<NormalizedResponse>;

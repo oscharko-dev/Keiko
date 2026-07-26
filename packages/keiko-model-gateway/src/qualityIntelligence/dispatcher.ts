@@ -123,8 +123,8 @@ async function invokePort(ctx: InvocationContext): Promise<NormalizedResponse> {
   try {
     const request = buildGatewayRequest(ctx.modelId, ctx.segments, handle.signal);
     return await ctx.port.call(request, ctx.providerConfig);
-  } catch (caught: unknown) {
-    classifyAndThrow(ctx.profile.id, ctx.profile.timeoutMsHint, handle.reasonKind(), caught);
+  } catch (error_: unknown) {
+    classifyAndThrow(ctx.profile.id, ctx.profile.timeoutMsHint, handle.reasonKind(), error_);
   } finally {
     handle.dispose();
   }

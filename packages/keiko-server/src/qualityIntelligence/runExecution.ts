@@ -26,7 +26,7 @@ import {
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligenceModelRouting } from "@oscharko-dev/keiko-contracts";
 import { currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
-import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
+import { ingestInlineSourcesAsync } from "./runIngestion.js";
 import type { QiSourceSummary } from "./runIngestion.js";
 import type { QiSkippedSource } from "./runIngestion.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
@@ -346,4 +346,5 @@ function buildWorkflowDeps(args: WorkflowDepsInput): QualityIntelligenceModelRou
   };
 }
 
-export { QiIngestionError, QiGenerationError };
+export { QiIngestionError } from "./runIngestion.js";
+export { QiGenerationError };

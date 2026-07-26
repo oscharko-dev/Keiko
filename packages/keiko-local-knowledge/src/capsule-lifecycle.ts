@@ -534,14 +534,12 @@ function assignContextualRetrievalSettings(
   settings: CapsuleContextualRetrievalSettings,
 ): void {
   assertSafeContextualRetrievalSettings(settings);
-  assignments.push("contextual_retrieval_enabled = :contextual_retrieval_enabled");
-  assignments.push("contextual_retrieval_model_id = :contextual_retrieval_model_id");
-  assignments.push("contextual_retrieval_prompt_version = :contextual_retrieval_prompt_version");
-  assignments.push("contextual_retrieval_strict = :contextual_retrieval_strict");
   assignments.push(
+    "contextual_retrieval_enabled = :contextual_retrieval_enabled",
+    "contextual_retrieval_model_id = :contextual_retrieval_model_id",
+    "contextual_retrieval_prompt_version = :contextual_retrieval_prompt_version",
+    "contextual_retrieval_strict = :contextual_retrieval_strict",
     "contextual_retrieval_max_context_chars = :contextual_retrieval_max_context_chars",
-  );
-  assignments.push(
     "contextual_retrieval_document_context_max_chars = :contextual_retrieval_document_context_max_chars",
   );
   params.contextual_retrieval_enabled = settings.enabled ? 1 : 0;

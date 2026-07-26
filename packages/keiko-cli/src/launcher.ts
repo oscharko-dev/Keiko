@@ -319,14 +319,18 @@ function buildInstallPlan(
 
 function describePlan(plan: InstallPlan, explain: boolean): string {
   const lines: string[] = [];
-  lines.push(`platform: ${plan.platform}`);
-  lines.push(`path:     ${plan.targetPath}`);
-  lines.push(`mode:     0o${plan.fileMode.toString(8)}`);
+  lines.push(
+    `platform: ${plan.platform}`,
+    `path:     ${plan.targetPath}`,
+    `mode:     0o${plan.fileMode.toString(8)}`,
+  );
   if (explain) {
-    lines.push("--- begin generated content ---");
-    lines.push(plan.content.replaceAll("\r\n", "\n"));
-    lines.push("--- end generated content ---");
-    lines.push("Remove with: keiko launcher remove");
+    lines.push(
+      "--- begin generated content ---",
+      plan.content.replaceAll("\r\n", "\n"),
+      "--- end generated content ---",
+      "Remove with: keiko launcher remove",
+    );
   }
   return lines.join("\n") + "\n";
 }

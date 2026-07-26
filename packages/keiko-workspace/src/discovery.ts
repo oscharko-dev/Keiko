@@ -48,7 +48,7 @@ export interface DiscoveryResult {
 }
 
 function toRelative(root: string, absolutePath: string): string {
-  return relative(root, absolutePath).split("\\").join("/");
+  return relative(root, absolutePath).replaceAll("\\", "/");
 }
 
 function toRealRelative(fs: WorkspaceFs, root: string, absolutePath: string): string {

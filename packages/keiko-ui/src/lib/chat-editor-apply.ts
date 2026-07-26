@@ -283,7 +283,7 @@ function normalizePatch(root: string, text: string): Step<ParsedPatch> {
   const parsed = parsePatchEntries(text);
   if (!parsed.ok) return parsed;
   const targets = parsed.value.map((entry) => patchTarget(root, entry));
-  if (targets.some((target) => target === null)) {
+  if (targets.includes(null)) {
     return { ok: false, outcome: rejected("INVALID_PATCH", "The patch target is unsupported.") };
   }
   const safeTargets = targets as readonly PatchTarget[];

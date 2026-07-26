@@ -82,8 +82,8 @@ function ConnectorPillItem({
       const response = await updateScopes(chat.id, remaining.length > 0 ? remaining : null);
       onDisconnect?.(response.chat);
       restoreScopeHeaderFocus(header);
-    } catch (caught) {
-      setError(formatErrorMessage(caught));
+    } catch (error_) {
+      setError(formatErrorMessage(error_));
     } finally {
       setBusy(false);
     }

@@ -298,7 +298,7 @@ async function api(baseUrl, path, options = {}) {
     Accept: "application/json",
     ...(method === "GET" || method === "HEAD" ? {} : { "X-Keiko-CSRF": "1" }),
     ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
-    ...(options.headers ?? {}),
+    ...options.headers,
   };
   const res = await globalThis.fetch(`${baseUrl}${path}`, {
     ...options,

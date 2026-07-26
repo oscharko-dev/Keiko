@@ -134,7 +134,7 @@ const writingEditing: PromptEnhancerEvalFixture = {
   category: "task-class",
   description: "A drafting/editing request that favours a lean profile.",
   request: { text: "Draft a short, polite email to reschedule a meeting and proofread it." },
-  dimensions: new Set([...CORE]),
+  dimensions: new Set(CORE),
   oracle: { expectedTaskClasses: ["writing-editing"], expectedProfiles: ["fast"] },
 };
 

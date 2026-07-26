@@ -10,7 +10,6 @@
 // applies, not redaction-before-display (ADR-0126 consequence).
 
 import {
-  buildEditorProblemsSnapshot,
   EDITOR_PROBLEM_MESSAGE_MAX_CHARS,
   type EditorProblem,
   type EditorProblemSeverity,
@@ -291,4 +290,4 @@ export function resetEditorProblemsStoreForTests(): void {
 }
 
 // Re-exported for the panel + tests so the canonical bounded/sorted snapshot is built in one place.
-export { buildEditorProblemsSnapshot };
+export { buildEditorProblemsSnapshot } from "@oscharko-dev/keiko-contracts";

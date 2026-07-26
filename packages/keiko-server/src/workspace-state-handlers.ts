@@ -215,7 +215,7 @@ function requestHasWorkspaceWritePrecondition(req: IncomingMessage): boolean {
   const values = headerValues(req, "if-match");
   if (values.length === 0) return false;
   const current = workspaceStateEtag(workspaceState.revision);
-  return values.some((item) => item === current);
+  return values.includes(current);
 }
 
 function workspacePayloadMatches(

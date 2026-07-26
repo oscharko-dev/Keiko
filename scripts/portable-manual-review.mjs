@@ -189,7 +189,8 @@ function ensureDir(path) {
 }
 
 function shellQuote(value) {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
+  const escapedSingleQuote = String.raw`'\''`;
+  return `'${value.replaceAll("'", escapedSingleQuote)}'`;
 }
 
 function targetByName(name) {

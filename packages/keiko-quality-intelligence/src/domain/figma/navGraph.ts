@@ -241,7 +241,7 @@ function walkFlows(
       counter.count += 1;
     }
     if (path.length >= maxDepth) return;
-    const last = path[path.length - 1];
+    const last = path.at(-1);
     if (last === undefined) return;
     for (const next of adjacency.get(last) ?? []) {
       if (counter.count >= cap) return;

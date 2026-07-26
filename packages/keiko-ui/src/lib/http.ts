@@ -88,7 +88,7 @@ function buildBffHeaders(init: RequestInit | undefined, correlationId: string): 
     [CORRELATION_HEADER]: correlationId,
     ...(isStateChanging || hasBody ? { "Content-Type": "application/json" } : {}),
     ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-    ...((init?.headers as Record<string, string> | undefined) ?? {}),
+    ...(init?.headers as Record<string, string> | undefined),
   };
 }
 

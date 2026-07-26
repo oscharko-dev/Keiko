@@ -131,10 +131,11 @@ export const normaliseGermanKeywordText = (value: string | undefined): string =>
     .replaceAll("ö", "oe")
     .replaceAll("ü", "ue");
 
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 
 const KEYWORD_PART_SEPARATOR = /[\s-]+/u;
-const KEYWORD_BOUNDARY = "[^\\p{L}\\p{N}]";
+const KEYWORD_BOUNDARY = String.raw`[^\p{L}\p{N}]`;
 
 /**
  * Boundary-aware keyword test over the German keyword fold. Hyphens and whitespace are equivalent
@@ -150,7 +151,7 @@ export const containsNormalisedKeyword = (text: string, keyword: string): boolea
   if (parts.length === 0) {
     return false;
   }
-  const keywordPattern = parts.map(escapeRegExp).join("[\\s-]+");
+  const keywordPattern = parts.map(escapeRegExp).join(String.raw`[\s-]+`);
   return new RegExp(
     `(?:^|${KEYWORD_BOUNDARY})${keywordPattern}(?=$|${KEYWORD_BOUNDARY})`,
     "u",

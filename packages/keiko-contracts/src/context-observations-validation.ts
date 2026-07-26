@@ -19,8 +19,13 @@ import {
 import { isContextLaneId } from "./context-engineering-validation.js";
 import type { ContextValidationResult } from "./context-engineering-validation.js";
 
-const TOOL_OBSERVATION_KINDS: readonly string[] = ["command", "test", "search", "browser"];
-const STREAMS: readonly string[] = ["stdout", "stderr"];
+const TOOL_OBSERVATION_KINDS: ReadonlySet<string> = new Set([
+  "command",
+  "test",
+  "search",
+  "browser",
+]);
+const STREAMS: ReadonlySet<string> = new Set(["stdout", "stderr"]);
 
 // ─── Shared primitives (local; contracts is a leaf, no shared-util import) ──────
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -63,7 +68,7 @@ function buildResult(reasons: readonly string[]): ContextValidationResult {
 
 // ─── Kind guard ──────────────────────────────────────────────────────────────
 export function isContextToolObservationKind(value: unknown): boolean {
-  return typeof value === "string" && TOOL_OBSERVATION_KINDS.includes(value);
+  return typeof value === "string" && TOOL_OBSERVATION_KINDS.has(value);
 }
 
 // ─── ContextToolRehydrationHandle ──────────────────────────────────────────────
@@ -129,7 +134,7 @@ function collectExcerpts(value: unknown, prefix: string): string[] {
     }
     pushIf(
       reasons,
-      typeof entry.stream !== "string" || !STREAMS.includes(entry.stream),
+      typeof entry.stream !== "string" || !STREAMS.has(entry.stream),
       `${at}.stream invalid`,
     );
     pushIf(reasons, !isFiniteNonNegativeNumber(entry.bytes), `${at}.bytes invalid`);
@@ -155,9 +160,11 @@ function collectCommand(value: Record<string, unknown>, prefix: string): string[
     !isOptionalFiniteNonNegativeNumber(value.omittedByteCount),
     `${prefix}.omittedByteCount invalid`,
   );
-  reasons.push(...collectExcerpts(value.excerpts, prefix));
-  reasons.push(...collectInjectionOptionals(value, prefix));
-  reasons.push(...collectOptionalRehydration(value.rehydration, `${prefix}.rehydration`));
+  reasons.push(
+    ...collectExcerpts(value.excerpts, prefix),
+    ...collectInjectionOptionals(value, prefix),
+    ...collectOptionalRehydration(value.rehydration, `${prefix}.rehydration`),
+  );
   return reasons;
 }
 
@@ -208,15 +215,13 @@ function collectTest(value: Record<string, unknown>, prefix: string): string[] {
     !isOptionalFiniteNonNegativeNumber(value.omittedByteCount),
     `${prefix}.omittedByteCount invalid`,
   );
-  reasons.push(...collectTestCounts(value.counts, prefix));
   reasons.push(
+    ...collectTestCounts(value.counts, prefix),
     ...collectBoundedStringArray(
       value.failingTestNames,
       `${prefix}.failingTestNames`,
       MAX_FAILING_TEST_NAMES,
     ),
-  );
-  reasons.push(
     ...collectBoundedStringArray(
       value.stackFrameExcerpts,
       `${prefix}.stackFrameExcerpts`,
@@ -224,8 +229,10 @@ function collectTest(value: Record<string, unknown>, prefix: string): string[] {
     ),
   );
   pushIf(reasons, typeof value.outputSummary !== "string", `${prefix}.outputSummary invalid`);
-  reasons.push(...collectInjectionOptionals(value, prefix));
-  reasons.push(...collectOptionalRehydration(value.rehydration, `${prefix}.rehydration`));
+  reasons.push(
+    ...collectInjectionOptionals(value, prefix),
+    ...collectOptionalRehydration(value.rehydration, `${prefix}.rehydration`),
+  );
   return reasons;
 }
 
@@ -277,8 +284,10 @@ function collectSearch(value: Record<string, unknown>, prefix: string): string[]
   );
   pushIf(reasons, !isFiniteNonNegativeNumber(value.omittedCount), `${prefix}.omittedCount invalid`);
   pushIf(reasons, typeof value.truncated !== "boolean", `${prefix}.truncated invalid`);
-  reasons.push(...collectTopRanges(value.topRanges, prefix));
-  reasons.push(...collectInjectionOptionals(value, prefix));
+  reasons.push(
+    ...collectTopRanges(value.topRanges, prefix),
+    ...collectInjectionOptionals(value, prefix),
+  );
   return reasons;
 }
 
@@ -309,8 +318,10 @@ function collectBrowser(value: Record<string, unknown>, prefix: string): string[
     !isOptionalNonEmptyString(value.screenshotScopePath),
     `${prefix}.screenshotScopePath invalid`,
   );
-  reasons.push(...collectInjectionOptionals(value, prefix));
-  reasons.push(...collectOptionalRehydration(value.rehydration, `${prefix}.rehydration`));
+  reasons.push(
+    ...collectInjectionOptionals(value, prefix),
+    ...collectOptionalRehydration(value.rehydration, `${prefix}.rehydration`),
+  );
   return reasons;
 }
 

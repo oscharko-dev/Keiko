@@ -630,7 +630,7 @@ function useFocusTrap(
         return;
       }
       const first = focusables[0] as HTMLElement;
-      const last = focusables[focusables.length - 1] as HTMLElement;
+      const last = focusables.at(-1) as HTMLElement;
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();

@@ -43,7 +43,7 @@ function compileGlobSource(glob: string): string {
       out += "[^/]";
       continue;
     }
-    out += ch.replace(SPECIAL_RE, "\\$&");
+    out += ch.replace(SPECIAL_RE, String.raw`\$&`);
   }
   return `${out}$`;
 }

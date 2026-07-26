@@ -31,8 +31,9 @@ import { createInMemoryUiStore } from "./store/index.js";
 // Canonical values live in the contracts leaf (GEN-PERF-CLI-001) so the CLI can
 // read them without loading this module graph; imported and re-exported here so
 // the keiko-server public surface is unchanged.
-import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
-export { DEFAULT_UI_PORT, UI_HOST };
+import { UI_HOST } from "@oscharko-dev/keiko-contracts";
+export { UI_HOST };
+export { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-contracts";
 const CSP_CACHE_TTL_MS = 1000;
 const JSON_GZIP_MIN_BYTES = 1024;
 const cspCache = new WeakMap<

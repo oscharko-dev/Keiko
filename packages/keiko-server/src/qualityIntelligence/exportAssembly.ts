@@ -130,7 +130,7 @@ export function assembleZipBundle(
   }
 
   const centralStart = offset;
-  const centralFlat = centralEntries.flatMap((e) => e);
+  const centralFlat = centralEntries.flat();
   const eocd = [
     ...ZIP_EOCD_SIG,
     ...u16le(0), // disk number
@@ -195,7 +195,10 @@ function pdfStr(s: string): Uint8Array {
 }
 
 function escapePdf(s: string): string {
-  return s.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
+  return s
+    .replaceAll("\\", "\\\\")
+    .replaceAll("(", String.raw`\(`)
+    .replaceAll(")", String.raw`\)`);
 }
 
 // WinAnsi (CP1252) bytes for the code points that differ from Latin-1 in the 0x80–0x9F window.
@@ -327,9 +330,7 @@ function buildPageContent(lines: readonly string[]): Uint8Array {
   ];
   let first = true;
   for (const line of lines) {
-    chunks.push(pdfStr(first ? "(" : "T* ("));
-    chunks.push(winAnsiEncode(escapePdf(line)));
-    chunks.push(pdfStr(") Tj\n"));
+    chunks.push(pdfStr(first ? "(" : "T* ("), winAnsiEncode(escapePdf(line)), pdfStr(") Tj\n"));
     first = false;
   }
   chunks.push(pdfStr("ET"));

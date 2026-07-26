@@ -766,10 +766,10 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
           : `Document evidence (${documentFormat.toUpperCase()}, extracted text)`;
       lines.push(
         `- ${label} ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
+        "```",
+        promptSafeExcerptText(redactedString(redactor, excerpt.content)),
+        "```",
       );
-      lines.push("```");
-      lines.push(promptSafeExcerptText(redactedString(redactor, excerpt.content)));
-      lines.push("```");
     }
   }
   if (lines.length === 0) {

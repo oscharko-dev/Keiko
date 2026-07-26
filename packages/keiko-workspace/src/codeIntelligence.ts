@@ -429,7 +429,7 @@ function declarationNameText(
 }
 
 function normalizeScopePath(scopePath: string): string {
-  return normalize(scopePath).split("\\").join("/");
+  return normalize(scopePath).replaceAll("\\", "/");
 }
 
 function resolveCandidate(
@@ -3119,13 +3119,12 @@ function dotNetMinimalApiMethod(mapMethod: string, args: string): string {
   return mapMethod.toUpperCase();
 }
 
-function goHttpMethodFromMethodsArgs(args: string | undefined): string {
-  const value = args ?? "";
-  const literal = /["']([A-Z]+)["']/u.exec(value)?.[1];
+function goHttpMethodFromMethodsArgs(args = ""): string {
+  const literal = /["']([A-Z]+)["']/u.exec(args)?.[1];
   if (literal !== undefined) {
     return literal;
   }
-  const constant = /\bhttp\.Method(Get|Post|Put|Patch|Delete|Head|Options)\b/u.exec(value)?.[1];
+  const constant = /\bhttp\.Method(Get|Post|Put|Patch|Delete|Head|Options)\b/u.exec(args)?.[1];
   return constant === undefined ? "ANY" : constant.toUpperCase();
 }
 
@@ -4080,9 +4079,11 @@ function collectEndpoints(file: SourceFile): readonly ApiEndpoint[] {
   }
   const scan = maskEndpointCommentOrDocstringText(file.text, file.language);
   const endpoints: ApiEndpoint[] = [];
-  endpoints.push(...collectGraphqlClientEndpoints(file, scan));
-  endpoints.push(...collectProtobufClientEndpoints(file, scan));
-  endpoints.push(...collectFetchClientEndpoints(file, scan));
+  endpoints.push(
+    ...collectGraphqlClientEndpoints(file, scan),
+    ...collectProtobufClientEndpoints(file, scan),
+    ...collectFetchClientEndpoints(file, scan),
+  );
   const state = createEndpointCollectionState();
   const hasRtkQueryApi =
     /\bcreateApi\s*\(/u.test(scan.text) || /\bbuilder\.(?:query|mutation)\b/u.test(scan.text);

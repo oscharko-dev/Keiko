@@ -25,7 +25,6 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { MemoryAuditEvent, MemoryScope, MemoryStatus } from "@oscharko-dev/keiko-contracts";
-import { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { MEMORY_DB_FILENAME, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { auditRunIdFor } from "./memory-audit-handler.js";
@@ -242,4 +241,4 @@ export function exportMemoryDiagnostics(
 }
 
 // Re-export the status list for callers that want to render a stable histogram order.
-export { MEMORY_STATUSES };
+export { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts";

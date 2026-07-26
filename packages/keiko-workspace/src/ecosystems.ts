@@ -346,7 +346,7 @@ export const ECOSYSTEMS: readonly Ecosystem[] = Object.freeze([
       {
         file: "gradle/wrapper/gradle-wrapper.properties",
         signal: "distributionUrl=.../gradle-x.y.z-bin.zip",
-        example: "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-bin.zip",
+        example: String.raw`distributionUrl=https\://services.gradle.org/distributions/gradle-8.10-bin.zip`,
       },
       {
         file: "build.gradle.kts",
@@ -1160,7 +1160,7 @@ const MANIFEST_SUFFIX_TO_ECOSYSTEM: readonly (readonly [string, EcosystemId])[] 
 // ─── Path helpers (pure, normalization mirrors repoSearchPolicy) ─────────────────
 
 function normalizedPath(scopePath: string): string {
-  return scopePath.split("\\").join("/").toLowerCase();
+  return scopePath.replaceAll("\\", "/").toLowerCase();
 }
 
 function basenameLc(scopePath: string): string {
@@ -1326,16 +1326,16 @@ export function isEcosystemLockfile(scopePath: string): boolean {
 // ─── Routing & matcher integration ───────────────────────────────────────────────
 
 function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 }
 
 // Compile a curated routing term into a linear, ReDoS-safe, case-insensitive pattern. A word
 // boundary is added only on a side that ends in an alphanumeric, so terms like "c#" / ".net" /
 // "c++" are matched literally. Internal spaces match any run of space/underscore/hyphen.
 function termToPattern(term: string): RegExp {
-  const escaped = escapeRegExp(term).replace(/\\?\s+/gu, "[\\s_-]+");
-  const left = /^[a-z0-9]/iu.test(term) ? "\\b" : "";
-  const right = /[a-z0-9]$/iu.test(term) ? "\\b" : "";
+  const escaped = escapeRegExp(term).replace(/\\?\s+/gu, String.raw`[\s_-]+`);
+  const left = /^[a-z0-9]/iu.test(term) ? String.raw`\b` : "";
+  const right = /[a-z0-9]$/iu.test(term) ? String.raw`\b` : "";
   return new RegExp(`${left}${escaped}${right}`, "iu");
 }
 

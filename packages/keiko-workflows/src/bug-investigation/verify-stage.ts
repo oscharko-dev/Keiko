@@ -39,8 +39,8 @@ function changedTestFiles(files: readonly PatchFileChange[]): readonly string[] 
 function isTestFile(path: string): boolean {
   const slash = path.lastIndexOf("/");
   const base = slash === -1 ? path : path.slice(slash + 1);
-  const segments = base.split(".");
-  return segments.includes("test") || segments.includes("spec");
+  const segments = new Set(base.split("."));
+  return segments.has("test") || segments.has("spec");
 }
 
 function buildPlanFallback(workspace: WorkspaceInfo, fs: WorkspaceFs): VerificationPlan {

@@ -237,7 +237,7 @@ function parseEnvValue(raw: string): string {
   const value = raw.trim();
   if (value.length >= 2) {
     const first = value[0];
-    const last = value[value.length - 1];
+    const last = value.at(-1);
     if ((first === `"` && last === `"`) || (first === "'" && last === "'")) {
       return value.slice(1, -1);
     }

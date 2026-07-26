@@ -197,8 +197,8 @@ export async function runQualityIntelligenceTestDesign(
       modelGatewayCallCount: ctx.modelGatewayCallCount,
       evidence,
     });
-  } catch (caught: unknown) {
-    return finaliseFailureOrCancellation(ctx, caught, {
+  } catch (error_: unknown) {
+    return finaliseFailureOrCancellation(ctx, error_, {
       candidatesCount: 0,
       findings: Object.freeze([]),
       provenanceRefs: input.provenanceRefs,
@@ -336,8 +336,8 @@ export async function runQualityIntelligenceValidation(
       modelGatewayCallCount: ctx.modelGatewayCallCount,
       evidence,
     });
-  } catch (caught: unknown) {
-    return finaliseFailureOrCancellation(ctx, caught, {
+  } catch (error_: unknown) {
+    return finaliseFailureOrCancellation(ctx, error_, {
       candidatesCount: input.candidates.length,
       findings: Object.freeze([]),
       provenanceRefs: input.provenanceRefs,

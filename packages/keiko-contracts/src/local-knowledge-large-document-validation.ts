@@ -6,7 +6,6 @@
 // shape as the other Local Knowledge validators so callers branch without throwing.
 
 import type {
-  CheckpointFingerprint,
   CoverageQuality,
   ExtractionCheckpointRecord,
   ExtractionPhase,
@@ -202,4 +201,4 @@ export function isSafeQualityWarning(value: unknown): value is string {
   return isSafeDisplaySummary(value);
 }
 
-export type { CheckpointFingerprint };
+export type { CheckpointFingerprint } from "./local-knowledge-large-document.js";

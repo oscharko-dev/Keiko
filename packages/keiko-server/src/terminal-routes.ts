@@ -4,7 +4,7 @@
 
 import type { ServerResponse } from "node:http";
 import type { IncomingMessage } from "node:http";
-import { TerminalToolError, type TerminalErrorCode } from "./terminal-errors.js";
+import { TerminalToolError } from "./terminal-errors.js";
 import {
   buildTerminalPolicySummary,
   listDirectories,
@@ -265,4 +265,4 @@ function writeTerminalEvent(
 
 // Re-export for the unused-import lint: callers can map a terminal error code → HTTP status if
 // they need to without importing TerminalToolError.
-export type { TerminalErrorCode };
+export type { TerminalErrorCode } from "./terminal-errors.js";

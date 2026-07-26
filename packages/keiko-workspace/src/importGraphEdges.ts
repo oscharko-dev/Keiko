@@ -181,7 +181,7 @@ const CJS_REQUIRE = /\brequire\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
 const DYNAMIC_IMPORT = /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
 
 function normalizeScopePath(scopePath: string): string {
-  return path.normalize(scopePath.split("\\").join("/")).replace(/^\.\//u, "");
+  return path.normalize(scopePath.replaceAll("\\", "/")).replace(/^\.\//u, "");
 }
 
 function lineNumberOf(text: string, charIndex: number): number {

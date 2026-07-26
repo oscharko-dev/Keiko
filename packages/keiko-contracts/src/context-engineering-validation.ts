@@ -25,7 +25,12 @@ import type {
 export type ContextValidationResult =
   { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
-const BUDGET_PRESSURES: readonly ContextBudgetPressure[] = ["low", "moderate", "high", "exceeded"];
+const BUDGET_PRESSURES: ReadonlySet<ContextBudgetPressure> = new Set([
+  "low",
+  "moderate",
+  "high",
+  "exceeded",
+]);
 
 // ─── Shared primitives (local; contracts is a leaf, no shared-util import) ──────
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -66,7 +71,7 @@ function isEvictionPolicy(value: unknown): value is ContextEvictionPolicy {
 }
 
 function isBudgetPressure(value: unknown): value is ContextBudgetPressure {
-  return typeof value === "string" && BUDGET_PRESSURES.includes(value as ContextBudgetPressure);
+  return typeof value === "string" && BUDGET_PRESSURES.has(value as ContextBudgetPressure);
 }
 
 function isTokenAccountingSource(value: unknown): value is ContextTokenAccountingSource {
@@ -219,9 +224,11 @@ function collectProfile(value: unknown, prefix: string): string[] {
     return [`${prefix} invalid`];
   }
   const reasons = collectProfileReasons(value, prefix);
-  reasons.push(...checkBudgetIdentity(value, prefix));
-  reasons.push(...collectTokenAccounting(value.tokenAccounting, prefix));
-  reasons.push(...validateModelMetadata(value.model, prefix));
+  reasons.push(
+    ...checkBudgetIdentity(value, prefix),
+    ...collectTokenAccounting(value.tokenAccounting, prefix),
+    ...validateModelMetadata(value.model, prefix),
+  );
   return reasons;
 }
 

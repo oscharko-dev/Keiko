@@ -149,7 +149,9 @@ export function EditorMenu({ project }: EditorMenuProps): ReactNode {
     const items = Array.from(menu.querySelectorAll<HTMLButtonElement>(".edm-item"));
     if (items.length === 0) return;
     event.preventDefault();
-    const activeIndex = items.findIndex((item) => item === document.activeElement);
+    const activeElement = document.activeElement;
+    const activeIndex =
+      activeElement instanceof HTMLButtonElement ? items.indexOf(activeElement) : -1;
     items[nextItemIndex(event.key, activeIndex, items.length)]?.focus();
   };
 

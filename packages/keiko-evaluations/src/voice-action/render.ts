@@ -38,28 +38,23 @@ function dimensionLine(entry: VoiceActionScorecardEntry): string {
 
 export function renderVoiceActionSummary(scorecard: VoiceActionScorecard): string {
   const lines: string[] = [];
-  lines.push(`Voice Action Governance evaluation summary (schema v${scorecard.schemaVersion})`);
   lines.push(
+    `Voice Action Governance evaluation summary (schema v${scorecard.schemaVersion})`,
     `Fixtures: ${String(scorecard.summary.totalFixtures)} total, ${String(scorecard.summary.fullyPassedFixtures)} fully passed`,
-  );
-  lines.push(
     `Effect classes covered: ${String(scorecard.coveredEffectClasses.length)} (${scorecard.coveredEffectClasses.join(", ")})`,
-  );
-  lines.push(
     `Profile coverage: no-voice=${scorecard.summary.coversNoVoiceProfile ? "yes" : "no"} voice=${scorecard.summary.coversVoiceProfile ? "yes" : "no"}`,
+    "",
+    "Fixtures:",
   );
-  lines.push("");
-  lines.push("Fixtures:");
   for (const fixture of scorecard.fixtureResults) {
     lines.push(fixtureLine(fixture));
   }
-  lines.push("");
-  lines.push("Dimensions:");
+  lines.push("", "Dimensions:");
   for (const entry of scorecard.dimensions) {
     lines.push(dimensionLine(entry));
   }
-  lines.push("");
   lines.push(
+    "",
     scorecard.summary.goNoGo === "GO"
       ? "Verdict: GO - every exercised security dimension passed across no-voice and voice profiles."
       : "Verdict: NO-GO - a dimension failed or a profile coverage gate was unmet (see table above).",

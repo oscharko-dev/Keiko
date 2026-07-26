@@ -265,18 +265,19 @@ export function extractSignals(
     { name: "generated-penalty", value: penalty },
   ];
   if (gitRecency > 0 || gitChurn > 0) {
-    baseSignals.push({ name: "git-recency", value: gitRecency });
-    baseSignals.push({ name: "git-churn", value: gitChurn });
+    baseSignals.push(
+      { name: "git-recency", value: gitRecency },
+      { name: "git-churn", value: gitChurn },
+    );
   }
   // M4: only a boosted intent appends the two new signals (and weightsForIntent only weights them
   // for the same intents), so the signal vector — and therefore the pack/cache content — is
   // byte-identical for every other intent and for callers that pass no context.
   if (isIntentBoosted(context?.retrievalIntent)) {
-    baseSignals.push({
-      name: "canonical-metadata",
-      value: isCanonicalMetadataFile(scopePath) ? 1 : 0,
-    });
-    baseSignals.push({ name: "structural-edge", value: hasStructuralEdge(atomsForPath) ? 1 : 0 });
+    baseSignals.push(
+      { name: "canonical-metadata", value: isCanonicalMetadataFile(scopePath) ? 1 : 0 },
+      { name: "structural-edge", value: hasStructuralEdge(atomsForPath) ? 1 : 0 },
+    );
     if (hasDiscoveredSymbolDefinition(atomsForPath)) {
       baseSignals.push({ name: "symbol-definition", value: 1 });
     }

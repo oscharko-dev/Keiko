@@ -10,8 +10,8 @@ export interface FigmaTarget {
   readonly nodeId: string;
 }
 
-const ACCEPTED_HOSTS: readonly string[] = ["figma.com", "www.figma.com"];
-const SCOPED_PATH_KINDS: readonly string[] = ["design", "file"];
+const ACCEPTED_HOSTS: ReadonlySet<string> = new Set(["figma.com", "www.figma.com"]);
+const SCOPED_PATH_KINDS: ReadonlySet<string> = new Set(["design", "file"]);
 
 const normaliseNodeId = (raw: string): string => raw.replaceAll("-", ":");
 
@@ -27,11 +27,11 @@ export const parseFigmaTarget = (value: string): FigmaTarget | null => {
   const url = parseUrl(value.trim());
   if (url === null) return null;
   if (url.protocol !== "https:") return null;
-  if (!ACCEPTED_HOSTS.includes(url.hostname)) return null;
+  if (!ACCEPTED_HOSTS.has(url.hostname)) return null;
 
   const segments = url.pathname.split("/").filter((part) => part.length > 0);
   const [kind, fileKey] = segments;
-  if (kind === undefined || !SCOPED_PATH_KINDS.includes(kind)) return null;
+  if (kind === undefined || !SCOPED_PATH_KINDS.has(kind)) return null;
   if (fileKey === undefined || fileKey.length === 0) return null;
 
   const rawNodeId = url.searchParams.get("node-id");

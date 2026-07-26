@@ -192,7 +192,7 @@ function parsePositiveBudget(value: string | null): number | undefined {
   }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isSafeInteger(parsed)) {
-    throw new Error("invalid budget");
+    throw new TypeError("invalid budget");
   }
   return parsed;
 }

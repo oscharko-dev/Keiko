@@ -658,8 +658,9 @@ function corpusChunkIds(fixture) {
 
 export function regressFixtureExpectations(fixture) {
   // Fixtures are plain JSON data (branded-string ids, numbers, nested arrays/objects) with no
-  // functions, Dates, Maps, or Sets, so a JSON round-trip is a safe, dependency-free deep clone.
-  const clone = JSON.parse(JSON.stringify(fixture));
+  // functions, Dates, Maps, or Sets, so a structured-clone round-trip is a safe, dependency-free
+  // deep clone.
+  const clone = structuredClone(fixture);
   const chunkIds = corpusChunkIds(clone);
   clone.id = `${fixture.id}-regression-probe`;
   clone.queries = clone.queries

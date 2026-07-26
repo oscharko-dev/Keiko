@@ -7,18 +7,9 @@
 // The pure summary type interfaces live in @oscharko-dev/keiko-contracts (issue #158). The
 // import+export split lets this file reference VerificationSummary/VerificationAuditSummary in
 // its own function return types while still re-exporting the types from the package barrel.
-import type {
-  VerificationResultSummary,
-  VerificationSummary,
-  AuditResultEntry,
-  VerificationAuditSummary,
-} from "@oscharko-dev/keiko-contracts";
-export type {
-  VerificationResultSummary,
-  VerificationSummary,
-  AuditResultEntry,
-  VerificationAuditSummary,
-};
+import type { VerificationSummary, VerificationAuditSummary } from "@oscharko-dev/keiko-contracts";
+export type { VerificationSummary, VerificationAuditSummary };
+export type { VerificationResultSummary, AuditResultEntry } from "@oscharko-dev/keiko-contracts";
 
 import { redact } from "@oscharko-dev/keiko-security";
 import type { VerificationReport, VerificationResult, VerificationStatus } from "./types.js";

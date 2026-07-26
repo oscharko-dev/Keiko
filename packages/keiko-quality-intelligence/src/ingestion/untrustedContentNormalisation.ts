@@ -132,7 +132,7 @@ const escapeMarkdownInjection = (value: string): EscapeOutcome => {
   });
   const imageEscaped = codeEscaped.replaceAll(IMAGE_OPEN, (): string => {
     count += 1;
-    return "\\!\\[";
+    return String.raw`\!\[`;
   });
   const links = escapeLinkOpens(imageEscaped);
   return { value: links.value, count: count + links.count };

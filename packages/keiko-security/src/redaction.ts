@@ -95,7 +95,7 @@ const BUILTIN_PATTERNS: readonly RegExp[] = [
 ];
 
 function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
 export function isCredentialKeyName(value: string): boolean {
