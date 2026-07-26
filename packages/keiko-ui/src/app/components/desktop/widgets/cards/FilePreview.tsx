@@ -175,6 +175,31 @@ function MetadataRow({
   );
 }
 
+// The copy feedback owns its own live-region decision so FilePreview does not carry it.
+// <output> already carries role="status"; only the clipboard failure needs the more assertive
+// region, so that is the one case that names a role — and role="alert" is implicitly assertive,
+// so aria-live is dropped there. Declaring both is a conflict screen readers resolve
+// inconsistently (#2721).
+function CopyStatusOutput({
+  status,
+  t,
+}: {
+  readonly status: CopyStatusKind | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (status === null) return null;
+  const failed = status === "clipboardFailed";
+  return (
+    <output
+      className="fpv-status fpv-copy-status"
+      role={failed ? "alert" : undefined}
+      aria-live={failed ? undefined : "polite"}
+    >
+      {copyStatusLabel(status, t)}
+    </output>
+  );
+}
+
 function copyStatusLabel(status: CopyStatusKind | null, t: I18nTranslate): string | null {
   switch (status) {
     case "nameCopied":
@@ -467,7 +492,6 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       () => setCopyStatus("clipboardFailed"),
     );
   };
-  const copyStatusText = copyStatusLabel(copyStatus, t);
 
   const denied = error?.denied === true;
   const lang = previewLanguageLabel(preview, error, t);
@@ -544,19 +568,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         ) : null}
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
-        {copyStatus !== null ? (
-          <output
-            className="fpv-status fpv-copy-status"
-            // <output> already carries role="status"; only the clipboard failure needs the
-            // more assertive live region, so that is the one case that still names a role.
-            // role=alert is implicitly assertive, so aria-live is dropped there — declaring
-            // both is a conflict screen readers resolve inconsistently.
-            role={copyStatus === "clipboardFailed" ? "alert" : undefined}
-            aria-live={copyStatus === "clipboardFailed" ? undefined : "polite"}
-          >
-            {copyStatusText}
-          </output>
-        ) : null}
+        <CopyStatusOutput status={copyStatus} t={t} />
         <button
           className="fpv-back fpv-refresh"
           type="button"
