@@ -160,7 +160,7 @@ export function buildRegenerationPlan({ headCommit, workdir }) {
         // construction, so the wrapper asserts the FULL freshness contract (ADR-0139 D10); the
         // pull-request lane validates integrity + budgets only.
         args: [
-          "scripts/check-perf-evidence.mjs",
+          "scripts/perf-evidence-gate.mjs",
           "--target",
           "editor",
           "--enforce-source-freshness",
@@ -250,6 +250,10 @@ export function regenerateInContainer(overrides = {}) {
   const clone = join(deps.makeWorkdir(), "repo.noindex");
   deps.log(`Provisioning a self-contained clone at ${clone}.`);
   deps.run("git", ["clone", "--no-local", "--quiet", repoRoot, clone]);
+  // The clone's origin would otherwise be the HOST path it was cloned from, which does not exist
+  // inside the container — so the in-container fallback fetch for a missing commit would fail on
+  // exactly the shallow-checkout case that fetch exists to handle. Point it at the real remote.
+  deps.run("git", ["remote", "set-url", "origin", deps.originUrl()], { cwd: clone });
   deps.log(
     `Measuring in ${CONTAINER_IMAGE}. This takes ~35 minutes and wants the machine to itself.`,
   );

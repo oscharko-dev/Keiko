@@ -78,7 +78,7 @@ independent Linux checker both accepted the generated artifact:
 npm run run:d12-perf-comparison -- <pinned baseline and signed candidate inputs>
 Wrote D12 comparison for 57524a9c0ea92b5ad19830d7199af32ffbc0822c from six orchestrated runs
 
-node scripts/check-perf-evidence.mjs --target editor
+node scripts/check-perf-evidence.mjs --target editor   # historical: the gate CLI moved to scripts/perf-evidence-gate.mjs (npm run check:perf-evidence:editor)
 perf-evidence: editor OK (budgets within limits, evidence fresh @ 57524a9c...)
 ```
 

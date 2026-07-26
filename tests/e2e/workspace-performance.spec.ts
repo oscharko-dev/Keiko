@@ -17,7 +17,7 @@ function resolveSourceTreeSha256(): string {
   }
   const digest = execFileSync(
     process.execPath,
-    [join(REPO_ROOT, "scripts", "check-perf-evidence.mjs"), "--print-source-tree-sha256"],
+    [join(REPO_ROOT, "scripts", "perf-evidence-gate.mjs"), "--print-source-tree-sha256"],
     { cwd: REPO_ROOT, encoding: "utf8" },
   ).trim();
   if (!SHA_256.test(digest)) throw new Error("performance subject digest is invalid");
@@ -25,7 +25,7 @@ function resolveSourceTreeSha256(): string {
 }
 
 // Stamp the commit the evidence was measured at so the freshness gate
-// (scripts/check-perf-evidence.mjs, GEN-PERF-BENCHMARK-001) can prove the committed evidence
+// (scripts/perf-evidence-gate.mjs, GEN-PERF-BENCHMARK-001) can prove the committed evidence
 // belongs to this history. CI provides GITHUB_SHA; locally we fall back to `git rev-parse HEAD`.
 function resolveCommit(): string {
   const fromEnv = process.env.GITHUB_SHA ?? process.env.KEIKO_PERF_COMMIT;

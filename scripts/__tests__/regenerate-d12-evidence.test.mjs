@@ -49,13 +49,13 @@ describe("D12 evidence regeneration plan", () => {
       "scripts/build-d12-bundle-input.mjs",
       "scripts/run-d12-perf-comparison.mjs",
       "scripts/editor-release-evidence.mjs",
-      "scripts/check-perf-evidence.mjs",
+      "scripts/perf-evidence-gate.mjs",
       "scripts/editor-bundle-size.mjs",
     ]);
   });
 
   it("validates the regenerated evidence with the full source-freshness contract (ADR-0139 D10)", () => {
-    const check = plan.commands.find((step) => step.args[0] === "scripts/check-perf-evidence.mjs");
+    const check = plan.commands.find((step) => step.args[0] === "scripts/perf-evidence-gate.mjs");
     expect(check?.args).toContain("--enforce-source-freshness");
   });
 
@@ -172,8 +172,13 @@ describe("regenerateInContainer", () => {
     expect(deps.run.mock.calls[0][0]).toBe("git");
     // --no-local matters: a worktree's .git is a file the container cannot resolve.
     expect(deps.run.mock.calls[0][1]).toContain("--no-local");
-    expect(deps.run.mock.calls[1][0]).toBe("docker");
-    expect(deps.run.mock.calls[1][1]).toEqual(buildContainerArgs(clone));
+    // call 0 clones, call 1 re-points the clone's origin at the REAL remote — without that the
+    // in-container fallback fetch would target a host path the container cannot resolve — and
+    // call 2 is the container itself.
+    expect(deps.run.mock.calls[1][0]).toBe("git");
+    expect(deps.run.mock.calls[1][1]).toEqual(["remote", "set-url", "origin", deps.originUrl()]);
+    expect(deps.run.mock.calls[2][0]).toBe("docker");
+    expect(deps.run.mock.calls[2][1]).toEqual(buildContainerArgs(clone));
     expect(deps.copyFile).toHaveBeenCalledTimes(2);
     expect(result).toEqual({ ok: true, clone });
   });

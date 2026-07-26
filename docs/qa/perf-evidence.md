@@ -19,7 +19,12 @@ rebuild the shipped editor on every pull request.
 
 You must regenerate in-flight only when your change edits the **measurement toolchain itself**
 (the scripts listed in `scripts/d12-measurement-toolchain.mjs`) — changing the ruler requires
-re-measuring with it. The regeneration wrapper validates its own output with the full
+re-measuring with it. The gate that judges the evidence (`scripts/perf-evidence-gate.mjs`, behind
+`check:perf-evidence*`) is deliberately **not** a digest member: the ruler lives in
+`check-perf-evidence.mjs`, the judge imports it, and editing the judge — a log sink, an exit code,
+a usage string — costs no re-measurement. That separation exists because the opposite was measured:
+three gate-only edits in one day each invalidated a 35-minute measurement they could not have
+influenced. The regeneration wrapper validates its own output with the full
 source-freshness contract (`--enforce-source-freshness`), which additionally requires exact
 source-tree equality, the current lockfile, and a clean subject working tree.
 
@@ -115,7 +120,7 @@ misleading anywhere else.
   provisions both checkouts with `npm ci --ignore-scripts` under a deterministic environment
   allowlist. A dependency change is therefore measured as part of the candidate instead of making
   evidence generation impossible or silently substituting dependency state.
-- Budgets are enforced in exactly one place: `check-perf-evidence.mjs`, reading the committed
+- Budgets are enforced in exactly one place: `scripts/perf-evidence-gate.mjs` (`npm run check:perf-evidence`), reading the committed
   document on every pull request (ADR-0156 D1/D5). Measurement lanes — this one and the scheduled
   workflow — measure and record; they never abort on a budget verdict, because the document that
   would report the regression must survive it. A failure that says the measurement cannot be
