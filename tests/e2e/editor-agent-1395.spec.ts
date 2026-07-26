@@ -84,7 +84,16 @@ async function openBridge(page: Page, sessionId: string): Promise<void> {
       `/api/editor/agent/events?sessionId=${encodeURIComponent(sid)}`,
     );
   }, sessionId);
-  await page.waitForTimeout(750);
+  // The bridge is usable once the EventSource reports OPEN. Waiting a fixed 750ms instead
+  // both slowed every call and raced a slow connect — synchronising on readyState is the
+  // observable condition (AGENTS.md §9: await a condition rather than sleeping).
+  await page.waitForFunction((k: string): boolean => {
+    // Narrowed with `instanceof` rather than asserted: the property is set by a prior
+    // page.evaluate, so the predicate must tolerate it being absent or something else
+    // entirely and keep waiting, instead of reading readyState off an arbitrary value.
+    const bridge: unknown = (window as unknown as Record<string, unknown>)[k];
+    return bridge instanceof EventSource && bridge.readyState === EventSource.OPEN;
+  }, "__keikoBridge");
 }
 
 async function postApplyTextEdits(
@@ -146,7 +155,7 @@ test("governs and audits agent editor actions end to end (AC1, AC2, AC3, AC4)", 
 
     // AC1/AC4: both governed actions are visible in the real audit feed the panel consumes.
     const records = await fetchAudit(request, sessionId);
-    expect(records.length).toBe(2);
+    expect(records).toHaveLength(2);
     const review = records.find((r) => r.disposition === "review-required");
     const block = records.find((r) => r.disposition === "denied");
     expect(review?.outcome).toBe("queued");

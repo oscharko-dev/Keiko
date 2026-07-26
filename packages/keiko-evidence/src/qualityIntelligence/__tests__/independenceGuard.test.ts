@@ -92,7 +92,7 @@ describe("independence guard for QI sub-module (ADR-0023 D12)", () => {
     // Documents the trust boundary: the QI supply-chain script's IGNORED_DIRECTORIES set includes
     // `__tests__`. If that ever changes, this test file would need to refactor its
     // FORBIDDEN_NAMESPACES construction further. The fragment build above is the durable form.
-    expect(FORBIDDEN_NAMESPACES.length).toBe(2);
+    expect(FORBIDDEN_NAMESPACES).toHaveLength(2);
     for (const ns of FORBIDDEN_NAMESPACES) {
       expect(ns.startsWith(NS_PREFIX)).toBe(true);
     }

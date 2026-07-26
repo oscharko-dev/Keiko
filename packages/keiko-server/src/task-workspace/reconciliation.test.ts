@@ -333,7 +333,7 @@ describe("stored-derived report (read-only) matches a live reconcile", () => {
   it("scopes the report to a single repository root when given", async () => {
     await provisionTask("t1");
     const stored = reconciliation().report(repoRoot);
-    expect(stored.entries.length).toBe(1);
+    expect(stored.entries).toHaveLength(1);
   });
 });
 

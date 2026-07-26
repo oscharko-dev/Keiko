@@ -78,7 +78,7 @@ describe("designTestCaseCandidates", () => {
       intent,
       atoms: fixture.atoms,
     });
-    expect(result.length).toBe(fixture.atoms.length);
+    expect(result).toHaveLength(fixture.atoms.length);
     for (const candidate of result) {
       expect(candidate.status).toBe("proposed");
       expect(candidate.runId).toBe(fixture.runId);
@@ -443,7 +443,7 @@ describe("designTestCaseCandidates — export-safe candidate text", () => {
 
     for (const candidate of candidates) {
       const themeTags = candidate.tags.filter((tag) => tag === "theme:login");
-      expect(themeTags.length).toBe(1);
+      expect(themeTags).toHaveLength(1);
       expect(new Set(candidate.tags).size).toBe(candidate.tags.length);
       for (const tag of candidate.tags) {
         expect(hasUnsafeCodePoint(tag)).toBe(false);

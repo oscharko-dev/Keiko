@@ -1202,7 +1202,7 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
       const slowBytes = slowSse.body().length;
       // Neither the refresh tick nor the ping keeps writing to the killed client.
       vi.advanceTimersByTime(35_000);
-      expect(slowSse.body().length).toBe(slowBytes);
+      expect(slowSse.body()).toHaveLength(slowBytes);
       const healthySse = (healthyCtx.res as unknown as { _sse: { body(): string } })._sse;
       expect(healthySse.body()).toContain(": ping");
       healthyReq.emit("close");

@@ -114,7 +114,7 @@ describe("rerankAndSelect — tie rule: connector before folder at equal engineR
     // One folder rank-1, one connector rank-1 → identical fusedScore → connector wins tie.
     const inputs: RerankInput<string>[] = [folder("f-a", 0.9), connector("c-a", 0.7)];
     const selected = rerankAndSelect(inputs, GENEROUS_BUDGET);
-    expect(selected.length).toBe(2);
+    expect(selected).toHaveLength(2);
     expect(selected[0]?.kind).toBe("connector");
     expect(selected[1]?.kind).toBe("folder");
   });
@@ -130,7 +130,7 @@ describe("rerankAndSelect — tie rule: connector before folder at equal engineR
       connector("c-c", 0.7),
     ];
     const selected = rerankAndSelect(inputs, GENEROUS_BUDGET);
-    expect(selected.length).toBe(6);
+    expect(selected).toHaveLength(6);
     // Positions 0,2,4 are connectors (tie won); 1,3,5 are folders.
     expect(selected[0]?.kind).toBe("connector");
     expect(selected[1]?.kind).toBe("folder");
@@ -157,7 +157,7 @@ describe("rerankAndSelect — byte budget", () => {
     const selected = rerankAndSelect(inputs, budget);
 
     // c-a (10 bytes) is selected first; f-a (300 bytes) is skipped; c-b (10 bytes) fits.
-    expect(selected.length).toBe(2);
+    expect(selected).toHaveLength(2);
     expect(selected.every((s) => s.kind === "connector")).toBe(true);
 
     const totalBytes = selected.reduce((acc, s) => acc + s.bytes, 0);
@@ -244,7 +244,7 @@ describe("rerankAndSelect — maxCandidates", () => {
     );
     const budget: RerankBudget = { maxCandidates: 5, maxExcerptBytes: 1_000_000 };
     const selected = rerankAndSelect(inputs, budget);
-    expect(selected.length).toBe(5);
+    expect(selected).toHaveLength(5);
   });
 });
 
@@ -310,7 +310,7 @@ describe("rerankAndSelect — edge cases", () => {
   it("single candidate within budget: selected with marker 1", () => {
     const inputs: RerankInput<string>[] = [folder("f-a", 0.5, "hello world")];
     const selected = rerankAndSelect(inputs, GENEROUS_BUDGET);
-    expect(selected.length).toBe(1);
+    expect(selected).toHaveLength(1);
     expect(selected[0]?.marker).toBe(1);
     expect(selected[0]?.engineRank).toBe(1);
     expect(selected[0]?.fusedScore).toBeCloseTo(1 / (RRF_K + 1), 5);

@@ -347,7 +347,7 @@ describe("embedChunkBatch — adapter failure", () => {
     });
 
     expect(result.errors.some((e) => e.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
-    expect(result.vectors.length).toBe(Math.max(0, fixture.chunks.length - 1));
+    expect(result.vectors).toHaveLength(Math.max(0, fixture.chunks.length - 1));
     expect(
       countVectorsForDocument(
         fixture.store._internal.db,
@@ -492,7 +492,7 @@ describe("embedChunkBatch — transient-failure retry", () => {
     });
 
     expect(result.errors).toEqual([]);
-    expect(result.vectors.length).toBe(fixture.chunks.length);
+    expect(result.vectors).toHaveLength(fixture.chunks.length);
     for (const chunk of fixture.chunks) {
       expect(attempts.get(chunk.text)).toBe(2);
     }
@@ -627,7 +627,7 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       idSource: fixedIds("vec"),
     });
     expect(scalarCalls()).toBe(0);
-    expect(batchCallSizes.length).toBe(1);
+    expect(batchCallSizes).toHaveLength(1);
     expect(batchCallSizes[0]).toBe(chunks.length);
     expect(result.vectors).toHaveLength(chunks.length);
     expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
@@ -660,7 +660,7 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
     });
     expect(scalarCalls()).toBe(0);
     // Item cap is 96; N>96 must fan out into more than one call, never one-per-chunk.
-    expect(batchCallSizes.length).toBe(Math.ceil(chunks.length / 96));
+    expect(batchCallSizes).toHaveLength(Math.ceil(chunks.length / 96));
     expect(batchCallSizes.length).toBeLessThan(chunks.length);
     expect(batchCallSizes.reduce((a, b) => a + b, 0)).toBe(chunks.length);
     expect(result.vectors).toHaveLength(chunks.length);

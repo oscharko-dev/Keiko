@@ -80,7 +80,7 @@ describe("validateGitCommitMessage per-violation cases", () => {
     expect(violationsOf(longSubject)).toContain("subject-too-long");
     // A 72-char subject (the ceiling) is accepted; 73 is rejected.
     const atCeiling = `feat: ${"x".repeat(66)}`; // "feat: " = 6 chars + 66 = 72
-    expect(atCeiling.length).toBe(72);
+    expect(atCeiling).toHaveLength(72);
     expect(violationsOf(atCeiling)).not.toContain("subject-too-long");
     expect(violationsOf(`${atCeiling}x`)).toContain("subject-too-long");
   });

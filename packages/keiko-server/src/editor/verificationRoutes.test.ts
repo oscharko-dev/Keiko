@@ -340,6 +340,6 @@ describe("openVerificationSseStream (AC6)", () => {
       runId: "r",
       reason: "x",
     });
-    expect(fake.writes.length).toBe(writesAfter);
+    expect(fake.writes).toHaveLength(writesAfter);
   });
 });

@@ -107,7 +107,7 @@ describe("createScriptedEmbeddingAdapter — determinism", () => {
       identity: { ...IDENTITY, vectorDimensions: 8 },
     });
     const v = await embed(adapter, "hello");
-    expect(v.length).toBe(8);
+    expect(v).toHaveLength(8);
   });
 
   it("returns different vectors for different inputs", async () => {

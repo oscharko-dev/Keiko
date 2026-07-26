@@ -495,7 +495,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.hasStaleModelMetadata).toBe("function");
   });
 
-  it("memory contract type re-exports are reachable through the barrel (#205)", () => {
+  it("memory contract type re-exports are reachable through the barrel (#205)", async () => {
     type Mod = typeof import("./index.js");
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<Mod["MEMORY_SCOPE_KINDS"]>();
@@ -541,7 +541,11 @@ describe("keiko-contracts package surface", () => {
     pin<_MemoryModelIdentity>();
     pin<_MemoryStructuredPayload>();
     pin<_MemoryValidation>();
-    expect(true).toBe(true);
+    // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
+    // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
+    // loads at all — a circular or broken re-export throws here. The previous
+    // `expect(true).toBe(true)` asserted neither.
+    await expect(import("./index.js")).resolves.toBeDefined();
   });
 
   it("memory subpath barrel is importable as @oscharko-dev/keiko-contracts/memory (#205)", async () => {
@@ -551,7 +555,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof subpath.isScopeReachable).toBe("function");
   });
 
-  it("memory workflow port re-exports are reachable through the barrel (#213)", () => {
+  it("memory workflow port re-exports are reachable through the barrel (#213)", async () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     type _MemoryWorkflowPort = import("./index.js").MemoryWorkflowPort;
     type _MemoryWorkflowContext = import("./index.js").MemoryWorkflowContext;
@@ -563,13 +567,17 @@ describe("keiko-contracts package surface", () => {
     pin<_MemoryUsedEvent>();
     pin<_MemoryOmittedEvent>();
     pin<_MemoryWriteCandidateEvent>();
-    expect(true).toBe(true);
+    // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
+    // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
+    // loads at all — a circular or broken re-export throws here. The previous
+    // `expect(true).toBe(true)` asserted neither.
+    await expect(import("./index.js")).resolves.toBeDefined();
   });
 
   it("memory workflow port subpath is importable (#213)", async () => {
     const subpath = await import("./memory-workflow-port.js");
     // Pure type-only module: it should import cleanly with no runtime exports.
-    expect(Object.keys(subpath).length).toBe(0);
+    expect(Object.keys(subpath)).toHaveLength(0);
   });
 
   it("memory audit event surface re-exports are reachable through the barrel (#214)", async () => {
@@ -589,7 +597,7 @@ describe("keiko-contracts package surface", () => {
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-used");
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-omitted");
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-write-candidate");
-    expect(mod.MEMORY_AUDIT_EVENT_KINDS.length).toBe(13);
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toHaveLength(13);
     const pin = <T>(_value?: T): T | undefined => undefined;
     type _MemoryAuditEvent = import("./index.js").MemoryAuditEvent;
     type _MemoryAuditEventKind = import("./index.js").MemoryAuditEventKind;
@@ -600,7 +608,7 @@ describe("keiko-contracts package surface", () => {
   it("memory audit event subpath is importable as @oscharko-dev/keiko-contracts/memory-audit-events (#214)", async () => {
     const subpath = await import("./memory-audit-events.js");
     expect(subpath.MEMORY_AUDIT_EVENT_SCHEMA_VERSION).toBe("1");
-    expect(subpath.MEMORY_AUDIT_EVENT_KINDS.length).toBe(13);
+    expect(subpath.MEMORY_AUDIT_EVENT_KINDS).toHaveLength(13);
     expect(subpath.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
   });
 
@@ -697,7 +705,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.editorAgentRootBindingDenyReason).toBe("function");
   });
 
-  it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {
+  it("editor-agent contract type re-exports are reachable through the barrel (#1391)", async () => {
     // Phantom generics pin the public contract types onto the barrel surface; a future refactor that
     // drops one of these names stops this test compiling (same guard pattern as #186/#205 above).
     const pin = <T>(_value?: T): T | undefined => undefined;
@@ -746,7 +754,11 @@ describe("keiko-contracts package surface", () => {
     pin<_ConflictDetail>();
     pin<_FileActionResult>();
     pin<_FileActionStatus>();
-    expect(true).toBe(true);
+    // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
+    // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
+    // loads at all — a circular or broken re-export throws here. The previous
+    // `expect(true).toBe(true)` asserted neither.
+    await expect(import("./index.js")).resolves.toBeDefined();
   });
 
   it("coding workbench mode-policy contracts are reachable through the barrel (#2091)", async () => {
@@ -776,8 +788,8 @@ describe("keiko-contracts package surface", () => {
     const mod = await import("./index.js");
     expect(mod.CODE_TASK_ACCEPTANCE_SCHEMA_VERSION).toBe(1);
     expect(mod.CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND).toBe("code-task-acceptance-contribution");
-    expect(mod.CODE_TASK_EVIDENCE_CLASSES.length).toBe(5);
-    expect(mod.CODE_TASK_EVIDENCE_PLATFORMS.length).toBe(4);
+    expect(mod.CODE_TASK_EVIDENCE_CLASSES).toHaveLength(5);
+    expect(mod.CODE_TASK_EVIDENCE_PLATFORMS).toHaveLength(4);
     expect(mod.CODE_TASK_SCENARIO_OUTCOMES).toEqual(["passed", "failed", "blocked"]);
     expect(mod.CODE_TASK_SALVAGE_DISPOSITIONS).toEqual(["taken-verbatim", "reshaped", "rejected"]);
     expect(mod.validateCodeTaskAcceptanceContribution({}).ok).toBe(false);
@@ -864,17 +876,17 @@ describe("keiko-contracts package surface", () => {
     expect(GIT_DELIVERY_PROVIDER_SCHEMA_VERSION).toBe("1");
 
     // Count assertions are intentional surface pins; bump deliberately when #472+ extends the surface.
-    expect(GIT_DELIVERY_ACTION_KINDS.length).toBe(11);
-    expect(GIT_DELIVERY_RISK_CLASSES.length).toBe(4);
-    expect(GIT_DELIVERY_BLOCK_REASONS.length).toBe(6);
-    expect(GIT_DELIVERY_PROVIDER_CAPABILITIES.length).toBe(5);
-    expect(GIT_DELIVERY_RULE_DECISIONS.length).toBe(4);
-    expect(GIT_DELIVERY_CHECKS_OVERALL_STATUSES.length).toBe(4);
-    expect(GIT_DELIVERY_PULL_REQUEST_STATUSES.length).toBe(3);
-    expect(GIT_DELIVERY_BRANCH_MATCH_KINDS.length).toBe(2);
-    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES.length).toBe(6);
-    expect(GIT_DELIVERY_EXECUTION_OUTCOMES.length).toBe(4);
-    expect(GIT_DELIVERY_MERGE_BLOCK_REASONS.length).toBe(6);
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
+    expect(GIT_DELIVERY_RISK_CLASSES).toHaveLength(4);
+    expect(GIT_DELIVERY_BLOCK_REASONS).toHaveLength(6);
+    expect(GIT_DELIVERY_PROVIDER_CAPABILITIES).toHaveLength(5);
+    expect(GIT_DELIVERY_RULE_DECISIONS).toHaveLength(4);
+    expect(GIT_DELIVERY_CHECKS_OVERALL_STATUSES).toHaveLength(4);
+    expect(GIT_DELIVERY_PULL_REQUEST_STATUSES).toHaveLength(3);
+    expect(GIT_DELIVERY_BRANCH_MATCH_KINDS).toHaveLength(2);
+    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES).toHaveLength(6);
+    expect(GIT_DELIVERY_EXECUTION_OUTCOMES).toHaveLength(4);
+    expect(GIT_DELIVERY_MERGE_BLOCK_REASONS).toHaveLength(6);
 
     // Risk severity and per-kind defaults cover every kind.
     expect(GIT_DELIVERY_RISK_CLASS_SEVERITY["local-mutation"]).toBe(1);
@@ -906,15 +918,15 @@ describe("keiko-contracts package surface", () => {
   it("governed Git action-sheet contracts are reachable through the barrel (#473)", () => {
     expect(GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION).toBe("1");
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
-    expect(GIT_DELIVERY_ACTION_SHEET_STATES.length).toBe(3);
-    expect(GIT_DELIVERY_APPROVAL_NECESSITIES.length).toBe(3);
-    expect(GIT_DELIVERY_BLOCKED_CAUSES.length).toBe(3);
-    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS.length).toBe(9);
+    expect(GIT_DELIVERY_ACTION_SHEET_STATES).toHaveLength(3);
+    expect(GIT_DELIVERY_APPROVAL_NECESSITIES).toHaveLength(3);
+    expect(GIT_DELIVERY_BLOCKED_CAUSES).toHaveLength(3);
+    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS).toHaveLength(9);
 
     expect(typeof isGitDeliveryActionSheet).toBe("function");
     expect(typeof buildGitDeliveryActionSheet).toBe("function");
     expect(gitDeliverySuggestedRecoveryStrategy("commit", false)).toBe("soft-reset");
-    expect(GIT_DELIVERY_POLICY_DECISION_OUTCOMES.length).toBe(4);
+    expect(GIT_DELIVERY_POLICY_DECISION_OUTCOMES).toHaveLength(4);
     expect(isGitDeliveryPolicyDecisionOutcome("approval-gated")).toBe(true);
     expect(isGitDeliveryPolicyDecisionOutcome("nonsense")).toBe(false);
 
@@ -950,10 +962,10 @@ describe("keiko-contracts package surface", () => {
     const m = await import("./index.js");
     expect(m.GIT_PULL_REQUEST_SCHEMA_VERSION).toBe("1");
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
-    expect(m.GIT_PR_CHANGE_TYPES.length).toBe(7);
-    expect(m.GIT_PR_READINESS_BLOCKER_CODES.length).toBe(9);
-    expect(m.GIT_PR_RECOMMENDATIONS.length).toBe(5);
-    expect(m.GIT_PR_REJECTION_REASONS.length).toBe(9);
+    expect(m.GIT_PR_CHANGE_TYPES).toHaveLength(7);
+    expect(m.GIT_PR_READINESS_BLOCKER_CODES).toHaveLength(9);
+    expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(5);
+    expect(m.GIT_PR_REJECTION_REASONS).toHaveLength(9);
 
     expect(typeof m.synthesizePullRequestMetadata).toBe("function");
     expect(typeof m.gitPullRequestReadinessFor).toBe("function");

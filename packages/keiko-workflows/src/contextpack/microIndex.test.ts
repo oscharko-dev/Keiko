@@ -217,7 +217,7 @@ describe("makeIndexKey", () => {
   it("emits the `ix-` prefix and a 16-hex-char body", () => {
     const key = makeIndexKey(base);
     expect(key.startsWith("ix-")).toBe(true);
-    expect(key.length).toBe(3 + 16);
+    expect(key).toHaveLength(3 + 16);
     expect(/^ix-[0-9a-f]{16}$/.test(key)).toBe(true);
   });
 });

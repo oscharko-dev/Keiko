@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import { Activity, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
 import type {
   EditorAgentRootBinding,
   WorkspaceManifest,
@@ -144,19 +143,6 @@ function EditorRootTab({
   );
 }
 
-function useRemovedRootDisposal(manifest: WorkspaceManifest): void {
-  const previousRoots = useRef(manifest.roots);
-  useEffect(() => {
-    const currentRefs = new Set(manifest.roots.map((root) => root.rootRef));
-    for (const root of previousRoots.current) {
-      if (!currentRefs.has(root.rootRef)) {
-        disposeEditorModelRegistryRoot(root.canonicalRoot, "root-disposed", true);
-      }
-    }
-    previousRoots.current = manifest.roots;
-  }, [manifest.roots]);
-}
-
 export function MultiRootEditorHost({
   manifest,
   workspace,
@@ -183,7 +169,6 @@ export function MultiRootEditorHost({
   activeRootRef.current = activeRoot.rootRef;
   manifestRef.current = manifest;
   updateCfgRef.current = updateCfg;
-  useRemovedRootDisposal(manifest);
   useEffect(() => setSessions(parsedSessions), [parsedSessions]);
   // openEditorFile targets an existing editor window by writing root/file/openFiles/layoutJson into
   // its cfg. Per-root sessions take precedence over cfg, so once a root had a session that request
@@ -268,6 +253,12 @@ export function MultiRootEditorHost({
       openFiles: undefined,
       layoutJson: session?.layoutJson,
       rootSessionsJson: serializeEditorRootSessions(sessionsRef.current, manifest, root.rootRef),
+      // Issue #2621 — the reveal in cfg was addressed to the root that is being left. Selecting a
+      // tab by hand is not that request, and cfg keys carry the reveal to whichever root is named
+      // there, so the stale line range is dropped instead of following the user to the new tab.
+      revealLineStart: undefined,
+      revealLineEnd: undefined,
+      revealRequestId: undefined,
     });
     void workspace.focusRoot(root.rootRef);
   };

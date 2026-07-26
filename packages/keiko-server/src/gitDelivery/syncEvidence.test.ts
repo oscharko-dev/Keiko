@@ -97,7 +97,7 @@ describe("gitSyncRepoIdHash", () => {
     const root = "/home/u/projects/secret-repo";
     const hash = gitSyncRepoIdHash(root);
     expect(hash).toBe(sha256Hex(root).slice(0, 24));
-    expect(hash.length).toBe(24);
+    expect(hash).toHaveLength(24);
     expect(hash).not.toContain("secret-repo");
   });
 });

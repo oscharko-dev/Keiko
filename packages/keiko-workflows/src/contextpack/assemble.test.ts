@@ -156,7 +156,7 @@ describe("assembleContextPack", () => {
     expect(validateConnectedContextPack(result.pack).ok).toBe(true);
     // The first candidate exceeds 5 bytes, so processing stops immediately and the second
     // file is never added.
-    expect(result.pack.files.length).toBe(0);
+    expect(result.pack.files).toHaveLength(0);
     // Exactly one budget-exhausted omission: the clip must BREAK the candidate loop, so the
     // second candidate is never processed (and never recorded) at all.
     expect(result.pack.omitted.filter((o) => o.reason === "budget-exhausted")).toHaveLength(1);

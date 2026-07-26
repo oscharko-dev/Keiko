@@ -65,7 +65,7 @@ describe("filterCandidates", () => {
 
   it("keeps candidates above minScore that are not generated or duplicates", () => {
     const result = filterCandidates([annotated("src/a.ts", 0.5)], options());
-    expect(result.kept.length).toBe(1);
+    expect(result.kept).toHaveLength(1);
     expect(result.kept[0]?.scopePath).toBe("src/a.ts");
     expect(result.omitted).toEqual([]);
   });
@@ -99,12 +99,12 @@ describe("filterCandidates", () => {
       annotated("src/e.ts", 0.5),
     ];
     const result = filterCandidates(inputs, options({ maxKept: 2 }));
-    expect(result.kept.length).toBe(2);
+    expect(result.kept).toHaveLength(2);
     expect(result.kept[0]?.scopePath).toBe("src/a.ts");
     expect(result.kept[1]?.scopePath).toBe("src/b.ts");
     const overflowReasons = result.omitted.map((o) => o.reason);
     expect(overflowReasons.every((r) => r === "budget-exhausted")).toBe(true);
-    expect(result.omitted.length).toBe(3);
+    expect(result.omitted).toHaveLength(3);
   });
 
   it("treats a negative maxKept as zero so kept output remains bounded", () => {
@@ -144,6 +144,6 @@ describe("filterCandidates", () => {
       [annotated("src/dist/a.js", 0.9, true)],
       options({ omitGenerated: false }),
     );
-    expect(result.kept.length).toBe(1);
+    expect(result.kept).toHaveLength(1);
   });
 });

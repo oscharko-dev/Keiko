@@ -1,5 +1,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
+import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 
 import { useTranslate } from "@/lib/i18n";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
@@ -323,6 +325,33 @@ export function ChatWindowSessionHost({
   );
 }
 
+// Issue #2621 — a root that leaves the workspace must hand back the Monaco models it retained, and
+// among the components that render an editor this host is the one that observes every transition
+// where that happens (a workspace whose editor window is closed still disposes nothing, unchanged
+// from before). Watching the manifest inside `MultiRootEditorHost` misses the two-root case: it
+// renders only while more than one root exists, so dropping to a single root
+// re-renders this host into its V1 branch, so the multi-root host unmounts on the very transition
+// that had to fire the disposal and never sees the manifest the removed root is missing from. Here
+// the observation straddles both branches, so 2 -> 1 is diffed exactly like N -> N-1.
+function useRemovedRootDisposal(manifest: WorkspaceManifest | null): void {
+  const observed = useRef<WorkspaceManifest | null>(manifest);
+  useEffect(() => {
+    // A missing manifest is absence of evidence (loading, a failed load, a V1 root), never proof
+    // that a root was removed, and a different workspace is a navigation rather than a removal.
+    // Forced disposal destroys dirty buffers in every window sharing the root, so both stay closed
+    // and the last workspace actually observed remains the baseline to diff against.
+    if (manifest === null) return;
+    const before = observed.current;
+    observed.current = manifest;
+    if (before?.workspaceId !== manifest.workspaceId) return;
+    const remaining = new Set(manifest.roots.map((entry) => entry.rootRef));
+    for (const removed of before.roots) {
+      if (remaining.has(removed.rootRef)) continue;
+      disposeEditorModelRegistryRoot(removed.canonicalRoot, "root-disposed", true);
+    }
+  }, [manifest]);
+}
+
 export function EditorWindowSessionHost({
   cfg,
   ctx,
@@ -337,9 +366,15 @@ export function EditorWindowSessionHost({
   const file = str(cfg, "file");
   const openFiles = stringArray(cfg, "openFiles");
   const layoutJson = str(cfg, "layoutJson");
+  useRemovedRootDisposal(workspace.manifest);
   const buildBaseProps = useCallback(
-    (targetRoot: string): EditorSessionBaseProps => editorSessionBaseProps(targetRoot, cfg, ctx),
-    [cfg, ctx],
+    (targetRoot: string): EditorSessionBaseProps => ({
+      ...editorSessionBaseProps(targetRoot, cfg, ctx),
+      // Issue #2621 — the reveal names its target root in the same cfg patch that carries the line
+      // range, and the multi-root host mounts every root. Only the addressed root may act on it.
+      ...(targetRoot === configuredRoot ? revealSessionProps(cfg) : {}),
+    }),
+    [cfg, configuredRoot, ctx],
   );
   if (workspace.manifest !== null && workspace.manifest.roots.length > 1) {
     return (
@@ -355,11 +390,15 @@ export function EditorWindowSessionHost({
   }
   const props: EditorWidgetProps = {
     ...editorSessionBaseProps(root, cfg, ctx),
+    // This branch renders exactly one editor, and it is handed the request unchanged from before —
+    // the root it displays is resolved by ADR-0090 binding and need not equal `cfg.root`, so the
+    // addressee comparison the multi-root branch makes has nothing to compare against here.
+    ...revealSessionProps(cfg),
     ...(root === undefined ? {} : { root }),
     ...(file === undefined ? {} : { file }),
     ...(openFiles === undefined ? {} : { openFiles }),
     ...(layoutJson === undefined ? {} : { layoutJson }),
-    onWorkspaceChange: (patch) => updateEditorCfg(ctx, patch),
+    onWorkspaceChange: (patch) => updateEditorCfg(ctx, configuredRoot, patch),
   };
 
   // V1/unbound roots keep the ADR-0090 remount guarantee. V2 manifests instead keep one keyed
@@ -372,21 +411,38 @@ type EditorSessionBaseProps = Omit<
   "file" | "layoutJson" | "onWorkspaceChange" | "openFiles" | "root" | "sessionActive"
 >;
 
-function updateEditorCfg(ctx: WindowRenderContext, patch: EditorWidgetWorkspacePatch): void {
+function updateEditorCfg(
+  ctx: WindowRenderContext,
+  configuredRoot: string | undefined,
+  patch: EditorWidgetWorkspacePatch,
+): void {
+  const rootChanged = patch.root !== undefined && patch.root !== configuredRoot;
   ctx.updateCfg({
     root: patch.root,
     file: patch.file,
     openFiles: patch.openFiles,
     layoutJson: patch.layoutJson,
+    // Issue #2621 — the reveal in cfg is addressed to the root named there, so re-homing the window
+    // to a different root invalidates it. The editor applies a reveal from its Monaco mount wiring,
+    // and a root change remounts this branch's editor (ADR-0090 D4), so keeping the triple would
+    // fire the line jump again in another root's file — and would silently re-address it to the new
+    // root, which is the very targeting the multi-root branch then trusts. Only on a root change: an
+    // ordinary layout commit carries the same root and must not kill an in-flight reveal.
+    ...(rootChanged
+      ? { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined }
+      : {}),
   });
 }
 
-function editorSessionBaseProps(
-  targetRoot: string | undefined,
-  cfg: Record<string, unknown>,
-  ctx: WindowRenderContext,
-): EditorSessionBaseProps {
-  const file = str(cfg, "file");
+type EditorRevealSessionProps = Pick<
+  EditorWidgetProps,
+  "revealLineEnd" | "revealLineStart" | "revealRequestId"
+>;
+
+// Issue #2621 — the reveal triple is addressed to exactly one root, so it is built apart from the
+// props every root shares. Callers decide who is addressed; nothing here reads a root, so a caller
+// cannot accidentally hand the request to a root it was not written for.
+function revealSessionProps(cfg: Record<string, unknown>): EditorRevealSessionProps {
   return {
     ...(num(cfg, "revealLineStart") === undefined
       ? {}
@@ -397,6 +453,16 @@ function editorSessionBaseProps(
     ...(str(cfg, "revealRequestId") === undefined
       ? {}
       : { revealRequestId: str(cfg, "revealRequestId") }),
+  };
+}
+
+function editorSessionBaseProps(
+  targetRoot: string | undefined,
+  cfg: Record<string, unknown>,
+  ctx: WindowRenderContext,
+): EditorSessionBaseProps {
+  const file = str(cfg, "file");
+  return {
     linkedRoot: ctx.linkedRoot,
     linkedFilePath: ctx.linkedFilePath,
     linkedCapsuleIds: ctx.linkedCapsuleIds,

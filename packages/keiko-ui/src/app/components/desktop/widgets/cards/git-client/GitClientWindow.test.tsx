@@ -466,7 +466,7 @@ afterEach(() => {
 describe("GitClientWindow — repository list", () => {
   it("lists multiple repos in the connect panel after load", async () => {
     render(<GitClientWindow client={makeClient()} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
   });
 
@@ -474,7 +474,7 @@ describe("GitClientWindow — repository list", () => {
     const updateCfg = vi.fn();
     const client = makeClient();
     render(<GitClientWindow client={client} updateCfg={updateCfg} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /alpha/ }));
 
@@ -484,7 +484,7 @@ describe("GitClientWindow — repository list", () => {
   it("selecting a repo triggers a branch and status load for the chosen path", async () => {
     const client = makeClient();
     render(<GitClientWindow client={client} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /alpha/ }));
 
@@ -504,7 +504,7 @@ describe("GitClientWindow — repository list", () => {
     });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
 
     // Switch to repo B via the toolbar repository selector.
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
@@ -578,7 +578,7 @@ describe("GitClientWindow — repository list", () => {
       }),
     });
     render(<GitClientWindow client={client} />);
-    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Network failure");
   });
 
@@ -600,9 +600,7 @@ describe("GitClientWindow — repository list", () => {
 describe("GitClientWindow — repository selector combobox (toolbar)", () => {
   it("renders the Repository combobox trigger in the toolbar", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Repository" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
   });
 });
 
@@ -610,7 +608,7 @@ describe("GitClientWindow — add-repository dialog", () => {
   it("opens the dialog when the connect-repository button is clicked", async () => {
     const user = userEvent.setup();
     render(<GitClientWindow client={makeClient()} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Clone from URL" }));
 
@@ -621,7 +619,7 @@ describe("GitClientWindow — add-repository dialog", () => {
     const user = userEvent.setup();
     const client = makeClient();
     render(<GitClientWindow client={client} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Clone from URL" }));
     const dialog = screen.getByRole("dialog");
@@ -649,7 +647,7 @@ describe("GitClientWindow — add-repository dialog", () => {
     const user = userEvent.setup();
     const client = makeClient();
     render(<GitClientWindow client={client} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Connect repository" }));
     const dialog = screen.getByRole("dialog");
@@ -669,7 +667,7 @@ describe("GitClientWindow — add-repository dialog", () => {
   it("closes the dialog on Escape", async () => {
     const user = userEvent.setup();
     render(<GitClientWindow client={makeClient()} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Clone from URL" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -862,7 +860,7 @@ describe("GitClientWindow — toolbar actions", () => {
     await waitFor(() => expect(submit).toBeEnabled());
     await user.click(submit);
 
-    await waitFor(() => expect(within(panel).getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(await within(panel).findByTestId("gpr-outcome")).toBeInTheDocument();
     expect(within(panel).getByTestId("gpr-outcome")).toHaveTextContent("rejected: provider-auth");
     expect(within(panel).getByTestId("gpr-outcome")).not.toHaveTextContent(
       /token|secret|authorization/i,
@@ -1309,7 +1307,7 @@ describe("GitClientWindow — empty / loading / error states", () => {
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Status fetch failed");
   });
 
@@ -1319,7 +1317,7 @@ describe("GitClientWindow — empty / loading / error states", () => {
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await waitFor(() => expect(screen.getByText("No changes")).toBeInTheDocument());
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
   });
 
   // AC (Issue #1576): "Empty repository and no-repository states guide users to clone or
@@ -1367,7 +1365,7 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     // "M" glyph for staged file, "M" for worktree-only file
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
     expect(screen.getByText("README.md")).toBeInTheDocument();
   });
 
@@ -1378,7 +1376,7 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
     fireEvent.click(screen.getByText("index.ts").closest("button")!);
 
     // src/index.ts is staged-only, so the pane defaults its scope to "staged".
@@ -1415,11 +1413,11 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
     fireEvent.click(screen.getByText("index.ts").closest("button")!);
 
     // Both file headings from the diff must be present — the second file is the regression guard.
-    await waitFor(() => expect(screen.getByText("src/first.ts")).toBeInTheDocument());
+    expect(await screen.findByText("src/first.ts")).toBeInTheDocument();
     expect(screen.getByText("src/second.ts")).toBeInTheDocument();
   });
 
@@ -1522,9 +1520,7 @@ describe("GitClientWindow — required visible / absent words", () => {
   it("renders 'Repository' as the combobox label in the toolbar", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     // KeikoSelect renders with aria-label="Repository"
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Repository" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
   });
 
   it("renders 'Changes' as a visible tab label", () => {
@@ -1539,9 +1535,7 @@ describe("GitClientWindow — required visible / absent words", () => {
 
   it("renders 'Branch' as the branch combobox label in the toolbar", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Branch: main" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
   });
 
   it("renders 'Sync' in the status pill", async () => {
@@ -1593,7 +1587,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
     // A staged file's checkbox is checked and reads "Unstage <path>".
     expect(screen.getByLabelText("Unstage src/index.ts")).toBeChecked();
     // An unstaged file's checkbox is unchecked and reads "Stage <path>".
@@ -1609,7 +1603,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
   it("checking an unstaged file stages it through the stage route", async () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("Stage README.md"));
 
@@ -1625,7 +1619,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
   it("staging an untracked file passes includeUntracked: true", async () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("notes.txt")).toBeInTheDocument());
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("Stage notes.txt"));
 
@@ -1641,7 +1635,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
   it("unchecking a staged file unstages it through the unstage route", async () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("Unstage src/index.ts"));
 
@@ -1656,7 +1650,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
   it("Stage all stages every unstaged and untracked path with includeUntracked", async () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Stage all" }));
 
@@ -1671,7 +1665,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
   it("Unstage all unstages every staged path", async () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Unstage all" }));
 
@@ -1686,7 +1680,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     const truncatedStatus = { ...makeStatusRich(), truncated: true, maxChanges: 2 };
     const client = makeClient({ getStatus: vi.fn(async () => truncatedStatus) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
 
     expect(screen.getByRole("button", { name: "Stage all" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Unstage all" })).toBeDisabled();
@@ -1696,7 +1690,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     const getStatus = vi.fn(async () => makeStatusRich());
     const client = makeClient({ getStatus });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
     const callsBefore = getStatus.mock.calls.length;
 
     fireEvent.click(screen.getByLabelText("Stage README.md"));
@@ -1718,7 +1712,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
       })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("Stage README.md"));
 
@@ -1749,7 +1743,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
       stage: vi.fn<GitClientSeam["stage"]>(() => stagePending),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
 
     // Begin staging in repo A (in flight), then switch to repo B before it resolves.
     fireEvent.click(screen.getByLabelText("Stage README.md"));
@@ -1776,7 +1770,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Summary"), "feat: wire commit composer");
     const button = screen.getByRole("button", { name: /^Commit/ });
@@ -1795,7 +1789,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Summary"), "feat: subject");
     await user.type(screen.getByLabelText("Description"), "Body line.");
@@ -1816,7 +1810,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     const client = makeClient({ getStatus });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
     const callsBefore = getStatus.mock.calls.length;
 
     await user.type(screen.getByLabelText("Summary"), "feat: done");
@@ -1831,7 +1825,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
   it("disables Commit when nothing is staged", async () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatus({ clean: true })) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("No changes")).toBeInTheDocument());
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
 
     expect(screen.getByRole("button", { name: /^Commit/ })).toBeDisabled();
   });
@@ -1845,7 +1839,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Summary"), "feat: wait for preview");
     const button = screen.getByRole("button", { name: /^Commit/ });
@@ -1863,7 +1857,7 @@ describe("GitClientWindow — diff scope (Issue #1575)", () => {
       getStructuredDiff: vi.fn(async (input) => makeStructuredDiffResponse("", input.scope)),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
 
     // README.md is unstaged-only, so the pane opens in the Worktree scope.
     fireEvent.click(screen.getByText("README.md").closest("button")!);
@@ -1908,7 +1902,7 @@ describe("GitClientWindow — diff scope (Issue #1575)", () => {
       getStructuredDiff: vi.fn(async (input) => makeStructuredDiffResponse("", input.scope)),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("README.md").closest("button")!);
     await waitFor(() =>

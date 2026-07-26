@@ -4746,7 +4746,7 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     // 3 viewports x 6 modes x 6 scenarios. Issue #1574 (EV3) added the git-window-desktop and
     // git-window-constrained scenarios, lifting the matrix from 72 to 108 captured cells.
     expect(browserManifest.shotCount).toBe(108);
-    expect(browserManifest.manifest.length).toBe(108);
+    expect(browserManifest.manifest).toHaveLength(108);
     const expectedCells = new Set(
       browserManifest.viewports.flatMap((viewport) =>
         browserManifest.modes.flatMap((mode) =>

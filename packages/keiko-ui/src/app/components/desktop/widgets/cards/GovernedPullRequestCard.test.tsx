@@ -84,7 +84,7 @@ describe("GovernedPullRequestCard", () => {
     );
     fillForm();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gpr-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-readiness")).toBeInTheDocument();
     const panel = screen.getByTestId("gpr-readiness");
     expect(panel).toHaveTextContent("Remote PR object: not created yet");
     expect(panel).toHaveTextContent("Ready for review: no");
@@ -119,7 +119,7 @@ describe("GovernedPullRequestCard", () => {
       target: { value: "claude/issue-477-x" },
     });
     fireEvent.click(screen.getByTestId("gpr-submit"));
-    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
     expect(prExecute).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: PROJECT,
@@ -144,7 +144,7 @@ describe("GovernedPullRequestCard", () => {
 
     fireEvent.click(screen.getByTestId("gpr-submit"));
 
-    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
     expect(prExecute).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: PROJECT,
@@ -170,7 +170,7 @@ describe("GovernedPullRequestCard", () => {
       target: { value: "claude/issue-477-x" },
     });
     fireEvent.click(screen.getByTestId("gpr-submit"));
-    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("pr-create: blocked");
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("reason: policy-pack-blocked");
   });
@@ -190,7 +190,7 @@ describe("GovernedPullRequestCard", () => {
       target: { value: "claude/issue-477-x" },
     });
     fireEvent.click(screen.getByTestId("gpr-submit"));
-    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("rejected: validation-error");
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("recover: user-fixable");
   });
@@ -211,7 +211,7 @@ describe("GovernedPullRequestCard", () => {
       target: { value: "claude/issue-477-x" },
     });
     fireEvent.click(screen.getByTestId("gpr-submit"));
-    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("rejected: provider-auth");
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("hint: Reconnect provider access.");
     expect(screen.getByTestId("gpr-outcome")).not.toHaveTextContent(/token|secret|authorization/i);
@@ -246,7 +246,7 @@ describe("GovernedPullRequestCard", () => {
     );
     fillForm();
     fireEvent.click(screen.getByTestId("gpr-submit"));
-    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
     // Switching Create → Update retargets the form: the old "created" banner must disappear —
     // it describes a different action than the one the form now names.
     fireEvent.click(screen.getByRole("radio", { name: "Update" }));
@@ -267,7 +267,7 @@ describe("GovernedPullRequestCard", () => {
     );
     fillForm();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gpr-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-readiness")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Base branch"), { target: { value: "main" } });
     expect(screen.queryByTestId("gpr-readiness")).not.toBeInTheDocument();
   });

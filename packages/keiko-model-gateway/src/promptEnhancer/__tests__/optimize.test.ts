@@ -69,7 +69,7 @@ function isSortedDescending(values: readonly number[]): boolean {
 describe("optimizePromptCandidates", () => {
   it("generates, scores, and ranks at least three candidates and selects a stable winner (AC1)", () => {
     const selection = optimizeFor({ recommendedProfile: "technical" }, { candidateCount: 3 });
-    expect(selection.ranked.length).toBe(3);
+    expect(selection.ranked).toHaveLength(3);
     expect(selection.candidatesConsidered).toBe(3);
     expect(selection.winner).toEqual(selection.ranked[0]);
     const aggregates = selection.ranked.map((card) => card.aggregateScore);
@@ -111,7 +111,7 @@ describe("optimizePromptCandidates", () => {
   it("makes every rejected alternative auditable with a reason and score (AC3)", () => {
     const selection = optimizeFor({ recommendedProfile: "technical" }, { candidateCount: 3 });
     const losers = selection.rejected.filter((entry) => entry.reason === "lower-aggregate-score");
-    expect(losers.length).toBe(2);
+    expect(losers).toHaveLength(2);
     for (const loser of losers) {
       expect(typeof loser.aggregateScore).toBe("number");
       expect(loser.aggregateScore ?? -1).toBeLessThanOrEqual(selection.winner.aggregateScore);
@@ -137,7 +137,7 @@ describe("optimizePromptCandidates", () => {
     );
     expect(selection.iterations).toBe(1);
     expect(selection.candidatesConsidered).toBe(1);
-    expect(selection.ranked.length).toBe(1);
+    expect(selection.ranked).toHaveLength(1);
   });
 
   it("rejects candidates before scoring when they exceed the token budget (AC4)", () => {
@@ -153,7 +153,7 @@ describe("optimizePromptCandidates", () => {
     expect(selection.candidatesConsidered).toBe(1);
     expect(selection.tokensConsumed).toBe(baselineOnly.winner.estimatedTokens);
     const skipped = selection.rejected.filter((entry) => entry.reason === "exceeded-token-budget");
-    expect(skipped.length).toBe(2);
+    expect(skipped).toHaveLength(2);
     for (const entry of skipped) {
       expect(entry.aggregateScore).toBeNull();
     }

@@ -37,7 +37,7 @@ describe("createDefaultFigmaRenderPort", () => {
     const result = await port({ url: "https://ephemeral.figma/render.png", headers: {} });
 
     expect(result.status).toBe(429);
-    expect(result.bytes.length).toBe(0);
+    expect(result.bytes).toHaveLength(0);
   });
 
   it("sends redirect: manual so auth headers cannot follow a cross-origin redirect", async () => {

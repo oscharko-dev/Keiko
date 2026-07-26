@@ -102,9 +102,7 @@ describe("ConnectionsLayer — GEN-UI-A11Y-015 auto-disarm announcement", () => 
     render(<ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />);
 
     // Arm the removal (first click) but never confirm.
-    act(() => {
-      fireEvent.click(removeBadge());
-    });
+    fireEvent.click(removeBadge());
     const status = document.querySelector('[role="status"][aria-live="polite"]');
     expect(status?.textContent).toBe("");
 
@@ -125,12 +123,8 @@ describe("ConnectionsLayer — GEN-UI-A11Y-015 auto-disarm announcement", () => 
     // captured reference stays valid even though the accessible name flips to "Confirm removal …".
     const badge = removeBadge();
     // First click arms, second click within the window confirms (user-initiated disarm + remove).
-    act(() => {
-      fireEvent.click(badge);
-    });
-    act(() => {
-      fireEvent.click(badge);
-    });
+    fireEvent.click(badge);
+    fireEvent.click(badge);
 
     expect(value.removeConn).toHaveBeenCalledWith("c-1");
     const status = document.querySelector('[role="status"][aria-live="polite"]');
