@@ -61,11 +61,28 @@ export interface EditorM11RootSettingsLayer {
 export type EditorM11SettingSource = "builtInDefault" | "profile" | "user" | "workspace" | "root";
 export type EditorM11SettingScope = EditorM7SettingScope | "root";
 
+/**
+ * What each layer stores for a setting in its OWN right, before resolution picks a winner.
+ *
+ * `value` answers "what is in effect"; this answers "what would I be rewriting". An editor that
+ * composes a new value from the old one — a keybinding list, any other collection — must build it
+ * from the layer it is about to write, never from the resolved view, or the write silently copies
+ * a foreign layer's content into the target layer (#2618). A key is absent exactly when that layer
+ * holds no value of its own for the setting.
+ */
+export interface EditorM11SettingLayerValues {
+  readonly profile?: EditorM7SettingValue | undefined;
+  readonly user?: EditorM7SettingValue | undefined;
+  readonly workspace?: EditorM7SettingValue | undefined;
+  readonly root?: EditorM7SettingValue | undefined;
+}
+
 export interface EditorM11ResolvedSetting {
   readonly id: EditorM7SettingId;
   readonly value: EditorM7SettingValue;
   readonly source: EditorM11SettingSource;
   readonly scope: EditorM11SettingScope;
+  readonly layers: EditorM11SettingLayerValues;
   readonly policyLocked: boolean;
   readonly reasonCode?: EditorM7ReasonCode | undefined;
   readonly effect: EditorM7SettingEffect;
@@ -338,6 +355,24 @@ function scopeForSource(source: EditorM11ResolvedSetting["source"]): "root" | "w
   if (source === "root") return "root";
   return source === "workspace" ? "workspace" : "user";
 }
+
+// The RAW stored value per layer, not the effective one: the root layer's monotonic clamp decides
+// what takes effect, never what that layer holds, and a scoped rewrite must preserve what it holds.
+function layerValues(
+  id: EditorM7SettingId,
+  input: EditorM11SettingsResolutionInput,
+): EditorM11SettingLayerValues {
+  const profile = layerValue(id, input.profile);
+  const user = layerValue(id, input.user);
+  const workspace = layerValue(id, input.workspace);
+  const root = layerValue(id, input.root);
+  return {
+    ...(profile === undefined ? {} : { profile }),
+    ...(user === undefined ? {} : { user }),
+    ...(workspace === undefined ? {} : { workspace }),
+    ...(root === undefined ? {} : { root }),
+  };
+}
 function resolveSetting(
   definition: (typeof EDITOR_M7_SETTING_REGISTRY)[number],
   input: EditorM11SettingsResolutionInput,
@@ -349,6 +384,7 @@ function resolveSetting(
     value: resolvedValue(definition.id, definition.defaultValue, input),
     source,
     scope: scopeForSource(source),
+    layers: layerValues(definition.id, input),
     policyLocked: reasonCode !== undefined,
     ...(reasonCode === undefined ? {} : { reasonCode }),
     effect: definition.effect,

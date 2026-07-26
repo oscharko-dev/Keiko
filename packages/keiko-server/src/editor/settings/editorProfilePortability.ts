@@ -3,9 +3,12 @@ import {
   EDITOR_M11_SETTINGS_SCHEMA_VERSION,
   WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
   WORKSPACE_PROFILE_SCHEMA_VERSION,
+  isAssignableWorkspaceProfileDisplayName,
+  isReservedWorkspaceProfileDisplayName,
   isWorkspaceProfileDisplayName,
   isWorkspaceProfileRef,
   parseEditorM7SettingValue,
+  workspaceProfileDisplayNameKey,
   type EditorM7SettingId,
   type EditorM7SettingValue,
   type WorkspaceProfileExportRedaction,
@@ -46,13 +49,21 @@ export interface EditorProfileImportPreviewContext {
   readonly expectedRevision: number;
 }
 
+interface RejectedImport {
+  readonly kind: "invalid";
+  readonly code: WorkspaceProfileImportFailureCode;
+}
+
 export type PreparedEditorProfileImport =
   | {
       readonly kind: "ok";
       readonly preview: WorkspaceProfileImportPreview;
       readonly values: ImportValues;
     }
-  | { readonly kind: "invalid"; readonly code: WorkspaceProfileImportFailureCode };
+  | RejectedImport;
+
+type ImportCandidateResult =
+  { readonly kind: "ok"; readonly candidate: ImportCandidate } | RejectedImport;
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -113,17 +124,23 @@ function validManifestEnvelope(value: UnknownRecord): value is UnknownRecord & {
   );
 }
 
-function importCandidate(value: unknown): ImportCandidate | WorkspaceProfileImportFailureCode {
-  if (exceedsDepth(value)) return "IMPORT_TOO_DEEP";
-  if (!isRecord(value)) return "INVALID_MANIFEST";
+function rejectedImport(code: WorkspaceProfileImportFailureCode): RejectedImport {
+  return { kind: "invalid", code };
+}
+
+function importCandidate(value: unknown): ImportCandidateResult {
+  if (exceedsDepth(value)) return rejectedImport("IMPORT_TOO_DEEP");
+  if (!isRecord(value)) return rejectedImport("INVALID_MANIFEST");
   const failure = versionFailure(value.schemaVersion);
-  if (failure !== undefined) return failure;
-  if (!validManifestEnvelope(value) || !isRecord(value.settings)) return "INVALID_MANIFEST";
+  if (failure !== undefined) return rejectedImport(failure);
+  if (!validManifestEnvelope(value) || !isRecord(value.settings)) {
+    return rejectedImport("INVALID_MANIFEST");
+  }
   const settingsFailure = versionFailure(value.settings.schemaVersion);
-  if (settingsFailure !== undefined) return settingsFailure;
+  if (settingsFailure !== undefined) return rejectedImport(settingsFailure);
   return validSettingsEnvelope(value.settings, value.profileRef, value.revision)
-    ? { displayName: value.displayName, values: value.settings.values }
-    : "INVALID_MANIFEST";
+    ? { kind: "ok", candidate: { displayName: value.displayName, values: value.settings.values } }
+    : rejectedImport("INVALID_MANIFEST");
 }
 
 function pathLike(value: string): boolean {
@@ -181,20 +198,33 @@ function previewRow(
   return { settingId, disposition, value: parsed.value };
 }
 
+function suffixedImportName(base: string, index: number): string {
+  const suffix = index === 1 ? " (Imported)" : ` (Imported ${String(index)})`;
+  const head = base.slice(0, WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS - suffix.length).trimEnd();
+  return `${head.length === 0 ? "Profile" : head}${suffix}`;
+}
+
+/**
+ * Import ASSIGNS a display name, so it owes exactly what create and rename owe: a trimmed, legal,
+ * non-reserved name that no reader could confuse with an existing profile (#2618). It differs from
+ * them in one deliberate way — a collision renames instead of failing, because a portable artifact
+ * must not be rejected over a name its author could not have known about.
+ *
+ * Suffixed candidates are pairwise distinct, so `occupied.size` existing names can block at most
+ * that many of them: the search is bounded and its result is always free.
+ */
 function uniqueImportedName(source: string, existingNames: readonly string[]): string {
-  const occupied = new Set(existingNames.map((name) => name.toLowerCase()));
-  if (source.toLowerCase() !== "default" && !occupied.has(source.toLowerCase())) {
-    return source;
-  }
-  for (let index = 1; index <= IMPORT_MAX_SETTING_ROWS; index += 1) {
-    const suffix = index === 1 ? " (Imported)" : ` (Imported ${String(index)})`;
-    const base = source
-      .slice(0, WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS - suffix.length)
-      .trimEnd();
-    const candidate = `${base.length === 0 ? "Profile" : base}${suffix}`;
-    if (!occupied.has(candidate.toLowerCase())) return candidate;
-  }
-  return "Imported profile";
+  const occupied = new Set(existingNames.map(workspaceProfileDisplayNameKey));
+  const base = source.trim();
+  const free = (candidate: string): boolean =>
+    !occupied.has(workspaceProfileDisplayNameKey(candidate));
+  const assignable =
+    isAssignableWorkspaceProfileDisplayName(base) && !isReservedWorkspaceProfileDisplayName(base);
+  if (assignable && free(base)) return base;
+  const limit = occupied.size + 1;
+  let index = 1;
+  while (index < limit && !free(suffixedImportName(base, index))) index += 1;
+  return suffixedImportName(base, index);
 }
 
 function preparedValues(rows: readonly WorkspaceProfileImportPreviewRow[]): ImportValues {
@@ -234,11 +264,9 @@ export function previewEditorProfileImport(
 ): PreparedEditorProfileImport {
   try {
     const candidate = importCandidate(value);
-    return typeof candidate === "string"
-      ? { kind: "invalid", code: candidate }
-      : buildPreview(candidate, context);
+    return candidate.kind === "invalid" ? candidate : buildPreview(candidate.candidate, context);
   } catch {
-    return { kind: "invalid", code: "INVALID_MANIFEST" };
+    return rejectedImport("INVALID_MANIFEST");
   }
 }
 

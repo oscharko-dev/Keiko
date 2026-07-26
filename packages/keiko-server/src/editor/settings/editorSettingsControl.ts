@@ -7,8 +7,10 @@ import {
   EDITOR_M11_SETTINGS_SCHEMA_VERSION,
   WORKSPACE_PROFILE_SCHEMA_VERSION,
   editorM11RootSettingIsMonotonic,
-  isWorkspaceProfileDisplayName,
+  isAssignableWorkspaceProfileDisplayName,
+  isReservedWorkspaceProfileDisplayName,
   isWorkspaceProfileRef,
+  workspaceProfileDisplayNameKey,
   parseEditorM7SettingPatch,
   resolveEditorM11Settings,
   type EditorM7AiActivationSummary,
@@ -913,7 +915,7 @@ function validProfileMutationEnvelope(mutation: EditorProfilesControlMutation): 
 }
 
 function validProfileName(value: string | undefined): boolean {
-  return value?.trim() === value && isWorkspaceProfileDisplayName(value);
+  return isAssignableWorkspaceProfileDisplayName(value);
 }
 
 function validCreateProfileMutation(
@@ -1018,10 +1020,12 @@ function profileNameExists(
   displayName: string,
   except?: WorkspaceProfileRef,
 ): boolean {
-  const normalized = displayName.toLowerCase();
-  if (normalized === "default") return true;
+  if (isReservedWorkspaceProfileDisplayName(displayName)) return true;
+  const normalized = workspaceProfileDisplayNameKey(displayName);
   return profiles.some(
-    (profile) => profile.profileRef !== except && profile.displayName.toLowerCase() === normalized,
+    (profile) =>
+      profile.profileRef !== except &&
+      workspaceProfileDisplayNameKey(profile.displayName) === normalized,
   );
 }
 

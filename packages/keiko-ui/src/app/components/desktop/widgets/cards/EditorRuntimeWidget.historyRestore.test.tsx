@@ -19,8 +19,8 @@ import {
   EDITOR_LOCAL_HISTORY_SCHEMA_VERSION,
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
-  resolveEditorM7Settings,
-  type EditorM7SettingsSnapshot,
+  resolveEditorM11Settings,
+  type EditorM11SettingsSnapshot,
   isWorkspaceContentDigest,
   isWorkspaceHistoryEntryRef,
   isWorkspaceIsoInstant,
@@ -121,7 +121,7 @@ const LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   ],
 };
 
-function editorSettingsSnapshot(formatOnSave: boolean): EditorM7SettingsSnapshot {
+function editorSettingsSnapshot(formatOnSave: boolean): EditorM11SettingsSnapshot {
   return {
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     storeState: "ready",
@@ -131,7 +131,7 @@ function editorSettingsSnapshot(formatOnSave: boolean): EditorM7SettingsSnapshot
     etag: '"edm7-1-0-history-restore"',
     root: "/repo",
     definitions: EDITOR_M7_SETTING_REGISTRY,
-    settings: resolveEditorM7Settings({ user: { scope: "user", values: { formatOnSave } } }),
+    settings: resolveEditorM11Settings({ user: { scope: "user", values: { formatOnSave } } }),
     eventSequence: 1,
   };
 }

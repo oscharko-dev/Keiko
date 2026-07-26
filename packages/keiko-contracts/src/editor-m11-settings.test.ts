@@ -24,6 +24,17 @@ function checked<Value>(value: string, guard: (input: unknown) => input is Value
   return value;
 }
 
+/**
+ * Everything a resolved row says about the OUTCOME, with the per-layer projection removed. The
+ * projection is expected to differ whenever a layer is added; the outcome is not.
+ */
+function resolution(
+  setting: EditorM11ResolvedSetting | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+  if (setting === undefined) return undefined;
+  return Object.fromEntries(Object.entries(setting).filter(([key]) => key !== "layers"));
+}
+
 const PROFILE = checked("profile-primary", isWorkspaceProfileRef);
 const ROOT = checked("root-primary", isWorkspaceRootRef);
 const ROOT_DIGEST = checked("a".repeat(64), isWorkspaceRootIdentityDigest);
@@ -129,7 +140,14 @@ describe("M11 editor settings", () => {
         user,
       }).find((setting) => setting.id === definition.id);
 
-      expect(withProfile, definition.id).toEqual(withoutProfile);
+      // A profile layer is the weakest layer: it may only ADD its own entry to the layer
+      // projection (#2618) and must leave every resolution field — value, source, scope,
+      // provenance, policy — exactly as it was.
+      expect(resolution(withProfile), definition.id).toEqual(resolution(withoutProfile));
+      expect(withProfile?.layers, definition.id).toEqual({
+        ...withoutProfile?.layers,
+        profile: definition.defaultValue,
+      });
       expect(withProfile?.source, definition.id).toBe("user");
     }
   });

@@ -5,7 +5,6 @@ import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   EDITOR_M11_DEFAULT_PROFILE_REF,
-  resolveEditorM7Settings,
   resolveEditorM11Settings,
   type EditorM11ProfileSettingsLayer,
   type EditorM11SettingsSnapshot,
@@ -76,7 +75,7 @@ function snapshot(revision: number, fontSize: number): EditorM11SettingsSnapshot
     etag: `"edm7-0-${revision.toString()}-0-test"`,
     root: "/repo",
     definitions: EDITOR_M7_SETTING_REGISTRY,
-    settings: resolveEditorM7Settings({
+    settings: resolveEditorM11Settings({
       workspace: { scope: "workspace", values: { fontSize } },
     }),
     eventSequence: revision,
@@ -274,7 +273,7 @@ describe("useEditorSettings M7 cross-window integration", () => {
   it("resolves effective modelRetentionCount/modelRetentionBytes from the snapshot", async () => {
     api.currentSnapshot = {
       ...snapshot(0, 13),
-      settings: resolveEditorM7Settings({
+      settings: resolveEditorM11Settings({
         workspace: {
           scope: "workspace",
           values: { modelRetentionCount: 5, modelRetentionBytes: 8 * 1024 * 1024 },

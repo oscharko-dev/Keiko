@@ -44,8 +44,10 @@ export function KeyboardShortcutsPanel({
   const [modifiedOnly, setModifiedOnly] = useState(false);
   const [recordingId, setRecordingId] = useState<string | null>(null);
   const [issue, setIssue] = useState<EditorM7ReasonCode | undefined>();
-  const raw = currentOverrideSetting(view);
+  const raw = resolvedOverrideSetting(view);
+  const layer = scopeOverrideSetting(view, scope);
   const registry = useMemo(() => resolveEffectiveKeyboardShortcuts(raw), [raw]);
+  const layerOverrides = useMemo(() => overriddenCommandIds(layer), [layer]);
   const rows = useMemo(
     () => filteredShortcutRows(registry.commands, query, modifiedOnly, t),
     [modifiedOnly, query, registry.commands, t],
@@ -85,6 +87,7 @@ export function KeyboardShortcutsPanel({
             disabled={disabled}
             entry={entry}
             recording={recordingId === entry.command.id}
+            removable={layerOverrides.has(entry.command.id)}
             setButtonRef={(node) => setButtonRef(buttonRefs.current, entry.command.id, node)}
             t={t}
             onCancel={() => {
@@ -94,7 +97,7 @@ export function KeyboardShortcutsPanel({
             onCapture={(event) => {
               handleCapture({
                 commandId: entry.command.id,
-                current: raw,
+                current: layer,
                 event,
                 scope,
                 setIssue,
@@ -111,7 +114,7 @@ export function KeyboardShortcutsPanel({
               void view.setValue(
                 scope,
                 "keybindingOverrides",
-                removeKeyboardShortcutOverride(raw, entry.command.id),
+                removeKeyboardShortcutOverride(layer, entry.command.id),
               );
             }}
           />
@@ -121,9 +124,32 @@ export function KeyboardShortcutsPanel({
   );
 }
 
-function currentOverrideSetting(view: EditorSettingsView): EditorM7SettingValue | undefined {
+// What the user SEES: the binding actually in effect, whichever layer won it.
+function resolvedOverrideSetting(view: EditorSettingsView): EditorM7SettingValue | undefined {
   return (
     settingById(view.snapshot, "keybindingOverrides")?.value ?? view.applied.keybindingOverrides
+  );
+}
+
+/**
+ * What an edit REWRITES: the overrides the edited scope holds in its own right. Composing the next
+ * list from the resolved view copied whatever layer happened to win into the layer being written —
+ * a profile edit absorbed the user/workspace/root list and carried it to another machine on export
+ * (#2618). `undefined` means the scope holds no overrides yet, so the edit starts from empty.
+ */
+function scopeOverrideSetting(
+  view: EditorSettingsView,
+  scope: EditorSettingsEditScope,
+): EditorM7SettingValue | undefined {
+  return settingById(view.snapshot, "keybindingOverrides")?.layers[scope];
+}
+
+// Remove clears the edited scope's own override, so it is offered only where one exists to clear —
+// a row overridden by a different layer stays untouched by an edit at this scope.
+function overriddenCommandIds(value: EditorM7SettingValue | undefined): ReadonlySet<string> {
+  const scoped = resolveEffectiveKeyboardShortcuts(value);
+  return new Set(
+    scoped.commands.filter((entry) => entry.modified).map((entry) => entry.command.id),
   );
 }
 
@@ -205,6 +231,7 @@ function ShortcutRow({
   disabled,
   entry,
   recording,
+  removable,
   setButtonRef,
   t,
   onCancel,
@@ -215,6 +242,7 @@ function ShortcutRow({
   readonly disabled: boolean;
   readonly entry: EffectiveKeyboardShortcut;
   readonly recording: boolean;
+  readonly removable: boolean;
   readonly setButtonRef: (node: HTMLButtonElement | null) => void;
   readonly t: I18nTranslate;
   readonly onCancel: () => void;
@@ -231,6 +259,7 @@ function ShortcutRow({
           disabled={disabled}
           entry={entry}
           recording={recording}
+          removable={removable}
           setButtonRef={setButtonRef}
           t={t}
           onCancel={onCancel}
@@ -276,6 +305,7 @@ function ShortcutActions({
   disabled,
   entry,
   recording,
+  removable,
   setButtonRef,
   t,
   onCancel,
@@ -286,6 +316,7 @@ function ShortcutActions({
   readonly disabled: boolean;
   readonly entry: EffectiveKeyboardShortcut;
   readonly recording: boolean;
+  readonly removable: boolean;
   readonly setButtonRef: (node: HTMLButtonElement | null) => void;
   readonly t: I18nTranslate;
   readonly onCancel: () => void;
@@ -321,7 +352,7 @@ function ShortcutActions({
       <button
         type="button"
         className={styles.button}
-        disabled={disabled || !entry.modified}
+        disabled={disabled || !removable}
         onClick={onRemove}
       >
         {t("settings.keyboard.remove")}
