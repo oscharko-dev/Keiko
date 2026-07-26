@@ -36,6 +36,18 @@ or compatibility playbook.
 | Memory vault              | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/keiko-memory.db` → `~/.keiko/memory/keiko-memory.db`                                                                               | `@oscharko-dev/keiko-memory-vault` and related memory packages | Local SQLite STRICT/WAL store; workspace-local paths are rejected.                                                                                                                                                                                                                                                                                                                  |
 | Workspace search index    | `KEIKO_WORKSPACE_INDEX_DIR` → `KEIKO_STATE_DIR/workspace-index/` → `~/.keiko/workspace-index/`; key via `KEIKO_WORKSPACE_INDEX_KEY` → keychain `keiko-workspace-index-vault` → `0600` keyfile | `@oscharko-dev/keiko-workspace`, `@oscharko-dev/keiko-server`  | AES-256-GCM sealed bounded repository-discovery and lexical-cache snapshots. The automatic key ladder requires no model-provider setup; legacy plaintext, tampered, or wrong-key snapshots are ignored and rebuilt from the governed workspace.                                                                                                                                     |
 
+The inventory is exhaustive for durable state. Notably **not** in it: the structural
+code-intelligence index that backs repository grounding. It is an in-process LRU cache in
+`@oscharko-dev/keiko-workspace` with no on-disk tier — a cold start rebuilds it from the governed
+workspace. Releases before issue #2670 persisted it as plaintext JSON under
+`<workspace-root>/.keiko/code-intelligence/`; that tier is removed, because the index is a
+reconstructive projection of the workspace (absolute root, scanned paths, symbol and DTO field
+names, call/reference edges, endpoint routes) and an unsealed artifact carrying it satisfied none of
+the [confidentiality controls](#confidentiality-classes-and-controls) below. Keiko never deletes an
+existing artifact left by an older release; the
+[local-state auditor](#local-state-verification-audit) reports one as residue for the operator to
+remove.
+
 ## Precedence ladders
 
 | Surface         | Precedence                                                                                     |
@@ -210,7 +222,8 @@ content (`kv1.` text envelopes, binary embedding envelopes); sealed Local Knowle
 content columns); protected Evidence/QI artifacts (owner-only modes, redaction checks on text-bearing
 artifacts, recomputed QI/Prompt Enhancement manifest hashes, Figma snapshot side-file hash checks, and
 symlink refusal before artifact reads); and runtime store integrity (no unresolved memory-vault or
-Evidence/QI quarantine residue left behind by a failed operation).
+Evidence/QI quarantine residue left behind by a failed operation, and no retired plaintext
+`code-intelligence/` index artifact left behind by a pre-#2670 release).
 
 Update recovery snapshots are not package archives or general downgrade backups. They retain one
 previous-version, local-only, content-free manifest with version pointers, affected store health,

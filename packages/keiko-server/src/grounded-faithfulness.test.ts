@@ -634,6 +634,10 @@ describe("reconcileClaimEntailment", () => {
       { maxClaims: 2, maxExcerptChars: 900, maxTotalMs: 20_000 },
     );
     expect(result.judgedClaims).toBe(2);
+    // #2670 AC6: a claim beyond the budget is UNDECIDED, never supported. Budget exhaustion must
+    // surface the same entailment-unavailable caveat the wall-clock branch below already does,
+    // instead of dropping the claim silently and rendering the answer as fully verified.
+    expect(result.unavailableClaims).toBe(1);
   });
 
   it("stops calling the judge and marks remaining claims unavailable when the signal is aborted", async () => {

@@ -100,7 +100,7 @@ export type {
   SearchPolicy,
   SearchPolicyMode,
 } from "./repoSearchPolicy.js";
-export { candidateBucketForPath } from "./repoSearchPolicy.js";
+export { candidateBucketForPath, SYMBOL_RELATION_TERMS } from "./repoSearchPolicy.js";
 export type {
   SemanticFusionSignals,
   SemanticSearchDocument,

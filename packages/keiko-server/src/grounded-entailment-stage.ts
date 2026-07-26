@@ -16,6 +16,7 @@
 // `entailment-unavailable` WARN marker plus a body-free operator diagnostic (correlation id + counts
 // + failure class — never claim text, excerpt text, or file content).
 
+import { randomUUID } from "node:crypto";
 import { isScopeModelUseOperationAllowed } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   ConnectedContextPack,
@@ -53,14 +54,22 @@ export interface EntailmentStageObservability {
   readonly correlationId?: string | undefined;
 }
 
+// The stage's own observability once the correlation id has been settled. Keeping `correlationId`
+// required here is what stops a caller that supplies only a sink from silently losing its
+// diagnostics — the failure mode #2670 found in all three production call sites.
+interface CorrelatedEntailmentObservability {
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly correlationId: string;
+}
+
 function recordDiagnostic(
-  observability: EntailmentStageObservability,
+  observability: CorrelatedEntailmentObservability,
   nowMs: number,
   errorClass: string,
   message: string,
 ): void {
   const sink = observability.diagnostics;
-  if (sink === undefined || observability.correlationId === undefined) {
+  if (sink === undefined) {
     return;
   }
   sink.record({
@@ -76,7 +85,7 @@ function recordDiagnostic(
 function markersFor(
   result: EntailmentReconciliation,
   nowMs: number,
-  observability: EntailmentStageObservability,
+  observability: CorrelatedEntailmentObservability,
 ): readonly UncertaintyMarker[] {
   const markers: UncertaintyMarker[] = [];
   const unsupported = unsupportedClaimMarker(result.unentailed, nowMs);
@@ -103,7 +112,7 @@ async function evaluateEntailment(
   nowMs: number,
   judge: EntailmentJudge,
   options: EntailmentOptions,
-  observability: EntailmentStageObservability,
+  observability: CorrelatedEntailmentObservability,
   signal: AbortSignal | undefined,
 ): Promise<readonly UncertaintyMarker[]> {
   try {
@@ -153,6 +162,14 @@ export function createEntailmentStage(
   if (judge === undefined) {
     return undefined;
   }
+  // Every production call site hands down a diagnostics sink but has no upstream correlation token
+  // to pair with it (the folder orchestrator never sees an answer id), which silently disabled the
+  // operator diagnostic this stage promises. Mint one per stage — the stage's lifetime is exactly
+  // one grounded ask — matching the workspace-index provider's convention for the same situation.
+  const correlated: CorrelatedEntailmentObservability = {
+    ...observability,
+    correlationId: observability.correlationId ?? randomUUID(),
+  };
   // The request signal is baked in here (the stage's lifetime is the grounded ask's): a client
   // cancellation stops the remaining sequential judge calls early, and the per-answer wall-clock
   // budget in reconcileClaimEntailment bounds the worst case even when the request never cancels.
@@ -162,6 +179,6 @@ export function createEntailmentStage(
       packs: readonly ConnectedContextPack[],
       nowMs: number,
     ): Promise<readonly UncertaintyMarker[]> =>
-      evaluateEntailment(answerText, packs, nowMs, judge, options, observability, signal),
+      evaluateEntailment(answerText, packs, nowMs, judge, options, correlated, signal),
   };
 }

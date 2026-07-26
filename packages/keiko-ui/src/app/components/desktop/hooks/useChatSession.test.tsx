@@ -2614,6 +2614,61 @@ describe("useChatSession canonical Voice FIFO", () => {
     }
   });
 
+  it("renders a durably admitted transcript once across a queue re-attempt", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const spoken = "voice retried after a lost socket";
+    // The BFF persists the canonical user row at admission, so the row outlives a transport
+    // failure with an unknown commit state. Reconciliation rebuilds `messages` from that row and
+    // drops the projection's local row — the queue then re-attempts the SAME turn identity.
+    const durableUser = message({
+      id: "durable-retry-user",
+      content: spoken,
+      role: "user",
+      timestamp: 30_000,
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [durableUser] });
+    const pending = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    const sends: Array<string | undefined> = [];
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      sends.push(request.clientTurnId);
+      // Attempt 1 loses the socket mid-generation (retryable, commit state unknown); attempt 2
+      // never settles, so the assertions observe the state the re-attempt leaves on screen.
+      return sends.length === 1
+        ? Promise.reject(new TypeError("network unavailable"))
+        : pending.promise;
+    });
+    const spokenUserRowIds = (): string[] =>
+      rendered.result.current.messages
+        .filter((candidate) => candidate.role === "user" && candidate.content === spoken)
+        .map((candidate) => candidate.id);
+    vi.useFakeTimers();
+    vi.setSystemTime(30_000);
+    try {
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(spoken, "voice-durable-retry"),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+
+      expect(delivery).toBeDefined();
+      expect(sends).toEqual(["voice-durable-retry"]);
+      expect(spokenUserRowIds()).toEqual(["durable-retry-user"]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(sends).toHaveLength(2);
+      expect(spokenUserRowIds()).toEqual(["durable-retry-user"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not surface a late grounded Voice failure in a different chat", async () => {
     const chatA = chat({
       id: "chat-a",

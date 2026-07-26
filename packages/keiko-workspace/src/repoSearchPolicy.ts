@@ -209,6 +209,81 @@ const IMPLEMENTATION_INTENT_TERMS = new Set([
   "source",
 ]);
 
+// The bilingual vocabulary of a symbol RELATION question — who calls, uses, imports, or depends on
+// a symbol. It is the counterpart of IMPLEMENTATION_INTENT_TERMS above and the single definition of
+// this vocabulary in the repository: the exploration planner (keiko-workflows planner/plan.ts)
+// classifies relation questions from the same set, importing it from here so the two layers cannot
+// drift apart. It lives in keiko-workspace because dependencies flow inward (ADR-0019) and the
+// planner already sources retrieval vocabulary from this package.
+export const SYMBOL_RELATION_TERMS: ReadonlySet<string> = new Set([
+  "call",
+  "caller",
+  "callers",
+  "calls",
+  "called",
+  "calling",
+  "callee",
+  "callees",
+  "consumer",
+  "consumers",
+  "dependency",
+  "dependencies",
+  "dependent",
+  "dependents",
+  "depend",
+  "depends",
+  "depended",
+  "depending",
+  "import",
+  "imports",
+  "imported",
+  "importing",
+  "export",
+  "exports",
+  "exported",
+  "exporting",
+  "invoke",
+  "invokes",
+  "invoked",
+  "invoking",
+  "invocation",
+  "invocations",
+  "reference",
+  "references",
+  "referenced",
+  "referencing",
+  "referenziert",
+  "usage",
+  "usages",
+  "use",
+  "uses",
+  "used",
+  "using",
+  "verwendet",
+  "verwenden",
+  "verwendest",
+  "verwende",
+  "verwendung",
+  "nutzt",
+  "nutzen",
+  "nutzung",
+  "genutzt",
+  "aufrufer",
+  "aufgerufen",
+  "aufrufen",
+  "aufruf",
+  "aufrufe",
+  "abhängig",
+  "abhängige",
+  "abhängigen",
+  "abhängiger",
+  "abhängiges",
+  "abhängigkeit",
+  "abhängigkeiten",
+  "importiert",
+  "exportiert",
+]);
+
 function emptyBucketCounts(): Record<CandidateBucket, number> {
   return {
     "canonical-metadata": 0,
@@ -363,6 +438,34 @@ const SHORT_CODE_TERMS: ReadonlySet<string> = new Set([
   "io",
 ]);
 const ROUTE_DECLARATION_BONUS = 160;
+// Awarded to a file whose EXECUTABLE source declares an identifier the question anchored on. Sized
+// above every filename signal so a real declaration beats an incidental name collision, and below
+// the route bonus so an explicit route lookup still wins its own question.
+const SYMBOL_DEFINITION_BONUS = 120;
+
+// The anchor-identifier shape (the compound form planner/anchors.ts recognizes as an identifier
+// anchor): camelCase/PascalCase, or an underscore/dollar compound. A plain capitalized English word
+// ("Where", "Java") is deliberately excluded, so ordinary question prose cannot claim a structural
+// declaration. Both patterns are single-pass and unambiguous — no nested quantifier to backtrack.
+const IDENTIFIER_TERM_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+const COMPOUND_IDENTIFIER_RE = /[a-z0-9][A-Z]|[_$]/u;
+
+// Bounded like the sibling query derivations in repoSearchMatchers: content scoring calls this once
+// per SCANNED FILE and the derivation is pure in the query text.
+const QUERY_TERM_MEMO_MAX_ENTRIES = 8;
+
+function isAnchorIdentifierTerm(term: string): boolean {
+  return IDENTIFIER_TERM_RE.test(term) && COMPOUND_IDENTIFIER_RE.test(term);
+}
+
+// Expanded with case PRESERVED (`caseSensitive: true`) because the shape test reads the
+// identifier's casing; the comparison against a declared symbol still honours the query's own
+// case sensitivity.
+const anchorIdentifierQueryTerms: (queryText: string) => readonly string[] = memoizeByStringKey(
+  QUERY_TERM_MEMO_MAX_ENTRIES,
+  (queryText: string): readonly string[] =>
+    expandedQueryTerms(queryText, true).filter(isAnchorIdentifierTerm),
+);
 
 function keepContentTerm(term: string): boolean {
   const lower = term.toLowerCase();
@@ -405,15 +508,40 @@ function exactSymbolContentBonus(query: RetrievalQuery, haystack: string): numbe
   return haystack.includes(needle) ? 45 : 0;
 }
 
-function exactSymbolDefinitionContentBonus(
+// An exact-symbol query IS the identifier; a natural-language question carries it among its
+// expanded anchors — but only when it actually asks for the declaration. "Which test file covers
+// X?" and "What calls X?" name X without asking where X is defined, and awarding the declaration
+// there outranks the paired test file and the call site the question asked for. Gating on the
+// definition vocabulary keeps this award aimed at the intent it was built for.
+function symbolDefinitionQueryTerms(query: RetrievalQuery): readonly string[] {
+  if (query.kind === "exact-symbol") {
+    return [query.text];
+  }
+  const asksForDefinition = normalizedQueryTerms(query).some((term) =>
+    IMPLEMENTATION_INTENT_TERMS.has(term),
+  );
+  return asksForDefinition ? anchorIdentifierQueryTerms(query.text) : [];
+}
+
+// The structural-definition award, and a sibling of routeDeclarationContentBonus: a content/
+// structure signal a natural-language question earns exactly as the route intent already does.
+// Gating it on `kind === "exact-symbol"` made it unreachable — every product query is built as
+// `natural-language` — so "Where is X defined?" fell back to the ungated filename signal and an
+// incidental docs/X.md, config/X.json or __snapshots__/X.test.ts.snap outranked the module that
+// actually declares X (Issue #2670 AC5). Because the evidence is structural, prose, JSON values and
+// snapshots cannot earn it: their lines carry no declaration.
+function symbolDefinitionContentBonus(
   query: RetrievalQuery,
   sourceLines: ReturnType<typeof repositorySourceLines>,
 ): number {
-  if (query.kind !== "exact-symbol") return 0;
+  const symbols = symbolDefinitionQueryTerms(query);
+  if (symbols.length === 0) return 0;
   return sourceLines.some((line) =>
-    structuralLineLooksLikeSymbolDefinition(line.structural, query.text, query.caseSensitive),
+    symbols.some((symbol) =>
+      structuralLineLooksLikeSymbolDefinition(line.structural, symbol, query.caseSensitive),
+    ),
   )
-    ? 120
+    ? SYMBOL_DEFINITION_BONUS
     : 0;
 }
 
@@ -508,7 +636,7 @@ export function scoreContentHitsForSearch(
     300,
     lexicalScore +
       (routeDeclarationMatched ? ROUTE_DECLARATION_BONUS : 0) +
-      (exactSymbolDefinitionMatched ? 120 : 0),
+      (exactSymbolDefinitionMatched ? SYMBOL_DEFINITION_BONUS : 0),
   );
 }
 
@@ -537,7 +665,7 @@ export function scoreContentForSearch(
     countContentTermHits(groups, haystack, tokens, query.caseSensitive),
     exactSymbolContentBonus(query, haystack) > 0,
     routeDeclarationContentBonus(query, sourceLines) > 0,
-    exactSymbolDefinitionContentBonus(query, sourceLines) > 0,
+    symbolDefinitionContentBonus(query, sourceLines) > 0,
   );
 }
 
@@ -687,8 +815,26 @@ function depthPenalty(scopePath: string): number {
   return Math.min(pathSegments(scopePath).length, 12);
 }
 
-function queryIntentBoost(bucket: CandidateBucket, terms: readonly string[]): number {
-  if (!terms.some((term) => IMPLEMENTATION_INTENT_TERMS.has(term))) {
+// A question about where a symbol is DEFINED and a question about what CALLS, USES or IMPORTS it
+// are the same kind of question for ranking purposes: executable code answers them, prose only
+// mentions them. Before Issue #2670 only the definition half existed, so "what calls X?" got no
+// source-over-prose bias at all and a Markdown note outranked the real call site (AC5).
+//
+// The relation half is additionally anchored on a compound identifier, because its vocabulary is
+// far more polysemous than the definition vocabulary: "which Node version does this project use?"
+// is a metadata question that must not inherit a code bias from the bare word "use".
+function prefersSourceOverProse(query: RetrievalQuery, terms: readonly string[]): boolean {
+  if (terms.some((term) => IMPLEMENTATION_INTENT_TERMS.has(term))) {
+    return true;
+  }
+  return (
+    terms.some((term) => SYMBOL_RELATION_TERMS.has(term)) &&
+    anchorIdentifierQueryTerms(query.text).length > 0
+  );
+}
+
+function queryIntentBoost(bucket: CandidateBucket, sourceOverProse: boolean): number {
+  if (!sourceOverProse) {
     return 0;
   }
   if (bucket === "source" || bucket === "symbol-source" || bucket === "exact-path") {
@@ -725,13 +871,14 @@ function scoreCandidate(
   terms: readonly string[],
   policy: SearchPolicy,
   contentScores: ReadonlyMap<string, number> | undefined,
+  sourceOverProse: boolean,
 ): ScoredCandidate {
   const path = file.relativePath;
   const bucket = bucketByPath(path);
   const lexical = lexicalPathSignals(path, terms);
   const depth = depthPenalty(path);
   const bucketTiebreak = bucketScore(bucket, policy.intent);
-  const intentBoost = queryIntentBoost(bucket, terms);
+  const intentBoost = queryIntentBoost(bucket, sourceOverProse);
   const recencyBoost = recentPathBoost(path, policy.recentPaths);
   const ecosystem = bucket === "canonical-metadata" ? canonicalMetadataEcosystem(path) : undefined;
   const signals: CandidateSignal[] = [
@@ -776,7 +923,10 @@ function rankCandidates(
   // Tie-break on raw code-point order, not localeCompare, so evidence ordering is reproducible
   // across locales/ICU builds (regulated-delivery determinism).
   const terms = normalizedQueryTerms(query);
-  const scored = files.map((file) => scoreCandidate(file, terms, policy, contentScores));
+  const sourceOverProse = prefersSourceOverProse(query, terms);
+  const scored = files.map((file) =>
+    scoreCandidate(file, terms, policy, contentScores, sourceOverProse),
+  );
   scored.sort((a, b) => {
     if (a.score !== b.score) return b.score - a.score;
     if (a.bucketTiebreak !== b.bucketTiebreak) return b.bucketTiebreak - a.bucketTiebreak;
