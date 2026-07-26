@@ -259,15 +259,19 @@ describe("MultiRootEditorHost", () => {
     await user.click(screen.getByRole("tab", { name: /Repo B/u }));
 
     // The session bootstrap writes cfg on mount, so the tab click is the most recent patch.
-    const patch = updateCfg.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
-    expect(patch?.["root"]).toBe("/repo-b");
+    const patch: unknown = updateCfg.mock.calls.at(-1)?.[0];
+    if (typeof patch !== "object" || patch === null) {
+      throw new Error("expected updateCfg to have been called with a patch object");
+    }
+    const cfgPatch = patch as Record<string, unknown>;
+    expect(cfgPatch["root"]).toBe("/repo-b");
     // Explicitly present and undefined: an absent key would leave the stale reveal in cfg, because
     // the window merges the patch into the existing config instead of replacing it.
-    expect(Object.keys(patch ?? {})).toEqual(
+    expect(Object.keys(cfgPatch)).toEqual(
       expect.arrayContaining(["revealLineStart", "revealLineEnd", "revealRequestId"]),
     );
-    expect(patch?.["revealLineStart"]).toBeUndefined();
-    expect(patch?.["revealLineEnd"]).toBeUndefined();
-    expect(patch?.["revealRequestId"]).toBeUndefined();
+    expect(cfgPatch["revealLineStart"]).toBeUndefined();
+    expect(cfgPatch["revealLineEnd"]).toBeUndefined();
+    expect(cfgPatch["revealRequestId"]).toBeUndefined();
   });
 });
