@@ -9,6 +9,7 @@
 import type { ReactNode } from "react";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
+import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import {
   AGENT_HINT_STYLE,
   CONNECT_COLUMN_STYLE,
@@ -70,9 +71,9 @@ export function ConnectPanel({
               {error}
             </p>
           ) : loading && repositories.length === 0 ? (
-            <p role="status" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
+            <output style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
               Loading repositories…
-            </p>
+            </output>
           ) : repositories.length === 0 ? (
             <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
               No repositories yet. Connect or clone one to get started.

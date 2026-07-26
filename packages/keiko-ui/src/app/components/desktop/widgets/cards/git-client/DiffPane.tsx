@@ -18,10 +18,12 @@ import {
   DIFF_HEADER_STYLE,
   DIFF_PATH_STYLE,
   HASH_CHIP_STYLE,
+  LOADING_STATE_STYLE,
   scopeButtonStyle,
   SCOPE_TOGGLE_STYLE,
   SUBTLE_TEXT_STYLE,
 } from "./git-client-styles";
+import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 
 interface DiffState {
   readonly loading: boolean;
@@ -167,10 +169,9 @@ export function DiffPane({
           </div>
         </div>
       ) : null}
-      <div
+      <section
         style={{ flex: 1, minHeight: 0, overflow: "auto" }}
         className="review"
-        role="region"
         aria-label="Diff"
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Long diffs need a named, keyboard-scrollable region.
         tabIndex={0}
@@ -180,7 +181,7 @@ export function DiffPane({
           selectedCommit={selectedCommit}
           state={state}
         />
-      </div>
+      </section>
     </div>
   );
 }
@@ -256,9 +257,9 @@ function DiffBody({
   }
   if (state.loading) {
     return (
-      <p className="rv-empty" role="status" style={{ padding: 14 }}>
+      <output className="rv-empty" style={LOADING_STATE_STYLE}>
         Loading diff…
-      </p>
+      </output>
     );
   }
   if (state.response === null || state.response.files.length === 0) {
@@ -273,10 +274,13 @@ function DiffBody({
   return (
     <div className="rv-body">
       {state.response.truncated ? (
-        <p className="rv-truncated" role="status" style={{ ...SUBTLE_TEXT_STYLE, padding: 14 }}>
+        <output
+          className="rv-truncated"
+          style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, padding: 14 }}
+        >
           This diff is large and has been truncated at {state.response.maxBytes.toLocaleString()}{" "}
           bytes or {state.response.maxFiles.toLocaleString()} files.
-        </p>
+        </output>
       ) : null}
       {state.response.files.map((file, index) => (
         <DiffFileSection key={file.path} file={file} index={index} sectionRef={() => undefined} />

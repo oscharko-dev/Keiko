@@ -21,6 +21,7 @@ import {
   type ReactNode,
 } from "react";
 import { Icons } from "./Icons";
+import { NATIVE_LIST_KEEP_PADDING_STYLE } from "./native-element-styles";
 import { formatBytes } from "@/lib/format";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type {
@@ -107,7 +108,9 @@ function AttachmentChip({ attachment, onRemove }: AttachmentChipProps): ReactNod
   const displayName = truncateName(attachment.name);
 
   return (
-    <div className="attach-chip" role="listitem">
+    // <li> owns role=listitem (#2721). No marker box is generated because .attach-chip
+    // renders the item as inline-flex, and <li> carries no user-agent margin or padding.
+    <li className="attach-chip">
       {attachment.kind === "image" && attachment.previewUrl !== undefined ? (
         // Thumbnail: capped at 40×40 via CSS. Decorative — the filename renders as
         // adjacent text, so alt="" (uiux-fix F040 C320: the previous alt={name} +
@@ -139,7 +142,7 @@ function AttachmentChip({ attachment, onRemove }: AttachmentChipProps): ReactNod
       >
         <Icons.close size={12} />
       </button>
-    </div>
+    </li>
   );
 }
 
@@ -154,11 +157,18 @@ export function AttachmentStrip({ attachments, onRemove }: AttachmentStripProps)
   const t = useTranslate();
   if (attachments.length === 0) return null;
   return (
-    <div className="attach-strip" role="list" aria-label={t("attachment.pending")}>
+    // <ul> owns role=list (#2721). NATIVE_LIST_KEEP_PADDING_STYLE drops the marker and the 1em
+    // block margin but leaves the padding alone, so .attach-strip's own `padding: 4px 2px`
+    // still applies.
+    <ul
+      className="attach-strip"
+      style={NATIVE_LIST_KEEP_PADDING_STYLE}
+      aria-label={t("attachment.pending")}
+    >
       {attachments.map((a) => (
         <AttachmentChip key={a.id} attachment={a} onRemove={onRemove} />
       ))}
-    </div>
+    </ul>
   );
 }
 

@@ -555,7 +555,7 @@ export function PdfCitationPreviewWindow({
   const backToChatDescriptionId = useId();
   const failureDescriptionId = useId();
   const pageRefs = useRef(new Map<number, HTMLElement>());
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLElement | null>(null);
   const persistedCitationContext = useMemo(
     () => readPersistedCitationContext(cfg.previewContextJson),
     [cfg.previewContextJson],
@@ -1202,14 +1202,15 @@ export function PdfCitationPreviewWindow({
   );
 
   const renderLoadedDocument = (pdf: PdfDocumentProxy): ReactNode => (
-    <div
+    // Scrollable page region: <section> plus an accessible name carries the region role
+    // natively, so no role attribute is needed (#2721).
+    <section
       ref={scrollRef}
       className="pdfv-scroll"
-      // Scrollable page region: tabIndex makes the overflow region keyboard-scrollable
-      // (WCAG 2.1.1); jsx-a11y's default allowlist only covers role="tabpanel".
+      // tabIndex makes the overflow region keyboard-scrollable (WCAG 2.1.1);
+      // jsx-a11y's default allowlist only covers role="tabpanel".
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
       tabIndex={0}
-      role="region"
       aria-label={t("pdfCitationPreviewWindow.scrollRegionLabel", {
         documentLabel: display.documentLabel,
       })}
@@ -1229,7 +1230,7 @@ export function PdfCitationPreviewWindow({
           aria-hidden="true"
         />
       ) : null}
-    </div>
+    </section>
   );
 
   const renderDocumentState = (): ReactNode => {

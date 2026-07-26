@@ -562,9 +562,7 @@ export function ReviewQueue({
 
       {/* Dedicated live region: row removals are not announced by the list
           (aria-relevant defaults to additions/text) — uiux-fix F035. */}
-      <p role="status" className="visually-hidden">
-        {actionStatus}
-      </p>
+      <output className="visually-hidden">{actionStatus}</output>
 
       <section
         aria-label={t("memoria.reviewRegion")}

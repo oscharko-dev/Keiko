@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef } from "react";
+import { useTranslate } from "@/lib/i18n";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { GitHistoryEntry, GitHistoryResponse } from "@/lib/types";
 import { Icons } from "../../../Icons";
@@ -10,6 +11,7 @@ import {
   EMPTY_STATE_STYLE,
   HEAD_PILL_STYLE,
   HISTORY_LIST_STYLE,
+  LOADING_STATE_STYLE,
   SUBTLE_TEXT_STYLE,
 } from "./git-client-styles";
 
@@ -79,9 +81,9 @@ export function HistoryPane({
   }
   if (loading && history === null) {
     return (
-      <p className="rv-empty" role="status" style={{ padding: 14 }}>
+      <output className="rv-empty" style={LOADING_STATE_STYLE}>
         Loading history…
-      </p>
+      </output>
     );
   }
   if (history === null) {
@@ -175,8 +177,9 @@ export function HistoryPane({
 // Commit-detail metadata block rendered in the diff pane body (the subject + author/hash/stats live
 // in the diff-pane header). Exposes the full sha, parents, changed-file count and refs.
 export function CommitDetailMeta({ entry }: { readonly entry: GitHistoryEntry }): ReactNode {
+  const t = useTranslate();
   return (
-    <div className="rv-empty" role="region" aria-label="Commit details">
+    <section className="rv-empty" aria-label={t("gitClientWindow.history.commitDetailsAria")}>
       <dl
         style={{
           display: "grid",
@@ -205,6 +208,6 @@ export function CommitDetailMeta({ entry }: { readonly entry: GitHistoryEntry })
           {entry.refs.length === 0 ? "None" : entry.refs.join(", ")}
         </dd>
       </dl>
-    </div>
+    </section>
   );
 }

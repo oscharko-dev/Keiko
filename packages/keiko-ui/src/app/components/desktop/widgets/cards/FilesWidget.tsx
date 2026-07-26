@@ -32,6 +32,7 @@ import type {
 } from "../../../../../lib/types";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
 import {
@@ -1574,16 +1575,22 @@ export function FilesWidget({
       // the root level sits directly under role="tree".
       <div className="tr-dir" role={depth === 0 ? undefined : "group"}>
         {state?.loading === true ? (
-          <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
+          <output
+            className="files-note"
+            style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
+          >
             {t("filesWidget.directory.loading")}
-          </div>
+          </output>
         ) : null}
         {state?.notice === "no-root" ? (
-          <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
+          <output
+            className="files-note"
+            style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
+          >
             {onRootChange !== undefined
               ? t("filesWidget.directory.noRootPrompt")
               : t("filesWidget.directory.noProjectAvailable")}
-          </div>
+          </output>
         ) : null}
         {state?.error !== null && state?.error !== undefined ? (
           <div className="files-error" role="alert" style={{ marginLeft: treeIndent(depth) }}>
@@ -1598,13 +1605,12 @@ export function FilesWidget({
           from the response instead of a hardcoded "1000": the server also truncates early when
           its ignored-entry scan cap is hit, i.e. with fewer visible entries (audit C350). */}
         {state?.truncated === true ? (
-          <div
+          <output
             className="files-note files-warning"
-            role="status"
-            style={{ paddingLeft: treeIndent(depth) + 18 }}
+            style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
           >
             {t("filesWidget.directory.truncated", { count: state.entries.length })}
-          </div>
+          </output>
         ) : null}
         {pendingEntry !== null &&
         pendingEntry.kind !== "rename" &&
@@ -1633,9 +1639,12 @@ export function FilesWidget({
         state.error === null &&
         state.notice === null &&
         state.entries.length === 0 ? (
-          <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
+          <output
+            className="files-note"
+            style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
+          >
             {t("filesWidget.directory.empty")}
-          </div>
+          </output>
         ) : null}
       </div>
     );
@@ -1678,9 +1687,9 @@ export function FilesWidget({
           </button>
         </div>
         {state.loading ? (
-          <div className="fpv-state" role="status">
+          <output className="fpv-state" style={NATIVE_BLOCK_STYLE}>
             {t("filesWidget.diff.loading")}
-          </div>
+          </output>
         ) : null}
         {state.error !== null ? (
           <div className="fpv-state fpv-error" role="alert">
@@ -1695,12 +1704,11 @@ export function FilesWidget({
           </div>
         ) : null}
         {state.response !== null ? (
-          <div
+          <section
             className="fpv-code mono"
             // Scrollable diff pane: tabIndex makes the overflow region keyboard-scrollable.
             // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
             tabIndex={0}
-            role="region"
             aria-label={t("filesWidget.diff.regionLabel", { path: state.path })}
           >
             {diff.length > 0 ? (
@@ -1714,7 +1722,7 @@ export function FilesWidget({
                 <span className="fpv-src">{t("filesWidget.diff.empty")}</span>
               </div>
             )}
-          </div>
+          </section>
         ) : null}
       </div>
     );
@@ -1840,9 +1848,9 @@ export function FilesWidget({
       {renderRootBar()}
       {renderGitSummary()}
       {gitStatusState.status?.available === true && gitStatusState.status.truncated ? (
-        <div className="files-note files-warning" role="status">
+        <output className="files-note files-warning" style={NATIVE_BLOCK_STYLE}>
           {tGit("git.decorationsIncomplete", { count: gitStatusState.status.maxChanges })}
-        </div>
+        </output>
       ) : null}
       <button
         className="files-refresh"

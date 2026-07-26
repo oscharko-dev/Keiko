@@ -20,6 +20,7 @@ import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
+import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
 
 type FormSubmitEvent = { preventDefault: () => void };
 
@@ -1866,14 +1867,14 @@ function GatewaySetupStatus({
         </div>
       ) : null}
       {success !== undefined ? (
-        <div className="gw-success" role="status">
+        <output className="gw-success" style={NATIVE_BLOCK_STYLE}>
           {success}
-        </div>
+        </output>
       ) : null}
       {busy ? (
-        <div className="gw-pending" role="status">
+        <output className="gw-pending" style={NATIVE_BLOCK_STYLE}>
           Testing credentials…
-        </div>
+        </output>
       ) : null}
     </>
   );

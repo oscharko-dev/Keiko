@@ -1062,7 +1062,10 @@ function AffectedSetsNotice({
   const descId = "lkd-affected-sets-desc";
 
   return createPortal(
-    <div className="dlg-overlay in" role="presentation">
+    // No role="presentation" here, unlike the confirm dialog's overlay above: this scrim
+    // carries no interaction, and a <div> has no implicit role for the attribute to suppress
+    // (#2721). The sibling keeps it because its outside-click handler needs it.
+    <div className="dlg-overlay in">
       <div
         ref={dialogRef}
         role="alertdialog"
