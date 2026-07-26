@@ -4,6 +4,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import type { WorkspaceTrustReason, WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import { useTranslate } from "@/lib/i18n";
+import type { WorkspaceTrustFailure } from "@/lib/workspace-trust-api";
 import { useDialogTabTrap } from "../hooks/useDialogTabTrap";
 import styles from "./WorkspaceTrust.module.css";
 
@@ -39,6 +40,23 @@ export function workspaceTrustReasonKey(reason: WorkspaceTrustReason): MessageKe
   return REASON_KEYS[reason];
 }
 
+export function WorkspaceTrustFailureDetails({
+  failure,
+}: {
+  readonly failure: WorkspaceTrustFailure | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  if (failure === undefined) return null;
+  return (
+    <p className={styles.cmpFailureDetails} data-testid="workspace-trust-failure-details">
+      <span>{t("workspaceTrust.errorCode", { code: failure.code })}</span>
+      {failure.correlationId === undefined ? null : (
+        <span>{t("workspaceTrust.supportId", { correlationId: failure.correlationId })}</span>
+      )}
+    </p>
+  );
+}
+
 export function WorkspaceTrustBadge({
   status,
 }: {
@@ -58,18 +76,22 @@ export function WorkspaceTrustBadge({
 export function WorkspaceTrustBanner({
   status,
   issue,
+  failure,
   surface,
   onManage,
   editor = false,
 }: {
   readonly status: WorkspaceTrustStatus | undefined;
   readonly issue: "load" | "update" | undefined;
+  readonly failure?: WorkspaceTrustFailure | undefined;
   readonly surface: WorkspaceTrustSurface;
   readonly onManage?: (() => void) | undefined;
   readonly editor?: boolean | undefined;
 }): ReactNode {
   const t = useTranslate();
-  if (status?.trust === "trusted") return null;
+  if (status?.trust === "trusted" && issue !== "load") return null;
+  const unavailable = issue === "load";
+  const title = unavailable ? t("workspaceTrust.unavailable") : t("workspaceTrust.restrictedMode");
   const reason =
     status === undefined
       ? t("workspaceTrust.reason.stateUnavailable")
@@ -78,18 +100,23 @@ export function WorkspaceTrustBanner({
     <div
       role="note"
       className={`${styles.cmpBanner} ${editor ? styles.cmpEditorBanner : ""}`}
-      aria-label={t("workspaceTrust.restrictedMode")}
+      aria-label={title}
       data-testid={`workspace-trust-banner-${surface}`}
     >
       <div className={styles.cmpBannerCopy}>
-        <div className={styles.cmpBannerTitle}>{t("workspaceTrust.restrictedMode")}</div>
-        <p className={styles.cmpBannerReason}>{reason}</p>
+        <div className={styles.cmpBannerTitle}>{title}</div>
+        {unavailable ? (
+          <p className={styles.cmpBannerReason}>{t("workspaceTrust.loadFailed")}</p>
+        ) : (
+          <p className={styles.cmpBannerReason}>{reason}</p>
+        )}
         <p className={styles.cmpBannerReason}>{t(SURFACE_KEYS[surface])}</p>
         {issue === "update" ? (
           <p className={styles.cmpBannerReason} role="alert">
             {t("workspaceTrust.updateFailed")}
           </p>
         ) : null}
+        <WorkspaceTrustFailureDetails failure={failure} />
       </div>
       {onManage === undefined ? null : (
         <button type="button" className={styles.cmpButton} onClick={onManage}>

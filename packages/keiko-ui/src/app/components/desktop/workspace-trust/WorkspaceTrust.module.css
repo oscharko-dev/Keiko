@@ -80,12 +80,21 @@
 
 .cmpBannerReason,
 .cmpCardReason,
+.cmpFailureDetails,
 .cmpIntro,
 .cmpHelp,
 .cmpPath {
   margin: 3px 0 0;
   color: var(--fg-muted);
   line-height: 1.45;
+}
+
+.cmpFailureDetails {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .cmpButton {
@@ -184,6 +193,10 @@
 
 .cmpState[data-trust="restricted"] {
   color: var(--fg);
+}
+
+.cmpState[data-trust="unavailable"] {
+  color: var(--fg-muted);
 }
 
 .cmpAlert,

@@ -6,9 +6,9 @@ import {
   type WorkspaceRootDispatchOperationClass,
   type WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
+import { bffFetchJson } from "./http";
 
 const WORKSPACES_URL = "/api/workspaces";
-const MUTATION_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 
 export const WORKSPACE_MANIFEST_CHANGED_EVENT = "keiko:workspace-manifest-changed";
 
@@ -16,22 +16,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function assertManifest(value: unknown): WorkspaceManifest {
+function invalidManifestResponse(path: string): Error {
+  return new Error(`Workspace manifest response invalid for ${path}.`);
+}
+
+function assertManifest(path: string, value: unknown): WorkspaceManifest {
   if (!validateWorkspaceManifest(value).ok) {
-    throw new Error("workspace manifest response invalid");
+    throw invalidManifestResponse(path);
   }
   return value as WorkspaceManifest;
 }
 
-async function responseJson(response: Response): Promise<unknown> {
-  if (!response.ok) throw new Error("workspace manifest request rejected");
-  return response.json();
+function manifestListValidator(path: string, value: unknown): readonly WorkspaceManifest[] {
+  if (!isRecord(value) || !Array.isArray(value["manifests"])) {
+    throw invalidManifestResponse(path);
+  }
+  return value["manifests"].map((candidate) => assertManifest(path, candidate));
 }
 
-async function responseManifest(response: Response): Promise<WorkspaceManifest> {
-  const body = await responseJson(response);
-  if (!isRecord(body)) throw new Error("workspace manifest response invalid");
-  return assertManifest(body["manifest"]);
+function manifestMutationValidator(path: string, value: unknown): WorkspaceManifest {
+  if (!isRecord(value)) throw invalidManifestResponse(path);
+  return assertManifest(path, value["manifest"]);
 }
 
 function workspaceUrl(manifest: WorkspaceManifest, suffix = ""): string {
@@ -54,11 +59,10 @@ export function workspaceManifestEventValue(event: Event): WorkspaceManifest | n
 }
 
 export async function fetchWorkspaceManifests(): Promise<readonly WorkspaceManifest[]> {
-  const body = await responseJson(await fetch(WORKSPACES_URL));
-  if (!isRecord(body) || !Array.isArray(body["manifests"])) {
-    throw new Error("workspace manifest response invalid");
-  }
-  return body["manifests"].map(assertManifest);
+  return bffFetchJson(WORKSPACES_URL, undefined, {
+    validator: manifestListValidator,
+    parseFailureMessage: () => "workspace manifest request rejected",
+  });
 }
 
 export function workspaceRootDispatch(
@@ -88,15 +92,20 @@ async function mutateManifest(
   method: "DELETE" | "POST" | "PUT",
   body: Record<string, unknown>,
 ): Promise<WorkspaceManifest> {
-  const next = await responseManifest(
-    await fetch(workspaceUrl(manifest, suffix), {
+  const path = workspaceUrl(manifest, suffix);
+  const next = await bffFetchJson(
+    path,
+    {
       method,
-      headers: MUTATION_HEADERS,
       body: JSON.stringify({
         dispatch: workspaceRootDispatch(manifest, actor.rootRef),
         ...body,
       }),
-    }),
+    },
+    {
+      validator: manifestMutationValidator,
+      parseFailureMessage: () => "workspace manifest request rejected",
+    },
   );
   return publishManifest(next);
 }

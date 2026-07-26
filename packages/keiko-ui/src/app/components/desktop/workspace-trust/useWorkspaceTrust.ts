@@ -8,8 +8,10 @@ import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
 import {
   fetchWorkspaceTrustStatus,
   mutateWorkspaceTrust,
+  workspaceTrustFailure,
   WORKSPACE_TRUST_CHANGED_EVENT,
   workspaceTrustEventProjectId,
+  type WorkspaceTrustFailure,
 } from "@/lib/workspace-trust-api";
 
 export interface WorkspaceTrustView {
@@ -17,6 +19,7 @@ export interface WorkspaceTrustView {
   readonly loading: boolean;
   readonly mutating: boolean;
   readonly issue: "load" | "update" | undefined;
+  readonly failure: WorkspaceTrustFailure | undefined;
   readonly refresh: () => Promise<void>;
   readonly grant: () => Promise<boolean>;
   readonly revoke: () => Promise<boolean>;
@@ -27,6 +30,7 @@ export function useWorkspaceTrust(projectId: string | undefined): WorkspaceTrust
   const [loading, setLoading] = useState(projectId !== undefined);
   const [mutating, setMutating] = useState(false);
   const [issue, setIssue] = useState<"load" | "update">();
+  const [failure, setFailure] = useState<WorkspaceTrustFailure>();
   const requestRef = useRef(0);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -35,19 +39,25 @@ export function useWorkspaceTrust(projectId: string | undefined): WorkspaceTrust
     if (projectId === undefined || projectId.length === 0) {
       setStatus(undefined);
       setLoading(false);
+      setIssue(undefined);
+      setFailure(undefined);
       return;
     }
     setLoading(true);
+    setIssue(undefined);
+    setFailure(undefined);
     try {
       const next = await fetchWorkspaceTrustStatus(projectId);
       if (request === requestRef.current) {
         setStatus(next);
         setIssue(undefined);
+        setFailure(undefined);
       }
-    } catch {
+    } catch (error) {
       if (request === requestRef.current) {
         setStatus(undefined);
         setIssue("load");
+        setFailure(workspaceTrustFailure(error));
       }
     } finally {
       if (request === requestRef.current) setLoading(false);
@@ -71,12 +81,15 @@ export function useWorkspaceTrust(projectId: string | undefined): WorkspaceTrust
       if (projectId === undefined || projectId.length === 0 || mutating) return false;
       setMutating(true);
       setIssue(undefined);
+      setFailure(undefined);
       try {
         const next = await mutateWorkspaceTrust(projectId, action);
         setStatus(next);
+        setFailure(undefined);
         return true;
-      } catch {
+      } catch (error) {
         setIssue("update");
+        setFailure(workspaceTrustFailure(error));
         return false;
       } finally {
         setMutating(false);
@@ -90,6 +103,7 @@ export function useWorkspaceTrust(projectId: string | undefined): WorkspaceTrust
     loading,
     mutating,
     issue,
+    failure,
     refresh,
     grant: () => mutate("grant"),
     revoke: () => mutate("revoke"),

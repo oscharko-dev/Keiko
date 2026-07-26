@@ -26,6 +26,40 @@ function restrictedStatus(reason: WorkspaceTrustStatus["reason"]): WorkspaceTrus
 }
 
 describe("Workspace Trust governance surfaces", () => {
+  it("renders a failed trust read as unavailable instead of claiming Restricted Mode", () => {
+    render(
+      <I18nProvider>
+        <WorkspaceTrustBanner
+          status={undefined}
+          issue="load"
+          failure={{
+            code: "WORKSPACE_STATE_UNAVAILABLE",
+            correlationId: "trust-banner-request-2625",
+          }}
+          surface="commands"
+          onManage={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText("Workspace Trust unavailable")).toBeVisible();
+    expect(screen.getByTestId("workspace-trust-banner-commands")).toHaveTextContent(
+      "Workspace Trust could not be read safely.",
+    );
+    expect(screen.queryByText("Restricted Mode")).toBeNull();
+    expect(
+      screen.queryByText(
+        "No current server-validated trust grant is available for this workspace.",
+      ),
+    ).toBeNull();
+    expect(screen.getByTestId("workspace-trust-failure-details")).toHaveTextContent(
+      "Error code: WORKSPACE_STATE_UNAVAILABLE",
+    );
+    expect(screen.getByTestId("workspace-trust-failure-details")).toHaveTextContent(
+      "Support ID: trust-banner-request-2625",
+    );
+  });
+
   it("projects unavailable trust as restricted and renders a trusted badge explicitly", () => {
     const view = render(
       <I18nProvider>
