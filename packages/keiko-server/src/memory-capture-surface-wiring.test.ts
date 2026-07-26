@@ -12,11 +12,10 @@
 // inferred server-side and must be declared on the request.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
-import type { IncomingMessage } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationId,
@@ -144,10 +143,14 @@ function depsFor(
   };
 }
 
+// Real node:http objects rather than coerced stand-ins: handleListMemories reads only `url`, but a
+// genuine IncomingMessage/ServerResponse pair satisfies RouteContext without an assertion, so a
+// future signature change fails the typecheck here instead of being masked by a cast.
 function makeRouteContext(path: string): RouteContext {
+  const req = new IncomingMessage(new Socket());
   return {
-    req: Readable.from([Buffer.from("{}")]) as unknown as IncomingMessage,
-    res: { socket: new Socket() } as unknown as RouteContext["res"],
+    req,
+    res: new ServerResponse(req),
     params: {},
     url: new URL(`http://127.0.0.1${path}`),
   };
@@ -164,11 +167,23 @@ const EMPTY_MEMORY_RESULT: ConversationMemoryResultWire = {
   actions: [],
 };
 
+// Fully constructed rather than asserted, so an added required field on the send request surfaces
+// here as a typecheck failure instead of silently reaching the handler as undefined.
 function sendRequest(content: string, surface?: "desktop" | "voice"): SendDesktopChatRequest {
   return {
+    chatId: "conversation-a",
+    projectPath: "project-a",
     content,
-    memory: { enabled: true, ...(surface === undefined ? {} : { surface }) },
-  } as unknown as SendDesktopChatRequest;
+    modelId: "gpt-test",
+    documentContext: [],
+    attachments: [],
+    memory: {
+      enabled: true,
+      ...(surface === undefined ? {} : { surface }),
+      context: { userId: context().userId },
+    },
+    discussionMode: undefined,
+  };
 }
 
 async function surfaceOfSingleCapture(deps: UiHandlerDeps): Promise<string> {

@@ -105,7 +105,7 @@ function passesSensitivityGate(
   policy: CapturePolicyOptions,
 ): boolean {
   return records.every(
-    (record) =>
+    (record): boolean =>
       record.provenance.sensitivity === "public" &&
       memoryTextEgressRejectionReason(record.body, policy) === null,
   );
