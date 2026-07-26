@@ -32,7 +32,10 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-say() { printf '\n\033[1m▶ %s\033[0m\n' "$1"; }
+say() {
+  local heading="$1"
+  printf '\n\033[1m▶ %s\033[0m\n' "${heading}"
+}
 
 # No request to the local server may block forever: an unbounded call turns the readiness loop into
 # a hang that never reaches its own failure path, and a pre-push gate that hangs is a gate nobody
@@ -147,6 +150,29 @@ KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
   -Dsonar.scm.disabled=true \
   -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**,**/.next/**,**/out/**,**/.portable-runtime/**,**/*.min.*" \
   -Dsonar.javascript.node.maxspace=4096
+
+# SonarQube Community carries no shell analyzer — `api/languages/list` has no shell entry, and
+# `shelldre:*` rules do not exist there — while SonarCloud runs them. A clean scan here therefore
+# says nothing about a changed shell script, which is exactly the kind of silent gap this lane exists
+# to remove. shellcheck is the closest locally available substitute and covers most of that class.
+if [[ "${scope}" == "changed" && -n "${changed}" ]]; then
+  shell_files=()
+  while IFS= read -r file; do
+    [[ "${file}" == *.sh && -f "${repo_root}/${file}" ]] && shell_files+=("${repo_root}/${file}")
+  done <<< "${changed}"
+  if [[ ${#shell_files[@]} -gt 0 ]]; then
+    say "Checking changed shell scripts (SonarQube Community has no shell analyzer)"
+    if ! command -v shellcheck >/dev/null 2>&1; then
+      printf '\033[33m! shellcheck is not installed — %s changed shell script(s) unchecked\033[0m\n' "${#shell_files[@]}"
+      printf '  brew install shellcheck. SonarCloud WILL analyse them on the pull request.\n'
+    elif ! shellcheck -S warning "${shell_files[@]}"; then
+      printf '\033[31m✘ shellcheck findings on changed shell scripts\033[0m\n' >&2
+      exit 1
+    else
+      printf '  %s changed shell script(s) clean\n' "${#shell_files[@]}"
+    fi
+  fi
+fi
 
 say "Collecting findings"
 issues="$(ask -u "${token}": \

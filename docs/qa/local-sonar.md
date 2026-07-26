@@ -22,6 +22,14 @@ CI rounds live in that difference:
 | `S7778` | one `Array#push` with several arguments, not consecutive pushes | no                    |
 | `S7776` | a `Set`, not `.includes()` on a constant array                  | no                    |
 
+Shell rules SonarCloud runs and no local tool reproduces — check these by hand on a changed `.sh`:
+
+| Rule             | What it wants                                      |
+| ---------------- | -------------------------------------------------- |
+| `shelldre:S7688` | `[[ … ]]`, never `[ … ]`                           |
+| `shelldre:S7679` | bind a positional parameter to a named local first |
+| `shelldre:S131`  | every `case` has a `*)` default                    |
+
 A green `check:sonar-rules` therefore says **nothing** about these. Only a real analyzer does, which
 is what this command runs. The `Coverage and SonarCloud` job demands **zero** unresolved issues, so a
 single MINOR of this class fails the required `ci` context.
@@ -48,6 +56,15 @@ npm run gates:sonar:stop     # stop the server, keep its cache
 **It never talks to sonarcloud.io.** A local scan must not publish an analysis over the real
 project's pull-request result, so it uses its own project key on its own server. Nothing it produces
 is evidence, and nothing downstream may treat it as a verdict.
+
+**It does not analyse shell.** SonarQube Community ships no shell analyzer — `api/languages/list`
+has no shell entry and the `shelldre:*` rules do not exist on it — while SonarCloud runs them. A
+clean local run therefore says **nothing** about a changed `.sh` file. The lane compensates by
+running `shellcheck -S warning` over the changed shell scripts and failing on findings; install it
+(`brew install shellcheck`) or the run says out loud that they went unchecked. shellcheck is not a
+complete substitute: SonarCloud's `shelldre:S7679` (bind a positional parameter to a name) and
+`shelldre:S7688` (`[[` over `[`) have no shellcheck equivalent, so review changed shell by hand
+against those two as well.
 
 **It is not the gate.** The verdict stays with SonarCloud on the pull request
 ([`local-gates.md`](local-gates.md)). Two things differ by construction:
