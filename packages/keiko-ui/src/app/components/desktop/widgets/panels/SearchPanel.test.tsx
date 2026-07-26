@@ -514,22 +514,28 @@ describe("SearchPanel", () => {
     });
   });
 
-  it("merges ordered root results with attribution, a total cap, and isolated root errors", async () => {
+  it("keeps a sparse root represented when a dominant root reaches the result cap", async () => {
     const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
-    const matches = (prefix: string, count: number): WorkspaceSearchResponse => ({
+    const matches = (
+      prefix: string,
+      count: number,
+      truncated: boolean,
+    ): WorkspaceSearchResponse => ({
       results: Array.from({ length: count }, (_, index) => ({
         path: index === 0 ? "src/shared.ts" : `src/${prefix}-${String(index)}.ts`,
         lineRange: { startLine: index + 1, endLine: index + 1 },
         snippet: `${prefix} needle ${String(index)}`,
         score: index,
       })),
-      truncated: false,
+      truncated,
       filesScanned: count,
       elapsedMs: prefix === "a" ? 4 : 7,
     });
     fetchWorkspaceSearchMock.mockImplementation((request) => {
-      if (request.root === "/repo/a") return Promise.resolve(matches("a", 120));
-      if (request.root === "/repo/b") return Promise.resolve(matches("b", 120));
+      if (request.root === "/repo/a") {
+        return Promise.resolve(matches("a", WORKSPACE_SEARCH_MAX_RESULTS, true));
+      }
+      if (request.root === "/repo/b") return Promise.resolve(matches("b", 1, false));
       return Promise.reject(new Error("Root C is unreadable."));
     });
     render(
@@ -548,10 +554,11 @@ describe("SearchPanel", () => {
     const options = await screen.findAllByRole("option");
 
     expect(options).toHaveLength(WORKSPACE_SEARCH_MAX_RESULTS);
-    expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Results were capped");
+    expect(screen.getByRole("status", { name: "" })).toHaveTextContent("capped per root");
     expect(screen.getByRole("alert")).toHaveTextContent("Root C: Root C is unreadable.");
     expect(screen.getByRole("group", { name: "Root A: src/shared.ts" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Root B: src/shared.ts" })).toBeInTheDocument();
+    expect(screen.queryByText("a needle 199")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("b needle 0"));
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/repo/b",

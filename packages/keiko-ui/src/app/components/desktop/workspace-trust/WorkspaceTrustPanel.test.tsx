@@ -44,6 +44,70 @@ afterEach(() => {
 });
 
 describe("WorkspaceTrustPanel", () => {
+  it("renders a failed trust read as unavailable instead of a missing or restricted grant", async () => {
+    fetchProjectsMock.mockResolvedValue({
+      projects: [
+        {
+          path: ROOT,
+          name: "Chosen workspace",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+          available: true,
+        },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "WORKSPACE_STATE_UNAVAILABLE",
+              message: "workspace trust unavailable",
+              correlationId: "trust-panel-request-2625",
+            },
+          }),
+          {
+            status: 503,
+            headers: {
+              "Content-Type": "application/json",
+              "X-Keiko-Correlation-Id": "trust-panel-request-2625",
+            },
+          },
+        ),
+      ),
+    );
+
+    render(
+      <I18nProvider>
+        <WorkspaceTrustPanel />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Workspace Trust unavailable")).toHaveAttribute(
+      "data-trust",
+      "unavailable",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Workspace Trust could not be read safely.",
+    );
+    expect(screen.queryByText("Restricted Mode")).toBeNull();
+    expect(
+      screen.queryByText(
+        "No current server-validated trust grant is available for this workspace.",
+      ),
+    ).toBeNull();
+    expect(screen.getByTestId("workspace-trust-failure-details")).toHaveTextContent(
+      "Error code: WORKSPACE_STATE_UNAVAILABLE",
+    );
+    expect(screen.getByTestId("workspace-trust-failure-details")).toHaveTextContent(
+      "Support ID: trust-panel-request-2625",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Trust" })).toBeNull();
+  });
+
   it("lists roots and keeps capabilities restricted until the server confirms grant and revoke", async () => {
     fetchProjectsMock.mockResolvedValue({
       projects: [

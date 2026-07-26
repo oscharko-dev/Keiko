@@ -585,6 +585,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "{count} Treffer{roots} in {filesScanned} durchsuchten Dateien.{suffix}",
   "searchPanel.status.resultsCappedSuffix":
     " Die Ergebnisse wurden begrenzt; Suchbegriff eingrenzen.",
+  "searchPanel.status.resultsCappedPerRootSuffix":
+    " Ergebnisse werden pro Root begrenzt und bis zum Workspace-Limit fair zusammengeführt; Suchbegriff eingrenzen.",
   "searchPanel.status.searching": "Workspace wird durchsucht…",
   "searchPanel.status.searchingRoots": "Workspace-Roots werden durchsucht…",
   "searchPanel.status.selectWorkspace": "Vor der Suche einen Workspace auswählen.",

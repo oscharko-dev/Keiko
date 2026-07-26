@@ -135,7 +135,7 @@ function RootGroup({
             <span className={styles.cmpRootPath}>{root.canonicalRoot}</span>
           </span>
         </button>
-        <WorkspaceTrustBadge status={trust.status} />
+        <WorkspaceTrustBadge status={trust.status} issue={trust.issue} />
         <button
           type="button"
           className={styles.cmpAction}

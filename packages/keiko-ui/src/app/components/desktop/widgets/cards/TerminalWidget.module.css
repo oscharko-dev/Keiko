@@ -258,6 +258,12 @@
   color: var(--fg-muted);
 }
 
+.lazyWidgetScope :global(.tm-output-content) {
+  margin: 0;
+  font: inherit;
+  white-space: inherit;
+}
+
 .lazyWidgetScope :global(.tm-events) {
   list-style: none;
   margin: 0;

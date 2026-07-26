@@ -3,9 +3,11 @@ import {
   WORKSPACE_TRUST_SCHEMA_VERSION,
   type WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { ApiError } from "./api";
 import {
   fetchWorkspaceTrustStatus,
   mutateWorkspaceTrust,
+  workspaceTrustFailure,
   workspaceTrustEventProjectId,
   WORKSPACE_TRUST_CHANGED_EVENT,
 } from "./workspace-trust-api";
@@ -27,6 +29,37 @@ afterEach(() => {
 });
 
 describe("workspace trust API", () => {
+  it("preserves the server error code and correlation id on a rejected trust read", async () => {
+    const correlationId = "trust-request-2625";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "WORKSPACE_STATE_UNAVAILABLE",
+              message: "workspace trust unavailable",
+              correlationId,
+            },
+          }),
+          {
+            status: 503,
+            headers: {
+              "Content-Type": "application/json",
+              "X-Keiko-Correlation-Id": correlationId,
+            },
+          },
+        ),
+      ),
+    );
+
+    await expect(fetchWorkspaceTrustStatus("/repo-a")).rejects.toMatchObject({
+      code: "WORKSPACE_STATE_UNAVAILABLE",
+      correlationId,
+      status: 503,
+    });
+  });
+
   it("returns a server status only when it validates and names the requested project", async () => {
     vi.stubGlobal(
       "fetch",
@@ -54,11 +87,22 @@ describe("workspace trust API", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 200 })));
     await expect(fetchWorkspaceTrustStatus("/repo-a")).rejects.toThrow("response invalid");
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(status()), { status: 503 })),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not-json", { status: 503 })));
     await expect(fetchWorkspaceTrustStatus("/repo-a")).rejects.toThrow("request rejected");
+  });
+
+  it("projects only redacted API error metadata for trust surfaces", () => {
+    const correlated = new ApiError("WORKSPACE_STATE_UNAVAILABLE", "sensitive detail", 503);
+    correlated.correlationId = "trust-surface-request-2625";
+
+    expect(workspaceTrustFailure(correlated)).toEqual({
+      code: "WORKSPACE_STATE_UNAVAILABLE",
+      correlationId: "trust-surface-request-2625",
+    });
+    expect(workspaceTrustFailure(new ApiError("DENIED", "detail", 403))).toEqual({
+      code: "DENIED",
+    });
+    expect(workspaceTrustFailure(new Error("unstructured"))).toBeUndefined();
   });
 
   it("sends the CSRF-guarded verb for each mutation and announces the validated result", async () => {

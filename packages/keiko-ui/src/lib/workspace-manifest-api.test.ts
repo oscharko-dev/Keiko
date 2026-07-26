@@ -41,6 +41,48 @@ function manifest(revision = 1): WorkspaceManifest {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("workspace manifest API", () => {
+  it("preserves the server error code and correlation id on a rejected workspace request", async () => {
+    const correlationId = "workspace-request-2625";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "WORKSPACE_REVISION_CONFLICT",
+              message: "workspace request rejected",
+              correlationId,
+            },
+          }),
+          {
+            status: 409,
+            headers: {
+              "Content-Type": "application/json",
+              "X-Keiko-Correlation-Id": correlationId,
+            },
+          },
+        ),
+      ),
+    );
+
+    await expect(fetchWorkspaceManifests()).rejects.toMatchObject({
+      code: "WORKSPACE_REVISION_CONFLICT",
+      correlationId,
+      status: 409,
+    });
+  });
+
+  it("fails closed with a correlated API error when a rejection is not a BFF envelope", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not-json", { status: 502 })));
+
+    await expect(fetchWorkspaceManifests()).rejects.toMatchObject({
+      code: "INTERNAL",
+      message: "workspace manifest request rejected",
+      status: 502,
+      correlationId: expect.stringMatching(/^[A-Za-z0-9._-]{8,128}$/),
+    });
+  });
+
   it("rejects malformed list entries instead of projecting browser-owned workspace state", async () => {
     vi.stubGlobal(
       "fetch",
