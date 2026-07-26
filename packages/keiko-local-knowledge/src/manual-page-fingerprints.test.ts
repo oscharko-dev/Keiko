@@ -96,6 +96,26 @@ describe("computeManualCrawlRunFingerprint", () => {
       computeManualCrawlRunFingerprint([guide, reference]),
     );
   });
+
+  // Strengthens the order-independence pin above onto the pairs that actually break it: a
+  // locale-aware collation reports 0 for these, which makes the sort a no-op and lets the digest
+  // follow input order. Crawled page paths come from remote HTML, so both Unicode spellings and
+  // format-control characters are inputs this digest does not get to assume away.
+  // Written as escapes, never as literal characters: NFC and NFD spellings are indistinguishable in
+  // an editor and a tool that normalizes on save would silently collapse the pair, leaving a test
+  // that passes because its fixture became vacuous.
+  it.each([
+    ["NFC vs NFD accented paths", "caf\u00e9.html", "cafe\u0301.html"],
+    ["a zero-width space", "a\u200bb.html", "ab.html"],
+    ["a soft hyphen", "page\u00ad1.html", "page1.html"],
+  ])("is order-independent across %s", (_case, left, right) => {
+    const encoder = new TextEncoder();
+    const set = [fp(left, encoder.encode("same")), fp(right, encoder.encode("same"))];
+
+    expect(computeManualCrawlRunFingerprint(set)).toBe(
+      computeManualCrawlRunFingerprint([...set].reverse()),
+    );
+  });
 });
 
 describe("readManualPageFingerprints / replaceManualPageFingerprints", () => {

@@ -93,15 +93,51 @@ audit output. Verify the current state with `npm run check:knowledge-m2-closeout
 
 ## Known gaps carried forward
 
+Like the Outcome 3 verdict above, the first two entries record the state of `dev` on 2026-07-20 and
+are preserved as historical audit output. Both were closed by Wave-2 children; the resolutions are
+noted inline rather than by deleting the entries, so the reasoning that made them "carried forward"
+at the time stays legible.
+
 - **`grounded-retrieval-eval.ts` keeps local `average()` / `ndcgAtK()`** rather than consuming the
   shared `mean` / `binaryNdcgAtK`. The epic's Purpose names this triplication, but no child's scope
   requires resolving it here, and resolving it would mean pointing `keiko-server` at
   `keiko-evaluations` — production code depending on an evaluation harness, which is the wrong
   direction. ADR-0152 D5 placed those helpers in the harness deliberately. Left as-is on purpose.
+  - **Resolved by [#2635](https://github.com/oscharko-dev/Keiko/issues/2635).** The direction
+    problem was the real obstacle and it was solved by moving, not by adding an edge: `mean` and
+    `binaryNdcgAtK` now live on the leaf in `keiko-contracts/src/eval-metrics.ts`, which every layer
+    may already depend on. `keiko-evaluations/src/metrics.ts` re-exports them for its SDK consumers,
+    the server retrieval eval imports them directly, and
+    `tests/architecture/eval-metrics-single-owner.test.ts` guards the single owner structurally.
 - **ADR-0152 D3 (namespace composition) is declared, not consumed.** `VectorIndexPort` has no
   importer outside `keiko-contracts`; only `embeddingIdentityKey` is consumed today. Wiring the
   `memory` and `repo` namespaces to a port with no active backend behind it would be ceremony, so
   the ADR records D3 as deferred rather than the code pretending otherwise.
+  - **Resolved by [#2632](https://github.com/oscharko-dev/Keiko/issues/2632)**, once
+    [#2630](https://github.com/oscharko-dev/Keiko/issues/2630) and
+    [#2631](https://github.com/oscharko-dev/Keiko/issues/2631) had put an active backend behind the
+    port and removed the ceremony objection. `VectorIndexPort` is now consumed outside contracts by
+    `keiko-local-knowledge/src/retrieval/local-vector-index-port.ts` and
+    `keiko-server/src/local-knowledge-store-open.ts`.
 - **#2570 AC2 caveat.** `codingContext.test.ts` is one of eight suites that criterion pins as
   unmodified; a later commit added cases to it and sharpened one assertion. The change is additive
   and belongs to the connected-context wiring, but it is not literally byte-identical.
+
+## Wave-3 audit — 2026-07-26
+
+A third pass over the merged epic (all 15 children on `dev`, `bf0451a3`..`3b5fed00`). Target
+Outcomes 1–2 and 4–7 and the Wave-2 criteria re-derived as delivered; Outcome 3 confirmed active on
+the current tree. Three defects found, each fixed at its owning layer with a failure-first test:
+
+| Defect                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Owning layer                                     |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `.mts` / `.cts` were absent from the code parser's language table while `.mjs` / `.cjs` were present, so TypeScript in those module flavours reached the permissive text adapter: whole-file chunking, no symbol anchor, and the anchor label is a citation section path. Reachable on this repository (`tests/e2e/servers/*.mts`).                                                                                                                      | `parsers/code-parser.ts`                         |
+| `repositoryFingerprintSetDigest` sorted with `String.localeCompare`. ICU collation reports 0 for distinct paths (NFC vs NFD, zero-width space, soft hyphen), so the sort is a no-op on such a pair and the digest follows input order — one fingerprint set yields two digests depending on whether it arrived from the walk or from an `ORDER BY` read, and the value shifts with the host's ICU version. The order-independence property was unpinned. | `indexing/repository-fingerprints.ts`            |
+| `computeManualCrawlRunFingerprint` carried the same collation defect, reachable when two pages share content across two path spellings. Its order-independence pin existed but used non-colliding fixtures.                                                                                                                                                                                                                                              | `manual-page-fingerprints.ts`                    |
+| The comparator that prevents the above had a correct private copy in `connector-item-fingerprints.ts` — with the rule written on it — which the other two digests did not consume. Promoted to one owner so a fourth digest cannot diverge again.                                                                                                                                                                                                        | `fingerprint-diff.ts` `compareFingerprintKeys()` |
+
+Examined and deliberately left unchanged: `parseVectorIndexMode` resolves unrecognised values to
+`auto` rather than failing closed. That is a recorded decision with a stated rationale and an
+explicit pin (`local-knowledge-store-open.vector-index.test.ts`, "falls through unrecognised values
+to the auto default"); the operator opt-out is the single explicit value `disabled`. Changing it
+would mean rewriting a pin to bless the opposite behaviour, so it is reported rather than edited.
