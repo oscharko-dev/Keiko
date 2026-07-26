@@ -151,7 +151,7 @@ describe("useWorkspaceManifest", () => {
     expect(reorderRoots).not.toHaveBeenCalled();
   });
 
-  it("keeps an event manifest when a fetch that predates it resolves afterwards (#2747)", async () => {
+  it("keeps an event manifest when a fetch that predates it resolves afterwards (#2747)", async (): Promise<void> => {
     // The consequence is not cosmetic: the editor host diffs consecutive manifests of one workspace
     // and force-disposes every root that disappeared. A fetch resolving with a snapshot from before
     // a root was added therefore destroyed that live root's Monaco models, dirty buffers included.
@@ -159,14 +159,14 @@ describe("useWorkspaceManifest", () => {
     const after = manifest("ws-a", ["alpha", "beta"]);
     let releaseFetch = (): void => undefined;
     fetchManifests.mockReturnValue(
-      new Promise((resolve) => {
-        releaseFetch = () => resolve([before]);
+      new Promise<unknown>((resolve): void => {
+        releaseFetch = (): void => resolve([before]);
       }),
     );
 
     const view = renderHook(() => useWorkspaceManifest("/ws/alpha"));
     // The mount fetch is still in flight when another surface announces the added root.
-    act(() => emitChanged(after));
+    act((): void => emitChanged(after));
     expect(view.result.current.manifest?.roots).toHaveLength(2);
 
     await act(async () => {

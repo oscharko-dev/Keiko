@@ -21,8 +21,10 @@ import { EditorWidget } from "./EditorWidget";
 
 const panes = vi.hoisted(() => [] as EditorRuntimeWidgetProps[]);
 
-vi.mock("next/dynamic", () => ({
-  default: () => {
+type RuntimeProbeComponent = (props: EditorRuntimeWidgetProps) => ReactElement;
+
+vi.mock("next/dynamic", (): { default: () => RuntimeProbeComponent } => ({
+  default: (): RuntimeProbeComponent => {
     function RuntimeProbe(props: EditorRuntimeWidgetProps): ReactElement {
       panes.push(props);
       return <div data-testid={`pane-${props.paneId ?? "none"}`}>{props.file ?? "none"}</div>;
@@ -31,13 +33,13 @@ vi.mock("next/dynamic", () => ({
   },
 }));
 
-vi.mock("./EditorDiffSurface", () => ({
+vi.mock("./EditorDiffSurface", (): { default: () => ReactElement } => ({
   default: function DiffProbe(): ReactElement {
     return <div />;
   },
 }));
 
-afterEach(() => {
+afterEach((): void => {
   panes.length = 0;
 });
 
@@ -55,11 +57,13 @@ function splitLayoutJson(): string {
     minSidebarWidth: 180,
     maxSidebarWidth: 440,
   });
+  // Split the addressed file out into the new pane, which becomes the active one — the shape
+  // `openEditorFile` produces, where the file it just opened is what the user is looking at.
   const split = editorLayoutReducer(base, {
     type: "split-pane",
     paneId: activeEditorPane(base).id,
     direction: "row",
-    file: SIBLING,
+    file: ADDRESSED,
   });
   return serializeEditorLayoutStateV2(split);
 }
@@ -68,8 +72,19 @@ function revealOf(paneProps: EditorRuntimeWidgetProps): string {
   return `${String(paneProps.revealLineStart ?? "")}:${String(paneProps.revealLineEnd ?? "")}:${paneProps.revealRequestId ?? ""}`;
 }
 
-describe("EditorWidget line-reveal addressing across panes (#2747)", () => {
-  it("hands the reveal only to the pane showing the addressed file", async () => {
+// Every distinct reveal triple each pane's file was handed, so an assertion can say "this pane never
+// once saw the request" rather than only "it does not see it in the final render".
+function revealsByFile(): Map<string, string[]> {
+  const byFile = new Map<string, string[]>();
+  for (const paneProps of panes) {
+    const file = paneProps.file ?? "none";
+    byFile.set(file, [...new Set([...(byFile.get(file) ?? []), revealOf(paneProps)])]);
+  }
+  return byFile;
+}
+
+describe("EditorWidget line-reveal addressing across panes (#2747)", (): void => {
+  it("hands the reveal only to the pane showing the addressed file", async (): Promise<void> => {
     render(
       <EditorWidget
         root={ROOT}
@@ -83,20 +98,34 @@ describe("EditorWidget line-reveal addressing across panes (#2747)", () => {
     );
     await screen.findByText(ADDRESSED);
 
-    const byFile = new Map<string, string[]>();
-    for (const paneProps of panes) {
-      const file = paneProps.file ?? "none";
-      byFile.set(file, [...new Set([...(byFile.get(file) ?? []), revealOf(paneProps)])]);
-    }
-
     // Both panes mounted, and only the addressed one ever saw the request.
-    expect(byFile.get(ADDRESSED)).toEqual(["7:10:reveal-1"]);
-    expect(byFile.get(SIBLING)).toEqual(["::"]);
+    expect(revealsByFile().get(ADDRESSED)).toEqual(["7:10:reveal-1"]);
+    expect(revealsByFile().get(SIBLING)).toEqual(["::"]);
+  });
+
+  it("still delivers when only the layout names the file (#2748 review)", async (): Promise<void> => {
+    // A multi-root root that already holds a session is handed `layoutJson` and no `file` prop,
+    // while the reveal still arrives through the shared props. Reading the addressee from the prop
+    // alone made the guard strip the triple from every pane, so open-and-reveal stopped working
+    // outright for exactly the sessions the multi-root host creates.
+    render(
+      <EditorWidget
+        root={ROOT}
+        layoutJson={splitLayoutJson()}
+        revealLineStart={7}
+        revealLineEnd={10}
+        revealRequestId="reveal-1"
+      />,
+    );
+    await screen.findByText(ADDRESSED);
+
+    expect(revealsByFile().get(ADDRESSED)).toEqual(["7:10:reveal-1"]);
+    expect(revealsByFile().get(SIBLING)).toEqual(["::"]);
   });
 });
 
-describe("paneLineRevealProps (#2747)", () => {
-  it("keeps the request for the addressed pane and withholds it everywhere else", () => {
+describe("paneLineRevealProps (#2747)", (): void => {
+  it("keeps the request for the addressed pane and withholds it everywhere else", (): void => {
     // An empty object means "leave what the shared props already carried"; the explicit undefineds
     // are what strip the triple back off a pane that must not act on it.
     expect(paneLineRevealProps(ADDRESSED, ADDRESSED)).toEqual({});

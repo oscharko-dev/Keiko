@@ -156,6 +156,16 @@ function revealsFor(targetRoot: string): readonly string[] {
   ];
 }
 
+// A cfg patch read back from the spy, narrowed rather than asserted: a test that silently reads
+// `undefined` off a call that never happened would pass every "is undefined" expectation below.
+function lastCfgPatch(ctx: WindowRenderContext): Record<string, unknown> {
+  const patch: unknown = vi.mocked(ctx.updateCfg).mock.calls.at(-1)?.[0];
+  if (typeof patch !== "object" || patch === null) {
+    throw new Error("expected updateCfg to have been called with a patch object");
+  }
+  return patch as Record<string, unknown>;
+}
+
 afterEach(() => {
   vi.clearAllMocks();
   editorProps.length = 0;
@@ -254,8 +264,8 @@ describe("EditorWindowSessionHost removed-root model disposal (#2621)", () => {
   });
 });
 
-describe("EditorWindowSessionHost departed-root retarget (#2747)", () => {
-  it("retargets a window whose configured root left the workspace", async () => {
+describe("EditorWindowSessionHost departed-root retarget (#2747)", (): void => {
+  it("retargets a window whose configured root left the workspace", async (): Promise<void> => {
     // The window keeps its root from cfg, not from the manifest, so removing that root left it
     // rendering a root the workspace no longer has — while #2621's disposal force-disposed exactly
     // that root's models underneath it, leaving Monaco bound to a disposed model.
@@ -268,19 +278,18 @@ describe("EditorWindowSessionHost departed-root retarget (#2747)", () => {
     manifestRef.current = ONE_ROOT;
     view.rerender(editorHost({ root: "/repo-b", file: "src/gone.ts" }, ctx));
 
-    const patch = vi.mocked(ctx.updateCfg).mock.calls.at(-1)?.[0] as
-      Record<string, unknown> | undefined;
+    const patch = lastCfgPatch(ctx);
     // The focused survivor, and nothing that described the root that left.
-    expect(patch?.["root"]).toBe("/repo-a");
-    expect(patch?.["file"]).toBeUndefined();
-    expect(patch?.["layoutJson"]).toBeUndefined();
-    expect(patch?.["revealRequestId"]).toBeUndefined();
-    expect(Object.keys(patch ?? {})).toEqual(
+    expect(patch["root"]).toBe("/repo-a");
+    expect(patch["file"]).toBeUndefined();
+    expect(patch["layoutJson"]).toBeUndefined();
+    expect(patch["revealRequestId"]).toBeUndefined();
+    expect(Object.keys(patch)).toEqual(
       expect.arrayContaining(["file", "openFiles", "layoutJson", "revealRequestId"]),
     );
   });
 
-  it("leaves cfg alone while an active task-workspace binding overrides it", async () => {
+  it("leaves cfg alone while an active task-workspace binding overrides it", async (): Promise<void> => {
     // ADR-0090 D4: the bound root wins over cfg, so cfg is dormant and is not what the user sees.
     // The manifest here has already lost `/repo-b`, which is exactly the state the retarget reacts
     // to — rewriting cfg would fight the binding over a root this window is not displaying.
@@ -292,7 +301,7 @@ describe("EditorWindowSessionHost departed-root retarget (#2747)", () => {
     expect(ctx.updateCfg).not.toHaveBeenCalled();
   });
 
-  it("falls back to the first root when focus still names the departed one", async () => {
+  it("falls back to the first root when focus still names the departed one", async (): Promise<void> => {
     // The removed root is often the focused one, and the manifest can still carry that stale focus
     // reference. Retargeting to a root that is not there either would leave the window exactly as
     // broken as before, so the ordered first member is the fallback.
@@ -304,12 +313,11 @@ describe("EditorWindowSessionHost departed-root retarget (#2747)", () => {
     manifestRef.current = { ...ONE_ROOT, focusedRootRef: REPO_B.rootRef };
     view.rerender(editorHost({ root: "/repo-b" }, ctx));
 
-    const patch = vi.mocked(ctx.updateCfg).mock.calls.at(-1)?.[0] as
-      Record<string, unknown> | undefined;
-    expect(patch?.["root"]).toBe("/repo-a");
+    const patch = lastCfgPatch(ctx);
+    expect(patch["root"]).toBe("/repo-a");
   });
 
-  it("writes nothing when the workspace has no root left to retarget to", async () => {
+  it("writes nothing when the workspace has no root left to retarget to", async (): Promise<void> => {
     const ctx = context();
     manifestRef.current = TWO_ROOTS;
     const view = render(editorHost({ root: "/repo-b" }, ctx));
@@ -321,7 +329,7 @@ describe("EditorWindowSessionHost departed-root retarget (#2747)", () => {
     expect(ctx.updateCfg).not.toHaveBeenCalled();
   });
 
-  it("leaves a configured root that is still a member alone", async () => {
+  it("leaves a configured root that is still a member alone", async (): Promise<void> => {
     const ctx = context();
     manifestRef.current = TWO_ROOTS;
     const view = render(editorHost({ root: "/repo-a" }, ctx));
@@ -407,13 +415,12 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
     expect(onWorkspaceChange).toBeDefined();
     onWorkspaceChange?.({ root: "/repo-b", file: "src/other.ts" });
 
-    const patch = vi.mocked(ctx.updateCfg).mock.calls.at(-1)?.[0] as
-      Record<string, unknown> | undefined;
-    expect(patch?.["root"]).toBe("/repo-b");
-    expect(Object.keys(patch ?? {})).toEqual(
+    const patch = lastCfgPatch(ctx);
+    expect(patch["root"]).toBe("/repo-b");
+    expect(Object.keys(patch)).toEqual(
       expect.arrayContaining(["revealLineStart", "revealLineEnd", "revealRequestId"]),
     );
-    expect(patch?.["revealRequestId"]).toBeUndefined();
+    expect(patch["revealRequestId"]).toBeUndefined();
   });
 
   it("keeps an in-flight reveal across a layout commit that does not change the root", async () => {
@@ -429,10 +436,9 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
 
     editorHandlers.at(-1)?.({ root: "/repo-a", layoutJson: '{"version":2}' });
 
-    const patch = vi.mocked(ctx.updateCfg).mock.calls.at(-1)?.[0] as
-      Record<string, unknown> | undefined;
+    const patch = lastCfgPatch(ctx);
     // The addressee did not change, so the request is still this editor's to act on.
-    expect(Object.keys(patch ?? {})).not.toContain("revealRequestId");
+    expect(Object.keys(patch)).not.toContain("revealRequestId");
   });
 
   it("withholds a reveal whose target root is not a member of the workspace", async () => {

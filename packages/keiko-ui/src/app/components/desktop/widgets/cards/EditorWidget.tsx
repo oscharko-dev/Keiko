@@ -594,6 +594,13 @@ export function EditorWidget({
   const dirtyFileList = useMemo(() => allDirtyFiles(dirtyByPane), [dirtyByPane]);
   const currentPane = activeEditorPane(layout);
   const activeFile = currentPane.activeFile;
+  // Issue #2747 — the addressee of a line reveal is the file it was requested for. It normally
+  // arrives as the `file` prop, normalized here so it is comparable to a pane's own root-relative
+  // file. A session-driven render has no such prop: a multi-root root that already holds a session
+  // is handed only `layoutJson`, while the reveal still comes through the shared props. The layout's
+  // active file is that same requested file there, so falling back to it is what keeps the per-pane
+  // guard from suppressing every pane and dropping the reveal outright.
+  const addressedRevealFile = normalizeEditorFile(workspaceRoot, file) || activeFile || undefined;
 
   useEffect(() => {
     if (dirtyFileList.length === 0) return;
@@ -1655,7 +1662,7 @@ export function EditorWidget({
     if (binding === undefined) return null;
     const runtimeProps: EditorRuntimeWidgetProps = {
       ...props,
-      ...paneLineRevealProps(file, pane.activeFile),
+      ...paneLineRevealProps(addressedRevealFile, pane.activeFile),
       sessionActive,
       root: workspaceRoot,
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
