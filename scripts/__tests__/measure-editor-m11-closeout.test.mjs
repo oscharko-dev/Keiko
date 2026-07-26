@@ -8,6 +8,7 @@ import {
   budgetDisposition,
   directoryBytes,
   EDITOR_M11_CLOSEOUT_LIMITS,
+  gcSettlingAvailable,
   percentile,
   runEditorM11CloseoutMeasurement,
   shouldFailBudget,
@@ -48,7 +49,7 @@ describe("editor M11 closeout measurement", () => {
       searchFanoutP95: true,
       editorSessionRoundTripP95: true,
       historyPruneP95: true,
-      rssPerAdditionalRoot: true,
+      historyCaptureRssPerRoot: true,
       historyDisk: true,
       retainedHistoryVersions: true,
     };
@@ -65,7 +66,7 @@ describe("editor M11 closeout measurement", () => {
       searchFanout: { p95Ms: 1 },
       editorSessionRoundTrip: { p95Ms: 1 },
       historyPrune: { p95Ms: 1 },
-      rssPerAdditionalRootBytes: 1,
+      historyCaptureRssPerRootBytes: 1,
       historyDiskBytes: 1,
       retainedHistoryVersions: 50,
     };
@@ -87,5 +88,11 @@ describe("editor M11 closeout measurement", () => {
     expect(result.historyChainLength).toBe(64);
     expect(result.historyRootCount).toBe(8);
     expect(result.passed).toBe(true);
+    // #2626: the RSS row is named for the local-history capture it measures, and every run states
+    // whether a heap settle was possible. Vitest runs this file without --expose-gc, so asserting
+    // the reported flag against the live capability pins an honest report rather than a constant.
+    expect(result.gcSettled).toBe(gcSettlingAvailable());
+    expect(result.measurement.historyCaptureRssPerRootBytes).toBeGreaterThanOrEqual(0);
+    expect(result.measurement).not.toHaveProperty("rssPerAdditionalRootBytes");
   });
 });

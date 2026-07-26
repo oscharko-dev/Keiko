@@ -297,6 +297,27 @@ async function restoreOldest(page: Page, pane: Locator): Promise<number> {
   return Date.now() - startedAt;
 }
 
+// The settings window opens on its Models tab. Scanning it in that state answers a question the
+// closeout never asked — the M11 claim is about the profile surface — so the Editor tab is opened
+// and its profile controls are proven present before any axe scan of this window (#2626).
+async function openProfileSettingsSurface(page: Page): Promise<void> {
+  const settings = page.locator(SETTINGS_WINDOW);
+  await settings.getByRole("button", { name: "Editor" }).click();
+  await expect(settings.getByText("Current profile: Focused M11")).toBeVisible();
+  await expect(settings.getByRole("combobox", { name: "Profile" })).toBeVisible();
+}
+
+// Every durable browser sink, not localStorage alone: the editor's hot-exit index lives in
+// IndexedDB and is content-free by contract, so a probe that cannot see IndexedDB cannot observe
+// the regression that would matter most. `storageState` covers cookies, localStorage, and
+// IndexedDB for every origin in the context; sessionStorage is read separately because storage
+// state does not carry it.
+async function browserStorageDump(page: Page): Promise<string> {
+  const state = await page.context().storageState({ indexedDB: true });
+  const session = await page.evaluate(() => JSON.stringify(window.sessionStorage));
+  return `${JSON.stringify(state)}\n${session}`;
+}
+
 async function expectAxeGreen(page: Page, selector: string): Promise<void> {
   const violations = seriousOrCritical(await runAxe(page, selector));
   expect(violations, formatViolations(violations)).toEqual([]);
@@ -346,10 +367,16 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   await saveVersion(journeyPage, pane, VERSION_TWO);
   const historyRestoreMs = await restoreOldest(journeyPage, pane);
   expect(readFileSync(join(harness.alpha.root, FILE), "utf8")).toBe(oldestContent);
-  expect(JSON.stringify(await journeyPage.evaluate(() => window.localStorage))).not.toContain(
-    "historyValue",
-  );
+  const storage = await browserStorageDump(journeyPage);
+  // Self-check the probe before trusting its negative: a dump that captured nothing would satisfy
+  // the leak assertion vacuously. The seeded window descriptor is known to be in localStorage.
+  expect(storage).toContain("keiko.workspace.v4");
+  // `historyValue` is the one identifier every saved version shares. Probing the identifier rather
+  // than a whole version line survives the JSON escaping of the storage dump, which would hide a
+  // quoted body from a full-content substring check.
+  expect(storage).not.toContain("historyValue");
   await expectKnownMultiRootAxeFinding(journeyPage);
+  await openProfileSettingsSurface(journeyPage);
   await expectAxeGreen(journeyPage, SETTINGS_WINDOW);
   await expectAxeGreen(journeyPage, "aside[aria-label='File history']");
   const metrics = {

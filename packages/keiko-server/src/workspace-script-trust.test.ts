@@ -473,6 +473,38 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     expect(trust.isTrusted(root, workspace)).toBe(true);
   });
 
+  // MIGRATION-TRUST-REGRANT, the executable owner of the re-grant drill in
+  // docs/keiko-editor/2285-m11-regression-evidence.md. The drill is the whole rollback loop, and
+  // ADR-0147 D3 states each leg: restoring the granted trust-basis bytes does NOT resurrect the
+  // prior grant, the invalidation is persisted rather than process-local, and only a new explicit
+  // server grant returns the root to trusted — at a newer revision. The row used to be mapped to
+  // "wire input cannot mint trust" above, which grants once on a fresh store and never touches the
+  // basis, so it could not fail this drill however the re-grant path behaved.
+  it("keeps an invalidated grant invalid and restores trust only through an explicit re-grant", () => {
+    const trust = createWorkspaceScriptTrustService({ store });
+    expect(trust.grant(root)).toEqual({ trusted: true });
+    expect(typecheckTrustState(trust)).toBe("trusted");
+    const grantedRevision = store.readWorkspaceTrustRecord(rootReference())?.revision ?? -1;
+
+    writeFileSync(join(root, "package.json"), `${MANIFEST}\n`, "utf8");
+    expect(typecheckTrustState(trust)).toBe("approval-required");
+
+    writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
+    expect(typecheckTrustState(trust)).toBe("approval-required");
+    // A restarted process reads the same store: the demotion is durable, not in-memory state.
+    expect(typecheckTrustState(createWorkspaceScriptTrustService({ store }))).toBe(
+      "approval-required",
+    );
+    const invalidated = store.readWorkspaceTrustRecord(rootReference());
+    expect(readTrustFrom(invalidated?.recordJson)).toBe("restricted");
+
+    expect(trust.grant(root)).toEqual({ trusted: true });
+    expect(typecheckTrustState(trust)).toBe("trusted");
+    const regranted = store.readWorkspaceTrustRecord(rootReference());
+    expect(readTrustFrom(regranted?.recordJson)).toBe("trusted");
+    expect(regranted?.revision).toBeGreaterThan(invalidated?.revision ?? grantedRevision);
+  });
+
   it("preserves the originating fs cause on coded errors and omits the property when absent (#2615)", () => {
     // Line 81 branch coverage for `Object.defineProperty(this, "cause", ...)`. The cause is
     // non-enumerable and reaches only redacted operator diagnostics, never the client-facing
