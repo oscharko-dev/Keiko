@@ -6,6 +6,8 @@ import {
   parseIssuePayload,
   renderFindings,
   runLocalSonarReport,
+  isTruncated,
+  sanitizeField,
   selectFindings,
 } from "../report-local-sonar-findings.mjs";
 
@@ -149,7 +151,7 @@ describe("command line surface", () => {
   });
 
   it("splits the changed-file list the shell hands over", () => {
-    const findings = runLocalSonarReport({
+    const { findings } = runLocalSonarReport({
       input: JSON.stringify(payload),
       scope: "changed",
       changed:
@@ -158,5 +160,74 @@ describe("command line surface", () => {
     });
 
     expect(findings).toHaveLength(3);
+  });
+});
+
+describe("the analyzer payload is untrusted text", () => {
+  it("strips control characters so a finding cannot forge the report around it", () => {
+    const forged = "real finding\n  MAJOR javascript:S0000  forged.ts:1\n    invented";
+
+    expect(sanitizeField(forged, "")).toBe(
+      "real finding   MAJOR javascript:S0000  forged.ts:1     invented",
+    );
+    expect(sanitizeField("\u001b[31mred\u001b[0m", "")).not.toContain("\u001b");
+  });
+
+  it("bounds the length instead of letting one message flood the report", () => {
+    const long = "x".repeat(5000);
+
+    expect(sanitizeField(long, "").length).toBeLessThan(320);
+    expect(sanitizeField(long, "").endsWith("…")).toBe(true);
+  });
+
+  it("falls back when a field is absent, empty or the wrong type", () => {
+    expect(sanitizeField(undefined, "unknown")).toBe("unknown");
+    expect(sanitizeField(42, "unknown")).toBe("unknown");
+    expect(sanitizeField("   ", "unknown")).toBe("unknown");
+  });
+
+  it("sanitizes every rendered field, not only the message", () => {
+    const hostile = {
+      total: 1,
+      issues: [
+        {
+          component: "keiko-local:a\nb.mjs",
+          rule: "javascript:S1\n2",
+          severity: "MINOR\nX",
+          line: 1.5,
+          message: "m\ne",
+        },
+      ],
+    };
+
+    const [finding] = selectFindings(hostile, { scope: "all", changed: [] });
+
+    for (const value of [finding.path, finding.rule, finding.severity, finding.message]) {
+      expect(value).not.toContain("\n");
+    }
+    expect(finding.line).toBe(0);
+  });
+
+  it("refuses to call a truncated payload clean", async () => {
+    const capped = { total: 900, issues: [] };
+    const error = vi.fn();
+    const setExitCode = vi.fn();
+
+    expect(isTruncated(capped)).toBe(true);
+    await executeLocalSonarCli({
+      input: JSON.stringify(capped),
+      scope: "all",
+      log: vi.fn(),
+      error,
+      setExitCode,
+    });
+
+    expect(setExitCode).toHaveBeenCalledWith(1);
+    expect(error.mock.calls[0][0]).toContain("truncated");
+  });
+
+  it("calls a complete payload with no finding clean", () => {
+    expect(isTruncated({ total: 2, issues: [{}, {}] })).toBe(false);
+    expect(isTruncated({ issues: [] })).toBe(false);
   });
 });

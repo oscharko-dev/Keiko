@@ -34,13 +34,44 @@ export function componentPath(component) {
   return separator < 0 ? component : component.slice(separator + 1);
 }
 
+// C0 and C1 control characters, named by code point rather than written into a pattern: a control
+// character in source is invisible to a reviewer, and every regular-expression form of this range
+// is rejected by `no-control-regex` for exactly that reason.
+const C0_LAST = 0x1f;
+const DELETE_CHARACTER = 0x7f;
+const C1_LAST = 0x9f;
+
+function isControlCharacter(character) {
+  const codePoint = character.codePointAt(0) ?? 0;
+  return codePoint <= C0_LAST || (codePoint >= DELETE_CHARACTER && codePoint <= C1_LAST);
+}
+
+const MAX_FIELD_LENGTH = 300;
+
+/**
+ * The analyzer is a connector, and connector output is untrusted text (AGENTS.md §7). A message
+ * carrying an ANSI escape or a newline would rewrite the terminal report around it, so every field
+ * that reaches the output is stripped of control characters and bounded in length first. The text
+ * itself is kept — a finding you cannot read is a finding you cannot fix — but it can no longer
+ * forge the report's own structure.
+ */
+export function sanitizeField(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const stripped = [...value]
+    .map((c) => (isControlCharacter(c) ? " " : c))
+    .join("")
+    .trim();
+  if (stripped === "") return fallback;
+  return stripped.length > MAX_FIELD_LENGTH ? `${stripped.slice(0, MAX_FIELD_LENGTH)}…` : stripped;
+}
+
 export function selectFindings(payload, { scope, changed }) {
   const findings = payload.issues.map((issue) => ({
-    rule: typeof issue.rule === "string" ? issue.rule : "unknown",
-    severity: typeof issue.severity === "string" ? issue.severity : "UNKNOWN",
-    path: componentPath(issue.component),
-    line: typeof issue.line === "number" ? issue.line : 0,
-    message: typeof issue.message === "string" ? issue.message : "",
+    rule: sanitizeField(issue.rule, "unknown"),
+    severity: sanitizeField(issue.severity, "UNKNOWN"),
+    path: sanitizeField(componentPath(issue.component), ""),
+    line: typeof issue.line === "number" && Number.isSafeInteger(issue.line) ? issue.line : 0,
+    message: sanitizeField(issue.message, ""),
   }));
   if (scope !== SCOPE_CHANGED) return findings;
   const touched = new Set(changed);
@@ -58,9 +89,10 @@ export function renderFindings(findings, payload, scope) {
   );
   const total = typeof payload.total === "number" ? payload.total : payload.issues.length;
   const capped = total > payload.issues.length;
+  const subject = scope === SCOPE_CHANGED ? "the files you changed" : "this project";
   const header =
     findings.length === 0
-      ? `local-sonar: PASS - no unresolved finding on ${scope === SCOPE_CHANGED ? "the files you changed" : "this project"}.`
+      ? `local-sonar: PASS - no unresolved finding on ${subject}.`
       : `local-sonar: ${String(findings.length)} finding(s) SonarCloud would likely report.`;
   const note = capped
     ? `\nlocal-sonar: NOTE - the server holds ${String(total)} finding(s); only ${String(payload.issues.length)} were fetched.`
@@ -75,13 +107,18 @@ function changedFiles(raw) {
     .filter((entry) => entry !== "");
 }
 
+export function isTruncated(payload) {
+  const total = typeof payload.total === "number" ? payload.total : payload.issues.length;
+  return total > payload.issues.length;
+}
+
 export function runLocalSonarReport(io = {}) {
   const scope = io.scope ?? process.env.KEIKO_SONAR_SCOPE ?? SCOPE_CHANGED;
   const changed = changedFiles(io.changed ?? process.env.KEIKO_SONAR_CHANGED ?? "");
   const payload = parseIssuePayload(io.input ?? "");
   const findings = selectFindings(payload, { scope, changed });
-  (io.log ?? console.log)(renderFindings(findings, payload, scope));
-  return findings;
+  (io.log ?? writeOut)(renderFindings(findings, payload, scope));
+  return { findings, truncated: isTruncated(payload) };
 }
 
 async function readStdin(stream = process.stdin) {
@@ -91,14 +128,25 @@ async function readStdin(stream = process.stdin) {
   return text;
 }
 
+const writeOut = (text) => process.stdout.write(`${text}\n`);
+const writeErr = (text) => process.stderr.write(`${text}\n`);
+
 export async function executeLocalSonarCli(io = {}) {
   const exit = io.setExitCode ?? ((value) => (process.exitCode = value));
+  const error = io.error ?? writeErr;
   try {
     const input = io.input ?? (await (io.read ?? readStdin)());
-    const findings = (io.run ?? runLocalSonarReport)({ ...io, input });
+    const { findings, truncated } = (io.run ?? runLocalSonarReport)({ ...io, input });
+    if (truncated) {
+      // A capped page can hide the very finding this run exists to catch, so an empty scoped list
+      // over a truncated payload is not a pass - it is an unknown, and unknown fails closed.
+      error("local-sonar: FAIL - the analyzer returned a truncated issue list; narrow the scope.");
+      exit(1);
+      return;
+    }
     exit(findings.length === 0 ? 0 : 1);
   } catch (cause) {
-    (io.error ?? console.error)(`local-sonar: FAIL - ${errorMessage(cause)}`);
+    error(`local-sonar: FAIL - ${errorMessage(cause)}`);
     exit(1);
   }
 }

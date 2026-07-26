@@ -16,11 +16,18 @@ project="keiko-local"
 scope="changed"
 base="origin/dev"
 
-while [ $# -gt 0 ]; do
-  case "$1" in
+while [[ $# -gt 0 ]]; do
+  argument="$1"
+  case "${argument}" in
     --all) scope="all" ;;
-    --base) base="${2:?--base needs a ref}"; shift ;;
-    *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
+    --base)
+      base="${2:?--base needs a ref}"
+      shift
+      ;;
+    *)
+      printf 'unknown argument: %s\n' "${argument}" >&2
+      exit 2
+      ;;
   esac
   shift
 done
@@ -34,45 +41,62 @@ say "Starting the local SonarQube (first run pulls the image and takes a few min
 # wget, curl, bash or python, so nothing inside it can probe its own port.
 printf '  waiting for the server'
 for _ in $(seq 1 120); do
-  if [ "$(curl -fsS "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')" = "UP" ]; then
+  if [[ "$(curl -fsS "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')" == "UP" ]]; then
     printf ' up\n'
     break
   fi
   printf '.'
   sleep 5
 done
-if [ "$(curl -fsS "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')" != "UP" ]; then
+if [[ "$(curl -fsS "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')" != "UP" ]]; then
   printf '\n\033[31m✘ SonarQube did not become ready at %s\033[0m\n' "${host}" >&2
   exit 1
 fi
 
-# SonarQube ships with admin/admin and refuses API use until that password is changed. Both values
-# are local-only and are never a secret: this server is bound to 127.0.0.1 and holds no evidence.
-# The password must satisfy SonarQube's own policy (upper, lower, digit, special) or the change is
-# rejected — and a rejected change is NOT ignored here, because a swallowed bootstrap failure turns
-# into an unexplained 401 three steps later.
+# SonarQube ships with admin/admin and refuses API use until that password is changed. The
+# replacement is GENERATED, never written into this file: a credential in a tracked script is a
+# credential regardless of how local the server is, and it would be copied into the next repository
+# that borrows this lane. It lives in the git directory, which is untracked by construction.
 say "Provisioning a local analysis token"
-password="Keiko-local-gate-1"
-if curl -fsS -o /dev/null -u "admin:${password}" "${host}/api/authentication/validate" 2>/dev/null &&
-  [ "$(curl -fsS -u "admin:${password}" "${host}/api/authentication/validate")" = '{"valid":true}' ]; then
-  printf '  password already provisioned\n'
+credentials="$(git -C "${repo_root}" rev-parse --absolute-git-dir)/keiko-local-sonar"
+if [[ ! -f "${credentials}" ]]; then
+  umask 077
+  # Satisfies SonarQube's policy (upper, lower, digit, special) without ever being predictable.
+  printf 'K%s-a1!\n' "$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)" > "${credentials}"
+fi
+password="$(cat "${credentials}")"
+
+if [[ "$(curl -fsS -u "admin:${password}" "${host}/api/authentication/validate" 2>/dev/null)" == '{"valid":true}' ]]; then
+  printf '  credentials already provisioned\n'
 else
-  change="$(curl -fsS -u admin:admin -X POST \
-    "${host}/api/users/change_password?login=admin&previousPassword=admin&password=${password}" || true)"
+  # Not swallowed: a bootstrap that fails here resurfaces three steps later as an unexplained 401,
+  # and the reader then debugs the wrong thing.
+  if ! change="$(curl -fsS -u admin:admin -X POST \
+    "${host}/api/users/change_password?login=admin&previousPassword=admin&password=${password}" 2>&1)"; then
+    printf '\033[31m✘ could not reach %s to provision credentials: %s\033[0m\n' "${host}" "${change}" >&2
+    printf '   If this server was provisioned with different credentials, remove %s and the\n' "${credentials}" >&2
+    printf '   sonar-data volume, then re-run.\n' >&2
+    exit 1
+  fi
   case "${change}" in
     "") : ;;
-    *result*)
+    *)
       printf '\033[31m✘ SonarQube rejected the local password: %s\033[0m\n' "${change}" >&2
       exit 1
       ;;
   esac
 fi
 
+# One named token, revoked before it is re-issued. A fresh timestamped token per run would pile up
+# credentials in the persisted volume forever.
+token_name="keiko-local-gate"
+curl -fsS -o /dev/null -u "admin:${password}" -X POST \
+  "${host}/api/user_tokens/revoke?name=${token_name}" 2>/dev/null || true
 token="$(curl -fsS -u "admin:${password}" -X POST \
-  "${host}/api/user_tokens/generate?name=keiko-local-$(date +%s)" |
+  "${host}/api/user_tokens/generate?name=${token_name}" |
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).token??"")}catch{process.stdout.write("")}})')"
 
-if [ -z "${token}" ]; then
+if [[ -z "${token}" ]]; then
   printf '\033[31m✘ could not obtain a local analysis token from %s\033[0m\n' "${host}" >&2
   exit 1
 fi
@@ -82,9 +106,9 @@ fi
 # rules this exists to catch (S7755, S7778, S7786, S7776) are single-file rules, so nothing is lost.
 # `--all` analyses everything when a whole-project picture is what you want.
 inclusions=""
-if [ "${scope}" = "changed" ]; then
+if [[ "${scope}" == "changed" ]]; then
   changed="$(git -C "${repo_root}" diff --name-only --diff-filter=ACMR "${base}...HEAD" 2>/dev/null || true)"
-  if [ -z "${changed}" ]; then
+  if [[ -z "${changed}" ]]; then
     printf '\033[33m! no diff against %s — analysing the whole project instead\033[0m\n' "${base}"
     scope="all"
   else
@@ -97,8 +121,12 @@ say "Analysing"
 # sonar.projectKey is deliberately NOT the real project key: nothing here may be mistaken for, or
 # uploaded over, the organisation's analysis. Coverage is not supplied on purpose — coverage has its
 # own gate (`check:coverage:new-code`) and importing it here would double the runtime for no signal.
+# An array, not an unquoted expansion: a changed path containing a space would otherwise split into
+# two arguments and silently scan the wrong scope.
+scanner_args=()
+if [[ -n "${inclusions}" ]]; then scanner_args+=("-Dsonar.inclusions=${inclusions}"); fi
 KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
-  ${inclusions:+-Dsonar.inclusions="${inclusions}"} \
+  "${scanner_args[@]}" \
   -Dsonar.projectKey="${project}" \
   -Dsonar.projectName="Keiko (local pre-push scan)" \
   -Dsonar.scm.disabled=true \
