@@ -6,7 +6,9 @@ import { DEFAULT_DISCOVERY_OPTIONS } from "../discovery/types.js";
 import {
   gitBlobFingerprint,
   parseGitIndexTrackedPaths,
+  repositoryFingerprintSetDigest,
   scanRepositoryFingerprints,
+  type RepositoryFileFingerprint,
 } from "./repository-fingerprints.js";
 
 const ROOT = "/workspace/repo";
@@ -118,5 +120,41 @@ describe("repository fingerprints", () => {
       "src/kept.ts",
     ]);
     expect(result.rejectedEntries).toBe(1);
+  });
+});
+
+// The digest is an order-independent identity for a fingerprint SET: the same files with the same
+// contents must produce one value no matter which order they arrive in. That property is what makes
+// it comparable across runs, and it was never pinned. It also has to hold for path pairs that a
+// locale-aware collation treats as equal — `café.ts` in NFC vs NFD is the reachable case, because
+// macOS hands back decomposed names from readdir while git's index stores the composed form, so a
+// single accented filename puts both spellings in play. With a collation that reports 0 for such a
+// pair, the sort is a no-op on it and the digest follows the input order: fingerprints arriving from
+// the walk (directory order) and from the ledger read (SQLite BINARY order) then disagree about the
+// identity of one identical set.
+describe("repositoryFingerprintSetDigest", () => {
+  function entry(relativePath: string, contentFingerprint: string): RepositoryFileFingerprint {
+    return { relativePath, contentFingerprint, fingerprintKind: "file-state", byteLength: 1 };
+  }
+
+  it.each([
+    ["NFC vs NFD accented paths", "caf\u00e9.ts", "cafe\u0301.ts"],
+    ["a zero-width space", "a\u200bb.ts", "ab.ts"],
+    ["a soft hyphen", "file\u00ad1.ts", "file1.ts"],
+  ])("is order-independent across %s", (_case, left, right) => {
+    const set = [entry(left, "aaa"), entry(right, "bbb")];
+
+    expect(repositoryFingerprintSetDigest(set)).toBe(
+      repositoryFingerprintSetDigest([...set].reverse()),
+    );
+  });
+
+  it("still separates sets that genuinely differ", () => {
+    expect(repositoryFingerprintSetDigest([entry("a.ts", "aaa")])).not.toBe(
+      repositoryFingerprintSetDigest([entry("a.ts", "bbb")]),
+    );
+    expect(repositoryFingerprintSetDigest([entry("a.ts", "aaa")])).not.toBe(
+      repositoryFingerprintSetDigest([entry("a.ts", "aaa"), entry("b.ts", "bbb")]),
+    );
   });
 });

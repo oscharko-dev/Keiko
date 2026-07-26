@@ -25,9 +25,15 @@ import type {
 export const CODE_PARSER_ID = "code-text" as const;
 const CODE_PARSER_VERSION = "1";
 
+// `mts`/`cts` are TypeScript in exactly the way `mjs`/`cjs` are JavaScript: the extension selects
+// the module system, never the syntax, so the same strict (void-blocking) pattern set applies. They
+// were missing while their JavaScript siblings were present, which routed every `.mts`/`.cts` file
+// to the permissive text adapter — whole-file chunking with no symbol anchor, and the anchor label
+// is a citation section path. Pinned by "routes the mts TypeScript extension to the code parser".
 const CODE_LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = Object.freeze({
   cjs: "javascript",
   cs: "csharp",
+  cts: "typescript",
   go: "go",
   java: "java",
   js: "javascript",
@@ -35,6 +41,7 @@ const CODE_LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = Object.free
   kt: "kotlin",
   kts: "kotlin",
   mjs: "javascript",
+  mts: "typescript",
   py: "python",
   pyi: "python",
   rs: "rust",

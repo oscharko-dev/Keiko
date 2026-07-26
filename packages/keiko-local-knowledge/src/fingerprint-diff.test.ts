@@ -2,7 +2,7 @@
 // implementation behind both the #1856 manual refresh (moves on) and connector sync (moves off).
 
 import { describe, expect, it } from "vitest";
-import { diffFingerprintSets } from "./fingerprint-diff.js";
+import { compareFingerprintKeys, diffFingerprintSets } from "./fingerprint-diff.js";
 
 function fingerprintMap(entries: Readonly<Record<string, string>>): ReadonlyMap<string, string> {
   return new Map(Object.entries(entries));
@@ -64,5 +64,27 @@ describe("diffFingerprintSets", () => {
       moved: 1,
       unchanged: 0,
     });
+  });
+});
+
+// The single-owner pin for run-digest ordering. Every case below is a pair of DISTINCT strings that
+// `String.localeCompare` reports as equal (0); a comparator that returns 0 leaves the pair in input
+// order, which is what made two of the three run digests order-sensitive. Fixtures are escapes, not
+// literal characters, so an editor or formatter that normalizes on save cannot quietly make them
+// vacuous.
+describe("compareFingerprintKeys", () => {
+  it.each([
+    ["NFC vs NFD", "caf\u00e9", "cafe\u0301"],
+    ["zero-width space", "a\u200bb", "ab"],
+    ["soft hyphen", "a\u00adb", "ab"],
+  ])("separates %s, which locale collation reports as equal", (_case, left, right) => {
+    expect(left.localeCompare(right)).toBe(0);
+    expect(compareFingerprintKeys(left, right)).not.toBe(0);
+  });
+
+  it("is a total order agreeing with the default sort and SQLite BINARY collation", () => {
+    const values = ["b", "A", "a", "B", "0"];
+    expect([...values].sort(compareFingerprintKeys)).toEqual([...values].sort());
+    expect(compareFingerprintKeys("a", "a")).toBe(0);
   });
 });

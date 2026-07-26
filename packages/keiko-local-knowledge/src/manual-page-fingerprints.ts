@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 
+import { compareFingerprintKeys } from "./fingerprint-diff.js";
 import type { KnowledgeStore } from "./store.js";
 
 // Opaque content fingerprint of a crawled page's raw bytes. `sha256:<base64url>` mirrors the
@@ -35,7 +36,7 @@ export function computeManualCrawlRunFingerprint(pages: readonly ManualPageFinge
   const FIELD_SEPARATOR = "\u0001";
   const canonical = [...pages]
     .map((page) => `${page.relativePath}${FIELD_SEPARATOR}${page.contentFingerprint}`)
-    .sort((left, right) => left.localeCompare(right))
+    .sort(compareFingerprintKeys)
     .join("\n");
   return computeManualPageFingerprint(new TextEncoder().encode(canonical));
 }

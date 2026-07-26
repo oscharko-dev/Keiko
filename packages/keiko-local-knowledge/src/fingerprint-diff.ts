@@ -26,6 +26,27 @@ export interface FingerprintDiffOptions {
   readonly detectMoves: boolean;
 }
 
+/**
+ * The one ordering every run-fingerprint digest in this package sorts by: UTF-16 code units,
+ * locale-independent by construction and identical to what a bare `Array.prototype.sort()` and
+ * SQLite's BINARY collation produce.
+ *
+ * `String.localeCompare` must NOT be used for this. ICU collation reports 0 for pairs of distinct
+ * strings — NFC vs NFD spellings of the same accented name, a zero-width space, a soft hyphen — and
+ * a comparator that reports 0 leaves that pair in input order. A run digest is supposed to be an
+ * order-independent identity for a set, so an input-order-sensitive pair means one set yields two
+ * digests depending on whether it arrived from a filesystem walk or from a `ORDER BY` read. The
+ * value would also shift with the host's ICU version, which a persisted evidence value cannot do.
+ *
+ * Lives here rather than beside any one pod kind because all three run digests (repository, manual
+ * crawl, connector sync) must agree, and a private copy per digest is exactly how they drifted.
+ */
+export function compareFingerprintKeys(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 // Keys present in `prior` but absent from the new set, tallied by their content fingerprint — the
 // candidate set a same-fingerprint added key can be correlated against to detect a move.
 function removedFingerprintTallies(
