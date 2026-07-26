@@ -82,11 +82,25 @@ function makeOriginUrl(exec) {
     }).trim();
 }
 
+function makeDirtyFiles(exec) {
+  return () => {
+    try {
+      return String(
+        exec("git", ["-C", repoRoot, "status", "--porcelain"], { encoding: "utf8" }),
+      ).trim();
+    } catch {
+      // Not being able to ask is not a reason to refuse the measurement; it only costs the warning.
+      return "";
+    }
+  };
+}
+
 function resolveDependencies(overrides) {
   const exec = overrides.exec ?? execFileSync;
   return {
     capture: makeCapture(exec),
     copyFile: copyFileSync,
+    dirtyFiles: makeDirtyFiles(exec),
     hasCommit: makeHasCommit(exec),
     log: (message) => console.log(message),
     makeWorkdir: () => mkdtempSync(join(tmpdir(), "keiko-d12-regen-")),
@@ -196,6 +210,17 @@ export function buildContainerArgs(clone) {
   return [
     "run",
     "--rm",
+    // --privileged is load-bearing here, and that was established by measurement rather than
+    // assumed. The debug adapter this evidence exercises is qualified through a bubblewrap
+    // sandbox, and two narrower profiles were each run end to end and each failed at
+    // `expect(settings.state).toBe("available")` with `notProvisioned`, because bubblewrap could
+    // not unshare:
+    //   1. --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+    //   2. the same, plus --cap-add=SYS_ADMIN
+    // What bounds the risk instead is where this runs: never in CI, never automatically, only when
+    // a developer types `npm run perf:evidence:regen:container` on their own machine, against a
+    // fresh clone of the repository they already have checked out. Widening it to a branch you do
+    // not trust is the same decision as checking that branch out and running its tests.
     "--privileged",
     "--shm-size=2g",
     "-v",
@@ -211,6 +236,17 @@ export function buildContainerArgs(clone) {
 
 export function regenerateInContainer(overrides = {}) {
   const deps = resolveDependencies(overrides);
+  // The container measures the CLONE's HEAD, so uncommitted work in the host tree is not part of
+  // the measured subject — while the refreshed documents are copied back into that same dirty tree.
+  // That is the intended contract, but finding it out after 35 minutes of measuring the wrong tree
+  // is not, so say it before the clock starts.
+  const dirty = deps.dirtyFiles();
+  if (dirty !== "") {
+    deps.log(
+      `WARNING: the working tree has uncommitted changes. The container measures HEAD, so they are ` +
+        `NOT part of the measured subject:\n${dirty}`,
+    );
+  }
   const clone = join(deps.makeWorkdir(), "repo.noindex");
   deps.log(`Provisioning a self-contained clone at ${clone}.`);
   deps.run("git", ["clone", "--no-local", "--quiet", repoRoot, clone]);

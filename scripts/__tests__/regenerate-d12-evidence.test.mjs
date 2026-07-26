@@ -181,6 +181,10 @@ describe("regenerateInContainer", () => {
   it("mounts the clone read-write at /repo and pins the image", () => {
     const args = buildContainerArgs("/tmp/x.noindex");
 
+    // Pinned deliberately: two narrower profiles (seccomp/apparmor unconfined, and that plus
+    // --cap-add=SYS_ADMIN) were each measured end to end and each failed with the debug capability
+    // `notProvisioned`, because the bubblewrap sandbox could not unshare. If this assertion is ever
+    // relaxed, re-measure before believing the narrower profile works.
     expect(args).toContain("--privileged");
     expect(args.join(" ")).toContain("-v /tmp/x.noindex:/repo");
     expect(args).toContain(CONTAINER_IMAGE);
@@ -245,5 +249,37 @@ describe("dispatch collaborators", () => {
     };
 
     expect(resolveCliIo(overrides)).toEqual(overrides);
+  });
+});
+
+describe("dirty-tree warning", () => {
+  it("warns before the clock starts that uncommitted work is not measured", () => {
+    const log = vi.fn();
+    const deps = {
+      dirtyFiles: () => " M scripts/check-perf-evidence.mjs",
+      makeWorkdir: () => "/tmp/x",
+      run: vi.fn(),
+      copyFile: vi.fn(),
+      log,
+    };
+
+    regenerateInContainer(deps);
+
+    expect(log.mock.calls[0][0]).toContain("uncommitted changes");
+    expect(log.mock.calls[0][0]).toContain("scripts/check-perf-evidence.mjs");
+  });
+
+  it("says nothing when the tree is clean", () => {
+    const log = vi.fn();
+
+    regenerateInContainer({
+      dirtyFiles: () => "",
+      makeWorkdir: () => "/tmp/x",
+      run: vi.fn(),
+      copyFile: vi.fn(),
+      log,
+    });
+
+    expect(log.mock.calls[0][0]).not.toContain("uncommitted");
   });
 });

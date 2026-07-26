@@ -19,6 +19,8 @@ import {
   gateModeLines,
   reportSubjectDriftNotes,
   runGate,
+  executePerfEvidenceCli,
+  parseCliArgs,
   resolveGateIo,
   evaluateWorkspaceEvidence,
   isPerformanceSubjectPath,
@@ -2549,5 +2551,76 @@ describe("gate verdict", () => {
     expect(typeof deps.error).toBe("function");
     expect(typeof deps.fail).toBe("function");
     expect(deps.targets).toBeUndefined();
+  });
+});
+
+describe("command line dispatch", () => {
+  function harness(extra = {}) {
+    return { log: vi.fn(), error: vi.fn(), setExitCode: vi.fn(), gate: vi.fn(), ...extra };
+  }
+
+  it("refuses --report-subject-drift without the enforcing mode", () => {
+    const io = harness();
+
+    executePerfEvidenceCli(["--report-subject-drift"], io);
+
+    expect(io.setExitCode).toHaveBeenCalledWith(2);
+    expect(io.error.mock.calls[0][0]).toContain("requires --enforce-source-freshness");
+    expect(io.gate).not.toHaveBeenCalled();
+  });
+
+  it("prints the subject digest and runs no gate", () => {
+    const io = harness({ digest: () => "abc123" });
+
+    executePerfEvidenceCli(["--print-source-tree-sha256"], io);
+
+    expect(io.log).toHaveBeenCalledWith("abc123");
+    expect(io.gate).not.toHaveBeenCalled();
+  });
+
+  it("routes --target editor and the empty invocation to the right lane", () => {
+    const editor = harness();
+    executePerfEvidenceCli(["--target", "editor"], editor);
+    expect(editor.gate).toHaveBeenCalledWith("editor", false, false);
+
+    const all = harness();
+    executePerfEvidenceCli([], all);
+    expect(all.gate).toHaveBeenCalledWith("all", false, false);
+  });
+
+  it("passes both flags through when they are given together", () => {
+    const io = harness();
+
+    executePerfEvidenceCli(["--enforce-source-freshness", "--report-subject-drift"], io);
+
+    expect(io.gate).toHaveBeenCalledWith("all", true, true);
+  });
+
+  it("prints the usage and exits two on anything else", () => {
+    const io = harness();
+
+    executePerfEvidenceCli(["--target", "nonsense"], io);
+
+    expect(io.setExitCode).toHaveBeenCalledWith(2);
+    expect(io.error.mock.calls[0][0]).toContain("usage:");
+  });
+
+  it("separates flags from positionals whatever their order", () => {
+    expect(parseCliArgs(["--target", "editor", "--enforce-source-freshness"])).toEqual({
+      enforceSourceFreshness: true,
+      reportSubjectDrift: false,
+      positional: ["--target", "editor"],
+    });
+  });
+
+  it("defaults to the real gate and the real sinks", () => {
+    const io = harness({ gate: undefined });
+
+    executePerfEvidenceCli(["--report-subject-drift"], {
+      setExitCode: io.setExitCode,
+      error: io.error,
+    });
+
+    expect(io.setExitCode).toHaveBeenCalledWith(2);
   });
 });

@@ -3135,30 +3135,58 @@ const USAGE =
   "usage: check-perf-evidence.mjs [--print-source-tree-sha256 | --target editor] " +
   "[--enforce-source-freshness [--report-subject-drift]]";
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const cliArgs = process.argv.slice(2);
-  const flags = new Set(["--enforce-source-freshness", "--report-subject-drift"]);
-  const enforceSourceFreshness = cliArgs.includes("--enforce-source-freshness");
-  const reportSubjectDrift = cliArgs.includes("--report-subject-drift");
-  const positional = cliArgs.filter((arg) => !flags.has(arg));
+const CLI_FLAGS = new Set(["--enforce-source-freshness", "--report-subject-drift"]);
+
+/**
+ * Exported so the argument dispatch is unit-tested directly. It decides which lane runs and what the
+ * exit code is, and a dispatch that only ever runs from the shebang is a dispatch nothing proves.
+ */
+export function resolveCliIo(io = {}) {
+  return {
+    log: io.log ?? console.log,
+    error: io.error ?? console.error,
+    setExitCode: io.setExitCode ?? ((value) => (process.exitCode = value)),
+    gate: io.gate ?? runGate,
+    digest: io.digest ?? computePerformanceSubjectDigest,
+  };
+}
+
+/** The invocation, reduced to the three things the dispatch branches on. */
+export function parseCliArgs(cliArgs) {
+  return {
+    enforceSourceFreshness: cliArgs.includes("--enforce-source-freshness"),
+    reportSubjectDrift: cliArgs.includes("--report-subject-drift"),
+    positional: cliArgs.filter((arg) => !CLI_FLAGS.has(arg)),
+  };
+}
+
+function selectedTarget(positional) {
+  if (positional.length === 0) return "all";
+  const isEditor =
+    positional.length === 2 && positional[0] === "--target" && positional[1] === "editor";
+  return isEditor ? "editor" : undefined;
+}
+
+export function executePerfEvidenceCli(cliArgs = process.argv.slice(2), io = {}) {
+  const deps = resolveCliIo(io);
+  const { enforceSourceFreshness, reportSubjectDrift, positional } = parseCliArgs(cliArgs);
+
   // Without the enforcing mode the subject digests are never evaluated, so there is nothing to
   // downgrade. Accepting the flag there would read as "this lane is more forgiving" while changing
   // nothing — refuse instead of pretending.
   if (reportSubjectDrift && !enforceSourceFreshness) {
-    console.error("perf-evidence: --report-subject-drift requires --enforce-source-freshness");
-    process.exitCode = 2;
-  } else if (positional.length === 1 && positional[0] === "--print-source-tree-sha256") {
-    console.log(computePerformanceSubjectDigest());
-  } else if (
-    positional.length === 2 &&
-    positional[0] === "--target" &&
-    positional[1] === "editor"
-  ) {
-    runGate("editor", enforceSourceFreshness, reportSubjectDrift);
-  } else if (positional.length === 0) {
-    runGate("all", enforceSourceFreshness, reportSubjectDrift);
-  } else {
-    console.error(USAGE);
-    process.exitCode = 2;
+    deps.error("perf-evidence: --report-subject-drift requires --enforce-source-freshness");
+    return deps.setExitCode(2);
   }
+  if (positional.length === 1 && positional[0] === "--print-source-tree-sha256") {
+    return deps.log(deps.digest());
+  }
+  const target = selectedTarget(positional);
+  if (target === undefined) {
+    deps.error(USAGE);
+    return deps.setExitCode(2);
+  }
+  return deps.gate(target, enforceSourceFreshness, reportSubjectDrift);
 }
+
+if (import.meta.url === `file://${process.argv[1]}`) executePerfEvidenceCli();
