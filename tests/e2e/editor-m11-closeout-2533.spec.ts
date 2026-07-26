@@ -384,16 +384,19 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   const historyRestoreMs = await restoreOldest(journeyPage, pane);
   expect(readFileSync(join(harness.alpha.root, FILE), "utf8")).toBe(oldestContent);
   const storage = await browserStorageDump(journeyPage);
-  // Self-check both readers before trusting their negative: a dump that captured nothing would
-  // satisfy the leak assertion vacuously. The window descriptor proves the storage-state arm
+  // Assert on booleans and carry the diagnosis in the message, never in the subject: a failing
+  // `toContain` prints what it searched, and here that is every browser sink including cookies —
+  // the failure report would publish into CI logs the very content this assertion exists to prove
+  // absent, plus session material besides.
+  //
+  // Self-check both readers before trusting their negative, or a dump that captured nothing
+  // satisfies the leak assertion vacuously. The window descriptor proves the storage-state arm
   // (cookies/localStorage/IndexedDB) read real state; the seeded control proves the sessionStorage
   // arm did too.
-  expect(storage).toContain("keiko.workspace.v4");
-  expect(storage).toContain("session-sink-reachable");
-  // `historyValue` is the one identifier every saved version shares. Probing the identifier rather
-  // than a whole version line survives the JSON escaping of the storage dump, which would hide a
-  // quoted body from a full-content substring check.
-  expect(storage).not.toContain("historyValue");
+  expect(storage.includes("keiko.workspace.v4"), "storage-state arm read no state").toBe(true);
+  expect(storage.includes("session-sink-reachable"), "sessionStorage arm read no state").toBe(true);
+  // `historyValue` is the one identifier every saved version shares, so any leaked body carries it.
+  expect(storage.includes("historyValue"), "a checkpoint body reached browser storage").toBe(false);
   await expectKnownMultiRootAxeFinding(journeyPage);
   await openProfileSettingsSurface(journeyPage);
   await expectAxeGreen(journeyPage, SETTINGS_WINDOW);

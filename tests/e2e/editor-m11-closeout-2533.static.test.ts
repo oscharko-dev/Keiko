@@ -35,8 +35,12 @@ describe("editor M11 browser closeout source contract (#2533)", () => {
     expect(spec).toContain("window.sessionStorage.key(index)");
     expect(spec).not.toContain("JSON.stringify(window.sessionStorage)");
     expect(spec).toContain("const storage = await browserStorageDump(journeyPage);");
-    expect(spec).toContain('expect(storage).toContain("keiko.workspace.v4");');
-    expect(spec).toContain('expect(storage).toContain("session-sink-reachable");');
-    expect(spec).toContain('expect(storage).not.toContain("historyValue");');
+    expect(spec).toContain('storage.includes("keiko.workspace.v4")');
+    expect(spec).toContain('storage.includes("session-sink-reachable")');
+    expect(spec).toContain('storage.includes("historyValue")');
+    // The dump is never the subject of a matcher: a failing `toContain` prints what it searched,
+    // which here is every browser sink — the failure report would leak what the test proves absent.
+    expect(spec).not.toContain("expect(storage).toContain");
+    expect(spec).not.toContain("expect(storage).not.toContain");
   });
 });

@@ -35,6 +35,14 @@ export function gcSettlingAvailable() {
   return typeof globalThis.gc === "function";
 }
 
+// A controlled run ENFORCES the RSS budget, and enforcing a budget against an unsettled delta is
+// enforcing it against allocator noise — a verdict the number cannot support. Reporting
+// `gcSettled` is enough for an informational run, where the RSS row is not a gate; a controlled one
+// has to refuse instead.
+export function measurementRefusalReason(controlled, gcSettled) {
+  return controlled && !gcSettled ? "gc-settling-required" : undefined;
+}
+
 export function percentile(samples, percentileValue) {
   const ordered = [...samples].sort((left, right) => left - right);
   const index = Math.min(ordered.length - 1, Math.ceil(ordered.length * percentileValue) - 1);
@@ -225,6 +233,14 @@ export function shouldFailBudget(disposition, controlled) {
 
 export async function runEditorM11CloseoutMeasurement(options = {}) {
   const controlled = options.controlled ?? process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1";
+  const gcSettled = gcSettlingAvailable();
+  const refusal = measurementRefusalReason(controlled, gcSettled);
+  if (refusal !== undefined) {
+    throw new Error(
+      `M11 closeout measurement refused (${refusal}): a controlled run enforces the RSS budget, ` +
+        "so it requires Node started with --expose-gc.",
+    );
+  }
   const samples = options.samples ?? DEFAULT_SAMPLES;
   const root = await realpath(
     await mkdtemp(join(await realpath(tmpdir()), "keiko-editor-m11-performance-")),
@@ -245,9 +261,9 @@ export async function runEditorM11CloseoutMeasurement(options = {}) {
       node: process.version,
       measurementMode: controlled ? "controlled-enforced" : "informational-local",
       // False means `historyCaptureRssPerRootBytes` was taken without a heap settle around it and
-      // is allocator noise, not a retained cost. It is reported rather than inferred so a reader
-      // of a committed run can tell which of the two numbers they are looking at.
-      gcSettled: gcSettlingAvailable(),
+      // is allocator noise, not a retained cost. An informational run may still report it, clearly
+      // labelled; a controlled run refuses above rather than gate on it.
+      gcSettled,
       samples,
       historyChainLength: HISTORY_CHAIN_LENGTH,
       historyRootCount: HISTORY_ROOT_COUNT,

@@ -19,8 +19,8 @@ collection rather than overstating it. Both halves are reported now.
 | Adversarial matrix ownership     | **IMPLEMENTED** — 16 named rows are mapped to executable child tests and collected by one focused command.                                                         |
 | Migration and rollback ownership | **IMPLEMENTED** — four named drills cover pre-M11 upgrade, downgrade guard, corrupt trust, and explicit re-grant.                                                  |
 | Supplemental M11 measurement     | **PASS** — local `darwin-arm64` informational run; every deterministic disposition and every observed local budget passed.                                         |
-| Focused M11 closeout             | **PASS** — both halves of the one command: 18 files / 188 tests in the package collection, then 9 files / 99 tests in the `keiko-ui` workspace collection.         |
-| Real product-path Playwright     | **PASS WITH FILED FINDING** — one Chromium journey passed in 18.8 s on the #2626 re-run; the exact multi-root ARIA finding is still reproduced and owned by #2605. |
+| Focused M11 closeout             | **PASS** — both halves of the one command: 18 files / 190 tests in the package collection, then 9 files / 99 tests in the `keiko-ui` workspace collection.         |
+| Real product-path Playwright     | **PASS WITH FILED FINDING** — one Chromium journey passed in 18.9 s on the #2626 re-run; the exact multi-root ARIA finding is still reproduced and owned by #2605. |
 | Exact epic-head CI               | **REMOTE RECEIPT AFTER PUSH** — the integration-branch push triggers the repository workflows; local evidence does not replace them.                               |
 
 ## Focused executable collection
