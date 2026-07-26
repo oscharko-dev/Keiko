@@ -254,6 +254,86 @@ describe("EditorWindowSessionHost removed-root model disposal (#2621)", () => {
   });
 });
 
+describe("EditorWindowSessionHost departed-root retarget (#2747)", () => {
+  it("retargets a window whose configured root left the workspace", async () => {
+    // The window keeps its root from cfg, not from the manifest, so removing that root left it
+    // rendering a root the workspace no longer has — while #2621's disposal force-disposed exactly
+    // that root's models underneath it, leaving Monaco bound to a disposed model.
+    const ctx = context();
+    manifestRef.current = TWO_ROOTS;
+    const view = render(editorHost({ root: "/repo-b", file: "src/gone.ts" }, ctx));
+    await screen.findByTestId("editor-/repo-b");
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+
+    manifestRef.current = ONE_ROOT;
+    view.rerender(editorHost({ root: "/repo-b", file: "src/gone.ts" }, ctx));
+
+    const patch = vi.mocked(ctx.updateCfg).mock.calls.at(-1)?.[0] as
+      Record<string, unknown> | undefined;
+    // The focused survivor, and nothing that described the root that left.
+    expect(patch?.["root"]).toBe("/repo-a");
+    expect(patch?.["file"]).toBeUndefined();
+    expect(patch?.["layoutJson"]).toBeUndefined();
+    expect(patch?.["revealRequestId"]).toBeUndefined();
+    expect(Object.keys(patch ?? {})).toEqual(
+      expect.arrayContaining(["file", "openFiles", "layoutJson", "revealRequestId"]),
+    );
+  });
+
+  it("leaves cfg alone while an active task-workspace binding overrides it", async () => {
+    // ADR-0090 D4: the bound root wins over cfg, so cfg is dormant and is not what the user sees.
+    // The manifest here has already lost `/repo-b`, which is exactly the state the retarget reacts
+    // to — rewriting cfg would fight the binding over a root this window is not displaying.
+    const ctx = context();
+    manifestRef.current = ONE_ROOT;
+    render(editorHost({ root: "/repo-b" }, ctx, "/wt/active"));
+    await screen.findByTestId("editor-/wt/active");
+
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the first root when focus still names the departed one", async () => {
+    // The removed root is often the focused one, and the manifest can still carry that stale focus
+    // reference. Retargeting to a root that is not there either would leave the window exactly as
+    // broken as before, so the ordered first member is the fallback.
+    const ctx = context();
+    manifestRef.current = TWO_ROOTS;
+    const view = render(editorHost({ root: "/repo-b" }, ctx));
+    await screen.findByTestId("editor-/repo-b");
+
+    manifestRef.current = { ...ONE_ROOT, focusedRootRef: REPO_B.rootRef };
+    view.rerender(editorHost({ root: "/repo-b" }, ctx));
+
+    const patch = vi.mocked(ctx.updateCfg).mock.calls.at(-1)?.[0] as
+      Record<string, unknown> | undefined;
+    expect(patch?.["root"]).toBe("/repo-a");
+  });
+
+  it("writes nothing when the workspace has no root left to retarget to", async () => {
+    const ctx = context();
+    manifestRef.current = TWO_ROOTS;
+    const view = render(editorHost({ root: "/repo-b" }, ctx));
+    await screen.findByTestId("editor-/repo-b");
+
+    manifestRef.current = { ...ONE_ROOT, roots: [] };
+    view.rerender(editorHost({ root: "/repo-b" }, ctx));
+
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
+
+  it("leaves a configured root that is still a member alone", async () => {
+    const ctx = context();
+    manifestRef.current = TWO_ROOTS;
+    const view = render(editorHost({ root: "/repo-a" }, ctx));
+    await screen.findByTestId("editor-/repo-a");
+
+    manifestRef.current = ONE_ROOT;
+    view.rerender(editorHost({ root: "/repo-a" }, ctx));
+
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
+});
+
 describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
   it("hands a reveal request to the addressed root only", async () => {
     // Regression: the reveal triple was copied into the props EVERY root's editor receives, so a

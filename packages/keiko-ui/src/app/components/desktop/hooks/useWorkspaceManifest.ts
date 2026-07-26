@@ -95,7 +95,15 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
       const containsTrackedRoot =
         rootPath !== undefined && next.roots.some((root) => root.canonicalRoot === rootPath);
       if (sameWorkspace || containsTrackedRoot) {
+        // Issue #2747 — a delivered manifest is newer than anything `refresh()` still has in flight,
+        // so it takes the request token with it. Without this a fetch that predates the change
+        // resolves afterwards and passes its own staleness guard, reinstating a snapshot in which a
+        // root added moments ago is missing — which the editor host reads as a removal and answers
+        // by force-disposing that live root's models. Clearing `loading` here keeps the state
+        // coherent, since the discarded response can no longer run its own `finally`.
+        requestRef.current += 1;
         setManifest(next);
+        setLoading(false);
         setIssue(null);
       }
     };

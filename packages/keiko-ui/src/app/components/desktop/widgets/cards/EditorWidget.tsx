@@ -407,6 +407,19 @@ function resolveTrustSettledAttribute(
   return initialPromptPending ? "false" : "true";
 }
 
+// Issue #2747 — a line reveal is addressed to the file cfg named alongside it, and every pane below
+// is handed its OWN file. The outline reveal already carries that guard in the runtime widget
+// (`outlineRevealRequest?.file === file`); the line reveal did not, so a split view moved the cursor
+// and stole focus in every pane, each at that line number in whatever file it happened to show.
+// Withheld rather than translated: a line range means nothing in a file it was not measured against.
+export function paneLineRevealProps(
+  addressedFile: string | undefined,
+  paneFile: string,
+): Pick<EditorRuntimeWidgetProps, "revealLineEnd" | "revealLineStart" | "revealRequestId"> {
+  if (addressedFile !== undefined && addressedFile === paneFile) return {};
+  return { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined };
+}
+
 export function EditorWidget({
   root,
   file,
@@ -1642,6 +1655,7 @@ export function EditorWidget({
     if (binding === undefined) return null;
     const runtimeProps: EditorRuntimeWidgetProps = {
       ...props,
+      ...paneLineRevealProps(file, pane.activeFile),
       sessionActive,
       root: workspaceRoot,
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
