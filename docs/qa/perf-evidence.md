@@ -39,6 +39,17 @@ the committed numbers have travelled from the product without pretending anyone 
 ## How to regenerate (one command)
 
 ```bash
+npm run perf:evidence:regen:container
+```
+
+Run it whenever you decide to — it starts immediately. It provisions the self-contained clone,
+runs the pinned container against it, and copies both documents back for you to review and commit.
+Give it a machine that is yours for the duration (see **Single occupancy** below); a busy host does
+not produce a slower number, it produces a broken run.
+
+On Linux you can also drive the producer directly, without the container:
+
+```bash
 npm run perf:evidence:regen
 ```
 

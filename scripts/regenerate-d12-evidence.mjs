@@ -25,13 +25,29 @@ const EVIDENCE_FILES = [
   "docs/release/1209-bundle-evidence.json",
 ];
 
+export const CONTAINER_IMAGE = "node:24.18.0-bookworm";
+export const PLAYWRIGHT_PIN = "playwright@1.61.1";
+
+// The one command the container runs. `safe.directory` is not optional: the bind mount is owned by
+// the host user and git refuses a repository it does not own, which otherwise fails the clone step
+// with a bare status 128.
+export const CONTAINER_SCRIPT = [
+  "set -e",
+  'git config --global --add safe.directory "*"',
+  "apt-get update -qq && apt-get install -y -qq bubblewrap",
+  `npx --yes --ignore-scripts ${PLAYWRIGHT_PIN} install --with-deps chromium`,
+  "node scripts/regenerate-d12-evidence.mjs",
+].join("\n");
+
 export const CONTAINER_REMEDIATION = [
-  "The D12 editor evidence is Linux-authoritative. Run the producer inside the pinned container:",
-  '  docker run --rm --privileged --shm-size=2g -v "$PWD":/repo -w /repo node:24.18.0-bookworm \\',
-  "    bash -c 'apt-get update -qq && apt-get install -y -qq bubblewrap && \\",
-  "      npx --yes --ignore-scripts playwright@1.61.1 install --with-deps chromium && \\",
-  "      node scripts/regenerate-d12-evidence.mjs'",
-  "(A bind mount installs Linux binaries into node_modules; re-run `npm install` on the host afterwards.)",
+  `The D12 editor evidence is Linux-authoritative. Run it in the pinned ${CONTAINER_IMAGE}`,
+  "container with one command:",
+  "  npm run perf:evidence:regen:container",
+  "",
+  "That provisions a self-contained clone (a worktree's .git is a file the container cannot",
+  "resolve), runs the producer in the container, and copies both documents back.",
+  "It measures whatever the host has free, so start it when the machine is yours -- see",
+  "docs/qa/perf-evidence.md.",
 ].join("\n");
 
 function makeRun(exec) {
@@ -172,11 +188,50 @@ export function regenerateEvidence(overrides = {}) {
   return { ok: true, headCommit };
 }
 
+// The host-side driver: one command, run when the machine is yours. It does the three steps that
+// were prose in CONTAINER_REMEDIATION and had to be retyped every time — provision a self-contained
+// clone, run the pinned container against it, copy both documents back — and it works from a
+// worktree, where `$PWD/.git` is a file the container cannot resolve.
+export function buildContainerArgs(clone) {
+  return [
+    "run",
+    "--rm",
+    "--privileged",
+    "--shm-size=2g",
+    "-v",
+    `${clone}:/repo`,
+    "-w",
+    "/repo",
+    CONTAINER_IMAGE,
+    "bash",
+    "-c",
+    CONTAINER_SCRIPT,
+  ];
+}
+
+export function regenerateInContainer(overrides = {}) {
+  const deps = resolveDependencies(overrides);
+  const clone = join(deps.makeWorkdir(), "repo.noindex");
+  deps.log(`Provisioning a self-contained clone at ${clone}.`);
+  deps.run("git", ["clone", "--no-local", "--quiet", repoRoot, clone]);
+  deps.log(
+    `Measuring in ${CONTAINER_IMAGE}. This takes ~35 minutes and wants the machine to itself.`,
+  );
+  deps.run("docker", buildContainerArgs(clone));
+  for (const file of EVIDENCE_FILES) deps.copyFile(join(clone, file), join(repoRoot, file));
+  deps.log(`Refreshed ${EVIDENCE_FILES.join(" and ")} — review and commit them.`);
+  return { ok: true, clone };
+}
+
 const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  const result = regenerateEvidence();
-  if (!result.ok) {
-    console.error(result.remediation);
-    process.exitCode = 1;
+  if (process.argv.includes("--container")) {
+    regenerateInContainer();
+  } else {
+    const result = regenerateEvidence();
+    if (!result.ok) {
+      console.error(result.remediation);
+      process.exitCode = 1;
+    }
   }
 }

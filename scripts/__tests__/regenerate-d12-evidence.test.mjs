@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildContainerArgs,
   buildRegenerationPlan,
+  CONTAINER_IMAGE,
   CONTAINER_REMEDIATION,
+  CONTAINER_SCRIPT,
+  PLAYWRIGHT_PIN,
   regenerateEvidence,
+  regenerateInContainer,
 } from "../regenerate-d12-evidence.mjs";
 import { BASELINE_COMMIT } from "../run-d12-perf-comparison.mjs";
 
@@ -68,10 +73,17 @@ describe("D12 evidence regeneration plan", () => {
     expect(runner?.args[artifactsIndex]).toBe("/work/out/d12-perf-runs");
   });
 
+  // The invariant is that a non-Linux host is handed a COMPLETE, pinned way to measure. It used to
+  // be prose the reader retyped, so the pin read the prose. The prose is now one command and the
+  // steps it names are executed, so the pin follows them there — same three parts, checked where
+  // they now bind rather than where they were quoted.
   it("directs non-Linux hosts to the pinned container invocation", () => {
     expect(CONTAINER_REMEDIATION).toContain("node:24.18.0-bookworm");
-    expect(CONTAINER_REMEDIATION).toContain("bubblewrap");
-    expect(CONTAINER_REMEDIATION).toContain("scripts/regenerate-d12-evidence.mjs");
+    expect(CONTAINER_REMEDIATION).toContain("npm run perf:evidence:regen:container");
+    expect(CONTAINER_SCRIPT).toContain("bubblewrap");
+    expect(CONTAINER_SCRIPT).toContain("scripts/regenerate-d12-evidence.mjs");
+    expect(CONTAINER_SCRIPT).toContain(PLAYWRIGHT_PIN);
+    expect(buildContainerArgs("/tmp/c")).toContain(CONTAINER_IMAGE);
   });
 });
 
@@ -146,5 +158,31 @@ describe("regenerateEvidence orchestration", () => {
     expect(exec.mock.calls.some((call) => call[2]?.stdio === "ignore")).toBe(true);
     expect(exec.mock.calls.some((call) => call[1].includes("fetch"))).toBe(true);
     expect(exec.mock.calls.every((call) => typeof call[0] === "string")).toBe(true);
+  });
+});
+
+describe("regenerateInContainer", () => {
+  it("clones, runs the pinned container against that clone, and copies both documents back", () => {
+    const deps = injectedDeps({ platform: "darwin" });
+    const result = regenerateInContainer(deps);
+
+    const [clone] = deps.run.mock.calls[0][1].slice(-1);
+    expect(deps.run.mock.calls[0][0]).toBe("git");
+    // --no-local matters: a worktree's .git is a file the container cannot resolve.
+    expect(deps.run.mock.calls[0][1]).toContain("--no-local");
+    expect(deps.run.mock.calls[1][0]).toBe("docker");
+    expect(deps.run.mock.calls[1][1]).toEqual(buildContainerArgs(clone));
+    expect(deps.copyFile).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ ok: true, clone });
+  });
+
+  it("mounts the clone read-write at /repo and pins the image", () => {
+    const args = buildContainerArgs("/tmp/x.noindex");
+
+    expect(args).toContain("--privileged");
+    expect(args.join(" ")).toContain("-v /tmp/x.noindex:/repo");
+    expect(args).toContain(CONTAINER_IMAGE);
+    // Without safe.directory git refuses the host-owned bind mount with a bare status 128.
+    expect(CONTAINER_SCRIPT).toMatch(/safe\.directory/u);
   });
 });
