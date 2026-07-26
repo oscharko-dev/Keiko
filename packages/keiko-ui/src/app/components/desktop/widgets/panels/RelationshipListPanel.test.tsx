@@ -15,7 +15,7 @@
 //   • aria-live="polite" region present for filter announcements
 //   • axe-core PASS on empty state
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { axe, toHaveNoViolations } from "jest-axe";
 import { RelationshipListPanel } from "./RelationshipListPanel";
@@ -45,6 +45,23 @@ import { listRelationships, RelationshipApiError } from "../../../../relationshi
 const mockListRelationships = vi.mocked(listRelationships);
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
+
+// GEN-UI-A11Y-012 — this pin asserts the ACCESSIBILITY TREE, not the markup. It was written
+// against role="list"/role="listitem" divs; #2721 moved the surface to native <ul>/<li>.
+// Querying the COMPUTED role keeps the original guarantee (a tag query would pass on an <li>
+// that is not exposed as a list item at all), and the tagName assertion adds the native-element
+// guarantee on top. Strengthened, never relaxed — AGENTS.md §7.
+function listItemsOf(container: HTMLElement): readonly HTMLElement[] {
+  const items = within(container).queryAllByRole("listitem");
+  for (const item of items) expect(item.tagName).toBe("LI");
+  return items;
+}
+
+function listOf(container: HTMLElement): HTMLElement {
+  const list = within(container).getByRole("list");
+  expect(list.tagName).toBe("UL");
+  return list;
+}
 
 function makeRelationship(id: string) {
   return {
@@ -136,15 +153,15 @@ describe("RelationshipListPanel", () => {
       });
       const { container } = renderPanel({ filters: { relDensity: "standard" } });
       await waitFor(() => {
-        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+        expect(listItemsOf(container).length).toBeGreaterThan(0);
       });
       // Second fetch (density click) never resolves — the panel is mid-refetch.
       mockListRelationships.mockReturnValue(new Promise(() => undefined));
       fireEvent.click(screen.getByRole("button", { name: /dense/i }));
       await waitFor(() => {
-        expect(container.querySelector('[role="list"]')?.getAttribute("aria-busy")).toBe("true");
+        expect(listOf(container).getAttribute("aria-busy")).toBe("true");
       });
-      expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+      expect(listItemsOf(container).length).toBeGreaterThan(0);
       // No full-panel "Loading…" swap (the edge badge has its own role=status, so query by text).
       expect(screen.queryByText(/^loading…$/i)).toBeNull();
     });
@@ -254,12 +271,12 @@ describe("RelationshipListPanel", () => {
         nextCursor: null,
       });
       const { onSelect, container } = renderPanel();
-      // Row buttons are inside role="listitem" elements
+      // Row buttons are inside the <li> elements of the relationship list
       await waitFor(() => {
-        const listItems = container.querySelectorAll('[role="listitem"]');
+        const listItems = listItemsOf(container);
         expect(listItems.length).toBeGreaterThan(0);
       });
-      const listItems = container.querySelectorAll('[role="listitem"]');
+      const listItems = listItemsOf(container);
       const rowBtn = listItems[0]?.querySelector("button");
       expect(rowBtn).not.toBeNull();
       fireEvent.click(rowBtn as HTMLElement);
@@ -275,9 +292,9 @@ describe("RelationshipListPanel", () => {
       });
       const { onSelect, container } = renderPanel();
       await waitFor(() => {
-        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+        expect(listItemsOf(container).length).toBeGreaterThan(0);
       });
-      const listItems = container.querySelectorAll('[role="listitem"]');
+      const listItems = listItemsOf(container);
       const rowBtn = listItems[0]?.querySelector("button");
       expect(rowBtn).not.toBeNull();
       fireEvent.keyDown(rowBtn as HTMLElement, { key: "Enter" });
@@ -297,13 +314,15 @@ describe("RelationshipListPanel", () => {
         activityMap: new Map([["rel-status", "processing"]]),
       });
       await waitFor(() => {
-        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+        expect(listItemsOf(container).length).toBeGreaterThan(0);
       });
-      const rowBtn = container.querySelector('[role="listitem"] button.rel-row');
+      const rowBtn = listItemsOf(container)[0]?.querySelector("button.rel-row") ?? null;
       expect(rowBtn).not.toBeNull();
-      // The nested badge must NOT be a live region inside the button.
-      expect(rowBtn?.querySelector('[role="status"]')).toBeNull();
-      expect(rowBtn?.querySelector('[aria-live="polite"]')).toBeNull();
+      // The nested badge must NOT be a live region inside the button. <output> is covered
+      // explicitly: it carries role=status and aria-live=polite implicitly, so neither
+      // attribute selector alone would catch one (#2721).
+      expect(rowBtn?.querySelector('[role="status"], output')).toBeNull();
+      expect(rowBtn?.querySelector('[aria-live="polite"], output')).toBeNull();
       // The badge wrapper is hidden from the accessibility tree instead.
       expect(rowBtn?.querySelector(".rb-edge-badge")?.getAttribute("aria-hidden")).toBe("true");
     });
@@ -319,9 +338,9 @@ describe("RelationshipListPanel", () => {
         activityMap: new Map([["rel-activity-label", "processing"]]),
       });
       await waitFor(() => {
-        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+        expect(listItemsOf(container).length).toBeGreaterThan(0);
       });
-      const rowBtn = container.querySelector('[role="listitem"] button.rel-row');
+      const rowBtn = listItemsOf(container)[0]?.querySelector("button.rel-row") ?? null;
       expect(rowBtn?.getAttribute("aria-label")).toContain("activity: Processing");
     });
   });

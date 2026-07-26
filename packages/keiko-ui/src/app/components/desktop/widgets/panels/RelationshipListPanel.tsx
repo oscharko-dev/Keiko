@@ -39,6 +39,7 @@ import {
 } from "../../../../relationships/api";
 import type { ApiRelationship } from "../../../../relationships/api";
 import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge";
+import { NATIVE_BLOCK_STYLE, NATIVE_LIST_STYLE } from "../../native-element-styles";
 
 // ─── Density mode helpers ──────────────────────────────────────────────────────
 
@@ -604,13 +605,14 @@ export function RelationshipListPanel({
           to keep on screen (initial load). Refetches keep the stale list mounted below
           (aria-busy + dim) instead of swapping the whole panel for a "Loading…" row on
           every debounced keystroke and density click, which jumped the layout height and
-          lost the scroll position. role="status" (live region) so the visible text is
-          announced; the previous aria-label sat on a generic div, where ARIA naming is
-          prohibited and ignored. .insp-empty aligns the typography with the empty state. */}
+          lost the scroll position. <output> is the native status live region so the visible
+          text is announced; the previous aria-label sat on a generic div, where ARIA naming
+          is prohibited and ignored. .insp-empty aligns the typography with the empty state;
+          NATIVE_BLOCK_STYLE restores the block box <output> does not have (#2721). */}
       {loading && items.length === 0 && (
-        <div role="status" className="insp-empty">
+        <output className="insp-empty" style={NATIVE_BLOCK_STYLE}>
           Loading…
-        </div>
+        </output>
       )}
 
       {/* Empty state — two cases: a virgin graph must not blame a "current filter" the
@@ -628,11 +630,11 @@ export function RelationshipListPanel({
       {/* Relationship list — stays mounted during refetches (stale-while-revalidate);
           aria-busy + reduced opacity signal the in-flight update without unmounting. */}
       {visibleItems.length > 0 && (
-        <div
-          role="list"
+        <ul
           aria-label="Relationships"
           aria-busy={loading || undefined}
           style={{
+            ...NATIVE_LIST_STYLE,
             display: "flex",
             flexDirection: "column",
             gap: "var(--space-1)",
@@ -646,7 +648,7 @@ export function RelationshipListPanel({
             const isFocusedNeighbour = focusMode && isSelected;
             const dimmed = focusMode && !isSelected;
             return (
-              <div key={item.id} role="listitem" style={{ opacity: dimmed ? 0.4 : 1 }}>
+              <li key={item.id} style={{ opacity: dimmed ? 0.4 : 1 }}>
                 <button
                   type="button"
                   aria-pressed={isSelected}
@@ -704,22 +706,21 @@ export function RelationshipListPanel({
                     {item.lifecycle}
                   </span>
                 </button>
-              </div>
+              </li>
             );
           })}
 
           {/* Static aggregate for items beyond animation cap */}
           {extraAnimated > 0 && (
-            <div
-              role="listitem"
+            <li
               aria-live="polite"
               style={{ fontSize: 12, color: "var(--fg-muted)", padding: "4px 6px" }}
               data-testid="animation-cap-aggregate"
             >
               +{String(extraAnimated)} more: {overflowSummary}
-            </div>
+            </li>
           )}
-        </div>
+        </ul>
       )}
     </div>
   );

@@ -1918,6 +1918,12 @@ export const EN_MESSAGES = {
   "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
   "gitClientWindow.panel.mergeOpened": "Merge panel opened.",
   "gitClientWindow.panel.diffOpened": "Diff panel opened.",
+  // Accessible names for the named <section> landmarks the #2721 wave introduced. They were
+  // hardcoded English on the role="region" elements these sections replace; a screen reader
+  // announces them, so they belong in the catalog like any other user-facing string.
+  "gitClientWindow.history.commitDetailsAria": "Commit details",
+  "runtimeHubWidget.auditMetadataAria": "Runtime audit metadata",
+  "installBanner.regionAria": "Install Keiko",
   "manualPod.progress.crawl": "{accepted} pages indexed, {denied} links skipped",
   "manualPod.progress.index": "{processed} of {total} documents processed",
   "manualPodCreate.button": "Add HTML manual",

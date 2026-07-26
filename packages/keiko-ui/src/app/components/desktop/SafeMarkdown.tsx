@@ -135,10 +135,10 @@ function CopyButton({ text }: { readonly text: string }): ReactNode {
       </button>
       {/* WCAG 4.1.3 — the visible label swap alone is silent for screen readers
           (the aria-label is not re-announced on change); a status region carries
-          the copy success / unavailable feedback (audit C135). */}
-      <span role="status" className="sm-code-copy-status">
-        {status}
-      </span>
+          the copy success / unavailable feedback (audit C135). <output> is the
+          native status live region (S6819) and is inline like the <span> it
+          replaces, so the surface keeps its box. */}
+      <output className="sm-code-copy-status">{status}</output>
     </div>
   );
 }
@@ -250,9 +250,7 @@ function ApplyCodeBlockButton({
         <Icons.editor size={13} aria-hidden="true" />
         <span>{label}</span>
       </button>
-      <span role="status" className="sm-code-copy-status">
-        {status}
-      </span>
+      <output className="sm-code-copy-status">{status}</output>
     </div>
   );
 }

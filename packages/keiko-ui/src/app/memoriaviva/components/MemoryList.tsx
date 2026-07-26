@@ -16,6 +16,7 @@ import Link from "next/link";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { NATIVE_BLOCK_STYLE } from "../../components/desktop/native-element-styles";
 import { formatError } from "./format-error";
 import {
   MemoryFilters,
@@ -474,10 +475,12 @@ export function MemoryListContent({
 
       {/* Compact live region instead of aria-live on the whole list section —
           announcing every inserted row flooded screen readers after each
-          filter change (uiux-fix F035). */}
-      <p role="status" className="visually-hidden">
+          filter change (uiux-fix F035). <output> is the native status live
+          region (S6819); NATIVE_BLOCK_STYLE restores the block box the <p> had,
+          since `.visually-hidden` declares no display of its own (#2721). */}
+      <output className="visually-hidden" style={NATIVE_BLOCK_STYLE}>
         {!loading && error === null ? t("memoria.memoriesFound", { count: memories.length }) : null}
-      </p>
+      </output>
 
       <section
         aria-label={t("memoria.memoryRecords")}
