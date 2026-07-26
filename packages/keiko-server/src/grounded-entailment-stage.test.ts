@@ -178,6 +178,27 @@ describe("createEntailmentStage — active flagging", () => {
     );
     expect(markers).toEqual([]);
   });
+
+  it("caveats an answer whose cited claims run past the per-answer claim ceiling", async () => {
+    // #2670 AC6: the claim budget bounds judge fan-out; it does not bless the untested tail of a
+    // long answer. One cited claim over the ceiling must still degrade the answer to WARN, exactly
+    // as wall-clock exhaustion does — otherwise a model that pads supported sentences ahead of a
+    // fabricated one renders as fully verified.
+    const stage = createEntailmentStage(
+      depsWith(portReturning('{"verdict":"supported"}')),
+      [],
+      MODEL_ID,
+      undefined,
+      undefined,
+      { maxClaims: 1, maxExcerptChars: 900, maxTotalMs: 20_000 },
+    );
+    const markers = await stage?.evaluate(
+      "Retention is 30 days [src/policy.ts:1-8]. Retention is 30 days [src/policy.ts:1-8].",
+      [packWithExcerpt("src/policy.ts", "retention: 30 days")],
+      NOW,
+    );
+    expect(markers?.map((m) => m.kind)).toEqual(["entailment-unavailable"]);
+  });
 });
 
 describe("createEntailmentStage — fail-closed degradation", () => {
@@ -198,6 +219,29 @@ describe("createEntailmentStage — fail-closed degradation", () => {
     expect(records[0]?.correlationId).toBe("corr-123");
     expect(records[0]?.source).toBe("grounded.entailment-stage");
     // Body-free: the diagnostic carries counts/classes only, never claim or excerpt text.
+    const serialised = JSON.stringify(records[0]);
+    expect(serialised).not.toContain("AES-256");
+    expect(serialised).not.toContain("cipher configuration");
+  });
+
+  it("still records the operator diagnostic when the caller supplies no correlation id", async () => {
+    // #2670: all three production call sites pass the sink but no correlation token (the folder
+    // orchestrator never sees an answer id), so `recordDiagnostic`'s guard dropped every entailment
+    // diagnostic and the module's documented "WARN + body-free operator diagnostic" was dead code
+    // in production while the tests — which supply their own id — stayed green.
+    const records: ServerDiagnosticRecord[] = [];
+    const deps = depsWith(portReturning(new Error("gateway down")), (r) => records.push(r));
+    const stage = createEntailmentStage(deps, [], MODEL_ID, { diagnostics: deps.diagnostics });
+    const markers = await stage?.evaluate(
+      "Encryption uses AES-256 [src/crypto.ts:1-8].",
+      [packWithExcerpt("src/crypto.ts", "cipher configuration")],
+      NOW,
+    );
+    expect(markers?.map((m) => m.kind)).toEqual(["entailment-unavailable"]);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.correlationId).toBeTruthy();
+    expect(records[0]?.source).toBe("grounded.entailment-stage");
+    // Still body-free: minting a correlation id must not widen what the diagnostic carries.
     const serialised = JSON.stringify(records[0]);
     expect(serialised).not.toContain("AES-256");
     expect(serialised).not.toContain("cipher configuration");

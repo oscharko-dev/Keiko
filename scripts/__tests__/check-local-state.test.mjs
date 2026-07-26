@@ -675,6 +675,24 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(integrity.findings.join(" ")).toContain("SQLite quarantine diagnostic record");
   });
 
+  it("runtime-integrity: reports a retired plaintext code-intelligence index artifact", () => {
+    const stateDir = freshStateDir("retired-code-intelligence-index");
+    const indexDir = join(stateDir, "code-intelligence");
+    mkdirSync(indexDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(indexDir, "a".repeat(64) + ".json"),
+      JSON.stringify({ schemaVersion: 13, fingerprint: "x", index: {} }),
+      { mode: 0o600 },
+    );
+    const result = auditLocalState(stateDir);
+    const integrity = classById(result, "runtime-integrity");
+    expect(result.ok).toBe(false);
+    expect(integrity.status).toBe("fail");
+    expect(integrity.findings.join(" ")).toContain(
+      "retired plaintext code-intelligence index artifact",
+    );
+  });
+
   it("evidence-qi: refuses a symlinked tool-results sub-store without reporting its target", (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("tool-result-symlink");

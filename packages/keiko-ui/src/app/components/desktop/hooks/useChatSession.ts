@@ -347,17 +347,20 @@ function replaceCanonicalTurnMessages(
 // hasNewCanonicalUserMessage); re-appending the held projection would render the transcript twice.
 // The proof is strong enough to SUPPRESS the re-append but deliberately not to release the held
 // projection: an identical-content sibling turn still queued behind this row could match too, and
-// only the turn's own settle path knows which turn the durable row belongs to.
-function canonicalVoiceProjectionDurablyAdmitted(
+// only the turn's own settle path knows which turn the durable row belongs to. One implementation
+// answers for every re-append site — the reopen-a-chat merge below and the queue's re-projection of
+// the same turn identity in sendMessage.
+function hasDurableCanonicalUserRow(
   messages: readonly ChatMessage[],
-  projection: CanonicalVoiceProjection,
+  content: string,
+  sinceTimestamp: number,
 ): boolean {
   return messages.some(
     (message) =>
       message.role === "user" &&
       !message.id.startsWith("local-") &&
-      message.content === projection.content &&
-      message.timestamp >= projection.message.timestamp,
+      message.content === content &&
+      message.timestamp >= sinceTimestamp,
   );
 }
 
@@ -375,7 +378,7 @@ function mergeCanonicalVoiceProjections(
         projection.chatId === chatId &&
         !excluded.has(projection.message.id) &&
         !ids.has(projection.message.id) &&
-        !canonicalVoiceProjectionDurablyAdmitted(messages, projection),
+        !hasDurableCanonicalUserRow(messages, projection.content, projection.message.timestamp),
     )
     .map((projection) => projection.message);
   return pending.length === 0 ? Array.from(messages) : [...messages, ...pending];
@@ -2816,9 +2819,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setDraft("");
       }
       setError(undefined);
+      // AC2 (#2670) — the queue re-attempts a retryable transport failure with the SAME optimistic
+      // row, whose id reconciliation already replaced with the durable row it fetched. The id guard
+      // alone would therefore project the transcript a second time next to that row, so a
+      // queue-owned re-projection (optimisticMessage present) also consults the durable-admission
+      // proof. The typed Composer path stays untouched: there identical text is a new turn.
       setState((previous) =>
         previous.activeChat?.id !== chat.id ||
-        previous.messages.some((message) => message.id === optimistic.id)
+        previous.messages.some((message) => message.id === optimistic.id) ||
+        (options?.optimisticMessage !== undefined &&
+          hasDurableCanonicalUserRow(previous.messages, optimistic.content, optimistic.timestamp))
           ? previous
           : { ...previous, messages: [...previous.messages, optimistic] },
       );

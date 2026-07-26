@@ -60,10 +60,8 @@ function sorted<T>(values: readonly T[]): readonly T[] {
   return [...values].sort();
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
+// A WorkspaceFs that CAN persist, so a regressed index writer would leave a visible artifact in
+// `files`. The index must stay in process only (issue #2670, AC6).
 function persistentMemFs(files: Record<string, string>): WorkspaceFs {
   const base = memFs(MEM_ROOT, files);
   const relative = (absolutePath: string): string =>
@@ -75,114 +73,6 @@ function persistentMemFs(files: Record<string, string>): WorkspaceFs {
       files[relative(absolutePath)] = content;
     },
   };
-}
-
-interface CacheEnvelopeForTest {
-  readonly schemaVersion?: number | undefined;
-  readonly fingerprint?: string | undefined;
-  readonly index?: unknown;
-}
-
-function requireCodeIntelligenceCachePath(files: Readonly<Record<string, string>>): string {
-  const cachePath = Object.keys(files).find((path) => path.startsWith(".keiko/code-intelligence/"));
-  if (cachePath === undefined) {
-    throw new Error("expected persistent code-intelligence cache path");
-  }
-  return cachePath;
-}
-
-function parseCacheEnvelope(
-  files: Readonly<Record<string, string>>,
-  cachePath: string,
-): CacheEnvelopeForTest {
-  return JSON.parse(files[cachePath] ?? "{}") as CacheEnvelopeForTest;
-}
-
-function firstRecord(value: unknown): Record<string, unknown> {
-  if (!Array.isArray(value)) {
-    return {};
-  }
-  const first = value[0] as unknown;
-  return isRecord(first) ? first : {};
-}
-
-function corruptIndexVariants(validIndex: Record<string, unknown>): readonly unknown[] {
-  const firstImport = firstRecord(validIndex.imports);
-  const firstSymbol = firstRecord(validIndex.symbols);
-  const firstCall = firstRecord(validIndex.calls);
-  const firstReference = firstRecord(validIndex.references);
-  const firstEndpoint = firstRecord(validIndex.endpoints);
-  const firstApiContract = firstRecord(validIndex.apiContracts);
-  const firstDtoContract = firstRecord(validIndex.dtoContracts);
-  const firstPackageDependency = firstRecord(validIndex.packageDependencies);
-  const firstParserCoverage = firstRecord(validIndex.parserCoverage);
-
-  return [
-    null,
-    [],
-    { ...validIndex, imports: [{ kind: "bad" }] },
-    { ...validIndex, imports: [null] },
-    { ...validIndex, imports: [{ ...firstImport, confidence: "trusted" }] },
-    { ...validIndex, symbols: [{ name: "OrderDto" }] },
-    { ...validIndex, symbols: [null] },
-    { ...validIndex, symbols: [{ ...firstSymbol, lineRange: { startLine: "1", endLine: 2 } }] },
-    { ...validIndex, calls: [{ callerPath: "a.ts" }] },
-    { ...validIndex, calls: [null] },
-    { ...validIndex, calls: [{ ...firstCall, parser: "unknown" }] },
-    { ...validIndex, references: [{ referencerPath: "a.ts" }] },
-    { ...validIndex, references: [null] },
-    { ...validIndex, references: [{ ...firstReference, confidence: "trusted" }] },
-    { ...validIndex, endpoints: [{ role: "server" }] },
-    { ...validIndex, endpoints: [null] },
-    { ...validIndex, endpoints: [{ ...firstEndpoint, role: "worker" }] },
-    { ...validIndex, apiContracts: [{ confidence: "resolved" }] },
-    { ...validIndex, apiContracts: [null] },
-    { ...validIndex, apiContracts: [{ ...firstApiContract, confidence: "trusted" }] },
-    { ...validIndex, dtoContracts: [{ sharedFields: ["status"] }] },
-    { ...validIndex, dtoContracts: [null] },
-    { ...validIndex, dtoContracts: [{ ...firstDtoContract, sharedFields: ["status", 1] }] },
-    { ...validIndex, packageDependencies: [{ sourcePackage: "@demo/root" }] },
-    { ...validIndex, packageDependencies: [null] },
-    {
-      ...validIndex,
-      packageDependencies: [{ ...firstPackageDependency, dependencyKind: "bundled" }],
-    },
-    { ...validIndex, parserCoverage: [{ parser: "unknown", filesIndexed: 1 }] },
-    { ...validIndex, parserCoverage: [null] },
-    { ...validIndex, parserCoverage: [{ ...firstParserCoverage, filesIndexed: "one" }] },
-    { ...validIndex, filesIndexed: "many" },
-    { ...validIndex, filesSkipped: "none" },
-    { ...validIndex, filesPartiallyIndexed: "none" },
-  ];
-}
-
-function requireValidCacheIndex(envelope: CacheEnvelopeForTest): {
-  readonly schemaVersion: number;
-  readonly fingerprint: string;
-  readonly index: Record<string, unknown>;
-} {
-  if (
-    envelope.schemaVersion === undefined ||
-    envelope.fingerprint === undefined ||
-    !isRecord(envelope.index)
-  ) {
-    throw new Error("expected valid persistent code-intelligence cache envelope");
-  }
-  return {
-    schemaVersion: envelope.schemaVersion,
-    fingerprint: envelope.fingerprint,
-    index: envelope.index,
-  };
-}
-
-function writeCacheEnvelope(
-  files: Record<string, string>,
-  cachePath: string,
-  schemaVersion: number,
-  fingerprint: string,
-  index: unknown,
-): void {
-  files[cachePath] = JSON.stringify({ schemaVersion, fingerprint, index });
 }
 
 function hasResolvedApiContract(
@@ -1305,7 +1195,9 @@ describe("buildCodeIntelligenceIndex", () => {
     expect(lookedUp).toHaveLength(3);
   });
 
-  it("uses memory and persistent cache only for valid matching index payloads", () => {
+  // Replaces the former persistent-cache pin: the disk tier is gone (issue #2670, AC6), so the
+  // memory tier is the whole cache and a writable WorkspaceFs must stay untouched by indexing.
+  it("caches in process only and leaves no artifact on a writable workspace fs", () => {
     const files = enterpriseFixture();
     const scope: SearchScope = {
       workspace: workspace(),
@@ -1318,39 +1210,28 @@ describe("buildCodeIntelligenceIndex", () => {
     const cached = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, firstFs);
 
     expect(cached).toBe(first);
-    const cachePath = requireCodeIntelligenceCachePath(files);
+    expect(Object.keys(files).filter((path) => path.startsWith(".keiko/"))).toEqual([]);
 
+    // A distinct WorkspaceFs identity misses the in-process cache and rebuilds from source instead
+    // of adopting anything on disk.
     const secondFs = persistentMemFs(files);
-    const fromPersistent = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, secondFs);
-    expect(fromPersistent).not.toBe(first);
-    expect(fromPersistent.imports).toEqual(first.imports);
+    const rebuilt = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, secondFs);
+    expect(rebuilt).not.toBe(first);
+    expect(rebuilt.imports).toEqual(first.imports);
 
-    files[cachePath] = JSON.stringify({ schemaVersion: -1, fingerprint: "stale", index: null });
-    const rebuilt = buildCodeIntelligenceIndex(
+    // A plaintext artifact left by an older version is neither consulted nor rewritten.
+    const stale = JSON.stringify({ schemaVersion: 13, fingerprint: "stale", index: null });
+    files[".keiko/code-intelligence/stale.json"] = stale;
+    const afterStale = buildCodeIntelligenceIndex(
       scope,
       DEFAULT_SEARCH_LIMITS,
       persistentMemFs(files),
     );
-    expect(rebuilt.imports).toEqual(first.imports);
-
-    const validCache = requireValidCacheIndex(parseCacheEnvelope(files, cachePath));
-    expect(typeof validCache.fingerprint).toBe("string");
-
-    for (const corruptIndex of corruptIndexVariants(validCache.index)) {
-      writeCacheEnvelope(
-        files,
-        cachePath,
-        validCache.schemaVersion,
-        validCache.fingerprint,
-        corruptIndex,
-      );
-      const recovered = buildCodeIntelligenceIndex(
-        scope,
-        DEFAULT_SEARCH_LIMITS,
-        persistentMemFs(files),
-      );
-      expect(recovered.imports).toEqual(first.imports);
-    }
+    expect(afterStale.imports).toEqual(first.imports);
+    expect(Object.keys(files).filter((path) => path.startsWith(".keiko/"))).toEqual([
+      ".keiko/code-intelligence/stale.json",
+    ]);
+    expect(files[".keiko/code-intelligence/stale.json"]).toBe(stale);
   });
 });
 

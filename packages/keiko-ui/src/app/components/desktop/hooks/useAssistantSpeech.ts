@@ -398,10 +398,21 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
     playbackRef.current.stop();
   }, [teardown]);
 
+  // ADR-0154 D4 — a barge-in stops the local canonical TTS playback AND returns the floor to input
+  // capture. `interrupt` is the right command only while audio is live or paused; during the pre-audible
+  // `preparing` window (worklet load + TTS TTFB) there is no output to interrupt and the contract has no
+  // `preparing → interrupted` edge, so the reducer would ignore it and strand the turn in `preparing`
+  // forever. `stop` is the sanctioned exit there (`preparing → canceled`), which releases the floor and
+  // lets the next turn re-arm. Mirrors the phase-aware release `setMuted` already performs.
   const interrupt = useCallback(
     (atMs?: number) => {
       teardown();
-      playbackRef.current.interrupt(atMs);
+      const { phase, active } = playbackRef.current.snapshot;
+      if (phase === "speaking" || phase === "paused") {
+        playbackRef.current.interrupt(atMs);
+      } else if (active) {
+        playbackRef.current.stop();
+      }
     },
     [teardown],
   );
