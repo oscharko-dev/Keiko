@@ -217,6 +217,10 @@ async function replacePage(page: Page, windows: readonly SeedWindow[]): Promise<
     window.localStorage.setItem("keiko.theme", "dark");
     window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
     window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(value));
+    // Positive control for the leak probe's sessionStorage arm. The journey writes nothing to
+    // sessionStorage of its own, so without a value planted here a broken reader and an empty sink
+    // are indistinguishable and the probe's negative would mean nothing.
+    window.sessionStorage.setItem("keiko.e2e.storage-probe", "session-sink-reachable");
   }, windows);
   await replacement.goto(`${origin}/${pairingFragment()}`);
   return replacement;
@@ -312,9 +316,21 @@ async function openProfileSettingsSurface(page: Page): Promise<void> {
 // the regression that would matter most. `storageState` covers cookies, localStorage, and
 // IndexedDB for every origin in the context; sessionStorage is read separately because storage
 // state does not carry it.
+//
+// sessionStorage is read through the documented `length`/`key(i)` API rather than by serializing
+// the `Storage` object. Chromium does expose stored entries as own-enumerable named properties, so
+// `JSON.stringify(sessionStorage)` happens to work there — but that is an engine detail, and a
+// leak probe that depends on it reports "clean" without looking on any engine that differs.
 async function browserStorageDump(page: Page): Promise<string> {
   const state = await page.context().storageState({ indexedDB: true });
-  const session = await page.evaluate(() => JSON.stringify(window.sessionStorage));
+  const session = await page.evaluate(() => {
+    const entries: Record<string, string> = {};
+    for (let index = 0; index < window.sessionStorage.length; index += 1) {
+      const key = window.sessionStorage.key(index);
+      if (key !== null) entries[key] = window.sessionStorage.getItem(key) ?? "";
+    }
+    return JSON.stringify(entries);
+  });
   return `${JSON.stringify(state)}\n${session}`;
 }
 
@@ -368,9 +384,12 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   const historyRestoreMs = await restoreOldest(journeyPage, pane);
   expect(readFileSync(join(harness.alpha.root, FILE), "utf8")).toBe(oldestContent);
   const storage = await browserStorageDump(journeyPage);
-  // Self-check the probe before trusting its negative: a dump that captured nothing would satisfy
-  // the leak assertion vacuously. The seeded window descriptor is known to be in localStorage.
+  // Self-check both readers before trusting their negative: a dump that captured nothing would
+  // satisfy the leak assertion vacuously. The window descriptor proves the storage-state arm
+  // (cookies/localStorage/IndexedDB) read real state; the seeded control proves the sessionStorage
+  // arm did too.
   expect(storage).toContain("keiko.workspace.v4");
+  expect(storage).toContain("session-sink-reachable");
   // `historyValue` is the one identifier every saved version shares. Probing the identifier rather
   // than a whole version line survives the JSON escaping of the storage dump, which would hide a
   // quoted body from a full-content substring check.

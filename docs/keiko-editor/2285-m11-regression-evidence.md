@@ -43,12 +43,12 @@ to this child-to-epic closeout command.
 
 ## Migration and rollback drills
 
-| Row                                | Drill                                                                                   | Fail-closed result                                                                                                                                                  | Executable owner                   |
-| ---------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `MIGRATION-PRE-M11-UPGRADE`        | Open a user-version 11 store containing a legacy project.                               | Migration creates one deterministic manifest, preserves the project registry, and remains idempotent.                                                               | `store/workspaceManifests.test.ts` |
-| `MIGRATION-DOWNGRADE-GUARD`        | Open state written by a schema newer than the current binary.                           | The typed `UI_STORE_SCHEMA_NEWER` error is returned; state is not quarantined or reinterpreted as V1.                                                               | `store/workspaceManifests.test.ts` |
-| `MIGRATION-CORRUPT-TRUST-RECOVERY` | Read malformed persisted trust JSON.                                                    | Trust projects to restricted and no corrupt bytes become authority.                                                                                                 | `workspace-script-trust.test.ts`   |
-| `MIGRATION-TRUST-REGRANT`          | Change the trust basis after an explicit grant, then roll it back to the granted bytes. | The demotion outlives the process, restored bytes do not resurrect the grant, and only a new explicit server grant returns the root to trusted at a newer revision. | `workspace-script-trust.test.ts`   |
+| Row                                | Drill                                                                                   | Fail-closed result                                                                                                                                                                                                   | Executable owner                   |
+| ---------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `MIGRATION-PRE-M11-UPGRADE`        | Open a user-version 11 store containing a legacy project.                               | Migration creates one deterministic manifest, preserves the project registry, and remains idempotent.                                                                                                                | `store/workspaceManifests.test.ts` |
+| `MIGRATION-DOWNGRADE-GUARD`        | Open state written by a schema newer than the current binary.                           | The typed `UI_STORE_SCHEMA_NEWER` error is returned; state is not quarantined or reinterpreted as V1.                                                                                                                | `store/workspaceManifests.test.ts` |
+| `MIGRATION-CORRUPT-TRUST-RECOVERY` | Read malformed persisted trust JSON.                                                    | Trust projects to restricted and no corrupt bytes become authority.                                                                                                                                                  | `workspace-script-trust.test.ts`   |
+| `MIGRATION-TRUST-REGRANT`          | Change the trust basis after an explicit grant, then roll it back to the granted bytes. | The demotion is read back at the same revision from a closed and reopened database, restored bytes do not resurrect the grant, and only a new explicit server grant returns the root to trusted at a newer revision. | `workspace-script-trust.test.ts`   |
 
 Every drill above names the assertion that runs it, and the matrix guard
 [`tests/qa/editor-m11-closeout-evidence.test.ts`](../../tests/qa/editor-m11-closeout-evidence.test.ts)
@@ -75,12 +75,13 @@ The journey proves that root focus does not copy trust, Restricted Mode remains 
 switch does not alter trust, restore writes only through the governed file route, the pre-restore
 checkpoint is retained, and checkpoint content enters none of the browser's storage sinks — the
 probe reads the context storage state for cookies, `localStorage`, and IndexedDB, plus
-`sessionStorage` from the page. Real-browser axe checks cover the populated multi-root Explorer, the
-Settings **Editor** tab carrying the profile controls, and the history panel; the journey opens that
-tab and asserts the active profile is on screen before scanning, because the settings window mounts
-on its Models tab. Settings and history have no serious/critical violations. The Explorer scan
-deterministically records the two-node critical `aria-required-children` defect filed as #2605; it
-neither suppresses the rule nor represents the surface as green.
+`sessionStorage` enumerated from the page. Each reader carries a positive control, so a probe that
+captured nothing cannot report a clean sink. Real-browser axe checks cover the populated multi-root
+Explorer, the Settings **Editor** tab carrying the profile controls, and the history panel; the
+journey opens that tab and asserts the active profile is on screen before scanning, because the
+settings window mounts on its Models tab. Settings and history have no serious/critical violations.
+The Explorer scan deterministically records the two-node critical `aria-required-children` defect
+filed as #2605; it neither suppresses the rule nor represents the surface as green.
 
 ## Accessibility, visual, and i18n evidence
 

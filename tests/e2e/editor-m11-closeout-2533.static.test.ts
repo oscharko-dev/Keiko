@@ -30,9 +30,13 @@ describe("editor M11 browser closeout source contract (#2533)", () => {
     expect(spec).toContain('settings.getByRole("button", { name: "Editor" })');
     expect(spec).toContain('settings.getByRole("combobox", { name: "Profile" })');
     expect(spec).toContain("storageState({ indexedDB: true })");
-    expect(spec).toContain("window.sessionStorage");
+    // Read through the documented API, never by serializing the `Storage` object: whether named
+    // properties are own-enumerable is an engine detail, and the probe must not rest on it.
+    expect(spec).toContain("window.sessionStorage.key(index)");
+    expect(spec).not.toContain("JSON.stringify(window.sessionStorage)");
     expect(spec).toContain("const storage = await browserStorageDump(journeyPage);");
     expect(spec).toContain('expect(storage).toContain("keiko.workspace.v4");');
+    expect(spec).toContain('expect(storage).toContain("session-sink-reachable");');
     expect(spec).toContain('expect(storage).not.toContain("historyValue");');
   });
 });

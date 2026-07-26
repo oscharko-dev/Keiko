@@ -370,9 +370,12 @@ describe("WorkspaceScriptTrustService", () => {
 });
 
 describe("WorkspaceScriptTrust fail-closed matrix", () => {
-  function typecheckTrustState(trust: WorkspaceScriptTrustService): string | undefined {
+  function typecheckTrustState(
+    trust: WorkspaceScriptTrustService,
+    trustStore: UiStore = store,
+  ): string | undefined {
     const verification = createVerificationRunnerManager({
-      store,
+      store: trustStore,
       evidenceStore: createInMemoryEvidenceStore(),
       isWorkspaceTrustedForPackageScripts: trust.isTrusted,
     });
@@ -480,29 +483,53 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
   // server grant returns the root to trusted — at a newer revision. The row used to be mapped to
   // "wire input cannot mint trust" above, which grants once on a fresh store and never touches the
   // basis, so it could not fail this drill however the re-grant path behaved.
+  //
+  // This is the one case in the matrix that must not use the suite's in-memory store: "the
+  // demotion survives a restart" is a claim about the database, and a second service constructed
+  // over a live in-memory store proves only that the decision is not cached in the service. So the
+  // drill spans a real SQLite file that is closed and reopened between its two halves.
   it("keeps an invalidated grant invalid and restores trust only through an explicit re-grant", () => {
-    const trust = createWorkspaceScriptTrustService({ store });
-    expect(trust.grant(root)).toEqual({ trusted: true });
-    expect(typecheckTrustState(trust)).toBe("trusted");
-    const grantedRevision = store.readWorkspaceTrustRecord(rootReference())?.revision ?? -1;
+    const dir = mkdtempSync(join(tmpdir(), "keiko-script-trust-regrant-"));
+    const dbPath = join(dir, "ui.db");
+    const before = createNodeUiStore(dbPath);
+    let invalidatedRevision = -1;
+    try {
+      before.createProject(root, "fixture");
+      const granted = createWorkspaceScriptTrustService({ store: before });
+      expect(granted.grant(root)).toEqual({ trusted: true });
+      expect(typecheckTrustState(granted, before)).toBe("trusted");
 
-    writeFileSync(join(root, "package.json"), `${MANIFEST}\n`, "utf8");
-    expect(typecheckTrustState(trust)).toBe("approval-required");
+      writeFileSync(join(root, "package.json"), `${MANIFEST}\n`, "utf8");
+      expect(typecheckTrustState(granted, before)).toBe("approval-required");
+      writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
+      expect(typecheckTrustState(granted, before)).toBe("approval-required");
 
-    writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
-    expect(typecheckTrustState(trust)).toBe("approval-required");
-    // A restarted process reads the same store: the demotion is durable, not in-memory state.
-    expect(typecheckTrustState(createWorkspaceScriptTrustService({ store }))).toBe(
-      "approval-required",
-    );
-    const invalidated = store.readWorkspaceTrustRecord(rootReference());
-    expect(readTrustFrom(invalidated?.recordJson)).toBe("restricted");
+      const invalidated = before.readWorkspaceTrustRecord(rootReference());
+      expect(readTrustFrom(invalidated?.recordJson)).toBe("restricted");
+      invalidatedRevision = invalidated?.revision ?? -1;
+    } finally {
+      before.close();
+    }
 
-    expect(trust.grant(root)).toEqual({ trusted: true });
-    expect(typecheckTrustState(trust)).toBe("trusted");
-    const regranted = store.readWorkspaceTrustRecord(rootReference());
-    expect(readTrustFrom(regranted?.recordJson)).toBe("trusted");
-    expect(regranted?.revision).toBeGreaterThan(invalidated?.revision ?? grantedRevision);
+    const after = createNodeUiStore(dbPath);
+    try {
+      const reopened = createWorkspaceScriptTrustService({ store: after });
+      // Read the row back before the projection: "approval-required" is also what a store that
+      // lost the record answers, so the projection alone cannot tell remembering from forgetting.
+      const persisted = after.readWorkspaceTrustRecord(rootReference());
+      expect(readTrustFrom(persisted?.recordJson)).toBe("restricted");
+      expect(persisted?.revision).toBe(invalidatedRevision);
+      expect(typecheckTrustState(reopened, after)).toBe("approval-required");
+
+      expect(reopened.grant(root)).toEqual({ trusted: true });
+      expect(typecheckTrustState(reopened, after)).toBe("trusted");
+      const regranted = after.readWorkspaceTrustRecord(rootReference());
+      expect(readTrustFrom(regranted?.recordJson)).toBe("trusted");
+      expect(regranted?.revision).toBeGreaterThan(invalidatedRevision);
+    } finally {
+      after.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("preserves the originating fs cause on coded errors and omits the property when absent (#2615)", () => {
