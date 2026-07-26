@@ -678,7 +678,7 @@ jobs:
             if [ "$scanner_status" -eq 0 ]; then
               break
             fi
-            if ! grep -qE "Gateway Timeout|Bad Gateway|Service Unavailable|Failed to query JRE metadata|connect timed out|Connection reset" "$RUNNER_TEMP/sonar-scanner.log"; then
+            if ! grep -qE "Gateway Timeout|Bad Gateway|Service Unavailable|Failed to query JRE metadata|connect timed out|Connection reset|Quality Gate check timeout exceeded" "$RUNNER_TEMP/sonar-scanner.log"; then
               break
             fi
             if [ "$attempt" -lt 3 ]; then

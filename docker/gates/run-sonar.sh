@@ -135,6 +135,14 @@ if [[ "${scope}" == "changed" ]]; then
   fi
 fi
 
+# Bind the post-scan wait to THIS submission. Preferred binding: the ceTaskId the scanner writes
+# into .scannerwork/report-task.txt. Observed fallback (this file does not always survive the
+# container): the CE task id visible BEFORE the scan — a new submission must show a DIFFERENT id.
+# A stale report-task.txt from an earlier run must not bind us to an old task, so clear it first.
+rm -rf "${repo_root}/.scannerwork"
+baseline_task="$(ask -u "${token}:" "${host}/api/ce/component?component=${project}" 2>/dev/null |
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).current?.id??"")}catch{process.stdout.write("")}})')"
+
 say "Analysing"
 # sonar.projectKey is deliberately NOT the real project key: nothing here may be mistaken for, or
 # uploaded over, the organisation's analysis. Coverage is not supplied on purpose — coverage has its
@@ -176,15 +184,28 @@ fi
 
 # The server ingests the analysis asynchronously: EXECUTION SUCCESS means the report was SUBMITTED,
 # not processed. Querying issues before the Compute Engine finishes returns the PREVIOUS analysis —
-# so a scan that just fixed findings would still report them once, and a pre-push gate that cries
-# wolf teaches people to distrust it. Wait for the component's task queue to drain, bounded.
-say "Waiting for the server to process the analysis"
+# so a scan that just fixed findings would still report them once. The wait is bound to THIS
+# submission: by the scanner's own ceTaskId when report-task.txt survived, otherwise by requiring a
+# task id DIFFERENT from the pre-scan baseline — the component's current task showing the previous
+# SUCCESS can therefore never satisfy it.
+say "Waiting for the server to process this analysis"
+ce_task_id="$(sed -n 's/^ceTaskId=//p' "${repo_root}/.scannerwork/report-task.txt" 2>/dev/null | head -1)"
+if [[ -n "${ce_task_id}" ]]; then
+  printf '  bound to task %s (report-task.txt)\n' "${ce_task_id}"
+else
+  printf '  report-task.txt not found — waiting for a task newer than %s\n' "${baseline_task:-<none>}"
+fi
 ce_ok=""
 for _ in $(seq 1 90); do
-  ce_state="$(ask -u "${token}:" "${host}/api/ce/component?component=${project}" 2>/dev/null |
-    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s);const q=(d.queue??[]).length;const c=d.current?.status??"NONE";process.stdout.write(q>0?"BUSY":c)}catch{process.stdout.write("UNKNOWN")}})')"
+  if [[ -n "${ce_task_id}" ]]; then
+    ce_state="$(ask -u "${token}:" "${host}/api/ce/task?id=${ce_task_id}" 2>/dev/null |
+      node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).task?.status??"UNKNOWN")}catch{process.stdout.write("UNKNOWN")}})')"
+  else
+    ce_state="$(ask -u "${token}:" "${host}/api/ce/component?component=${project}" 2>/dev/null |
+      KEIKO_BASELINE_TASK="${baseline_task}" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s);const q=(d.queue??[]).length;const c=d.current;if(q>0){process.stdout.write("BUSY");return}if(!c){process.stdout.write("PENDING");return}process.stdout.write(c.id===process.env.KEIKO_BASELINE_TASK?"PENDING":(c.status??"UNKNOWN"))}catch{process.stdout.write("UNKNOWN")}})')"
+  fi
   case "${ce_state}" in
-    SUCCESS | NONE)
+    SUCCESS)
       ce_ok="yes"
       break
       ;;
@@ -196,7 +217,7 @@ for _ in $(seq 1 90); do
   esac
 done
 if [[ -z "${ce_ok}" ]]; then
-  printf '\033[31m✘ the server did not finish processing the analysis in time\033[0m\n' >&2
+  printf '\033[31m✘ the server did not finish processing this analysis in time\033[0m\n' >&2
   exit 1
 fi
 
