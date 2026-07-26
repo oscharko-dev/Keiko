@@ -210,12 +210,14 @@ else
 fi
 ce_ok=""
 for _ in $(seq 1 90); do
+  # A single failed poll (server busy compacting, transient 5xx) must count as UNKNOWN and retry,
+  # not kill the whole lane under `set -eo pipefail` after a successful upload.
   if [[ -n "${ce_task_id}" ]]; then
     ce_state="$(ask -u "${token}:" "${host}/api/ce/task?id=${ce_task_id}" 2>/dev/null |
-      node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).task?.status??"UNKNOWN")}catch{process.stdout.write("UNKNOWN")}})')"
+      node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).task?.status??"UNKNOWN")}catch{process.stdout.write("UNKNOWN")}})' || printf 'UNKNOWN')"
   else
     ce_state="$(ask -u "${token}:" "${host}/api/ce/component?component=${project}" 2>/dev/null |
-      KEIKO_BASELINE_TASK="${baseline_task}" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s);const q=(d.queue??[]).length;const c=d.current;if(q>0){process.stdout.write("BUSY");return}if(!c){process.stdout.write("PENDING");return}process.stdout.write(c.id===process.env.KEIKO_BASELINE_TASK?"PENDING":(c.status??"UNKNOWN"))}catch{process.stdout.write("UNKNOWN")}})')"
+      KEIKO_BASELINE_TASK="${baseline_task}" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s);const q=(d.queue??[]).length;const c=d.current;if(q>0){process.stdout.write("BUSY");return}if(!c){process.stdout.write("PENDING");return}process.stdout.write(c.id===process.env.KEIKO_BASELINE_TASK?"PENDING":(c.status??"UNKNOWN"))}catch{process.stdout.write("UNKNOWN")}})' || printf 'UNKNOWN')"
   fi
   case "${ce_state}" in
     SUCCESS)
