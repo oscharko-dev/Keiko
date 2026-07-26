@@ -214,7 +214,7 @@ function suffixedImportName(base: string, index: number): string {
  * that many of them: the search is bounded and its result is always free.
  */
 function uniqueImportedName(source: string, existingNames: readonly string[]): string {
-  const occupied = new Set(existingNames.map(workspaceProfileDisplayNameKey));
+  const occupied = new Set(existingNames.map((name) => workspaceProfileDisplayNameKey(name)));
   const base = source.trim();
   const free = (candidate: string): boolean =>
     !occupied.has(workspaceProfileDisplayNameKey(candidate));
