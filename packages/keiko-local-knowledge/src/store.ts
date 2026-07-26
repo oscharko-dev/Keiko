@@ -357,8 +357,9 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
   // encryption state before the handle is usable: this seals a legacy plaintext store forward, or
   // fails closed on a wrong key / missing provider for an already-encrypted store (ADR-0047 D4). A
   // failure here closes the handle so a half-open store never leaks.
-  const contentCipher = resolveContentCipher(opts, currentUserVersion(db));
+  let contentCipher: StoreContentCipher;
   try {
+    contentCipher = resolveContentCipher(opts, currentUserVersion(db));
     applyStoreContentEncryption(db, contentCipher);
   } catch (cause) {
     db.close();

@@ -85,6 +85,11 @@ import {
   type RerankSelectionPolicy,
 } from "./grounded-rerank-facade.js";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
+import {
+  missingCitationMarker,
+  reconcileNumericCitations,
+  unsupportedNumericCitationMarker,
+} from "./grounded-faithfulness.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
@@ -1072,6 +1077,50 @@ function noEvidenceUncertainty(
   ];
 }
 
+// AC6 fail-closed (#2670): the folder, multi-source, and hybrid grounded paths attach the shared
+// grounded-faithfulness markers when a source-backed answer cites nothing (missingCitationMarker)
+// or cites [n] markers the attacher dropped (unsupportedNumericCitationMarker). Mirror that exact
+// mechanism here by reconciling the answer's [n] markers against the citations the attacher kept;
+// the marker claims are body-free and pass the same wire-boundary redaction as citation labels.
+function citationReconciliationUncertainty(
+  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
+  noEvidenceReason: string | undefined,
+  redactLabel: LabelRedactor | undefined,
+): readonly GroundedUncertainty[] {
+  if (noEvidenceReason !== undefined || result.noEvidence || result.references.length === 0) {
+    return [];
+  }
+  const nowMs = Date.now();
+  const attachedMarkers = new Set(result.citations.map((entry) => entry.index));
+  const numeric = reconcileNumericCitations(result.answer, attachedMarkers);
+  const unsupported = unsupportedNumericCitationMarker(numeric.unsupportedMarkers, nowMs);
+  const missing =
+    unsupported === undefined && result.citations.length === 0
+      ? missingCitationMarker(nowMs)
+      : undefined;
+  const markers = [
+    ...(unsupported === undefined ? [] : [unsupported]),
+    ...(missing === undefined ? [] : [missing]),
+  ];
+  return markers.map((marker) => ({
+    kind: marker.kind,
+    claim: redactLabel === undefined ? marker.claim : redactLabel(marker.claim),
+  }));
+}
+
+function answerUncertainty(
+  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
+  noEvidenceReason: string | undefined,
+  assistantContent: string,
+  redactLabel: LabelRedactor | undefined,
+): readonly GroundedUncertainty[] {
+  if (result.answerOnlyContextUsed === true) return [];
+  return [
+    ...noEvidenceUncertainty(noEvidenceReason, assistantContent),
+    ...citationReconciliationUncertainty(result, noEvidenceReason, redactLabel),
+  ];
+}
+
 function buildLocalKnowledgeContextPack(
   chat: Chat,
   selected: SelectedLocalKnowledgeScope,
@@ -1166,7 +1215,7 @@ function buildLocalKnowledgeAnswer(
     assistantMessageId: assistant.id,
     content: assistantContent,
     citations,
-    uncertainty: answerOnlyMemory ? [] : noEvidenceUncertainty(noEvidenceReason, assistantContent),
+    uncertainty: answerUncertainty(result, noEvidenceReason, assistantContent, redactLabel),
     omittedCount: 0,
     elapsedMs,
     noEvidence: sourceNoEvidence,

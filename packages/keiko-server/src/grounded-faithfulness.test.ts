@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
-import type { ConnectedContextPack, ContextExcerpt } from "@oscharko-dev/keiko-contracts";
+import type {
+  ConnectedContextPack,
+  ContextExcerpt,
+  KnowledgeCapsuleId,
+  RetrievalReference,
+} from "@oscharko-dev/keiko-contracts";
+import { attachCitationsToAnswer } from "@oscharko-dev/keiko-local-knowledge";
 import {
   DEFAULT_ENTAILMENT_OPTIONS,
   GROUNDED_NO_EVIDENCE_ANSWER,
@@ -311,6 +317,23 @@ describe("unsupportedCitationMarker", () => {
   });
 });
 
+// Minimal real reference for the attacher/reconciler drift pin, mirroring the fixture shape in
+// packages/keiko-local-knowledge/src/conversation/citation-attacher.test.ts.
+function driftPinReference(): RetrievalReference {
+  return {
+    chunkId: "ch-a" as RetrievalReference["chunkId"],
+    capsuleId: "cap" as KnowledgeCapsuleId,
+    score: 0.9,
+    citation: {
+      documentId: "doc-ch-a" as RetrievalReference["citation"]["documentId"],
+      capsuleId: "cap" as KnowledgeCapsuleId,
+      sourceId: "src" as RetrievalReference["citation"]["sourceId"],
+      chunkId: "ch-a" as RetrievalReference["chunkId"],
+      safeDisplayName: "display-ch-a",
+    },
+  };
+}
+
 describe("numeric citation reconciliation", () => {
   it("keeps known markers and reports each unknown marker once", () => {
     const result = reconcileNumericCitations(
@@ -323,6 +346,31 @@ describe("numeric citation reconciliation", () => {
     expect(unsupportedNumericCitationMarker(result.unsupportedMarkers, NOW)?.claim).toContain(
       "[99]",
     );
+  });
+
+  it("reads every bracket glyph the citation attacher accepts", () => {
+    // gpt-oss-style CJK lenticular, fullwidth, and mismatched pairs — the attacher's documented
+    // tolerance grammar. A reconciler narrower than that grammar cannot see a dropped marker.
+    const result = reconcileNumericCitations(
+      "Known 【1】, fullwidth ［7］, and mismatched [9】.",
+      new Set([1]),
+    );
+
+    expect([...result.citedMarkers]).toEqual([1]);
+    expect(result.unsupportedMarkers).toEqual([7, 9]);
+  });
+
+  it("stays in lockstep with the attacher's marker grammar", () => {
+    const answer = "Alpha 【1】 beta ［2］ gamma [3】.";
+    const attached = attachCitationsToAnswer(answer, [driftPinReference()]);
+    const attachedMarkers = new Set(attached.citations.map((citation) => citation.index));
+    const numeric = reconcileNumericCitations(answer, attachedMarkers);
+
+    // The attacher keeps the in-range 【1】 and drops ［2］/[3】; every glyph shape it parses
+    // must be visible to the reconciliation, so the dropped markers surface as unsupported.
+    expect([...attachedMarkers]).toEqual([1]);
+    expect([...numeric.citedMarkers]).toEqual([1]);
+    expect(numeric.unsupportedMarkers).toEqual([2, 3]);
   });
 });
 

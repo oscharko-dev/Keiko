@@ -19,7 +19,7 @@ import {
   KNOWLEDGE_CAPSULE_TABLES,
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KnowledgeStoreError } from "./errors.js";
 import { LK_STORE_BUSY_TIMEOUT_MS, openKnowledgeStore } from "./store.js";
@@ -151,6 +151,38 @@ describe("openKnowledgeStore — fresh install", () => {
         },
       }),
     ).toThrow(/must be exactly 32 bytes/);
+  });
+});
+
+describe("openKnowledgeStore — key-resolution failure closes the handle", () => {
+  it("closes the open database when the key provider's resolveKey throws", () => {
+    // Regression for issue #2670: resolveContentCipher ran outside the close-on-failure guard,
+    // so a key-resolution failure (malformed KEIKO_LOCAL_KNOWLEDGE_KEY, throwing keychain tier)
+    // leaked the already-open, migrated WAL handle on every request. A closed WAL handle
+    // checkpoints and removes its -wal/-shm sidecars; a leaked one keeps holding them.
+    const dbPath = join(tmp, "capsules.db");
+    const closeSpy = vi.spyOn(DatabaseSync.prototype, "close");
+    try {
+      expect(() =>
+        openKnowledgeStore({
+          dbPath,
+          protection: {
+            mode: "encrypted-key-provider",
+            keyProvider: {
+              providerId: "throwing",
+              resolveKey: () => {
+                throw new Error("test key tier unavailable");
+              },
+            },
+          },
+        }),
+      ).toThrow(/test key tier unavailable/);
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      closeSpy.mockRestore();
+    }
+    expect(existsSync(`${dbPath}-wal`)).toBe(false);
+    expect(existsSync(`${dbPath}-shm`)).toBe(false);
   });
 });
 

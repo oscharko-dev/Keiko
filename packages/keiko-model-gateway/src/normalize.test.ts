@@ -7,6 +7,10 @@ import { normalizeChatResponse } from "./normalize.js";
 
 const BASE_USAGE = { requestId: "req-1", latencyMs: 12, costClass: "medium" } as const;
 
+// Hostile fixture: a provider-controlled name carrying an endpoint and customer-like
+// prose that must never reach a UI-visible error message.
+const HOSTILE_TOOL_NAME = "see https://internal.corp.example/v1 — customer said: private notes";
+
 function chatPayload(overrides: Record<string, unknown> = {}): unknown {
   return {
     choices: [
@@ -18,6 +22,32 @@ function chatPayload(overrides: Record<string, unknown> = {}): unknown {
     usage: { prompt_tokens: 10, completion_tokens: 5 },
     ...overrides,
   };
+}
+
+function toolCallPayload(name: string, argumentsText: string): unknown {
+  return chatPayload({
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "c", function: { name, arguments: argumentsText } }],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  });
+}
+
+function malformedToolCallMessage(payload: unknown): string {
+  try {
+    normalizeChatResponse(payload, "m", BASE_USAGE);
+  } catch (error) {
+    if (error instanceof MalformedToolCallError) {
+      return error.message;
+    }
+  }
+  throw new Error("expected normalizeChatResponse to throw MalformedToolCallError");
 }
 
 describe("normalizeChatResponse", () => {
@@ -135,6 +165,23 @@ describe("normalizeChatResponse", () => {
       ],
     });
     expect(() => normalizeChatResponse(payload, "m", BASE_USAGE)).toThrow(MalformedToolCallError);
+  });
+
+  it("omits a hostile provider-supplied tool name from the non-JSON-arguments error message", () => {
+    const message = malformedToolCallMessage(toolCallPayload(HOSTILE_TOOL_NAME, "not-json"));
+    expect(message).toBe("tool call has non-JSON arguments");
+    expect(message).not.toContain("internal.corp.example");
+  });
+
+  it("omits a hostile provider-supplied tool name from the non-object-arguments error message", () => {
+    const message = malformedToolCallMessage(toolCallPayload(HOSTILE_TOOL_NAME, "[1,2]"));
+    expect(message).toBe("tool call arguments are not an object");
+    expect(message).not.toContain("customer said");
+  });
+
+  it("keeps a machine-token tool name in the malformed-arguments error message", () => {
+    const message = malformedToolCallMessage(toolCallPayload("search", "{not json"));
+    expect(message).toBe("tool call 'search' has non-JSON arguments");
   });
 
   it("normalises missing usage counts to zero", () => {

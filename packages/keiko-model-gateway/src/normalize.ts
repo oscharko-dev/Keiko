@@ -53,6 +53,16 @@ function buildUsage(payload: Record<string, unknown>, seed: UsageSeed): UsageMet
   };
 }
 
+// The name is provider-controlled and gateway error messages cross to UI-visible
+// bodies, so it is admitted into a message only when it is a bounded machine token
+// (mirrors the server diagnostics machineToken bound, which this package cannot
+// import); URLs, prose, or echoed content are omitted, never rewritten.
+const TOOL_NAME_TOKEN_SHAPE = /^[A-Za-z0-9._-]{1,64}$/;
+
+function toolCallLabel(name: string): string {
+  return TOOL_NAME_TOKEN_SHAPE.test(name) ? `tool call '${name}'` : "tool call";
+}
+
 function parseToolCall(raw: unknown): NormalizedToolCall {
   if (!isRecord(raw) || !isRecord(raw.function)) {
     throw new MalformedToolCallError("tool call is missing a function descriptor");
@@ -65,10 +75,10 @@ function parseToolCall(raw: unknown): NormalizedToolCall {
   try {
     parsed = JSON.parse(argsText);
   } catch {
-    throw new MalformedToolCallError(`tool call '${name}' has non-JSON arguments`);
+    throw new MalformedToolCallError(`${toolCallLabel(name)} has non-JSON arguments`);
   }
   if (!isRecord(parsed)) {
-    throw new MalformedToolCallError(`tool call '${name}' arguments are not an object`);
+    throw new MalformedToolCallError(`${toolCallLabel(name)} arguments are not an object`);
   }
   return { id, name, arguments: parsed };
 }

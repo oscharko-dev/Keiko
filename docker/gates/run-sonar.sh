@@ -12,7 +12,17 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 compose=(docker compose -f "${repo_root}/docker/gates/sonar-compose.yml")
 host="http://127.0.0.1:9234"
-project="keiko-local"
+# The server is shared per machine, but several checkouts (worktrees, parallel agent sessions) run
+# this lane concurrently. A shared project key would let one checkout's upload overwrite the state
+# another checkout is about to query, and a shared token name would let one provisioning revoke a
+# token another scan is still using mid-flight (observed as an unexplained 401 at report upload).
+# Namespacing both by the checkout path keeps concurrent runs fully independent.
+checkout_id="$(printf '%s' "${repo_root}" | node -e 'const { createHash } = require("node:crypto");
+let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(createHash("sha256").update(s).digest("hex").slice(0, 12));
+});')"
+project="keiko-local-${checkout_id}"
 scope="changed"
 base="origin/dev"
 
@@ -98,7 +108,7 @@ fi
 
 # One named token, revoked before it is re-issued. A fresh timestamped token per run would pile up
 # credentials in the persisted volume forever.
-token_name="keiko-local-gate"
+token_name="keiko-local-gate-${checkout_id}"
 ask -o /dev/null -u "admin:${password}" -X POST \
   "${host}/api/user_tokens/revoke?name=${token_name}" 2>/dev/null || true
 token="$(ask -u "admin:${password}" -X POST \
@@ -139,9 +149,12 @@ fi
 # into .scannerwork/report-task.txt. Observed fallback (this file does not always survive the
 # container): the CE task id visible BEFORE the scan — a new submission must show a DIFFERENT id.
 # A stale report-task.txt from an earlier run must not bind us to an old task, so clear it first.
+# On a never-analysed project (fresh server volume) this endpoint 404s; under `set -eo pipefail`
+# that must yield an empty baseline — any new task id then counts as this submission — instead of
+# silently killing the whole run before "Analysing".
 rm -rf "${repo_root}/.scannerwork"
 baseline_task="$(ask -u "${token}:" "${host}/api/ce/component?component=${project}" 2>/dev/null |
-  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).current?.id??"")}catch{process.stdout.write("")}})')"
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).current?.id??"")}catch{process.stdout.write("")}})' || true)"
 
 say "Analysing"
 # sonar.projectKey is deliberately NOT the real project key: nothing here may be mistaken for, or
@@ -189,7 +202,9 @@ fi
 # task id DIFFERENT from the pre-scan baseline — the component's current task showing the previous
 # SUCCESS can therefore never satisfy it.
 say "Waiting for the server to process this analysis"
-ce_task_id="$(sed -n 's/^ceTaskId=//p' "${repo_root}/.scannerwork/report-task.txt" 2>/dev/null | head -1)"
+# The scanner container does not always leave report-task.txt behind (see above): a missing file
+# must select the baseline fallback, not kill the lane via `set -eo pipefail`.
+ce_task_id="$(sed -n 's/^ceTaskId=//p' "${repo_root}/.scannerwork/report-task.txt" 2>/dev/null | head -1 || true)"
 if [[ -n "${ce_task_id}" ]]; then
   printf '  bound to task %s (report-task.txt)\n' "${ce_task_id}"
 else
@@ -197,12 +212,14 @@ else
 fi
 ce_ok=""
 for _ in $(seq 1 90); do
+  # A single failed poll (server busy compacting, transient 5xx) must count as UNKNOWN and retry,
+  # not kill the whole lane under `set -eo pipefail` after a successful upload.
   if [[ -n "${ce_task_id}" ]]; then
     ce_state="$(ask -u "${token}:" "${host}/api/ce/task?id=${ce_task_id}" 2>/dev/null |
-      node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).task?.status??"UNKNOWN")}catch{process.stdout.write("UNKNOWN")}})')"
+      node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).task?.status??"UNKNOWN")}catch{process.stdout.write("UNKNOWN")}})' || printf 'UNKNOWN')"
   else
     ce_state="$(ask -u "${token}:" "${host}/api/ce/component?component=${project}" 2>/dev/null |
-      KEIKO_BASELINE_TASK="${baseline_task}" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s);const q=(d.queue??[]).length;const c=d.current;if(q>0){process.stdout.write("BUSY");return}if(!c){process.stdout.write("PENDING");return}process.stdout.write(c.id===process.env.KEIKO_BASELINE_TASK?"PENDING":(c.status??"UNKNOWN"))}catch{process.stdout.write("UNKNOWN")}})')"
+      KEIKO_BASELINE_TASK="${baseline_task}" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s);const q=(d.queue??[]).length;const c=d.current;if(q>0){process.stdout.write("BUSY");return}if(!c){process.stdout.write("PENDING");return}process.stdout.write(c.id===process.env.KEIKO_BASELINE_TASK?"PENDING":(c.status??"UNKNOWN"))}catch{process.stdout.write("UNKNOWN")}})' || printf 'UNKNOWN')"
   fi
   case "${ce_state}" in
     SUCCESS)

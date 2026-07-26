@@ -341,6 +341,26 @@ function replaceCanonicalTurnMessages(
   return result;
 }
 
+// AC2 (#2670) — the BFF persists the canonical user row at admission, before generation
+// completes. A fetched non-local user row with the projection's exact content stamped at or
+// after the projection therefore proves a durable admission (the same proof shape as
+// hasNewCanonicalUserMessage); re-appending the held projection would render the transcript twice.
+// The proof is strong enough to SUPPRESS the re-append but deliberately not to release the held
+// projection: an identical-content sibling turn still queued behind this row could match too, and
+// only the turn's own settle path knows which turn the durable row belongs to.
+function canonicalVoiceProjectionDurablyAdmitted(
+  messages: readonly ChatMessage[],
+  projection: CanonicalVoiceProjection,
+): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "user" &&
+      !message.id.startsWith("local-") &&
+      message.content === projection.content &&
+      message.timestamp >= projection.message.timestamp,
+  );
+}
+
 function mergeCanonicalVoiceProjections(
   messages: readonly ChatMessage[],
   chatId: string,
@@ -354,7 +374,8 @@ function mergeCanonicalVoiceProjections(
       (projection) =>
         projection.chatId === chatId &&
         !excluded.has(projection.message.id) &&
-        !ids.has(projection.message.id),
+        !ids.has(projection.message.id) &&
+        !canonicalVoiceProjectionDurablyAdmitted(messages, projection),
     )
     .map((projection) => projection.message);
   return pending.length === 0 ? Array.from(messages) : [...messages, ...pending];

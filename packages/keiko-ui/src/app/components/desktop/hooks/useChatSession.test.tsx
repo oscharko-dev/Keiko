@@ -2281,69 +2281,73 @@ describe("useChatSession canonical Voice FIFO", () => {
   });
 
   it("settles a durably admitted permanent model failure and advances the FIFO", async () => {
-    const retiredChat = chat({ selectedModel: "retired-chat-deployment" });
-    const rendered = await setupVoiceQueueSession([retiredChat], [project()], []);
-    const durableUser = message({
-      id: "durable-retired-model-user",
-      content: "final after model removal",
-      role: "user",
-      timestamp: Date.now() + 1,
-    });
-    vi.mocked(fetchChatMessages).mockResolvedValue({
-      messages: [durableUser],
-    });
-    vi.mocked(sendDesktopChat)
-      .mockRejectedValueOnce(
-        new ApiError("MODEL_NOT_FOUND", "The configured chat deployment is unavailable.", 400),
-      )
-      .mockResolvedValueOnce({
-        chat: retiredChat,
-        messages: [
-          message({
-            id: "next-permanent-user",
-            content: "next final after permanent failure",
-            role: "user",
-          }),
-          message({
-            id: "next-permanent-assistant",
-            content: "Answer: next final after permanent failure",
-            role: "assistant",
-          }),
-        ],
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const retiredChat = chat({ selectedModel: "retired-chat-deployment" });
+      const rendered = await setupVoiceQueueSession([retiredChat], [project()], []);
+      const durableUser = message({
+        id: "durable-retired-model-user",
+        content: "final after model removal",
+        role: "user",
+        timestamp: 10_000,
       });
-    let first: Promise<SendMessageOutcome> | undefined;
-    let second: Promise<SendMessageOutcome> | undefined;
-    act(() => {
-      first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
-        canonicalVoiceTurn("final after model removal", "voice-retired-model", retiredChat),
-      );
-      second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
-        canonicalVoiceTurn(
-          "next final after permanent failure",
-          "voice-after-retired-model",
-          retiredChat,
-        ),
-      );
-    });
+      vi.mocked(fetchChatMessages).mockResolvedValue({
+        messages: [durableUser],
+      });
+      vi.mocked(sendDesktopChat)
+        .mockRejectedValueOnce(
+          new ApiError("MODEL_NOT_FOUND", "The configured chat deployment is unavailable.", 400),
+        )
+        .mockResolvedValueOnce({
+          chat: retiredChat,
+          messages: [
+            message({
+              id: "next-permanent-user",
+              content: "next final after permanent failure",
+              role: "user",
+            }),
+            message({
+              id: "next-permanent-assistant",
+              content: "Answer: next final after permanent failure",
+              role: "assistant",
+            }),
+          ],
+        });
+      let first: Promise<SendMessageOutcome> | undefined;
+      let second: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        first = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("final after model removal", "voice-retired-model", retiredChat),
+        );
+        second = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(
+            "next final after permanent failure",
+            "voice-after-retired-model",
+            retiredChat,
+          ),
+        );
+      });
 
-    await expect(first).resolves.toEqual({
-      status: "failed",
-      retryable: false,
-      userPersisted: true,
-    });
-    await expect(second).resolves.toEqual({
-      status: "completed",
-      assistantMessageId: "next-permanent-assistant",
-    });
-    expect(vi.mocked(sendDesktopChat).mock.calls.map(([request]) => request.clientTurnId)).toEqual([
-      "voice-retired-model",
-      "voice-after-retired-model",
-    ]);
-    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
-      chatId: retiredChat.id,
-      modelId: "retired-chat-deployment",
-      clientTurnId: "voice-retired-model",
-    });
+      await expect(first).resolves.toEqual({
+        status: "failed",
+        retryable: false,
+        userPersisted: true,
+      });
+      await expect(second).resolves.toEqual({
+        status: "completed",
+        assistantMessageId: "next-permanent-assistant",
+      });
+      expect(
+        vi.mocked(sendDesktopChat).mock.calls.map(([request]) => request.clientTurnId),
+      ).toEqual(["voice-retired-model", "voice-after-retired-model"]);
+      expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
+        chatId: retiredChat.id,
+        modelId: "retired-chat-deployment",
+        clientTurnId: "voice-retired-model",
+      });
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("does not use an older identical user message as proof of canonical admission", async () => {
@@ -2493,6 +2497,121 @@ describe("useChatSession canonical Voice FIFO", () => {
       "assistant-a-user",
       "assistant-a",
     ]);
+  });
+
+  it("renders a reopened in-flight admitted Voice transcript exactly once", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(30_000);
+    try {
+      const chatA = chat({ id: "chat-a", updatedAt: 2 });
+      const chatB = chat({ id: "chat-b", updatedAt: 1 });
+      const rendered = await setupVoiceQueueSession([chatA, chatB]);
+      const response = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+      vi.mocked(sendDesktopChat).mockReturnValue(response.promise);
+      // The BFF persists the canonical user row at admission, long before generation completes;
+      // a reopen while the delivery is still pending fetches that durable row.
+      const durableUser = message({
+        id: "assistant-inflight-user",
+        chatId: "chat-a",
+        content: "voice while generating",
+        role: "user",
+        timestamp: 30_000,
+      });
+      vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
+        Promise.resolve({ messages: chatId === "chat-a" ? [durableUser] : [] }),
+      );
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("voice while generating", "voice-inflight-reopen", chatA),
+        );
+      });
+      await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+
+      await act(async () => {
+        await rendered.result.current.openChat(chatB);
+      });
+      await act(async () => {
+        await rendered.result.current.openChat(chatA);
+      });
+
+      expect(
+        rendered.result.current.messages.filter(
+          (candidate) => candidate.content === "voice while generating",
+        ),
+      ).toHaveLength(1);
+
+      response.resolve(completedTurn("voice while generating", "assistant-inflight", "chat-a"));
+      let outcome: SendMessageOutcome | undefined;
+      await act(async () => {
+        outcome = await delivery;
+      });
+      expect(outcome).toEqual({ status: "completed", assistantMessageId: "assistant-inflight" });
+      expect(
+        rendered.result.current.messages.filter(
+          (candidate) => candidate.content === "voice while generating",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("suppresses without swallowing a projection matched by an identical earlier turn", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(30_000);
+    try {
+      const chatA = chat({ id: "chat-a", updatedAt: 2 });
+      const chatB = chat({ id: "chat-b", updatedAt: 1 });
+      const rendered = await setupVoiceQueueSession([chatA, chatB]);
+      const response = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+      vi.mocked(sendDesktopChat).mockReturnValue(response.promise);
+      // A durable row from an EARLIER identical-content turn satisfies the content+timestamp
+      // proof. It may suppress this turn's re-append, but it must not release the held
+      // projection: only this turn's own settle path knows which row belongs to it.
+      const earlierIdenticalUser = message({
+        id: "earlier-turn-user",
+        chatId: "chat-a",
+        content: "yes",
+        role: "user",
+        timestamp: 30_000,
+      });
+      vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
+        Promise.resolve({ messages: chatId === "chat-a" ? [earlierIdenticalUser] : [] }),
+      );
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("yes", "voice-two-identical", chatA),
+        );
+      });
+      await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+
+      await act(async () => {
+        await rendered.result.current.openChat(chatB);
+      });
+      await act(async () => {
+        await rendered.result.current.openChat(chatA);
+      });
+
+      expect(
+        rendered.result.current.messages.filter((candidate) => candidate.content === "yes"),
+      ).toHaveLength(1);
+
+      response.resolve(completedTurn("yes", "voice-two", "chat-a"));
+      let outcome: SendMessageOutcome | undefined;
+      await act(async () => {
+        outcome = await delivery;
+      });
+      expect(outcome).toEqual({ status: "completed", assistantMessageId: "voice-two" });
+      const userRows = rendered.result.current.messages.filter(
+        (candidate) => candidate.content === "yes" && candidate.role === "user",
+      );
+      expect(userRows.map((candidate) => candidate.id).sort()).toEqual([
+        "earlier-turn-user",
+        "voice-two-user",
+      ]);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("does not surface a late grounded Voice failure in a different chat", async () => {
