@@ -285,6 +285,7 @@ describe("dirty-tree warning", () => {
       log,
     });
 
-    expect(log.mock.calls[0][0]).not.toContain("uncommitted");
+    // Across every message, not only the first: a warning emitted later must also fail this.
+    expect(log.mock.calls.map(([message]) => message).join("\n")).not.toContain("uncommitted");
   });
 });
