@@ -335,9 +335,15 @@ async function certifyVoicePath(
   recordCorrectCapture(metrics);
 }
 
-// The voice turn must add exactly one capture without disturbing the typed ones, and those typed
-// captures must stay on the desktop surface — proving the two surfaces remain distinguishable in
-// both directions rather than the run simply relabelling everything as voice.
+// The voice turn must add exactly one capture without disturbing the typed ones, and every capture
+// that is NOT the voice one must stay on the desktop surface — proving the two surfaces remain
+// distinguishable in both directions rather than the run simply relabelling everything as voice.
+//
+// The desktop side is asserted over what the projection actually returns, not marker by marker:
+// certifyGovernedJournal deliberately forgets the governed-assist capture, and M1.2's monotonic
+// forgotten-suppression then correctly drops that decision from the recent view. A per-marker lookup
+// would find nothing for it and mistake correct suppression for a missing attribution. The
+// non-emptiness assertion keeps this from passing vacuously.
 function assertTypedTurnsUnchangedAndDesktopAttributed(
   before: readonly RecentCapture[],
   after: readonly RecentCapture[],
@@ -347,9 +353,14 @@ function assertTypedTurnsUnchangedAndDesktopAttributed(
     captures.filter((capture) => capture.bodyExcerpt?.includes(marker) === true).length;
   for (const marker of typedMarkers) {
     expect(countMarker(after, marker)).toBe(countMarker(before, marker));
-    const typed = after.find((capture) => capture.bodyExcerpt?.includes(marker) === true);
-    expect(typed?.provenance.initiatorSurface).toBe("conversation-center");
   }
+  const desktop = after.filter(
+    (capture) => capture.bodyExcerpt?.includes("M1_VOICE_CAPTURE") !== true,
+  );
+  expect(desktop.length).toBeGreaterThan(0);
+  expect(desktop.map((capture) => capture.provenance.initiatorSurface)).toEqual(
+    desktop.map(() => "conversation-center"),
+  );
 }
 
 async function certifyCorrectionMetrics(
