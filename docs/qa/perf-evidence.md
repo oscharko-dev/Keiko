@@ -24,10 +24,17 @@ source-freshness contract (`--enforce-source-freshness`), which additionally req
 source-tree equality, the current lockfile, and a clean subject working tree.
 
 The scheduled workflow `nightly-perf-evidence` asks that same deterministic question against `dev`
-every night and files a tracking issue when the committed documents stop binding it. It does not
-re-measure and does not open a bot pull request: only the reference environment below can produce
-comparable numbers, so drift detection is automatic and repair is a deliberate local run
-(ADR-0156 D6).
+every night. It does not re-measure and does not open a bot pull request: only the reference
+environment below can produce comparable numbers, so drift detection is automatic and repair is a
+deliberate local run (ADR-0156 D6).
+
+It files a tracking issue only for drift a re-measurement repairs for good — a moved measurement
+toolchain, an unsound document, a broken pinned anchor, a missing stamp, a dirty subject tree, a
+budget overrun (ADR-0162). It does **not** fail for the measured subject having moved on: that is
+what every merge into `packages/keiko-editor/`, `packages/keiko-ui/`, `packages/keiko-contracts/`,
+`packages/keiko-server/src/editor/`, `src/` or the root lockfile does, and the next such merge
+undoes any repair. That finding is reported in the run's job summary instead, where it says how far
+the committed numbers have travelled from the product without pretending anyone owes work for it.
 
 ## How to regenerate (one command)
 
@@ -77,9 +84,19 @@ self-enforcing. Changing the reference class is
 
 **Scheduled lane.** `nightly-perf-evidence` detects drift; it does not measure (ADR-0156 D6). It runs
 the deterministic freshness contract — digests, plus every budget re-derived from the committed
-samples — and files a tracking issue naming this command when the committed evidence stops binding
-`dev`. It used to run the full producer on a hosted runner, which failed 12 of 12 times and published
-nothing. Repair is yours to run here.
+samples — and files a tracking issue naming this command when the committed evidence stops holding
+on `dev`. It used to run the full producer on a hosted runner, which failed 12 of 12 times and
+published nothing. Repair is yours to run here.
+
+To ask the same question locally, exactly as that lane asks it:
+
+```bash
+npm run check:perf-evidence:editor -- --enforce-source-freshness --report-subject-drift
+```
+
+Drop `--report-subject-drift` to get the regeneration wrapper's stricter reading, where the measured
+subject having moved on is fatal too — which is what you want right after producing evidence, and
+misleading anywhere else.
 
 ## Invariants
 
