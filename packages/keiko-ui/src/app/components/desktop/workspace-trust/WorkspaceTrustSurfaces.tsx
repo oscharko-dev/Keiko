@@ -19,6 +19,8 @@ function confirmButtonLabel(
 
 export type WorkspaceTrustSurface = "editor" | "commands" | "languages";
 export type WorkspaceTrustDecision = "grant" | "revoke";
+type WorkspaceTrustIssue = "load" | "update";
+type WorkspaceTrustBadgeState = "trusted" | "restricted" | "unavailable";
 
 const REASON_KEYS: Readonly<Record<WorkspaceTrustReason, MessageKey>> = {
   "human-grant": "workspaceTrust.reason.humanGrant",
@@ -57,15 +59,38 @@ export function WorkspaceTrustFailureDetails({
   );
 }
 
+function workspaceTrustBadgeState(
+  status: WorkspaceTrustStatus | undefined,
+  issue: WorkspaceTrustIssue | undefined,
+): WorkspaceTrustBadgeState {
+  if (issue === "load") return "unavailable";
+  return status?.trust === "trusted" ? "trusted" : "restricted";
+}
+
+function workspaceTrustBadgeLabel(
+  trust: WorkspaceTrustBadgeState,
+  t: ReturnType<typeof useTranslate>,
+): string {
+  switch (trust) {
+    case "unavailable":
+      return t("workspaceTrust.unavailable");
+    case "trusted":
+      return t("workspaceTrust.trustedMode");
+    case "restricted":
+      return t("workspaceTrust.restrictedMode");
+  }
+}
+
 export function WorkspaceTrustBadge({
   status,
+  issue,
 }: {
   readonly status: WorkspaceTrustStatus | undefined;
+  readonly issue?: WorkspaceTrustIssue | undefined;
 }): ReactNode {
   const t = useTranslate();
-  const trust = status?.trust ?? "restricted";
-  const label =
-    trust === "trusted" ? t("workspaceTrust.trustedMode") : t("workspaceTrust.restrictedMode");
+  const trust = workspaceTrustBadgeState(status, issue);
+  const label = workspaceTrustBadgeLabel(trust, t);
   return (
     <span className={styles.cmpBadge} data-trust={trust} aria-label={label}>
       {label}
@@ -82,7 +107,7 @@ export function WorkspaceTrustBanner({
   editor = false,
 }: {
   readonly status: WorkspaceTrustStatus | undefined;
-  readonly issue: "load" | "update" | undefined;
+  readonly issue: WorkspaceTrustIssue | undefined;
   readonly failure?: WorkspaceTrustFailure | undefined;
   readonly surface: WorkspaceTrustSurface;
   readonly onManage?: (() => void) | undefined;

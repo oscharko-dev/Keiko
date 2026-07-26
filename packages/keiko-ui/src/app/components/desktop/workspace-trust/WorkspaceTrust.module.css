@@ -39,6 +39,10 @@
   border-color: color-mix(in oklch, var(--warning, #d88919) 55%, var(--line));
 }
 
+.cmpBadge[data-trust="unavailable"] {
+  border-color: var(--line-strong);
+}
+
 .cmpBanner,
 .cmpPanel,
 .cmpDialog {

@@ -60,8 +60,18 @@ describe("Workspace Trust governance surfaces", () => {
     );
   });
 
-  it("projects unavailable trust as restricted and renders a trusted badge explicitly", () => {
+  it("distinguishes unavailable, restricted, and trusted badge states", () => {
     const view = render(
+      <I18nProvider>
+        <WorkspaceTrustBadge status={undefined} issue="load" />
+      </I18nProvider>,
+    );
+    expect(screen.getByLabelText("Workspace Trust unavailable")).toHaveAttribute(
+      "data-trust",
+      "unavailable",
+    );
+
+    view.rerender(
       <I18nProvider>
         <WorkspaceTrustBadge status={undefined} />
       </I18nProvider>,
