@@ -12,7 +12,17 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 compose=(docker compose -f "${repo_root}/docker/gates/sonar-compose.yml")
 host="http://127.0.0.1:9234"
-project="keiko-local"
+# The server is shared per machine, but several checkouts (worktrees, parallel agent sessions) run
+# this lane concurrently. A shared project key would let one checkout's upload overwrite the state
+# another checkout is about to query, and a shared token name would let one provisioning revoke a
+# token another scan is still using mid-flight (observed as an unexplained 401 at report upload).
+# Namespacing both by the checkout path keeps concurrent runs fully independent.
+checkout_id="$(printf '%s' "${repo_root}" | node -e 'const { createHash } = require("node:crypto");
+let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(createHash("sha256").update(s).digest("hex").slice(0, 12));
+});')"
+project="keiko-local-${checkout_id}"
 scope="changed"
 base="origin/dev"
 
@@ -98,7 +108,7 @@ fi
 
 # One named token, revoked before it is re-issued. A fresh timestamped token per run would pile up
 # credentials in the persisted volume forever.
-token_name="keiko-local-gate"
+token_name="keiko-local-gate-${checkout_id}"
 ask -o /dev/null -u "admin:${password}" -X POST \
   "${host}/api/user_tokens/revoke?name=${token_name}" 2>/dev/null || true
 token="$(ask -u "admin:${password}" -X POST \

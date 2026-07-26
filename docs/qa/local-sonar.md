@@ -40,7 +40,9 @@ single MINOR of this class fails the required `ci` context.
    `docker/gates/sonar-compose.yml`. First start pulls the image and takes a few minutes; every later
    start reuses the cached volumes and takes seconds.
 2. Provisions a local analysis token. There is no account, no secret and no network dependency.
-3. Analyses the working tree under the project key `keiko-local`.
+3. Analyses the working tree under a checkout-scoped project key (`keiko-local-<hash>`), so
+   several checkouts or agent sessions on one machine can run the lane concurrently without
+   overwriting each other's analysis state or revoking each other's in-flight token.
 4. Prints the findings that land **on files this branch changed against `origin/dev`**, and exits
    non-zero if there are any.
 
