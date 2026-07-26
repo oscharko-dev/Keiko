@@ -202,7 +202,9 @@ fi
 # task id DIFFERENT from the pre-scan baseline — the component's current task showing the previous
 # SUCCESS can therefore never satisfy it.
 say "Waiting for the server to process this analysis"
-ce_task_id="$(sed -n 's/^ceTaskId=//p' "${repo_root}/.scannerwork/report-task.txt" 2>/dev/null | head -1)"
+# The scanner container does not always leave report-task.txt behind (see above): a missing file
+# must select the baseline fallback, not kill the lane via `set -eo pipefail`.
+ce_task_id="$(sed -n 's/^ceTaskId=//p' "${repo_root}/.scannerwork/report-task.txt" 2>/dev/null | head -1 || true)"
 if [[ -n "${ce_task_id}" ]]; then
   printf '  bound to task %s (report-task.txt)\n' "${ce_task_id}"
 else
