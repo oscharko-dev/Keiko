@@ -1,5 +1,9 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
+import { resolveProvisionedSqliteVecPath } from "../lib/clean-checkout-demo.mjs";
 import {
   HS6_SINGLE_WRITER_FILE_COUNT,
   PROOF_IDS,
@@ -28,6 +32,28 @@ import {
 } from "../lib/knowledge-m2-closeout.mjs";
 
 const FACADE = "packages/keiko-server/src/grounded-rerank-facade.ts";
+
+const CLOSEOUT_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+// The real-proof gate routes its per-proof diagnostics into the injected `log`, which this suite
+// discards — so an unprovisioned checkout used to fail as a bare "expected false to be true" with no
+// hint that the ann-active proof wants a native extension. The sibling clean-checkout demo names its
+// remedy explicitly (knowledge-m2-clean-checkout-demo.test.mjs), and CI provisions the extension as
+// a setup step (ci.yml). This renders the same information into the assertion message.
+//
+// Deliberately a MESSAGE, not a skip: a missing extension must still fail loudly, exactly as the
+// sibling suite argues, so it can never mask a real ANN regression on a host that should have one.
+function proofFailureDetail(outcome) {
+  const failed = outcome.results.filter((result) => !result.ok);
+  if (failed.length === 0) {
+    return "gate reported not-ok while every proof passed";
+  }
+  const detail = failed.map((result) => `${result.id}: ${result.failures.join("; ")}`).join(" | ");
+  if (resolveProvisionedSqliteVecPath(CLOSEOUT_REPO_ROOT) !== undefined) {
+    return detail;
+  }
+  return `${detail} — the sqlite-vec extension is not provisioned; run \`npm run provision:sqlite-vec\` first`;
+}
 
 function annInput(overrides = {}) {
   return {
@@ -510,7 +536,7 @@ describe("runKnowledgeM2CloseoutGate", () => {
       fail: vi.fn(),
       settleEvidence,
     });
-    expect(outcome.ok).toBe(true);
+    expect(outcome.ok, proofFailureDetail(outcome)).toBe(true);
     expect(outcome.results.map((result) => result.id)).toEqual(PROOF_IDS);
     expect(settleEvidence).toHaveBeenCalledOnce();
   }, 300_000);
