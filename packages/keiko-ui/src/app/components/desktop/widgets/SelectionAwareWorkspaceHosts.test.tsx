@@ -271,7 +271,18 @@ describe("EditorWindowSessionHost departed-root retarget (#2747)", (): void => {
     // that root's models underneath it, leaving Monaco bound to a disposed model.
     const ctx = context();
     manifestRef.current = TWO_ROOTS;
-    const view = render(editorHost({ root: "/repo-b", file: "src/gone.ts" }, ctx));
+    const view = render(
+      editorHost(
+        {
+          root: "/repo-b",
+          file: "src/gone.ts",
+          revealLineStart: 10,
+          revealLineEnd: 12,
+          revealRequestId: "reveal-1",
+        },
+        ctx,
+      ),
+    );
     await screen.findByTestId("editor-/repo-b");
     expect(ctx.updateCfg).not.toHaveBeenCalled();
 
@@ -283,9 +294,19 @@ describe("EditorWindowSessionHost departed-root retarget (#2747)", (): void => {
     expect(patch["root"]).toBe("/repo-a");
     expect(patch["file"]).toBeUndefined();
     expect(patch["layoutJson"]).toBeUndefined();
+    // Both boundaries, not just the id: dropping either one would leave a stale half-range behind.
+    expect(patch["revealLineStart"]).toBeUndefined();
+    expect(patch["revealLineEnd"]).toBeUndefined();
     expect(patch["revealRequestId"]).toBeUndefined();
     expect(Object.keys(patch)).toEqual(
-      expect.arrayContaining(["file", "openFiles", "layoutJson", "revealRequestId"]),
+      expect.arrayContaining([
+        "file",
+        "openFiles",
+        "layoutJson",
+        "revealLineStart",
+        "revealLineEnd",
+        "revealRequestId",
+      ]),
     );
   });
 

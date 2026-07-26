@@ -416,7 +416,11 @@ export function paneLineRevealProps(
   addressedFile: string | undefined,
   paneFile: string,
 ): Pick<EditorRuntimeWidgetProps, "revealLineEnd" | "revealLineStart" | "revealRequestId"> {
-  if (addressedFile !== undefined && addressedFile === paneFile) return {};
+  // A pane with no file open is not an addressee, and neither is an empty addressee — matching two
+  // empty strings would hand the request to whichever pane happens to be showing nothing.
+  if (addressedFile !== undefined && addressedFile.length > 0 && addressedFile === paneFile) {
+    return {};
+  }
   return { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined };
 }
 

@@ -145,5 +145,12 @@ describe("paneLineRevealProps (#2747)", (): void => {
       revealLineEnd: undefined,
       revealRequestId: undefined,
     });
+    // Two empty strings are equal but neither is an addressee: a pane showing nothing must not
+    // inherit the request just because the addressee is missing too.
+    expect(paneLineRevealProps("", "")).toEqual({
+      revealLineStart: undefined,
+      revealLineEnd: undefined,
+      revealRequestId: undefined,
+    });
   });
 });
