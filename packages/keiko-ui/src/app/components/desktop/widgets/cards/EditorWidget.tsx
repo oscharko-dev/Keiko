@@ -407,6 +407,23 @@ function resolveTrustSettledAttribute(
   return initialPromptPending ? "false" : "true";
 }
 
+// Issue #2747 — a line reveal is addressed to the file cfg named alongside it, and every pane below
+// is handed its OWN file. The outline reveal already carries that guard in the runtime widget
+// (`outlineRevealRequest?.file === file`); the line reveal did not, so a split view moved the cursor
+// and stole focus in every pane, each at that line number in whatever file it happened to show.
+// Withheld rather than translated: a line range means nothing in a file it was not measured against.
+export function paneLineRevealProps(
+  addressedFile: string | undefined,
+  paneFile: string,
+): Pick<EditorRuntimeWidgetProps, "revealLineEnd" | "revealLineStart" | "revealRequestId"> {
+  // A pane with no file open is not an addressee, and neither is an empty addressee — matching two
+  // empty strings would hand the request to whichever pane happens to be showing nothing.
+  if (addressedFile !== undefined && addressedFile.length > 0 && addressedFile === paneFile) {
+    return {};
+  }
+  return { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined };
+}
+
 export function EditorWidget({
   root,
   file,
@@ -581,6 +598,13 @@ export function EditorWidget({
   const dirtyFileList = useMemo(() => allDirtyFiles(dirtyByPane), [dirtyByPane]);
   const currentPane = activeEditorPane(layout);
   const activeFile = currentPane.activeFile;
+  // Issue #2747 — the addressee of a line reveal is the file it was requested for. It normally
+  // arrives as the `file` prop, normalized here so it is comparable to a pane's own root-relative
+  // file. A session-driven render has no such prop: a multi-root root that already holds a session
+  // is handed only `layoutJson`, while the reveal still comes through the shared props. The layout's
+  // active file is that same requested file there, so falling back to it is what keeps the per-pane
+  // guard from suppressing every pane and dropping the reveal outright.
+  const addressedRevealFile = normalizeEditorFile(workspaceRoot, file) || activeFile || undefined;
 
   useEffect(() => {
     if (dirtyFileList.length === 0) return;
@@ -1642,6 +1666,7 @@ export function EditorWidget({
     if (binding === undefined) return null;
     const runtimeProps: EditorRuntimeWidgetProps = {
       ...props,
+      ...paneLineRevealProps(addressedRevealFile, pane.activeFile),
       sessionActive,
       root: workspaceRoot,
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
