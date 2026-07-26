@@ -5,6 +5,7 @@
 // server-frozen catalogs, and all Git mutations stay in Epic #470 Git Delivery windows.
 
 import { useEffect, useState, type ReactNode } from "react";
+import { useTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import styles from "./TerminalWidget.module.css";
@@ -45,6 +46,7 @@ function RuntimeActionButton({ action }: { readonly action: RuntimeAction }): Re
 }
 
 export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
+  const t = useTranslate();
   const [projectInput, setProjectInput] = useState<string>(props.projectPath ?? "");
   useEffect(() => {
     setProjectInput(props.projectPath ?? "");
@@ -133,7 +135,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
         ) : null}
       </form>
 
-      <section aria-label="Runtime audit metadata">
+      <section aria-label={t("runtimeHubWidget.auditMetadataAria")}>
         <ul className="tm-events">
           <li className="tm-event">
             <span className="tm-event-kind">Commands</span>

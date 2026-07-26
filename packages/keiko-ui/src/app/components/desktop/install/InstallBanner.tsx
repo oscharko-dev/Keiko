@@ -14,12 +14,13 @@
  * Content boundary (ADR-0024 D7.4): all copy is static literals — no
  * workspace paths, model names, run IDs, credentials, or user data.
  *
- * Accessibility: <section aria-label="Install Keiko"> — a named <section> is the
+ * Accessibility: a named <section> is the
  * native element that owns role="region" (#2721).
  * WCAG 2.2 AA — contrast, keyboard, focus-visible, 24×24 target, reduced-motion.
  */
 
 import { useCallback, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useTranslate } from "@/lib/i18n";
 import { detectSupport } from "./browserSupport";
 import { useInstallPrompt } from "./useInstallPrompt";
 
@@ -77,6 +78,7 @@ function isAlreadyDismissed(): boolean {
 // ---------------------------------------------------------------------------
 
 export function InstallBanner(): ReactNode {
+  const t = useTranslate();
   const { available, triggerInstall } = useInstallPrompt();
   const [dismissed, setDismissed] = useState(false);
   const [support] = useState(() =>
@@ -129,7 +131,11 @@ export function InstallBanner(): ReactNode {
 
   return (
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape-to-dismiss must be scoped to focus inside the banner (audit C037); the buttons inside are the interactive targets
-    <section className="install-banner" aria-label="Install Keiko" onKeyDown={onBannerKeyDown}>
+    <section
+      className="install-banner"
+      aria-label={t("installBanner.regionAria")}
+      onKeyDown={onBannerKeyDown}
+    >
       <div className="install-banner-body">
         <div className="install-banner-text">
           <span className="install-banner-heading">{copy.heading}</span>

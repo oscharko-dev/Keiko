@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef } from "react";
+import { useTranslate } from "@/lib/i18n";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { GitHistoryEntry, GitHistoryResponse } from "@/lib/types";
 import { Icons } from "../../../Icons";
@@ -176,8 +177,9 @@ export function HistoryPane({
 // Commit-detail metadata block rendered in the diff pane body (the subject + author/hash/stats live
 // in the diff-pane header). Exposes the full sha, parents, changed-file count and refs.
 export function CommitDetailMeta({ entry }: { readonly entry: GitHistoryEntry }): ReactNode {
+  const t = useTranslate();
   return (
-    <section className="rv-empty" aria-label="Commit details">
+    <section className="rv-empty" aria-label={t("gitClientWindow.history.commitDetailsAria")}>
       <dl
         style={{
           display: "grid",

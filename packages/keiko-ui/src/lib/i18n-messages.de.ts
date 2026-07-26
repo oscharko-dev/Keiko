@@ -1975,6 +1975,12 @@ export const DE_MESSAGES = {
   "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
   "gitClientWindow.panel.mergeOpened": "Merge-Panel geöffnet.",
   "gitClientWindow.panel.diffOpened": "Diff-Panel geöffnet.",
+  // Zugängliche Namen der benannten <section>-Landmarks aus Welle #2721. Sie standen als
+  // fest verdrahtetes Englisch auf den role="region"-Elementen, die diese Sections ersetzen;
+  // ein Screenreader liest sie vor, also gehören sie wie jeder andere Nutzertext in den Katalog.
+  "gitClientWindow.history.commitDetailsAria": "Commit-Details",
+  "runtimeHubWidget.auditMetadataAria": "Laufzeit-Audit-Metadaten",
+  "installBanner.regionAria": "Keiko installieren",
   "manualPod.progress.crawl": "{accepted} Seiten indexiert, {denied} Links übersprungen",
   "manualPod.progress.index": "{processed} von {total} Dokumenten verarbeitet",
   "manualPodCreate.button": "HTML-Handbuch hinzufügen",
