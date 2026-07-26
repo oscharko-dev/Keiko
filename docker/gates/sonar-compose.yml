@@ -1,0 +1,55 @@
+# Local SonarQube analysis (see docs/qa/local-sonar.md).
+#
+#   npm run gates:sonar          # analyse the working tree, report findings on files you changed
+#   npm run gates:sonar:all      # the same, but report every finding in the project
+#   npm run gates:sonar:stop     # shut the server down and keep its cache for next time
+#
+# WHY THIS EXISTS: `npm run check:sonar-rules` runs eslint-plugin-sonarjs, which carries 279 rules.
+# SonarCloud runs the full SonarJS analyzer, which carries hundreds more — and the rules that have
+# actually cost us CI rounds (S7755, S7778, S7786, S7776) are in that difference and exist in NO
+# published version of the ESLint plugin. Only a real analyzer finds them, which is what this is.
+#
+# It is deliberately SELF-HOSTED and never talks to sonarcloud.io: a local scan must not publish an
+# analysis over the real project's pull-request result, and it must work without a token or a
+# network account. The analyzer inside is the same SonarJS that SonarCloud runs, so the rule keys
+# and messages match; the quality PROFILE is SonarQube's built-in "Sonar way" rather than the
+# organisation's, so treat a clean local run as "no known rule violation", not as a gate verdict.
+# The verdict stays CI's (docs/qa/local-gates.md).
+services:
+  sonarqube:
+    # Digest-pinned like every GitHub Action in this repository: a floating tag would silently
+    # change the analyzer, and with it which findings a pre-push scan can see.
+    image: sonarqube@sha256:160bd2f6a3485bd09b655ef22dd63c02bd1fa7ba82aa5d9973fd010b8bcca0b3 # 26.7.0.124771-community
+    environment:
+      # This server is reachable only from the loopback interface of the developer machine and holds
+      # no secret, no customer data and no production evidence. Disabling the bundled Elasticsearch
+      # bootstrap checks is what lets it start on Docker Desktop without a host sysctl change.
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    ports:
+      - "127.0.0.1:9234:9000"
+    # No container healthcheck: the image carries no wget, curl, bash or python, so nothing
+    # inside it can probe the port. `run-sonar.sh` waits from the host, which can.
+    volumes:
+      - sonar-data:/opt/sonarqube/data
+      - sonar-extensions:/opt/sonarqube/extensions
+      - sonar-logs:/opt/sonarqube/logs
+
+  scanner:
+    image: sonarsource/sonar-scanner-cli@sha256:23ca0f137965d9dff2198074043fd48d386280bc5d0ccac8c8349cea4cf096a9 # 12.1
+    depends_on:
+      sonarqube:
+        condition: service_started
+    working_dir: /usr/src
+    environment:
+      SONAR_HOST_URL: http://sonarqube:9000
+      SONAR_TOKEN: "${KEIKO_LOCAL_SONAR_TOKEN:-}"
+      SONAR_SCANNER_OPTS: "-Xmx2g"
+    volumes:
+      - ../..:/usr/src
+      - sonar-scanner-cache:/opt/sonar-scanner/.sonar/cache
+
+volumes:
+  sonar-data:
+  sonar-extensions:
+  sonar-logs:
+  sonar-scanner-cache:

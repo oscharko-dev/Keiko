@@ -9,6 +9,7 @@ import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import { highlightLines, langOf, type Token } from "./shared/syntaxHighlight";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 
 interface FilePreviewProps {
   readonly root: string;
@@ -174,6 +175,31 @@ function MetadataRow({
   );
 }
 
+// The copy feedback owns its own live-region decision so FilePreview does not carry it.
+// <output> already carries role="status"; only the clipboard failure needs the more assertive
+// region, so that is the one case that names a role — and role="alert" is implicitly assertive,
+// so aria-live is dropped there. Declaring both is a conflict screen readers resolve
+// inconsistently (#2721).
+function CopyStatusOutput({
+  status,
+  t,
+}: {
+  readonly status: CopyStatusKind | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (status === null) return null;
+  const failed = status === "clipboardFailed";
+  return (
+    <output
+      className="fpv-status fpv-copy-status"
+      role={failed ? "alert" : undefined}
+      aria-live={failed ? undefined : "polite"}
+    >
+      {copyStatusLabel(status, t)}
+    </output>
+  );
+}
+
 function copyStatusLabel(status: CopyStatusKind | null, t: I18nTranslate): string | null {
   switch (status) {
     case "nameCopied":
@@ -275,11 +301,10 @@ function TextFilePreview(props: TextFilePreviewProps): ReactNode {
       {!props.shouldHighlight ? (
         <div className="fpv-banner">{props.t("filePreview.syntaxHighlightDisabled")}</div>
       ) : null}
-      <div
+      <section
         className="fpv-code mono"
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
         tabIndex={0}
-        role="region"
         aria-label={props.t("filePreview.previewRegionLabel", { name: props.preview.name })}
         style={
           {
@@ -300,7 +325,7 @@ function TextFilePreview(props: TextFilePreviewProps): ReactNode {
             })}
           </button>
         ) : null}
-      </div>
+      </section>
     </>
   );
 }
@@ -467,7 +492,6 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       () => setCopyStatus("clipboardFailed"),
     );
   };
-  const copyStatusText = copyStatusLabel(copyStatus, t);
 
   const denied = error?.denied === true;
   const lang = previewLanguageLabel(preview, error, t);
@@ -544,15 +568,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         ) : null}
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
-        {copyStatus !== null ? (
-          <span
-            className="fpv-status fpv-copy-status"
-            role={copyStatus === "clipboardFailed" ? "alert" : "status"}
-            aria-live="polite"
-          >
-            {copyStatusText}
-          </span>
-        ) : null}
+        <CopyStatusOutput status={copyStatus} t={t} />
         <button
           className="fpv-back fpv-refresh"
           type="button"
@@ -565,14 +581,9 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           <Icons.reset size={14} />
         </button>
         {refreshStatusText.length > 0 ? (
-          <span
-            className="fpv-status mono"
-            data-state={refreshStatus}
-            role="status"
-            aria-live="polite"
-          >
+          <output className="fpv-status mono" data-state={refreshStatus} aria-live="polite">
             {refreshStatusText}
-          </span>
+          </output>
         ) : null}
         {canOpenInEditor ? (
           <button
@@ -597,9 +608,9 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       </div>
 
       {loading && preview === null ? (
-        <div className="fpv-state" role="status">
+        <output className="fpv-state" style={NATIVE_BLOCK_STYLE}>
           {t("filePreview.loadingState")}
-        </div>
+        </output>
       ) : null}
       {error !== null ? (
         <div className="fpv-state fpv-error" role="alert">

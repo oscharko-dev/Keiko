@@ -375,7 +375,7 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
 
       expect(await screen.findByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument();
-      const row = screen.getByText(/AbCdEfGhIjKl · 1:2/iu).closest("article");
+      const row = screen.getByText(/AbCdEfGhIjKl · 1:2/iu).closest("li");
       expect(row).not.toBeNull();
       await user.click(within(row as HTMLElement).getByRole("button", { name: /load snapshot/iu }));
 

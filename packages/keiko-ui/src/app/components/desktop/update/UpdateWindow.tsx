@@ -1528,11 +1528,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   );
 
   if (state.status === "loading") {
-    return (
-      <div className="upd-loading" role="status">
-        {t("updates.loading")}
-      </div>
-    );
+    return <output className="upd-loading">{t("updates.loading")}</output>;
   }
 
   if (state.status === "error") {

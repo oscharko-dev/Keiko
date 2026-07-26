@@ -127,10 +127,32 @@ CI cycle to discover. What the container may and may not answer is in
 opposite of CI-owned: its reference environment IS a developer-machine container, and no hosted
 runner matches it.
 
+### Before every pull request, without exception
+
+```bash
+npm run gates:sonar
+```
+
+**This is mandatory before you open or update a pull request against `dev`.** It runs a real SonarJS
+analyzer against your diff in a self-hosted, digest-pinned container and exits non-zero if it finds
+anything. It never contacts sonarcloud.io.
+
+Run it because `npm run check:sonar-rules` cannot answer the question. That gate runs
+`eslint-plugin-sonarjs`, which carries 279 rules in every published version up to 4.2.0; SonarCloud
+runs the full analyzer, which carries hundreds more. `S7786` (throw `TypeError`, not `Error`, after a
+type check), `S7755` (`.at(-1)`, not `[x.length - 1]`), `S7778` (one `push` with several arguments)
+and `S7776` (a `Set`, not `.includes()` on a constant array) are in that gap and exist in **no**
+version of the plugin. Each of them has already cost this repository a full CI round, and the
+`Coverage and SonarCloud` job demands zero unresolved issues — so one MINOR of that class fails the
+required `ci` context. A green `check:sonar-rules` says nothing about any of them.
+
+What it is and is not, and how to read a disagreement with CI:
+[`docs/qa/local-sonar.md`](docs/qa/local-sonar.md).
+
 For PR-bound work there is deliberately **no aggregate pre-PR wrapper** (ADR-0145 retired
 `agent:pre-pr` by owner decision): run the minimum-loop commands that can see your change, plus
-any touched-area gate from the table below, and let the required CI run on the pull request be
-the complete arbiter.
+`npm run gates:sonar` and any touched-area gate from the table below, and let the required CI run on
+the pull request be the complete arbiter.
 
 ### Local-first gate policy
 
@@ -138,7 +160,7 @@ Verify locally what your change can affect; required CI is the authoritative ful
 pull request. Never use CI to discover what your own diff obviously breaks. Concretely:
 
 1. Before a push or PR update, run the minimum-loop commands scoped to what your change touches,
-   plus any touched-area gate from the table below.
+   `npm run gates:sonar`, and any touched-area gate from the table below.
 2. If a required CI gate goes red, reproduce that exact failure locally with the targeted
    command before pushing another fix; after the fix, rerun that command first.
 3. Push only when your targeted local runs are green or a documented platform-specific local
@@ -166,6 +188,7 @@ evidence.
 | An ADR (added/renumbered)                      | `npm run check:adr-index`                                                                                                                                                               |
 | Package versions / release metadata            | `check:version-consistency`, `check:release-impact`                                                                                                                                     |
 | Coverage-sensitive code                        | `npm run test:coverage:quality`                                                                                                                                                         |
+| **Any code at all, before every pull request** | **`npm run gates:sonar`** — the only local run that sees the SonarJS rules `eslint-plugin-sonarjs` does not ship ([`docs/qa/local-sonar.md`](docs/qa/local-sonar.md))                   |
 
 Prefer the narrow gate for your change over running everything; run the full
 `test:coverage:quality` chain before you claim a release-affecting change is green.

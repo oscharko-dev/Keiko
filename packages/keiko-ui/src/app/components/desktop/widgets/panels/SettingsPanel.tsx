@@ -70,6 +70,7 @@ import {
   readWorkspaceCameraSmoothness,
   readWorkspaceGridStrength,
 } from "../../workspace-appearance";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 
 const SettingsIcon = Icons.settings;
 
@@ -159,56 +160,52 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
   if (isConfiguredVoiceProvider(model)) {
     const label = voiceProviderAvailabilityLabel(model, t);
     return (
-      <span
+      <output
         className="ml-elig ml-elig-voice"
         data-testid="voice-elig-ok"
-        role="status"
         aria-label={t("settings.models.eligibilityPrefix", { label })}
         title={label}
       >
         {t("settings.models.voiceProviderBadge", { label: voiceProviderShortLabel(model, t) })}
-      </span>
+      </output>
     );
   }
   if (reason === undefined) {
     return (
-      <span
+      <output
         className="ml-elig ml-elig-ok"
         data-testid="conv-elig-ok"
-        role="status"
         aria-label={t("settings.models.eligibilityOkAria")}
       >
         {t("settings.models.eligibilityOk")}
-      </span>
+      </output>
     );
   }
   if (reason === "embedding-only") {
     const label = embeddingAvailabilityLabel(t);
     return (
-      <span
+      <output
         className="ml-elig ml-elig-embed"
         data-testid="embedding-elig-ok"
-        role="status"
         aria-label={t("settings.models.eligibilityPrefix", { label })}
         title={label}
       >
         {t("settings.models.embeddingLabel")}
-      </span>
+      </output>
     );
   }
   const label = conversationIneligibilityLabel(reason, t);
   return (
-    <span
+    <output
       className="ml-elig ml-elig-no"
       data-testid="conv-elig-no"
-      role="status"
       aria-label={t("settings.models.eligibilityPrefix", { label })}
       title={label}
     >
       {t("settings.models.notSelectable", {
         reason: conversationIneligibilityShortLabel(reason, t),
       })}
-    </span>
+    </output>
   );
 }
 
@@ -347,13 +344,16 @@ function ReadinessReportCopyButton({
         <Icons.copy size={12} aria-hidden="true" />
         {copyState === "copied" ? t("settings.models.copied") : t("settings.models.copyReport")}
       </button>
-      <span
+      {/* <output> already carries role=status; only the failure branch overrides it. role=alert
+          is implicitly assertive, so aria-live is dropped on that branch — the two together are
+          a conflicting live-region declaration that screen readers resolve inconsistently. */}
+      <output
         className="ml-url mono"
-        role={copyState === "failed" ? "alert" : "status"}
-        aria-live="polite"
+        role={copyState === "failed" ? "alert" : undefined}
+        aria-live={copyState === "failed" ? undefined : "polite"}
       >
         {status}
-      </span>
+      </output>
     </>
   );
 }
@@ -363,13 +363,13 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
   if (state === undefined || state.status === "idle") return null;
   if (state.status === "running") {
     return (
-      <div className="ml-readiness" role="status">
+      <output className="ml-readiness" style={NATIVE_BLOCK_STYLE}>
         {t("settings.models.checkingReadiness", {
           mode: state.deep
             ? t("settings.models.readinessModeDeep")
             : t("settings.models.readinessModeBasic"),
         })}
-      </div>
+      </output>
     );
   }
   if (state.status === "error") {
@@ -385,11 +385,18 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
   return (
     <div className="ml-readiness">
       <div className="ml-rrow">
-        <div className="ml-rsummary" role={report.overallStatus === "failed" ? "alert" : "status"}>
+        <div className="ml-rsummary">
           <div className="ml-rhead">
-            <span className={"ml-rstatus " + report.overallStatus}>
+            {/* The live region is the concise status line, not the summary subtree around it:
+                <output> is phrasing content and cannot wrap these blocks, and announcing every
+                badge on each re-check floods the reader. <output> already carries role=status;
+                only the failure branch overrides it (#2721). */}
+            <output
+              className={"ml-rstatus " + report.overallStatus}
+              role={report.overallStatus === "failed" ? "alert" : undefined}
+            >
               {workingToday ? t("settings.models.workingToday") : t("settings.models.notVerified")}
-            </span>
+            </output>
             <span className="ml-rtime mono">{new Date(report.checkedAt).toLocaleTimeString()}</span>
           </div>
           <div className="ml-rbadges" aria-label={t("settings.models.verifiedCapabilities")}>
@@ -1123,15 +1130,15 @@ function ModelsTabContent({
 
       {/* uiux-fix C285: loading -> result transition is announced */}
       {loadingModels ? (
-        <div className="set-placeholder" role="status">
+        <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
           {t("settings.models.loading")}
-        </div>
+        </output>
       ) : models.length === 0 ? (
-        <div className="set-placeholder" role="status">
+        <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
           {gatewayConfigured
             ? t("settings.models.emptyConfigured")
             : t("settings.models.emptyUnconfigured")}
-        </div>
+        </output>
       ) : (
         <div className="set-list">
           {models.map((model) => (
