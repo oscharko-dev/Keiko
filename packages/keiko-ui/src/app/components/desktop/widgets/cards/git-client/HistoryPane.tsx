@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 import { useTranslate } from "@/lib/i18n";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { GitHistoryEntry, GitHistoryResponse } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import {

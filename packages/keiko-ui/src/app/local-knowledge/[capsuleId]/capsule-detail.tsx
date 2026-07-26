@@ -150,9 +150,9 @@ function compatibilityLabel(status: EmbeddingCompatibility["status"], t: I18nTra
   return t("localKnowledge.detail.compatibility.incompatible");
 }
 
-function contextualTone(
-  status: ContextualRetrievalHealth["status"] | undefined,
-): "neutral" | "ok" | "warn" | "danger" {
+type ContextualTone = "neutral" | "ok" | "warn" | "danger";
+
+function contextualTone(status: ContextualRetrievalHealth["status"] | undefined): ContextualTone {
   if (status === "ready") return "ok";
   if (status === "unavailable") return "danger";
   if (status === "rebuild-required" || status === "degraded") return "warn";
