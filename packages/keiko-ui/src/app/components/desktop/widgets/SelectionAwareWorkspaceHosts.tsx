@@ -352,6 +352,44 @@ function useRemovedRootDisposal(manifest: WorkspaceManifest | null): void {
   }, [manifest]);
 }
 
+// Issue #2747 — a window must not keep operating against a root that left the workspace. The rule
+// already exists one surface over: `resolveExplicitWindowRoot` (#2619, ADR-0147 D1) falls back to
+// the focused root when the configured one is not a manifest member. It engages only from two roots
+// up and the editor host resolves its own root, so the same rule is applied here — and it has to be,
+// because #2621's removed-root disposal force-disposes that root's models underneath this editor,
+// which would otherwise stay bound to a disposed Monaco model. An active task-workspace binding
+// overrides cfg (ADR-0090 D4); cfg is dormant then and is left untouched.
+function useDepartedRootRetarget(args: {
+  readonly configuredRoot: string | undefined;
+  readonly effectiveRoot: string | undefined;
+  readonly manifest: WorkspaceManifest | null;
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}): void {
+  const { configuredRoot, effectiveRoot, manifest } = args;
+  const updateCfgRef = useRef(args.updateCfg);
+  updateCfgRef.current = args.updateCfg;
+  useEffect(() => {
+    if (manifest === null || configuredRoot === undefined) return;
+    if (effectiveRoot !== configuredRoot) return;
+    if (manifest.roots.some((entry) => entry.canonicalRoot === configuredRoot)) return;
+    const focused =
+      manifest.roots.find((entry) => entry.rootRef === manifest.focusedRootRef) ??
+      manifest.roots[0];
+    if (focused === undefined) return;
+    updateCfgRef.current({
+      root: focused.canonicalRoot,
+      // Every one of these described the departed root: its open files, its layout, and a reveal
+      // whose addressee no longer exists.
+      file: undefined,
+      openFiles: undefined,
+      layoutJson: undefined,
+      revealLineStart: undefined,
+      revealLineEnd: undefined,
+      revealRequestId: undefined,
+    });
+  }, [configuredRoot, effectiveRoot, manifest]);
+}
+
 export function EditorWindowSessionHost({
   cfg,
   ctx,
@@ -367,6 +405,12 @@ export function EditorWindowSessionHost({
   const openFiles = stringArray(cfg, "openFiles");
   const layoutJson = str(cfg, "layoutJson");
   useRemovedRootDisposal(workspace.manifest);
+  useDepartedRootRetarget({
+    configuredRoot,
+    effectiveRoot: root,
+    manifest: workspace.manifest,
+    updateCfg: ctx.updateCfg,
+  });
   const buildBaseProps = useCallback(
     (targetRoot: string): EditorSessionBaseProps => ({
       ...editorSessionBaseProps(targetRoot, cfg, ctx),

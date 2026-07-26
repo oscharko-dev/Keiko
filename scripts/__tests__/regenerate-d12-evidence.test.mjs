@@ -11,7 +11,6 @@ import {
   regenerateInContainer,
   executeRegenerationCli,
   resolveCliIo,
-  regenerateEvidence,
 } from "../regenerate-d12-evidence.mjs";
 import { BASELINE_COMMIT } from "../run-d12-perf-comparison.mjs";
 
