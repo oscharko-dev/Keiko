@@ -6,6 +6,7 @@ import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   EDITOR_M11_SETTINGS_SCHEMA_VERSION,
+  isWorkspaceProfileRef,
   resolveEditorM11Settings,
   type EditorM11ProfileSettingsLayer,
   type EditorM11SettingsSnapshot,
@@ -22,11 +23,16 @@ type SettingValues = Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingV
 const USER_OVERRIDE = "1|quick-access.files|CtrlOrMeta+Shift+O";
 const PROFILE_OVERRIDE = "1|redo|CtrlOrMeta+Alt+J";
 
+function profileRef(value: string): WorkspaceProfileRef {
+  if (!isWorkspaceProfileRef(value)) throw new Error(`invalid profile fixture: ${value}`);
+  return value;
+}
+
 function profileLayer(values: SettingValues): EditorM11ProfileSettingsLayer {
   return {
     kind: "editor-profile-settings",
     schemaVersion: EDITOR_M11_SETTINGS_SCHEMA_VERSION,
-    profileRef: "profile-focus" as WorkspaceProfileRef,
+    profileRef: profileRef("profile-focus"),
     revision: 1,
     values,
   };

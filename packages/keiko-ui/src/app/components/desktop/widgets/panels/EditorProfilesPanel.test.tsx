@@ -6,6 +6,7 @@ import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   EDITOR_M11_DEFAULT_PROFILE_REF,
+  isWorkspaceProfileRef,
   resolveEditorM11Settings,
   type EditorM11ProfileSummary,
   type EditorM11SettingsSnapshot,
@@ -31,7 +32,8 @@ vi.mock("../../../../../lib/api", () => ({
 }));
 
 function profileRef(value: string): WorkspaceProfileRef {
-  return value as WorkspaceProfileRef;
+  if (!isWorkspaceProfileRef(value)) throw new Error(`invalid profile fixture: ${value}`);
+  return value;
 }
 
 const DEFAULT_PROFILE: EditorM11ProfileSummary = {
@@ -199,14 +201,36 @@ describe("EditorProfilesPanel", () => {
     expect(screen.getByLabelText("Profile")).toHaveValue(FOCUS.profileRef);
   });
 
-  it("refuses a display name create and rename would reject", () => {
-    renderPanel(view(FOCUS.profileRef));
+  it.each([" Focus", "Focus ", "Default", "default", "DEFAULT"])(
+    "refuses %j — every name the server would reject",
+    (name) => {
+      renderPanel(view(FOCUS.profileRef));
 
-    fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: " Focus" } });
+      fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: name } });
 
-    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Duplicate" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Duplicate" })).toBeDisabled();
+    },
+  );
+
+  /**
+   * A draft is typed for one profile. When the selection moves on its own — the chosen profile is
+   * deleted and the fallback takes over — carrying the draft along would rename or duplicate a
+   * profile the text was never meant for.
+   */
+  it("drops a typed name when the selection falls back to another profile", () => {
+    const currentView = view(EDITOR_M11_DEFAULT_PROFILE_REF);
+    const result = renderPanel(currentView);
+    selectProfile(WORK.profileRef);
+    fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "Deep Work" } });
+
+    rerenderPanel(result, view(FOCUS.profileRef, [DEFAULT_PROFILE, FOCUS]));
+
+    expect(screen.getByLabelText("Profile")).toHaveValue(FOCUS.profileRef);
+    expect(screen.getByLabelText("Profile name")).toHaveValue("Focus");
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    expect(currentView.renameProfile).not.toHaveBeenCalledWith(FOCUS.profileRef, "Deep Work");
   });
 
   it("renames the profile the user selected, not the active one", () => {

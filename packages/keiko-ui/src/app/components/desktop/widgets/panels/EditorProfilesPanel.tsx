@@ -6,6 +6,7 @@ import {
   EDITOR_M11_DEFAULT_PROFILE_REF,
   WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
   isAssignableWorkspaceProfileDisplayName,
+  isReservedWorkspaceProfileDisplayName,
   type EditorM11ProfileSummary,
   type EditorM11ProfilesSnapshot,
   type WorkspaceProfileRef,
@@ -26,7 +27,7 @@ export function EditorProfilesPanel({
   const t = useTranslate();
   const snapshot = view.snapshot?.profiles;
   const [chosenRef, setChosenRef] = useState<WorkspaceProfileRef | undefined>();
-  const [nameDraft, setNameDraft] = useState<string | undefined>();
+  const [nameDraft, setNameDraft] = useState<NameDraft | undefined>();
   const selectedRef = selectedProfileRef(chosenRef, snapshot);
   const selected = useMemo(
     () => snapshot?.profiles.find((profile) => profile.profileRef === selectedRef),
@@ -35,8 +36,14 @@ export function EditorProfilesPanel({
   const active = snapshot?.profiles.find(
     (profile) => profile.profileRef === snapshot.activeProfileRef,
   );
-  const displayName = nameDraft ?? projectedDisplayName(selected);
-  const validName = isAssignableWorkspaceProfileDisplayName(displayName);
+  // A draft belongs to the profile it was typed for. The selection can also move on its own — the
+  // chosen profile gets deleted and the fallback takes over — and carrying the draft across that
+  // would rename or duplicate a profile the text was never meant for.
+  const displayName =
+    nameDraft?.profileRef === selectedRef ? nameDraft.text : projectedDisplayName(selected);
+  const validName =
+    isAssignableWorkspaceProfileDisplayName(displayName) &&
+    !isReservedWorkspaceProfileDisplayName(displayName);
   return (
     <section className={styles.section} aria-labelledby="editor-profiles-title">
       <header className={styles.header}>
@@ -66,7 +73,6 @@ export function EditorProfilesPanel({
               );
               if (next === undefined) return;
               setChosenRef(next.profileRef);
-              setNameDraft(undefined);
             }}
           >
             {(snapshot?.profiles ?? []).map((profile) => (
@@ -82,7 +88,9 @@ export function EditorProfilesPanel({
             className={styles.input}
             value={displayName}
             maxLength={WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS}
-            onChange={(event) => setNameDraft(event.target.value)}
+            onChange={(event) =>
+              setNameDraft({ profileRef: selectedRef, text: event.target.value })
+            }
           />
         </label>
         <ProfileActions
@@ -98,6 +106,11 @@ export function EditorProfilesPanel({
       <EditorProfilePortability root={root} selected={selected} view={view} />
     </section>
   );
+}
+
+interface NameDraft {
+  readonly profileRef: WorkspaceProfileRef;
+  readonly text: string;
 }
 
 /**

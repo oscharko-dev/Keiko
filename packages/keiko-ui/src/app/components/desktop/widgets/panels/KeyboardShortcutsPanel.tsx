@@ -47,7 +47,7 @@ export function KeyboardShortcutsPanel({
   const raw = resolvedOverrideSetting(view);
   const layer = scopeOverrideSetting(view, scope);
   const registry = useMemo(() => resolveEffectiveKeyboardShortcuts(raw), [raw]);
-  const layerOverrides = useMemo(() => overriddenCommandIds(layer), [layer]);
+  const layerOverrides = useMemo((): ReadonlySet<string> => overriddenCommandIds(layer), [layer]);
   const rows = useMemo(
     () => filteredShortcutRows(registry.commands, query, modifiedOnly, t),
     [modifiedOnly, query, registry.commands, t],
