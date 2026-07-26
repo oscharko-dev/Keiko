@@ -1696,10 +1696,11 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     fireEvent.click(screen.getByLabelText("Stage README.md"));
 
     await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(callsBefore));
-    const outcome = await screen.findByTestId("git-staging-outcome");
-    // The outcome surface is an <output>, the element that owns role=status
-    // (S6819), so the role is implicit — assert the computed role and the
+    // The live region is the banner's concise headline — an <output>, the element that owns
+    // role=status (S6819) — rather than the whole banner, which wraps block-level structure
+    // an <output> may not contain. The role is implicit, so assert the computed role and the
     // element rather than a literal role attribute.
+    const outcome = await screen.findByTestId("git-staging-outcome-headline");
     expect(outcome).toHaveRole("status");
     expect(outcome.tagName).toBe("OUTPUT");
     expect(outcome).toHaveTextContent("Succeeded");

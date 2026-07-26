@@ -9,6 +9,7 @@ import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import { highlightLines, langOf, type Token } from "./shared/syntaxHighlight";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 
 interface FilePreviewProps {
   readonly root: string;
@@ -593,7 +594,9 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       </div>
 
       {loading && preview === null ? (
-        <output className="fpv-state cmp-native-block">{t("filePreview.loadingState")}</output>
+        <output className="fpv-state" style={NATIVE_BLOCK_STYLE}>
+          {t("filePreview.loadingState")}
+        </output>
       ) : null}
       {error !== null ? (
         <div className="fpv-state fpv-error" role="alert">

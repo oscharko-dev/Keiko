@@ -10,6 +10,7 @@
 import type { ReactNode } from "react";
 import type { I18nTranslate } from "../../../../../../lib/i18n";
 import type { ChangedFile } from "../../../../../../lib/types";
+import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import { langOf, highlightLines } from "./syntaxHighlight";
 import type { Token } from "./syntaxHighlight";
 import type {
@@ -127,7 +128,7 @@ export function DiffHunkView({ hunk, lang, labels, viewLabels }: DiffHunkViewPro
         />
       ))}
       {hunk.truncated ? (
-        <output className="rv-truncated cmp-native-block">
+        <output className="rv-truncated" style={NATIVE_BLOCK_STYLE}>
           {viewLabels?.hunkTruncated ??
             "This hunk is incomplete because the bounded diff was truncated."}
         </output>
@@ -199,7 +200,7 @@ export function DiffFileSection({
           ))
         )}
         {file.truncated && !file.hunks.some((hunk) => hunk.truncated) ? (
-          <output className="rv-truncated cmp-native-block">
+          <output className="rv-truncated" style={NATIVE_BLOCK_STYLE}>
             {labels?.fileTruncated ??
               "This file diff is incomplete because the bounded diff was truncated."}
           </output>

@@ -9,6 +9,7 @@ import type {
   GitRepositoryStatusResponse,
 } from "@/lib/types";
 import { Icons } from "../../../Icons";
+import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import type { GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
 import { HistoryPane } from "./HistoryPane";
@@ -374,8 +375,12 @@ function ChangesList({
 
       {status.truncated ? (
         <output
-          className="cmp-native-block"
-          style={{ ...SUBTLE_TEXT_STYLE, padding: "0 14px 6px", fontSize: 12 }}
+          style={{
+            ...NATIVE_BLOCK_STYLE,
+            ...SUBTLE_TEXT_STYLE,
+            padding: "0 14px 6px",
+            fontSize: 12,
+          }}
         >
           Showing the first {status.maxChanges} changes; the list is truncated.
         </output>

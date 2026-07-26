@@ -28,6 +28,7 @@ import {
   formatDate,
   reviewLabel,
 } from "./qiShared";
+import { NATIVE_HEADING_STYLE } from "../../native-element-styles";
 
 const REVIEWER_LABEL_STORAGE_KEY = "keiko.qi.reviewerLabel";
 const GOVERNANCE_REQUIRED_MESSAGE =
@@ -866,11 +867,11 @@ export function QiRunCard({
         {/* a11y m-02: name the card as a level-2 heading so the inner section <h3>s are not
             orphaned and screen-reader heading navigation can reach the card. <h2> owns the
             role and the level (#2721), and the monospace run-id visual stays unchanged:
-            cmp-native-heading only neutralises the user-agent margin and bold weight, because
-            native-elements.css loads before globals.css and .qi-run-id/.qi-monospace therefore
-            keep their own font-family, font-size and colour. */}
+            NATIVE_HEADING_STYLE only neutralises the user-agent margin and bold weight, so
+            .qi-run-id/.qi-monospace keep their own font-family, font-size and colour. */}
         <h2
-          className="qi-run-id qi-monospace cmp-native-heading"
+          className="qi-run-id qi-monospace"
+          style={NATIVE_HEADING_STYLE}
           title={runId}
           aria-label={t("qi.run.aria", { runId })}
         >

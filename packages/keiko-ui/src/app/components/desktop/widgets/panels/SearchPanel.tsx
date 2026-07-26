@@ -42,6 +42,7 @@ import {
 } from "./SearchResultList";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./searchPanelEvents";
 import styles from "./SearchPanel.module.css";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import EditorDiffSurface, { buildWorkspaceReplacePatchModel } from "../cards/EditorDiffSurface";
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -792,17 +793,20 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
           {t("searchPanel.action.previewReplace")}
         </button>
       </form>
-      {/* <output> owns role=status; cmp-native-block restores the block box the <div> had,
+      {/* <output> owns role=status; NATIVE_BLOCK_STYLE restores the block box the <div> had,
           because .status declares no display of its own (#2721). */}
       <output
         id={controlsId}
-        className={`${styles.status} ${(inlineError ?? routeError) ? styles.error : ""} cmp-native-block`}
+        className={`${styles.status} ${(inlineError ?? routeError) ? styles.error : ""}`}
+        style={NATIVE_BLOCK_STYLE}
       >
         {message}
       </output>
       <RootErrors errors={rootErrors} operation="searched" t={t} />
       {showReplaceStatus ? (
-        <output className={`${styles.status} cmp-native-block`}>{replaceStatus}</output>
+        <output className={styles.status} style={NATIVE_BLOCK_STYLE}>
+          {replaceStatus}
+        </output>
       ) : null}
       <RootErrors errors={replaceErrors} operation="previewed" t={t} />
       {groups.length > 0 ? (

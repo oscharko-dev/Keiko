@@ -24,6 +24,7 @@ import type {
   EditorAgentActionDisposition,
 } from "../../../../../lib/types";
 import { useTranslate } from "@/lib/i18n";
+import { NATIVE_FIELDSET_RESET_STYLE } from "../../native-element-styles";
 import {
   useEditorAgentTranslate,
   type EditorAgentMessageKey,
@@ -123,7 +124,10 @@ const TITLE_STYLE: CSSProperties = {
   letterSpacing: "0.04em",
 };
 
+// <fieldset> owns role="group" (#2721); NATIVE_FIELDSET_RESET_STYLE drops the user-agent margin,
+// padding, border and min-inline-size the group never had, so only the flex row below shows.
 const FILTER_GROUP_STYLE: CSSProperties = {
+  ...NATIVE_FIELDSET_RESET_STYLE,
   display: "flex",
   flexWrap: "wrap",
   gap: "6px",
@@ -234,11 +238,7 @@ function AuditFilterControls({
     option.value === "save" ? { ...option, label: saveLabel } : option,
   );
   return (
-    <fieldset
-      className="cmp-native-group"
-      style={FILTER_GROUP_STYLE}
-      aria-label={t("actions.filterGroup")}
-    >
+    <fieldset style={FILTER_GROUP_STYLE} aria-label={t("actions.filterGroup")}>
       <FilterSelect
         label={t("actions.filter.actionType")}
         value={filters.actionType}

@@ -1,10 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-// Loaded BEFORE globals.css on purpose (#2721). The neutralisers stand in for user-agent
-// defaults, so a surface's own class — same specificity, later in source order — has to be
-// able to override any of them. Loading them afterwards would let `cmp-native-group` erase a
-// component's own padding and border.
-import "./native-elements.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

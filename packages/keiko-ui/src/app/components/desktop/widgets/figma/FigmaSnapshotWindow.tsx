@@ -84,6 +84,7 @@ import {
   type FigmaImageDropDetail,
 } from "../../figma-image-drag";
 import { JsonSyntaxBlock, jsonTextByteLength } from "./JsonSyntaxBlock";
+import { NATIVE_BLOCK_STYLE, NATIVE_LIST_STYLE } from "../../native-element-styles";
 
 type CurrentRef<T> = { current: T };
 type FormSubmitEvent = { preventDefault: () => void };
@@ -1900,9 +1901,9 @@ export function FigmaSnapshotWindow({
       );
     }
     return (
-      // <ul> owns role=list; cmp-native-list drops the marker, block margin and 40px start
+      // <ul> owns role=list; NATIVE_LIST_STYLE drops the marker, block margin and 40px start
       // padding the class does not declare (#2721).
-      <ul className="figma-snapshot-dashboard-list cmp-native-list">
+      <ul className="figma-snapshot-dashboard-list" style={NATIVE_LIST_STYLE}>
         {snapshots.map((snapshot) => {
           const isCurrent = summary?.runId === snapshot.runId;
           const title = snapshotDisplayName(snapshot, t);
@@ -2272,10 +2273,10 @@ export function FigmaSnapshotWindow({
                 {t("figmaSnapshotWindow.jsonInspector.copyJson")}
               </button>
             </div>
-            {/* <output> owns role=status; cmp-native-block restores the block box the <p>
+            {/* <output> owns role=status; NATIVE_BLOCK_STYLE restores the block box the <p>
                 had (#2721). */}
             {screenJsonCopyStatus !== null ? (
-              <output className="figma-view-json-copy-status cmp-native-block">
+              <output className="figma-view-json-copy-status" style={NATIVE_BLOCK_STYLE}>
                 {screenJsonCopyStatus}
               </output>
             ) : null}

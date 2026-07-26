@@ -23,6 +23,7 @@ import {
   SCOPE_TOGGLE_STYLE,
   SUBTLE_TEXT_STYLE,
 } from "./git-client-styles";
+import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 
 interface DiffState {
   readonly loading: boolean;
@@ -274,8 +275,8 @@ function DiffBody({
     <div className="rv-body">
       {state.response.truncated ? (
         <output
-          className="rv-truncated cmp-native-block"
-          style={{ ...SUBTLE_TEXT_STYLE, padding: 14 }}
+          className="rv-truncated"
+          style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, padding: 14 }}
         >
           This diff is large and has been truncated at {state.response.maxBytes.toLocaleString()}{" "}
           bytes or {state.response.maxFiles.toLocaleString()} files.

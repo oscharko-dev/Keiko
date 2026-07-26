@@ -26,6 +26,7 @@ import {
 import { ApiError } from "@/lib/api";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -406,7 +407,7 @@ export function ConnectorPickerWidget({
       />
 
       {setsFailed ? (
-        <output className="connector-picker-notice cmp-native-block">
+        <output className="connector-picker-notice" style={NATIVE_BLOCK_STYLE}>
           Knowledge Pod Sets could not be loaded.
         </output>
       ) : null}

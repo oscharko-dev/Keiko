@@ -6,6 +6,7 @@ import {
   loadFigmaSnapshotScreenJson,
   type FigmaSnapshotScreenJsonResponse,
 } from "@/lib/figma-snapshot-api";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { JsonSyntaxBlock, jsonTextByteLength } from "./JsonSyntaxBlock";
 
 export interface FigmaJsonSourceWindowProps {
@@ -126,7 +127,9 @@ export function FigmaJsonSourceWindow({
       </header>
 
       {state === "loading" ? (
-        <output className="figma-json-status cmp-native-block">Loading JSON…</output>
+        <output className="figma-json-status" style={NATIVE_BLOCK_STYLE}>
+          Loading JSON…
+        </output>
       ) : null}
       {state === "error" && error !== null ? (
         <div className="figma-json-error" role="alert">
@@ -137,7 +140,9 @@ export function FigmaJsonSourceWindow({
         </div>
       ) : null}
       {copyStatus !== null ? (
-        <output className="figma-view-json-copy-status cmp-native-block">{copyStatus}</output>
+        <output className="figma-view-json-copy-status" style={NATIVE_BLOCK_STYLE}>
+          {copyStatus}
+        </output>
       ) : null}
       {state === "done" && jsonText.length > 0 ? (
         <JsonSyntaxBlock

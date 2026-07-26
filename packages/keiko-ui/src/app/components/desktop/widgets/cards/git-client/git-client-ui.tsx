@@ -157,20 +157,26 @@ export function MutationOutcome({
           ? "color-mix(in oklch, var(--danger) 42%, var(--line))"
           : "var(--line)";
   return (
-    // <output> is the native status live region (S6819); a danger outcome still
-    // overrides the role to "alert" so it keeps its assertive announcement.
-    // PREVIEW_STYLE declares display:flex, so no neutraliser class is needed.
-    <output
+    // The banner is block-level structure (a pill, a headline, a code list), which <output> —
+    // phrasing content — may not contain, so the container stays a plain <div>; a bare <div>
+    // carries no role, so S6819 has nothing to rewrite. The live region is the concise headline
+    // instead of the whole subtree: that <output> owns role="status" natively, and a danger
+    // outcome still overrides the role to "alert" so it keeps its assertive announcement.
+    // PREVIEW_STYLE declares display:flex, so the headline stays a blockified flex item.
+    <div
       data-testid={testid}
-      role={tone === "danger" ? "alert" : undefined}
       style={{ ...PREVIEW_STYLE, boxShadow: `inset 0 0 0 1px ${ringColor}` }}
     >
       <StatusPill tone={tone}>
         <Icons.check size={11} /> {STATUS_LABEL[outcome.status]}
       </StatusPill>
-      <p style={{ margin: 0, font: "600 13px var(--font-ui)", color: "var(--fg)" }}>
+      <output
+        data-testid={`${testid}-headline`}
+        role={tone === "danger" ? "alert" : undefined}
+        style={{ margin: 0, font: "600 13px var(--font-ui)", color: "var(--fg)" }}
+      >
         {outcome.actionKind}: {STATUS_LABEL[outcome.status]}
-      </p>
+      </output>
       {codes.length > 0 ? (
         <ul style={{ margin: 0, paddingLeft: 18, font: "400 11px var(--font-ui)" }}>
           {codes.map((code) => (
@@ -180,6 +186,6 @@ export function MutationOutcome({
           ))}
         </ul>
       ) : null}
-    </output>
+    </div>
   );
 }

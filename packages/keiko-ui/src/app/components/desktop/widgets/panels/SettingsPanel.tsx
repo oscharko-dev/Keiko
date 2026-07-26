@@ -70,6 +70,7 @@ import {
   readWorkspaceCameraSmoothness,
   readWorkspaceGridStrength,
 } from "../../workspace-appearance";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 
 const SettingsIcon = Icons.settings;
 
@@ -360,7 +361,7 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
   if (state === undefined || state.status === "idle") return null;
   if (state.status === "running") {
     return (
-      <output className="ml-readiness cmp-native-block">
+      <output className="ml-readiness" style={NATIVE_BLOCK_STYLE}>
         {t("settings.models.checkingReadiness", {
           mode: state.deep
             ? t("settings.models.readinessModeDeep")
@@ -382,15 +383,18 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
   return (
     <div className="ml-readiness">
       <div className="ml-rrow">
-        {/* <output> already carries role=status; only the failure branch overrides it. */}
-        <output
-          className="ml-rsummary cmp-native-block"
-          role={report.overallStatus === "failed" ? "alert" : undefined}
-        >
+        <div className="ml-rsummary">
           <div className="ml-rhead">
-            <span className={"ml-rstatus " + report.overallStatus}>
+            {/* The live region is the concise status line, not the summary subtree around it:
+                <output> is phrasing content and cannot wrap these blocks, and announcing every
+                badge on each re-check floods the reader. <output> already carries role=status;
+                only the failure branch overrides it (#2721). */}
+            <output
+              className={"ml-rstatus " + report.overallStatus}
+              role={report.overallStatus === "failed" ? "alert" : undefined}
+            >
               {workingToday ? t("settings.models.workingToday") : t("settings.models.notVerified")}
-            </span>
+            </output>
             <span className="ml-rtime mono">{new Date(report.checkedAt).toLocaleTimeString()}</span>
           </div>
           <div className="ml-rbadges" aria-label={t("settings.models.verifiedCapabilities")}>
@@ -421,7 +425,7 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
             ) : null}
           </div>
           {warning !== undefined ? <div className="ml-rwarn">{warning}</div> : null}
-        </output>
+        </div>
       </div>
     </div>
   );
@@ -1124,9 +1128,11 @@ function ModelsTabContent({
 
       {/* uiux-fix C285: loading -> result transition is announced */}
       {loadingModels ? (
-        <output className="set-placeholder cmp-native-block">{t("settings.models.loading")}</output>
+        <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
+          {t("settings.models.loading")}
+        </output>
       ) : models.length === 0 ? (
-        <output className="set-placeholder cmp-native-block">
+        <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
           {gatewayConfigured
             ? t("settings.models.emptyConfigured")
             : t("settings.models.emptyUnconfigured")}

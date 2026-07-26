@@ -18,6 +18,7 @@
 import { useEffect, useRef, type ReactNode, type Ref, type RefObject } from "react";
 import { useVoiceTranslate as useTranslate, type I18nTranslate } from "./voice-i18n";
 import { Icons } from "./Icons";
+import { NATIVE_FIELDSET_STYLE } from "./native-element-styles";
 import type {
   DictationController,
   DictationErrorReason,
@@ -294,10 +295,11 @@ function ReadyPreview({
 }: ReadyPreviewProps): ReactNode {
   return (
     // <fieldset> owns role=group and this group really does wrap the transcript form control.
-    // cmp-native-group only neutralises the user-agent defaults .cmp-voice-preview leaves
-    // standing: it loads before globals.css, so that class keeps its own padding and border.
+    // NATIVE_FIELDSET_STYLE neutralises only the user-agent defaults .cmp-voice-preview leaves
+    // standing — that class declares its own padding and border, so neither is reset (#2721).
     <fieldset
-      className="cmp-voice-preview cmp-native-group"
+      className="cmp-voice-preview"
+      style={NATIVE_FIELDSET_STYLE}
       aria-label={t("voice.dictation.preview")}
     >
       <span role="status" aria-live="polite" className="sr-only">

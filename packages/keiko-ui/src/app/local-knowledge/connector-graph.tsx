@@ -62,6 +62,7 @@ import manualRefreshStyles from "./manual-refresh-panel.module.css";
 import createDialogStyles from "./create-capsule-dialog.module.css";
 import setCountsStyles from "./set-counts.module.css";
 import detailStyles from "./capsule-detail.module.css";
+import { NATIVE_BLOCK_STYLE } from "../components/desktop/native-element-styles";
 
 // ---------------------------------------------------------------------------
 // AlertBanner
@@ -1905,9 +1906,9 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
       {/* Compact live region instead of aria-live on the whole list section —
           re-announcing every row after each reload flooded screen readers
           (uiux-fix F032, C226; pattern of MemoryList). <output> is the native
-          status live region (S6819); cmp-native-block restores the block box the
-          <p> had, since `.visually-hidden` declares no display of its own. */}
-      <output className="visually-hidden cmp-native-block">
+          status live region (S6819); NATIVE_BLOCK_STYLE restores the block box the
+          <p> had, since `.visually-hidden` declares no display of its own (#2721). */}
+      <output className="visually-hidden" style={NATIVE_BLOCK_STYLE}>
         {!isLoading && loadError === null ? catalogAnnouncement(capsules, capsuleSets) : null}
       </output>
       {capsuleSetActionError !== null ? (

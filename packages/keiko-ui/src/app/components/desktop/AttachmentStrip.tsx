@@ -21,6 +21,7 @@ import {
   type ReactNode,
 } from "react";
 import { Icons } from "./Icons";
+import { NATIVE_LIST_KEEP_PADDING_STYLE } from "./native-element-styles";
 import { formatBytes } from "@/lib/format";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type {
@@ -156,10 +157,14 @@ export function AttachmentStrip({ attachments, onRemove }: AttachmentStripProps)
   const t = useTranslate();
   if (attachments.length === 0) return null;
   return (
-    // <ul> owns role=list (#2721). cmp-native-list neutralises the marker and the 1em block
-    // margin; its padding:0 is overridden by .attach-strip's own padding, because
-    // native-elements.css loads before globals.css.
-    <ul className="attach-strip cmp-native-list" aria-label={t("attachment.pending")}>
+    // <ul> owns role=list (#2721). NATIVE_LIST_KEEP_PADDING_STYLE drops the marker and the 1em
+    // block margin but leaves the padding alone, so .attach-strip's own `padding: 4px 2px`
+    // still applies.
+    <ul
+      className="attach-strip"
+      style={NATIVE_LIST_KEEP_PADDING_STYLE}
+      aria-label={t("attachment.pending")}
+    >
       {attachments.map((a) => (
         <AttachmentChip key={a.id} attachment={a} onRemove={onRemove} />
       ))}

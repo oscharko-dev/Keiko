@@ -6,6 +6,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../Icons";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import styles from "./TerminalWidget.module.css";
 
 interface RuntimeHubWidgetProps {
@@ -126,7 +127,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
           ))}
         </div>
         {!hasProject ? (
-          <output className="tm-limits cmp-native-block">
+          <output className="tm-limits" style={NATIVE_BLOCK_STYLE}>
             Add a project path to enable task and Git workflows.
           </output>
         ) : null}

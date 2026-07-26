@@ -4,6 +4,7 @@ import { useCallback, useState, type KeyboardEvent, type ReactNode } from "react
 import { pickWithNativeDialog } from "../../../../../lib/native-file-dialog";
 import { useNativeFileDialogCapability } from "../../hooks/useNativeFileDialogCapability";
 import { Icons } from "../../Icons";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import styles from "./EditorEmptyState.module.css";
 
 // Shown when the editor window is open without a bound project root (e.g. toggled from the left
@@ -88,7 +89,9 @@ export function EditorEmptyState({
         </button>
       </div>
       {notice !== null ? (
-        <output className={`${styles.notice} cmp-native-block`}>{notice}</output>
+        <output className={styles.notice} style={NATIVE_BLOCK_STYLE}>
+          {notice}
+        </output>
       ) : null}
     </div>
   );

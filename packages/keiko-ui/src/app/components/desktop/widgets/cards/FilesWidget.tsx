@@ -32,6 +32,7 @@ import type {
 } from "../../../../../lib/types";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
 import {
@@ -1575,16 +1576,16 @@ export function FilesWidget({
       <div className="tr-dir" role={depth === 0 ? undefined : "group"}>
         {state?.loading === true ? (
           <output
-            className="files-note cmp-native-block"
-            style={{ paddingLeft: treeIndent(depth) + 18 }}
+            className="files-note"
+            style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
           >
             {t("filesWidget.directory.loading")}
           </output>
         ) : null}
         {state?.notice === "no-root" ? (
           <output
-            className="files-note cmp-native-block"
-            style={{ paddingLeft: treeIndent(depth) + 18 }}
+            className="files-note"
+            style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
           >
             {onRootChange !== undefined
               ? t("filesWidget.directory.noRootPrompt")
@@ -1605,8 +1606,8 @@ export function FilesWidget({
           its ignored-entry scan cap is hit, i.e. with fewer visible entries (audit C350). */}
         {state?.truncated === true ? (
           <output
-            className="files-note files-warning cmp-native-block"
-            style={{ paddingLeft: treeIndent(depth) + 18 }}
+            className="files-note files-warning"
+            style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
           >
             {t("filesWidget.directory.truncated", { count: state.entries.length })}
           </output>
@@ -1639,8 +1640,8 @@ export function FilesWidget({
         state.notice === null &&
         state.entries.length === 0 ? (
           <output
-            className="files-note cmp-native-block"
-            style={{ paddingLeft: treeIndent(depth) + 18 }}
+            className="files-note"
+            style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
           >
             {t("filesWidget.directory.empty")}
           </output>
@@ -1686,7 +1687,9 @@ export function FilesWidget({
           </button>
         </div>
         {state.loading ? (
-          <output className="fpv-state cmp-native-block">{t("filesWidget.diff.loading")}</output>
+          <output className="fpv-state" style={NATIVE_BLOCK_STYLE}>
+            {t("filesWidget.diff.loading")}
+          </output>
         ) : null}
         {state.error !== null ? (
           <div className="fpv-state fpv-error" role="alert">
@@ -1845,7 +1848,7 @@ export function FilesWidget({
       {renderRootBar()}
       {renderGitSummary()}
       {gitStatusState.status?.available === true && gitStatusState.status.truncated ? (
-        <output className="files-note files-warning cmp-native-block">
+        <output className="files-note files-warning" style={NATIVE_BLOCK_STYLE}>
           {tGit("git.decorationsIncomplete", { count: gitStatusState.status.maxChanges })}
         </output>
       ) : null}

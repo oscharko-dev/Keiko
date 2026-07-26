@@ -39,6 +39,7 @@ import {
 } from "../../../../relationships/api";
 import type { ApiRelationship } from "../../../../relationships/api";
 import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge";
+import { NATIVE_BLOCK_STYLE, NATIVE_LIST_STYLE } from "../../native-element-styles";
 
 // ─── Density mode helpers ──────────────────────────────────────────────────────
 
@@ -607,9 +608,11 @@ export function RelationshipListPanel({
           lost the scroll position. <output> is the native status live region so the visible
           text is announced; the previous aria-label sat on a generic div, where ARIA naming
           is prohibited and ignored. .insp-empty aligns the typography with the empty state;
-          cmp-native-block restores the block box <output> does not have (#2721). */}
+          NATIVE_BLOCK_STYLE restores the block box <output> does not have (#2721). */}
       {loading && items.length === 0 && (
-        <output className="insp-empty cmp-native-block">Loading…</output>
+        <output className="insp-empty" style={NATIVE_BLOCK_STYLE}>
+          Loading…
+        </output>
       )}
 
       {/* Empty state — two cases: a virgin graph must not blame a "current filter" the
@@ -628,10 +631,10 @@ export function RelationshipListPanel({
           aria-busy + reduced opacity signal the in-flight update without unmounting. */}
       {visibleItems.length > 0 && (
         <ul
-          className="cmp-native-list"
           aria-label="Relationships"
           aria-busy={loading || undefined}
           style={{
+            ...NATIVE_LIST_STYLE,
             display: "flex",
             flexDirection: "column",
             gap: "var(--space-1)",

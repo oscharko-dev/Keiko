@@ -47,6 +47,7 @@ import { CapsuleRename } from "./capsule-rename";
 import { SourceRebindControl } from "./source-rebind-control";
 import detailStyles from "../capsule-detail.module.css";
 import { Explainable } from "../detail-help";
+import { NATIVE_BLOCK_STYLE } from "../../components/desktop/native-element-styles";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -713,7 +714,7 @@ function ContextualHealthCallout({
 }): ReactNode {
   if (live) {
     return (
-      <output className="lkd-status-callout cmp-native-block" data-tone={tone}>
+      <output className="lkd-status-callout" style={NATIVE_BLOCK_STYLE} data-tone={tone}>
         {message}
       </output>
     );
@@ -929,7 +930,7 @@ function ContextualRetrievalSection({
         {busy ? t("common.saving") : t("localKnowledge.detail.context.save")}
       </button>
       {message !== null ? (
-        <output className="lkd-status-callout cmp-native-block" data-tone="warn">
+        <output className="lkd-status-callout" style={NATIVE_BLOCK_STYLE} data-tone="warn">
           {message}
         </output>
       ) : null}

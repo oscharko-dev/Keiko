@@ -45,6 +45,7 @@ import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
+import { NATIVE_LIST_KEEP_PADDING_STYLE } from "./native-element-styles";
 import {
   SafeMarkdownBoundary,
   type AssistantCodeBlockApply,
@@ -1768,9 +1769,8 @@ interface RepositoryReferenceStripProps {
 }
 
 // #2721 — the strip is a real list, so it is a <ul>/<li> rather than a <div> pair carrying
-// role="list"/role="listitem". cmp-native-list neutralises the marker and the block margin;
-// the strip's own `padding: 4px 2px` survives because native-elements.css loads before
-// globals.css, so .repo-token-strip wins at equal specificity.
+// role="list"/role="listitem". NATIVE_LIST_KEEP_PADDING_STYLE drops the marker and the block
+// margin but leaves the padding alone, so the strip's own `padding: 4px 2px` still applies.
 function RepositoryReferenceStrip({
   references,
   onRemove,
@@ -1778,7 +1778,11 @@ function RepositoryReferenceStrip({
   const t = useTranslate();
   if (references.length === 0) return null;
   return (
-    <ul className="repo-token-strip cmp-native-list" aria-label={t("chat.repository.references")}>
+    <ul
+      className="repo-token-strip"
+      style={NATIVE_LIST_KEEP_PADDING_STYLE}
+      aria-label={t("chat.repository.references")}
+    >
       {references.map((reference) => (
         <li
           key={reference.id}
