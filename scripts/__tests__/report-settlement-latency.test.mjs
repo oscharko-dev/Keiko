@@ -249,6 +249,24 @@ describe("pull-request summary", () => {
     expect(report.firstGreenToMergedMinutes).toBeNull();
   });
 
+  it("keeps the settlement span of a merge that had an earlier green head", () => {
+    // The final head was still finishing at merge time, so there is no final gap - but an earlier
+    // head HAD been green, and how long the change then waited is a fact, not an artefact.
+    const report = summarizePullRequest({
+      number: 2661,
+      mergedAt: "2026-07-25T12:00:00Z",
+      heads: [
+        head("2026-07-25T10:00:00Z", "2026-07-25T11:00:00Z"),
+        head("2026-07-25T11:30:00Z", "2026-07-25T12:30:00Z"),
+      ],
+      findings: [],
+    });
+
+    expect(report.outcome).toBe("merged-before-green");
+    expect(report.checksGreenToMergedMinutes).toBeNull();
+    expect(report.firstGreenToMergedMinutes).toBe(60);
+  });
+
   it("counts a reaction only for a round that answered a finding", () => {
     const report = summarizePullRequest({
       number: 1,

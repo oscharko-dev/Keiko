@@ -182,7 +182,9 @@ function reactionMinutes(heads, findingsMs) {
 
 /**
  * The full settlement span: from the FIRST moment the change was green - the first instant it could
- * have merged had no finding arrived - to the merge. Issue #2708's founding 108-122 minute
+ * have merged had no finding arrived - to the merge. Deliberately independent of the outcome: a run
+ * that merged before its FINAL head finished still had a first green head, and that span is a fact.
+ * Only the final gap is outcome-gated, because only it depends on the final head being green. Issue #2708's founding 108-122 minute
  * measurements are this number, not the final-head gap, which auto-merge closes in seconds. Keeping
  * both is what makes the difference between "auto-merge is slow" and "repair rounds are the cost"
  * legible instead of arguable.
