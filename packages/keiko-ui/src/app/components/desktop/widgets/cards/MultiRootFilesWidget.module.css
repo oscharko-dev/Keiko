@@ -75,6 +75,16 @@
   border-bottom: 1px solid var(--line);
 }
 
+.cmpRootGroup:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+:global(:root[data-input-modality="pointer"]) .cmpRootGroup:focus {
+  outline: var(--focus-width, 2px) solid var(--focus-ring) !important;
+  outline-offset: -2px;
+}
+
 .cmpRootHeader {
   display: flex;
   align-items: center;

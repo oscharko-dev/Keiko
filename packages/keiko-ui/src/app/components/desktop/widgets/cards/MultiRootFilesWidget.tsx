@@ -50,12 +50,13 @@ function rootOrderAfterMove(
   return next;
 }
 
-function focusSiblingRootGroup(event: KeyboardEvent<HTMLDivElement>): void {
-  if (event.target !== event.currentTarget) return;
+function focusSiblingRootGroup(event: KeyboardEvent<HTMLElement>): void {
   if (!ROOT_GROUP_NAV_KEYS.has(event.key)) return;
-  const explorer = event.currentTarget.closest<HTMLElement>("[data-multi-root-explorer]");
+  const currentGroup = event.currentTarget.closest<HTMLDivElement>("[data-root-group]");
+  if (currentGroup === null) return;
+  const explorer = currentGroup.closest<HTMLElement>("[data-multi-root-explorer]");
   const groups = Array.from(explorer?.querySelectorAll<HTMLDivElement>("[data-root-group]") ?? []);
-  const current = groups.indexOf(event.currentTarget);
+  const current = groups.indexOf(currentGroup);
   if (current < 0 || groups.length === 0) return;
   event.preventDefault();
   let target = Math.max(
@@ -90,6 +91,19 @@ function RootGroup({
   const move = (offset: -1 | 1): void => {
     void workspace.reorderRoots(root.rootRef, rootOrderAfterMove(manifest.roots, index, offset));
   };
+  const handleRootGroupKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
+    if (event.key === "ArrowLeft" && expanded) {
+      event.preventDefault();
+      setExpanded(false);
+      return;
+    }
+    if (event.key === "ArrowRight" && !expanded) {
+      event.preventDefault();
+      setExpanded(true);
+      return;
+    }
+    focusSiblingRootGroup(event);
+  };
   return (
     <div
       className={styles.cmpRootGroup}
@@ -99,20 +113,9 @@ function RootGroup({
       aria-label={root.displayName}
       data-root-group
       tabIndex={rovingTabIndex}
-      onFocus={() => onRovingFocus(root.rootRef)}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return;
-        if (event.key === "ArrowLeft" && expanded) {
-          event.preventDefault();
-          setExpanded(false);
-          return;
-        }
-        if (event.key === "ArrowRight" && !expanded) {
-          event.preventDefault();
-          setExpanded(true);
-          return;
-        }
-        focusSiblingRootGroup(event);
+      onFocus={(): void => onRovingFocus(root.rootRef)}
+      onKeyDown={(event): void => {
+        if (event.target === event.currentTarget) handleRootGroupKeyDown(event);
       }}
     >
       <div className={styles.cmpRootHeader} data-focused={focused}>
@@ -121,6 +124,7 @@ function RootGroup({
           className={styles.cmpRootToggle}
           data-root-group-header
           aria-expanded={expanded}
+          onKeyDown={handleRootGroupKeyDown}
           onClick={() => setExpanded((current) => !current)}
         >
           <span className={styles.cmpCaret} data-expanded={expanded} aria-hidden="true">
@@ -249,6 +253,12 @@ export function MultiRootFilesWidget(props: MultiRootFilesWidgetProps): ReactNod
   const t = useTranslate();
   const fallbackRootRef = props.manifest.focusedRootRef ?? props.manifest.roots[0]?.rootRef ?? null;
   const [rovingRootRef, setRovingRootRef] = useState<WorkspaceRootRef | null>(fallbackRootRef);
+  const [lastFallbackRootRef, setLastFallbackRootRef] = useState(fallbackRootRef);
+  if (lastFallbackRootRef !== fallbackRootRef) {
+    // Reset before commit so a changed manifest focus is never paired with the previous tab stop.
+    setLastFallbackRootRef(fallbackRootRef);
+    setRovingRootRef(fallbackRootRef);
+  }
   const activeRootRef = props.manifest.roots.some((root) => root.rootRef === rovingRootRef)
     ? rovingRootRef
     : fallbackRootRef;
