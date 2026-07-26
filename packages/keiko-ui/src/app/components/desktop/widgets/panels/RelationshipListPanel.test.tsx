@@ -136,15 +136,15 @@ describe("RelationshipListPanel", () => {
       });
       const { container } = renderPanel({ filters: { relDensity: "standard" } });
       await waitFor(() => {
-        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+        expect(container.querySelectorAll("li").length).toBeGreaterThan(0);
       });
       // Second fetch (density click) never resolves — the panel is mid-refetch.
       mockListRelationships.mockReturnValue(new Promise(() => undefined));
       fireEvent.click(screen.getByRole("button", { name: /dense/i }));
       await waitFor(() => {
-        expect(container.querySelector('[role="list"]')?.getAttribute("aria-busy")).toBe("true");
+        expect(container.querySelector("ul")?.getAttribute("aria-busy")).toBe("true");
       });
-      expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+      expect(container.querySelectorAll("li").length).toBeGreaterThan(0);
       // No full-panel "Loading…" swap (the edge badge has its own role=status, so query by text).
       expect(screen.queryByText(/^loading…$/i)).toBeNull();
     });
@@ -254,12 +254,12 @@ describe("RelationshipListPanel", () => {
         nextCursor: null,
       });
       const { onSelect, container } = renderPanel();
-      // Row buttons are inside role="listitem" elements
+      // Row buttons are inside the <li> elements of the relationship list
       await waitFor(() => {
-        const listItems = container.querySelectorAll('[role="listitem"]');
+        const listItems = container.querySelectorAll("li");
         expect(listItems.length).toBeGreaterThan(0);
       });
-      const listItems = container.querySelectorAll('[role="listitem"]');
+      const listItems = container.querySelectorAll("li");
       const rowBtn = listItems[0]?.querySelector("button");
       expect(rowBtn).not.toBeNull();
       fireEvent.click(rowBtn as HTMLElement);
@@ -275,9 +275,9 @@ describe("RelationshipListPanel", () => {
       });
       const { onSelect, container } = renderPanel();
       await waitFor(() => {
-        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+        expect(container.querySelectorAll("li").length).toBeGreaterThan(0);
       });
-      const listItems = container.querySelectorAll('[role="listitem"]');
+      const listItems = container.querySelectorAll("li");
       const rowBtn = listItems[0]?.querySelector("button");
       expect(rowBtn).not.toBeNull();
       fireEvent.keyDown(rowBtn as HTMLElement, { key: "Enter" });
@@ -297,13 +297,15 @@ describe("RelationshipListPanel", () => {
         activityMap: new Map([["rel-status", "processing"]]),
       });
       await waitFor(() => {
-        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+        expect(container.querySelectorAll("li").length).toBeGreaterThan(0);
       });
-      const rowBtn = container.querySelector('[role="listitem"] button.rel-row');
+      const rowBtn = container.querySelector("li button.rel-row");
       expect(rowBtn).not.toBeNull();
-      // The nested badge must NOT be a live region inside the button.
-      expect(rowBtn?.querySelector('[role="status"]')).toBeNull();
-      expect(rowBtn?.querySelector('[aria-live="polite"]')).toBeNull();
+      // The nested badge must NOT be a live region inside the button. <output> is covered
+      // explicitly: it carries role=status and aria-live=polite implicitly, so neither
+      // attribute selector alone would catch one (#2721).
+      expect(rowBtn?.querySelector('[role="status"], output')).toBeNull();
+      expect(rowBtn?.querySelector('[aria-live="polite"], output')).toBeNull();
       // The badge wrapper is hidden from the accessibility tree instead.
       expect(rowBtn?.querySelector(".rb-edge-badge")?.getAttribute("aria-hidden")).toBe("true");
     });
@@ -319,9 +321,9 @@ describe("RelationshipListPanel", () => {
         activityMap: new Map([["rel-activity-label", "processing"]]),
       });
       await waitFor(() => {
-        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+        expect(container.querySelectorAll("li").length).toBeGreaterThan(0);
       });
-      const rowBtn = container.querySelector('[role="listitem"] button.rel-row');
+      const rowBtn = container.querySelector("li button.rel-row");
       expect(rowBtn?.getAttribute("aria-label")).toContain("activity: Processing");
     });
   });

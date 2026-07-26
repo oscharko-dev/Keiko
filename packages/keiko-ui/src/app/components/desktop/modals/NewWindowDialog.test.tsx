@@ -185,17 +185,21 @@ describe("NewWindowDialog agents: Start agent a11y attributes (FE-05/FE-03)", ()
     expect(btn).toHaveAttribute("aria-busy", "false");
   });
 
-  it("Start agent button has aria-describedby pointing to the validation status span when disabled", () => {
+  it("Start agent button has aria-describedby pointing to the validation status output when disabled", () => {
     render(
       <NewWindowDialog type="agents" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
     );
     const btn = screen.getByRole("button", { name: /start .*agent/i });
     // Button is disabled (models still loading) — aria-describedby must point at
-    // the validation/loading span so AT users know why it cannot be activated (FE-03).
+    // the validation/loading live region so AT users know why it cannot be
+    // activated (FE-03). That region is an <output>, the element that owns
+    // role=status (S6819), so the role is implicit — assert the computed role
+    // and the element, not a literal role attribute.
     expect(btn).toHaveAttribute("aria-describedby", "agent-start-validation");
     const desc = document.getElementById("agent-start-validation");
     expect(desc).not.toBeNull();
-    expect(desc?.getAttribute("role")).toBe("status");
+    expect(desc).toHaveRole("status");
+    expect(desc?.tagName).toBe("OUTPUT");
   });
 });
 

@@ -59,9 +59,7 @@ function ImpactDirection({
   if (report === null) {
     return (
       <section style={{ marginBottom: 12 }}>
-        <div className="rb-section-label" role="heading" aria-level={4}>
-          {title}
-        </div>
+        <h4 className="rb-section-label">{title}</h4>
         <p style={{ fontSize: 12, color: "var(--fg-muted)", margin: 0 }}>Loading…</p>
       </section>
     );
@@ -74,12 +72,12 @@ function ImpactDirection({
 
   return (
     <section style={{ marginBottom: 12 }} aria-label={title}>
-      <div className="rb-section-label" role="heading" aria-level={4}>
+      <h4 className="rb-section-label">
         {title}
         <span className="rb-count" aria-hidden="true">
           {impactedEndpoints.length}
         </span>
-      </div>
+      </h4>
       <p style={{ margin: "0 0 6px", fontSize: 11, color: "var(--fg-muted)" }}>{help}</p>
 
       {impactedEndpoints.length === 0 ? (

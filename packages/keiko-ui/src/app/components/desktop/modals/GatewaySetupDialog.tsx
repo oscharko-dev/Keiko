@@ -1866,15 +1866,9 @@ function GatewaySetupStatus({
         </div>
       ) : null}
       {success !== undefined ? (
-        <div className="gw-success" role="status">
-          {success}
-        </div>
+        <output className="gw-success cmp-native-block">{success}</output>
       ) : null}
-      {busy ? (
-        <div className="gw-pending" role="status">
-          Testing credentials…
-        </div>
-      ) : null}
+      {busy ? <output className="gw-pending cmp-native-block">Testing credentials…</output> : null}
     </>
   );
 }

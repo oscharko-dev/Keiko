@@ -126,9 +126,7 @@ export function FigmaJsonSourceWindow({
       </header>
 
       {state === "loading" ? (
-        <p className="figma-json-status" role="status">
-          Loading JSON…
-        </p>
+        <output className="figma-json-status cmp-native-block">Loading JSON…</output>
       ) : null}
       {state === "error" && error !== null ? (
         <div className="figma-json-error" role="alert">
@@ -139,9 +137,7 @@ export function FigmaJsonSourceWindow({
         </div>
       ) : null}
       {copyStatus !== null ? (
-        <p className="figma-view-json-copy-status" role="status">
-          {copyStatus}
-        </p>
+        <output className="figma-view-json-copy-status cmp-native-block">{copyStatus}</output>
       ) : null}
       {state === "done" && jsonText.length > 0 ? (
         <JsonSyntaxBlock

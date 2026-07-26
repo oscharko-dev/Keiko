@@ -595,16 +595,15 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
           label={t("common.status")}
           help={t("localKnowledge.detail.help.overviewStatus")}
           value={
-            <span
+            <output
               className="lk-badge"
               data-state={capsule.lifecycleState}
-              role="status"
               aria-label={t("localKnowledge.detail.overview.statusAria", {
                 status: STATUS_LABELS[capsule.lifecycleState],
               })}
             >
               {STATUS_LABELS[capsule.lifecycleState]}
-            </span>
+            </output>
           }
         />
         <OverviewRow
@@ -696,6 +695,34 @@ function positiveIntOrUndefined(value: string): number | undefined {
 
 function settingInputValue(value: number | undefined): string {
   return value === undefined ? "" : value.toString();
+}
+
+/**
+ * Contextual-health callout. It is a live region only while a rebuild is required, so routine
+ * health text is never announced — the element carries the announcement, not a toggled role
+ * (S6819: `<output>` is the native `status` live region; the quiet variant stays a paragraph).
+ */
+function ContextualHealthCallout({
+  message,
+  tone,
+  live,
+}: {
+  readonly message: string;
+  readonly tone: "neutral" | "ok" | "warn" | "danger";
+  readonly live: boolean;
+}): ReactNode {
+  if (live) {
+    return (
+      <output className="lkd-status-callout cmp-native-block" data-tone={tone}>
+        {message}
+      </output>
+    );
+  }
+  return (
+    <p className="lkd-status-callout" data-tone={tone}>
+      {message}
+    </p>
+  );
 }
 
 function ContextualRetrievalSection({
@@ -799,13 +826,11 @@ function ContextualRetrievalSection({
         </div>
       ) : null}
       {health?.message !== undefined ? (
-        <p
-          className="lkd-status-callout"
-          data-tone={contextualTone(health.status)}
-          role={health.rebuildRequired ? "status" : undefined}
-        >
-          {health.message}
-        </p>
+        <ContextualHealthCallout
+          message={health.message}
+          tone={contextualTone(health.status)}
+          live={health.rebuildRequired}
+        />
       ) : null}
       <div className="lkd-connect-row">
         <label
@@ -904,9 +929,9 @@ function ContextualRetrievalSection({
         {busy ? t("common.saving") : t("localKnowledge.detail.context.save")}
       </button>
       {message !== null ? (
-        <p className="lkd-status-callout" data-tone="warn" role="status">
+        <output className="lkd-status-callout cmp-native-block" data-tone="warn">
           {message}
-        </p>
+        </output>
       ) : null}
       {error !== null ? (
         <div role="alert" aria-live="assertive" className="lk-alert">

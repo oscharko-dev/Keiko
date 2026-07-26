@@ -124,9 +124,9 @@ function SectionLabel({
   style?: CSSProperties;
 }): ReactNode {
   return (
-    <div className="rb-section-label" role="heading" aria-level={3} style={style}>
+    <h3 className="rb-section-label" style={style}>
       {children}
-    </div>
+    </h3>
   );
 }
 

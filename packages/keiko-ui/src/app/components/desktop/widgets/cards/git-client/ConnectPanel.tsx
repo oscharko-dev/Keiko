@@ -70,9 +70,9 @@ export function ConnectPanel({
               {error}
             </p>
           ) : loading && repositories.length === 0 ? (
-            <p role="status" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
+            <output className="cmp-native-block" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
               Loading repositories…
-            </p>
+            </output>
           ) : repositories.length === 0 ? (
             <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
               No repositories yet. Connect or clone one to get started.

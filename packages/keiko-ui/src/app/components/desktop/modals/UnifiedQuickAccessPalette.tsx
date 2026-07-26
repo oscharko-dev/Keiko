@@ -378,9 +378,9 @@ export function UnifiedQuickAccessPalette({
           />
           <span className="kbd">esc</span>
         </div>
-        <div className="sr-only" role="status">
+        <output className="sr-only cmp-native-block">
           {itemCount === 0 ? emptyText : t(resultKey, { count: itemCount })}
-        </div>
+        </output>
         {failedRoots.length > 0 ? (
           <div className="cmdk-empty" role="alert">
             Search unavailable for {failedRoots.join(", ")}.

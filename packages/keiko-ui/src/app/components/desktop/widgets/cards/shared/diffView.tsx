@@ -127,10 +127,10 @@ export function DiffHunkView({ hunk, lang, labels, viewLabels }: DiffHunkViewPro
         />
       ))}
       {hunk.truncated ? (
-        <p className="rv-truncated" role="status">
+        <output className="rv-truncated cmp-native-block">
           {viewLabels?.hunkTruncated ??
             "This hunk is incomplete because the bounded diff was truncated."}
-        </p>
+        </output>
       ) : null}
     </>
   );
@@ -199,10 +199,10 @@ export function DiffFileSection({
           ))
         )}
         {file.truncated && !file.hunks.some((hunk) => hunk.truncated) ? (
-          <p className="rv-truncated" role="status">
+          <output className="rv-truncated cmp-native-block">
             {labels?.fileTruncated ??
               "This file diff is incomplete because the bounded diff was truncated."}
-          </p>
+          </output>
         ) : null}
       </div>
     </section>

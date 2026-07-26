@@ -88,9 +88,7 @@ export function EditorEmptyState({
         </button>
       </div>
       {notice !== null ? (
-        <p className={styles.notice} role="status">
-          {notice}
-        </p>
+        <output className={`${styles.notice} cmp-native-block`}>{notice}</output>
       ) : null}
     </div>
   );

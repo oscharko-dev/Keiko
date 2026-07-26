@@ -21,6 +21,7 @@ import {
   FILE_NAME_STYLE,
   FILE_PATH_STYLE,
   fileRowStyle,
+  LOADING_STATE_STYLE,
   stageBoxStyle,
   statusSquareStyle,
   SUBTLE_TEXT_STYLE,
@@ -269,9 +270,9 @@ function ChangesList({
   }
   if (statusLoading && status === null) {
     return (
-      <p className="rv-empty" role="status" style={{ padding: 14 }}>
+      <output className="rv-empty" style={LOADING_STATE_STYLE}>
         Loading changes…
-      </p>
+      </output>
     );
   }
   if (status === null) {
@@ -372,9 +373,12 @@ function ChangesList({
       ) : null}
 
       {status.truncated ? (
-        <p style={{ ...SUBTLE_TEXT_STYLE, padding: "0 14px 6px", fontSize: 12 }} role="status">
+        <output
+          className="cmp-native-block"
+          style={{ ...SUBTLE_TEXT_STYLE, padding: "0 14px 6px", fontSize: 12 }}
+        >
           Showing the first {status.maxChanges} changes; the list is truncated.
-        </p>
+        </output>
       ) : null}
 
       <div style={FILE_LIST_STYLE}>

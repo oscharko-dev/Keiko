@@ -289,7 +289,15 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
 
   return (
     <section aria-label={t("problems.panelLabel")} style={PANEL_STYLE}>
-      <div role="group" aria-label={t("problems.filterGroup")} style={FILTER_ROW_STYLE}>
+      {/* #2721 — the filter row groups two real form controls, so it is a <fieldset> (the element
+          that owns role="group") named by aria-label rather than a <legend>. cmp-native-group
+          drops the user-agent border, margin, padding and min-inline-size the inline style
+          does not set. */}
+      <fieldset
+        className="cmp-native-group"
+        aria-label={t("problems.filterGroup")}
+        style={FILTER_ROW_STYLE}
+      >
         <SeverityFilterSelect value={severity} t={t} onChange={setSeverity} />
         <SourceFilterSelect value={source} t={t} onChange={setSource} />
         {snapshot.truncated ? (
@@ -300,7 +308,7 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
             })}
           </span>
         ) : null}
-      </div>
+      </fieldset>
       <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.85em" }}>
         {t("problems.openFilesOnly")}
       </p>

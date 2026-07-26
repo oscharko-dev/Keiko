@@ -1441,9 +1441,9 @@ export function RunLauncher({
         </p>
         {renderCoverageNotice()}
         {degradedNotice !== null ? (
-          <p className="qi-degraded-notice" role="status" data-testid="qi-launch-degraded">
+          <output className="qi-degraded-notice cmp-native-block" data-testid="qi-launch-degraded">
             {degradedNotice}
-          </p>
+          </output>
         ) : null}
         {error !== null ? (
           <p className="lk-alert" role="alert" data-testid="qi-launch-error">

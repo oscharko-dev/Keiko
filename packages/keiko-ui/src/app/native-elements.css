@@ -1,0 +1,62 @@
+/* ============================================================
+   NATIVE ELEMENTS — user-agent default neutralisers (#2721)
+
+   S6819 asks a surface that carries an ARIA role to use the element that
+   already owns that role: role="status" -> <output>, role="list" -> <ul>,
+   role="heading" -> <h1>-<h6>, role="separator" -> <hr>, role="group" ->
+   <fieldset>. The role attribute carried no styling; the native element
+   arrives with user-agent defaults the <div>/<span> it replaces never had.
+
+   These classes restore the box the surface already had, so each swap is a
+   semantics change and not a visual one. They are deliberately narrow: one
+   class per user-agent default that a swap has to undo, applied only where
+   the surface's own class does not already set the property.
+
+   They live here and not in globals.css because that file is byte-pinned by
+   the visual-proof gate (#1300): `globals.css.test.ts` asserts the committed
+   consolidated-fidelity and axe proofs were generated from its exact sha256,
+   so any edit there requires regenerating both proofs. Adding component
+   styling in a component-scoped class instead is what #2721 asks for.
+   ============================================================ */
+
+/* <output> is display:inline. Every surface migrated from a block-level
+   <div role="status"> / <p role="status"> needs its block box back. Applying
+   it to a flex/grid item or an absolutely positioned element is a no-op:
+   both already blockify an inline display to block. */
+.cmp-native-block {
+  display: block;
+}
+
+/* <ul>/<menu> ship a disc marker, a block margin and a 40px start padding.
+   The marker is dropped on the list rather than on the item so the <li>
+   keeps display:list-item, which is what assistive technology reads. */
+.cmp-native-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* <h1>-<h6> ship a scaled font-size, a bold weight and block margins. The
+   surfaces that carried role="heading" were styled entirely by their own
+   class, so the heading inherits its type from the surrounding component. */
+.cmp-native-heading {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+
+/* <hr> ships an inset border and a 0.5em block margin. The separators that
+   carried role="separator" paint their own rule through their own class. */
+.cmp-native-separator {
+  margin: 0;
+  border: 0;
+}
+
+/* <fieldset> ships a groove border, block margin, inline padding and a
+   min-inline-size:min-content that stops it shrinking inside a flex row. */
+.cmp-native-group {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}

@@ -792,18 +792,17 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
           {t("searchPanel.action.previewReplace")}
         </button>
       </form>
-      <div
+      {/* <output> owns role=status; cmp-native-block restores the block box the <div> had,
+          because .status declares no display of its own (#2721). */}
+      <output
         id={controlsId}
-        className={`${styles.status} ${(inlineError ?? routeError) ? styles.error : ""}`}
-        role="status"
+        className={`${styles.status} ${(inlineError ?? routeError) ? styles.error : ""} cmp-native-block`}
       >
         {message}
-      </div>
+      </output>
       <RootErrors errors={rootErrors} operation="searched" t={t} />
       {showReplaceStatus ? (
-        <div className={styles.status} role="status">
-          {replaceStatus}
-        </div>
+        <output className={`${styles.status} cmp-native-block`}>{replaceStatus}</output>
       ) : null}
       <RootErrors errors={replaceErrors} operation="previewed" t={t} />
       {groups.length > 0 ? (

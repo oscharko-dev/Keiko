@@ -1050,7 +1050,9 @@ export function GitClientWindow({
     setRightPaneMode("diff");
     setRightPaneAnnouncement(t("gitClientWindow.panel.diffOpened"));
     window.requestAnimationFrame(() => {
-      const diffRegion = diffPaneRef.current?.querySelector('[role="region"][aria-label="Diff"]');
+      // The diff pane's scroll region is a native <section> (#2721): its region role is
+      // implicit, so a [role="region"] attribute selector no longer matches it.
+      const diffRegion = diffPaneRef.current?.querySelector('section[aria-label="Diff"]');
       if (diffRegion instanceof HTMLElement) diffRegion.focus();
     });
   }, [t]);

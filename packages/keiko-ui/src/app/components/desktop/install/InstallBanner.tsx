@@ -14,7 +14,8 @@
  * Content boundary (ADR-0024 D7.4): all copy is static literals — no
  * workspace paths, model names, run IDs, credentials, or user data.
  *
- * Accessibility: <aside role="region" aria-label="Install Keiko">
+ * Accessibility: <section aria-label="Install Keiko"> — a named <section> is the
+ * native element that owns role="region" (#2721).
  * WCAG 2.2 AA — contrast, keyboard, focus-visible, 24×24 target, reduced-motion.
  */
 
@@ -128,12 +129,7 @@ export function InstallBanner(): ReactNode {
 
   return (
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape-to-dismiss must be scoped to focus inside the banner (audit C037); the buttons inside are the interactive targets
-    <aside
-      className="install-banner"
-      role="region"
-      aria-label="Install Keiko"
-      onKeyDown={onBannerKeyDown}
-    >
+    <section className="install-banner" aria-label="Install Keiko" onKeyDown={onBannerKeyDown}>
       <div className="install-banner-body">
         <div className="install-banner-text">
           <span className="install-banner-heading">{copy.heading}</span>
@@ -155,6 +151,6 @@ export function InstallBanner(): ReactNode {
           </button>
         </div>
       </div>
-    </aside>
+    </section>
   );
 }

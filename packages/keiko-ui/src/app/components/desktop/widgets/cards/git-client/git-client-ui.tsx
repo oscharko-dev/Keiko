@@ -157,9 +157,12 @@ export function MutationOutcome({
           ? "color-mix(in oklch, var(--danger) 42%, var(--line))"
           : "var(--line)";
   return (
-    <div
+    // <output> is the native status live region (S6819); a danger outcome still
+    // overrides the role to "alert" so it keeps its assertive announcement.
+    // PREVIEW_STYLE declares display:flex, so no neutraliser class is needed.
+    <output
       data-testid={testid}
-      role={tone === "danger" ? "alert" : "status"}
+      role={tone === "danger" ? "alert" : undefined}
       style={{ ...PREVIEW_STYLE, boxShadow: `inset 0 0 0 1px ${ringColor}` }}
     >
       <StatusPill tone={tone}>
@@ -177,6 +180,6 @@ export function MutationOutcome({
           ))}
         </ul>
       ) : null}
-    </div>
+    </output>
   );
 }

@@ -1904,10 +1904,12 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
       />
       {/* Compact live region instead of aria-live on the whole list section —
           re-announcing every row after each reload flooded screen readers
-          (uiux-fix F032, C226; pattern of MemoryList). */}
-      <p role="status" className="visually-hidden">
+          (uiux-fix F032, C226; pattern of MemoryList). <output> is the native
+          status live region (S6819); cmp-native-block restores the block box the
+          <p> had, since `.visually-hidden` declares no display of its own. */}
+      <output className="visually-hidden cmp-native-block">
         {!isLoading && loadError === null ? catalogAnnouncement(capsules, capsuleSets) : null}
-      </p>
+      </output>
       {capsuleSetActionError !== null ? (
         <AlertBanner message={capsuleSetActionError} onDismiss={clearCapsuleSetActionError} />
       ) : null}

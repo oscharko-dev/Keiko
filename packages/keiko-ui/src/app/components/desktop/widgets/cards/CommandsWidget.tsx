@@ -353,15 +353,17 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
             </button>
           ) : null}
         </div>
+        {/* <output> owns role=status; cmp-native-block restores the block box the <p> had
+            (#2721). */}
         {tasks.length === 0 && projectInput.length > 0 && error === null ? (
-          <p className="tm-limits" role="status">
+          <output className="tm-limits cmp-native-block">
             {t("commandsWidget.empty.noRunnableTasks")}
-          </p>
+          </output>
         ) : null}
         {selectedTaskRequiresApproval ? (
-          <p className="tm-limits" role="status">
+          <output className="tm-limits cmp-native-block">
             {t("commandsWidget.trust.required")}
-          </p>
+          </output>
         ) : null}
       </form>
 

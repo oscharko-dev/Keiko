@@ -159,56 +159,52 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
   if (isConfiguredVoiceProvider(model)) {
     const label = voiceProviderAvailabilityLabel(model, t);
     return (
-      <span
+      <output
         className="ml-elig ml-elig-voice"
         data-testid="voice-elig-ok"
-        role="status"
         aria-label={t("settings.models.eligibilityPrefix", { label })}
         title={label}
       >
         {t("settings.models.voiceProviderBadge", { label: voiceProviderShortLabel(model, t) })}
-      </span>
+      </output>
     );
   }
   if (reason === undefined) {
     return (
-      <span
+      <output
         className="ml-elig ml-elig-ok"
         data-testid="conv-elig-ok"
-        role="status"
         aria-label={t("settings.models.eligibilityOkAria")}
       >
         {t("settings.models.eligibilityOk")}
-      </span>
+      </output>
     );
   }
   if (reason === "embedding-only") {
     const label = embeddingAvailabilityLabel(t);
     return (
-      <span
+      <output
         className="ml-elig ml-elig-embed"
         data-testid="embedding-elig-ok"
-        role="status"
         aria-label={t("settings.models.eligibilityPrefix", { label })}
         title={label}
       >
         {t("settings.models.embeddingLabel")}
-      </span>
+      </output>
     );
   }
   const label = conversationIneligibilityLabel(reason, t);
   return (
-    <span
+    <output
       className="ml-elig ml-elig-no"
       data-testid="conv-elig-no"
-      role="status"
       aria-label={t("settings.models.eligibilityPrefix", { label })}
       title={label}
     >
       {t("settings.models.notSelectable", {
         reason: conversationIneligibilityShortLabel(reason, t),
       })}
-    </span>
+    </output>
   );
 }
 
@@ -347,13 +343,14 @@ function ReadinessReportCopyButton({
         <Icons.copy size={12} aria-hidden="true" />
         {copyState === "copied" ? t("settings.models.copied") : t("settings.models.copyReport")}
       </button>
-      <span
+      {/* <output> already carries role=status; only the failure branch overrides it. */}
+      <output
         className="ml-url mono"
-        role={copyState === "failed" ? "alert" : "status"}
+        role={copyState === "failed" ? "alert" : undefined}
         aria-live="polite"
       >
         {status}
-      </span>
+      </output>
     </>
   );
 }
@@ -363,13 +360,13 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
   if (state === undefined || state.status === "idle") return null;
   if (state.status === "running") {
     return (
-      <div className="ml-readiness" role="status">
+      <output className="ml-readiness cmp-native-block">
         {t("settings.models.checkingReadiness", {
           mode: state.deep
             ? t("settings.models.readinessModeDeep")
             : t("settings.models.readinessModeBasic"),
         })}
-      </div>
+      </output>
     );
   }
   if (state.status === "error") {
@@ -385,7 +382,11 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
   return (
     <div className="ml-readiness">
       <div className="ml-rrow">
-        <div className="ml-rsummary" role={report.overallStatus === "failed" ? "alert" : "status"}>
+        {/* <output> already carries role=status; only the failure branch overrides it. */}
+        <output
+          className="ml-rsummary cmp-native-block"
+          role={report.overallStatus === "failed" ? "alert" : undefined}
+        >
           <div className="ml-rhead">
             <span className={"ml-rstatus " + report.overallStatus}>
               {workingToday ? t("settings.models.workingToday") : t("settings.models.notVerified")}
@@ -420,7 +421,7 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
             ) : null}
           </div>
           {warning !== undefined ? <div className="ml-rwarn">{warning}</div> : null}
-        </div>
+        </output>
       </div>
     </div>
   );
@@ -1123,15 +1124,13 @@ function ModelsTabContent({
 
       {/* uiux-fix C285: loading -> result transition is announced */}
       {loadingModels ? (
-        <div className="set-placeholder" role="status">
-          {t("settings.models.loading")}
-        </div>
+        <output className="set-placeholder cmp-native-block">{t("settings.models.loading")}</output>
       ) : models.length === 0 ? (
-        <div className="set-placeholder" role="status">
+        <output className="set-placeholder cmp-native-block">
           {gatewayConfigured
             ? t("settings.models.emptyConfigured")
             : t("settings.models.emptyUnconfigured")}
-        </div>
+        </output>
       ) : (
         <div className="set-list">
           {models.map((model) => (

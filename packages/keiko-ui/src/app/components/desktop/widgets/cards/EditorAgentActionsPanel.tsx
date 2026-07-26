@@ -234,7 +234,11 @@ function AuditFilterControls({
     option.value === "save" ? { ...option, label: saveLabel } : option,
   );
   return (
-    <div style={FILTER_GROUP_STYLE} role="group" aria-label={t("actions.filterGroup")}>
+    <fieldset
+      className="cmp-native-group"
+      style={FILTER_GROUP_STYLE}
+      aria-label={t("actions.filterGroup")}
+    >
       <FilterSelect
         label={t("actions.filter.actionType")}
         value={filters.actionType}
@@ -253,7 +257,7 @@ function AuditFilterControls({
         options={translateOptions(TIME_RANGE_OPTIONS, t)}
         onChange={onTimeRangeChange}
       />
-    </div>
+    </fieldset>
   );
 }
 

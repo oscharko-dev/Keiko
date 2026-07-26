@@ -868,14 +868,17 @@ export function PromptEnhancerPanel({
               {result.renderedPrompt}
             </pre>
             <div className="pe-actions">
+              {/* <output> owns role=status, so the success branch needs no role at all; the
+                  failure branch keeps its explicit role=alert override. cmp-native-block
+                  restores the block box the <p> had (#2721). */}
               {copyStatus !== null ? (
-                <p
-                  className={`pe-copy-status pe-copy-status-${copyState}`}
-                  role={copyState === "failed" ? "alert" : "status"}
+                <output
+                  className={`pe-copy-status pe-copy-status-${copyState} cmp-native-block`}
+                  role={copyState === "failed" ? "alert" : undefined}
                   aria-live="polite"
                 >
                   {copyStatus}
-                </p>
+                </output>
               ) : null}
               <button
                 type="button"

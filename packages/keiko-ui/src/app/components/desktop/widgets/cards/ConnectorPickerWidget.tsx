@@ -406,9 +406,9 @@ export function ConnectorPickerWidget({
       />
 
       {setsFailed ? (
-        <p className="connector-picker-notice" role="status">
+        <output className="connector-picker-notice cmp-native-block">
           Knowledge Pod Sets could not be loaded.
-        </p>
+        </output>
       ) : null}
 
       <div className="connector-picker-footer">

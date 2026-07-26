@@ -275,11 +275,10 @@ function TextFilePreview(props: TextFilePreviewProps): ReactNode {
       {!props.shouldHighlight ? (
         <div className="fpv-banner">{props.t("filePreview.syntaxHighlightDisabled")}</div>
       ) : null}
-      <div
+      <section
         className="fpv-code mono"
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
         tabIndex={0}
-        role="region"
         aria-label={props.t("filePreview.previewRegionLabel", { name: props.preview.name })}
         style={
           {
@@ -300,7 +299,7 @@ function TextFilePreview(props: TextFilePreviewProps): ReactNode {
             })}
           </button>
         ) : null}
-      </div>
+      </section>
     </>
   );
 }
@@ -545,13 +544,15 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
         {copyStatus !== null ? (
-          <span
+          <output
             className="fpv-status fpv-copy-status"
-            role={copyStatus === "clipboardFailed" ? "alert" : "status"}
+            // <output> already carries role="status"; only the clipboard failure needs the
+            // more assertive live region, so that is the one case that still names a role.
+            role={copyStatus === "clipboardFailed" ? "alert" : undefined}
             aria-live="polite"
           >
             {copyStatusText}
-          </span>
+          </output>
         ) : null}
         <button
           className="fpv-back fpv-refresh"
@@ -565,14 +566,9 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           <Icons.reset size={14} />
         </button>
         {refreshStatusText.length > 0 ? (
-          <span
-            className="fpv-status mono"
-            data-state={refreshStatus}
-            role="status"
-            aria-live="polite"
-          >
+          <output className="fpv-status mono" data-state={refreshStatus} aria-live="polite">
             {refreshStatusText}
-          </span>
+          </output>
         ) : null}
         {canOpenInEditor ? (
           <button
@@ -597,9 +593,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       </div>
 
       {loading && preview === null ? (
-        <div className="fpv-state" role="status">
-          {t("filePreview.loadingState")}
-        </div>
+        <output className="fpv-state cmp-native-block">{t("filePreview.loadingState")}</output>
       ) : null}
       {error !== null ? (
         <div className="fpv-state fpv-error" role="alert">

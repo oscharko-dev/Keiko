@@ -497,9 +497,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
       >
         <Icons.copy size={20} aria-hidden="true" />
       </button>
-      <span role="status" className="chat-msg-copy-status">
-        {status}
-      </span>
+      <output className="chat-msg-copy-status">{status}</output>
     </div>
   );
 }
@@ -539,9 +537,7 @@ function MessageRegenerateButton({
           {regenerating ? t("chat.regenerate.cancelShort") : t("chat.regenerate.short")}
         </button>
       </div>
-      <span role="status" className="sr-only">
-        {status}
-      </span>
+      <output className="sr-only">{status}</output>
     </>
   );
 }
@@ -1771,6 +1767,10 @@ interface RepositoryReferenceStripProps {
   readonly onRemove: (id: string) => void;
 }
 
+// #2721 — the strip is a real list, so it is a <ul>/<li> rather than a <div> pair carrying
+// role="list"/role="listitem". cmp-native-list neutralises the marker and the block margin;
+// the strip's own `padding: 4px 2px` survives because native-elements.css loads before
+// globals.css, so .repo-token-strip wins at equal specificity.
 function RepositoryReferenceStrip({
   references,
   onRemove,
@@ -1778,12 +1778,11 @@ function RepositoryReferenceStrip({
   const t = useTranslate();
   if (references.length === 0) return null;
   return (
-    <div className="repo-token-strip" role="list" aria-label={t("chat.repository.references")}>
+    <ul className="repo-token-strip cmp-native-list" aria-label={t("chat.repository.references")}>
       {references.map((reference) => (
-        <div
+        <li
           key={reference.id}
           className={`repo-token${reference.verified ? "" : " repo-token-unverified"}`}
-          role="listitem"
           title={
             reference.verified
               ? `${reference.path} - ${reference.root}`
@@ -1814,9 +1813,9 @@ function RepositoryReferenceStrip({
           >
             <Icons.close size={12} />
           </button>
-        </div>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -2191,16 +2190,16 @@ function NoModelAlert(): ReactNode {
   );
 }
 
-// AC #3: rendered while session.loading is true. role="status" (polite) so
-// screen-reader users hear the state without interruption. No fake progress
-// percentage — engineering note forbids it.
+// AC #3: rendered while session.loading is true. <output> is the element that
+// owns role="status" (polite), so screen-reader users hear the state without
+// interruption. No fake progress percentage — engineering note forbids it.
 function LoadingStatus(): ReactNode {
   const t = useTranslate();
   return (
-    <div id={LOADING_STATUS_ID} role="status" className="cmp-loading-status">
+    <output id={LOADING_STATUS_ID} className="cmp-loading-status">
       <span className="cmp-loading-dot" aria-hidden="true" />
       {t("chat.loadingGateway")}
-    </div>
+    </output>
   );
 }
 

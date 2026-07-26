@@ -474,10 +474,12 @@ export function MemoryListContent({
 
       {/* Compact live region instead of aria-live on the whole list section —
           announcing every inserted row flooded screen readers after each
-          filter change (uiux-fix F035). */}
-      <p role="status" className="visually-hidden">
+          filter change (uiux-fix F035). <output> is the native status live
+          region (S6819); cmp-native-block restores the block box the <p> had,
+          since `.visually-hidden` declares no display of its own. */}
+      <output className="visually-hidden cmp-native-block">
         {!loading && error === null ? t("memoria.memoriesFound", { count: memories.length }) : null}
-      </p>
+      </output>
 
       <section
         aria-label={t("memoria.memoryRecords")}

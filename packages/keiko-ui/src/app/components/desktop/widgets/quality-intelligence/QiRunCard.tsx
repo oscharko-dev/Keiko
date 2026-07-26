@@ -864,17 +864,18 @@ export function QiRunCard({
     <div className="qi-run-card" data-testid="qi-run-card">
       <header className="qi-run-card-head">
         {/* a11y m-02: name the card as a level-2 heading so the inner section <h3>s are not
-            orphaned and screen-reader heading navigation can reach the card. role="heading" keeps
-            the existing monospace run-id visual unchanged (no font/structure change). */}
-        <span
-          className="qi-run-id qi-monospace"
+            orphaned and screen-reader heading navigation can reach the card. <h2> owns the
+            role and the level (#2721), and the monospace run-id visual stays unchanged:
+            cmp-native-heading only neutralises the user-agent margin and bold weight, because
+            native-elements.css loads before globals.css and .qi-run-id/.qi-monospace therefore
+            keep their own font-family, font-size and colour. */}
+        <h2
+          className="qi-run-id qi-monospace cmp-native-heading"
           title={runId}
-          role="heading"
-          aria-level={2}
           aria-label={t("qi.run.aria", { runId })}
         >
           {runId}
-        </span>
+        </h2>
       </header>
       {/* uiux-fix F030 C111: the live region is a small persistent sr-only status line — NOT the
           whole card body. role="status" on the body (implicit aria-atomic) re-announced every

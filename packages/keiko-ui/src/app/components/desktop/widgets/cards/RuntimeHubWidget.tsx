@@ -126,13 +126,13 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
           ))}
         </div>
         {!hasProject ? (
-          <p className="tm-limits" role="status">
+          <output className="tm-limits cmp-native-block">
             Add a project path to enable task and Git workflows.
-          </p>
+          </output>
         ) : null}
       </form>
 
-      <div role="region" aria-label="Runtime audit metadata">
+      <section aria-label="Runtime audit metadata">
         <ul className="tm-events">
           <li className="tm-event">
             <span className="tm-event-kind">Commands</span>
@@ -147,7 +147,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
             <span className="tm-event-detail">policy / approval / evidence ledger</span>
           </li>
         </ul>
-      </div>
+      </section>
     </div>
   );
 }

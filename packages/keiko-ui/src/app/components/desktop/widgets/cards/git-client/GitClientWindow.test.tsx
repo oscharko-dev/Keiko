@@ -1697,7 +1697,11 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
 
     await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(callsBefore));
     const outcome = await screen.findByTestId("git-staging-outcome");
-    expect(outcome).toHaveAttribute("role", "status");
+    // The outcome surface is an <output>, the element that owns role=status
+    // (S6819), so the role is implicit — assert the computed role and the
+    // element rather than a literal role attribute.
+    expect(outcome).toHaveRole("status");
+    expect(outcome.tagName).toBe("OUTPUT");
     expect(outcome).toHaveTextContent("Succeeded");
   });
 

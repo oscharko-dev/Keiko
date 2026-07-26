@@ -191,7 +191,11 @@
                 <rect x="4" y="8" width="12" height="12" rx="1.5" /></svg
               >Duplicate<span class="k">⌘D</span>
             </button>
-            <div class="c-ctx-sep" role="separator"></div>
+            <!-- #2721 — <hr> is the element that owns role="separator". .c-ctx-sep already
+                 overrides the user-agent margin and paints the rule with height+background;
+                 only the inset border it does not set has to be dropped here, because
+                 keiko-nav.css is sha256-pinned by the #1300 fidelity proof. -->
+            <hr class="c-ctx-sep" style="border: 0" />
             <button class="c-ctx-item danger" role="menuitem" tabindex="-1">
               <svg
                 width="15"

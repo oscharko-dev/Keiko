@@ -293,7 +293,13 @@ function ReadyPreview({
   t,
 }: ReadyPreviewProps): ReactNode {
   return (
-    <div className="cmp-voice-preview" role="group" aria-label={t("voice.dictation.preview")}>
+    // <fieldset> owns role=group and this group really does wrap the transcript form control.
+    // cmp-native-group only neutralises the user-agent defaults .cmp-voice-preview leaves
+    // standing: it loads before globals.css, so that class keeps its own padding and border.
+    <fieldset
+      className="cmp-voice-preview cmp-native-group"
+      aria-label={t("voice.dictation.preview")}
+    >
       <span role="status" aria-live="polite" className="sr-only">
         {t("voice.dictation.ready")}
       </span>
@@ -342,7 +348,7 @@ function ReadyPreview({
           {t("voice.dictation.discard")}
         </button>
       </div>
-    </div>
+    </fieldset>
   );
 }
 
