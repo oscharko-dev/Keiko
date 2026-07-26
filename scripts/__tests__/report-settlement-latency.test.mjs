@@ -83,6 +83,36 @@ describe("head greenness", () => {
     expect(requiredGreenAt(contexts, REQUIRED)).toBe("2026-07-25T10:50:00.000Z");
   });
 
+  it("accepts a required check that failed and was then re-run green", () => {
+    const contexts = [
+      checkRun("ci", "FAILURE", "2026-07-25T10:00:00Z", "2026-07-25T10:20:00Z"),
+      checkRun("ci", "SUCCESS", "2026-07-25T10:30:00Z", "2026-07-25T10:55:00Z"),
+      checkRun("workflow hygiene", "SUCCESS", "2026-07-25T10:00:00Z", "2026-07-25T10:05:00Z"),
+    ];
+
+    expect(requiredGreenAt(contexts, REQUIRED)).toBe("2026-07-25T10:55:00.000Z");
+  });
+
+  it("still refuses a check whose latest attempt failed, whatever came before", () => {
+    const contexts = [
+      checkRun("ci", "SUCCESS", "2026-07-25T10:00:00Z", "2026-07-25T10:20:00Z"),
+      checkRun("ci", "FAILURE", "2026-07-25T10:30:00Z", "2026-07-25T10:55:00Z"),
+      checkRun("workflow hygiene", "SUCCESS", "2026-07-25T10:00:00Z", "2026-07-25T10:05:00Z"),
+    ];
+
+    expect(requiredGreenAt(contexts, REQUIRED)).toBeNull();
+  });
+
+  it("treats a check that is still running as the newest state, and not as green", () => {
+    const contexts = [
+      checkRun("ci", "SUCCESS", "2026-07-25T10:00:00Z", "2026-07-25T10:20:00Z"),
+      checkRun("workflow hygiene", "SUCCESS", "2026-07-25T10:00:00Z", "2026-07-25T10:05:00Z"),
+      { __typename: "CheckRun", name: "ui", conclusion: null, startedAt: "2026-07-25T10:00:00Z" },
+    ];
+
+    expect(requiredGreenAt(contexts, REQUIRED)).toBeNull();
+  });
+
   it("returns null when a required check failed, whatever else succeeded", () => {
     const contexts = [
       checkRun("ci", "SUCCESS", "2026-07-25T10:00:00Z", "2026-07-25T10:20:00Z"),
@@ -175,6 +205,23 @@ describe("pull-request summary", () => {
     expect(report.reactionMinutes).toEqual([20]);
   });
 
+  it("reports a pull request CI never observed instead of aborting the whole report", () => {
+    const report = summarizePullRequest({
+      number: 3,
+      mergedAt: "2026-07-25T11:00:00Z",
+      heads: [],
+      findings: [],
+    });
+
+    expect(report).toMatchObject({
+      outcome: "unobserved",
+      headCount: 0,
+      repairRounds: 0,
+      checksGreenToMergedMinutes: null,
+      firstGreenToMergedMinutes: null,
+    });
+  });
+
   it("reports a head that never went green instead of guessing a duration", () => {
     const report = summarizePullRequest({
       number: 2702,
@@ -217,6 +264,21 @@ describe("pull-request summary", () => {
     expect(report.reactionMinutes).toEqual([20]);
   });
 
+  it("counts a finding that arrived while CI was still running", () => {
+    const report = summarizePullRequest({
+      number: 1,
+      mergedAt: "2026-07-25T14:00:00Z",
+      heads: [
+        head("2026-07-25T10:00:00Z", "2026-07-25T10:30:00Z"),
+        head("2026-07-25T11:00:00Z", "2026-07-25T13:00:00Z"),
+      ],
+      // Published 10 minutes into CI, well before the head turned green - the common case.
+      findings: ["2026-07-25T10:10:00Z"],
+    });
+
+    expect(report.reactionMinutes).toEqual([50]);
+  });
+
   it("fails loud on malformed data rather than reporting a wrong duration", () => {
     const valid = {
       number: 1,
@@ -228,10 +290,7 @@ describe("pull-request summary", () => {
     expect(() => summarizePullRequest({ ...valid, number: "1" })).toThrow(/integer number/u);
     expect(() => summarizePullRequest({ ...valid, mergedAt: "yesterday" })).toThrow(/ISO-8601/u);
     expect(() => summarizePullRequest({ ...valid, mergedAt: undefined })).toThrow(/ISO-8601/u);
-    expect(() => summarizePullRequest({ ...valid, heads: [] })).toThrow(/at least one head/u);
-    expect(() => summarizePullRequest({ ...valid, heads: undefined })).toThrow(
-      /at least one head/u,
-    );
+    expect(() => summarizePullRequest({ ...valid, heads: undefined })).toThrow(TypeError);
     expect(() => summarizePullRequest({ ...valid, findings: "none" })).toThrow(
       /array of instants/u,
     );
@@ -301,6 +360,13 @@ describe("cohort aggregation", () => {
     expect(rendered).toContain("| 1 | clean | measured |");
     expect(rendered).toContain("| 2 | finding-bearing | measured |");
     expect(rendered).toContain("median settlement");
+  });
+
+  it("renders an absent value as a dash in both tables, never as the string null", () => {
+    const rendered = renderReport([], summarizeCohorts([]));
+
+    expect(rendered).not.toContain("null");
+    expect(rendered).toContain("| finding-bearing | 0 | 0 | - | - | - | - | - |");
   });
 });
 
@@ -417,15 +483,179 @@ describe("collection", () => {
     });
   });
 
+  it("refuses to report durations for a pull request GitHub truncated", () => {
+    const timeline = timelineFromNode(
+      {
+        number: 9,
+        mergedAt: "2026-07-25T12:00:00Z",
+        commits: {
+          totalCount: 250,
+          nodes: [
+            {
+              commit: {
+                oid: "a",
+                committedDate: "2026-07-25T10:00:00Z",
+                statusCheckRollup: {
+                  contexts: {
+                    totalCount: 2,
+                    nodes: [
+                      checkRun("ci", "SUCCESS", "2026-07-25T10:01:00Z", "2026-07-25T10:20:00Z"),
+                      checkRun("ui", "SUCCESS", "2026-07-25T10:02:00Z", "2026-07-25T10:25:00Z"),
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        },
+        reviewThreads: { totalCount: 0, nodes: [] },
+      },
+      REQUIRED,
+    );
+
+    expect(timeline.truncated).toBe(true);
+    const report = summarizePullRequest(timeline);
+    expect(report.outcome).toBe("truncated");
+    expect(report.checksGreenToMergedMinutes).toBeNull();
+    expect(report.firstGreenToMergedMinutes).toBeNull();
+  });
+
+  it("cannot establish greenness from a truncated context list", () => {
+    const timeline = timelineFromNode(
+      {
+        number: 9,
+        mergedAt: "2026-07-25T12:00:00Z",
+        commits: {
+          totalCount: 1,
+          nodes: [
+            {
+              commit: {
+                oid: "a",
+                committedDate: "2026-07-25T10:00:00Z",
+                statusCheckRollup: {
+                  contexts: {
+                    totalCount: 99,
+                    nodes: [
+                      checkRun("ci", "SUCCESS", "2026-07-25T10:01:00Z", "2026-07-25T10:20:00Z"),
+                      checkRun("ui", "SUCCESS", "2026-07-25T10:02:00Z", "2026-07-25T10:25:00Z"),
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        },
+        reviewThreads: { totalCount: 0, nodes: [] },
+      },
+      REQUIRED,
+    );
+
+    expect(timeline.heads[0].requiredGreenAt).toBeNull();
+  });
+
+  it("clamps a commit-date fallback so one odd head cannot abort the whole report", () => {
+    const withStart = (started, completed) => ({
+      commit: {
+        oid: "a",
+        committedDate: "2026-07-25T09:00:00Z",
+        statusCheckRollup: {
+          totalCount: 2,
+          contexts: {
+            totalCount: 2,
+            nodes: [
+              checkRun("ci", "SUCCESS", started, completed),
+              checkRun("ui", "SUCCESS", started, completed),
+            ],
+          },
+        },
+      },
+    });
+    // Head 2 has no observable CI start, so it falls back to a commit date that PRECEDES head 1's
+    // CI start. Unclamped that inversion throws and takes every other pull request with it.
+    const noStart = {
+      commit: {
+        oid: "b",
+        committedDate: "2026-07-25T09:00:00Z",
+        statusCheckRollup: {
+          contexts: {
+            totalCount: 1,
+            nodes: [{ __typename: "CheckRun", name: "ci", conclusion: "SUCCESS" }],
+          },
+        },
+      },
+    };
+
+    const timeline = timelineFromNode(
+      {
+        number: 5,
+        mergedAt: "2026-07-25T13:00:00Z",
+        commits: {
+          totalCount: 2,
+          nodes: [withStart("2026-07-25T11:00:00Z", "2026-07-25T11:30:00Z"), noStart],
+        },
+        reviewThreads: { totalCount: 0, nodes: [] },
+      },
+      REQUIRED,
+    );
+
+    expect(timeline.heads[1].startedAt).toBe(timeline.heads[0].startedAt);
+    expect(() => summarizePullRequest(timeline)).not.toThrow();
+  });
+
+  it("refuses to page on when the query stops making progress", () => {
+    const repeating = vi.fn().mockReturnValue({
+      repository: {
+        pullRequests: {
+          pageInfo: { hasNextPage: true, endCursor: "same" },
+          nodes: [{ number: 1 }],
+        },
+      },
+    });
+    const empty = vi.fn().mockReturnValue({
+      repository: {
+        pullRequests: { pageInfo: { hasNextPage: true, endCursor: "c" }, nodes: [] },
+      },
+    });
+
+    expect(() => collectMergedPullRequests(20, { repository: "o/r", query: repeating })).toThrow(
+      /made no progress/u,
+    );
+    expect(() => collectMergedPullRequests(20, { repository: "o/r", query: empty })).toThrow(
+      /made no progress/u,
+    );
+  });
+
+  it("refuses to page on when GitHub promises a page but sends no cursor", () => {
+    const query = vi.fn().mockReturnValue({
+      repository: {
+        pullRequests: { pageInfo: { hasNextPage: true }, nodes: [{ number: 1 }] },
+      },
+    });
+
+    expect(() => collectMergedPullRequests(20, { repository: "o/r", query })).toThrow(
+      /without a cursor/u,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds the outbound call so a hung request cannot stall the report", () => {
+    const execute = vi.fn().mockReturnValue({ status: 0, stdout: '{"data":{}}' });
+
+    ghGraphql("q", {}, { execute, ghExecutable: "gh" });
+
+    expect(execute.mock.calls[0][2]).toMatchObject({ timeout: expect.any(Number) });
+    expect(execute.mock.calls[0][2].timeout).toBeGreaterThan(0);
+  });
+
   it("asks GitHub for merged pull requests against dev and validates the slug", () => {
     const query = vi.fn().mockReturnValue({
       repository: { pullRequests: { pageInfo: { hasNextPage: false }, nodes: [{ number: 1 }] } },
     });
 
-    expect(collectMergedPullRequests(5, { repository: "o/r", query })).toEqual([{ number: 1 }]);
-    expect(query).toHaveBeenCalledWith({ owner: "o", name: "r", count: 5, after: null });
+    expect(collectMergedPullRequests(3, { repository: "o/r", query })).toEqual([{ number: 1 }]);
+    expect(query).toHaveBeenCalledWith({ owner: "o", name: "r", count: 3, after: null });
     expect(MERGED_PULL_REQUESTS_QUERY).toContain('baseRefName:"dev"');
-    expect(() => collectMergedPullRequests(5, { repository: "nope", query })).toThrow(
+    expect(() => collectMergedPullRequests(3, { repository: "nope", query })).toThrow(
       /repository slug/u,
     );
     expect(requireRepositorySlug("oscharko-dev/Keiko")).toBe("oscharko-dev/Keiko");
@@ -593,6 +823,14 @@ describe("command line surface", () => {
         runSettlementReport({ argv: ["--count", count], collect, readRequired: () => REQUIRED }),
       ).toThrow(/--count/u);
     }
+  });
+
+  it("names the pull request when one of them cannot be summarized", () => {
+    const collect = vi.fn().mockReturnValue([{ number: 4242, mergedAt: "not-an-instant" }]);
+
+    expect(() => runSettlementReport({ argv: [], collect, readRequired: () => REQUIRED })).toThrow(
+      /pull request 4242: merge instant/u,
+    );
   });
 
   it("prints the report and exits zero", () => {

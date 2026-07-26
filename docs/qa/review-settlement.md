@@ -21,7 +21,7 @@ requests, the median gap between the last required check turning green and the m
 **0.1 minutes**. Auto-merge is not slow; there is nothing there to cut.
 
 The cost sits in the repair rounds themselves — a median of 3 per finding-bearing pull request — and
-inside those rounds, in reaction time: of 105 measured reactions, **61 exceed 10 minutes**, with a
+inside those rounds, in reaction time: of 119 measured reactions, **69 exceed 10 minutes**, with a
 520-minute maximum. Review bots publish while CI is still running, so a fast reaction lands the
 repair inside the CI window that was going to elapse anyway, and a slow one adds its full duration to
 the wall clock.
@@ -47,10 +47,14 @@ finding within 10 minutes of its appearance.**
 
 This formalizes the proactive-monitoring practice that already exists as an operating habit. It is an
 SLO, not a gate: nothing fails a check because a reaction was slow. Its measurement hook is the
-`reactions (min)` column of `npm run report:settlement-latency`, one sample per repair round, so
-adherence is visible per pull request and in the cohort median.
+`reactions (min)` column of `npm run report:settlement-latency`. A repair round yields a sample only
+when a finding was actually published while the previous head was live — a round pushed for any other
+reason (a rebase, a merge from `dev`, an author-initiated change) answered no finding and is
+deliberately left unmeasured, so the reaction figures are never diluted by rounds that had nothing to
+react to. Adherence is therefore visible per pull request and in the cohort median over the rounds
+that did answer something.
 
-Baseline adherence is **42%** (44 of 105 reactions within 10 minutes), median 11.4 minutes. That is
+Baseline adherence is **42%** (50 of 119 reactions within 10 minutes), median 11.4 minutes. That is
 the number the post-adoption report tracks, and it is the honest substitute for Issue #2708's stated
 "median checks-green-to-merged gap ≤30 minutes" target, which the same measurement shows is already
 met at 0.1 minutes and would pass without anything improving.

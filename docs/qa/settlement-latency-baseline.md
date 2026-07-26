@@ -5,8 +5,10 @@ recently merged pull requests targeting `dev`. The decision context is Issue #27
 rules derived from these numbers are in [`review-settlement.md`](review-settlement.md).
 
 This is a report, never a gate (ADR-0139 D1 keeps wall-clock assertions out of the required lane).
-Every value below is a duration, a count or a pull-request number — the metric's data model has no
-field that could carry a finding body, a file name or an author.
+Every metric value below is a duration, a count or a pull-request number, and an absent one reads as
+`-`. The only other values the schema admits are the allowlisted categorical labels in the two
+columns `cohort` and `outcome`. There is no field anywhere that could carry a finding body, a file
+name or an author.
 
 ## Definitions
 
@@ -15,9 +17,10 @@ field that could carry a finding body, a file name or an author.
 | `settlement`          | From the **first** instant every required check was green to `merged_at`. This is the span Issue #2708's founding 108–122 minute measurements describe. |
 | `final gap`           | From the **last** head turning green to `merged_at`. This is auto-merge's own latency.                                                                  |
 | `repair rounds`       | Heads CI actually observed, minus one. A commit pushed inside a batch behind a later commit was never a head and is not counted.                        |
-| `reactions`           | Per repair round: from the earliest finding on the previous head to the moment CI started on the repair.                                                |
+| `reactions`           | Per repair round: from the earliest finding published while the previous head was live, to the moment CI started on the repair.                         |
 | `never-fully-green`   | The final head never had enough required checks green — an administrative merge, or a required set that predates the current vocabulary.                |
 | `merged-before-green` | A required check was still completing when the merge landed.                                                                                            |
+| `truncated`           | GitHub returned a truncated commit, thread or check-context list, so no duration can be trusted for that pull request.                                  |
 
 ## What the numbers say
 
@@ -27,8 +30,8 @@ minute observations are settlement spans, not auto-merge latency — measuring t
 what makes that visible.
 
 **The cost is repair rounds and reaction time.** Finding-bearing pull requests carry a median of
-**3** repair rounds, and the reaction distribution is where the tail lives: of **105** measured
-reactions, **61 (58%)** exceed 10 minutes, with a maximum of **520 minutes**. The median reaction is
+**3** repair rounds, and the reaction distribution is where the tail lives: of **119** measured
+reactions, **69 (58%)** exceed 10 minutes, with a maximum of **520 minutes**. The median reaction is
 **11.4 minutes** — marginally outside the SLO this task documents, with a very heavy tail.
 
 **Findings arrive during CI, not after it.** The median settlement span (5.6 min) is far below the
@@ -38,42 +41,48 @@ wall-clock directly, while cutting auto-merge latency buys nothing — there is 
 
 **Target reading.** Issue #2708's target is stated as "median checks-green-to-merged gap ≤30 minutes".
 Measured as named, that target is already met at 0.1 minutes and would pass vacuously. The number
-worth binding is the reaction distribution — the share of reactions inside the 10-minute SLO — and
-the post-adoption report tracks it on that basis, recorded here so the substitution is explicit
-rather than silent.
+worth binding is the reaction distribution — the share of reactions inside the 10-minute SLO,
+**42% (50 of 119)** at baseline — and the post-adoption report tracks it on that basis, recorded here
+so the substitution is explicit rather than silent.
+
+**Outcome mix.** Of the 60 pull requests, **27** are fully measured, **26** never reached a green
+final head (administrative merges and pre-ADR-0159 required vocabularies), and **7** merged while a
+required check was still completing. Only the 27 contribute to a gap median; the rest are reported
+rather than silently averaged away.
 
 ## Cohort summary
 
 | cohort          | PRs | measured | median settlement | max settlement | median final gap | median rounds | median reaction |
 | --------------- | --: | -------: | ----------------: | -------------: | ---------------: | ------------: | --------------: |
 | finding-bearing |  56 |       26 |               5.6 |          500.8 |              0.1 |             3 |            11.4 |
-| clean           |   4 |        1 |               0.1 |            0.1 |              0.1 |             1 |            null |
+| clean           |   4 |        1 |               0.1 |            0.1 |              0.1 |             1 |               - |
 
 ## Per pull request
 
 | PR   | cohort          | outcome             | heads | repair rounds | findings | settlement (min) | final gap (min) | reactions (min)                                |
 | ---- | --------------- | ------------------- | ----: | ------------: | -------: | ---------------: | --------------: | ---------------------------------------------- |
+| 2744 | finding-bearing | never-fully-green   |     1 |             0 |        1 |                - |               - | -                                              |
 | 2737 | finding-bearing | never-fully-green   |     9 |             8 |        3 |            500.8 |               - | 6.8, 5.3                                       |
 | 2741 | finding-bearing | measured            |     3 |             2 |        4 |              1.8 |             1.8 | 9.2                                            |
 | 2738 | finding-bearing | measured            |     3 |             2 |        4 |              0.1 |             0.1 | 16, 13.9                                       |
 | 2739 | finding-bearing | measured            |     2 |             1 |        2 |              0.1 |             0.1 | 11                                             |
 | 2733 | finding-bearing | never-fully-green   |     6 |             5 |        3 |                - |               - | 17, 16.7                                       |
 | 2735 | finding-bearing | never-fully-green   |     4 |             3 |        4 |                - |               - | 30.1                                           |
-| 2734 | finding-bearing | measured            |     5 |             4 |        6 |               17 |             8.8 | 6.5, 0.3                                       |
+| 2734 | finding-bearing | measured            |     5 |             4 |        6 |               17 |             8.8 | 6.5, 4                                         |
 | 2732 | clean           | merged-before-green |     6 |             5 |        0 |                - |               - | -                                              |
 | 2729 | finding-bearing | measured            |     4 |             3 |        3 |              0.1 |             0.1 | 1.8, 2.1                                       |
 | 2728 | finding-bearing | never-fully-green   |     3 |             2 |        1 |                - |               - | 3.9                                            |
 | 2718 | clean           | measured            |     1 |             0 |        0 |              0.1 |             0.1 | -                                              |
 | 2717 | finding-bearing | never-fully-green   |     3 |             2 |        1 |                - |               - | 3.2                                            |
-| 2716 | finding-bearing | measured            |     5 |             4 |        5 |             23.9 |             0.1 | 6.4                                            |
+| 2716 | finding-bearing | measured            |     5 |             4 |        5 |             23.9 |             0.1 | 6.4, 4.2                                       |
 | 2715 | finding-bearing | never-fully-green   |     4 |             3 |        4 |                - |               - | 8.2                                            |
 | 2714 | finding-bearing | measured            |     3 |             2 |        4 |                0 |               0 | -                                              |
 | 2712 | clean           | merged-before-green |     1 |             0 |        0 |                - |               - | -                                              |
 | 2711 | finding-bearing | never-fully-green   |     4 |             3 |        2 |                - |               - | 9.1                                            |
 | 2709 | finding-bearing | measured            |     2 |             1 |        4 |              0.1 |             0.1 | 4.9                                            |
-| 2702 | finding-bearing | never-fully-green   |    16 |            15 |       14 |                - |               - | 26.5, 38.6, 43.8                               |
+| 2702 | finding-bearing | never-fully-green   |    20 |            19 |       14 |                - |               - | 3, 26.5, 38.6, 43.8                            |
 | 2701 | finding-bearing | measured            |     8 |             7 |       13 |              0.1 |             0.1 | 174.3, 19.8, 7.2, 20.1, 1.7                    |
-| 2700 | finding-bearing | measured            |     4 |             3 |        2 |             57.3 |             0.1 | 126.5                                          |
+| 2700 | finding-bearing | measured            |     4 |             3 |        2 |             57.3 |             0.1 | 126.5, 2.9                                     |
 | 2697 | finding-bearing | never-fully-green   |    18 |            17 |       33 |                - |               - | 10.4, 47.6, 2.8, 7.2, 8, 42.5, 10.8, 3.4, 32.8 |
 | 2698 | finding-bearing | measured            |     5 |             4 |        3 |              0.1 |             0.1 | 8.5                                            |
 | 2689 | finding-bearing | never-fully-green   |    16 |            15 |       12 |                - |               - | 11.8, 4.9, 34, 14.4                            |
@@ -81,35 +90,34 @@ rather than silent.
 | 2691 | finding-bearing | never-fully-green   |     2 |             1 |        3 |                - |               - | -                                              |
 | 2690 | finding-bearing | merged-before-green |     2 |             1 |        1 |                - |               - | 2.1                                            |
 | 2688 | finding-bearing | measured            |     3 |             2 |        5 |              5.6 |             0.1 | 7.5                                            |
-| 2686 | finding-bearing | measured            |     4 |             3 |        7 |             36.6 |             0.1 | 27.9, 36.2                                     |
+| 2686 | finding-bearing | measured            |     4 |             3 |        7 |             36.6 |             0.1 | 27.9, 36.2, 32.2                               |
 | 2682 | finding-bearing | measured            |     3 |             2 |        3 |            164.7 |               0 | 5.3                                            |
-| 2612 | finding-bearing | never-fully-green   |    18 |            17 |       29 |                - |               - | -                                              |
+| 2612 | finding-bearing | never-fully-green   |    64 |            63 |       29 |                - |               - | 13.3, 48.7, 22.4, 5.8, 0.6                     |
 | 2680 | finding-bearing | measured            |    16 |            15 |       19 |             38.2 |             0.1 | 3.7, 39.6, 0.4, 520.4, 19.5                    |
 | 2677 | finding-bearing | measured            |     2 |             1 |        1 |                2 |               2 | 14.4                                           |
 | 2671 | finding-bearing | measured            |     5 |             4 |       24 |              1.6 |             1.6 | 155.4, 10.6, 9                                 |
-| 2665 | finding-bearing | measured            |    20 |            19 |       17 |             81.2 |             0.1 | 9.9, 46.9, 7                                   |
-| 2662 | finding-bearing | measured            |     3 |             2 |        4 |               13 |               0 | 29.3                                           |
+| 2665 | finding-bearing | measured            |    23 |            22 |       17 |             81.2 |             0.1 | 9.9, 46.9, 32.7, 7                             |
+| 2662 | finding-bearing | measured            |     3 |             2 |        4 |               13 |               0 | 29.3, 10.7                                     |
 | 2661 | finding-bearing | merged-before-green |     3 |             2 |        5 |             11.9 |               - | 8.5                                            |
 | 2660 | finding-bearing | never-fully-green   |     9 |             8 |       11 |                - |               - | 9.3, 3.2, 1.9                                  |
-| 2658 | finding-bearing | measured            |     4 |             3 |        5 |             37.2 |               0 | 8.8                                            |
+| 2658 | finding-bearing | measured            |     4 |             3 |        5 |             37.2 |               0 | 8.8, 27.8                                      |
 | 2659 | finding-bearing | merged-before-green |     2 |             1 |       10 |                - |               - | 10.8                                           |
 | 2655 | finding-bearing | measured            |     3 |             2 |        4 |              0.1 |             0.1 | 20.1                                           |
 | 2653 | finding-bearing | measured            |     9 |             8 |       15 |              0.1 |             0.1 | 13.8, 24.7, 5.5, 10.7                          |
 | 2654 | finding-bearing | never-fully-green   |     3 |             2 |        7 |                - |               - | 6.1, 11.4                                      |
 | 2652 | finding-bearing | never-fully-green   |     3 |             2 |        1 |                - |               - | 5.4                                            |
 | 2651 | finding-bearing | never-fully-green   |     4 |             3 |        4 |                - |               - | 30, 44.5                                       |
-| 2650 | finding-bearing | never-fully-green   |     4 |             3 |        5 |             18.7 |               - | 14.9                                           |
+| 2650 | finding-bearing | never-fully-green   |     4 |             3 |        5 |             18.7 |               - | 14.9, 56.2, 7                                  |
 | 2647 | finding-bearing | merged-before-green |    10 |             9 |        7 |             14.8 |               - | 20, 6.8, 39.5                                  |
 | 2648 | finding-bearing | measured            |    11 |            10 |        1 |              2.3 |             2.3 | 18.5                                           |
-| 2646 | finding-bearing | merged-before-green |     4 |             3 |        8 |             19.1 |               - | 22.8                                           |
+| 2646 | finding-bearing | merged-before-green |     4 |             3 |        8 |             19.1 |               - | 22.8, 32.9                                     |
 | 2645 | finding-bearing | measured            |     3 |             2 |        5 |              0.1 |             0.1 | 4.6, 17.2                                      |
-| 2602 | finding-bearing | never-fully-green   |    16 |            15 |       29 |                - |               - | 331.2, 12.1, 9.6, 35.5, 41.1, 14.8             |
+| 2602 | finding-bearing | never-fully-green   |    22 |            21 |       29 |                - |               - | 331.2, 12.1, 9.6, 35.5, 41.1, 14.8             |
 | 2603 | finding-bearing | never-fully-green   |    11 |            10 |       16 |                - |               - | 3.5, 5.5, 113.9, 60.7, 45.1                    |
 | 2611 | finding-bearing | never-fully-green   |     2 |             1 |        3 |                - |               - | 5.5                                            |
 | 2604 | finding-bearing | never-fully-green   |     3 |             2 |        1 |                - |               - | 22.5                                           |
-| 2601 | finding-bearing | never-fully-green   |     6 |             5 |       24 |                - |               - | 88.9, 38, 18.7, 21.5                           |
+| 2601 | finding-bearing | never-fully-green   |    13 |            12 |       24 |                - |               - | 88.9, 38, 18.7, 21.5                           |
 | 2600 | finding-bearing | measured            |    14 |            13 |        9 |            181.8 |             0.1 | 10.4, 3.8                                      |
 | 2470 | finding-bearing | measured            |     5 |             4 |        2 |              0.1 |             0.1 | 11.1                                           |
 | 2599 | finding-bearing | never-fully-green   |     1 |             0 |        2 |                - |               - | -                                              |
 | 2590 | clean           | never-fully-green   |     3 |             2 |        0 |                - |               - | -                                              |
-| 2585 | finding-bearing | never-fully-green   |     4 |             3 |        2 |                - |               - | 12.7                                           |
