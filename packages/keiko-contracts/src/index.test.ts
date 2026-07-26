@@ -1291,6 +1291,9 @@ describe("keiko-contracts package surface", () => {
     expect(typeof m.validateWorkspaceProfileManifest).toBe("function");
     expect(m.EDITOR_M11_DEFAULT_PROFILE_REF).toBe("profile-default");
     expect(typeof m.isWorkspaceProfileDisplayName).toBe("function");
+    expect(typeof m.isAssignableWorkspaceProfileDisplayName).toBe("function");
+    expect(typeof m.isReservedWorkspaceProfileDisplayName).toBe("function");
+    expect(typeof m.workspaceProfileDisplayNameKey).toBe("function");
     expect(typeof m.planEditorLocalHistoryRetention).toBe("function");
     expect(typeof m.validateWorkspaceBindingV2).toBe("function");
 
@@ -1303,6 +1306,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EditorM11ProfileSettingsLayer>();
     pin<import("./index.js").EditorM11RootSettingsLayer>();
     pin<import("./index.js").EditorM11ResolvedSetting>();
+    pin<import("./index.js").EditorM11SettingLayerValues>();
     pin<import("./index.js").EditorM11ProfilesSnapshot>();
     pin<import("./index.js").EditorM11ProfileMutation>();
     pin<import("./index.js").EditorM11ProfileMutationResult>();

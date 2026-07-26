@@ -4053,6 +4053,7 @@ export type {
   EditorM11RootSettingsLayer,
   EditorM11SettingScope,
   EditorM11SettingSource,
+  EditorM11SettingLayerValues,
   EditorM11ResolvedSetting,
   EditorM11SettingsResolutionInput,
   EditorM11ManagedLanguageComposition,
@@ -4095,6 +4096,9 @@ export {
   WORKSPACE_PROFILE_SCHEMA_VERSION,
   WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
   isWorkspaceProfileDisplayName,
+  isAssignableWorkspaceProfileDisplayName,
+  isReservedWorkspaceProfileDisplayName,
+  workspaceProfileDisplayNameKey,
   validateWorkspaceProfileManifest,
   redactWorkspaceProfileForExport,
 } from "./workspace-profile.js";

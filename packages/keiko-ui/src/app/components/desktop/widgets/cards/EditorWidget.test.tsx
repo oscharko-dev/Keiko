@@ -50,10 +50,10 @@ import {
   EDITOR_M7_SNIPPET_COLLECTION_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
-  resolveEditorM7Settings,
+  resolveEditorM11Settings,
   type EditorM7SettingId,
   type EditorM7SettingValue,
-  type EditorM7SettingsSnapshot,
+  type EditorM11SettingsSnapshot,
   type EditorM7WorkspaceSnippetSnapshot,
   type EditorHotExitSnapshotV1,
 } from "@oscharko-dev/keiko-contracts";
@@ -390,7 +390,7 @@ function deferred<T>(): Deferred<T> {
 
 function editorSettingsSnapshot(
   values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> = {},
-): EditorM7SettingsSnapshot {
+): EditorM11SettingsSnapshot {
   return {
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     storeState: "ready",
@@ -400,7 +400,7 @@ function editorSettingsSnapshot(
     etag: '"edm7-1-0-test"',
     root: "/repo",
     definitions: EDITOR_M7_SETTING_REGISTRY,
-    settings: resolveEditorM7Settings({ user: { scope: "user", values } }),
+    settings: resolveEditorM11Settings({ user: { scope: "user", values } }),
     eventSequence: 1,
   };
 }

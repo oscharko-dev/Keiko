@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  resolveEditorM7Settings,
+  resolveEditorM11Settings,
   type EditorM7AiActivationStatus,
   type EditorM7AiActivationSummary,
   type EditorM7AiFeature,
-  type EditorM7ResolvedSetting,
   type EditorM7SettingId,
   type EditorM7SettingValue,
+  type EditorM11ResolvedSetting,
 } from "@oscharko-dev/keiko-contracts";
 
 import {
@@ -20,13 +20,13 @@ import {
 
 type Values = Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>;
 
-function settings(values: Values): readonly EditorM7ResolvedSetting[] {
+function settings(values: Values): readonly EditorM11ResolvedSetting[] {
   const userValues: Partial<Record<EditorM7SettingId, EditorM7SettingValue>> = {};
   const workspaceValues: Partial<Record<EditorM7SettingId, EditorM7SettingValue>> = {};
   if (values.inlineCompletion !== undefined) userValues.inlineCompletion = values.inlineCompletion;
   if (values.testGeneration !== undefined) workspaceValues.testGeneration = values.testGeneration;
   if (values.patchApply !== undefined) workspaceValues.patchApply = values.patchApply;
-  return resolveEditorM7Settings({
+  return resolveEditorM11Settings({
     user: { scope: "user", values: userValues },
     workspace: { scope: "workspace", values: workspaceValues },
   });

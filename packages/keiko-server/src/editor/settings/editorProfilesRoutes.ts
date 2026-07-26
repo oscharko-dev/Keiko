@@ -1,7 +1,7 @@
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
-  isWorkspaceProfileDisplayName,
+  isAssignableWorkspaceProfileDisplayName,
   isWorkspaceProfileRef,
   parseEditorM7SettingPatch,
   type EditorM11ProfileMutation,
@@ -93,8 +93,7 @@ function parseNamedMutation(
   action: "create" | "rename" | "duplicate",
   root: string | undefined,
 ): ParsedProfileMutation | undefined {
-  if (!isWorkspaceProfileDisplayName(value.displayName)) return undefined;
-  if (value.displayName.trim() !== value.displayName) return undefined;
+  if (!isAssignableWorkspaceProfileDisplayName(value.displayName)) return undefined;
   const ref = profileRef(value.profileRef);
   if (action !== "create" && ref === undefined) return undefined;
   if (action === "create" && value.profileRef !== undefined) return undefined;

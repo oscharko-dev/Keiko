@@ -6,11 +6,9 @@ import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   EDITOR_M11_DEFAULT_PROFILE_REF,
-  resolveEditorM7Settings,
   resolveEditorM11Settings,
   type EditorM7AiActivationStatus,
   type EditorM7AiState,
-  type EditorM7SettingsSnapshot,
   type EditorM7SettingId,
   type EditorM7SettingValue,
   type EditorM11RootSettingsLayer,
@@ -36,7 +34,7 @@ function snapshot(
     fontSize: 16,
     formatOnSave: true,
   },
-): EditorM7SettingsSnapshot {
+): EditorM11SettingsSnapshot {
   return {
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     storeState: "ready",
@@ -46,7 +44,7 @@ function snapshot(
     etag: '"edm7-1-0-test"',
     root: "/repo",
     definitions: EDITOR_M7_SETTING_REGISTRY,
-    settings: resolveEditorM7Settings({
+    settings: resolveEditorM11Settings({
       user: { scope: "user", values },
       ceiling: { locked: { inlineCompletion: "OPERATOR_CEILING_DENIED" } },
     }),
@@ -400,7 +398,7 @@ describe("EditorSettingsPanel workspace-scope guardrail", () => {
 });
 
 describe("EditorSettingsPanel AI activation confirmation", () => {
-  function ungoverned(): EditorM7SettingsSnapshot {
+  function ungoverned(): EditorM11SettingsSnapshot {
     return {
       schemaVersion: EDITOR_M7_SCHEMA_VERSION,
       storeState: "ready",
@@ -410,7 +408,7 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
       etag: '"edm7-ai-test"',
       root: "/repo",
       definitions: EDITOR_M7_SETTING_REGISTRY,
-      settings: resolveEditorM7Settings({
+      settings: resolveEditorM11Settings({
         user: { scope: "user", values: {} },
         workspace: { scope: "workspace", values: {} },
       }),
@@ -538,7 +536,7 @@ describe("EditorSettingsPanel AI status badges", () => {
     };
   }
 
-  function snapshotWithAiStatuses(): EditorM7SettingsSnapshot {
+  function snapshotWithAiStatuses(): EditorM11SettingsSnapshot {
     return {
       ...snapshot(),
       aiAssistance: {
