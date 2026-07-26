@@ -102,8 +102,8 @@ describe("ConversationQuestionMap — two-phase wave (GEN-PERF-CHAT-012)", () =>
     // 6 buttons: 6 rect reads, then 6 --wave-width writes. Assert every read precedes every write.
     const waveWrites = log.filter((e) => e.op === "write" && e.prop === "--wave-width");
     const reads = log.filter((e) => e.op === "read");
-    expect(reads.length).toBe(6);
-    expect(waveWrites.length).toBe(6);
+    expect(reads).toHaveLength(6);
+    expect(waveWrites).toHaveLength(6);
 
     const firstWriteIndex = log.findIndex((e) => e.op === "write" && e.prop === "--wave-width");
     const lastReadIndex = log.reduce((acc, e, i) => (e.op === "read" ? i : acc), -1);

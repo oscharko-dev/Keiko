@@ -151,7 +151,7 @@ describe("adaptToPlainText — large case list", () => {
     const out = adaptToPlainText(bundle(reversed), reversed);
 
     const headers = out.match(/^CANDIDATE \d+: Title \d{3}$/gmu) ?? [];
-    expect(headers.length).toBe(50);
+    expect(headers).toHaveLength(50);
     // Candidate N must render the Nth title in ascending id order (pins ordering at scale).
     headers.forEach((header, i) => {
       const pad = String(i + 1).padStart(3, "0");

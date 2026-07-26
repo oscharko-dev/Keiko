@@ -402,7 +402,7 @@ describe("QiRunCard", () => {
       await screen.findByText("QI_BAD_EDIT: A valid candidate edit is required."),
     ).toBeInTheDocument();
     expect(screen.getByRole("form", { name: /edit login/i })).toBeInTheDocument();
-    expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
   it("keeps an open edit form intact when a review reloads the detail for another candidate", async () => {

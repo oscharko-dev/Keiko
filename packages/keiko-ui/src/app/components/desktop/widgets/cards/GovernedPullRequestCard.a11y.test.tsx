@@ -3,7 +3,7 @@
 // banner; asserts the polite live region exists for async outcome announcements; and asserts readiness /
 // outcome are conveyed by TEXT, not colour alone.
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { GovernedPullRequestCard, type GovernedPullRequestClient } from "./GovernedPullRequestCard";
@@ -75,7 +75,7 @@ describe("GovernedPullRequestCard — a11y (WCAG 2.2 AA)", () => {
     );
     fillForm();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gpr-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-readiness")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -85,7 +85,7 @@ describe("GovernedPullRequestCard — a11y (WCAG 2.2 AA)", () => {
     );
     fillForm();
     fireEvent.click(screen.getByTestId("gpr-submit"));
-    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -100,10 +100,10 @@ describe("GovernedPullRequestCard — a11y (WCAG 2.2 AA)", () => {
     render(<GovernedPullRequestCard projectId={PROJECT} client={makeClient()} />);
     fillForm();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gpr-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-readiness")).toBeInTheDocument();
     expect(screen.getByTestId("gpr-readiness")).toHaveTextContent("Ready for review: no");
     fireEvent.click(screen.getByTestId("gpr-submit"));
-    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gpr-outcome")).toBeInTheDocument();
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("pr-create: blocked");
   });
 });

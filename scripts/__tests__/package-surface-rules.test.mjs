@@ -100,7 +100,7 @@ describe("findForbiddenPaths — build metadata and compiled tests", () => {
       "node_modules/@oscharko-dev/keiko-server/dist/gitRepositoryRoutes.test.js",
       "node_modules/@oscharko-dev/keiko-server/dist/gitRepositoryRoutes.test.d.ts",
     ]);
-    expect(hits.filter((h) => h.label === "compiled test or spec artifact").length).toBe(2);
+    expect(hits.filter((h) => h.label === "compiled test or spec artifact")).toHaveLength(2);
   });
 
   it("flags nested __tests__ artifacts", () => {

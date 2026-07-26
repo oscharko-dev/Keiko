@@ -183,9 +183,7 @@ describe("InstallBanner", () => {
     });
 
     const dismissBtn = screen.getByRole("button", { name: /not now/i });
-    act(() => {
-      fireEvent.click(dismissBtn);
-    });
+    fireEvent.click(dismissBtn);
 
     expect(localStorage.getItem("keiko.pwa.dismissed")).not.toBeNull();
     expect(screen.queryByRole("region", { name: "Install Keiko" })).toBeNull();
@@ -226,10 +224,8 @@ describe("InstallBanner", () => {
       window.dispatchEvent(event);
     });
 
-    act(() => {
-      fireEvent.keyDown(window, { key: "Escape" });
-      fireEvent.keyDown(document.body, { key: "Escape" });
-    });
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
 
     expect(localStorage.getItem("keiko.pwa.dismissed")).toBeNull();
     expect(screen.getByRole("region", { name: "Install Keiko" })).toBeInTheDocument();

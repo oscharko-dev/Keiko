@@ -127,7 +127,7 @@ describe("screenCandidatesForSafety", () => {
       candidateCount: 3,
     });
     const screen = screenCandidatesForSafety(candidates, analysis, BENIGN_INPUT);
-    expect(screen.safe.length).toBe(candidates.length);
+    expect(screen.safe).toHaveLength(candidates.length);
     expect(screen.rejected).toEqual([]);
   });
 

@@ -291,14 +291,14 @@ describe("parseUnifiedDiff", () => {
 
     it("does NOT mark truncated when the file count is exactly at the cap", () => {
       const result = parseUnifiedDiff(buildDiff(MAX_DIFF_FILES));
-      expect(result.files.length).toBe(MAX_DIFF_FILES);
+      expect(result.files).toHaveLength(MAX_DIFF_FILES);
       expect(result.truncated).toBe(false);
     });
 
     it("caps file list at MAX_DIFF_FILES and marks truncated:true when more files are present", () => {
       const overshoot = MAX_DIFF_FILES + 50;
       const result = parseUnifiedDiff(buildDiff(overshoot));
-      expect(result.files.length).toBe(MAX_DIFF_FILES);
+      expect(result.files).toHaveLength(MAX_DIFF_FILES);
       expect(result.truncated).toBe(true);
     });
 

@@ -271,7 +271,7 @@ describe("keiko-model-gateway package surface", () => {
     expect(transport.code).toBe(ERROR_CODES.TRANSPORT);
   });
 
-  it("each type-only export is reachable by name at compile time", () => {
+  it("each type-only export is reachable by name at compile time", async () => {
     // verbatimModuleSyntax requires the type imports above to be used in a type position. A
     // phantom generic `pin<T>()` references the type argument at the call site without producing
     // any runtime value, so each symbol stays load-bearing on the public surface without tripping
@@ -313,6 +313,10 @@ describe("keiko-model-gateway package surface", () => {
     pin<CompletionDegradeReason>();
     pin<CompletionModelSelection>();
     pin<CompletionSelectionOptions>();
-    expect(true).toBe(true);
+    // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
+    // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
+    // loads at all — a circular or broken re-export throws here. The previous
+    // `expect(true).toBe(true)` asserted neither.
+    await expect(import("./index.js")).resolves.toBeDefined();
   });
 });

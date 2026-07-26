@@ -225,6 +225,6 @@ describe("HTML Manual Knowledge Pod — end-to-end evidence (#1877)", () => {
     );
 
     expect(retrieval.noEvidence).toBe(true);
-    expect(retrieval.references.length).toBe(0);
+    expect(retrieval.references).toHaveLength(0);
   });
 });

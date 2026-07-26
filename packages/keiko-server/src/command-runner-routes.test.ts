@@ -502,7 +502,7 @@ describe("openCommandSseStream backpressure", () => {
       runId: "run-bp",
       payload: { failureReason: "none" },
     });
-    expect(fake.writes.length).toBe(writesAfterKill);
+    expect(fake.writes).toHaveLength(writesAfterKill);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
 

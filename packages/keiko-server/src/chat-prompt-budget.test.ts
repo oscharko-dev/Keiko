@@ -40,7 +40,7 @@ describe("promptLaneSelectionVariants (GEN-AI-CONTEXT-001, RB-4)", () => {
     for (const variant of variants.filter(
       (v) => v.documentContext.length < selection.documentContext.length,
     )) {
-      expect(variant.memoryEntries.length).toBe(0);
+      expect(variant.memoryEntries).toHaveLength(0);
       expect(variant.compactionContextText).toBeUndefined();
     }
   });

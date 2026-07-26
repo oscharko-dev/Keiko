@@ -532,7 +532,7 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect(result.status).toBe(200);
     const body = asJson(result);
     expect(Array.isArray(body.outcomes)).toBe(true);
-    expect((body.outcomes as readonly unknown[]).length).toBe(0);
+    expect(body.outcomes as readonly unknown[]).toHaveLength(0);
   });
 
   it("captures an explicit remember intent and returns a candidate outcome", async () => {
@@ -552,7 +552,7 @@ describe("handleMemoryCaptureFromConversation", () => {
       kind: string;
       proposal?: { proposalId: string; body: string };
     }[];
-    expect(outcomes.length).toBe(1);
+    expect(outcomes).toHaveLength(1);
     expect(outcomes[0]?.kind).toBe("candidate");
     expect(typeof outcomes[0]?.proposal?.proposalId).toBe("string");
     expect((outcomes[0]?.proposal?.body ?? "").length).toBeGreaterThan(0);
@@ -919,7 +919,7 @@ describe("handleMemoryCaptureFromConversation", () => {
         includeExpired: true,
       });
       // No project-scoped memories should have been written for a chat with no detected intent.
-      expect(projectMemories.length).toBe(0);
+      expect(projectMemories).toHaveLength(0);
       // And nothing was added to the user scope either.
       const after = vault.listMemoriesByScope(
         { kind: "user", userId: "local" as unknown as MemoryUserId },

@@ -248,7 +248,7 @@ async function typeAndSubmit(user: ReturnType<typeof userEvent.setup>) {
 
 // Wait until the done state (reduction hint visible).
 async function waitForDone() {
-  await waitFor(() => expect(screen.getByText("2 screens from 4 detected")).toBeInTheDocument());
+  expect(await screen.findByText("2 screens from 4 detected")).toBeInTheDocument();
 }
 
 function mockRect(patch: Partial<DOMRect> = {}): DOMRect {
@@ -374,7 +374,7 @@ describe("FigmaSnapshotWindow", () => {
       const { updateCfg } = renderWindow({ listImpl, loadImpl });
       const user = userEvent.setup();
 
-      await waitFor(() => expect(screen.getByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument());
+      expect(await screen.findByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument();
       const row = screen.getByText(/AbCdEfGhIjKl · 1:2/iu).closest("article");
       expect(row).not.toBeNull();
       await user.click(within(row as HTMLElement).getByRole("button", { name: /load snapshot/iu }));
@@ -382,9 +382,9 @@ describe("FigmaSnapshotWindow", () => {
       await waitFor(() =>
         expect(loadImpl).toHaveBeenCalledWith(MOCK_SUMMARY.runId, expect.anything()),
       );
-      await waitFor(() =>
-        expect(screen.getByRole("article", { name: /screen 1: screen 1/iu })).toBeInTheDocument(),
-      );
+      expect(
+        await screen.findByRole("article", { name: /screen 1: screen 1/iu }),
+      ).toBeInTheDocument();
       expect(updateCfg).toHaveBeenCalledWith({ snapshotRunId: MOCK_SUMMARY.runId });
     });
 
@@ -394,7 +394,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ listImpl, updateMetadataImpl });
       const user = userEvent.setup();
 
-      await waitFor(() => expect(screen.getByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument());
+      expect(await screen.findByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /rename snapshot/iu }));
       await user.type(screen.getByLabelText(/snapshot name for/iu), "Release baseline");
       await user.click(screen.getByRole("button", { name: /^save$/iu }));
@@ -419,7 +419,7 @@ describe("FigmaSnapshotWindow", () => {
       });
       const user = userEvent.setup();
 
-      await waitFor(() => expect(screen.getByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument());
+      expect(await screen.findByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /delete snapshot/iu }));
       await user.click(screen.getByRole("button", { name: /^delete$/iu }));
 
@@ -487,9 +487,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(screen.getByRole("article", { name: /screen 1/iu })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("article", { name: /screen 1/iu })).toBeInTheDocument();
       expect(screen.getByRole("article", { name: /screen 2/iu })).toBeInTheDocument();
     });
 
@@ -505,9 +503,7 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
       await typeAndSubmit(user);
 
-      await waitFor(() =>
-        expect(screen.getByRole("article", { name: /screen 24/iu })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("article", { name: /screen 24/iu })).toBeInTheDocument();
       expect(screen.queryByRole("article", { name: /screen 25/iu })).not.toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: /show more screens/iu }));
@@ -519,11 +515,9 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(
-          screen.getByRole("img", { name: /captured preview for screen 1/iu }),
-        ).toBeInTheDocument(),
-      );
+      expect(
+        await screen.findByRole("img", { name: /captured preview for screen 1/iu }),
+      ).toBeInTheDocument();
       expect(
         imageSourceTarget(screen.getByRole("img", { name: /captured preview for screen 1/iu })),
       ).toBe("/api/figma/snapshots/fs-test-run-id-1234/screens/0/image");
@@ -672,9 +666,9 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
       await typeAndSubmit(user);
 
-      await waitFor(() =>
-        expect(screen.getByRole("article", { name: /screen 1: screen 2/iu })).toBeInTheDocument(),
-      );
+      expect(
+        await screen.findByRole("article", { name: /screen 1: screen 2/iu }),
+      ).toBeInTheDocument();
       expect(
         screen.queryByRole("article", { name: /screen 1: screen 1/iu }),
       ).not.toBeInTheDocument();
@@ -711,9 +705,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(screen.getByText(/1 screen could not be rendered/iu)).toBeInTheDocument(),
-      );
+      expect(await screen.findByText(/1 screen could not be rendered/iu)).toBeInTheDocument();
     });
 
     it("stores snapshotRunId in cfg via updateCfg after success", async () => {
@@ -733,9 +725,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(screen.getByText(/token invalid or missing/iu)).toBeInTheDocument(),
-      );
+      expect(await screen.findByText(/token invalid or missing/iu)).toBeInTheDocument();
     });
 
     it("does not call updateCfg when triggerImpl rejects", async () => {
@@ -743,7 +733,7 @@ describe("FigmaSnapshotWindow", () => {
       const { updateCfg } = renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() => expect(screen.getByText(/node not found/iu)).toBeInTheDocument());
+      expect(await screen.findByText(/node not found/iu)).toBeInTheDocument();
       expect(updateCfg).not.toHaveBeenCalled();
     });
 
@@ -867,11 +857,9 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(
-          screen.getByRole("button", { name: /re-snapshot this board/iu }),
-        ).toBeInTheDocument(),
-      );
+      expect(
+        await screen.findByRole("button", { name: /re-snapshot this board/iu }),
+      ).toBeInTheDocument();
     });
 
     it("calls triggerImpl again when Re-snapshot is clicked", async () => {
@@ -879,9 +867,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /re-snapshot/iu })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("button", { name: /re-snapshot/iu })).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /re-snapshot this board/iu }));
       await waitFor(() => expect(trigger).toHaveBeenCalledTimes(2));
     });
@@ -920,7 +906,7 @@ describe("FigmaSnapshotWindow", () => {
 
       await user.click(screen.getByRole("button", { name: /re-snapshot this board/iu }));
       // Previous summary still visible after failure.
-      await waitFor(() => expect(screen.getByText(/token expired/iu)).toBeInTheDocument());
+      expect(await screen.findByText(/token expired/iu)).toBeInTheDocument();
       expect(screen.getByText("2 screens from 4 detected")).toBeInTheDocument();
     });
 
@@ -1391,7 +1377,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ snapshotRunId: "fs-stored-123", loadImpl: loadSpy as unknown as LoadFn });
       const user = userEvent.setup();
       await user.click(screen.getByRole("button", { name: /load snapshot/iu }));
-      await waitFor(() => expect(screen.getByText(/token invalid/iu)).toBeInTheDocument());
+      expect(await screen.findByText(/token invalid/iu)).toBeInTheDocument();
       // The Load button must remain mounted after the error.
       expect(screen.getByRole("button", { name: /load snapshot/iu })).toBeInTheDocument();
     });
@@ -1446,9 +1432,7 @@ describe("FigmaSnapshotWindow", () => {
       await user.click(screen.getByRole("button", { name: /revoke stored token/iu }));
       await user.click(screen.getByRole("button", { name: /yes, revoke/iu }));
       await waitFor(() => expect(revokeFn).toHaveBeenCalledTimes(1));
-      await waitFor(() =>
-        expect(screen.getByText(/stored figma pat was removed/iu)).toBeInTheDocument(),
-      );
+      expect(await screen.findByText(/stored figma pat was removed/iu)).toBeInTheDocument();
     });
 
     it("shows error status when revokeImpl rejects", async () => {
@@ -1463,7 +1447,7 @@ describe("FigmaSnapshotWindow", () => {
       await user.click(screen.getByText(/required figma pat scopes/iu));
       await user.click(screen.getByRole("button", { name: /revoke stored token/iu }));
       await user.click(screen.getByRole("button", { name: /yes, revoke/iu }));
-      await waitFor(() => expect(screen.getByText(/no token stored/iu)).toBeInTheDocument());
+      expect(await screen.findByText(/no token stored/iu)).toBeInTheDocument();
     });
 
     it("cancelling the confirm does not call revokeImpl", async () => {
@@ -1539,9 +1523,9 @@ describe("FigmaSnapshotWindow", () => {
       rejectFirst(new DOMException("Aborted", "AbortError"));
       await user.click(screen.getByRole("button", { name: /cancel/iu }));
 
-      await waitFor(() =>
-        expect(screen.getByText(/server may still be building the snapshot/iu)).toBeInTheDocument(),
-      );
+      expect(
+        await screen.findByText(/server may still be building the snapshot/iu),
+      ).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /reconnect build/iu }));
       await waitFor(() => expect(trigger).toHaveBeenCalledTimes(2));
       expect(trigger.mock.calls[1]?.[0]).toBe(VALID_LINK);
@@ -1584,11 +1568,9 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(
-          screen.getByText(/window stopped waiting for the snapshot result/iu),
-        ).toBeInTheDocument(),
-      );
+      expect(
+        await screen.findByText(/window stopped waiting for the snapshot result/iu),
+      ).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /reconnect build/iu })).toBeInTheDocument();
     });
   });
@@ -1615,9 +1597,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(screen.getByText(/required figma pat scopes/iu)).toBeInTheDocument(),
-      );
+      expect(await screen.findByText(/required figma pat scopes/iu)).toBeInTheDocument();
       // Security: no token input/field anywhere in the component.
       expect(screen.queryByRole("textbox", { name: /token/iu })).not.toBeInTheDocument();
     });
@@ -1627,9 +1607,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(screen.getByText(/required figma pat scopes/iu)).toBeInTheDocument(),
-      );
+      expect(await screen.findByText(/required figma pat scopes/iu)).toBeInTheDocument();
       await user.click(screen.getByText(/required figma pat scopes/iu));
       expect(screen.getAllByText("file_content:read").length).toBeGreaterThan(0);
       expect(screen.queryByText("file_read")).not.toBeInTheDocument();
@@ -1660,7 +1638,7 @@ describe("FigmaSnapshotWindow", () => {
       const { container } = renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() => expect(screen.getByText(/token invalid/iu)).toBeInTheDocument());
+      expect(await screen.findByText(/token invalid/iu)).toBeInTheDocument();
       const results = await axe(container);
       expect(results).toHaveNoViolations();
     });
@@ -1753,11 +1731,9 @@ describe("FigmaSnapshotWindow", () => {
       await typeAndSubmit(user);
       // The server message names the policy but not the control — the UI appends an
       // instruction that references the checkbox and highlights + focuses it.
-      await waitFor(() =>
-        expect(
-          screen.getByText(/tick the acknowledgement checkbox below, then snapshot again/iu),
-        ).toBeInTheDocument(),
-      );
+      expect(
+        await screen.findByText(/tick the acknowledgement checkbox below, then snapshot again/iu),
+      ).toBeInTheDocument();
       const checkbox = screen.getByRole("checkbox", { name: /read-only and least-privilege/iu });
       expect(checkbox).toHaveAttribute("aria-invalid", "true");
       expect(checkbox).toHaveFocus();
@@ -1818,9 +1794,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(screen.getByText(/acknowledge the read-only/iu)).toBeInTheDocument(),
-      );
+      expect(await screen.findByText(/acknowledge the read-only/iu)).toBeInTheDocument();
       expect(screen.queryByText(/FIGMA_CONSENT_REQUIRED/u)).not.toBeInTheDocument();
     });
 
@@ -1829,9 +1803,7 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      await waitFor(() =>
-        expect(screen.getByText(/token invalid or missing/iu)).toBeInTheDocument(),
-      );
+      expect(await screen.findByText(/token invalid or missing/iu)).toBeInTheDocument();
       await user.type(screen.getByLabelText(/board link/iu), "x");
       expect(screen.queryByText(/token invalid or missing/iu)).not.toBeInTheDocument();
     });

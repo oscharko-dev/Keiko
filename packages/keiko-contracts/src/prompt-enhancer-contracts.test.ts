@@ -271,7 +271,7 @@ describe("prompt enhancer core primitives", () => {
 
   it("truncates an over-long draft to the scan bound", () => {
     const huge = "a".repeat(PROMPT_ANALYSIS_MAX_SCAN_CHARS + 500);
-    expect(normalizePromptDraft(huge).length).toBe(PROMPT_ANALYSIS_MAX_SCAN_CHARS);
+    expect(normalizePromptDraft(huge)).toHaveLength(PROMPT_ANALYSIS_MAX_SCAN_CHARS);
   });
 
   it("leaves a short draft unchanged", () => {

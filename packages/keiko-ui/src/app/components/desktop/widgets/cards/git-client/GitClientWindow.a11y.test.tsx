@@ -238,7 +238,7 @@ describe("GitClientWindow — axe no-violations", () => {
   it("empty state (no repo selected) has no axe violations", async () => {
     const { container } = render(<GitClientWindow client={makeClient()} />);
     // Wait for repos to load so the connect panel's recent list is rendered
-    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -247,7 +247,7 @@ describe("GitClientWindow — axe no-violations", () => {
     const { container } = render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
     // Wait for changed file to appear
-    await waitFor(() => expect(screen.getByText("foo.ts")).toBeInTheDocument());
+    expect(await screen.findByText("foo.ts")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -265,18 +265,16 @@ describe("GitClientWindow — axe no-violations", () => {
       })),
     });
     const { container } = render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("foo.ts")).toBeInTheDocument());
+    expect(await screen.findByText("foo.ts")).toBeInTheDocument();
     fireEvent.click(screen.getByText("foo.ts").closest("button")!);
-    await waitFor(() =>
-      expect(screen.getByRole("group", { name: "Diff scope" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("group", { name: "Diff scope" })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
   it("add-repository dialog open has no axe violations", async () => {
     const user = userEvent.setup();
     const { container } = render(<GitClientWindow client={makeClient()} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Clone from URL" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -289,31 +287,25 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
   describe("toolbar comboboxes", () => {
     it("Repository combobox has accessible name 'Repository'", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("combobox", { name: "Repository" })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
     });
 
     it("Branch combobox has accessible name 'Branch'", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("combobox", { name: "Branch: main" })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
     });
 
     it("Repository combobox is absent until a repository is connected", async () => {
       render(<GitClientWindow client={makeClient()} />);
       // Before any selection the body shows the Connect panel rather than the toolbar combobox.
-      await waitFor(() => expect(screen.getByText("No repository connected")).toBeInTheDocument());
+      expect(await screen.findByText("No repository connected")).toBeInTheDocument();
       expect(screen.queryByRole("combobox", { name: "Repository" })).not.toBeInTheDocument();
     });
 
     it("Repository combobox popup listbox has an accessible name", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("combobox", { name: "Repository" })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
 
       const trigger = screen.getByRole("combobox", { name: "Repository" });
       vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
@@ -344,9 +336,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
   describe("connect panel repository list", () => {
     it("lists recent repositories as buttons in the connect panel", async () => {
       render(<GitClientWindow client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
     });
 
@@ -431,7 +421,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
   describe("staging and commit controls", () => {
     it("each changed file has a checkbox whose name states the stage action", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      await waitFor(() => expect(screen.getByText("foo.ts")).toBeInTheDocument());
+      expect(await screen.findByText("foo.ts")).toBeInTheDocument();
       // src/foo.ts is staged → its checkbox reads "Unstage <path>" and is checked.
       const checkbox = screen.getByRole("checkbox", { name: "Unstage src/foo.ts" });
       expect(checkbox).toBeChecked();
@@ -439,7 +429,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
 
     it("the commit composer exposes labelled Summary and Description fields", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      await waitFor(() => expect(screen.getByText("foo.ts")).toBeInTheDocument());
+      expect(await screen.findByText("foo.ts")).toBeInTheDocument();
       expect(screen.getByRole("region", { name: "Commit" })).toBeInTheDocument();
       expect(screen.getByLabelText("Summary")).toBeInTheDocument();
       expect(screen.getByLabelText("Description")).toBeInTheDocument();
@@ -447,7 +437,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
 
     it("the stage-all and unstage-all actions are buttons with accessible names", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      await waitFor(() => expect(screen.getByText("foo.ts")).toBeInTheDocument());
+      expect(await screen.findByText("foo.ts")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Stage all" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Unstage all" })).toBeInTheDocument();
     });
@@ -457,11 +447,9 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("changed-file rows expose the Git status in their accessible names", async () => {
       const client = makeClient();
       render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-      await waitFor(() =>
-        expect(
-          screen.getByRole("button", { name: /src\/foo\.ts, staged modified/i }),
-        ).toBeInTheDocument(),
-      );
+      expect(
+        await screen.findByRole("button", { name: /src\/foo\.ts, staged modified/i }),
+      ).toBeInTheDocument();
     });
 
     it("diff content is a named keyboard-scrollable region", async () => {
@@ -487,9 +475,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("branch selector exposes searchable listbox controls", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("combobox", { name: "Branch: main" })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
 
       await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
 
@@ -552,16 +538,12 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(box).not.toBeNull();
 
       expect(box!.getAttribute("data-focus-visible")).toBeNull();
-      act(() => {
-        fireEvent.focus(checkbox);
-      });
+      fireEvent.focus(checkbox);
       expect(box!.getAttribute("data-focus-visible")).toBe("true");
       // The ring is rendered on the visible box, not the invisible input.
       expect(box!.style.boxShadow).toContain("var(--focus-ring)");
 
-      act(() => {
-        fireEvent.blur(checkbox);
-      });
+      fireEvent.blur(checkbox);
       expect(box!.getAttribute("data-focus-visible")).toBeNull();
     });
 
@@ -639,9 +621,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("dialog has role=dialog and accessible name 'Add repository'", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Clone from URL" }));
 
@@ -652,9 +632,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("dialog has aria-modal='true'", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Clone from URL" }));
 
@@ -664,9 +642,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("focus is initially on the first input inside the dialog", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Clone from URL" }));
 
@@ -684,9 +660,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("Tab key wraps focus within the dialog (focus trap)", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Clone from URL" }));
       const dialog = screen.getByRole("dialog");
@@ -705,9 +679,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("Escape key closes the dialog", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow client={makeClient()} />);
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument(),
-      );
+      expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Clone from URL" }));
       expect(screen.getByRole("dialog")).toBeInTheDocument();

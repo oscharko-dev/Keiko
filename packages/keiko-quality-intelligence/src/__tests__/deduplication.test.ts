@@ -40,7 +40,7 @@ describe("deduplicateCandidates", () => {
       title: "  Verify the LOGIN flow  ", // whitespace + case-insensitive duplicate
     });
     const result = deduplicateCandidates([left, right]);
-    expect(result.length).toBe(1);
+    expect(result).toHaveLength(1);
     expect(result[0]?.id).toBe(left.id); // lexicographically smallest survives
   });
 
@@ -51,7 +51,7 @@ describe("deduplicateCandidates", () => {
       steps: ["Open login page", "Enter different credentials", "Submit form"],
     });
     const result = deduplicateCandidates([left, right]);
-    expect(result.length).toBe(2);
+    expect(result).toHaveLength(2);
   });
 
   it("produces the same equivalence signature for whitespace-equivalent candidates", () => {

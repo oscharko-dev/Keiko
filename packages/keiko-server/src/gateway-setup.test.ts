@@ -3389,7 +3389,7 @@ describe("normalizeDiscoveryPayload", () => {
         id: `m-${String(index)}`,
       })),
     };
-    expect(normalizeDiscoveryPayload(payload).length).toBe(MAX_DISCOVERED_MODELS);
+    expect(normalizeDiscoveryPayload(payload)).toHaveLength(MAX_DISCOVERED_MODELS);
   });
 });
 

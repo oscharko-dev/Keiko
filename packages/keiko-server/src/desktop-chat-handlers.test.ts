@@ -2320,12 +2320,12 @@ describe("desktop chat routes", () => {
     // The gateway request for the SECOND send carries both user turns.
     const secondRequest = seenRequests.at(-1);
     const userTurns = (secondRequest?.messages ?? []).filter((message) => message.role === "user");
-    expect(userTurns.length).toBe(2);
+    expect(userTurns).toHaveLength(2);
 
     const expectedBlock = composeDiscussionDirectiveBlock("decide");
     // Exactly one user turn carries the block — the latest.
     const turnsWithBlock = userTurns.filter((turn) => turn.content.includes(expectedBlock));
-    expect(turnsWithBlock.length).toBe(1);
+    expect(turnsWithBlock).toHaveLength(1);
     expect(userTurns.at(-1)?.content.startsWith(expectedBlock)).toBe(true);
     // The earlier same-text turn is the bare draft (no block, no header).
     expect(userTurns[0]?.content).toBe("Should we ship this?");

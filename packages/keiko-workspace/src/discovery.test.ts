@@ -89,7 +89,7 @@ describe("discoverFiles", () => {
       ...DEFAULT_DISCOVERY_OPTIONS,
       maxFiles: 3,
     });
-    expect(found.length).toBe(3);
+    expect(found).toHaveLength(3);
   });
 
   it("caps recursion at maxDepth", () => {

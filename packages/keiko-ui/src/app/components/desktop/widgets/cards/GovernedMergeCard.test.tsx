@@ -85,7 +85,7 @@ describe("GovernedMergeCard", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient()} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     const select = screen.getByTestId("gm-strategy") as HTMLSelectElement;
     expect(select).not.toBeDisabled();
     const optionValues = Array.from(select.options).map((o) => o.value);
@@ -105,7 +105,7 @@ describe("GovernedMergeCard", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient({ mergePreview })} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     expect(screen.getByText(/is not eligible/i)).toBeInTheDocument();
   });
 
@@ -114,9 +114,9 @@ describe("GovernedMergeCard", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient({ mergeExecute })} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("gm-submit"));
-    await waitFor(() => expect(screen.getByTestId("gm-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-outcome")).toBeInTheDocument();
     expect(mergeExecute).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: PROJECT,
@@ -150,7 +150,7 @@ describe("GovernedMergeCard", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient({ mergePreview })} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     expect(screen.getByTestId("gm-readiness")).toHaveTextContent("Mergeable: no");
     expect(screen.getByTestId("gm-readiness")).toHaveTextContent("blocker: conflicts");
     // AC3: recovery action hint is rendered for the readiness blocker.
@@ -163,7 +163,7 @@ describe("GovernedMergeCard", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient({ mergePreview })} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     // Mergeable but unconfirmed → still disabled.
     expect(screen.getByTestId("gm-submit")).toBeDisabled();
     fireEvent.click(screen.getByLabelText("I confirm this high-risk merge"));
@@ -174,7 +174,7 @@ describe("GovernedMergeCard", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient()} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     // Mergeable, no approval required → enabled for the previewed target.
     expect(screen.getByTestId("gm-submit")).not.toBeDisabled();
     // Editing the target invalidates the stale preview gate until a fresh preview is run.
@@ -196,9 +196,9 @@ describe("GovernedMergeCard", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient({ mergeExecute })} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("gm-submit"));
-    await waitFor(() => expect(screen.getByTestId("gm-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-outcome")).toBeInTheDocument();
     expect(screen.getByTestId("gm-outcome")).toHaveTextContent("merge: blocked");
     expect(screen.getByTestId("gm-outcome")).toHaveTextContent("reason: policy-pack-blocked");
     expect(screen.getByTestId("gm-outcome")).toHaveTextContent("blocker: base-protected");
@@ -217,9 +217,9 @@ describe("GovernedMergeCard", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient({ mergeExecute })} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("gm-submit"));
-    await waitFor(() => expect(screen.getByTestId("gm-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-outcome")).toBeInTheDocument();
     expect(screen.getByTestId("gm-outcome")).toHaveTextContent("rejected: not-mergeable");
     expect(screen.getByTestId("gm-outcome")).toHaveTextContent("recover: user-fixable");
     expect(screen.getByTestId("gm-outcome")).toHaveTextContent("hint: resolve-conflicts");
@@ -245,9 +245,9 @@ describe("GovernedMergeCard", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient()} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("gm-submit"));
-    await waitFor(() => expect(screen.getByTestId("gm-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-outcome")).toBeInTheDocument();
     // Retargeting the form must hide the old target's outcome banner AND readiness panel — a
     // stale "merged" banner over a different PR number misreports what actually happened.
     fireEvent.change(screen.getByLabelText("Pull Request number"), { target: { value: "1501" } });

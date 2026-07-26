@@ -59,8 +59,8 @@ describe("computeScore", () => {
       "stacktrace-position-bonus": 1,
     });
     const score = computeScore(signals);
-    expect(score > 0.9).toBe(true);
-    expect(score <= 1).toBe(true);
+    expect(score).toBeGreaterThan(0.9);
+    expect(score).toBeLessThanOrEqual(1);
   });
 
   it("clamps the raw score into [0, 1] when custom weights overshoot", () => {

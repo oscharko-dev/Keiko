@@ -205,7 +205,7 @@ describe("describeRetrievalScope", () => {
     expect(aSummary?.sourceCount).toBe(aSources.length);
     expect(typeof aSummary?.displayName).toBe("string");
     expect(aSummary?.alwaysQuery).toBe(false);
-    expect(disclosure.sourceSummaries.length).toBe(aSources.length + 1);
+    expect(disclosure.sourceSummaries).toHaveLength(aSources.length + 1);
     for (const summary of disclosure.sourceSummaries) {
       expect(summary.id).toBeDefined();
       expect(typeof summary.displayName).toBe("string");
@@ -317,7 +317,7 @@ describe("composeCapsules", () => {
     for (const capsuleId of [aId, bId]) {
       const audit = listCapsuleMembershipChanges(store, capsuleId);
       const composeRows = audit.filter((r) => r.changeKind === "compose-set");
-      expect(composeRows.length).toBe(1);
+      expect(composeRows).toHaveLength(1);
       const composeRow = composeRows[0];
       expect(composeRow).toBeDefined();
       if (composeRow !== undefined) {

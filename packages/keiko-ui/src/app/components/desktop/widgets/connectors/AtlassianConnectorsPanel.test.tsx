@@ -70,7 +70,7 @@ describe("AtlassianConnectorsPanel", () => {
     await user.type(screen.getByLabelText("Account email"), "me@example.com");
     await user.type(screen.getByLabelText("API token"), "tok");
     await user.click(screen.getByRole("button", { name: "Save connector" }));
-    await waitFor(() => expect(screen.getByText("Ops")).toBeInTheDocument());
+    expect(await screen.findByText("Ops")).toBeInTheDocument();
   });
 
   it("verifies a connector inline and reveals the sync surface on manage", async () => {

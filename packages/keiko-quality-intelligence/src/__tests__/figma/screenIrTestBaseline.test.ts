@@ -519,10 +519,10 @@ describe("parseScreenIr — node-breadth bound", () => {
     if (parsed === undefined) throw new Error("expected a parseable Screen-IR");
     // The root consumes one unit of the budget, so exactly MAX_IR_NODES_PER_SCREEN - 1 children survive
     // — never the full oversized count.
-    expect(parsed.root.children.length).toBe(MAX_IR_NODES_PER_SCREEN - 1);
+    expect(parsed.root.children).toHaveLength(MAX_IR_NODES_PER_SCREEN - 1);
     const baseline = deriveScreenTestBaseline(parsed);
     // screen-render (1) + 2 items per surviving input child — bounded, not derived from the raw width.
-    expect(baseline.items.length).toBe(1 + 2 * (MAX_IR_NODES_PER_SCREEN - 1));
+    expect(baseline.items).toHaveLength(1 + 2 * (MAX_IR_NODES_PER_SCREEN - 1));
   });
 
   it("truncates deterministically — the same oversized IR yields an identical bounded tree", () => {

@@ -186,7 +186,7 @@ describe("retrieveMemoryContext — AC2 project-scoped decisions", () => {
       { scopes: [projectScope()], nowMs: now, queryText: "pnpm" },
       port,
     );
-    expect(result.included.length).toBe(1);
+    expect(result.included).toHaveLength(1);
     expect(result.included[0]?.memoryId).toBe(memoryId("d1"));
   });
 });
@@ -407,7 +407,7 @@ describe("retrieveMemoryContext — AC6 cross-scope isolation", () => {
       "project:p1": [projectRecord],
     });
     const result = retrieveMemoryContext({ scopes: [userScope()], nowMs: now }, port);
-    expect(calledScopes.length).toBe(1);
+    expect(calledScopes).toHaveLength(1);
     expect(calledScopes[0]?.kind).toBe("user");
     expect(result.included.map((i) => i.memoryId)).toEqual([memoryId("u")]);
     expect(result.included.map((i) => i.memoryId)).not.toContain(memoryId("p"));
@@ -423,7 +423,7 @@ describe("retrieveMemoryContext — AC7 no-memory result", () => {
     expect(result.contextBlock.text).toBe("");
     expect(result.contextBlock.memories).toEqual([]);
     expect(result.budget.used).toBe(0);
-    expect(result.request.scopes.length).toBe(1);
+    expect(result.request.scopes).toHaveLength(1);
   });
 });
 
@@ -467,7 +467,7 @@ describe("retrieveMemoryContext — type filter + explainability + determinism",
       { scopes: [userScope(), projectScope()], nowMs: now },
       port,
     );
-    expect(result.included.filter((i) => i.memoryId === memoryId("shared")).length).toBe(1);
+    expect(result.included.filter((i) => i.memoryId === memoryId("shared"))).toHaveLength(1);
   });
 
   it("omits accepted memories with zero lexical and semantic relevance when a query is present", () => {

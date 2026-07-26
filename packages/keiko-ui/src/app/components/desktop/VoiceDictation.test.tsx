@@ -170,7 +170,7 @@ describe("VoiceDictationPreview", () => {
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent("Preparing mic…");
-    expect(document.querySelectorAll(".cmp-voice-level-bar[data-active='true']").length).toBe(0);
+    expect(document.querySelectorAll(".cmp-voice-level-bar[data-active='true']")).toHaveLength(0);
 
     // Once ready, it invites speech and the level meter reflects the live signal.
     rerender(

@@ -73,8 +73,8 @@ describe("assembleContextBlock — caps and pressure", () => {
     const records = ids.map((id) => buildRecord({ id, body: `body ${id}` }));
     const ranked = ids.map((id) => included(id));
     const result = assembleContextBlock(ranked, records, { budgetTokens: 10_000, maxIncluded: 2 });
-    expect(result.included.length).toBe(2);
-    expect(result.omitted.length).toBe(3);
+    expect(result.included).toHaveLength(2);
+    expect(result.omitted).toHaveLength(3);
     expect(result.omitted.every((o) => o.reason === "budget-exceeded")).toBe(true);
   });
 

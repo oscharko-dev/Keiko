@@ -211,7 +211,7 @@ async function assertNotMergeableIsBlocked(page: Page, ledger: RouteLedger): Pro
 
   // The only merge affordance must be disabled — no execute request is reachable.
   await expect(page.getByTestId("gm-submit")).toBeDisabled();
-  expect(ledger.executeBodies.length).toBe(0);
+  expect(ledger.executeBodies).toHaveLength(0);
 }
 
 // Positive control: a mergeable PR reaches succeeded through the governed execute route, but ONLY after the
@@ -240,7 +240,7 @@ async function assertMergeableReachesGovernedExecute(
   await expect(outcome).toContainText("merge: succeeded");
   await expect(outcome).toContainText("merged: yes");
 
-  expect(ledger.executeBodies.length).toBe(1);
+  expect(ledger.executeBodies).toHaveLength(1);
   expect(ledger.executeBodies[0]?.prExternalId).toBe(MERGEABLE_PR);
 }
 

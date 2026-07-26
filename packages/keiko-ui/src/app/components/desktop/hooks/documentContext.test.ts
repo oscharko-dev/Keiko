@@ -127,7 +127,7 @@ describe("extractDocumentContext — per-entry budget", () => {
     expect(entry.truncationMarker).toBe(DOCUMENT_TRUNCATION_MARKER);
     expect(utf8Bytes(entry.text)).toBeLessThanOrEqual(MAX_DOCUMENT_CONTEXT_TEXT_BYTES);
     expect(entry.extractedBytes).toBe(utf8Bytes(entry.text));
-    expect(entry.text.length).toBe(MAX_DOCUMENT_CONTEXT_TEXT_BYTES);
+    expect(entry.text).toHaveLength(MAX_DOCUMENT_CONTEXT_TEXT_BYTES);
   });
 
   it("never splits a multi-byte code point at the budget boundary", async () => {
@@ -143,7 +143,7 @@ describe("extractDocumentContext — per-entry budget", () => {
     // Re-encode/decode round-trips with no replacement char => no split surrogate.
     expect(entry.text).not.toContain("\uFFFD");
     // 65_536 / 3 = 21_845 whole chars; the 21_846th would overflow.
-    expect(entry.text.length).toBe(21_845);
+    expect(entry.text).toHaveLength(21_845);
   });
 });
 

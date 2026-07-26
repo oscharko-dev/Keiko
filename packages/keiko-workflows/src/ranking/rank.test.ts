@@ -129,7 +129,7 @@ describe("rankCandidates", () => {
       ...result.kept.map((c) => c.scopePath),
       ...result.omitted.map((o) => o.scopePath),
     ];
-    expect(allPaths.filter((p) => p === "src/foo.ts").length).toBe(1);
+    expect(allPaths.filter((p) => p === "src/foo.ts")).toHaveLength(1);
   });
 
   it("omits a generated path with reason generated", () => {
@@ -218,8 +218,8 @@ describe("rankCandidates", () => {
       },
     );
     const reasons = result.omitted.map((o) => o.reason);
-    expect(reasons.filter((r) => r === "budget-exhausted").length).toBe(2);
-    expect(result.kept.length).toBe(1);
+    expect(reasons.filter((r) => r === "budget-exhausted")).toHaveLength(2);
+    expect(result.kept).toHaveLength(1);
   });
 
   it("counts invalid scope paths without exposing them as omitted entries", () => {

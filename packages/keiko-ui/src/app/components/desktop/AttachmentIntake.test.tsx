@@ -264,6 +264,15 @@ describe("AC #2 — unsupported and oversized files rejected", () => {
 // ─── AC #3 — users can remove pending attachments ────────────────────────────
 
 describe("AC #3 — pending attachment removal", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  beforeEach(() => {
+    api.clearModelCacheForTests();
+  });
+
   it("renders a remove button for each pending attachment", () => {
     const attachment: PendingAttachment = {
       id: "att-1",
@@ -452,15 +461,6 @@ describe("AC #3 — pending attachment removal", () => {
     });
     expect(revoked.sort()).toEqual([...created].sort());
     expect(view.result.current.pendingAttachments).toHaveLength(0);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  beforeEach(() => {
-    api.clearModelCacheForTests();
   });
 });
 
