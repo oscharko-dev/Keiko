@@ -627,6 +627,13 @@ export const SUBTLE_TEXT_STYLE: CSSProperties = {
   color: "var(--fg-muted)",
 };
 
+// #2721 — the diff, changes and history panes render their loading state as an <output> (the
+// element that owns role="status") instead of a <p role="status">. .rv-empty already sets
+// display and padding, but not the block margin a <p> carries by user-agent default and an
+// <output> does not. Keeping it explicitly leaves the box identical to the role="alert" <p>
+// twin each pane renders for its error state.
+export const LOADING_STATE_STYLE: CSSProperties = { padding: 14, margin: "1em 0" };
+
 export const MONO_PATH_STYLE: CSSProperties = {
   display: "block",
   marginTop: 2,

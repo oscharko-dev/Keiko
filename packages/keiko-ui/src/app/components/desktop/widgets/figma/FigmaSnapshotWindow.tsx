@@ -84,6 +84,7 @@ import {
   type FigmaImageDropDetail,
 } from "../../figma-image-drag";
 import { JsonSyntaxBlock, jsonTextByteLength } from "./JsonSyntaxBlock";
+import { NATIVE_BLOCK_STYLE, NATIVE_LIST_STYLE } from "../../native-element-styles";
 
 type CurrentRef<T> = { current: T };
 type FormSubmitEvent = { preventDefault: () => void };
@@ -1900,7 +1901,9 @@ export function FigmaSnapshotWindow({
       );
     }
     return (
-      <div className="figma-snapshot-dashboard-list" role="list">
+      // <ul> owns role=list; NATIVE_LIST_STYLE drops the marker, block margin and 40px start
+      // padding the class does not declare (#2721).
+      <ul className="figma-snapshot-dashboard-list" style={NATIVE_LIST_STYLE}>
         {snapshots.map((snapshot) => {
           const isCurrent = summary?.runId === snapshot.runId;
           const title = snapshotDisplayName(snapshot, t);
@@ -1910,10 +1913,11 @@ export function FigmaSnapshotWindow({
           const renameOpen = renamingSnapshotRunId === snapshot.runId;
           const deleteOpen = deleteConfirmRunId === snapshot.runId;
           return (
-            <article
+            // <li> owns role=listitem; the exposed role was already listitem, so nothing is
+            // lost by dropping <article> (#2721).
+            <li
               key={snapshot.runId}
               className="figma-snapshot-dashboard-item"
-              role="listitem"
               aria-current={isCurrent ? "true" : undefined}
               aria-busy={isLoading && snapshotRunId === snapshot.runId ? "true" : undefined}
             >
@@ -2082,10 +2086,10 @@ export function FigmaSnapshotWindow({
                   ) : null}
                 </dl>
               ) : null}
-            </article>
+            </li>
           );
         })}
-      </div>
+      </ul>
     );
   };
 
@@ -2269,10 +2273,12 @@ export function FigmaSnapshotWindow({
                 {t("figmaSnapshotWindow.jsonInspector.copyJson")}
               </button>
             </div>
+            {/* <output> owns role=status; NATIVE_BLOCK_STYLE restores the block box the <p>
+                had (#2721). */}
             {screenJsonCopyStatus !== null ? (
-              <p className="figma-view-json-copy-status" role="status">
+              <output className="figma-view-json-copy-status" style={NATIVE_BLOCK_STYLE}>
                 {screenJsonCopyStatus}
-              </p>
+              </output>
             ) : null}
             <JsonSyntaxBlock
               text={screenJsonText}

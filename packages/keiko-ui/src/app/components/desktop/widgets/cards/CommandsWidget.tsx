@@ -25,6 +25,7 @@ import type {
 } from "../../../../../lib/types";
 import { secureRandomId } from "../../../../../lib/secure-random";
 import KeikoSelect from "../../KeikoSelect";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { subscribeSharedEventSource } from "./sharedEventSource";
 import styles from "./TerminalWidget.module.css";
 import { useWorkspaceTrust } from "../../workspace-trust/useWorkspaceTrust";
@@ -353,15 +354,17 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
             </button>
           ) : null}
         </div>
+        {/* <output> owns role=status; NATIVE_BLOCK_STYLE restores the block box the <p> had
+            (#2721). */}
         {tasks.length === 0 && projectInput.length > 0 && error === null ? (
-          <p className="tm-limits" role="status">
+          <output className="tm-limits" style={NATIVE_BLOCK_STYLE}>
             {t("commandsWidget.empty.noRunnableTasks")}
-          </p>
+          </output>
         ) : null}
         {selectedTaskRequiresApproval ? (
-          <p className="tm-limits" role="status">
+          <output className="tm-limits" style={NATIVE_BLOCK_STYLE}>
             {t("commandsWidget.trust.required")}
-          </p>
+          </output>
         ) : null}
       </form>
 

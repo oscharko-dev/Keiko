@@ -308,7 +308,7 @@
                 </div>
               </div>
             </div>
-            <div class="c-msg c-msg--ok" role="status">
+            <output class="c-msg c-msg--ok">
               <span class="c-msg-ico"
                 ><span class="ico" data-licon="success" data-size="26"></span
               ></span>
@@ -316,7 +316,7 @@
                 <div class="c-msg-tt">Workspace updated</div>
                 <div class="c-msg-tx">Coder applied the design tweaks across 4 windows.</div>
               </div>
-            </div>
+            </output>
           </div>
           <p class="muted-cap" style="margin-top: 18px">
             <span class="cls">.c-msg</span> +
@@ -407,21 +407,21 @@
         </div>
         <div class="card demo-card">
           <div class="stack14" style="max-width: 440px">
-            <div class="c-toast c-toast--ok" role="status">
+            <output class="c-toast c-toast--ok">
               <span class="ic"><span class="ico" data-licon="success" data-size="17"></span></span>
               <span class="tx"
                 ><span class="tt">Connected to release/0.2.0</span
                 ><span class="ts">Grounding is live for this chat.</span></span
               >
               <button class="c-btn c-btn--sm c-btn--ghost">OK</button>
-            </div>
-            <div class="c-toast c-toast--info" role="status">
+            </output>
+            <output class="c-toast c-toast--info">
               <span class="ic"><span class="ico" data-licon="info" data-size="17"></span></span>
               <span class="tx"
                 ><span class="tt">Window minimized to the dock</span
                 ><span class="ts">Files · reachable in one click.</span></span
               >
-            </div>
+            </output>
             <div class="c-toast c-toast--danger" role="alert">
               <span class="ic"><span class="ico" data-licon="error" data-size="17"></span></span>
               <span class="tx"
@@ -553,8 +553,9 @@
                 <th scope="row" class="fgw">Live regions</th>
                 <td>
                   Blocking errors use <span class="cls">role="alert"</span> (assertive); info &amp;
-                  success use <span class="cls">role="status"</span> /
-                  <span class="cls">aria-live="polite"</span> so a screen reader announces them
+                  success announce through <span class="cls">&lt;output&gt;</span>, the native
+                  element that already carries <span class="cls">role="status"</span> /
+                  <span class="cls">aria-live="polite"</span>, so a screen reader announces them
                   without stealing focus.
                 </td>
               </tr>

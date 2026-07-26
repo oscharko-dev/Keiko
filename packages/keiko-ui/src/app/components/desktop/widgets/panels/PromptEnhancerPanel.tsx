@@ -24,6 +24,7 @@ import type {
 } from "@/lib/types";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { humanizeToken } from "../../GroundedAnswer";
 import { buildConnectedRunSources } from "../quality-intelligence/connectedSources";
 
@@ -868,14 +869,18 @@ export function PromptEnhancerPanel({
               {result.renderedPrompt}
             </pre>
             <div className="pe-actions">
+              {/* <output> owns role=status, so the success branch needs no role at all; the
+                  failure branch keeps its explicit role=alert override. NATIVE_BLOCK_STYLE
+                  restores the block box the <p> had (#2721). */}
               {copyStatus !== null ? (
-                <p
+                <output
                   className={`pe-copy-status pe-copy-status-${copyState}`}
-                  role={copyState === "failed" ? "alert" : "status"}
+                  style={NATIVE_BLOCK_STYLE}
+                  role={copyState === "failed" ? "alert" : undefined}
                   aria-live="polite"
                 >
                   {copyStatus}
-                </p>
+                </output>
               ) : null}
               <button
                 type="button"

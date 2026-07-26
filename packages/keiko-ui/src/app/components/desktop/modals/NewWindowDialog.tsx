@@ -629,12 +629,16 @@ function renderCurrentFileButton(
   );
 }
 
+// Both agent-start notices render into `#agent-start-validation`, the target of the
+// Start button's aria-describedby. <output> is the native status live region
+// (S6819); it is inline like the <span> it replaces, so `.dlg-note` keeps
+// rendering the same box.
 function renderAgentLoadingStatus(loading: boolean): ReactNode {
   if (!loading) return null;
   return (
-    <span id="agent-start-validation" className="dlg-note" role="status">
+    <output id="agent-start-validation" className="dlg-note">
       Loading models and projects…
-    </span>
+    </output>
   );
 }
 
@@ -643,9 +647,9 @@ function renderAgentLoadingStatus(loading: boolean): ReactNode {
 function renderAgentValidationStatus(loading: boolean, validation: string | null): ReactNode {
   if (loading || validation === null) return null;
   return (
-    <span id="agent-start-validation" className="dlg-note" role="status">
+    <output id="agent-start-validation" className="dlg-note">
       {validation}
-    </span>
+    </output>
   );
 }
 
