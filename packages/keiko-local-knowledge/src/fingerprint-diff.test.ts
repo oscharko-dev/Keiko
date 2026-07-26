@@ -67,19 +67,33 @@ describe("diffFingerprintSets", () => {
   });
 });
 
-// The single-owner pin for run-digest ordering. Every case below is a pair of DISTINCT strings that
-// `String.localeCompare` reports as equal (0); a comparator that returns 0 leaves the pair in input
-// order, which is what made two of the three run digests order-sensitive. Fixtures are escapes, not
-// literal characters, so an editor or formatter that normalizes on save cannot quietly make them
-// vacuous.
+// The single-owner pin for run-digest ordering. The fixtures are the pairs that motivated the shared
+// comparator: distinct strings a locale-aware collation is liable to report as equal (NFC vs NFD, a
+// zero-width space, a soft hyphen), which leaves them in input order and cost two of the three run
+// digests their order-independence.
+//
+// What is asserted is deliberately only the comparator's own contract \u2014 a strict total order, never
+// 0 for distinct input. Whether THIS host's `localeCompare` actually collides on a given pair is a
+// property of the runtime's ICU build and default locale, not of the contract under test, so
+// measuring it here would make the suite fail on a small-icu Node while the production code stayed
+// correct. That is the same host-dependence this comparator exists to remove (Qodo finding on
+// PR #2756).
+//
+// Fixtures are escapes, not literal characters, so an editor or formatter that normalizes on save
+// cannot quietly make them vacuous.
 describe("compareFingerprintKeys", () => {
   it.each([
     ["NFC vs NFD", "caf\u00e9", "cafe\u0301"],
     ["zero-width space", "a\u200bb", "ab"],
     ["soft hyphen", "a\u00adb", "ab"],
-  ])("separates %s, which locale collation reports as equal", (_case, left, right) => {
-    expect(left.localeCompare(right)).toBe(0);
+  ])("separates %s regardless of host collation", (_case, left, right) => {
+    expect(left).not.toBe(right);
     expect(compareFingerprintKeys(left, right)).not.toBe(0);
+    // Antisymmetry: a comparator that is not strictly ordered here would let `sort` depend on the
+    // order the pair arrived in, which is exactly the digest defect.
+    expect(Math.sign(compareFingerprintKeys(right, left))).toBe(
+      -Math.sign(compareFingerprintKeys(left, right)),
+    );
   });
 
   it("is a total order agreeing with the default sort and SQLite BINARY collation", () => {
