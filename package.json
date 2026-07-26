@@ -144,6 +144,7 @@
     "check:git-client-evidence": "node scripts/check-git-client-evidence.mjs",
     "check:ui-i18n": "node scripts/check-ui-i18n-guard.mjs",
     "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
+    "check:e2e-suite-wiring": "node scripts/check-e2e-suite-wiring.mjs",
     "check:adr-index": "node scripts/check-adr-index.mjs",
     "check:package-graph": "node scripts/check-package-graph.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",

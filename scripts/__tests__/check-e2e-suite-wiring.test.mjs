@@ -1,0 +1,122 @@
+import { readFileSync, readdirSync } from "node:fs";
+
+import { describe, expect, it } from "vitest";
+
+import {
+  checkE2eSuiteWiring,
+  formatGateReport,
+  isWiredInWorkflows,
+  runE2eSuiteWiringGate,
+} from "../check-e2e-suite-wiring.mjs";
+
+const RUN_LANE = `
+jobs:
+  e2e:
+    steps:
+      - run: npm run test:e2e:wired
+`;
+
+// The shape e2e-extended.yml uses: the script name alone in a matrix, invoked indirectly.
+const MATRIX_LANE = `
+jobs:
+  e2e:
+    strategy:
+      matrix:
+        suite:
+          - test:e2e:matrix-wired
+    steps:
+      - run: npm run \${{ matrix.suite }}
+`;
+
+function problemsFor(scripts, workflowText, baseline = []) {
+  return checkE2eSuiteWiring({ scripts, workflowText, baseline });
+}
+
+describe("e2e suite wiring gate (#2629)", () => {
+  // The gate's whole reason to exist. An unwired suite reads as coverage while running nowhere, so
+  // the one thing it must never do is pass over one.
+  it("detects a suite that exists in package.json and runs in no workflow", () => {
+    const problems = problemsFor(["build", "test:e2e:wired", "test:e2e:orphan"], RUN_LANE);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("test:e2e:orphan");
+    expect(problems[0]).toContain("no workflow runs it");
+  });
+
+  it("accepts a suite invoked directly and one named only in a matrix", () => {
+    const both = `${RUN_LANE}\n${MATRIX_LANE}`;
+    expect(problemsFor(["test:e2e:wired", "test:e2e:matrix-wired"], both)).toEqual([]);
+  });
+
+  it("ignores non-e2e scripts entirely", () => {
+    expect(problemsFor(["build", "lint", "test:coverage:ui"], "")).toEqual([]);
+  });
+
+  // A prefix match would let one lane vouch for a suite it never runs.
+  it("does not let a longer suite name satisfy a shorter one", () => {
+    const lane = "      - run: npm run test:e2e:wired-extended\n";
+    const problems = problemsFor(["test:e2e:wired"], lane);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("test:e2e:wired");
+  });
+
+  // Comments are where an unwired suite gets explained, not where it gets executed.
+  it("does not treat a suite mentioned only in a comment as wired", () => {
+    const lane = "        # test:e2e:orphan is not wired yet\n        - run: npm run build\n";
+    expect(isWiredInWorkflows("test:e2e:orphan", lane)).toBe(false);
+    expect(problemsFor(["test:e2e:orphan"], lane)).toHaveLength(1);
+  });
+
+  it("accepts a recorded suite and names the baseline in the failure it prints", () => {
+    expect(problemsFor(["test:e2e:orphan"], "", ["test:e2e:orphan"])).toEqual([]);
+    expect(problemsFor(["test:e2e:orphan"], "")[0]).toContain("docs/qa/unwired-e2e-suites.json");
+  });
+
+  // The ratchet: the baseline is a debt register, so it may only shrink. Both ways an entry can go
+  // stale have to fail, or a wired-then-recorded suite would sit there forever.
+  it("rejects a baseline entry that is now wired, and one that no longer exists", () => {
+    const wiredButRecorded = problemsFor(["test:e2e:wired"], RUN_LANE, ["test:e2e:wired"]);
+    expect(wiredButRecorded).toHaveLength(1);
+    expect(wiredButRecorded[0]).toContain("the baseline only shrinks");
+
+    const deletedButRecorded = problemsFor([], "", ["test:e2e:gone"]);
+    expect(deletedButRecorded).toHaveLength(1);
+    expect(deletedButRecorded[0]).toContain("no longer exists");
+  });
+
+  // Live wiring, through the gate's own readers rather than a re-implementation of them. This is
+  // what turns the register into a ratchet on the actual repository instead of only on fixtures,
+  // and it is the only thing that proves the gate can load its real inputs at all.
+  it("holds over the real package.json, workflows, and baseline", () => {
+    const result = runE2eSuiteWiringGate();
+    expect(result.problems).toEqual([]);
+    expect(result.total).toBeGreaterThan(result.recorded);
+    expect(formatGateReport(result)).toContain("e2e-suite-wiring: PASS");
+
+    const workflowText = readdirSync(".github/workflows")
+      .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+      .map((name) => readFileSync(`.github/workflows/${name}`, "utf8"))
+      .join("\n");
+    const baseline = JSON.parse(readFileSync("docs/qa/unwired-e2e-suites.json", "utf8"));
+    // The M11 journeys #2629 was filed over: seven per-child suites that ran in no lane at all.
+    for (const suite of ["test:e2e:workspace-trust-2523", "test:e2e:file-history-2531"]) {
+      expect(isWiredInWorkflows(suite, workflowText), suite).toBe(true);
+      expect(baseline.suites, suite).not.toContain(suite);
+    }
+  });
+
+  it("reports failures with every problem listed under a FAIL headline", () => {
+    const report = formatGateReport({
+      problems: ["test:e2e:orphan runs nowhere"],
+      total: 3,
+      recorded: 0,
+    });
+    expect(report).toContain("e2e-suite-wiring: FAIL — 1 problem(s)");
+    expect(report).toContain("  - test:e2e:orphan runs nowhere");
+  });
+
+  it("rejects a baseline document that is not a suites array", () => {
+    // Fail loudly on a malformed register rather than treating it as "nothing recorded", which
+    // would silently re-admit every suite it was holding.
+    expect(() => runE2eSuiteWiringGate("scripts/__tests__")).toThrow();
+  });
+});

@@ -10,6 +10,7 @@ import {
   budgetDisposition,
   directoryBytes,
   EDITOR_M11_CLOSEOUT_LIMITS,
+  gcSettlingAvailable,
   measurementRefusalReason,
   percentile,
   runEditorM11CloseoutMeasurement,
@@ -99,6 +100,17 @@ describe("editor M11 closeout measurement", () => {
     // below, which exercise the settling branches themselves.
     expect(typeof result.measurement.historyCaptureRssPerRootBytes).toBe("number");
     expect(result.measurement).not.toHaveProperty("rssPerAdditionalRootBytes");
+  });
+
+  // The predicate decides; this proves the run obeys it, and that the refusal happens before any
+  // measurement work rather than after. Vitest runs without --expose-gc, which is the refusable
+  // state — asserted first so a runtime that ever gains the flag fails here with its own reason
+  // instead of as a confusing missing rejection.
+  it("refuses a controlled run in a process that cannot settle the heap", async () => {
+    expect(gcSettlingAvailable()).toBe(false);
+    await expect(runEditorM11CloseoutMeasurement({ controlled: true })).rejects.toThrow(
+      /gc-settling-required/u,
+    );
   });
 
   // A controlled run enforces the RSS budget, so it must not proceed on an unsettled delta. Pure

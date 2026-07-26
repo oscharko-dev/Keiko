@@ -88,6 +88,43 @@ each ruler answers is in [`coverage-truth-model.md`](coverage-truth-model.md).
 `KEIKO_LOCAL_GATE_CONTAINER=1` is set inside the container so nothing downstream mistakes a local
 run for authoritative measurement evidence.
 
+## What a macOS host cannot answer — and where the suite will not tell you
+
+The section above is about what this container cannot answer. The reverse gap is sharper, because it
+is silent: a suite that skips on your platform reports as green.
+
+**Governed debugging (DAP) has Linux-only coverage.** Two tests in
+`packages/keiko-server/src/editor/dap/dapProductionService.test.ts` drive the real namespace sandbox
+backend and are `skipIf(process.platform !== "linux")`. On macOS they do not execute — `18 passed |
+2 skipped` — and #2643 is what that costs: a production launch failure (`INVALID_CAPSULE_PLAN` in
+layer-2 validation, from a workspace-identity digest formula that drifted from its producer) that
+both tests caught on Linux CI while every local run stayed green. Their titles now carry
+`[linux-only: namespace sandbox]` so the skip names its own reason.
+
+Run them where they run, in about two seconds once the image is warm:
+
+```bash
+git clone --no-local --no-hardlinks . /tmp/keiko-dap
+docker run --rm --privileged -v /tmp/keiko-dap:/repo -w /repo node:24.18.0-bookworm bash -lc '
+  git config --global --add safe.directory "*"
+  apt-get update -qq && apt-get install -y -qq bubblewrap
+  sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+  npm ci --no-audit --no-fund && npm run build:packages
+  npx vitest run packages/keiko-server/src/editor/dap/dapProductionService.test.ts'
+```
+
+Clone fully rather than shallowly — a shallow clone loses the baseline the suite reads. The `sysctl`
+is a no-op on Docker Desktop (its LinuxKit VM exposes no AppArmor) and matters on a host that
+restricts unprivileged user namespaces.
+
+**A platform-gated test is not the only proof available.** Where the underlying defect is ordinary
+logic that merely _surfaced_ on one platform, pin it with a test that runs everywhere as well.
+#2643's root cause was a digest derived by two different formulas, which is platform-independent;
+`debugLaunchPlan.test.ts` accordingly asserts that the validator accepts the identity its production
+producer emits, and that test runs on every platform. Prefer that pin: the sandbox tests tell you
+the launch works, and this one tells you _why_ it stopped working, on the machine you are sitting
+at.
+
 ## Relation to the required checks
 
 This is a pre-flight, not a replacement. The required checks on the pull request remain the complete
