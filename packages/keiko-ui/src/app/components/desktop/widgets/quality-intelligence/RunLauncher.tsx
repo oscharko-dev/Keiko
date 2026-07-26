@@ -50,6 +50,7 @@ import {
 } from "@/lib/local-knowledge-api";
 import { Icons } from "@/app/components/desktop/Icons";
 import KeikoSelect from "../../KeikoSelect";
+import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { formatCodedError, formatError } from "./qiShared";
 import { buildConnectedRunSources } from "./connectedSources";
 import type { ConnectedRunSource } from "./connectedSources";
@@ -1441,9 +1442,13 @@ export function RunLauncher({
         </p>
         {renderCoverageNotice()}
         {degradedNotice !== null ? (
-          <p className="qi-degraded-notice" role="status" data-testid="qi-launch-degraded">
+          <output
+            className="qi-degraded-notice"
+            style={NATIVE_BLOCK_STYLE}
+            data-testid="qi-launch-degraded"
+          >
             {degradedNotice}
-          </p>
+          </output>
         ) : null}
         {error !== null ? (
           <p className="lk-alert" role="alert" data-testid="qi-launch-error">

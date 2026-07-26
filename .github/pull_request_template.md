@@ -61,6 +61,9 @@ Refs #<issue_number>
 
 Required:
 
+- [ ] `npm run gates:sonar` was run on this diff and reported no finding. It is the only local run
+      that sees the SonarJS rules `eslint-plugin-sonarjs` does not ship, and the `Coverage and
+SonarCloud` job demands zero unresolved issues — see [`docs/qa/local-sonar.md`](../docs/qa/local-sonar.md).
 - [ ] Required GitHub checks pass before merge.
 - [ ] `npm run check:ui-i18n` passes, or no UI production source changed.
 - [ ] Local verification commands or rationale are listed below.

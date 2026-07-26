@@ -133,12 +133,12 @@ function RelationshipFindingList({
       aria-label={`${category.label} (${String(category.items.length)})`}
       style={{ marginBottom: 14 }}
     >
-      <div className="rb-section-label" role="heading" aria-level={3}>
+      <h3 className="rb-section-label">
         {category.label}
         <span className="rb-count" aria-hidden="true">
           {category.items.length}
         </span>
-      </div>
+      </h3>
       <p style={{ margin: "0 0 6px", fontSize: 11, color: "var(--fg-muted)" }}>{category.help}</p>
       <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
         {shown.map((ref) => (
@@ -188,7 +188,7 @@ function OrphanedEndpointList({ findings }: { findings: HealthFindings }): React
       aria-label={`Orphaned endpoints (${String(findings.orphanedEndpoints.length)})`}
       style={{ marginBottom: 14 }}
     >
-      <div className="rb-section-label" role="heading" aria-level={3}>
+      <h3 className="rb-section-label">
         {/* No text-node space before the count pill by design — matches the same
             label+rb-count pattern in RelationshipFindingList and RelationshipImpactCard,
             where the pill's own padding/background provides the visual separation. */}
@@ -196,7 +196,7 @@ function OrphanedEndpointList({ findings }: { findings: HealthFindings }): React
         <span className="rb-count" aria-hidden="true">
           {findings.orphanedEndpoints.length}
         </span>
-      </div>
+      </h3>
       <p style={{ margin: "0 0 6px", fontSize: 11, color: "var(--fg-muted)" }}>
         Endpoints that participate in no live relationship.
       </p>
