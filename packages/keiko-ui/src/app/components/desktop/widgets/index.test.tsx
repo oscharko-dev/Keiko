@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { AppWindow } from "../windows/types";
@@ -212,6 +212,24 @@ vi.mock("./cards/FilesWidget", () => ({
     </div>
   ),
 }));
+const editorWidgetMounts = vi.hoisted(() => [] as string[]);
+const editorWidgetUnmounts = vi.hoisted(() => [] as string[]);
+
+// Issue #446 (ADR-0090 D4) — the remount pin below reads these ledgers. The root a mounted editor
+// was built for is fixed for the lifetime of that instance, so a switch shows up as unmount + mount
+// and never as an in-place update. Kept out of the mock body so the mock's own complexity, which is
+// already above the repository ceiling for its assertion string, does not grow further.
+function useEditorMountLedger(root: string | undefined): void {
+  const identity = useRef(root ?? "unbound");
+  useEffect(() => {
+    const mounted = identity.current;
+    editorWidgetMounts.push(mounted);
+    return () => {
+      editorWidgetUnmounts.push(mounted);
+    };
+  }, []);
+}
+
 vi.mock("./cards/EditorWidget", () => ({
   EditorWidget: ({
     root,
@@ -250,43 +268,46 @@ vi.mock("./cards/EditorWidget", () => ({
     readonly onAskSelection?: ((handoff: EditorSelectionHandoff) => boolean) | undefined;
     readonly onOpenGitCommit?: ((root: string, commit: string) => void) | undefined;
     readonly onOpenGitDiff?: ((root: string, path: string) => void) | undefined;
-  }) => (
-    <div data-testid="editor-widget">
-      <span>{`${root ?? ""}:${file ?? ""}:${(openFiles ?? []).join("|")}:${layoutJson ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}:${String(revealLineStart ?? "")}:${String(revealLineEnd ?? "")}:${revealRequestId ?? ""}`}</span>
-      <button
-        type="button"
-        onClick={() =>
-          onWorkspaceChange?.({
-            root: "/next-root",
-            file: "README.md",
-            openFiles: ["README.md"],
-            layoutJson: '{"version":1}',
-          })
-        }
-      >
-        Change editor workspace
-      </button>
-      <button
-        type="button"
-        onClick={() =>
-          onAskSelection?.({
-            file: "src/app.ts",
-            range: { start: { line: 1, column: 2 }, end: { line: 2, column: 4 } },
-            text: "const selected = true;\r\n",
-            truncated: false,
-          })
-        }
-      >
-        Ask editor selection
-      </button>
-      <button type="button" onClick={() => onOpenGitCommit?.("/repo", "a".repeat(40))}>
-        Open blame commit
-      </button>
-      <button type="button" onClick={() => onOpenGitDiff?.("/repo", "src/app.ts")}>
-        Open file diff
-      </button>
-    </div>
-  ),
+  }) => {
+    useEditorMountLedger(root);
+    return (
+      <div data-testid="editor-widget">
+        <span>{`${root ?? ""}:${file ?? ""}:${(openFiles ?? []).join("|")}:${layoutJson ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}:${String(revealLineStart ?? "")}:${String(revealLineEnd ?? "")}:${revealRequestId ?? ""}`}</span>
+        <button
+          type="button"
+          onClick={() =>
+            onWorkspaceChange?.({
+              root: "/next-root",
+              file: "README.md",
+              openFiles: ["README.md"],
+              layoutJson: '{"version":1}',
+            })
+          }
+        >
+          Change editor workspace
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            onAskSelection?.({
+              file: "src/app.ts",
+              range: { start: { line: 1, column: 2 }, end: { line: 2, column: 4 } },
+              text: "const selected = true;\r\n",
+              truncated: false,
+            })
+          }
+        >
+          Ask editor selection
+        </button>
+        <button type="button" onClick={() => onOpenGitCommit?.("/repo", "a".repeat(40))}>
+          Open blame commit
+        </button>
+        <button type="button" onClick={() => onOpenGitDiff?.("/repo", "src/app.ts")}>
+          Open file diff
+        </button>
+      </div>
+    );
+  },
 }));
 vi.mock("./cards/BrowserWidget", () => ({
   BrowserWidget: ({ url }: { readonly url?: string }) => (
@@ -1069,23 +1090,45 @@ describe("active workspace binding override (Issue #446)", () => {
     expect(await screen.findByTestId("terminal-widget")).toHaveTextContent("/wt/active:/wt/active");
   });
 
-  it("editor renderer targets the active root through a stable session host", async () => {
-    render(<>{WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>);
+  // RELOCATED REGRESSION PIN (Issue #446, ADR-0090 D4) — do not delete, move it if the layer moves.
+  // It was originally `it("editor renderer targets the active root and remounts (key changes) on a
+  // switch")` and asserted the React `key` of the element this renderer returns. Epic #2285 moved
+  // the remount key one layer down — `EditorWindowSessionHost` now keys its V1 editor — and the pin
+  // was replaced by a `key === null` assertion, which proves the host is stable but says nothing
+  // about the remount the ADR relies on. Issue #2621 restores it where the invariant now lives, and
+  // states it as the behaviour rather than the mechanism: a switch must tear the editor down, which
+  // is how the stale Monaco model is dropped (ADR-0090 D4, SC "no stale editor model").
+  it("editor renderer targets the active root and remounts the editor on a switch", async () => {
+    editorWidgetMounts.length = 0;
+    editorWidgetUnmounts.length = 0;
+    const view = render(
+      <>{WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>,
+    );
     expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/wt/active:");
-    // The outer session host stays stable so V2 can retain sibling roots. Its inner V1 editor keeps
-    // the root-keyed remount guarantee, while the V2 host owns one keyed state container per root.
-    const a = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/a")) as {
+
+    view.rerender(<>{WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/a"))}</>);
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/wt/a:");
+    view.rerender(<>{WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/b"))}</>);
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/wt/b:");
+
+    // Each switch built a new editor and destroyed the previous one. An in-place update would leave
+    // one mount and no unmount here — that is the shape this pin exists to reject.
+    expect(editorWidgetMounts).toEqual(["/wt/active", "/wt/a", "/wt/b"]);
+    expect(editorWidgetUnmounts).toEqual(["/wt/active", "/wt/a"]);
+
+    // Unbound mode keeps the window's own cfg root, and re-rendering an unchanged root must NOT
+    // remount: the identity is derived from the root, never from the render count.
+    view.rerender(<>{WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx(null))}</>);
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/cfg/old:");
+    view.rerender(<>{WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx(null))}</>);
+    expect(editorWidgetMounts).toEqual(["/wt/active", "/wt/a", "/wt/b", "/cfg/old"]);
+
+    // The outer session host itself carries no key, deliberately: it must survive a switch so a
+    // multi-root workspace can retain its sibling roots' state containers.
+    const host = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/a")) as {
       key: string | null;
     };
-    const b = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/b")) as {
-      key: string | null;
-    };
-    const unbound = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx(null)) as {
-      key: string | null;
-    };
-    expect(a.key).toBeNull();
-    expect(b.key).toBeNull();
-    expect(unbound.key).toBeNull();
+    expect(host.key).toBeNull();
   });
 
   it("search renderer uses the active root before linked or active-project fallbacks", async () => {
