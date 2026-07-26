@@ -3036,7 +3036,7 @@ const SUBJECT_DRIFT_NOTE =
   "reference environment can re-measure (docs/qa/perf-evidence.md), and no pull request is " +
   "blocked by this";
 
-function gateModeLines(enforceSourceFreshness, reportSubjectDrift) {
+export function gateModeLines(enforceSourceFreshness, reportSubjectDrift) {
   if (reportSubjectDrift) {
     return {
       ok: (name, commit) =>
@@ -3064,7 +3064,7 @@ function gateModeLines(enforceSourceFreshness, reportSubjectDrift) {
   };
 }
 
-function evaluateGateTarget(target, freshnessOptions, lines, reportSubjectDrift) {
+export function evaluateGateTarget(target, freshnessOptions, lines, reportSubjectDrift) {
   const { evidence, error } = readEvidence(target.path);
   if (error !== undefined) return { failures: [`${target.name}: ${error}`], notes: [] };
   const failures = target
@@ -3079,7 +3079,7 @@ function evaluateGateTarget(target, freshnessOptions, lines, reportSubjectDrift)
   return { failures, notes: freshness.notes.map((note) => `${target.name} freshness: ${note}`) };
 }
 
-function freshnessOptionsFor(enforceSourceFreshness) {
+export function freshnessOptionsFor(enforceSourceFreshness) {
   // KEIKO_PERF_EVIDENCE_BASE_REF is the pull request's merge base. When it is absent — the nightly
   // and regeneration lanes — the toolchain digest is evaluated unconditionally anyway.
   const baseRef = process.env.KEIKO_PERF_EVIDENCE_BASE_REF ?? "";
@@ -3090,24 +3090,45 @@ function freshnessOptionsFor(enforceSourceFreshness) {
   };
 }
 
-function reportSubjectDriftNotes(notes) {
+export function reportSubjectDriftNotes(notes) {
   for (const note of notes) console.log(`perf-evidence: NOTE - ${note}`);
   if (notes.length > 0) console.log(`perf-evidence: NOTE - ${SUBJECT_DRIFT_NOTE}`);
 }
 
-function runGate(targetName = "all", enforceSourceFreshness = false, reportSubjectDrift = false) {
+/** The sinks and collaborators the gate verdict uses, resolved in one place. */
+export function resolveGateIo(io = {}) {
+  return {
+    log: io.log ?? console.log,
+    error: io.error ?? console.error,
+    fail: io.fail ?? ((code) => process.exit(code)),
+    evaluateTarget: io.evaluateTarget ?? evaluateGateTarget,
+    targets: io.targets,
+  };
+}
+
+// Exported with injectable sinks: this is the half that decides the exit code, and a verdict that
+// only ever runs in the CLI is a verdict nothing proves.
+export function runGate(
+  targetName = "all",
+  enforceSourceFreshness = false,
+  reportSubjectDrift = false,
+  io = {},
+) {
+  const deps = resolveGateIo(io);
   const lines = gateModeLines(enforceSourceFreshness, reportSubjectDrift);
   const freshnessOptions = freshnessOptionsFor(enforceSourceFreshness);
-  const results = selectGateTargets(targetName).map((target) =>
-    evaluateGateTarget(target, freshnessOptions, lines, reportSubjectDrift),
+  const targets = deps.targets ?? selectGateTargets(targetName);
+  const results = targets.map((target) =>
+    deps.evaluateTarget(target, freshnessOptions, lines, reportSubjectDrift),
   );
   reportSubjectDriftNotes(results.flatMap((result) => result.notes));
-  const allFailures = results.flatMap((result) => result.failures);
-  if (allFailures.length > 0) {
-    for (const failure of allFailures) console.error(`perf-evidence: FAIL - ${failure}`);
-    process.exit(1);
+  const failures = results.flatMap((result) => result.failures);
+  if (failures.length === 0) {
+    deps.log(lines.pass);
+    return 0;
   }
-  console.log(lines.pass);
+  for (const failure of failures) deps.error(`perf-evidence: FAIL - ${failure}`);
+  return deps.fail(1);
 }
 
 const USAGE =

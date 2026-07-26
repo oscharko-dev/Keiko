@@ -223,15 +223,32 @@ export function regenerateInContainer(overrides = {}) {
   return { ok: true, clone };
 }
 
-const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
-if (invokedPath === fileURLToPath(import.meta.url)) {
-  if (process.argv.includes("--container")) {
-    regenerateInContainer();
-  } else {
-    const result = regenerateEvidence();
-    if (!result.ok) {
-      console.error(result.remediation);
-      process.exitCode = 1;
-    }
-  }
+/**
+ * The collaborators the dispatch uses, resolved in one place. Exported so a test can assert what the
+ * production defaults ARE without invoking them — a default that only ever runs in production is a
+ * default nothing verifies.
+ */
+export function resolveCliIo(io = {}) {
+  return {
+    container: io.container ?? regenerateInContainer,
+    regenerate: io.regenerate ?? regenerateEvidence,
+    error: io.error ?? ((message) => process.stderr.write(`${message}\n`)),
+    setExitCode: io.setExitCode ?? ((value) => (process.exitCode = value)),
+  };
 }
+
+// Exported so the dispatch is unit-tested directly rather than only through the entry point: it is
+// the half that decides which lane runs and what the exit code is.
+export function executeRegenerationCli(argv = process.argv, io = {}) {
+  const deps = resolveCliIo(io);
+  if (argv.includes("--container")) return deps.container();
+  const result = deps.regenerate();
+  if (!result.ok) {
+    deps.error(result.remediation);
+    deps.setExitCode(1);
+  }
+  return result;
+}
+
+const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
+if (invokedPath === fileURLToPath(import.meta.url)) executeRegenerationCli();

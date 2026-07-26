@@ -9,6 +9,9 @@ import {
   PLAYWRIGHT_PIN,
   regenerateEvidence,
   regenerateInContainer,
+  executeRegenerationCli,
+  resolveCliIo,
+  regenerateEvidence,
 } from "../regenerate-d12-evidence.mjs";
 import { BASELINE_COMMIT } from "../run-d12-perf-comparison.mjs";
 
@@ -184,5 +187,64 @@ describe("regenerateInContainer", () => {
     expect(args).toContain(CONTAINER_IMAGE);
     // Without safe.directory git refuses the host-owned bind mount with a bare status 128.
     expect(CONTAINER_SCRIPT).toMatch(/safe\.directory/u);
+  });
+});
+
+describe("command line dispatch", () => {
+  it("routes --container to the container lane and nothing else", () => {
+    const container = vi.fn().mockReturnValue({ ok: true });
+    const regenerate = vi.fn();
+
+    executeRegenerationCli(["node", "x", "--container"], { container, regenerate });
+
+    expect(container).toHaveBeenCalledOnce();
+    expect(regenerate).not.toHaveBeenCalled();
+  });
+
+  it("runs the host lane by default and stays silent when it succeeds", () => {
+    const regenerate = vi.fn().mockReturnValue({ ok: true });
+    const error = vi.fn();
+    const setExitCode = vi.fn();
+
+    expect(executeRegenerationCli(["node", "x"], { regenerate, error, setExitCode })).toEqual({
+      ok: true,
+    });
+    expect(error).not.toHaveBeenCalled();
+    expect(setExitCode).not.toHaveBeenCalled();
+  });
+
+  it("prints the remediation and exits non-zero when the host lane refuses", () => {
+    const regenerate = vi
+      .fn()
+      .mockReturnValue({ ok: false, remediation: "run it on the reference" });
+    const error = vi.fn();
+    const setExitCode = vi.fn();
+
+    executeRegenerationCli(["node", "x"], { regenerate, error, setExitCode });
+
+    expect(error).toHaveBeenCalledWith("run it on the reference");
+    expect(setExitCode).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("dispatch collaborators", () => {
+  it("defaults to the real lanes and the real sinks", () => {
+    const deps = resolveCliIo();
+
+    expect(deps.container).toBe(regenerateInContainer);
+    expect(deps.regenerate).toBe(regenerateEvidence);
+    expect(typeof deps.error).toBe("function");
+    expect(typeof deps.setExitCode).toBe("function");
+  });
+
+  it("lets every collaborator be replaced", () => {
+    const overrides = {
+      container: () => "c",
+      regenerate: () => "r",
+      error: () => "e",
+      setExitCode: () => "x",
+    };
+
+    expect(resolveCliIo(overrides)).toEqual(overrides);
   });
 });
