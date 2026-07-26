@@ -53,6 +53,7 @@ import type {
   Chat,
   ChatMessage,
   ConversationDocumentContextWire,
+  ConversationMemoryCaptureSurfaceWire,
   ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
   GroundedAnswer as GroundedAnswerWire,
@@ -1792,11 +1793,20 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setLatestMemory(undefined);
   }, []);
 
+  // `surface` declares where the turn originated so a capture made during a spoken turn is attributed
+  // to Voice in the Memory Journal (Issue #2550). Realtime Voice answers every settled final through
+  // this same canonical chat pipeline, so the server cannot infer the origin — only the caller knows.
+  // Omitted for typed sends, which keeps the request byte-identical to the pre-#2550 shape.
   const buildMemoryRequest = useCallback(
-    (chat: Chat, project: { readonly path: string }): ConversationMemoryRequestWire => ({
+    (
+      chat: Chat,
+      project: { readonly path: string },
+      surface?: ConversationMemoryCaptureSurfaceWire,
+    ): ConversationMemoryRequestWire => ({
       enabled: memoryEnabled,
       budgetTokens: memoryBudgetTokens,
       mode: memoryMode,
+      ...(surface === undefined ? {} : { surface }),
       context: {
         userId: DEFAULT_CONVERSATION_MEMORY_USER_ID,
         workspaceId: project.path,
@@ -3143,7 +3153,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         content,
         contentDigest,
         clientTurnId,
-        target: { chat, project, modelId, memory: buildMemoryRequest(chat, project) },
+        target: { chat, project, modelId, memory: buildMemoryRequest(chat, project, "voice") },
         optimistic,
         byteLength,
         promise,

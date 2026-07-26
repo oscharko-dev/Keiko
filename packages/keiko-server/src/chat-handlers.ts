@@ -26,6 +26,7 @@ import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
+  isConversationMemoryCaptureSurfaceWire,
   isGroundingScopeIdentity,
   type ConversationMemoryActionWire,
   type ConversationMemoryRequestWire,
@@ -391,6 +392,40 @@ function parseMemoryMode(
     : { status: 400, body: errorBody("BAD_REQUEST", "memory.mode must be a valid autonomy mode.") };
 }
 
+// The originating product surface for this turn's capture (Issue #2550). Absent keeps the historical
+// desktop attribution, so an un-migrated caller is byte-identical; an unrecognised value fails closed
+// with 400 rather than silently degrading to desktop, matching parseMemoryMode.
+function parseMemorySurface(
+  raw: Record<string, unknown>,
+): ConversationMemoryRequestWire["surface"] | RouteResult {
+  if (raw.surface === undefined) return undefined;
+  return isConversationMemoryCaptureSurfaceWire(raw.surface)
+    ? raw.surface
+    : {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "memory.surface must be a valid capture surface."),
+      };
+}
+
+type OptionalMemoryRequestFields = Omit<ParsedConversationMemoryRequest, "enabled" | "context">;
+
+// The additive scalars, each absent-preserving so an un-migrated caller keeps the exact legacy shape.
+function parseOptionalMemoryFields(
+  raw: Record<string, unknown>,
+): OptionalMemoryRequestFields | RouteResult {
+  const budgetTokens = parseMemoryBudget(raw);
+  if (isRouteResult(budgetTokens)) return budgetTokens;
+  const mode = parseMemoryMode(raw);
+  if (isRouteResult(mode)) return mode;
+  const surface = parseMemorySurface(raw);
+  if (isRouteResult(surface)) return surface;
+  return {
+    ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+    ...(mode !== undefined ? { mode } : {}),
+    ...(surface !== undefined ? { surface } : {}),
+  };
+}
+
 export function parseMemoryRequest(
   value: unknown,
 ): ParsedConversationMemoryRequest | RouteResult | undefined {
@@ -402,16 +437,9 @@ export function parseMemoryRequest(
   if (isRouteResult(context)) return context;
   const enabled = parseMemoryEnabled(value);
   if (isRouteResult(enabled)) return enabled;
-  const budgetTokens = parseMemoryBudget(value);
-  if (isRouteResult(budgetTokens)) return budgetTokens;
-  const mode = parseMemoryMode(value);
-  if (isRouteResult(mode)) return mode;
-  return {
-    enabled,
-    ...(budgetTokens !== undefined ? { budgetTokens } : {}),
-    ...(mode !== undefined ? { mode } : {}),
-    context,
-  };
+  const optional = parseOptionalMemoryFields(value);
+  if (isRouteResult(optional)) return optional;
+  return { enabled, ...optional, context };
 }
 
 const MAX_ATTACHMENT_ENTRIES = 16;
@@ -1269,7 +1297,7 @@ export function runPostCommitConversationMemorySideEffects(
       context,
       modelId,
       assistantText,
-      "desktop",
+      request.memory?.surface ?? "desktop",
       correlationId,
     );
   });
@@ -2075,7 +2103,7 @@ function scheduleCanonicalTurnSalienceCapture(
       context,
       modelId,
       pair.assistantText,
-      "desktop",
+      request.memory.surface ?? "desktop",
       correlationId,
     );
   }
