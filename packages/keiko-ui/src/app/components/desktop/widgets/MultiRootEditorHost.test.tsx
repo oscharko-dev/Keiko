@@ -216,12 +216,58 @@ describe("MultiRootEditorHost", () => {
     expect(screen.getByTestId("editor-/repo-a")).toHaveTextContent("layout:/repo-a:opened");
   });
 
-  it("forcibly disposes models only after a root leaves the manifest and remains axe-clean", async () => {
+  // Issue #2621 — the forced-disposal assertion that used to live here moved to
+  // `SelectionAwareWorkspaceHosts.test.tsx` ("removed-root model disposal"), together with the diff
+  // itself. It passed here only because this harness mounts the host directly; in the product the
+  // 2 -> 1 transition unmounts it, so the assertion described a path the user never takes. The
+  // `not.toHaveBeenCalled()` below is a deliberate negative control, not leftover scaffolding: the
+  // keiko-editor mock is still installed, so it fails the moment a disposal returns to this layer
+  // and starts double-disposing behind the host that now owns it.
+  it("remains axe-clean after a root leaves the manifest", async () => {
     const current = manifest();
     const view = render(<Harness current={current} />);
     view.rerender(<Harness current={manifest([current.roots[0]!])} />);
 
-    expect(disposeRoot).toHaveBeenCalledWith("/repo-b", "root-disposed", true);
+    expect(disposeRoot).not.toHaveBeenCalled();
     expect(await axe(view.container)).toHaveNoViolations();
+  });
+
+  it("drops a stale reveal when the user selects another root by hand", async () => {
+    // A reveal request names its target root in the same cfg patch that carries the line range, and
+    // cfg keys outlive the request. Without clearing them, clicking a tab re-pointed `cfg.root` at
+    // the new root and handed it a jump-to-line that was addressed to the root just left.
+    const user = userEvent.setup();
+    const updateCfg = vi.fn();
+    render(
+      <I18nProvider>
+        <MultiRootEditorHost
+          manifest={manifest()}
+          workspace={workspace(manifest())}
+          configuredRoot="/repo-a"
+          cfg={{
+            root: "/repo-a",
+            revealLineStart: 7,
+            revealLineEnd: 10,
+            revealRequestId: "reveal-1",
+          }}
+          buildBaseProps={() => ({ windowId: "editor-window" })}
+          updateCfg={updateCfg}
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: /Repo B/u }));
+
+    // The session bootstrap writes cfg on mount, so the tab click is the most recent patch.
+    const patch = updateCfg.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+    expect(patch?.["root"]).toBe("/repo-b");
+    // Explicitly present and undefined: an absent key would leave the stale reveal in cfg, because
+    // the window merges the patch into the existing config instead of replacing it.
+    expect(Object.keys(patch ?? {})).toEqual(
+      expect.arrayContaining(["revealLineStart", "revealLineEnd", "revealRequestId"]),
+    );
+    expect(patch?.["revealLineStart"]).toBeUndefined();
+    expect(patch?.["revealLineEnd"]).toBeUndefined();
+    expect(patch?.["revealRequestId"]).toBeUndefined();
   });
 });
