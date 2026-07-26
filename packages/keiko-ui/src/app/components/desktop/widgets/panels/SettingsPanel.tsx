@@ -344,11 +344,13 @@ function ReadinessReportCopyButton({
         <Icons.copy size={12} aria-hidden="true" />
         {copyState === "copied" ? t("settings.models.copied") : t("settings.models.copyReport")}
       </button>
-      {/* <output> already carries role=status; only the failure branch overrides it. */}
+      {/* <output> already carries role=status; only the failure branch overrides it. role=alert
+          is implicitly assertive, so aria-live is dropped on that branch — the two together are
+          a conflicting live-region declaration that screen readers resolve inconsistently. */}
       <output
         className="ml-url mono"
         role={copyState === "failed" ? "alert" : undefined}
-        aria-live="polite"
+        aria-live={copyState === "failed" ? undefined : "polite"}
       >
         {status}
       </output>

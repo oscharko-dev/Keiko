@@ -549,8 +549,10 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
             className="fpv-status fpv-copy-status"
             // <output> already carries role="status"; only the clipboard failure needs the
             // more assertive live region, so that is the one case that still names a role.
+            // role=alert is implicitly assertive, so aria-live is dropped there — declaring
+            // both is a conflict screen readers resolve inconsistently.
             role={copyStatus === "clipboardFailed" ? "alert" : undefined}
-            aria-live="polite"
+            aria-live={copyStatus === "clipboardFailed" ? undefined : "polite"}
           >
             {copyStatusText}
           </output>
