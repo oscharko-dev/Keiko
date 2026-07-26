@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   COHORTS,
   MERGED_PULL_REQUESTS_QUERY,
+  MERGE_ORDER_OVERSAMPLE,
   OUTCOMES,
   collectMergedPullRequests,
   earliestStart,
@@ -653,7 +654,10 @@ describe("collection", () => {
     });
 
     expect(collectMergedPullRequests(3, { repository: "o/r", query })).toEqual([{ number: 1 }]);
-    expect(query).toHaveBeenCalledWith({ owner: "o", name: "r", count: 3, after: null });
+    // The window is 3, but the collector oversamples so it can order by merge instant itself; the
+    // first request is bounded by the page size rather than by the window.
+    expect(query.mock.calls[0][0]).toMatchObject({ owner: "o", name: "r", after: null });
+    expect(query.mock.calls[0][0].count).toBeGreaterThan(3);
     expect(MERGED_PULL_REQUESTS_QUERY).toContain('baseRefName:"dev"');
     expect(() => collectMergedPullRequests(3, { repository: "nope", query })).toThrow(
       /repository slug/u,
@@ -668,26 +672,52 @@ describe("collection", () => {
         repository: {
           pullRequests: {
             pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
-            nodes: [{ number: 1 }, { number: 2 }],
+            nodes: [
+              { number: 1, mergedAt: "2026-07-21T00:00:00Z" },
+              { number: 2, mergedAt: "2026-07-22T00:00:00Z" },
+            ],
           },
         },
       })
       .mockReturnValueOnce({
         repository: {
           pullRequests: {
-            pageInfo: { hasNextPage: true, endCursor: "cursor-2" },
-            nodes: [{ number: 3 }],
+            pageInfo: { hasNextPage: false },
+            nodes: [{ number: 3, mergedAt: "2026-07-23T00:00:00Z" }],
           },
         },
       });
 
-    expect(collectMergedPullRequests(3, { repository: "o/r", query })).toEqual([
-      { number: 1 },
-      { number: 2 },
-      { number: 3 },
-    ]);
+    expect(
+      collectMergedPullRequests(3, { repository: "o/r", query })
+        .map((node) => node.number)
+        .sort((left, right) => left - right),
+    ).toEqual([1, 2, 3]);
     expect(query).toHaveBeenCalledTimes(2);
-    expect(query.mock.calls[1][0]).toMatchObject({ after: "cursor-1", count: 1 });
+    expect(query.mock.calls[1][0]).toMatchObject({ after: "cursor-1" });
+  });
+
+  it("orders by merge instant, because GitHub can only order by update instant", () => {
+    // A pull request updated after it merged sorts ahead of a newer merge in GitHub's own ordering.
+    const query = vi.fn().mockReturnValue({
+      repository: {
+        pullRequests: {
+          pageInfo: { hasNextPage: false },
+          nodes: [
+            { number: 1, mergedAt: "2026-07-20T10:00:00Z" },
+            { number: 2, mergedAt: "2026-07-25T10:00:00Z" },
+            { number: 3, mergedAt: "2026-07-23T10:00:00Z" },
+          ],
+        },
+      },
+    });
+
+    expect(collectMergedPullRequests(2, { repository: "o/r", query }).map((n) => n.number)).toEqual(
+      [2, 3],
+    );
+    // …and it oversamples, because ordering a single window would only reorder the wrong sample.
+    expect(query.mock.calls[0][0].count).toBeGreaterThan(2);
+    expect(MERGE_ORDER_OVERSAMPLE).toBeGreaterThan(1);
   });
 
   it("stops early when GitHub reports no further page", () => {
@@ -822,6 +852,13 @@ describe("command line surface", () => {
       expect(() =>
         runSettlementReport({ argv: ["--count", count], collect, readRequired: () => REQUIRED }),
       ).toThrow(/--count/u);
+    }
+
+    // A flag with no value is user error, not a request for the default window.
+    for (const argv of [["--count"], ["--count", "--all"]]) {
+      expect(() => runSettlementReport({ argv, collect, readRequired: () => REQUIRED })).toThrow(
+        /--count needs a value/u,
+      );
     }
   });
 

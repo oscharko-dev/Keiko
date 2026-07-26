@@ -56,6 +56,7 @@ const GH_API_MAX_BUFFER = 64 * 1024 * 1024;
 // An outbound call with no ceiling is an unbounded failure mode: a hung request would stall the
 // report forever instead of failing. Two minutes is far above the slowest observed page.
 const GH_API_TIMEOUT_MS = 120_000;
+const DEFAULT_WINDOW = 20;
 
 /**
  * The required-check names come from CONTRIBUTING.md, which AGENTS.md §10 names as authoritative,
@@ -462,21 +463,37 @@ function pullRequestPage(data) {
   return pullRequests;
 }
 
+/**
+ * GitHub's pull-request connection cannot order by merge instant - `UPDATED_AT` is the closest it
+ * offers, and a pull request updated after it merged sorts ahead of a newer merge. So the collector
+ * oversamples and orders by `mergedAt` here, which is what makes "the most recently merged" true
+ * rather than approximately true.
+ */
+export const MERGE_ORDER_OVERSAMPLE = 3;
+
+function byMergedAtDescending(left, right) {
+  const leftAt = typeof left?.mergedAt === "string" ? left.mergedAt : "";
+  const rightAt = typeof right?.mergedAt === "string" ? right.mergedAt : "";
+  if (leftAt === rightAt) return 0;
+  return leftAt < rightAt ? 1 : -1;
+}
+
 export function collectMergedPullRequests(count, io = {}) {
   const slug = requireRepositorySlug(io.repository ?? process.env.GITHUB_REPOSITORY);
   const [owner, name] = slug.split("/");
   const query =
     io.query ?? ((variables) => ghGraphqlWithRetry(MERGED_PULL_REQUESTS_QUERY, variables, io));
   const collected = [];
+  const sample = Math.min(count * MERGE_ORDER_OVERSAMPLE, 100);
   let after = null;
-  while (collected.length < count) {
-    const page = Math.min(PULL_REQUEST_PAGE_SIZE, count - collected.length);
+  while (collected.length < sample) {
+    const page = Math.min(PULL_REQUEST_PAGE_SIZE, sample - collected.length);
     const pullRequests = pullRequestPage(query({ owner, name, count: page, after }));
     collected.push(...pullRequests.nodes);
     if (pullRequests.pageInfo?.hasNextPage !== true) break;
     after = nextCursor(pullRequests, after);
   }
-  return collected.slice(0, count);
+  return [...collected].sort(byMergedAtDescending).slice(0, count);
 }
 
 /** An absent value reads the same in both tables: a dash, never the literal string "null". */
@@ -512,8 +529,13 @@ export function renderReport(reports, cohorts) {
 
 function parseCount(argv) {
   const index = argv.indexOf("--count");
-  const raw = index < 0 ? undefined : argv[index + 1];
-  if (raw === undefined) return 20;
+  if (index < 0) return DEFAULT_WINDOW;
+  const raw = argv[index + 1];
+  // A flag present with no value is user error, not a request for the default: silently reporting a
+  // 20-pull-request window when someone asked for something else is a misleading report.
+  if (raw === undefined || raw.startsWith("--")) {
+    throw new Error("--count needs a value");
+  }
   const count = Number(raw);
   if (!Number.isSafeInteger(count)) throw new TypeError("--count must be an integer");
   if (count < 1 || count > 100) throw new RangeError("--count must be between 1 and 100");
