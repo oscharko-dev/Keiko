@@ -34,6 +34,12 @@ done
 
 say() { printf '\n\033[1m▶ %s\033[0m\n' "$1"; }
 
+# No request to the local server may block forever: an unbounded call turns the readiness loop into
+# a hang that never reaches its own failure path, and a pre-push gate that hangs is a gate nobody
+# runs. Generous enough for a cold server, finite in every case.
+curl_opts=(--connect-timeout 5 --max-time 120)
+ask() { curl -fsS "${curl_opts[@]}" "$@"; }
+
 say "Starting the local SonarQube (first run pulls the image and takes a few minutes)"
 "${compose[@]}" up -d sonarqube
 
@@ -41,14 +47,14 @@ say "Starting the local SonarQube (first run pulls the image and takes a few min
 # wget, curl, bash or python, so nothing inside it can probe its own port.
 printf '  waiting for the server'
 for _ in $(seq 1 120); do
-  if [[ "$(curl -fsS "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')" == "UP" ]]; then
+  if [[ "$(ask "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')" == "UP" ]]; then
     printf ' up\n'
     break
   fi
   printf '.'
   sleep 5
 done
-if [[ "$(curl -fsS "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')" != "UP" ]]; then
+if [[ "$(ask "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')" != "UP" ]]; then
   printf '\n\033[31m✘ SonarQube did not become ready at %s\033[0m\n' "${host}" >&2
   exit 1
 fi
@@ -66,12 +72,12 @@ if [[ ! -f "${credentials}" ]]; then
 fi
 password="$(cat "${credentials}")"
 
-if [[ "$(curl -fsS -u "admin:${password}" "${host}/api/authentication/validate" 2>/dev/null)" == '{"valid":true}' ]]; then
+if [[ "$(ask -u "admin:${password}" "${host}/api/authentication/validate" 2>/dev/null)" == '{"valid":true}' ]]; then
   printf '  credentials already provisioned\n'
 else
   # Not swallowed: a bootstrap that fails here resurfaces three steps later as an unexplained 401,
   # and the reader then debugs the wrong thing.
-  if ! change="$(curl -fsS -u admin:admin -X POST \
+  if ! change="$(ask -u admin:admin -X POST \
     "${host}/api/users/change_password?login=admin&previousPassword=admin&password=${password}" 2>&1)"; then
     printf '\033[31m✘ could not reach %s to provision credentials: %s\033[0m\n' "${host}" "${change}" >&2
     printf '   If this server was provisioned with different credentials, remove %s and the\n' "${credentials}" >&2
@@ -90,9 +96,9 @@ fi
 # One named token, revoked before it is re-issued. A fresh timestamped token per run would pile up
 # credentials in the persisted volume forever.
 token_name="keiko-local-gate"
-curl -fsS -o /dev/null -u "admin:${password}" -X POST \
+ask -o /dev/null -u "admin:${password}" -X POST \
   "${host}/api/user_tokens/revoke?name=${token_name}" 2>/dev/null || true
-token="$(curl -fsS -u "admin:${password}" -X POST \
+token="$(ask -u "admin:${password}" -X POST \
   "${host}/api/user_tokens/generate?name=${token_name}" |
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).token??"")}catch{process.stdout.write("")}})')"
 
@@ -107,9 +113,18 @@ fi
 # `--all` analyses everything when a whole-project picture is what you want.
 inclusions=""
 if [[ "${scope}" == "changed" ]]; then
-  changed="$(git -C "${repo_root}" diff --name-only --diff-filter=ACMR "${base}...HEAD" 2>/dev/null || true)"
+  # NUL-delimited: a newline in a path would otherwise become two paths. `sonar.inclusions` is a
+  # comma-separated list of GLOBS, so a name carrying a comma or a glob metacharacter cannot be
+  # expressed exactly — and a path that cannot be expressed exactly would be silently dropped from
+  # the scan. That is the one outcome a pre-push gate must never produce, so it widens to a full
+  # scan instead of quietly narrowing.
+  changed="$(git -C "${repo_root}" diff -z --name-only --diff-filter=ACMR "${base}...HEAD" 2>/dev/null | tr '\0' '\n' || true)"
   if [[ -z "${changed}" ]]; then
     printf '\033[33m! no diff against %s — analysing the whole project instead\033[0m\n' "${base}"
+    scope="all"
+  elif printf '%s' "${changed}" | grep -q '[],*?[]'; then
+    printf '\033[33m! a changed path carries a comma or a glob character and cannot be scoped exactly\033[0m\n'
+    printf '  analysing the whole project instead, so nothing is skipped\n'
     scope="all"
   else
     inclusions="$(printf '%s' "${changed}" | tr '\n' ',' | sed 's/,$//')"
@@ -134,7 +149,7 @@ KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
   -Dsonar.javascript.node.maxspace=4096
 
 say "Collecting findings"
-issues="$(curl -fsS -u "${token}": \
+issues="$(ask -u "${token}": \
   "${host}/api/issues/search?componentKeys=${project}&resolved=false&ps=500")"
 
 printf '%s' "${issues}" | KEIKO_SONAR_SCOPE="${scope}" KEIKO_SONAR_CHANGED="${changed:-}" \
