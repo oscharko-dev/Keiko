@@ -50,6 +50,7 @@ interface ChatFixture {
 interface RecentCapture {
   readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected";
   readonly mode?: CodingWorkbenchMode;
+  readonly provenance: { readonly initiatorSurface: string };
   readonly reason: string;
   readonly memoryId?: string;
   readonly bodyExcerpt?: string;
@@ -292,15 +293,24 @@ async function certifyVoicePath(
   const before = (await recent(context.request, context.since)).captures;
   const countMarker = (captures: readonly RecentCapture[], marker: string): number =>
     captures.filter((capture) => capture.bodyExcerpt?.includes(marker) === true).length;
-  // A settled Voice transcript uses the ordinary desktop-chat request. There is deliberately no
-  // Voice-specific append route and no provider-supplied assistant message.
+  // Realtime Voice never routes its transcript through the control socket (voice-realtime.ts): a
+  // settled spoken final is answered by this same canonical chat request. What makes THIS a voice
+  // certification rather than a second desktop one is `memory.surface` — the origin the UI's
+  // canonical-voice delivery declares (#2550). Without it the server cannot tell the surfaces apart
+  // and every voice capture is filed as desktop, so asserting the surface below is the whole point.
   const response = await context.request.post("/api/desktop/chat", {
     headers: MUTATION_HEADERS,
     data: {
       chatId: context.chat.id,
       projectPath: context.chat.projectPath,
       content: "Recall the certified-supervised detail, then note M1_VOICE_CAPTURE.",
-      memory: { enabled: true, mode: "autonomous-delivery", budgetTokens: 1_200, context: {} },
+      memory: {
+        enabled: true,
+        mode: "autonomous-delivery",
+        surface: "voice",
+        budgetTokens: 1_200,
+        context: {},
+      },
     },
   });
   expect(response.ok(), await response.text().catch(() => "")).toBe(true);
@@ -310,13 +320,36 @@ async function certifyVoicePath(
   };
   expect(body.memory?.context.memories.map(({ memoryId }) => memoryId)).toContain(recalledMemoryId);
   expect(body.messages.find(({ role }) => role === "assistant")?.content).toBe(REPLY_TEXT);
-  await waitForCapture(context, "M1_VOICE_CAPTURE", "autonomous-delivery", "auto-accepted");
+  const voiceCapture = await waitForCapture(
+    context,
+    "M1_VOICE_CAPTURE",
+    "autonomous-delivery",
+    "auto-accepted",
+  );
+  // The decisive assertion: the spoken turn is attributed to Voice, so the Journal can show what was
+  // learned during voice and offer one-click forget on exactly those rows.
+  expect(voiceCapture.provenance.initiatorSurface).toBe("voice");
   const after = (await recent(context.request, context.since)).captures;
-  for (const marker of captureMarkers.slice(0, -1)) {
-    expect(countMarker(after, marker)).toBe(countMarker(before, marker));
-  }
+  assertTypedTurnsUnchangedAndDesktopAttributed(before, after, captureMarkers.slice(0, -1));
   expect(countMarker(after, "M1_VOICE_CAPTURE") - countMarker(before, "M1_VOICE_CAPTURE")).toBe(1);
   recordCorrectCapture(metrics);
+}
+
+// The voice turn must add exactly one capture without disturbing the typed ones, and those typed
+// captures must stay on the desktop surface — proving the two surfaces remain distinguishable in
+// both directions rather than the run simply relabelling everything as voice.
+function assertTypedTurnsUnchangedAndDesktopAttributed(
+  before: readonly RecentCapture[],
+  after: readonly RecentCapture[],
+  typedMarkers: readonly string[],
+): void {
+  const countMarker = (captures: readonly RecentCapture[], marker: string): number =>
+    captures.filter((capture) => capture.bodyExcerpt?.includes(marker) === true).length;
+  for (const marker of typedMarkers) {
+    expect(countMarker(after, marker)).toBe(countMarker(before, marker));
+    const typed = after.find((capture) => capture.bodyExcerpt?.includes(marker) === true);
+    expect(typed?.provenance.initiatorSurface).toBe("conversation-center");
+  }
 }
 
 async function certifyCorrectionMetrics(

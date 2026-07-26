@@ -1307,6 +1307,34 @@ describe("useChatSession canonical Voice FIFO", () => {
     }
   });
 
+  // Issue #2550: a settled spoken final is answered by this same canonical chat pipeline, so the
+  // server cannot infer that the turn came from Voice — only this caller knows. Declaring the origin
+  // here is what lets the Memory Journal show what was learned during voice; without it every voice
+  // capture is filed as desktop.
+  it("declares the voice capture surface on a canonical voice final", async () => {
+    const rendered = await setupVoiceQueueSession();
+
+    await act(async () => {
+      await rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("I prefer stand-ups at 9am.", "surface-voice-final"),
+      );
+    });
+
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0].memory).toMatchObject({
+      surface: "voice",
+    });
+  });
+
+  it("leaves a typed send free of a surface marker so its request stays byte-identical", async () => {
+    const rendered = await setupVoiceQueueSession();
+
+    await act(async () => {
+      await rendered.result.current.sendMessage({ text: "A typed turn." });
+    });
+
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0].memory).not.toHaveProperty("surface");
+  });
+
   it("persists a 16,001-character final as one user turn with one assistant before the next utterance", async () => {
     const rendered = await setupVoiceQueueSession();
     const longFinal = `${"a".repeat(8_000)} ${"b".repeat(8_000)}`;

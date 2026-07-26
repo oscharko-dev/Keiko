@@ -341,10 +341,31 @@ export interface ConversationMemoryScopeContextWire {
   readonly conversationId?: string | undefined;
 }
 
+// The product surface a canonical turn originated on, so a capture made during a spoken turn can be
+// attributed to Voice in the Memory Journal (Issue #2550). Realtime Voice deliberately never routes
+// its transcript through the control socket — every settled spoken final is answered by the same
+// canonical chat pipeline as a typed turn (voice-realtime.ts) — so the origin cannot be inferred
+// server-side and must be declared here. Absent means the historical desktop-chat origin, keeping an
+// un-migrated caller byte-identical.
+export const CONVERSATION_MEMORY_CAPTURE_SURFACES = ["desktop", "voice"] as const;
+
+export type ConversationMemoryCaptureSurfaceWire =
+  (typeof CONVERSATION_MEMORY_CAPTURE_SURFACES)[number];
+
+export function isConversationMemoryCaptureSurfaceWire(
+  value: unknown,
+): value is ConversationMemoryCaptureSurfaceWire {
+  return (
+    typeof value === "string" &&
+    (CONVERSATION_MEMORY_CAPTURE_SURFACES as readonly string[]).includes(value)
+  );
+}
+
 export interface ConversationMemoryRequestWire {
   readonly enabled?: boolean | undefined;
   readonly budgetTokens?: number | undefined;
   readonly mode?: CodingWorkbenchMode | undefined;
+  readonly surface?: ConversationMemoryCaptureSurfaceWire | undefined;
   readonly context: ConversationMemoryScopeContextWire;
 }
 
