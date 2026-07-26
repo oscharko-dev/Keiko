@@ -116,7 +116,7 @@ describe("agent editor action audit ledger (Issue #1395)", () => {
     expect(listEditorAgentActionAudit("session-1")).toHaveLength(1);
     expect(listEditorAgentActionAudit("session-2")).toHaveLength(1);
     // A flattened view across sessions when no sessionId is given.
-    expect(listEditorAgentActionAudit().length).toBe(2);
+    expect(listEditorAgentActionAudit()).toHaveLength(2);
   });
 
   it("resets cleanly between runs", () => {

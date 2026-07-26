@@ -1533,7 +1533,7 @@ describe("WindowFrame body memo — discrete breakpoint keying (GEN-PERF-RENDER-
         wsRef={wsRef}
       />,
     );
-    expect(bodyRenders.length).toBe(1);
+    expect(bodyRenders).toHaveLength(1);
 
     // Resize within the same band (still above 640, no other breakpoint crossed): the
     // continuous ew/eh change, but the discrete breakpoint signature does not, so the
@@ -1548,7 +1548,7 @@ describe("WindowFrame body memo — discrete breakpoint keying (GEN-PERF-RENDER-
         wsRef={wsRef}
       />,
     );
-    expect(bodyRenders.length).toBe(1);
+    expect(bodyRenders).toHaveLength(1);
 
     // Cross the compact breakpoint (w below 640) → compact flips → body rebuilds.
     rerender(
@@ -1561,7 +1561,7 @@ describe("WindowFrame body memo — discrete breakpoint keying (GEN-PERF-RENDER-
         wsRef={wsRef}
       />,
     );
-    expect(bodyRenders.length).toBe(2);
+    expect(bodyRenders).toHaveLength(2);
   });
 });
 

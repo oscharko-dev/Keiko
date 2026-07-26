@@ -492,9 +492,9 @@ describe("runPortableCli", () => {
 
       const registration = readPortableInstallRegistration(stateDir);
       expect(registration?.status).toBe("managed");
-      expect(registration?.status === "managed" ? registration.managedRootLocator : undefined).toBe(
-        undefined,
-      );
+      expect(
+        registration?.status === "managed" ? registration.managedRootLocator : undefined,
+      ).toBeUndefined();
     }
   });
 

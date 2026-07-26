@@ -275,7 +275,7 @@ describe("scripted QI entries — limits and truncation", () => {
     );
     expect(summary.status).toBe("succeeded");
     const proposed = cap.kinds().filter((k) => k === "candidate:proposed");
-    expect(proposed.length).toBe(1);
+    expect(proposed).toHaveLength(1);
     expect(store.load("qi-run-td-limit")?.totals.candidates).toBe(1);
   });
 
@@ -311,7 +311,7 @@ describe("scripted QI entries — limits and truncation", () => {
     expect(summary.status).toBe("succeeded");
     const recorded = cap.kinds().filter((k) => k === "finding:recorded");
     // At most the cap (1), even though the raw findings exceed it.
-    expect(recorded.length).toBe(1);
+    expect(recorded).toHaveLength(1);
     expect(store.load("qi-run-val-limit")?.totals.findings).toBe(1);
   });
 });

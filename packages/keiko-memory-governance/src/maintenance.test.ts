@@ -410,7 +410,7 @@ describe("planMemoryMaintenance — forget", () => {
       );
     }
     const plan = planFor(records, emptyStats());
-    expect(plan.forget.length).toBe(25);
+    expect(plan.forget).toHaveLength(25);
     // equal strength => id tie-break
     expect(plan.forget[0]?.id).toBe("a00");
     expect(plan.forget[24]?.id).toBe("a24");

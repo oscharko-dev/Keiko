@@ -66,7 +66,7 @@ describe("RelationshipImpactCard", () => {
         onSelectRelationship={vi.fn()}
       />,
     );
-    expect(screen.getAllByText(/No further objects are affected/i).length).toBe(2);
+    expect(screen.getAllByText(/No further objects are affected/i)).toHaveLength(2);
   });
 
   it("lists impacted endpoints beyond the origin", () => {
@@ -135,7 +135,7 @@ describe("RelationshipImpactCard", () => {
     render(
       <RelationshipImpactCard outgoing={null} incoming={null} onSelectRelationship={vi.fn()} />,
     );
-    expect(screen.getAllByText(/Loading…/i).length).toBe(2);
+    expect(screen.getAllByText(/Loading…/i)).toHaveLength(2);
   });
 
   it("passes axe on a populated impact state (GEN-UI-TEST-GAP-009)", async () => {

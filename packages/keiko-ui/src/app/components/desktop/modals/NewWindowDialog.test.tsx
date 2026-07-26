@@ -343,7 +343,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByText("Repository is required.")).toBeInTheDocument());
+    expect(await screen.findByText("Repository is required.")).toBeInTheDocument();
     const repositoryInput = screen.getByPlaceholderText("/absolute/repository/path");
     expect(repositoryInput).not.toHaveAttribute("disabled");
     const repositoryBrowse = screen.getByRole("button", { name: "Browse" });
@@ -538,12 +538,12 @@ describe("NewWindowDialog agents: start-run contract", () => {
       />,
     );
 
-    await waitFor(() => screen.getByText("Repository is required."));
+    await screen.findByText("Repository is required.");
     fireEvent.change(screen.getByPlaceholderText("/absolute/repository/path"), {
       target: { value: "/external" },
     });
 
-    await waitFor(() => screen.getByText("Repository is not registered."));
+    await screen.findByText("Repository is not registered.");
     fireEvent.click(screen.getByRole("button", { name: "Register repository" }));
 
     await waitFor(() => expect(createProject).toHaveBeenCalledWith({ path: "/external" }));

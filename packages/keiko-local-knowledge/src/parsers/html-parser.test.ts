@@ -244,7 +244,7 @@ describe("htmlParser — cleaned normalizedText (GRD-003)", () => {
     for (const unit of result.units) {
       const block = asBlock(unit);
       const span = text.slice(block.span.start, block.span.end);
-      expect(span.length).toBe(block.span.end - block.span.start);
+      expect(span).toHaveLength(block.span.end - block.span.start);
       expect(span).not.toContain("<");
     }
   });

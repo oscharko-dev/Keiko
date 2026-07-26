@@ -661,10 +661,10 @@ describe("buildChatHistoryFixtures (PR4-W4)", () => {
 
   it("builds long/short/tiny histories with the documented turn counts", () => {
     const f = buildChatHistoryFixtures();
-    expect(f.long.length).toBe(30);
-    expect(f.pressure.length).toBe(3);
-    expect(f.short.length).toBe(24);
-    expect(f.tiny.length).toBe(8);
+    expect(f.long).toHaveLength(30);
+    expect(f.pressure).toHaveLength(3);
+    expect(f.short).toHaveLength(24);
+    expect(f.tiny).toHaveLength(8);
   });
 
   it("the long history is budget-safe even though it exceeds the 24-message window", () => {
@@ -683,7 +683,7 @@ describe("buildChatHistoryFixtures (PR4-W4)", () => {
   it("embeds the secret in an EARLY (dropped) turn that the window evicts", () => {
     const f = buildChatHistoryFixtures();
     const dropped = f.pressure.slice(0, 1);
-    expect(dropped.length).toBe(1);
+    expect(dropped).toHaveLength(1);
     expect(dropped[0].content).toContain(f.earlyRedactionSentinel);
     expect(f.earlyRedactionSentinel).toBe("[fixture-redaction-sentinel-7f3a]");
     expect(f.earlyRedactionSentinel).not.toMatch(/secret|credential|api[-_]?key|token/iu);

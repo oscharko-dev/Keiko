@@ -278,7 +278,7 @@ describe("POST /api/editor/patch-apply — explicit decision (AC1)", () => {
     // Proposal → apply → verification evidence linkage by patchId (AC4).
     expect(response.evidence?.applyRunId).toBeTruthy();
     expect(response.evidence?.verificationRunId).toBeTruthy();
-    expect(evidenceStore.list().length).toBe(2);
+    expect(evidenceStore.list()).toHaveLength(2);
   });
 
   it("records a reject decision and mutates nothing", async () => {

@@ -3,7 +3,7 @@
 // and an outcome banner; asserts the polite live region exists for async outcome announcements; and
 // asserts readiness / outcome are conveyed by TEXT, not colour alone.
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { GovernedMergeCard, type GovernedMergeClient } from "./GovernedMergeCard";
@@ -79,7 +79,7 @@ describe("GovernedMergeCard — a11y (WCAG 2.2 AA)", () => {
     const { container } = render(<GovernedMergeCard projectId={PROJECT} client={makeClient()} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     expect(screen.getByTestId("gm-approval")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
@@ -88,10 +88,10 @@ describe("GovernedMergeCard — a11y (WCAG 2.2 AA)", () => {
     const { container } = render(<GovernedMergeCard projectId={PROJECT} client={makeClient()} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("I confirm this high-risk merge"));
     fireEvent.click(screen.getByTestId("gm-submit"));
-    await waitFor(() => expect(screen.getByTestId("gm-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-outcome")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -106,11 +106,11 @@ describe("GovernedMergeCard — a11y (WCAG 2.2 AA)", () => {
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient()} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
     expect(screen.getByTestId("gm-readiness")).toHaveTextContent("Mergeable: yes");
     fireEvent.click(screen.getByLabelText("I confirm this high-risk merge"));
     fireEvent.click(screen.getByTestId("gm-submit"));
-    await waitFor(() => expect(screen.getByTestId("gm-outcome")).toBeInTheDocument());
+    expect(await screen.findByTestId("gm-outcome")).toBeInTheDocument();
     expect(screen.getByTestId("gm-outcome")).toHaveTextContent("merge: blocked");
   });
 });

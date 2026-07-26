@@ -258,7 +258,7 @@ describe("runStructuralAdapters", () => {
         nowMs: FIXED_NOW,
       },
     );
-    expect(result.atoms.length).toBe(1);
+    expect(result.atoms).toHaveLength(1);
   });
 
   it("caps total emitted atoms at limits.maxMatchesReturned", async () => {
@@ -271,7 +271,7 @@ describe("runStructuralAdapters", () => {
     const result = await runStructuralAdapters(registry, scope, nlq("x"), capped, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(result.atoms.length).toBe(2);
+    expect(result.atoms).toHaveLength(2);
   });
 
   it("records elapsedMs computed from deps.nowMs", async () => {
@@ -317,14 +317,14 @@ describe("runStructuralAdapters", () => {
     const result = await runStructuralAdapters(registry, scope, queryNarrow, limitsWide, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(result.atoms.length).toBe(2);
+    expect(result.atoms).toHaveLength(2);
     // Also verify the reverse: limits.maxMatchesReturned = 2, query.maxResults = 5 → cap = 2
     const limitsNarrow: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 2 };
     const queryWide = { ...queryNarrow, maxResults: 5 };
     const result2 = await runStructuralAdapters(registry, scope, queryWide, limitsNarrow, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(result2.atoms.length).toBe(2);
+    expect(result2.atoms).toHaveLength(2);
   });
 
   it("invokes registered ecosystem extractors as ordinary structural adapters", async () => {

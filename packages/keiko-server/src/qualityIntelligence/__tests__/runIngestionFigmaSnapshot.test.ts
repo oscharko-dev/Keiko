@@ -1013,7 +1013,7 @@ describe("figma-snapshot ingestion — four-kind cross-source composition (Issue
       );
 
       // (1) All four source kinds produce their own envelope.
-      expect(result.envelopes.length).toBe(4);
+      expect(result.envelopes).toHaveLength(4);
 
       // (2) sourceSummaries lists all four kinds in source order.
       expect(result.sourceSummaries.map((s) => s.kind)).toEqual([

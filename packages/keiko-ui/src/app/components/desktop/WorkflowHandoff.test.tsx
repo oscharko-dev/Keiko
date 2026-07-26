@@ -486,7 +486,7 @@ describe("useChatSession run-summary patching", () => {
 
       // Advance well past several poll intervals. No further fetches must be issued.
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(report.mock.calls.length).toBe(callsBeforeUnmount);
+      expect(report.mock.calls).toHaveLength(callsBeforeUnmount);
     } finally {
       vi.useRealTimers();
     }

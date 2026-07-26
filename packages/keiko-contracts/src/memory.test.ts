@@ -742,9 +742,14 @@ describe("branded IDs", () => {
     expect(userId).toBe("u-1");
     expect(projectId).toBe("p-1");
     expect(memoryId).toBe("m-1");
-    expect(_crossUserProject).toBeDefined();
-    expect(_crossProjectMemory).toBeDefined();
-    expect(_bareString).toBeDefined();
+    // Each @ts-expect-error above is the real compile-time assertion. What is worth asserting at
+    // RUNTIME is the complementary fact: the brands are erased, so a cross-assigned value is
+    // indistinguishable from its source and `user()` is identity — which is what makes branded ids
+    // safe to serialize. The previous lines asserted definedness of a literal, which no change could
+    // ever falsify (typescript:S5914).
+    expect(_crossUserProject).toBe(userId);
+    expect(_crossProjectMemory).toBe(projectId);
+    expect(_bareString).toBe(user("u-2"));
   });
 
   it("survive JSON round-trip as plain strings", () => {

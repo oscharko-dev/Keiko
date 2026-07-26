@@ -2,7 +2,7 @@
 // and the default same-origin client (fetch stubbed to empty lists). Covers the route entry and the
 // default-client path the injected-client component tests do not exercise.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AtlassianConnectorsApp from "./AtlassianConnectorsApp";
 import AtlassianConnectorsPage from "./page";
@@ -33,7 +33,7 @@ describe("AtlassianConnectorsApp route", () => {
     stubEmptyFetch();
     render(<AtlassianConnectorsApp />);
     expect(await screen.findByText("Atlassian connectors")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/No connectors yet/i)).toBeInTheDocument());
+    expect(await screen.findByText(/No connectors yet/i)).toBeInTheDocument();
   });
 
   it("renders through the route page entry", async () => {

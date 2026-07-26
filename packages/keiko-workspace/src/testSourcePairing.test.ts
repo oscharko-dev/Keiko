@@ -59,7 +59,7 @@ describe("testSourcePairingAdapter", () => {
       fs,
       { nowMs: FIXED_NOW },
     );
-    expect(atoms.length).toBe(1);
+    expect(atoms).toHaveLength(1);
     expect(atoms[0]?.scopePath).toBe("tests/foo.test.ts");
     expect(atoms[0]?.provenance.kind).toBe("structural");
     expect(atoms[0]?.provenance.tool).toBe("test-source-pairing");
@@ -400,7 +400,7 @@ describe("testSourcePairingAdapter", () => {
     const atoms = await testSourcePairingAdapter.lookup(scope, exq("foo"), cappedLimits, fs, {
       nowMs: FIXED_NOW,
     });
-    expect(atoms.length).toBe(0);
+    expect(atoms).toHaveLength(0);
   });
 
   it("rejects other query kinds with an empty result (not throw)", async () => {

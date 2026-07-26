@@ -166,7 +166,7 @@ describe("audit packet (AC4)", () => {
     const packet = buildGitDeliveryAuditPacket([], 1, ["extra limitation"]);
     expect(packet.recordCount).toBe(0);
     expect(packet.knownLimitations).toContain("extra limitation");
-    expect(packet.knownLimitations.length).toBe(
+    expect(packet.knownLimitations).toHaveLength(
       GIT_DELIVERY_AUDIT_PACKET_KNOWN_LIMITATIONS.length + 1,
     );
     const allClasses = Object.values(packet.outcomeClassCounts);

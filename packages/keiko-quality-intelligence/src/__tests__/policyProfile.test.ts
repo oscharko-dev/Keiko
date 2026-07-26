@@ -9,7 +9,7 @@ import {
 
 describe("policy profiles", () => {
   it("expose three named profiles", () => {
-    expect(ALL_POLICY_PROFILES.length).toBe(3);
+    expect(ALL_POLICY_PROFILES).toHaveLength(3);
     expect(ALL_POLICY_PROFILES).toContain(bankingDefault);
     expect(ALL_POLICY_PROFILES).toContain(insuranceDefault);
     expect(ALL_POLICY_PROFILES).toContain(regressionDefault);

@@ -1466,7 +1466,7 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
-    expect(answer.uncertainty.filter((u) => u.claim.includes("Indexing")).length).toBe(2);
+    expect(answer.uncertainty.filter((u) => u.claim.includes("Indexing"))).toHaveLength(2);
     expect(retrievalCallCount).toBe(0);
     expect(auditKindsFor(indexingA)).toEqual([]);
     expect(auditKindsFor(indexingB)).toEqual([]);
@@ -1590,7 +1590,7 @@ describe("hybrid grounded ask — EmbeddingAdapterError is skipped, not aborted"
     const answer = asHybrid(result.body as GroundedAnswer);
     expect(answer.citations.length).toBeGreaterThan(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
-    expect(answer.uncertainty.filter((u) => u.kind === "embedding-unavailable").length).toBe(2);
+    expect(answer.uncertainty.filter((u) => u.kind === "embedding-unavailable")).toHaveLength(2);
   });
 });
 
@@ -1761,7 +1761,7 @@ describe("hybrid grounded ask — folder pack-validation failure is skipped, not
     expect(answer.knowledgeCitations.some((kc) => kc.source?.startsWith(`${connLabel} / `))).toBe(
       true,
     );
-    expect(answer.uncertainty.filter((u) => u.kind === "pack-validation-failed").length).toBe(2);
+    expect(answer.uncertainty.filter((u) => u.kind === "pack-validation-failed")).toHaveLength(2);
   });
 });
 
@@ -1901,7 +1901,7 @@ describe("hybrid grounded ask — folder EmbeddingAdapterError is skipped, not a
     expect(answer.knowledgeCitations.some((kc) => kc.source?.startsWith(`${connLabel} / `))).toBe(
       true,
     );
-    expect(answer.uncertainty.filter((u) => u.kind === "embedding-unavailable").length).toBe(2);
+    expect(answer.uncertainty.filter((u) => u.kind === "embedding-unavailable")).toHaveLength(2);
   });
 });
 

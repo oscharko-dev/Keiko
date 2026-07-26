@@ -306,9 +306,13 @@ describe("createBrowserVoiceRtcTransport", () => {
     const transport = createBrowserVoiceRtcTransport();
     const session = await transport.connect();
     await session.applyAnswer(RECEIVE_ONLY_ANSWER);
-    // The FakePeerConnection sets remoteDescription; we verify via the answer SDP stored.
-    // (The stub's setRemoteDescription is async-no-op; we just verify no error is thrown.)
-    expect(true).toBe(true);
+    // The stored description is the observable effect this test is named for. It previously
+    // asserted `expect(true).toBe(true)`, so a regression that dropped the setRemoteDescription
+    // call entirely — or handed it the wrong SDP — would have kept the test green.
+    expect(lastPeerConnection?.remoteDescription).toEqual({
+      type: "answer",
+      sdp: RECEIVE_ONLY_ANSWER,
+    });
   });
 
   it("rejects a remote answer that attempts to send provider audio", async () => {

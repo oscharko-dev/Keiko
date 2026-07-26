@@ -82,7 +82,7 @@ describe("sealBytes / openBytes", () => {
   it("round-trips an empty buffer", () => {
     const k = key();
     const sealed = sealBytes(k, Buffer.alloc(0));
-    expect(openBytes(k, sealed).length).toBe(0);
+    expect(openBytes(k, sealed)).toHaveLength(0);
   });
 
   it("prefixes the binary envelope with version byte 0x01", () => {

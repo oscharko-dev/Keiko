@@ -123,7 +123,7 @@ describe("ConnectorPickerWidget", () => {
     const onSelect = vi.fn();
     const user = userEvent.setup();
     render(<ConnectorPickerWidget onSelect={onSelect} />);
-    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
     await chooseComboboxOption(user, /My Docs/i);
     expect(onSelect).toHaveBeenCalledWith({ selectedKind: "capsule", selectedId: "cap-abc" });
   });
@@ -133,7 +133,7 @@ describe("ConnectorPickerWidget", () => {
     const onSelect = vi.fn();
     const user = userEvent.setup();
     render(<ConnectorPickerWidget onSelect={onSelect} />);
-    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
     await chooseComboboxOption(user, /All Sources/i);
     expect(onSelect).toHaveBeenCalledWith({ selectedKind: "capsule-set", selectedId: "set-xyz" });
   });
@@ -143,7 +143,7 @@ describe("ConnectorPickerWidget", () => {
     render(
       <ConnectorPickerWidget selectedKind="capsule" selectedId="cap-abc" onSelect={vi.fn()} />,
     );
-    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
     const statuses = screen.getAllByRole("status");
     const badge = statuses.find((el) => el.textContent?.includes("My Docs"));
     expect(badge).not.toBeUndefined();
@@ -172,7 +172,7 @@ describe("ConnectorPickerWidget", () => {
       <ConnectorPickerWidget selectedKind="capsule" selectedId="cap-abc" onSelect={vi.fn()} />,
     );
 
-    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
     const selectedStatuses = screen.getAllByRole("status");
     const selectedBadge = selectedStatuses.find((el) =>
       el.textContent?.includes("Embedding mismatch"),
@@ -222,7 +222,7 @@ describe("ConnectorPickerWidget", () => {
       <ConnectorPickerWidget selectedKind="capsule-set" selectedId="set-xyz" onSelect={vi.fn()} />,
     );
 
-    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
     const selectedStatuses = screen.getAllByRole("status");
     const selectedBadge = selectedStatuses.find((el) =>
       el.textContent?.includes("Members unavailable"),
@@ -260,7 +260,7 @@ describe("ConnectorPickerWidget", () => {
     const onManageConnectors = vi.fn();
     const user = userEvent.setup();
     render(<ConnectorPickerWidget onSelect={vi.fn()} onManageConnectors={onManageConnectors} />);
-    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Create or manage Knowledge Pods/i }));
     expect(onManageConnectors).toHaveBeenCalledTimes(1);
   });
@@ -313,7 +313,7 @@ describe("ConnectorPickerWidget — a11y (GEN-UI-A11Y-018 / test-plan #28)", () 
   it("jest-axe: loaded list state has no violations", async () => {
     defaultMocks();
     const { container } = render(<ConnectorPickerWidget onSelect={vi.fn()} />);
-    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });

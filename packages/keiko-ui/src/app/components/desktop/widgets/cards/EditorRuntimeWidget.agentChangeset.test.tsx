@@ -584,7 +584,7 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
       expect(screen.queryByRole("group", { name: "Agent changeset review" })).toBeNull();
     });
     expect(surface.props?.buffer.content.text).toBe(UPDATED_ACTIVE);
-    expect(surface.props?.fileModel === undefined).toBe(false);
+    expect(surface.props?.fileModel).toBeDefined();
     expect(isDocumentDirty(surface.props!.fileModel)).toBe(false);
     expect(rendered.onCloseOpenFile).toHaveBeenCalledOnce();
     expect(rendered.onCloseOpenFile).toHaveBeenCalledWith("src/deleted.ts");

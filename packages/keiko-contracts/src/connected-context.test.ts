@@ -473,7 +473,7 @@ describe("validateSelectedScope", () => {
     const result = validateSelectedScope(scope);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reasons.length).toBe(3);
+      expect(result.reasons).toHaveLength(3);
     }
   });
 });

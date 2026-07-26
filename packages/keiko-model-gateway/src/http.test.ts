@@ -1486,7 +1486,7 @@ describe("gatewayFetch maxResponseBytes override", () => {
       });
       expect(res.status).toBe(200);
       const text = await res.text();
-      expect(text.length).toBe(200);
+      expect(text).toHaveLength(200);
     } finally {
       for (const s of originSockets) s.destroy();
       await close(origin);

@@ -597,10 +597,10 @@ describe("runIndexingJob — happy path", () => {
     const kinds = events.map((e) => e.kind);
     expect(kinds[0]).toBe("job-started");
     expect(kinds.at(-1)).toBe("job-completed");
-    expect(kinds.filter((k) => k === "document-discovered").length).toBe(3);
-    expect(kinds.filter((k) => k === "document-extracted").length).toBe(3);
-    expect(kinds.filter((k) => k === "document-chunked").length).toBe(3);
-    expect(kinds.filter((k) => k === "document-embedded").length).toBe(3);
+    expect(kinds.filter((k) => k === "document-discovered")).toHaveLength(3);
+    expect(kinds.filter((k) => k === "document-extracted")).toHaveLength(3);
+    expect(kinds.filter((k) => k === "document-chunked")).toHaveLength(3);
+    expect(kinds.filter((k) => k === "document-embedded")).toHaveLength(3);
     expect(kinds.includes("document-failed")).toBe(false);
     expect(kinds.includes("job-failed")).toBe(false);
 
@@ -939,7 +939,7 @@ describe("runIndexingJob — incremental", () => {
     // fast path fires. Either way: no new document-embedded events.
     const embeddedSecondPass = secondEvents.filter((e) => e.kind === "document-embedded").length;
     expect(embeddedSecondPass).toBe(0);
-    expect(secondEvents.filter((e) => e.kind === "document-skipped").length).toBe(2);
+    expect(secondEvents.filter((e) => e.kind === "document-skipped")).toHaveLength(2);
   });
 
   it("re-embeds unchanged files when existing chunks are marked stale by strategy version", async () => {
@@ -949,7 +949,7 @@ describe("runIndexingJob — incremental", () => {
       .run({ c: fixture.capsuleId });
 
     const secondEvents = await drain(runIndexingJob(buildOptions(fixture)));
-    expect(secondEvents.filter((e) => e.kind === "document-embedded").length).toBe(2);
+    expect(secondEvents.filter((e) => e.kind === "document-embedded")).toHaveLength(2);
     expect(
       secondEvents.some((e) => e.kind === "document-skipped" && e.reason === "already-embedded"),
     ).toBe(false);
@@ -1013,8 +1013,8 @@ describe("runIndexingJob — incremental", () => {
       ),
     );
 
-    expect(secondEvents.filter((e) => e.kind === "document-discovered").length).toBe(1);
-    expect(secondEvents.filter((e) => e.kind === "document-skipped").length).toBe(1);
+    expect(secondEvents.filter((e) => e.kind === "document-discovered")).toHaveLength(1);
+    expect(secondEvents.filter((e) => e.kind === "document-skipped")).toHaveLength(1);
     expect(
       readExistingDocumentRow(fixture.store._internal.db, fixture.capsuleId, deletedDocumentId),
     ).toBeUndefined();
@@ -1157,7 +1157,7 @@ describe("runIndexingJob — incremental", () => {
       ),
     );
 
-    expect(secondEvents.filter((e) => e.kind === "document-discovered").length).toBe(1);
+    expect(secondEvents.filter((e) => e.kind === "document-discovered")).toHaveLength(1);
     expect(
       readExistingDocumentRow(fixture.store._internal.db, fixture.capsuleId, cappedOutDocumentId),
     ).toBeDefined();
@@ -1282,7 +1282,7 @@ describe("runIndexingJob — force", () => {
         ),
       );
 
-      expect(events.filter((event) => event.kind === "document-embedded").length).toBe(1);
+      expect(events.filter((event) => event.kind === "document-embedded")).toHaveLength(1);
       expect(countVectorsForSource(multi, multi.sourceId)).toBe(firstSourceVectors);
       expect(countVectorsForSource(multi, multi.otherSourceId)).toBe(otherSourceVectors);
     } finally {
@@ -1845,7 +1845,7 @@ describe("runIndexingJob — partial adapter failure", () => {
     expect(failed.length).toBeGreaterThanOrEqual(1);
     const embedded = events.filter((e) => e.kind === "document-embedded");
     // 2 successful docs (beta + gamma) — alpha is the failing doc.
-    expect(embedded.length).toBe(2);
+    expect(embedded).toHaveLength(2);
     // Job-level outcome: completed (because at least one doc succeeded).
     expect(events.at(-1)?.kind).toBe("job-completed");
   });
@@ -1902,7 +1902,7 @@ describe("runIndexingJob — capsule-sources query budget", () => {
 
     try {
       const events = await drain(runIndexingJob(buildOptions(fixture)));
-      expect(events.filter((e) => e.kind === "document-embedded").length).toBe(9);
+      expect(events.filter((e) => e.kind === "document-embedded")).toHaveLength(9);
     } finally {
       db.prepare = originalPrepare;
     }

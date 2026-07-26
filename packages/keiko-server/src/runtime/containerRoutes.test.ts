@@ -501,7 +501,7 @@ describe("openContainerSseStream backpressure", () => {
     // The abort unsubscribed from the manager, so a second event produces no further work.
     const writesAfterKill = fake.writes.length;
     manager.emitExternal({ kind: "run-started", runId: "run-bp", payload: { taskId: "t" } });
-    expect(fake.writes.length).toBe(writesAfterKill);
+    expect(fake.writes).toHaveLength(writesAfterKill);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
 

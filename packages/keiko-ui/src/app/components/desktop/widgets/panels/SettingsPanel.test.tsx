@@ -690,16 +690,14 @@ describe("SettingsPanel Figma token deep-link (Issue #1399)", () => {
     primeFetches([chatCapability("test-chat-1")]);
     render(<SettingsPanel />);
     // Wait until config has loaded (preserveExisting depends on it).
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Update credentials" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("button", { name: "Update credentials" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/figma access token/iu)).not.toBeInTheDocument();
 
     act(() => {
       requestGatewaySetup();
     });
 
-    await waitFor(() => expect(screen.getByLabelText(/figma access token/iu)).toBeInTheDocument());
+    expect(await screen.findByLabelText(/figma access token/iu)).toBeInTheDocument();
     // The dialog's Figma section heading confirms the deep-link target.
     expect(screen.getByRole("heading", { name: "Figma Snapshot" })).toBeInTheDocument();
   });
@@ -710,15 +708,13 @@ describe("SettingsPanel Figma token deep-link (Issue #1399)", () => {
     requestGatewaySetup();
     render(<SettingsPanel />);
 
-    await waitFor(() => expect(screen.getByLabelText(/figma access token/iu)).toBeInTheDocument());
+    expect(await screen.findByLabelText(/figma access token/iu)).toBeInTheDocument();
   });
 
   it("does not open the dialog on a normal mount without a pending request", async () => {
     primeFetches([chatCapability("test-chat-1")]);
     render(<SettingsPanel />);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Update credentials" })).toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("button", { name: "Update credentials" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/figma access token/iu)).not.toBeInTheDocument();
   });
 
@@ -739,6 +735,6 @@ describe("SettingsPanel Figma token deep-link (Issue #1399)", () => {
     expect(screen.queryByLabelText(/figma access token/iu)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(screen.getByLabelText(/figma access token/iu)).toBeInTheDocument());
+    expect(await screen.findByLabelText(/figma access token/iu)).toBeInTheDocument();
   });
 });

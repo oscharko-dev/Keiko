@@ -80,7 +80,7 @@ describe("runBugVerification (D11)", () => {
     const out = await runBugVerification(state, workspace, [changed("src/buggy.ts")], fs);
     expect(out.skipReason).toBeUndefined();
     expect(out.summary?.overallStatus).toBe("passed");
-    expect(spawn.calls().length).toBe(1);
+    expect(spawn.calls()).toHaveLength(1);
   });
 
   it("skips when no test command resolves for the changed source", async () => {
@@ -105,7 +105,7 @@ describe("runBugVerification (D11)", () => {
     const out = await runBugVerification(state, workspace, [changed("src/buggy.ts")], fs);
     expect(out.skipReason).toBeUndefined();
     expect(out.summary?.overallStatus).toBe("passed");
-    expect(spawn.calls().length).toBe(1);
+    expect(spawn.calls()).toHaveLength(1);
   });
 
   it("runs a changed regression test file directly instead of falling back to the full suite", async () => {

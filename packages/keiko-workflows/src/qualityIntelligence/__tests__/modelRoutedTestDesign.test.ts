@@ -165,7 +165,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     expect(manifest?.coverageMatrix).toBeDefined();
     const matrix = manifest?.coverageMatrix ?? [];
     // All 3 atoms must appear in the matrix
-    expect(matrix.length).toBe(3);
+    expect(matrix).toHaveLength(3);
     const uncoveredRow = matrix.find((row) => row.atomId === "atom-3");
     expect(uncoveredRow).toBeDefined();
     expect(uncoveredRow?.status).toBe("uncovered");
@@ -493,7 +493,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
 
     // Deliverable: every coverageMatrix row must be "covered" (not "weakly-covered" / "uncovered").
     const matrix = manifest.coverageMatrix ?? [];
-    expect(matrix.length).toBe(2);
+    expect(matrix).toHaveLength(2);
     expect(matrix.every((row) => row.status === "covered")).toBe(true);
   });
 
@@ -693,7 +693,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
 
     const qualityFindings = manifest.findings.filter((f) => f.kind === "test-quality");
     // Both model-delta candidates are weak → 2 test-quality findings.
-    expect(qualityFindings.length).toBe(2);
+    expect(qualityFindings).toHaveLength(2);
     // Each test-quality finding is candidate-scoped so the UI can flag the exact test (#748).
     expect(qualityFindings.every((f) => typeof f.candidateId === "string")).toBe(true);
   });
@@ -764,7 +764,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(manifest?.qualityDiagnostics).toMatchObject(summary.qualityDiagnostics ?? {});
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     // Only the weak candidate is flagged.
-    expect(qualityFindings.length).toBe(1);
+    expect(qualityFindings).toHaveLength(1);
   });
 
   it("sets judgeIsSelfModel when generation and judge routing resolve to the same model", async () => {
@@ -993,7 +993,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
 
     const manifest = store.load(String(input.plan.id));
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
-    expect(qualityFindings.length).toBe(0);
+    expect(qualityFindings).toHaveLength(0);
   });
 
   it("passes the originating requirement context into the judge for ac-fidelity scoring", async () => {
@@ -1405,7 +1405,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
       makeIngestedAtom("atom-3", "Reset the lockout counter after a successful login."),
     ]);
     const matrix = store.load(String(RUN_ID))?.coverageMatrix ?? [];
-    expect(matrix.length).toBe(3);
+    expect(matrix).toHaveLength(3);
     const row1 = matrix.find((row) => row.atomId === "atom-1");
     // The path\ntext canonical shape collapses to a single readable line.
     expect(row1?.requirementExcerptRedacted).toBe(

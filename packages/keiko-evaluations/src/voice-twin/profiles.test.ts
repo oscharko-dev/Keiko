@@ -26,7 +26,7 @@ describe("localProfilesMatchContract", () => {
     const contractKeys = Object.keys(VOICE_PROFILE_MEDIA_TRANSPORT).sort();
     const local = ALL_VOICE_PROFILES.slice().sort();
     // Mutation guard: if the length comparison is inverted (> instead of ===), this fails.
-    expect(local.length).toBe(contractKeys.length);
+    expect(local).toHaveLength(contractKeys.length);
     expect(local).toEqual(contractKeys);
   });
 

@@ -271,7 +271,7 @@ describe("buildGatewayAssembly", () => {
     expect(
       outcome.diagnostics.lanes.reduce((sum, lane) => sum + lane.estimatedTokens, 0),
     ).toBeLessThanOrEqual(profile.effectiveInputBudget);
-    expect((latestUserTurn.match(/Included memory context:/g) ?? []).length).toBe(1);
+    expect(latestUserTurn.match(/Included memory context:/g) ?? []).toHaveLength(1);
     expect(latestUserTurn).toContain("# Relevant memories");
   });
 

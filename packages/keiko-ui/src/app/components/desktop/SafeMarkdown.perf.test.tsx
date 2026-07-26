@@ -53,7 +53,7 @@ describe("SafeMarkdown — render stability (GEN-PERF-CHAT-010)", () => {
     for (let i = 0; i < 10; i += 1) {
       rerender(<SafeMarkdown source={CODE_SOURCE} onApplyCodeBlock={onApplyCodeBlock} />);
     }
-    expect(highlightSpy.mock.calls.length).toBe(afterFirst);
+    expect(highlightSpy.mock.calls).toHaveLength(afterFirst);
   });
 
   it("parses the Markdown source exactly once across identical-prop re-renders", () => {
@@ -64,12 +64,12 @@ describe("SafeMarkdown — render stability (GEN-PERF-CHAT-010)", () => {
     const { rerender } = render(
       <SafeMarkdown source={CODE_SOURCE} onApplyCodeBlock={onApplyCodeBlock} />,
     );
-    expect(parseSpy.mock.calls.length).toBe(1);
+    expect(parseSpy.mock.calls).toHaveLength(1);
 
     for (let i = 0; i < 10; i += 1) {
       rerender(<SafeMarkdown source={CODE_SOURCE} onApplyCodeBlock={onApplyCodeBlock} />);
     }
-    expect(parseSpy.mock.calls.length).toBe(1);
+    expect(parseSpy.mock.calls).toHaveLength(1);
   });
 
   it("re-highlights when the source text actually changes", () => {
@@ -77,9 +77,9 @@ describe("SafeMarkdown — render stability (GEN-PERF-CHAT-010)", () => {
     highlightSpy.mockClear();
 
     const { rerender } = render(<SafeMarkdown source={CODE_SOURCE} />);
-    expect(highlightSpy.mock.calls.length).toBe(1);
+    expect(highlightSpy.mock.calls).toHaveLength(1);
 
     rerender(<SafeMarkdown source={"```ts\nconst z = 9;\n```\n"} />);
-    expect(highlightSpy.mock.calls.length).toBe(2);
+    expect(highlightSpy.mock.calls).toHaveLength(2);
   });
 });

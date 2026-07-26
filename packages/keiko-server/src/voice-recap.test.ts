@@ -200,7 +200,7 @@ describe("handleBuildVoiceRecap", () => {
       status: ["proposed"],
       includeExpired: true,
     });
-    expect(proposed.length).toBe(2);
+    expect(proposed).toHaveLength(2);
     expect(proposed.every((memory) => memory.status === "proposed")).toBe(true);
 
     // Governance audit (ADR-0109 D1): a content-free recap roll-up is persisted, and a
