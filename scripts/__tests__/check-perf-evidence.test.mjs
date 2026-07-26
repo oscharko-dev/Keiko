@@ -18,9 +18,11 @@ import {
   isPerformanceSubjectPath,
   listDirtyPerformanceSubjectPaths,
   isPerformanceBudgetFailure,
-  readEvidence,
+  isSubjectDriftFinding,
+  partitionFreshnessFindings,
   toolchainTouchedAgainst,
 } from "../check-perf-evidence.mjs";
+import { readEvidence } from "../perf-evidence-gate.mjs";
 
 const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
 const CANDIDATE_COMMIT = "6c3d061e6c3d061e6c3d061e6c3d061e6c3d061e";
@@ -2228,5 +2230,164 @@ describe("the declared D12 reference environment", () => {
 
   it("accepts the reference architecture", () => {
     expect(evaluateD12Comparison(editorEvidence())).toEqual([]);
+  });
+});
+
+// #2740. The scheduled lane ran the enforcing contract as a pass/fail gate against `dev` and filed a
+// tracking issue for every difference it found. But `sourceTreeSha256` binds the whole product
+// subject — keiko-editor, keiko-ui, keiko-contracts, the server editor subsystem, src/ and the root
+// lockfile — so ANY product merge makes the committed documents stop binding the branch. Its first
+// regular night after the ADR-0156 D6 cutover went red for exactly one finding, that digest; its
+// only green run was a manual dispatch minutes after a regeneration. Of the 18 commits that
+// followed that regeneration, 8 moved the subject, the first of them 1h41m later. Repair is a
+// ~35-minute exclusive measurement on the reference machine that the next editor merge invalidates
+// again, so the lane demanded, nightly, work that could never hold. A lane that is red every night
+// is as silent as one that never speaks, which is the very failure ADR-0156 D3 exists to prevent.
+describe("isSubjectDriftFinding", () => {
+  const isAncestor = () => true;
+
+  function freshnessFailures(overrides = {}) {
+    return evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => D12_LOCKFILE_SHA_256_BY_REVISION.candidate,
+      computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
+      computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+      enforceSourceFreshness: true,
+      isAncestor,
+      ...overrides,
+    }).failures;
+  }
+
+  it("classifies the source-tree drift it produced", () => {
+    const failures = freshnessFailures({ computeSourceTreeSha256: () => "e".repeat(64) });
+    const drift = failures.filter((failure) => /stale performance evidence/u.test(failure));
+
+    expect(drift, failures.join("\n")).toHaveLength(1);
+    for (const finding of drift) expect(isSubjectDriftFinding(finding)).toBe(true);
+  });
+
+  it("classifies the candidate lockfile drift it produced — the lockfile is a subject path", () => {
+    const failures = freshnessFailures({ computeLockfileSha256: () => "e".repeat(64) });
+    const drift = failures.filter((failure) => /stale D12 dependency evidence/u.test(failure));
+
+    expect(drift, failures.join("\n")).toHaveLength(1);
+    for (const finding of drift) expect(isSubjectDriftFinding(finding)).toBe(true);
+  });
+
+  // The negative control that matters most: a change to the ruler is the ONE freshness finding a
+  // re-measurement repairs for good, and the only one a pull request can be answerable for
+  // (ADR-0156 D2). If it ever slipped into the reported class, editing the measurement toolchain
+  // without re-measuring would go unnoticed by every lane.
+  it("never classifies measurement-toolchain drift", () => {
+    const failures = freshnessFailures({ computeMeasurementHarnessSha256: () => "e".repeat(64) });
+    const toolchain = failures.filter((failure) => /measurement toolchain/u.test(failure));
+
+    expect(toolchain, failures.join("\n")).toHaveLength(1);
+    for (const finding of toolchain) expect(isSubjectDriftFinding(finding)).toBe(false);
+  });
+
+  // Membership by construction, not by evaluator: these come out of the very functions that emit
+  // the two drift findings, and each says the checker could not answer rather than that the subject
+  // aged. Text matching would have swept them in and let a broken checker read as ordinary age.
+  it("never classifies a malfunction reported by the same evaluators", () => {
+    const malfunctions = [
+      ...freshnessFailures({ computeSourceTreeSha256: () => "not-a-digest" }),
+      ...freshnessFailures({
+        computeSourceTreeSha256: () => {
+          throw new Error("subject digest unavailable");
+        },
+      }),
+      ...freshnessFailures({ computeLockfileSha256: () => "not-a-digest" }),
+      ...freshnessFailures({
+        computeLockfileSha256: () => {
+          throw new Error("lockfile unreadable");
+        },
+      }),
+    ].filter((failure) => !/^d12 |^evidence |^b\d/u.test(failure));
+
+    expect(malfunctions.length).toBeGreaterThanOrEqual(4);
+    for (const malfunction of malfunctions) expect(isSubjectDriftFinding(malfunction)).toBe(false);
+  });
+
+  // A dirty subject working tree is not ordinary age: on the scheduled lane the checkout is fresh,
+  // so it can only mean something altered it. Fail-closed, deliberately outside the class.
+  it("never classifies a dirty subject working tree", () => {
+    const dirty = freshnessFailures({
+      dirtySubjectPaths: ["packages/keiko-ui/src/app/page.tsx"],
+    }).filter((failure) => /dirty inputs/u.test(failure));
+
+    expect(dirty).toHaveLength(1);
+    for (const finding of dirty) expect(isSubjectDriftFinding(finding)).toBe(false);
+  });
+
+  it.each([
+    undefined,
+    null,
+    42,
+    {},
+    ["sourceTreeSha256 a != current b (stale performance evidence)"],
+  ])("does not classify the non-string %s", (value) => {
+    expect(isSubjectDriftFinding(value)).toBe(false);
+  });
+
+  it("does not classify a message no digest comparison produced", () => {
+    expect(
+      isSubjectDriftFinding(
+        `sourceTreeSha256 ${"1".repeat(64)} != current ${"2".repeat(64)} (stale performance evidence)`,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("partitionFreshnessFindings", () => {
+  const isAncestor = () => true;
+
+  function detectionLaneFindings(overrides = {}) {
+    return evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => D12_LOCKFILE_SHA_256_BY_REVISION.candidate,
+      computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
+      computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+      enforceSourceFreshness: true,
+      isAncestor,
+      ...overrides,
+    }).failures;
+  }
+
+  // The exact state of `dev` on 2026-07-26: the ruler, the pinned anchor, the lockfile and every
+  // budget still hold; only the measured product tree has moved on. The detection lane must stay
+  // green and say so.
+  it("leaves the detection lane green when only the measured subject has moved on", () => {
+    const findings = detectionLaneFindings({ computeSourceTreeSha256: () => "e".repeat(64) });
+    const { failures, notes } = partitionFreshnessFindings(findings, true);
+
+    expect(failures).toEqual([]);
+    expect(notes).toEqual(findings);
+    expect(notes.join("\n")).toMatch(/stale performance evidence/u);
+  });
+
+  it("still fails the detection lane for drift a re-measurement actually repairs", () => {
+    const findings = detectionLaneFindings({
+      computeMeasurementHarnessSha256: () => "e".repeat(64),
+      computeSourceTreeSha256: () => "e".repeat(64),
+    });
+    const { failures, notes } = partitionFreshnessFindings(findings, true);
+
+    expect(failures.join("\n")).toMatch(/stale D12 measurement toolchain evidence/u);
+    expect(notes.join("\n")).toMatch(/stale performance evidence/u);
+  });
+
+  // The regeneration wrapper validates its own fresh output, where exact-tree equality holds by
+  // construction. Reporting drift there would let a producer publish a document binding a tree it
+  // did not measure, so the default must keep every finding fatal.
+  it("keeps subject drift fatal by default, for the regeneration wrapper", () => {
+    const findings = detectionLaneFindings({ computeSourceTreeSha256: () => "e".repeat(64) });
+
+    expect(partitionFreshnessFindings(findings)).toEqual({ failures: findings, notes: [] });
+    expect(partitionFreshnessFindings(findings, false)).toEqual({ failures: findings, notes: [] });
+  });
+
+  it("passes an empty finding set through unchanged", () => {
+    expect(partitionFreshnessFindings([], true)).toEqual({ failures: [], notes: [] });
   });
 });

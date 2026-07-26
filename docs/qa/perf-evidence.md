@@ -19,17 +19,40 @@ rebuild the shipped editor on every pull request.
 
 You must regenerate in-flight only when your change edits the **measurement toolchain itself**
 (the scripts listed in `scripts/d12-measurement-toolchain.mjs`) — changing the ruler requires
-re-measuring with it. The regeneration wrapper validates its own output with the full
+re-measuring with it. The gate that judges the evidence (`scripts/perf-evidence-gate.mjs`, behind
+`check:perf-evidence*`) is deliberately **not** a digest member: the ruler lives in
+`check-perf-evidence.mjs`, the judge imports it, and editing the judge — a log sink, an exit code,
+a usage string — costs no re-measurement. That separation exists because the opposite was measured:
+three gate-only edits in one day each invalidated a 35-minute measurement they could not have
+influenced. The regeneration wrapper validates its own output with the full
 source-freshness contract (`--enforce-source-freshness`), which additionally requires exact
 source-tree equality, the current lockfile, and a clean subject working tree.
 
 The scheduled workflow `nightly-perf-evidence` asks that same deterministic question against `dev`
-every night and files a tracking issue when the committed documents stop binding it. It does not
-re-measure and does not open a bot pull request: only the reference environment below can produce
-comparable numbers, so drift detection is automatic and repair is a deliberate local run
-(ADR-0156 D6).
+every night. It does not re-measure and does not open a bot pull request: only the reference
+environment below can produce comparable numbers, so drift detection is automatic and repair is a
+deliberate local run (ADR-0156 D6).
+
+It files a tracking issue only for drift a re-measurement repairs for good — a moved measurement
+toolchain, an unsound document, a broken pinned anchor, a missing stamp, a dirty subject tree, a
+budget overrun (ADR-0162). It does **not** fail for the measured subject having moved on: that is
+what every merge into `packages/keiko-editor/`, `packages/keiko-ui/`, `packages/keiko-contracts/`,
+`packages/keiko-server/src/editor/`, `src/` or the root lockfile does, and the next such merge
+undoes any repair. That finding is reported in the run's job summary instead, where it says how far
+the committed numbers have travelled from the product without pretending anyone owes work for it.
 
 ## How to regenerate (one command)
+
+```bash
+npm run perf:evidence:regen:container
+```
+
+Run it whenever you decide to — it starts immediately. It provisions the self-contained clone,
+runs the pinned container against it, and copies both documents back for you to review and commit.
+Give it a machine that is yours for the duration (see **Single occupancy** below); a busy host does
+not produce a slower number, it produces a broken run.
+
+On Linux you can also drive the producer directly, without the container:
 
 ```bash
 npm run perf:evidence:regen
@@ -77,9 +100,19 @@ self-enforcing. Changing the reference class is
 
 **Scheduled lane.** `nightly-perf-evidence` detects drift; it does not measure (ADR-0156 D6). It runs
 the deterministic freshness contract — digests, plus every budget re-derived from the committed
-samples — and files a tracking issue naming this command when the committed evidence stops binding
-`dev`. It used to run the full producer on a hosted runner, which failed 12 of 12 times and published
-nothing. Repair is yours to run here.
+samples — and files a tracking issue naming this command when the committed evidence stops holding
+on `dev`. It used to run the full producer on a hosted runner, which failed 12 of 12 times and
+published nothing. Repair is yours to run here.
+
+To ask the same question locally, exactly as that lane asks it:
+
+```bash
+npm run check:perf-evidence:editor -- --enforce-source-freshness --report-subject-drift
+```
+
+Drop `--report-subject-drift` to get the regeneration wrapper's stricter reading, where the measured
+subject having moved on is fatal too — which is what you want right after producing evidence, and
+misleading anywhere else.
 
 ## Invariants
 
@@ -87,7 +120,7 @@ nothing. Repair is yours to run here.
   provisions both checkouts with `npm ci --ignore-scripts` under a deterministic environment
   allowlist. A dependency change is therefore measured as part of the candidate instead of making
   evidence generation impossible or silently substituting dependency state.
-- Budgets are enforced in exactly one place: `check-perf-evidence.mjs`, reading the committed
+- Budgets are enforced in exactly one place: `scripts/perf-evidence-gate.mjs` (`npm run check:perf-evidence`), reading the committed
   document on every pull request (ADR-0156 D1/D5). Measurement lanes — this one and the scheduled
   workflow — measure and record; they never abort on a budget verdict, because the document that
   would report the regression must survive it. A failure that says the measurement cannot be

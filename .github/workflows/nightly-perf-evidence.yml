@@ -9,6 +9,10 @@
 # What is environment-independent is the drift question itself — source-tree, lockfile and
 # measurement-toolchain digests are hashes. So this lane answers exactly that, in ~2 minutes instead
 # of 180, and says out loud when the reference environment owes a re-measurement.
+#
+# ADR-0162 (#2740) settles which answers are worth a red lane: only drift a re-measurement repairs
+# for good. Subject drift — the measured product tree moving on, which every merge causes and no
+# re-measurement outlives — is reported in the job summary and leaves the lane green.
 name: Nightly performance evidence
 
 on:
@@ -45,10 +49,30 @@ jobs:
       # The full source-freshness contract: recorded digests against the current tree, plus every
       # budget re-derived from the committed samples. All deterministic, all hashes and arithmetic —
       # nothing here measures, so the runner's hardware cannot change the answer.
+      #
+      # `--report-subject-drift` decides what this lane may FAIL for, never what it evaluates (#2740).
+      # `sourceTreeSha256` binds the whole product subject, so any editor/UI/contracts merge makes
+      # the committed documents stop binding `dev` — the normal state of a living branch, not a
+      # defect, and one no automation can repair: the reference environment re-measures in ~35
+      # exclusive minutes and the next merge invalidates that again. Failing for it made this lane
+      # red on fifteen consecutive runs, which is exactly as informative as never speaking (D3).
+      # Drift that a re-measurement actually repairs — a moved ruler, an unsound document, a broken
+      # anchor, a budget overrun — still fails here, loudly, and still files the issue.
       - name: Check committed evidence against the current tree
         id: drift
         continue-on-error: true
-        run: npm run check:perf-evidence:editor -- --enforce-source-freshness
+        run: |
+          npm run --silent check:perf-evidence:editor -- \
+            --enforce-source-freshness --report-subject-drift >evidence-check.log 2>&1 || status=$?
+          cat evidence-check.log
+          {
+            echo "### D12 evidence versus \`${GITHUB_REF_NAME}\`"
+            echo
+            echo '```'
+            cat evidence-check.log
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
+          exit "${status:-0}"
       # A repair lane that fails silently is worse than no lane: twelve consecutive failures went
       # unnoticed between 2026-07-19 and 2026-07-25, until pull requests deadlocked on evidence
       # nothing was refreshing. The drift step is `continue-on-error`, so this one reads its outcome
@@ -65,11 +89,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          title="D12 evidence has drifted from ${GITHUB_REF_NAME}"
-          existing=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "in:title ${title}" --json number --jq '.[0].number // empty')
+          title="D12 evidence no longer holds on ${GITHUB_REF_NAME}"
+          # Matched on a machine marker in the BODY, never on the title. A title is prose and gets
+          # reworded; a search that matches prose stops finding the issue it filed last time and
+          # opens a duplicate instead of commenting. That is not hypothetical - issue #2740 was
+          # filed under an earlier wording of this very title.
+          marker="<!-- d12-drift:${GITHUB_REF_NAME} -->"
+          existing=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "\"${marker}\" in:body" --json number --jq '.[0].number // empty')
           # The format string is literal by design: values arrive as printf arguments.
           # shellcheck disable=SC2016
-          body=$(printf 'The committed editor performance evidence no longer binds `%s`.\n\nRun: %s\n\nOnly the declared reference environment can produce comparable numbers (linux/arm64, >=14 logical cores). Regenerate there and commit both documents as the final commit of the pull request that moved the ruler:\n\n```bash\nnpm run perf:evidence:regen\n```\n\nSee `docs/qa/perf-evidence.md`. Until then, pull requests that do NOT touch a `D12_MEASUREMENT_TOOLCHAIN_PATHS` member are unaffected (ADR-0156 D2); one that does has no route to green.' "${GITHUB_REF_NAME}" "${RUN_URL}")
+          body=$(printf '%s\n\nThe committed editor performance evidence does not hold on `%s`: the deterministic contract found drift that a re-measurement repairs for good — a moved measurement toolchain or lockfile digest, an unsound or unreadable document, a broken pinned baseline anchor, provenance that differs outside the lockfile, or a budget overrun. The job summary of the run names the exact findings.\n\nRun: %s\n\nOnly the declared reference environment can produce comparable numbers (linux/arm64, >=14 logical cores). Regenerate there and commit both documents as the final commit of the pull request that moved the ruler:\n\n```bash\nnpm run perf:evidence:regen\n```\n\nSee `docs/qa/perf-evidence.md`. A pull request touching a `D12_MEASUREMENT_TOOLCHAIN_PATHS` member has no route to green until this is repaired; one that does not is unaffected (ADR-0156 D2). Ordinary subject drift — the measured product tree moving on — is reported in the same summary and deliberately does not raise this issue (ADR-0162).' "${marker}" "${GITHUB_REF_NAME}" "${RUN_URL}")
           if [ -n "${existing}" ]; then
             gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
           else
@@ -78,5 +107,5 @@ jobs:
       - name: Fail the lane when drift is unrepaired
         if: ${{ steps.drift.outcome == 'failure' }}
         run: |
-          echo "Committed D12 evidence does not bind ${GITHUB_REF_NAME}; a tracking issue was filed."
+          echo "Committed D12 evidence does not hold on ${GITHUB_REF_NAME}; a tracking issue was filed."
           exit 1

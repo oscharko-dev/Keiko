@@ -18,7 +18,7 @@
 import { execFileSync } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -30,8 +30,6 @@ import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const WORKSPACE_EVIDENCE = join(repoRoot, "docs", "release", "1580-workspace-perf-evidence.json");
-const EDITOR_EVIDENCE = join(repoRoot, "docs", "release", "1209-perf-evidence.json");
 
 const PERFORMANCE_SUBJECT_DOMAIN = "keiko-performance-measurement-subject-v1\0";
 const SOURCE_TREE_FRESHNESS_BINDING = "source-tree-v1";
@@ -2713,6 +2711,42 @@ function evaluateD12FinalEvidenceEnvelope(evidence) {
 
 // ---- Freshness -------------------------------------------------------------
 
+// A subject-drift finding says the committed evidence measured an older product tree than the one
+// in front of it. On a live integration branch that is the normal state after any product merge,
+// and no automation can repair it: only the declared reference environment can re-measure
+// (ADR-0156 D6), and the next editor or UI merge invalidates the result again — the documents
+// regenerated at 5560893c stopped binding `dev` 1h41m later, and 8 of the following 18 merges moved
+// the subject again (#2740). Every OTHER freshness finding says the evidence is unsound or was
+// measured with a different ruler; re-measuring fixes those and they stay fixed.
+//
+// Membership is established by CONSTRUCTION, exactly as for the budget verdict class above: only
+// the two comparisons that ask "is this the same subject?" register their message. The malfunction
+// branches inside those very evaluators — a digest that cannot be recomputed, a binding that is not
+// a SHA-256 — deliberately do NOT, so a broken checker can never be read as ordinary age. An
+// evaluator that forgets the wrapper stays fatal, which is the fail-closed direction.
+const SUBJECT_DRIFT_FINDINGS = new Set();
+
+function subjectDriftFinding(message) {
+  SUBJECT_DRIFT_FINDINGS.add(message);
+  return message;
+}
+
+export function isSubjectDriftFinding(finding) {
+  return typeof finding === "string" && SUBJECT_DRIFT_FINDINGS.has(finding);
+}
+
+// Splits freshness findings into what a lane must fail for and what it may only report. Kept pure
+// and exported so the partition is unit-tested directly rather than through the CLI.
+export function partitionFreshnessFindings(findings, reportSubjectDrift = false) {
+  const failures = [];
+  const notes = [];
+  for (const finding of findings) {
+    if (reportSubjectDrift && isSubjectDriftFinding(finding)) notes.push(finding);
+    else failures.push(finding);
+  }
+  return { failures, notes };
+}
+
 function defaultIsAncestor(sha) {
   try {
     execFileSync(resolveHostExecutable("git"), ["merge-base", "--is-ancestor", sha, "HEAD"], {
@@ -2741,8 +2775,10 @@ function evaluateCurrentSourceTreeDigest(recordedDigest, computeSourceTreeSha256
     return currentDigest === recordedDigest
       ? []
       : [
-          `sourceTreeSha256 ${recordedDigest} != current ${currentDigest} ` +
-            "(stale performance evidence)",
+          subjectDriftFinding(
+            `sourceTreeSha256 ${recordedDigest} != current ${currentDigest} ` +
+              "(stale performance evidence)",
+          ),
         ];
   } catch (error) {
     return [`could not recompute current performance measurement subject: ${String(error)}`];
@@ -2832,8 +2868,13 @@ function evaluateCurrentD12LockfileDigest(evidence, computeLockfileSha256) {
     return currentDigest === recordedDigest
       ? []
       : [
-          `dependencyProvisioning candidate lockfileSha256 ${recordedDigest} != current ${currentDigest} ` +
-            "(stale D12 dependency evidence)",
+          // The lockfile is itself a performance subject path (isRootMeasurementConfig), so this
+          // says the same thing the source-tree digest says, in the narrower words of the
+          // dependency binding. It belongs to the same class for the same reason.
+          subjectDriftFinding(
+            `dependencyProvisioning candidate lockfileSha256 ${recordedDigest} != current ${currentDigest} ` +
+              "(stale D12 dependency evidence)",
+          ),
         ];
   } catch (error) {
     return [`could not recompute current package-lock.json digest: ${String(error)}`];
@@ -2900,8 +2941,12 @@ function evaluateFreshnessBinding(evidence, isAncestor, computeSourceTreeSha256,
 //     every PR and catch any change to what users actually load.
 //   * Enforcing mode (`enforceSourceFreshness` / --enforce-source-freshness): additionally requires
 //     exact source-tree equality, the current lockfile, and a clean subject working tree. Used by
-//     the regeneration wrapper right after producing evidence (where the tree matches by
-//     construction) and available to the nightly lane for drift diagnosis.
+//     the regeneration wrapper right after producing evidence, where the tree matches by
+//     construction — there, and only there, exact-tree equality is a property the run can hold.
+//     `--report-subject-drift` layers the detection lane on top: it evaluates the identical set and
+//     downgrades the two subject-age findings to notes, because a scheduled lane inspecting a
+//     living branch cannot be right about them and cannot repair them either (see the class comment
+//     on SUBJECT_DRIFT_FINDINGS).
 // The always-on integrity set: stamps, binding shape, and the pinned-baseline anchor.
 function integrityFreshnessFailures(evidence, options, enforceSourceFreshness) {
   const {
@@ -2955,104 +3000,13 @@ export function evaluateFreshness(evidence, options = {}) {
   return { passed: failures.length === 0, failures };
 }
 
-// ---- CLI -------------------------------------------------------------------
-
-export function readEvidence(path) {
-  if (!existsSync(path)) return { error: `missing evidence file: ${path}` };
-  try {
-    const contents = readFileSync(path);
-    const evidence = JSON.parse(contents.toString("utf8"));
-    if (
-      evidence?.d12Comparison !== undefined &&
-      !contents.equals(canonicalD12ArtifactBytes(evidence))
-    ) {
-      return { error: `non-canonical D12 evidence file: ${path}` };
-    }
-    return { evidence };
-  } catch (error) {
-    return { error: `unreadable evidence file ${path}: ${String(error)}` };
-  }
-}
-
-function selectGateTargets(targetName) {
-  const allTargets = [
-    { name: "workspace", path: WORKSPACE_EVIDENCE, evaluate: evaluateWorkspaceEvidence },
-    { name: "editor", path: EDITOR_EVIDENCE, evaluate: evaluateEditorEvidence },
-  ];
-  return targetName === "all"
-    ? allTargets
-    : allTargets.filter((target) => target.name === targetName);
-}
-
-function gateModeLines(enforceSourceFreshness) {
-  if (enforceSourceFreshness) {
-    return {
-      ok: (name, commit) =>
-        `perf-evidence: ${name} OK (budgets within limits, evidence fresh @ ${commit})`,
-      pass: "perf-evidence: PASS - all committed performance evidence is within budget and fresh.",
-    };
-  }
-  return {
-    ok: (name, commit) =>
-      `perf-evidence: ${name} OK (budgets within limits, evidence integrity verified ` +
-      `@ ${commit}; source freshness is owned by the nightly regeneration lane)`,
-    pass:
-      "perf-evidence: PASS - all committed performance evidence is within budget and " +
-      "internally sound.",
-  };
-}
-
-function evaluateGateTarget(target, freshnessOptions, okLine) {
-  const { evidence, error } = readEvidence(target.path);
-  if (error !== undefined) return [`${target.name}: ${error}`];
-  const failures = [];
-  const budget = target.evaluate(evidence);
-  for (const failure of budget.failures) failures.push(`${target.name} budget: ${failure}`);
-  const freshness = evaluateFreshness(evidence, freshnessOptions);
-  for (const failure of freshness.failures) failures.push(`${target.name} freshness: ${failure}`);
-  if (failures.length === 0) console.log(okLine(target.name, evidence.commit));
-  return failures;
-}
-
-function runGate(targetName = "all", enforceSourceFreshness = false) {
-  const lines = gateModeLines(enforceSourceFreshness);
-  // KEIKO_PERF_EVIDENCE_BASE_REF is the pull request's merge base. When it is absent — the nightly
-  // and regeneration lanes — the toolchain digest is evaluated unconditionally anyway.
-  const baseRef = process.env.KEIKO_PERF_EVIDENCE_BASE_REF ?? "";
-  const freshnessOptions = {
-    dirtySubjectPaths: enforceSourceFreshness ? listDirtyPerformanceSubjectPaths() : [],
-    enforceSourceFreshness,
-    toolchainTouched: enforceSourceFreshness || baseRef === "" || toolchainTouchedAgainst(baseRef),
-  };
-  const allFailures = selectGateTargets(targetName).flatMap((target) =>
-    evaluateGateTarget(target, freshnessOptions, lines.ok),
-  );
-  if (allFailures.length > 0) {
-    for (const failure of allFailures) console.error(`perf-evidence: FAIL - ${failure}`);
-    process.exit(1);
-  }
-  console.log(lines.pass);
-}
-
+// The gate CLI moved to scripts/perf-evidence-gate.mjs. Executing this library directly used to BE
+// the gate, so a silent exit 0 here would read as a pass while checking nothing — the one failure
+// mode this repository never accepts. Refuse loudly instead.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const cliArgs = process.argv.slice(2);
-  const enforceSourceFreshness = cliArgs.includes("--enforce-source-freshness");
-  const positional = cliArgs.filter((arg) => arg !== "--enforce-source-freshness");
-  if (positional.length === 1 && positional[0] === "--print-source-tree-sha256") {
-    console.log(computePerformanceSubjectDigest());
-  } else if (
-    positional.length === 2 &&
-    positional[0] === "--target" &&
-    positional[1] === "editor"
-  ) {
-    runGate("editor", enforceSourceFreshness);
-  } else if (positional.length === 0) {
-    runGate("all", enforceSourceFreshness);
-  } else {
-    console.error(
-      "usage: check-perf-evidence.mjs " +
-        "[--print-source-tree-sha256 | --target editor] [--enforce-source-freshness]",
-    );
-    process.exitCode = 2;
-  }
+  console.error(
+    "check-perf-evidence.mjs is the measurement/digest library and has no CLI. " +
+      "Run the gate instead: npm run check:perf-evidence (scripts/perf-evidence-gate.mjs).",
+  );
+  process.exitCode = 2;
 }

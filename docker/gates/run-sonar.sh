@@ -174,6 +174,32 @@ if [[ "${scope}" == "changed" && -n "${changed}" ]]; then
   fi
 fi
 
+# The server ingests the analysis asynchronously: EXECUTION SUCCESS means the report was SUBMITTED,
+# not processed. Querying issues before the Compute Engine finishes returns the PREVIOUS analysis —
+# so a scan that just fixed findings would still report them once, and a pre-push gate that cries
+# wolf teaches people to distrust it. Wait for the component's task queue to drain, bounded.
+say "Waiting for the server to process the analysis"
+ce_ok=""
+for _ in $(seq 1 90); do
+  ce_state="$(ask -u "${token}:" "${host}/api/ce/component?component=${project}" 2>/dev/null |
+    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s);const q=(d.queue??[]).length;const c=d.current?.status??"NONE";process.stdout.write(q>0?"BUSY":c)}catch{process.stdout.write("UNKNOWN")}})')"
+  case "${ce_state}" in
+    SUCCESS | NONE)
+      ce_ok="yes"
+      break
+      ;;
+    FAILED | CANCELED)
+      printf '\033[31m✘ the server failed to process the analysis (%s)\033[0m\n' "${ce_state}" >&2
+      exit 1
+      ;;
+    *) sleep 2 ;;
+  esac
+done
+if [[ -z "${ce_ok}" ]]; then
+  printf '\033[31m✘ the server did not finish processing the analysis in time\033[0m\n' >&2
+  exit 1
+fi
+
 say "Collecting findings"
 issues="$(ask -u "${token}": \
   "${host}/api/issues/search?componentKeys=${project}&resolved=false&ps=500")"

@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildContainerArgs,
   buildRegenerationPlan,
+  CONTAINER_IMAGE,
   CONTAINER_REMEDIATION,
+  CONTAINER_SCRIPT,
+  PLAYWRIGHT_PIN,
   regenerateEvidence,
+  regenerateInContainer,
+  executeRegenerationCli,
+  resolveCliIo,
 } from "../regenerate-d12-evidence.mjs";
 import { BASELINE_COMMIT } from "../run-d12-perf-comparison.mjs";
 
@@ -42,13 +49,13 @@ describe("D12 evidence regeneration plan", () => {
       "scripts/build-d12-bundle-input.mjs",
       "scripts/run-d12-perf-comparison.mjs",
       "scripts/editor-release-evidence.mjs",
-      "scripts/check-perf-evidence.mjs",
+      "scripts/perf-evidence-gate.mjs",
       "scripts/editor-bundle-size.mjs",
     ]);
   });
 
   it("validates the regenerated evidence with the full source-freshness contract (ADR-0139 D10)", () => {
-    const check = plan.commands.find((step) => step.args[0] === "scripts/check-perf-evidence.mjs");
+    const check = plan.commands.find((step) => step.args[0] === "scripts/perf-evidence-gate.mjs");
     expect(check?.args).toContain("--enforce-source-freshness");
   });
 
@@ -68,10 +75,17 @@ describe("D12 evidence regeneration plan", () => {
     expect(runner?.args[artifactsIndex]).toBe("/work/out/d12-perf-runs");
   });
 
+  // The invariant is that a non-Linux host is handed a COMPLETE, pinned way to measure. It used to
+  // be prose the reader retyped, so the pin read the prose. The prose is now one command and the
+  // steps it names are executed, so the pin follows them there — same three parts, checked where
+  // they now bind rather than where they were quoted.
   it("directs non-Linux hosts to the pinned container invocation", () => {
     expect(CONTAINER_REMEDIATION).toContain("node:24.18.0-bookworm");
-    expect(CONTAINER_REMEDIATION).toContain("bubblewrap");
-    expect(CONTAINER_REMEDIATION).toContain("scripts/regenerate-d12-evidence.mjs");
+    expect(CONTAINER_REMEDIATION).toContain("npm run perf:evidence:regen:container");
+    expect(CONTAINER_SCRIPT).toContain("bubblewrap");
+    expect(CONTAINER_SCRIPT).toContain("scripts/regenerate-d12-evidence.mjs");
+    expect(CONTAINER_SCRIPT).toContain(PLAYWRIGHT_PIN);
+    expect(buildContainerArgs("/tmp/c")).toContain(CONTAINER_IMAGE);
   });
 });
 
@@ -146,5 +160,132 @@ describe("regenerateEvidence orchestration", () => {
     expect(exec.mock.calls.some((call) => call[2]?.stdio === "ignore")).toBe(true);
     expect(exec.mock.calls.some((call) => call[1].includes("fetch"))).toBe(true);
     expect(exec.mock.calls.every((call) => typeof call[0] === "string")).toBe(true);
+  });
+});
+
+describe("regenerateInContainer", () => {
+  it("clones, runs the pinned container against that clone, and copies both documents back", () => {
+    const deps = injectedDeps({ platform: "darwin" });
+    const result = regenerateInContainer(deps);
+
+    const [clone] = deps.run.mock.calls[0][1].slice(-1);
+    expect(deps.run.mock.calls[0][0]).toBe("git");
+    // --no-local matters: a worktree's .git is a file the container cannot resolve.
+    expect(deps.run.mock.calls[0][1]).toContain("--no-local");
+    // call 0 clones, call 1 re-points the clone's origin at the REAL remote — without that the
+    // in-container fallback fetch would target a host path the container cannot resolve — and
+    // call 2 is the container itself.
+    expect(deps.run.mock.calls[1][0]).toBe("git");
+    expect(deps.run.mock.calls[1][1]).toEqual(["remote", "set-url", "origin", deps.originUrl()]);
+    expect(deps.run.mock.calls[2][0]).toBe("docker");
+    expect(deps.run.mock.calls[2][1]).toEqual(buildContainerArgs(clone));
+    expect(deps.copyFile).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ ok: true, clone });
+  });
+
+  it("mounts the clone read-write at /repo and pins the image", () => {
+    const args = buildContainerArgs("/tmp/x.noindex");
+
+    // Pinned deliberately: two narrower profiles (seccomp/apparmor unconfined, and that plus
+    // --cap-add=SYS_ADMIN) were each measured end to end and each failed with the debug capability
+    // `notProvisioned`, because the bubblewrap sandbox could not unshare. If this assertion is ever
+    // relaxed, re-measure before believing the narrower profile works.
+    expect(args).toContain("--privileged");
+    expect(args.join(" ")).toContain("-v /tmp/x.noindex:/repo");
+    expect(args).toContain(CONTAINER_IMAGE);
+    // Without safe.directory git refuses the host-owned bind mount with a bare status 128.
+    expect(CONTAINER_SCRIPT).toMatch(/safe\.directory/u);
+  });
+});
+
+describe("command line dispatch", () => {
+  it("routes --container to the container lane and nothing else", () => {
+    const container = vi.fn().mockReturnValue({ ok: true });
+    const regenerate = vi.fn();
+
+    executeRegenerationCli(["node", "x", "--container"], { container, regenerate });
+
+    expect(container).toHaveBeenCalledOnce();
+    expect(regenerate).not.toHaveBeenCalled();
+  });
+
+  it("runs the host lane by default and stays silent when it succeeds", () => {
+    const regenerate = vi.fn().mockReturnValue({ ok: true });
+    const error = vi.fn();
+    const setExitCode = vi.fn();
+
+    expect(executeRegenerationCli(["node", "x"], { regenerate, error, setExitCode })).toEqual({
+      ok: true,
+    });
+    expect(error).not.toHaveBeenCalled();
+    expect(setExitCode).not.toHaveBeenCalled();
+  });
+
+  it("prints the remediation and exits non-zero when the host lane refuses", () => {
+    const regenerate = vi
+      .fn()
+      .mockReturnValue({ ok: false, remediation: "run it on the reference" });
+    const error = vi.fn();
+    const setExitCode = vi.fn();
+
+    executeRegenerationCli(["node", "x"], { regenerate, error, setExitCode });
+
+    expect(error).toHaveBeenCalledWith("run it on the reference");
+    expect(setExitCode).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("dispatch collaborators", () => {
+  it("defaults to the real lanes and the real sinks", () => {
+    const deps = resolveCliIo();
+
+    expect(deps.container).toBe(regenerateInContainer);
+    expect(deps.regenerate).toBe(regenerateEvidence);
+    expect(typeof deps.error).toBe("function");
+    expect(typeof deps.setExitCode).toBe("function");
+  });
+
+  it("lets every collaborator be replaced", () => {
+    const overrides = {
+      container: () => "c",
+      regenerate: () => "r",
+      error: () => "e",
+      setExitCode: () => "x",
+    };
+
+    expect(resolveCliIo(overrides)).toEqual(overrides);
+  });
+});
+
+describe("dirty-tree warning", () => {
+  it("warns before the clock starts that uncommitted work is not measured", () => {
+    const log = vi.fn();
+    const deps = {
+      dirtyFiles: () => " M scripts/check-perf-evidence.mjs",
+      makeWorkdir: () => "/tmp/x",
+      run: vi.fn(),
+      copyFile: vi.fn(),
+      log,
+    };
+
+    regenerateInContainer(deps);
+
+    expect(log.mock.calls[0][0]).toContain("uncommitted changes");
+    expect(log.mock.calls[0][0]).toContain("scripts/check-perf-evidence.mjs");
+  });
+
+  it("says nothing when the tree is clean", () => {
+    const log = vi.fn();
+
+    regenerateInContainer({
+      dirtyFiles: () => "",
+      makeWorkdir: () => "/tmp/x",
+      run: vi.fn(),
+      copyFile: vi.fn(),
+      log,
+    });
+
+    // Across every message, not only the first: a warning emitted later must also fail this.
+    expect(log.mock.calls.map(([message]) => message).join("\n")).not.toContain("uncommitted");
   });
 });

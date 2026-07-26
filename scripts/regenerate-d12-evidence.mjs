@@ -25,13 +25,29 @@ const EVIDENCE_FILES = [
   "docs/release/1209-bundle-evidence.json",
 ];
 
+export const CONTAINER_IMAGE = "node:24.18.0-bookworm";
+export const PLAYWRIGHT_PIN = "playwright@1.61.1";
+
+// The one command the container runs. `safe.directory` is not optional: the bind mount is owned by
+// the host user and git refuses a repository it does not own, which otherwise fails the clone step
+// with a bare status 128.
+export const CONTAINER_SCRIPT = [
+  "set -e",
+  'git config --global --add safe.directory "*"',
+  "apt-get update -qq && apt-get install -y -qq bubblewrap",
+  `npx --yes --ignore-scripts ${PLAYWRIGHT_PIN} install --with-deps chromium`,
+  "node scripts/regenerate-d12-evidence.mjs",
+].join("\n");
+
 export const CONTAINER_REMEDIATION = [
-  "The D12 editor evidence is Linux-authoritative. Run the producer inside the pinned container:",
-  '  docker run --rm --privileged --shm-size=2g -v "$PWD":/repo -w /repo node:24.18.0-bookworm \\',
-  "    bash -c 'apt-get update -qq && apt-get install -y -qq bubblewrap && \\",
-  "      npx --yes --ignore-scripts playwright@1.61.1 install --with-deps chromium && \\",
-  "      node scripts/regenerate-d12-evidence.mjs'",
-  "(A bind mount installs Linux binaries into node_modules; re-run `npm install` on the host afterwards.)",
+  `The D12 editor evidence is Linux-authoritative. Run it in the pinned ${CONTAINER_IMAGE}`,
+  "container with one command:",
+  "  npm run perf:evidence:regen:container",
+  "",
+  "That provisions a self-contained clone (a worktree's .git is a file the container cannot",
+  "resolve), runs the producer in the container, and copies both documents back.",
+  "It measures whatever the host has free, so start it when the machine is yours -- see",
+  "docs/qa/perf-evidence.md.",
 ].join("\n");
 
 function makeRun(exec) {
@@ -66,11 +82,25 @@ function makeOriginUrl(exec) {
     }).trim();
 }
 
+function makeDirtyFiles(exec) {
+  return () => {
+    try {
+      return String(
+        exec("git", ["-C", repoRoot, "status", "--porcelain"], { encoding: "utf8" }),
+      ).trim();
+    } catch {
+      // Not being able to ask is not a reason to refuse the measurement; it only costs the warning.
+      return "";
+    }
+  };
+}
+
 function resolveDependencies(overrides) {
   const exec = overrides.exec ?? execFileSync;
   return {
     capture: makeCapture(exec),
     copyFile: copyFileSync,
+    dirtyFiles: makeDirtyFiles(exec),
     hasCommit: makeHasCommit(exec),
     log: (message) => console.log(message),
     makeWorkdir: () => mkdtempSync(join(tmpdir(), "keiko-d12-regen-")),
@@ -130,7 +160,7 @@ export function buildRegenerationPlan({ headCommit, workdir }) {
         // construction, so the wrapper asserts the FULL freshness contract (ADR-0139 D10); the
         // pull-request lane validates integrity + budgets only.
         args: [
-          "scripts/check-perf-evidence.mjs",
+          "scripts/perf-evidence-gate.mjs",
           "--target",
           "editor",
           "--enforce-source-freshness",
@@ -172,11 +202,93 @@ export function regenerateEvidence(overrides = {}) {
   return { ok: true, headCommit };
 }
 
-const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
-if (invokedPath === fileURLToPath(import.meta.url)) {
-  const result = regenerateEvidence();
-  if (!result.ok) {
-    console.error(result.remediation);
-    process.exitCode = 1;
-  }
+// The host-side driver: one command, run when the machine is yours. It does the three steps that
+// were prose in CONTAINER_REMEDIATION and had to be retyped every time — provision a self-contained
+// clone, run the pinned container against it, copy both documents back — and it works from a
+// worktree, where `$PWD/.git` is a file the container cannot resolve.
+export function buildContainerArgs(clone) {
+  return [
+    "run",
+    "--rm",
+    // --privileged is load-bearing here, and that was established by measurement rather than
+    // assumed. The debug adapter this evidence exercises is qualified through a bubblewrap
+    // sandbox, and two narrower profiles were each run end to end and each failed at
+    // `expect(settings.state).toBe("available")` with `notProvisioned`, because bubblewrap could
+    // not unshare:
+    //   1. --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+    //   2. the same, plus --cap-add=SYS_ADMIN
+    // What bounds the risk instead is where this runs: never in CI, never automatically, only when
+    // a developer types `npm run perf:evidence:regen:container` on their own machine, against a
+    // fresh clone of the repository they already have checked out. Widening it to a branch you do
+    // not trust is the same decision as checking that branch out and running its tests.
+    "--privileged",
+    "--shm-size=2g",
+    "-v",
+    `${clone}:/repo`,
+    "-w",
+    "/repo",
+    CONTAINER_IMAGE,
+    "bash",
+    "-c",
+    CONTAINER_SCRIPT,
+  ];
 }
+
+export function regenerateInContainer(overrides = {}) {
+  const deps = resolveDependencies(overrides);
+  // The container measures the CLONE's HEAD, so uncommitted work in the host tree is not part of
+  // the measured subject — while the refreshed documents are copied back into that same dirty tree.
+  // That is the intended contract, but finding it out after 35 minutes of measuring the wrong tree
+  // is not, so say it before the clock starts.
+  const dirty = deps.dirtyFiles();
+  if (dirty !== "") {
+    deps.log(
+      `WARNING: the working tree has uncommitted changes. The container measures HEAD, so they are ` +
+        `NOT part of the measured subject:\n${dirty}`,
+    );
+  }
+  const clone = join(deps.makeWorkdir(), "repo.noindex");
+  deps.log(`Provisioning a self-contained clone at ${clone}.`);
+  deps.run("git", ["clone", "--no-local", "--quiet", repoRoot, clone]);
+  // The clone's origin would otherwise be the HOST path it was cloned from, which does not exist
+  // inside the container — so the in-container fallback fetch for a missing commit would fail on
+  // exactly the shallow-checkout case that fetch exists to handle. Point it at the real remote.
+  deps.run("git", ["remote", "set-url", "origin", deps.originUrl()], { cwd: clone });
+  deps.log(
+    `Measuring in ${CONTAINER_IMAGE}. This takes ~35 minutes and wants the machine to itself.`,
+  );
+  deps.run("docker", buildContainerArgs(clone));
+  for (const file of EVIDENCE_FILES) deps.copyFile(join(clone, file), join(repoRoot, file));
+  deps.log(`Refreshed ${EVIDENCE_FILES.join(" and ")} — review and commit them.`);
+  return { ok: true, clone };
+}
+
+/**
+ * The collaborators the dispatch uses, resolved in one place. Exported so a test can assert what the
+ * production defaults ARE without invoking them — a default that only ever runs in production is a
+ * default nothing verifies.
+ */
+export function resolveCliIo(io = {}) {
+  return {
+    container: io.container ?? regenerateInContainer,
+    regenerate: io.regenerate ?? regenerateEvidence,
+    error: io.error ?? ((message) => process.stderr.write(`${message}\n`)),
+    setExitCode: io.setExitCode ?? ((value) => (process.exitCode = value)),
+  };
+}
+
+// Exported so the dispatch is unit-tested directly rather than only through the entry point: it is
+// the half that decides which lane runs and what the exit code is.
+export function executeRegenerationCli(argv = process.argv, io = {}) {
+  const deps = resolveCliIo(io);
+  if (argv.includes("--container")) return deps.container();
+  const result = deps.regenerate();
+  if (!result.ok) {
+    deps.error(result.remediation);
+    deps.setExitCode(1);
+  }
+  return result;
+}
+
+const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
+if (invokedPath === fileURLToPath(import.meta.url)) executeRegenerationCli();

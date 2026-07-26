@@ -34,7 +34,7 @@ delivery deadlocked.
 **D1 — The producer measures; it does not judge.** The official D12 producer runs at full sample
 depth (`KEIKO_D12_FULL_SAMPLE_DEPTH`) so its percentiles are meaningful, and no longer asserts the
 budgets it is measuring. A budget overrun lands in the evidence and fails at
-`check-perf-evidence.mjs`, which evaluates the same numbers against the committed document
+the evidence gate (`scripts/perf-evidence-gate.mjs`, `check:perf-evidence*` — the judging CLI was split out of `check-perf-evidence.mjs` on 2026-07-26 so that edits to the judge stop invalidating the measurement digest; the budget and digest helpers remain in `check-perf-evidence.mjs`, which stays the toolchain-digest member), which evaluates the same numbers against the committed document
 (`outputFlood maxLongTaskMs > D12_CAP_LONG_TASK_BUDGET_MS`). The verdict was never missing — it was
 duplicated, and the copy inside the measurement decided whether evidence existed at all.
 
@@ -67,7 +67,7 @@ before it is written. A failure that says the measurement cannot be trusted — 
 wrong provenance, a digest that does not match its inputs — stays fatal at both, because writing
 that document would poison the gate. A performance-budget verdict says the measured product got
 slower or heavier; it is written into the evidence, reported on stderr, and enforced by
-`check-perf-evidence.mjs` on the pull request.
+the evidence gate (`scripts/perf-evidence-gate.mjs`) on the pull request.
 
 **Membership in the verdict class is established by construction, never by matching message text.**
 `performanceBudgetFailure` registers each verdict as it formats it, and `isPerformanceBudgetFailure`
