@@ -2556,6 +2556,64 @@ describe("useChatSession canonical Voice FIFO", () => {
     }
   });
 
+  it("suppresses without swallowing a projection matched by an identical earlier turn", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(30_000);
+    try {
+      const chatA = chat({ id: "chat-a", updatedAt: 2 });
+      const chatB = chat({ id: "chat-b", updatedAt: 1 });
+      const rendered = await setupVoiceQueueSession([chatA, chatB]);
+      const response = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+      vi.mocked(sendDesktopChat).mockReturnValue(response.promise);
+      // A durable row from an EARLIER identical-content turn satisfies the content+timestamp
+      // proof. It may suppress this turn's re-append, but it must not release the held
+      // projection: only this turn's own settle path knows which row belongs to it.
+      const earlierIdenticalUser = message({
+        id: "earlier-turn-user",
+        chatId: "chat-a",
+        content: "yes",
+        role: "user",
+        timestamp: 30_000,
+      });
+      vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
+        Promise.resolve({ messages: chatId === "chat-a" ? [earlierIdenticalUser] : [] }),
+      );
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("yes", "voice-two-identical", chatA),
+        );
+      });
+      await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+
+      await act(async () => {
+        await rendered.result.current.openChat(chatB);
+      });
+      await act(async () => {
+        await rendered.result.current.openChat(chatA);
+      });
+
+      expect(
+        rendered.result.current.messages.filter((candidate) => candidate.content === "yes"),
+      ).toHaveLength(1);
+
+      response.resolve(completedTurn("yes", "voice-two", "chat-a"));
+      let outcome: SendMessageOutcome | undefined;
+      await act(async () => {
+        outcome = await delivery;
+      });
+      expect(outcome).toEqual({ status: "completed", assistantMessageId: "voice-two" });
+      const userRows = rendered.result.current.messages.filter(
+        (candidate) => candidate.content === "yes" && candidate.role === "user",
+      );
+      expect(userRows.map((candidate) => candidate.id).sort()).toEqual([
+        "earlier-turn-user",
+        "voice-two-user",
+      ]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("does not surface a late grounded Voice failure in a different chat", async () => {
     const chatA = chat({
       id: "chat-a",

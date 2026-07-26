@@ -71,7 +71,13 @@ export interface ParsedInlineCitation {
 const BRACKET_RE = /\[([^\]\n]{1,200})\]/g;
 const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:-(\d+))?$/;
 const SOURCE_QUALIFIER_RE = /^source:(\d+)\|/u;
-const NUMERIC_CITATION_RE = /\[(\d+)\]/gu;
+// Must match the marker grammar of the citation attacher it reconciles against
+// (packages/keiko-local-knowledge/src/conversation/citation-attacher.ts MARKER_PATTERN): ASCII
+// plus CJK lenticular 【n】 and fullwidth ［n］ glyphs, mismatched pairs tolerated. A reconciler
+// narrower than the attacher cannot see a dropped marker, so the fail-closed net would miss
+// exactly the gpt-oss-style output the attacher exists to tolerate. A lockstep pin in
+// grounded-faithfulness.test.ts guards the two patterns against drifting apart.
+const NUMERIC_CITATION_RE = /[[【［](\d+)[\]】］]/gu;
 
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {

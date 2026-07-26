@@ -3156,6 +3156,25 @@ describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
     expect(answer.uncertainty[0]?.claim).not.toContain("without a supported inline citation");
   });
 
+  it("reconciles CJK bracket markers with the attacher grammar instead of missing them", async () => {
+    const chat = await seedFailClosedChat("cjk-mixed");
+
+    // gpt-oss-style output: the attacher tolerates 【n】 glyphs, so 【1】 is attached while the
+    // out-of-range 【7】 is dropped. The fail-closed net must read the same grammar — otherwise
+    // the dangling 【7】 renders with nothing behind it and no unsupported-citation signal.
+    const answer = await askFailClosedChat(
+      chat,
+      "Alpha beta grounded evidence 【1】 and decisively 【7】.",
+      "fail-closed-cjk-mixed",
+    );
+
+    expect(answer.noEvidence).toBe(false);
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.uncertainty).toHaveLength(1);
+    expect(answer.uncertainty[0]?.kind).toBe("unsupported-citation");
+    expect(answer.uncertainty[0]?.claim).toContain("[7]");
+  });
+
   it("keeps a faithfully cited answer free of reconciliation markers", async () => {
     const chat = await seedFailClosedChat("cited");
 
