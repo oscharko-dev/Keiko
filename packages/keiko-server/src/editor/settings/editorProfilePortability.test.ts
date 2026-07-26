@@ -104,6 +104,47 @@ describe("editor profile portability", () => {
     ]);
   });
 
+  /**
+   * Export → import must be lossless, and stable under repetition: an artifact that quietly gains
+   * or drops a setting on the way back is a portability claim the product cannot keep (#2618).
+   */
+  it("round-trips an exported profile back to byte-identical settings content", () => {
+    const exported = assembleEditorProfileExport(
+      profile({
+        fontSize: 18,
+        tabSize: 4,
+        wordWrap: "on",
+        minimap: true,
+        watcherExclusions: ["dist/**", "build/**"],
+        keybindingOverrides: ["1|redo|CtrlOrMeta+Alt+J"],
+      }),
+    );
+
+    const prepared = previewEditorProfileImport(
+      JSON.parse(exported.serializedManifest) as unknown,
+      {
+        activeValues: {},
+        existingNames: [],
+        expectedRevision: 0,
+      },
+    );
+
+    expect(exported.redactions).toEqual([]);
+    expect(prepared.kind).toBe("ok");
+    if (prepared.kind !== "ok") return;
+    expect(prepared.preview.rows.every((row) => row.disposition !== "rejected")).toBe(true);
+    expect(JSON.stringify(prepared.values)).toBe(JSON.stringify(exported.manifest.settings.values));
+
+    // Re-exporting what the import prepared must produce the same bytes: the artifact survives an
+    // export → import → export cycle unchanged, not merely a single parse.
+    const reExported = assembleEditorProfileExport({
+      ...exported.manifest,
+      settings: { ...exported.manifest.settings, values: prepared.values },
+    });
+
+    expect(reExported.serializedManifest).toBe(exported.serializedManifest);
+  });
+
   it("refuses future versions and excessive JSON depth without partial values", () => {
     expect(
       previewEditorProfileImport(

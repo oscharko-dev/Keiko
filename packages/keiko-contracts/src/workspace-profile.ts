@@ -23,6 +23,8 @@ import type {
 export const WORKSPACE_PROFILE_SCHEMA_VERSION = WORKSPACE_CONTRACT_SCHEMA_VERSION;
 export const WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS = 80 as const;
 
+const WORKSPACE_PROFILE_RESERVED_DISPLAY_NAME_KEY = "default";
+
 export interface WorkspaceProfileManifest {
   readonly kind: "workspace-profile";
   readonly schemaVersion: typeof WORKSPACE_PROFILE_SCHEMA_VERSION;
@@ -113,6 +115,34 @@ export function isWorkspaceProfileDisplayName(value: unknown): value is string {
     value.length <= WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
     !hasControlCharacter(value),
   ].every(Boolean);
+}
+
+/**
+ * The identity under which two display names are the same name to a reader: surrounding
+ * whitespace and letter case carry no meaning in the profile picker, so they carry none here.
+ * Every reserved-name and collision decision goes through this one key.
+ */
+export function workspaceProfileDisplayNameKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * "Default" names the built-in profile. A custom profile may not claim it, however it is padded
+ * or cased — two entries reading "Default" in the picker is a lie about which one is built in.
+ */
+export function isReservedWorkspaceProfileDisplayName(value: string): boolean {
+  return workspaceProfileDisplayNameKey(value) === WORKSPACE_PROFILE_RESERVED_DISPLAY_NAME_KEY;
+}
+
+/**
+ * The invariant every path that ASSIGNS a display name must satisfy — create, rename, duplicate
+ * and import alike (#2618). Deliberately stricter than `isWorkspaceProfileDisplayName`, which
+ * stays the looser parse predicate for manifests that are ALREADY persisted: tightening the parse
+ * predicate would make records written before this fix unreadable and take the whole profile store
+ * to `unavailable`, so writes fail closed while reads keep degrading gracefully.
+ */
+export function isAssignableWorkspaceProfileDisplayName(value: unknown): value is string {
+  return isWorkspaceProfileDisplayName(value) && value.trim() === value;
 }
 
 function isWorkspaceProfileManifest(value: unknown): value is WorkspaceProfileManifest {

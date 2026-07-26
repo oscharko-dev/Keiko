@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   type DebugActivationSummary,
-  type EditorM7SettingsSnapshot,
+  type EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
 import type { EditorSettingsView } from "../cards/useEditorSettings";
@@ -15,7 +15,7 @@ const mutateDebugActivationMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../cards/useEditorSettings", () => ({
   useEditorSettings: (): EditorSettingsView => editorView.current,
-  settingById: (snapshot: EditorM7SettingsSnapshot | undefined) =>
+  settingById: (snapshot: EditorM11SettingsSnapshot | undefined) =>
     snapshot?.settings.find((setting) => setting.id === "debuggingEnabled"),
 }));
 
@@ -46,7 +46,7 @@ function summary(
 function editorSnapshot(
   debugging: DebugActivationSummary | undefined,
   enabled: boolean,
-): EditorM7SettingsSnapshot {
+): EditorM11SettingsSnapshot {
   return {
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     storeState: "ready",
@@ -62,6 +62,7 @@ function editorSnapshot(
         value: enabled,
         source: "workspace",
         scope: "workspace",
+        layers: { workspace: enabled },
         policyLocked: false,
         effect: "live",
       },
@@ -71,7 +72,7 @@ function editorSnapshot(
   };
 }
 
-function view(snapshot: EditorM7SettingsSnapshot | undefined): EditorSettingsView {
+function view(snapshot: EditorM11SettingsSnapshot | undefined): EditorSettingsView {
   return {
     snapshot,
     applied: {

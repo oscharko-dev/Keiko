@@ -7,6 +7,8 @@ import {
   EDITOR_M11_DEFAULT_PROFILE_REF,
   isWorkspaceProfileRef,
   resolveEditorM7Settings,
+  type EditorM7SettingId,
+  type EditorM11ResolvedSetting,
   type WorkspaceProfileRef,
 } from "@oscharko-dev/keiko-contracts";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
@@ -57,6 +59,41 @@ function replaceDirectory(path: string): void {
   mkdirSync(staged);
   rmSync(path, { recursive: true, force: true });
   renameSync(staged, path);
+}
+
+/**
+ * Fields an M11 row carries that M7 never defined. `profileRef`/`rootRef` came with ADR-0147;
+ * `layers` came with #2618, which exposes what each layer stores in its own right so a scoped edit
+ * can rewrite the layer it targets instead of the resolved view.
+ */
+const M11_ADDITIVE_ROW_KEYS = new Set(["layers", "profileRef", "rootRef"]);
+
+/**
+ * The M7-defined fields of an M11 row, in M7's own key order. The migration pin below asserts
+ * byte-identity against the legacy resolver, so it has to compare what M7 actually defines —
+ * comparing whole rows would make every additive M11 field look like a resolution change.
+ */
+function m7Projection(settings: readonly EditorM11ResolvedSetting[]): string {
+  return JSON.stringify(
+    settings.map((entry) => ({
+      id: entry.id,
+      value: entry.value,
+      source: entry.source,
+      scope: entry.scope,
+      policyLocked: entry.policyLocked,
+      ...(entry.reasonCode === undefined ? {} : { reasonCode: entry.reasonCode }),
+      effect: entry.effect,
+    })),
+  );
+}
+
+function settingRow(
+  settings: readonly EditorM11ResolvedSetting[],
+  id: EditorM7SettingId,
+): EditorM11ResolvedSetting {
+  const row = settings.find((entry) => entry.id === id);
+  if (row === undefined) throw new Error(`missing resolved setting: ${id}`);
+  return row;
 }
 
 function service(
@@ -448,7 +485,20 @@ describe("editor settings control service", () => {
       workspace: { scope: "workspace", values: { fontSize: 16, wordWrap: "on" } },
     });
 
-    expect(JSON.stringify(snapshot.settings)).toBe(JSON.stringify(legacy));
+    expect(m7Projection(snapshot.settings)).toBe(JSON.stringify(legacy));
+    // Nothing but the known additive fields may appear, in M7's own key order — the original pin
+    // caught an unexpected field by byte-comparing the whole row, and that must keep holding.
+    for (const entry of snapshot.settings) {
+      const legacyRow = legacy.find((row) => row.id === entry.id);
+      expect(Object.keys(entry).filter((key) => !M11_ADDITIVE_ROW_KEYS.has(key))).toEqual(
+        Object.keys(legacyRow ?? {}),
+      );
+    }
+    // And the additive part reports exactly the layers this fixture wrote — no more, no less.
+    expect(settingRow(snapshot.settings, "fontSize").layers).toEqual({ user: 15, workspace: 16 });
+    expect(settingRow(snapshot.settings, "minimap").layers).toEqual({ user: true });
+    expect(settingRow(snapshot.settings, "wordWrap").layers).toEqual({ workspace: "on" });
+    expect(settingRow(snapshot.settings, "tabSize").layers).toEqual({});
   });
 
   it("rejects a root override that widens a policy-ceiling setting", async () => {

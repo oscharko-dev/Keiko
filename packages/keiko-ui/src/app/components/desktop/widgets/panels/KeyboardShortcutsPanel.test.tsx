@@ -5,18 +5,43 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
-  resolveEditorM7Settings,
+  EDITOR_M11_SETTINGS_SCHEMA_VERSION,
+  isWorkspaceProfileRef,
+  resolveEditorM11Settings,
+  type EditorM11ProfileSettingsLayer,
+  type EditorM11SettingsSnapshot,
   type EditorM7SettingId,
   type EditorM7SettingValue,
-  type EditorM7SettingsSnapshot,
+  type WorkspaceProfileRef,
 } from "@oscharko-dev/keiko-contracts";
 import { I18nProvider } from "@/lib/i18n";
-import type { EditorSettingsView } from "../cards/useEditorSettings";
+import type { EditorSettingsEditScope, EditorSettingsView } from "../cards/useEditorSettings";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsPanel";
 
+type SettingValues = Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>;
+
+const USER_OVERRIDE = "1|quick-access.files|CtrlOrMeta+Shift+O";
+const PROFILE_OVERRIDE = "1|redo|CtrlOrMeta+Alt+J";
+
+function profileRef(value: string): WorkspaceProfileRef {
+  if (!isWorkspaceProfileRef(value)) throw new Error(`invalid profile fixture: ${value}`);
+  return value;
+}
+
+function profileLayer(values: SettingValues): EditorM11ProfileSettingsLayer {
+  return {
+    kind: "editor-profile-settings",
+    schemaVersion: EDITOR_M11_SETTINGS_SCHEMA_VERSION,
+    profileRef: profileRef("profile-focus"),
+    revision: 1,
+    values,
+  };
+}
+
 function snapshot(
-  values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> = {},
-): EditorM7SettingsSnapshot {
+  values: SettingValues = {},
+  profileValues?: SettingValues,
+): EditorM11SettingsSnapshot {
   return {
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     storeState: "ready",
@@ -26,7 +51,10 @@ function snapshot(
     etag: '"edm7-keyboard-test"',
     root: "/repo",
     definitions: EDITOR_M7_SETTING_REGISTRY,
-    settings: resolveEditorM7Settings({ user: { scope: "user", values } }),
+    settings: resolveEditorM11Settings({
+      user: { scope: "user", values },
+      ...(profileValues === undefined ? {} : { profile: profileLayer(profileValues) }),
+    }),
     eventSequence: 1,
   };
 }
@@ -68,12 +96,22 @@ function view(overrides: Partial<EditorSettingsView> = {}): EditorSettingsView {
   };
 }
 
-function renderPanel(currentView: EditorSettingsView, root = "/repo"): ReturnType<typeof render> {
+function renderPanel(
+  currentView: EditorSettingsView,
+  root = "/repo",
+  scope: EditorSettingsEditScope = "user",
+): ReturnType<typeof render> {
   return render(
     <I18nProvider>
-      <KeyboardShortcutsPanel root={root} scope="user" view={currentView} />
+      <KeyboardShortcutsPanel root={root} scope={scope} view={currentView} />
     </I18nProvider>,
   );
+}
+
+function search(term: string): void {
+  fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+    target: { value: term },
+  });
 }
 
 describe("KeyboardShortcutsPanel", () => {
@@ -177,5 +215,76 @@ describe("KeyboardShortcutsPanel", () => {
     });
 
     expect(screen.getByRole("button", { name: "Protected" })).toBeDisabled();
+  });
+
+  /**
+   * A profile-scope edit rewrites the profile's own layer, so it must be composed from that layer —
+   * never from the resolved view. Seeding it from the resolved value copied the user/workspace/root
+   * override list into the profile, which then carried other layers' settings to another machine on
+   * export (#2618).
+   */
+  it("writes only the profile's own layer when a profile-scope shortcut is recorded", () => {
+    const currentView = view({
+      snapshot: snapshot({ keybindingOverrides: [USER_OVERRIDE] }, {}),
+    });
+    renderPanel(currentView, "/repo", "profile");
+
+    search("Redo");
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Press shortcut" }), {
+      key: "J",
+      code: "KeyJ",
+      metaKey: true,
+      altKey: true,
+    });
+
+    expect(currentView.setValue).toHaveBeenCalledWith("profile", "keybindingOverrides", [
+      PROFILE_OVERRIDE,
+    ]);
+  });
+
+  it("still shows the binding that is actually in effect while editing the profile layer", () => {
+    renderPanel(
+      view({ snapshot: snapshot({ keybindingOverrides: [USER_OVERRIDE] }, {}) }),
+      "/repo",
+      "profile",
+    );
+
+    search("Quick Access: files");
+
+    // The row reports the user layer's binding and marks it modified, even though the profile layer
+    // being edited holds nothing for it: what you see stays the resolved view.
+    const row = screen.getByRole("article", { name: "Quick Access: files" });
+    expect(row).toHaveTextContent("Ctrl+Shift+O");
+    expect(row).toHaveTextContent("modified");
+  });
+
+  it("offers Remove only where the edited scope holds an override of its own", () => {
+    renderPanel(
+      view({ snapshot: snapshot({ keybindingOverrides: [USER_OVERRIDE] }, {}) }),
+      "/repo",
+      "profile",
+    );
+
+    search("Quick Access: files");
+
+    expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+  });
+
+  it("removes a profile override without touching the user layer's list", () => {
+    const currentView = view({
+      snapshot: snapshot(
+        { keybindingOverrides: [USER_OVERRIDE] },
+        { keybindingOverrides: [PROFILE_OVERRIDE] },
+      ),
+    });
+    renderPanel(currentView, "/repo", "profile");
+
+    search("Redo");
+    const remove = screen.getByRole("button", { name: "Remove" });
+
+    expect(remove).toBeEnabled();
+    fireEvent.click(remove);
+    expect(currentView.setValue).toHaveBeenCalledWith("profile", "keybindingOverrides", []);
   });
 });

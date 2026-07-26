@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import {
   EDITOR_M11_DEFAULT_PROFILE_REF,
+  WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
+  isAssignableWorkspaceProfileDisplayName,
+  isReservedWorkspaceProfileDisplayName,
   type EditorM11ProfileSummary,
+  type EditorM11ProfilesSnapshot,
   type WorkspaceProfileRef,
 } from "@oscharko-dev/keiko-contracts";
 import type { EditorSettingsView } from "../cards/useEditorSettings";
@@ -22,10 +26,9 @@ export function EditorProfilesPanel({
 }): ReactNode {
   const t = useTranslate();
   const snapshot = view.snapshot?.profiles;
-  const [selectedRef, setSelectedRef] = useState<WorkspaceProfileRef>(
-    EDITOR_M11_DEFAULT_PROFILE_REF,
-  );
-  const [displayName, setDisplayName] = useState("");
+  const [chosenRef, setChosenRef] = useState<WorkspaceProfileRef | undefined>();
+  const [nameDraft, setNameDraft] = useState<NameDraft | undefined>();
+  const selectedRef = selectedProfileRef(chosenRef, snapshot);
   const selected = useMemo(
     () => snapshot?.profiles.find((profile) => profile.profileRef === selectedRef),
     [selectedRef, snapshot],
@@ -33,25 +36,14 @@ export function EditorProfilesPanel({
   const active = snapshot?.profiles.find(
     (profile) => profile.profileRef === snapshot.activeProfileRef,
   );
-
-  useEffect(() => {
-    if (snapshot === undefined) return;
-    const current = snapshot.profiles.find(
-      (profile) => profile.profileRef === snapshot.activeProfileRef,
-    );
-    setSelectedRef(snapshot.activeProfileRef);
-    setDisplayName(current?.builtIn === true ? "" : (current?.displayName ?? ""));
-    // Depend on the active profile ref alone, not the whole snapshot container.
-    // Any unrelated settings refresh (e.g. SSE `editor-settings:changed`) gives
-    // `snapshot` a new reference and would otherwise reset the selection and
-    // overwrite whatever the user was typing in the rename/duplicate field
-    // (CR #3613099024). `snapshot.profiles` is still read inside the effect,
-    // but only to project the display name for the ref that just changed —
-    // profile list edits arrive with an activeProfileRef change themselves.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot?.activeProfileRef]);
-
-  const validName = displayName.trim().length > 0 && displayName.trim() === displayName;
+  // A draft belongs to the profile it was typed for. The selection can also move on its own — the
+  // chosen profile gets deleted and the fallback takes over — and carrying the draft across that
+  // would rename or duplicate a profile the text was never meant for.
+  const displayName =
+    nameDraft?.profileRef === selectedRef ? nameDraft.text : projectedDisplayName(selected);
+  const validName =
+    isAssignableWorkspaceProfileDisplayName(displayName) &&
+    !isReservedWorkspaceProfileDisplayName(displayName);
   return (
     <section className={styles.section} aria-labelledby="editor-profiles-title">
       <header className={styles.header}>
@@ -80,8 +72,7 @@ export function EditorProfilesPanel({
                 (profile) => profile.profileRef === event.target.value,
               );
               if (next === undefined) return;
-              setSelectedRef(next.profileRef);
-              setDisplayName(next.builtIn ? "" : next.displayName);
+              setChosenRef(next.profileRef);
             }}
           >
             {(snapshot?.profiles ?? []).map((profile) => (
@@ -96,8 +87,10 @@ export function EditorProfilesPanel({
           <input
             className={styles.input}
             value={displayName}
-            maxLength={80}
-            onChange={(event) => setDisplayName(event.target.value)}
+            maxLength={WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS}
+            onChange={(event) =>
+              setNameDraft({ profileRef: selectedRef, text: event.target.value })
+            }
           />
         </label>
         <ProfileActions
@@ -113,6 +106,35 @@ export function EditorProfilesPanel({
       <EditorProfilePortability root={root} selected={selected} view={view} />
     </section>
   );
+}
+
+interface NameDraft {
+  readonly profileRef: WorkspaceProfileRef;
+  readonly text: string;
+}
+
+/**
+ * The user's choice is authoritative once made, and it is derived — never copied into state by an
+ * effect. An effect that re-seeded the selection from `activeProfileRef` made a background profile
+ * switch (a second window, an import with "switch after import", any SSE refresh) silently move
+ * the selection, and "Export selected profile" then wrote a different profile than the one the
+ * user picked (#2618). The selection is surrendered on exactly one condition: the chosen profile
+ * no longer exists, in which case there is nothing left to act on.
+ */
+function selectedProfileRef(
+  chosen: WorkspaceProfileRef | undefined,
+  snapshot: EditorM11ProfilesSnapshot | undefined,
+): WorkspaceProfileRef {
+  if (snapshot === undefined) return chosen ?? EDITOR_M11_DEFAULT_PROFILE_REF;
+  const stillListed =
+    chosen !== undefined && snapshot.profiles.some((profile) => profile.profileRef === chosen);
+  return stillListed ? chosen : snapshot.activeProfileRef;
+}
+
+// The built-in profile cannot be renamed, so it seeds an empty field rather than the word "Default"
+// — typing into it means creating or duplicating, never renaming the built-in.
+function projectedDisplayName(selected: EditorM11ProfileSummary | undefined): string {
+  return selected === undefined || selected.builtIn ? "" : selected.displayName;
 }
 
 function ProfileActions({
