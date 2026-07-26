@@ -18,6 +18,7 @@ import styles from "./MultiRootFilesWidget.module.css";
 
 const ChevronRightIcon = Icons.chevronR;
 const CloseIcon = Icons.close;
+const ROOT_GROUP_NAV_KEYS = new Set(["ArrowDown", "ArrowUp", "Home", "End"]);
 
 interface MultiRootFilesWidgetProps {
   readonly manifest: WorkspaceManifest;
@@ -49,22 +50,21 @@ function rootOrderAfterMove(
   return next;
 }
 
-function focusSiblingRootHeader(event: KeyboardEvent<HTMLButtonElement>): void {
-  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+function focusSiblingRootGroup(event: KeyboardEvent<HTMLDivElement>): void {
+  if (event.target !== event.currentTarget) return;
+  if (!ROOT_GROUP_NAV_KEYS.has(event.key)) return;
   const explorer = event.currentTarget.closest<HTMLElement>("[data-multi-root-explorer]");
-  const headers = Array.from(
-    explorer?.querySelectorAll<HTMLButtonElement>("button[data-root-group-header]") ?? [],
-  );
-  const current = headers.indexOf(event.currentTarget);
-  if (current < 0 || headers.length === 0) return;
+  const groups = Array.from(explorer?.querySelectorAll<HTMLDivElement>("[data-root-group]") ?? []);
+  const current = groups.indexOf(event.currentTarget);
+  if (current < 0 || groups.length === 0) return;
   event.preventDefault();
   let target = Math.max(
     0,
-    Math.min(headers.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)),
+    Math.min(groups.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)),
   );
   if (event.key === "Home") target = 0;
-  else if (event.key === "End") target = headers.length - 1;
-  headers[target]?.focus();
+  else if (event.key === "End") target = groups.length - 1;
+  groups[target]?.focus();
 }
 
 function RootGroup({
@@ -75,9 +75,13 @@ function RootGroup({
   onActiveFileChange,
   onOpenFile,
   onOpenGitDelivery,
+  rovingTabIndex,
+  onRovingFocus,
 }: MultiRootFilesWidgetProps & {
   readonly root: WorkspaceRootDescriptor;
   readonly index: number;
+  readonly rovingTabIndex: 0 | -1;
+  readonly onRovingFocus: (rootRef: WorkspaceRootRef) => void;
 }): ReactNode {
   const t = useTranslate();
   const trust = useWorkspaceTrust(root.canonicalRoot);
@@ -93,13 +97,30 @@ function RootGroup({
       aria-expanded={expanded}
       aria-selected={focused}
       aria-label={root.displayName}
+      data-root-group
+      tabIndex={rovingTabIndex}
+      onFocus={() => onRovingFocus(root.rootRef)}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "ArrowLeft" && expanded) {
+          event.preventDefault();
+          setExpanded(false);
+          return;
+        }
+        if (event.key === "ArrowRight" && !expanded) {
+          event.preventDefault();
+          setExpanded(true);
+          return;
+        }
+        focusSiblingRootGroup(event);
+      }}
     >
       <div className={styles.cmpRootHeader} data-focused={focused}>
         <button
           type="button"
           className={styles.cmpRootToggle}
           data-root-group-header
-          onKeyDown={focusSiblingRootHeader}
+          aria-expanded={expanded}
           onClick={() => setExpanded((current) => !current)}
         >
           <span className={styles.cmpCaret} data-expanded={expanded} aria-hidden="true">
@@ -226,6 +247,11 @@ function AddRootToolbar({
 
 export function MultiRootFilesWidget(props: MultiRootFilesWidgetProps): ReactNode {
   const t = useTranslate();
+  const fallbackRootRef = props.manifest.focusedRootRef ?? props.manifest.roots[0]?.rootRef ?? null;
+  const [rovingRootRef, setRovingRootRef] = useState<WorkspaceRootRef | null>(fallbackRootRef);
+  const activeRootRef = props.manifest.roots.some((root) => root.rootRef === rovingRootRef)
+    ? rovingRootRef
+    : fallbackRootRef;
   return (
     <section
       className={styles.cmpRootExplorer}
@@ -240,7 +266,14 @@ export function MultiRootFilesWidget(props: MultiRootFilesWidgetProps): ReactNod
       )}
       <div className={styles.cmpRootList} role="tree" aria-label={t("filesWidget.multiRoot.label")}>
         {props.manifest.roots.map((root, index) => (
-          <RootGroup {...props} root={root} index={index} key={root.rootRef} />
+          <RootGroup
+            {...props}
+            root={root}
+            index={index}
+            key={root.rootRef}
+            rovingTabIndex={root.rootRef === activeRootRef ? 0 : -1}
+            onRovingFocus={setRovingRootRef}
+          />
         ))}
       </div>
     </section>

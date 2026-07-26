@@ -41,14 +41,16 @@ vi.mock("./FilesWidget", () => ({
     readonly onOpenFile: (root: string, path: string) => void;
   }) => (
     <div role="tree" aria-label={`Files ${root}`}>
-      <button
-        type="button"
-        role="treeitem"
-        aria-selected="false"
-        onClick={() => onOpenFile(root, "src/app.ts")}
-      >
-        Open {root}
-      </button>
+      {root === "/repo-a" ? null : (
+        <button
+          type="button"
+          role="treeitem"
+          aria-selected="false"
+          onClick={() => onOpenFile(root, "src/app.ts")}
+        >
+          Open {root}
+        </button>
+      )}
     </div>
   ),
 }));
@@ -67,8 +69,12 @@ function root(
   };
 }
 
-function manifest(): WorkspaceManifest {
-  const roots = [root("root-a", "/repo-a", "Repo A"), root("root-b", "/repo-b", "Repo B")];
+function manifest(
+  roots: readonly WorkspaceRootDescriptor[] = [
+    root("root-a", "/repo-a", "Repo A"),
+    root("root-b", "/repo-b", "Repo B"),
+  ],
+): WorkspaceManifest {
   return {
     kind: "workspace-manifest",
     schemaVersion: 1,
@@ -132,7 +138,43 @@ describe("MultiRootFilesWidget", () => {
     expect(onOpenFile).toHaveBeenCalledWith("/repo-b", "src/app.ts");
   });
 
-  it("supports arrow navigation across root groups, collapse, axe, and 320px width", async () => {
+  it("uses roving tabindex with ArrowUp, ArrowDown, Home, and End across root groups", async () => {
+    const current = manifest();
+    render(
+      <I18nProvider>
+        <MultiRootFilesWidget
+          manifest={current}
+          workspace={workspace(current)}
+          onActiveFileChange={vi.fn()}
+          onOpenFile={vi.fn()}
+          onOpenGitDelivery={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    await screen.findByRole("option", { name: "Repo C" });
+    const rootA = screen.getByRole("treeitem", { name: "Repo A" });
+    const rootB = screen.getByRole("treeitem", { name: "Repo B" });
+
+    expect(rootA).toHaveAttribute("tabindex", "0");
+    expect(rootB).toHaveAttribute("tabindex", "-1");
+    rootA.focus();
+    fireEvent.keyDown(rootA, { key: "ArrowDown" });
+    expect(rootB).toHaveFocus();
+    expect(rootA).toHaveAttribute("tabindex", "-1");
+    expect(rootB).toHaveAttribute("tabindex", "0");
+    fireEvent.keyDown(rootB, { key: "ArrowUp" });
+    expect(rootA).toHaveFocus();
+    fireEvent.keyDown(rootA, { key: "End" });
+    expect(rootB).toHaveFocus();
+    fireEvent.keyDown(rootB, { key: "Home" });
+    expect(rootA).toHaveFocus();
+    fireEvent.keyDown(rootA, { key: "ArrowLeft" });
+    expect(rootA).toHaveAttribute("aria-expanded", "false");
+    fireEvent.keyDown(rootA, { key: "ArrowRight" });
+    expect(rootA).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("exposes expanded state on the focusable root control", async () => {
     const current = manifest();
     const { container } = render(
       <I18nProvider>
@@ -149,15 +191,62 @@ describe("MultiRootFilesWidget", () => {
     const headers = Array.from(
       container.querySelectorAll<HTMLButtonElement>("button[data-root-group-header]"),
     );
-    headers[0]?.focus();
-    fireEvent.keyDown(headers[0]!, { key: "ArrowDown" });
-    expect(headers[1]).toHaveFocus();
-    await userEvent.click(headers[1]!);
-    expect(screen.getByRole("treeitem", { name: "Repo B" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
+    const rootB = headers[1]!;
+
+    expect(rootB).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(rootB);
+    expect(rootB).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("supports collapse at 320px width", async () => {
+    const current = manifest();
+    const { container } = render(
+      <I18nProvider>
+        <MultiRootFilesWidget
+          manifest={current}
+          workspace={workspace(current)}
+          onActiveFileChange={vi.fn()}
+          onOpenFile={vi.fn()}
+          onOpenGitDelivery={vi.fn()}
+        />
+      </I18nProvider>,
     );
+    await screen.findByRole("option", { name: "Repo C" });
+    const headers = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button[data-root-group-header]"),
+    );
+    const rootB = screen.getByRole("treeitem", { name: "Repo B" });
+
+    await userEvent.click(headers[1]!);
+    expect(rootB).toHaveAttribute("aria-expanded", "false");
     container.style.width = "320px";
+    expect(container).toHaveStyle({ width: "320px" });
+  });
+
+  it.each([
+    {
+      state: "empty",
+      roots: [root("root-a", "/repo-a", "Repo A")],
+    },
+    {
+      state: "populated",
+      roots: [root("root-b", "/repo-b", "Repo B")],
+    },
+  ])("has no axe violations for a $state root", async ({ roots }) => {
+    const current = manifest(roots);
+    const { container } = render(
+      <I18nProvider>
+        <MultiRootFilesWidget
+          manifest={current}
+          workspace={workspace(current)}
+          onActiveFileChange={vi.fn()}
+          onOpenFile={vi.fn()}
+          onOpenGitDelivery={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    await screen.findByRole("option", { name: "Repo C" });
+
     expect(await axe(container)).toHaveNoViolations();
   });
 });
