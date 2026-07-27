@@ -79,6 +79,9 @@ interface VerifiedPortableInput {
   readonly admission?: "release-qualified" | "functional-dev-lane" | undefined;
 }
 
+/** Terminal states for a tool action's safe-activity settlement (#2386). */
+type OpenCodeToolSettlementState = "succeeded" | "failed" | "denied" | "cancelled";
+
 export interface OpenCodeRuntimeCompositionInput {
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
@@ -107,7 +110,7 @@ export interface OpenCodeRuntimeCompositionInput {
         readonly recordDrops: (count: number) => void;
         readonly settleTool: (input: {
           readonly actionId: string;
-          readonly state: "succeeded" | "failed" | "denied" | "cancelled";
+          readonly state: OpenCodeToolSettlementState;
           readonly occurredAt: string;
         }) => void;
       }
@@ -1253,13 +1256,13 @@ function releaseAdmissionWhenSettled(
 function settleSafeTool(
   settleTool: SafeToolSettlement | undefined,
   actionId: string | undefined,
-  state: "succeeded" | "failed" | "denied" | "cancelled",
+  state: OpenCodeToolSettlementState,
 ): void {
   if (actionId === undefined) return;
   settleTool?.({ actionId, state, occurredAt: new Date().toISOString() });
 }
 
-function safeToolState(result: CodingToolResult): "succeeded" | "failed" | "denied" | "cancelled" {
+function safeToolState(result: CodingToolResult): OpenCodeToolSettlementState {
   if (result.status === "completed") return "succeeded";
   if (result.status === "denied") return "denied";
   if (result.status === "cancelled") return "cancelled";

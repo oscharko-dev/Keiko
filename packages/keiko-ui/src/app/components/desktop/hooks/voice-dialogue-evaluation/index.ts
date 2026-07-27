@@ -375,7 +375,7 @@ function allPass(results: readonly { readonly outcome: DialogueEvalOutcome }[]):
 // not silently dropping it.
 function catchesNoVoiceMisgating(profiles: readonly DialogueProfileResult[]): boolean {
   const noVoice = profiles.find((profile) => profile.key === "no-voice");
-  return noVoice !== undefined && noVoice.expectedOffered === false && noVoice.outcome === "pass";
+  return noVoice?.expectedOffered === false && noVoice.outcome === "pass";
 }
 
 function coversAllProfiles(profiles: readonly DialogueProfileResult[]): boolean {
@@ -390,7 +390,7 @@ export function summarizeDialogueEvaluation(
   const catchesMisgating = catchesNoVoiceMisgating(parts.profiles);
   const profilesPassed = allPass(parts.profiles);
   const latencyPassed = allPass(parts.latency);
-  const cleanupPassed = parts.cleanup !== undefined && parts.cleanup.outcome === "pass";
+  const cleanupPassed = parts.cleanup?.outcome === "pass";
   const accessibilityPassed = allPass(parts.accessibility);
   const go =
     coversProfiles &&

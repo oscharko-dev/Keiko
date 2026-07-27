@@ -280,7 +280,8 @@ function shortHash(input: string): string {
 }
 
 function itemId(screenId: string, category: string, nodeId: string, ordinal: number): string {
-  return `fst-${shortHash(`${screenId}|${category}|${nodeId}|${String(ordinal)}`)}`;
+  const idComponents = `${screenId}|${category}|${nodeId}|${String(ordinal)}`;
+  return `fst-${shortHash(idComponents)}`;
 }
 
 interface DerivationContext {

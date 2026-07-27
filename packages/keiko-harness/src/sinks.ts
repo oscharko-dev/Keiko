@@ -71,8 +71,10 @@ const SUMMARISERS: {
   "patch:proposed": (e) => `file=${e.targetFile} bytes=${String(e.patchBytes)} (diff redacted)`,
   "verification:result": (e) => `passed=${String(e.passed)}`,
   "run:completed": () => "completed",
-  "run:cancelled": (e) =>
-    `cancelled at ${e.atState}${e.reason === undefined ? "" : ` (${e.reason})`}`,
+  "run:cancelled": (e) => {
+    const reasonSuffix = e.reason === undefined ? "" : ` (${e.reason})`;
+    return `cancelled at ${e.atState}${reasonSuffix}`;
+  },
   "run:failed": (e) => `${e.failure.category}: ${e.failure.message}`,
   // ADR-0017 — browser-tool events. originOnly is the scheme+authority only; never a path/query.
   "browser:session-opened": (e) =>

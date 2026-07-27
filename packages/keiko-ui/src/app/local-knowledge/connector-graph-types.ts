@@ -1,7 +1,10 @@
 // Issue #197 — shared types for the connector graph surface.
 
-import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
-import type { CapsuleSetId } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  CapsuleLifecycleState,
+  CapsuleSetId,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   fetchCapsules,
   fetchCapsuleSets,

@@ -19,6 +19,7 @@
 // carry only their byte lengths, so evidence never persists raw content.
 
 import type {
+  CommandRule,
   GitDeliveryActionEnvelope,
   GitDeliveryActionPreview,
   GitDeliveryApprovalRequirement,
@@ -43,7 +44,6 @@ import {
   gitDeliveryRiskClassWithinCeiling,
   gitPrRejectionToDisposition,
 } from "@oscharko-dev/keiko-contracts";
-import type { CommandRule } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
 import type {
@@ -157,16 +157,16 @@ export class GitPrArgvError extends Error {
   }
 }
 
-// NUL + the C0 control range + DEL, enumerated via a string-built RegExp (no literal control chars in
+// NUL + the C0 control range + DEL, enumerated via unicode escapes in a regex literal (no literal control chars in
 // source). A ref / repo slug never legitimately contains one.
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const REF_CONTROL_CHAR = new RegExp("[\u0000-\u001f\u007f]");
+const REF_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 // Title is a single line: reject the whole control range.
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const TITLE_CONTROL_CHAR = new RegExp("[\u0000-\u001f\u007f]");
+const TITLE_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 // Body permits TAB (09), LF (0a), CR (0d); every other control char + NUL + DEL is rejected.
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const BODY_CONTROL_CHAR = new RegExp("[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]");
+const BODY_CONTROL_CHAR = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const PR_NUMBER_RE = /^[1-9][0-9]{0,9}$/;
 
