@@ -118,7 +118,16 @@ async function settledTrees(expected: number): Promise<void> {
 
 beforeEach(() => {
   vi.mocked(fetchProjects).mockResolvedValue({
-    projects: [{ id: "p3", name: "Repo C", path: "/repo-c", available: true }],
+    projects: [
+      {
+        name: "Repo C",
+        path: "/repo-c",
+        available: true,
+        favorite: false,
+        createdAt: 1,
+        lastOpenedAt: 1,
+      },
+    ],
   });
   vi.mocked(fetchGitStatus).mockRejectedValue(new Error("no git repository"));
   vi.mocked(fetchFilesTree).mockImplementation(async (treeRoot: string, path = "") => ({
