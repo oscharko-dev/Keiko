@@ -64,16 +64,19 @@ async function readSymbolSource(
   }
 }
 
-function makeRecord(
-  scopePath: string,
-  kind: SymbolGraphRecordKind,
-  symbol: string,
-  line: number,
-  ordinal: number,
-  confidence: number,
-  definitionKind: SymbolDefinitionKind | undefined,
-  enclosing: string | undefined,
-): SymbolGraphRecord {
+interface MakeRecordOptions {
+  readonly scopePath: string;
+  readonly kind: SymbolGraphRecordKind;
+  readonly symbol: string;
+  readonly line: number;
+  readonly ordinal: number;
+  readonly confidence: number;
+  readonly definitionKind: SymbolDefinitionKind | undefined;
+  readonly enclosing: string | undefined;
+}
+
+function makeRecord(options: MakeRecordOptions): SymbolGraphRecord {
+  const { scopePath, kind, symbol, line, ordinal, confidence, definitionKind, enclosing } = options;
   return {
     stableId: symbolGraphRecordStableId({
       symbol,
@@ -135,16 +138,16 @@ function addDefinitionRecords(
   cap: number,
 ): boolean {
   for (const definition of definitions) {
-    const record = makeRecord(
+    const record = makeRecord({
       scopePath,
-      "definition",
-      definition.symbol,
-      definition.line,
-      definition.ordinal,
-      1,
-      definition.definitionKind,
-      undefined,
-    );
+      kind: "definition",
+      symbol: definition.symbol,
+      line: definition.line,
+      ordinal: definition.ordinal,
+      confidence: 1,
+      definitionKind: definition.definitionKind,
+      enclosing: undefined,
+    });
     if (!addIndexedRecord(builder, builder.definitions, record, cap)) return false;
   }
   return true;
@@ -159,16 +162,16 @@ function addReferenceRecords(
 ): boolean {
   for (const hit of collectIdentifiers(text, IDENTIFIER_REGEX)) {
     if (isDefinitionHit(definitions, hit.symbol, hit.line)) continue;
-    const record = makeRecord(
+    const record = makeRecord({
       scopePath,
-      "reference",
-      hit.symbol,
-      hit.line,
-      hit.ordinal,
-      0.72,
-      undefined,
-      enclosingSymbol(definitions, hit.line),
-    );
+      kind: "reference",
+      symbol: hit.symbol,
+      line: hit.line,
+      ordinal: hit.ordinal,
+      confidence: 0.72,
+      definitionKind: undefined,
+      enclosing: enclosingSymbol(definitions, hit.line),
+    });
     if (!addIndexedRecord(builder, builder.references, record, cap)) return false;
   }
   return true;
@@ -183,16 +186,16 @@ function addCallRecords(
 ): boolean {
   for (const hit of collectIdentifiers(text, CALL_REGEX)) {
     if (isDefinitionHit(definitions, hit.symbol, hit.line)) continue;
-    const record = makeRecord(
+    const record = makeRecord({
       scopePath,
-      "call",
-      hit.symbol,
-      hit.line,
-      hit.ordinal,
-      0.86,
-      undefined,
-      enclosingSymbol(definitions, hit.line),
-    );
+      kind: "call",
+      symbol: hit.symbol,
+      line: hit.line,
+      ordinal: hit.ordinal,
+      confidence: 0.86,
+      definitionKind: undefined,
+      enclosing: enclosingSymbol(definitions, hit.line),
+    });
     if (!addIndexedRecord(builder, builder.calls, record, cap)) return false;
   }
   return true;
