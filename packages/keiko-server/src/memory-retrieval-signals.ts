@@ -298,6 +298,24 @@ function compareMemoryEntryIds(left: UsearchVectorEntry, right: UsearchVectorEnt
   return left.id < right.id ? -1 : 1;
 }
 
+function memoryPartitionCacheGroupKey(partitionKey: string): string {
+  return `keiko-memory-vector-group-v3:${createHash("sha256")
+    .update(JSON.stringify([partitionKey]), "utf8")
+    .digest("hex")}`;
+}
+
+function memoryPartitionCacheKey(
+  cacheGroupKey: string,
+  entries: readonly UsearchVectorEntry[],
+): string {
+  const hash = createHash("sha256").update(cacheGroupKey, "utf8");
+  for (const entry of entries) {
+    hash.update(`${String(Buffer.byteLength(entry.id, "utf8"))}:`);
+    hash.update(entry.id, "utf8");
+  }
+  return `keiko-memory-vector-partition-v3:${hash.digest("hex")}`;
+}
+
 function memoryPortDiagnostics(
   result: Awaited<ReturnType<typeof searchUsearchAnnIndex>>,
   vectorCount: number,
@@ -341,13 +359,12 @@ function createMemoryVectorIndexPort(
         return entry === undefined ? [] : [entry];
       });
       const canonicalEntries = [...requestedEntries].sort(compareMemoryEntryIds);
-      const cacheKey = `keiko-memory-vector-partition-v2:${createHash("sha256")
-        .update(JSON.stringify([query.partitionKey]), "utf8")
-        .digest("hex")}`;
+      const cacheGroupKey = memoryPartitionCacheGroupKey(query.partitionKey);
+      const cacheKey = memoryPartitionCacheKey(cacheGroupKey, canonicalEntries);
       const result = await searchUsearchAnnIndex({
         partition: {
           cacheKey,
-          cacheGroupKey: cacheKey,
+          cacheGroupKey,
           revision: memoryPartitionRevision(identity, canonicalEntries),
           identity,
           rowCount: canonicalEntries.length,

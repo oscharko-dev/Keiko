@@ -93,7 +93,8 @@ function governedStageRoot(targetName) {
 
 function requiredCliStageRoot(value, targetName) {
   const expected = governedStageRoot(targetName);
-  if (resolve(value) !== expected) {
+  const candidate = isAbsolute(value) ? resolve(value) : resolve(REPOSITORY_ROOT, value);
+  if (candidate !== expected) {
     fail("stage root argument does not match the governed target");
   }
   return expected;

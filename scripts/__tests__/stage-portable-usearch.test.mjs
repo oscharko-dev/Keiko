@@ -271,6 +271,21 @@ describe("portable USearch staging", () => {
     expect(result.stderr).not.toContain("missing portable manifest");
   });
 
+  it("anchors governed repo-relative CLI roots independently of the current directory", () => {
+    const target = hostPortableTarget().platformTarget;
+    const result = spawnSync(
+      process.execPath,
+      [
+        resolve("scripts/smoke-portable-usearch.mjs"),
+        `.portable-runtime/staging/${target}`,
+        target,
+      ],
+      { cwd: temporaryRoot(), encoding: "utf8" },
+    );
+
+    expect(result.stderr).not.toContain("stage root argument does not match the governed target");
+  });
+
   it("canonicalizes a regular stage root and reads only bounded regular files", () => {
     const root = temporaryRoot();
     const canonicalRoot = requiredStageRoot(root);

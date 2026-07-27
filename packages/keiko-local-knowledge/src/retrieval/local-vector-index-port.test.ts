@@ -17,6 +17,7 @@ import type {
   VectorIndexQuery,
 } from "@oscharko-dev/keiko-contracts";
 import { VECTOR_INDEX_NAMESPACES, isValidVectorIndexQuery } from "@oscharko-dev/keiko-contracts";
+import type { VectorIndexUnexpectedFailureDiagnostic as PublicUnexpectedFailureDiagnostic } from "@oscharko-dev/keiko-local-knowledge";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
@@ -553,6 +554,18 @@ describe("vectorIndexPortAsRepoAdapter", () => {
 });
 
 describe("VectorIndexPort exports are reachable via the LK public entrypoint", () => {
+  it("keeps the unexpected-failure diagnostic type on the public surface", () => {
+    const diagnostic: PublicUnexpectedFailureDiagnostic = {
+      correlationId: "corr-public-type-pin",
+      operation: "vector-index.search",
+      source: "keiko-local-knowledge.vector-index",
+      error: new Error("opaque test error"),
+    };
+
+    expect(diagnostic.operation).toBe("vector-index.search");
+    expect(diagnostic.source).toBe("keiko-local-knowledge.vector-index");
+  });
+
   it("re-exports the port factory, adapter shims, and encoder from the package barrel", async () => {
     // Public-entrypoint smoke: if `retrieval/index.ts` stops re-exporting any of these four
     // symbols, importing them via `@oscharko-dev/keiko-local-knowledge` would resolve to

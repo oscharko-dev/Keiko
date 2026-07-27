@@ -46,7 +46,7 @@ async function runGroundedRetrievalRegressionProbes(onLog) {
   });
 }
 
-function collectFailures(baselineResult, rerankerOffResult, regression) {
+export function collectFailures(baselineResult, rerankerOffResult, regression) {
   const failures = [];
   if (!baselineResult.ok)
     failures.push(`baseline below floors (${baselineResult.failures.join(", ")})`);

@@ -16,7 +16,12 @@ import type { UiHandlerDeps } from "./deps.js";
 
 const { embedMock, observations, searchMock } = vi.hoisted(() => ({
   embedMock: vi.fn(),
-  observations: [] as { readonly ids: readonly string[]; readonly revision: string }[],
+  observations: [] as {
+    readonly cacheGroupKey: string;
+    readonly cacheKey: string;
+    readonly ids: readonly string[];
+    readonly revision: string;
+  }[],
   searchMock: vi.fn(),
 }));
 
@@ -115,6 +120,8 @@ beforeEach(() => {
     (request: UsearchAnnSearchRequest): Promise<UsearchAnnSearchResult> => {
       const entries = request.partition.loadEntries();
       observations.push({
+        cacheGroupKey: request.partition.cacheGroupKey,
+        cacheKey: request.partition.cacheKey,
         ids: entries.map((entry) => entry.id),
         revision: request.partition.revision,
       });
@@ -155,6 +162,29 @@ describe("buildConversationRetrievalSignals", () => {
       ["alpha", "beta"],
     ]);
     expect(observations[0]?.revision).toBe(observations[1]?.revision);
+    expect(observations[0]?.cacheKey).toBe(observations[1]?.cacheKey);
+    expect(observations[0]?.cacheGroupKey).toBe(observations[1]?.cacheGroupKey);
+  });
+
+  it("separates candidate-set caches while retaining one logical invalidation group", async () => {
+    const alpha = memoryId("alpha");
+    const beta = memoryId("beta");
+    const embeddings = new Map<MemoryId, MemoryEmbeddingRow>([
+      [alpha, embedding(alpha, new Float32Array([1, 0]))],
+      [beta, embedding(beta, new Float32Array([0, 1]))],
+    ]);
+    let includeBeta = true;
+    const vault = vaultFor(
+      () => (includeBeta ? [metadata(alpha, 200), metadata(beta, 100)] : [metadata(alpha, 200)]),
+      embeddings,
+    );
+
+    await collectSignals(vault);
+    includeBeta = false;
+    await collectSignals(vault);
+
+    expect(observations[0]?.cacheKey).not.toBe(observations[1]?.cacheKey);
+    expect(observations[0]?.cacheGroupKey).toBe(observations[1]?.cacheGroupKey);
   });
 
   it("changes the canonical partition revision when vector bytes change", async () => {
@@ -169,6 +199,7 @@ describe("buildConversationRetrievalSignals", () => {
     await collectSignals(vault);
 
     expect(observations[0]?.revision).not.toBe(observations[1]?.revision);
+    expect(observations[0]?.cacheKey).toBe(observations[1]?.cacheKey);
   });
 
   it("skips only stored rows whose vector norm is zero or non-finite", async () => {
