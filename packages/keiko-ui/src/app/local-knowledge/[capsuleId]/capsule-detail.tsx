@@ -138,7 +138,9 @@ function compatibilityStatus(data: CapsuleDetailData): EmbeddingCompatibility["s
   );
 }
 
-function compatibilityTone(status: EmbeddingCompatibility["status"]): "ok" | "warn" | "danger" {
+type StatusTone = "ok" | "warn" | "danger";
+
+function compatibilityTone(status: EmbeddingCompatibility["status"]): StatusTone {
   if (status === "compatible") return "ok";
   if (status === "unknown") return "warn";
   return "danger";
@@ -280,7 +282,7 @@ function ProgressBar({
 }: {
   readonly value: number;
   readonly label: string;
-  readonly tone?: "ok" | "warn" | "danger";
+  readonly tone?: StatusTone;
 }): ReactNode {
   return (
     <div className="lkd-progress" role="img" aria-label={`${label}: ${formatPercent(value)}`}>
@@ -298,7 +300,7 @@ function ProgressRow({
   readonly label: string;
   readonly value: number;
   readonly help: string;
-  readonly tone?: "ok" | "warn" | "danger";
+  readonly tone?: StatusTone;
 }): ReactNode {
   return (
     <Explainable as="div" block={true} description={help}>
@@ -379,7 +381,7 @@ function indexIssueTone(
   missingVectors: number,
   data: CapsuleDetailData,
   job: IndexingJobRecord | undefined,
-): "ok" | "warn" | "danger" {
+): StatusTone {
   if (missingVectors <= 0 && data.health.failedDocuments <= 0) return "ok";
   if (job?.lastError !== undefined) return "danger";
   return "warn";
@@ -390,7 +392,7 @@ function indexLiveNoteLabel(job: IndexingJobRecord | undefined, t: I18nTranslate
   return t("localKnowledge.detail.index.latestRun");
 }
 
-function indexedDocumentsTone(data: CapsuleDetailData): "ok" | "warn" | "danger" {
+function indexedDocumentsTone(data: CapsuleDetailData): StatusTone {
   if (data.health.failedDocuments > 0) return "danger";
   if (data.health.skippedDocuments > 0) return "warn";
   return "ok";
@@ -1349,7 +1351,7 @@ function phaseLabel(phase: ExtractionPhase, t: I18nTranslate): string {
   return t("localKnowledge.detail.large.phase.failed");
 }
 
-function coverageTone(coverage: CoverageQuality): "ok" | "warn" | "danger" {
+function coverageTone(coverage: CoverageQuality): StatusTone {
   if (coverage === "complete") return "ok";
   if (coverage === "none") return "danger";
   return "warn";
