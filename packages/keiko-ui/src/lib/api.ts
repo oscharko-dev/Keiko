@@ -12,8 +12,7 @@ import type {
   ChatsResponse,
   ConversationMemoryRequestWire,
   ChatStatus,
-  ChatMessageRole,
-  ChatWorkflowStatus,
+  ChatRole,
   DesktopChatBootstrapResponse,
   DesktopChatSendResponse,
   EvidenceListEntry,
@@ -101,6 +100,7 @@ import type {
   UpdateSessionStartRequest,
   UpdateSessionStatus,
   WorkspaceSummary,
+  WorkflowStatus,
   WorkflowsResponse,
 } from "./types";
 import type {
@@ -763,7 +763,8 @@ export async function fetchEvidenceList(
     }
   }
   const qs = params.toString();
-  return fetchJson(`/api/evidence${qs ? `?${qs}` : ""}`);
+  const path = qs.length > 0 ? `/api/evidence?${qs}` : "/api/evidence";
+  return fetchJson(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -797,8 +798,7 @@ export async function fetchWorkspaceSummary(
   if (filters.budget !== undefined) {
     params.set("budget", String(filters.budget));
   }
-  const qs = params.toString();
-  return fetchJson(`/api/workspace${qs ? `?${qs}` : ""}`);
+  return fetchJson(`/api/workspace?${params.toString()}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -990,12 +990,12 @@ export async function fetchChatMessages(
 export interface CreateMessageInput {
   chatId: string;
   projectPath: string;
-  role: ChatMessageRole;
+  role: ChatRole;
   content: string;
   timestamp: number;
   runId?: string;
   workflowId?: string;
-  workflowStatus?: ChatWorkflowStatus;
+  workflowStatus?: WorkflowStatus;
   shortResult?: string;
   /** Issue #66 — labels harness task runs (verify, explain-plan). */
   taskType?: string;
@@ -1017,7 +1017,7 @@ export interface CreateRunSummaryPairInput {
     timestamp: number;
     runId: string;
     workflowId?: string;
-    workflowStatus: ChatWorkflowStatus;
+    workflowStatus: WorkflowStatus;
     shortResult?: string;
     /** Issue #66 — labels harness task runs (verify, explain-plan). */
     taskType?: string;

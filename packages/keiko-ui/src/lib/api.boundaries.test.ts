@@ -105,6 +105,7 @@ describe("API BFF boundary helpers", () => {
     await cancelRun("run 1");
     await fetchRunReport("run 1");
     await applyRun("run 1");
+    await fetchEvidenceList();
     await fetchEvidenceList({ workspace: "/repo", date: "", workflow: "verify", model: "model-a" });
     await fetchEvidenceManifest("run 1");
     await createProject({ path: "/repo", name: "Repo" });
@@ -144,6 +145,10 @@ describe("API BFF boundary helpers", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/config",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/evidence",
       expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
     );
     expect(fetchMock).toHaveBeenCalledWith(

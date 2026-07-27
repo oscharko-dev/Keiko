@@ -6,6 +6,7 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  compareCodingWorkbenchModeAuthority,
   resolveEffectiveCodingWorkbenchMode,
   validateCodingWorkbenchCodexAuthSetupRequest,
   validateCodingWorkbenchRuntimeReadiness,
@@ -15,7 +16,7 @@ import {
   type MemoryAutonomyPolicyWire,
 } from "@oscharko-dev/keiko-contracts";
 import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.js";
-import { parsedRequestedMode } from "./autonomyPolicyRequest.js";
+import { parsedAutonomyPolicyUpdate } from "./autonomyPolicyRequest.js";
 import {
   activeWorkspace,
   codexProfile,
@@ -52,11 +53,11 @@ function effectiveMode(
 async function handleAutonomyPolicy(
   route: Route,
   ceiling: CodingWorkbenchMode,
-  state: { requestedMode: CodingWorkbenchMode },
+  state: { requestedMode: CodingWorkbenchMode; revision: number },
 ): Promise<void> {
   if (route.request().method() === "PUT") {
-    const requested = parsedRequestedMode(route.request().postData());
-    if (requested === null) {
+    const update = parsedAutonomyPolicyUpdate(route.request().postData());
+    if (update === null) {
       // The client parses failures out of the server's `{ error: { code, message } }` envelope; a
       // bare body would degrade to a generic HTTP error here and hide client-side regressions in
       // error-code handling behind a fixture that does not speak the real contract.
@@ -72,12 +73,31 @@ async function handleAutonomyPolicy(
       });
       return;
     }
-    state.requestedMode = requested;
+    const exactRevision = update.expectedRevision === state.revision;
+    const staleDowngrade =
+      update.expectedRevision < state.revision &&
+      compareCodingWorkbenchModeAuthority(update.requestedMode, state.requestedMode) < 0;
+    if (!exactRevision && !staleDowngrade) {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "CONFLICT",
+            message: "Memory autonomy policy changed. Reload and retry.",
+          },
+        }),
+      });
+      return;
+    }
+    state.requestedMode = update.requestedMode;
+    state.revision += 1;
   }
   const policy: MemoryAutonomyPolicyWire = {
     requestedMode: state.requestedMode,
     effectiveMode: effectiveMode(state.requestedMode, ceiling),
     deploymentCeiling: ceiling,
+    revision: state.revision,
   };
   await fulfillJson(route, policy);
 }
@@ -304,7 +324,7 @@ export async function installRuntimeRoutes(
   const authStatus = options.authStatus ?? "connected";
   // #2386 fixed the product default at the supervised middle mode; the policy channel starts there
   // so the Workbench sees the same baseline it had before the modes moved into Settings.
-  const autonomy = { requestedMode: options.requestedMode ?? "supervised-coding" };
+  const autonomy = { requestedMode: options.requestedMode ?? "supervised-coding", revision: 0 };
   await page.route("**/api/**", async (route) => {
     const { pathname, searchParams } = new URL(route.request().url());
     if (pathname === "/api/memory/autonomy-policy") {

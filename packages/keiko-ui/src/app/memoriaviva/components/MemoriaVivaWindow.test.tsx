@@ -1,8 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryListResponse, MemoryRecentCapturesResponse } from "@/lib/memory-api";
 import { resetConversationMemorySettingsForTests } from "@/app/components/desktop/hooks/memorySettings";
+import { resetAutonomyPersistenceQueueForTests } from "@/app/components/desktop/hooks/useAutonomyModePolicy";
 import { MemoriaVivaWindow } from "./MemoriaVivaWindow";
 
 function makeListResponse(): MemoryListResponse {
@@ -29,11 +30,16 @@ function loadDefaultMode() {
     requestedMode: "governed-assist",
     effectiveMode: "governed-assist",
     deploymentCeiling: "autonomous-delivery",
+    revision: 0,
   });
 }
 
 beforeEach(() => {
   resetConversationMemorySettingsForTests();
+});
+
+afterEach(() => {
+  resetAutonomyPersistenceQueueForTests();
 });
 
 describe("MemoriaVivaWindow request settings", () => {

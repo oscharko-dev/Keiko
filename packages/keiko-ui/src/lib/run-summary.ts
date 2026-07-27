@@ -12,7 +12,7 @@
  * The output `shortResult` is ALWAYS ≤ 200 chars; the BFF re-runs the same truncation server-
  * side, but bounding here avoids round-tripping oversized text on the wire.
  */
-import type { ChatWorkflowStatus } from "./types";
+import type { WorkflowStatus } from "./types";
 
 export interface RunSummaryFallbackKind {
   readonly workflowId?: string;
@@ -20,7 +20,7 @@ export interface RunSummaryFallbackKind {
 }
 
 export interface RunSummary {
-  readonly workflowStatus: ChatWorkflowStatus;
+  readonly workflowStatus: WorkflowStatus;
   readonly shortResult: string;
 }
 

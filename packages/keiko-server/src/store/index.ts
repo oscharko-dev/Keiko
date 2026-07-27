@@ -11,6 +11,7 @@ export type {
   ChatTurnInspection,
   CreateChatOptions,
   GroundedAnswer,
+  MemoryAutonomyPolicyRecord,
   NewChatMessage,
   Project,
   UiStore,

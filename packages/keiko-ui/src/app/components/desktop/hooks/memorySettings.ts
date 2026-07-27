@@ -18,6 +18,7 @@ const DEFAULT_MEMORY_SETTINGS: ConversationMemorySettingsSnapshot = {
 };
 
 let currentSettings = DEFAULT_MEMORY_SETTINGS;
+let currentModeRevision = 0;
 const listeners = new Set<() => void>();
 
 function normalizeBudgetTokens(tokens: number): number {
@@ -33,7 +34,9 @@ function publish(next: ConversationMemorySettingsSnapshot): void {
   ) {
     return;
   }
+  const modeChanged = next.mode !== currentSettings.mode;
   currentSettings = next;
+  if (modeChanged) currentModeRevision += 1;
   for (const listener of listeners) listener();
 }
 
@@ -48,9 +51,13 @@ function getSnapshot(): ConversationMemorySettingsSnapshot {
   return currentSettings;
 }
 
-// Synchronous, non-subscribing read of the current mode — lets a background hydration (see
-// useChatSession's autonomy-policy hydration effect) detect whether a newer selection landed
-// while its request was in flight, without needing a full revision counter on the store.
+// Synchronous, non-subscribing revision read. Comparing the revision, rather than only the
+// current value, closes the A→B→A case where a stale hydration would otherwise mistake an older
+// value for an unchanged store and overwrite a newer user selection.
+export function currentConversationMemoryModeRevision(): number {
+  return currentModeRevision;
+}
+
 export function currentConversationMemoryMode(): CodingWorkbenchMode {
   return currentSettings.mode;
 }
