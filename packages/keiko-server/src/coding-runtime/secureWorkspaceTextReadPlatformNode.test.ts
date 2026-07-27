@@ -106,6 +106,9 @@ describe("node portable secure workspace-read inspection", () => {
     await expect(inspection.verifySignature("/usr/bin/true", "darwin-arm64")).resolves.toEqual(
       expect.any(Boolean),
     );
+    await expect(
+      inspection.verifySignature("/definitely/missing/keiko-helper", "darwin-x64"),
+    ).resolves.toBe(false);
     await expect(inspection.verifySignature("/missing/helper.exe", "win32-x64")).resolves.toBe(
       false,
     );
@@ -129,6 +132,13 @@ describe("node portable secure workspace-read inspection", () => {
         run,
       ),
     ).resolves.toBe(true);
+    await expect(
+      provePortableImmutableResourceTree(
+        "/Applications/Keiko.app/Contents/Resources",
+        "darwin-x64",
+        run,
+      ),
+    ).resolves.toBe(true);
     await expect(provePortableImmutableResourceTree("C:\\Keiko", "win32-x64", run)).resolves.toBe(
       true,
     );
@@ -140,6 +150,16 @@ describe("node portable secure workspace-read inspection", () => {
           "--deep",
           "--strict",
           '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-arm64"',
+          "/Applications/Keiko.app",
+        ],
+      },
+      {
+        command: "/usr/bin/codesign",
+        args: [
+          "--verify",
+          "--deep",
+          "--strict",
+          '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-x64"',
           "/Applications/Keiko.app",
         ],
       },
@@ -178,6 +198,13 @@ describe("node portable secure workspace-read inspection", () => {
     });
 
     await expect(inspection.verifySignature(executable, "win32-x64")).resolves.toBe(true);
+    await expect(inspection.verifySignature(executable, "win32-x64")).resolves.toBe(false);
+  });
+
+  it("rejects Windows verification when the fixed launcher is absent", async () => {
+    const { executable, resourceRoot } = fixture();
+    const inspection = createNodePortableSecureWorkspaceReadInspection({ resourceRoot });
+
     await expect(inspection.verifySignature(executable, "win32-x64")).resolves.toBe(false);
   });
 });

@@ -93,4 +93,19 @@ describe("activateMacosPortableRuntime", () => {
     expect(active).toBe(false);
     expect(executed).toBe(false);
   });
+
+  it("applies the production root-ownership check before manager execution", async () => {
+    const fixture = activationFixture();
+    let executed = false;
+
+    const active = await activateMacosPortableRuntime(fixture.layout, {
+      runManager: () => {
+        executed = true;
+        return Promise.resolve({ ok: true, stdout: "active\n", stderr: "" });
+      },
+    });
+
+    expect(active).toBe(false);
+    expect(executed).toBe(false);
+  });
 });
