@@ -120,6 +120,16 @@ function startResult(result: StartManualPodJobResult, ctx: RouteContext): RouteR
       ),
     };
   }
+  if (result.reason === "job-already-running") {
+    return {
+      status: 409,
+      body: errorBody(
+        "MANUAL_POD_JOB_ALREADY_RUNNING",
+        "An indexing job is already running for this Knowledge Pod.",
+        ctx.correlationId,
+      ),
+    };
+  }
   return {
     status: 400,
     body: errorBody("VALIDATION_FAILED", "The manual source is invalid.", ctx.correlationId),
