@@ -41,15 +41,13 @@ import {
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
-import type {
-  AsyncParserAdapter,
-  ParserAdapter,
-  ParserOptions,
-  ParserRegistry,
-  ParserSelectionInput,
-  ProgressiveExtractor,
-} from "../parsers/index.js";
 import {
+  type AsyncParserAdapter,
+  type ParserAdapter,
+  type ParserOptions,
+  type ParserRegistry,
+  type ParserSelectionInput,
+  type ProgressiveExtractor,
   buildParserOptions,
   createProgressivePdfExtractor,
   classifyLargeDocument,
@@ -1530,6 +1528,9 @@ function oversizedDocumentRecord(
   };
 }
 
+// Identical to `persistFailureRow` — the oversized-file path persists the same
+// document/diagnostic shape as any other extraction failure, so it delegates rather than
+// duplicating the transaction.
 function persistOversizedRow(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -1538,35 +1539,7 @@ function persistOversizedRow(
   diagnostic: ParserDiagnostic,
   now: () => number,
 ): void {
-  const db = deps.store._internal.db;
-  db.exec("BEGIN");
-  try {
-    insertDocumentRow(db, {
-      id: documentId,
-      capsuleId: params.capsuleId,
-      sourceId: String(params.source.id),
-      documentPath: document.documentPath,
-      sizeBytes: document.sizeBytes,
-      mediaType: document.mediaType,
-      contentHash: document.contentHash,
-      parserId: document.parser.parserId,
-      parserVersion: document.parser.parserVersion,
-      lastExtractedAt: document.lastExtractedAt,
-      status: document.status,
-      safeDisplayName: document.safeDisplayName,
-    });
-    deleteDependentRows(db, params.capsuleId, documentId);
-    insertDiagnosticRow(db, {
-      id: `${String(documentId)}#d0`,
-      capsuleId: params.capsuleId,
-      diagnostic,
-      createdAt: now(),
-    });
-    db.exec("COMMIT");
-  } catch (cause) {
-    db.exec("ROLLBACK");
-    throw cause;
-  }
+  persistFailureRow(deps, params, documentId, document, diagnostic, now);
 }
 
 function buildOversizedFailure(

@@ -37,13 +37,13 @@ function parseArgs(argv) {
     if (arg === "--self-test") args.selfTest = true;
     else if (arg === "--state-dir") {
       const value = argv[i + 1];
-      if (value === undefined || value.startsWith("--")) return "usage";
+      if (value === undefined || value.startsWith("--")) return { kind: "usage" };
       args.stateDir = value;
       i += 1;
-    } else if (arg === "--help" || arg === "-h") return "help";
-    else return "usage";
+    } else if (arg === "--help" || arg === "-h") return { kind: "help" };
+    else return { kind: "usage" };
   }
-  return args;
+  return { kind: "args", ...args };
 }
 
 const USAGE = `Usage:
@@ -94,11 +94,11 @@ async function runSelfTest() {
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
-  if (parsed === "help") {
+  if (parsed.kind === "help") {
     console.log(USAGE);
     return 0;
   }
-  if (parsed === "usage") {
+  if (parsed.kind === "usage") {
     console.error(USAGE);
     return 2;
   }
