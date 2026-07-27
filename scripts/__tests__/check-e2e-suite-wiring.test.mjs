@@ -1,13 +1,22 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   checkE2eSuiteWiring,
   formatGateReport,
   isWiredInWorkflows,
+  main,
   runE2eSuiteWiringGate,
 } from "../check-e2e-suite-wiring.mjs";
+
+const roots = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 const RUN_LANE = `
 jobs:
@@ -117,6 +126,21 @@ describe("e2e suite wiring gate (#2629)", () => {
   it("rejects a baseline document that is not a suites array", () => {
     // Fail loudly on a malformed register rather than treating it as "nothing recorded", which
     // would silently re-admit every suite it was holding.
-    expect(() => runE2eSuiteWiringGate("scripts/__tests__")).toThrow();
+    const root = mkdtempSync(join(tmpdir(), "keiko-e2e-wiring-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "qa"), { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: {} }), "utf8");
+    writeFileSync(
+      join(root, "docs", "qa", "unwired-e2e-suites.json"),
+      JSON.stringify({ suites: "not-an-array" }),
+      "utf8",
+    );
+    expect(() => runE2eSuiteWiringGate(root)).toThrow(/must carry a "suites" array/u);
+  });
+
+  it("runs end to end and reports success without writing to the real stdout", () => {
+    const written = [];
+    expect(main((text) => written.push(text))).toBe(0);
+    expect(written.join("")).toContain("e2e-suite-wiring: PASS");
   });
 });

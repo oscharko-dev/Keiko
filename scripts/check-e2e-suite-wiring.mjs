@@ -141,11 +141,13 @@ export function formatGateReport({ problems, total, recorded }) {
   );
 }
 
-function main() {
+export function main(write = (text) => process.stdout.write(text)) {
   const result = runE2eSuiteWiringGate();
-  process.stdout.write(formatGateReport(result));
-  if (result.problems.length > 0) process.exitCode = 1;
+  write(formatGateReport(result));
+  return result.problems.length > 0 ? 1 : 0;
 }
 
 const entry = process.argv[1];
-if (entry !== undefined && import.meta.url === pathToFileURL(resolve(entry)).href) main();
+if (entry !== undefined && import.meta.url === pathToFileURL(resolve(entry)).href) {
+  process.exitCode = main();
+}
