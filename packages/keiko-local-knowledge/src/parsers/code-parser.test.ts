@@ -86,7 +86,10 @@ describe("codeParser", () => {
     ["php", "function load() {}", "function load"],
     ["swift", "func load() {}", "function load"],
     ["c", "int load() {\n  return 0;\n}", "function load"],
+    ["cc", "int load() {\n  return 0;\n}", "function load"],
     ["cpp", "int load() {\n  return 0;\n}", "function load"],
+    ["h", "int load();", "function load"],
+    ["hpp", "int load();", "function load"],
   ])("emits a symbol-anchored section for %s", (extension, text, label) => {
     const sections = sectionsFor(text, extension);
     expect(sections).toHaveLength(1);

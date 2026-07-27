@@ -385,8 +385,16 @@ export function startManualPodRefresh(
   // LK-003 (Epic #189): refuse to start a second concurrent indexer for this capsule — the
   // orchestrator persists running jobs under the same capsule_id whether the run started from
   // the manual path or the general reindex/repair path, so a duplicate refresh would race the
-  // in-flight one and corrupt the fingerprint baseline (last-writer-wins, no version check).
-  if (latestRunningJobId(ctx.env.store, request.capsuleId as KnowledgeCapsuleId) !== undefined) {
+  // in-flight one and corrupt the fingerprint baseline (last-writer-wins, no version check). The
+  // query is wrapped so a thrown error still closes the store instead of leaking the handle.
+  let runningJobId: string | undefined;
+  try {
+    runningJobId = latestRunningJobId(ctx.env.store, request.capsuleId as KnowledgeCapsuleId);
+  } catch (error) {
+    ctx.env.close();
+    throw error;
+  }
+  if (runningJobId !== undefined) {
     ctx.env.close();
     return { ok: false, reason: "job-already-running" };
   }

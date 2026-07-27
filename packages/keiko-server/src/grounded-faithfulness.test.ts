@@ -640,7 +640,7 @@ describe("reconcileClaimEntailment", () => {
     expect(result.unavailableClaims).toBe(1);
   });
 
-  it("treats a truncated excerpt as unavailable instead of judging a partial excerpt (release audit)", async () => {
+  it("treats a truncated excerpt as unavailable instead of judging a partial excerpt", async () => {
     // The contradicting fact sits past the default 900-char maxExcerptChars cut. If the judge were
     // ever handed the truncated prefix, scriptedJudge's default verdict is "supported" — exactly the
     // silent false-positive this reconciliation exists to prevent. maxClaims/maxTotalMs both already
@@ -648,7 +648,7 @@ describe("reconcileClaimEntailment", () => {
     const resolve = judgeFixturePack(`${"filler ".repeat(150)}[[CONTRADICTS]]`);
     let judgeCalls = 0;
     const countingJudge: EntailmentJudge = {
-      judge: (input) => {
+      judge: (input): Promise<EntailmentVerdict> => {
         judgeCalls += 1;
         return scriptedJudge().judge(input);
       },
@@ -661,6 +661,9 @@ describe("reconcileClaimEntailment", () => {
     );
     expect(judgeCalls).toBe(0);
     expect(result.unentailed).toHaveLength(0);
+    // The claim was never actually submitted to the judge, so it must not count as judged (the
+    // entailment-stage diagnostic reports "unavailable for X of Y judged claims" from this count).
+    expect(result.judgedClaims).toBe(0);
     expect(result.unavailableClaims).toBe(1);
   });
 

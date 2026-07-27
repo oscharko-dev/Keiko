@@ -579,6 +579,15 @@ function collectExcerptText(
   return { text: joined.slice(0, maxExcerptChars), truncated: joined.length > maxExcerptChars };
 }
 
+// `submittedToJudge` distinguishes a real judge call from every fail-closed "unavailable" that
+// never reaches the judge (empty excerpt, truncated excerpt) — `judgedClaims` below must count only
+// the former, or the entailment-stage diagnostic ("unavailable for X of Y judged claims") reports
+// judge activity that never happened.
+interface ClaimVerdictOutcome {
+  readonly verdict: EntailmentVerdict;
+  readonly submittedToJudge: boolean;
+}
+
 async function verdictForClaim(
   claim: CitedClaim,
   validCitations: readonly ParsedInlineCitation[],
@@ -586,7 +595,7 @@ async function verdictForClaim(
   judge: EntailmentJudge,
   maxExcerptChars: number,
   signal: AbortSignal | undefined,
-): Promise<EntailmentVerdict> {
+): Promise<ClaimVerdictOutcome> {
   const { text: excerptText, truncated } = collectExcerptText(
     validCitations,
     resolveExcerptText,
@@ -594,15 +603,16 @@ async function verdictForClaim(
   );
   if (excerptText.length === 0 || claim.claimText.length === 0) {
     // No usable excerpt/claim text to judge against — undecidable, never assumed supported.
-    return "unavailable";
+    return { verdict: "unavailable", submittedToJudge: false };
   }
   if (truncated) {
     // The judge would only see a prefix of the cited evidence, exactly like an exhausted
     // maxClaims/maxTotalMs budget — count it unavailable rather than risk a "supported" verdict
     // that never saw the excerpt text past the cut.
-    return "unavailable";
+    return { verdict: "unavailable", submittedToJudge: false };
   }
-  return judge.judge({ claimText: claim.claimText, excerptText }, signal);
+  const verdict = await judge.judge({ claimText: claim.claimText, excerptText }, signal);
+  return { verdict, submittedToJudge: true };
 }
 
 /**
@@ -650,7 +660,7 @@ export async function reconcileClaimEntailment(
       unavailableClaims += 1;
       continue;
     }
-    const verdict = await verdictForClaim(
+    const { verdict, submittedToJudge } = await verdictForClaim(
       claim,
       valid,
       resolveExcerptText,
@@ -658,7 +668,9 @@ export async function reconcileClaimEntailment(
       options.maxExcerptChars,
       budget,
     );
-    judgedClaims += 1;
+    if (submittedToJudge) {
+      judgedClaims += 1;
+    }
     if (verdict === "unsupported") {
       unentailed.push({ citedPaths: [...new Set(valid.map((c) => c.scopePath))] });
     } else if (verdict === "unavailable") {

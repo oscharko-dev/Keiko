@@ -60,6 +60,26 @@ function stubContext(runningJobIdForCapsule?: string): ManualPodJobContext {
   };
 }
 
+// A context whose LK-003 running-job query throws (a DB error), to prove the guard still closes
+// the store on the query's own failure, not just on the "job already running" branch.
+function stubContextWithThrowingQuery(): ManualPodJobContext {
+  const db = {
+    prepare: (): { get: () => never } => ({
+      get: (): never => {
+        throw new Error("db unavailable");
+      },
+    }),
+  };
+  return {
+    env: {
+      store: { _internal: { db } } as never,
+      close: vi.fn(),
+      embeddingAdapter: {} as never,
+    },
+    fetcher: {} as never,
+  };
+}
+
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 describe("ManualPodJobRegistry", () => {
@@ -288,14 +308,32 @@ describe("startManualPodRefresh (injected seams)", () => {
   // version check). This must fail closed with no second job ever starting.
   it("refuses to start when a job is already running for the capsule (LK-003)", () => {
     const run = vi.fn().mockResolvedValue({ progress: PROGRESS, state: "succeeded" });
+    const conflictContext = stubContext("already-running-job");
     const result = startManualPodRefresh(
       {} as UiHandlerDeps,
       { capsuleId: "cap", sourceId: "src" },
-      { context: stubContext("already-running-job"), run },
+      { context: conflictContext, run },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("job-already-running");
     expect(run).not.toHaveBeenCalled();
+    // The conflict path opened no background job, so nothing else will ever close this store —
+    // the guard itself must close it, or the store handle leaks on every refused refresh.
+    expect(conflictContext.env.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the store when the LK-003 running-job query itself throws", () => {
+    const run = vi.fn();
+    const throwingContext = stubContextWithThrowingQuery();
+    expect(() =>
+      startManualPodRefresh(
+        {} as UiHandlerDeps,
+        { capsuleId: "cap", sourceId: "src" },
+        { context: throwingContext, run },
+      ),
+    ).toThrow("db unavailable");
+    expect(run).not.toHaveBeenCalled();
+    expect(throwingContext.env.close).toHaveBeenCalledTimes(1);
   });
 });
 
