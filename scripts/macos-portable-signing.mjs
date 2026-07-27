@@ -242,8 +242,8 @@ function prepareQualifiedPayloadCommand(options) {
   }
   markMacosProductionState(manifest);
   markNativeHelpersVerified(manifest);
-  manifest.runtimeActivation.trustAnchor = "developer-id-app-resource-seal";
   rebindSignedPayload(stage, manifest, target);
+  manifest.runtimeActivation.trustAnchor = "developer-id-app-resource-seal";
   manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
     manifest.nativeHelpers,
   );

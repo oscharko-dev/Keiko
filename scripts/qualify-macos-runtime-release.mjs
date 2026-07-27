@@ -20,7 +20,7 @@ function fail(message) {
   throw new MacosRuntimeQualificationError(`macos-runtime-qualification: ${message}`);
 }
 
-function parse(argv) {
+export function parseMacosQualificationArgs(argv) {
   const options = {};
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index];
@@ -176,8 +176,8 @@ export function qualificationReceiptFor(input) {
   };
 }
 
-function run(command, args, label) {
-  const result = spawnSync(command, args, {
+export function runQualificationCommand(command, args, label, spawnSyncImpl = spawnSync) {
+  const result = spawnSyncImpl(command, args, {
     cwd: resolve(import.meta.dirname, ".."),
     encoding: "utf8",
     env: {},
@@ -190,8 +190,8 @@ function run(command, args, label) {
   return result.stdout.trim();
 }
 
-function runQuiet(command, args, label) {
-  const result = spawnSync(command, args, {
+export function runQuietQualificationCommand(command, args, label, spawnSyncImpl = spawnSync) {
+  const result = spawnSyncImpl(command, args, {
     cwd: resolve(import.meta.dirname, ".."),
     encoding: "utf8",
     env: {},
@@ -201,7 +201,7 @@ function runQuiet(command, args, label) {
   if (result.error !== undefined || result.status !== 0) fail(`${label} failed`);
 }
 
-function assertSameExecutable(stagedPath, executionPath, label) {
+export function assertSameExecutable(stagedPath, executionPath, label) {
   const staged = lstatSync(stagedPath);
   const execution = lstatSync(executionPath);
   if (
@@ -218,11 +218,11 @@ function assertSameExecutable(stagedPath, executionPath, label) {
   }
 }
 
-function executionAppRoot(options) {
+export function executionAppRoot(options, lstat = lstatSync) {
   const configured = options["execution-app-root"];
   if (configured === undefined) fail("--execution-app-root is required");
   const appRoot = resolve(configured);
-  const entry = lstatSync(appRoot);
+  const entry = lstat(appRoot);
   if (
     !/^\/Applications\/KeikoQualification-[A-Za-z0-9._-]+\.app$/u.test(appRoot) ||
     !entry.isDirectory() ||
@@ -240,8 +240,16 @@ function verifyOnly(options) {
   return true;
 }
 
-export function qualifyMacosRuntimeRelease(options) {
-  if (process.platform !== "darwin") fail("qualification requires macOS");
+export function qualifyMacosRuntimeRelease(
+  options,
+  {
+    executionAppRootFn = executionAppRoot,
+    platform = process.platform,
+    runFn = runQualificationCommand,
+    runQuietFn = runQuietQualificationCommand,
+  } = {},
+) {
+  if (platform !== "darwin") fail("qualification requires macOS");
   const target = required(options, "target");
   const sourceCommitSha = required(options, "source-commit-sha");
   if (!TARGETS.has(target) || !COMMIT.test(sourceCommitSha))
@@ -249,8 +257,8 @@ export function qualifyMacosRuntimeRelease(options) {
   const stageRoot = resolve(required(options, "stage-root"));
   const resourceRoot = join(stageRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources");
   const stagedAppRoot = join(stageRoot, "payload", "Keiko", "Keiko.app");
-  const appRoot = executionAppRoot(options);
-  qualifyExecutionApp({ appRoot, resourceRoot, stagedAppRoot });
+  const appRoot = executionAppRootFn(options);
+  qualifyExecutionApp({ appRoot, resourceRoot, stagedAppRoot }, { runFn, runQuietFn });
   const activationPath = join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/"));
   const receipt = qualificationReceiptFor({
     activationPath,
@@ -261,16 +269,16 @@ export function qualifyMacosRuntimeRelease(options) {
   persistQualificationReceipt(resourceRoot, receipt, verifyOnly(options));
 }
 
-function qualifyExecutionApp({ appRoot, resourceRoot, stagedAppRoot }) {
-  runQuiet("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot], "app signature");
-  runQuiet("/usr/sbin/spctl", ["-a", "-t", "exec", appRoot], "Gatekeeper assessment");
+function qualifyExecutionApp({ appRoot, resourceRoot, stagedAppRoot }, { runFn, runQuietFn }) {
+  runQuietFn("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot], "app signature");
+  runQuietFn("/usr/sbin/spctl", ["-a", "-t", "exec", appRoot], "Gatekeeper assessment");
   const manager = join(appRoot, "Contents", "MacOS", "KeikoSystemExtensionManager");
   assertSameExecutable(
     join(stagedAppRoot, "Contents", "MacOS", "KeikoSystemExtensionManager"),
     manager,
     "system extension manager",
   );
-  if (run(manager, ["--activate"], "system extension activation") !== "active") {
+  if (runFn(manager, ["--activate"], "system extension activation") !== "active") {
     fail("system extension requires approval");
   }
   const supervisor = join(
@@ -286,7 +294,7 @@ function qualifyExecutionApp({ appRoot, resourceRoot, stagedAppRoot }) {
     supervisor,
     "runtime supervisor",
   );
-  run(
+  runFn(
     process.execPath,
     ["native/runtime-supervisor/macos/test-protocol.mjs", "--helper", supervisor],
     "exact supervisor qualification",
@@ -309,7 +317,7 @@ function persistQualificationReceipt(resourceRoot, receipt, verify) {
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {
   try {
-    qualifyMacosRuntimeRelease(parse(process.argv.slice(2)));
+    qualifyMacosRuntimeRelease(parseMacosQualificationArgs(process.argv.slice(2)));
   } catch (error) {
     console.error(
       error instanceof MacosRuntimeQualificationError

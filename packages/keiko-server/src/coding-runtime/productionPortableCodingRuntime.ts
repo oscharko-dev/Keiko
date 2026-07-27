@@ -41,6 +41,25 @@ interface PortableRuntimeAttestationPort {
   }): unknown;
 }
 
+export interface PortableRuntimeCommandOptions {
+  readonly env: NodeJS.ProcessEnv;
+  readonly maxBuffer?: number | undefined;
+  readonly timeout: number;
+  readonly windowsHide?: boolean | undefined;
+}
+
+export interface PortableRuntimeCommandResult {
+  readonly status: number | null;
+  readonly stderr: string;
+  readonly stdout: string;
+}
+
+export type PortableRuntimeCommandRunner = (
+  command: string,
+  args: readonly string[],
+  options: PortableRuntimeCommandOptions,
+) => PortableRuntimeCommandResult;
+
 export interface PortableOpenCodeDiscoveryInput {
   readonly env: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform | undefined;
@@ -170,18 +189,19 @@ const PLATFORM_ATTESTATION: PortableRuntimeAttestationPort = Object.freeze({
       : readMacosAttestation(resourceRoot),
 });
 
-function readWindowsAttestation(resourceRoot: string): unknown {
+export function readWindowsAttestation(
+  resourceRoot: string,
+  run: PortableRuntimeCommandRunner = runPortableRuntimeCommand,
+): unknown {
   const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
   const executable = safeRealFile(
     join(resourceRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
   );
-  verifyWindowsSignature(executable);
-  const result = spawnSync(executable, ["--emit"], {
-    encoding: "utf8",
+  verifyWindowsSignature(executable, run);
+  const result = run(executable, ["--emit"], {
     env: {
       SystemRoot: systemRoot,
     },
-    shell: false,
     windowsHide: true,
     timeout: 10_000,
     maxBuffer: MAX_ATTESTATION_BYTES,
@@ -192,7 +212,7 @@ function readWindowsAttestation(resourceRoot: string): unknown {
   return JSON.parse(result.stdout);
 }
 
-function verifyWindowsSignature(executable: string): void {
+function verifyWindowsSignature(executable: string, run: PortableRuntimeCommandRunner): void {
   const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
   const powershell = win32.join(
     systemRoot,
@@ -204,15 +224,13 @@ function verifyWindowsSignature(executable: string): void {
   const script =
     "$s=Get-AuthenticodeSignature -LiteralPath $args[0];" +
     "if($s.Status -ne 'Valid' -or $null -eq $s.TimeStamperCertificate){exit 1}";
-  const result = spawnSync(
+  const result = run(
     powershell,
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, executable],
     {
-      encoding: "utf8",
       env: {
         SystemRoot: systemRoot,
       },
-      shell: false,
       windowsHide: true,
       timeout: 10_000,
     },
@@ -220,17 +238,18 @@ function verifyWindowsSignature(executable: string): void {
   if (result.status !== 0) throw new Error("runtime-attestation-signature-invalid");
 }
 
-function readMacosAttestation(resourceRoot: string): unknown {
+export function readMacosAttestation(
+  resourceRoot: string,
+  run: PortableRuntimeCommandRunner = runPortableRuntimeCommand,
+): unknown {
   const appRoot = dirname(dirname(resourceRoot));
-  runMacosVerifier("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot]);
-  runMacosVerifier("/usr/sbin/spctl", ["--assess", "--type", "execute", appRoot]);
+  runMacosVerifier("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot], run);
+  runMacosVerifier("/usr/sbin/spctl", ["--assess", "--type", "execute", appRoot], run);
   const manager = safeRealFile(
     join(dirname(dirname(resourceRoot)), "Contents", "MacOS", "KeikoSystemExtensionManager"),
   );
-  const status = spawnSync(manager, ["--status"], {
-    encoding: "utf8",
+  const status = run(manager, ["--status"], {
     env: {},
-    shell: false,
     timeout: 10_000,
   });
   if (status.status !== 0 || status.stdout.trim() !== "active" || status.stderr !== "") {
@@ -239,14 +258,31 @@ function readMacosAttestation(resourceRoot: string): unknown {
   return readRecord(safeRealFile(join(resourceRoot, ...MACOS_RECEIPT_PATH.split("/"))));
 }
 
-function runMacosVerifier(command: string, args: readonly string[]): void {
-  const result = spawnSync(command, [...args], {
-    encoding: "utf8",
+function runMacosVerifier(
+  command: string,
+  args: readonly string[],
+  run: PortableRuntimeCommandRunner,
+): void {
+  const result = run(command, args, {
     env: { PATH: "/usr/bin:/usr/sbin" },
-    shell: false,
     timeout: 15_000,
   });
   if (result.status !== 0) throw new Error("runtime-app-seal-invalid");
+}
+
+function runPortableRuntimeCommand(
+  command: string,
+  args: readonly string[],
+  options: PortableRuntimeCommandOptions,
+): PortableRuntimeCommandResult {
+  return spawnSync(command, [...args], {
+    encoding: "utf8",
+    env: options.env,
+    maxBuffer: options.maxBuffer,
+    shell: false,
+    timeout: options.timeout,
+    windowsHide: options.windowsHide,
+  });
 }
 
 function trustedResourceRoot(input: PortableOpenCodeDiscoveryInput): string | undefined {

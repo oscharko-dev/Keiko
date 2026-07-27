@@ -173,14 +173,17 @@ function required(options, name) {
   return value;
 }
 
-export function qualifyWindowsRuntimeRelease(options) {
-  if (process.platform !== "win32") fail("qualification requires Windows");
+export function qualifyWindowsRuntimeRelease(
+  options,
+  { platform = process.platform, spawnSyncImpl = spawnSync } = {},
+) {
+  if (platform !== "win32") fail("qualification requires Windows");
   const stageRoot = resolve(required(options, "stage-root"));
   const sourceCommitSha = required(options, "source-commit-sha");
   if (!COMMIT.test(sourceCommitSha)) fail("source commit is invalid");
   const resourceRoot = join(stageRoot, "payload", "Keiko");
   const helper = join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe");
-  const result = spawnSync(
+  const result = spawnSyncImpl(
     process.execPath,
     ["native/runtime-supervisor/test-protocol.mjs", "--helper", helper],
     {

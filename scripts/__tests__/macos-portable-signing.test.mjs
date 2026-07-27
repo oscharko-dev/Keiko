@@ -415,6 +415,23 @@ function macFinalizeStage() {
     upstreamSidecarExecutableSha256: sha256(upstreamSidecarExecutable),
   };
 }
+
+function resetSidecarSbomForRebind(fixture) {
+  const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+  const sidecar = manifest.sidecarRuntimes[0];
+  const sbomPath = join(
+    fixture.resources,
+    "runtime",
+    "sidecars",
+    "opencode-compatible",
+    "evidence",
+    "sbom.cdx.json",
+  );
+  const sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
+  sbom.components[0].hashes = [{ alg: "SHA-256", content: sidecar.executableSha256 }];
+  writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
+}
+
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop(), { recursive: true, force: true });
 });
@@ -628,6 +645,102 @@ describe("macOS portable signing inventory", () => {
         main(["compare-paths", "--expected-inventory", expected, "--actual-inventory", actual]),
       ).rejects.toThrow(/inventory|changed unexpectedly|executable is missing/u);
     }
+  });
+
+  it("dispatches every bounded macOS inventory and payload preparation command", async () => {
+    const fixture = macFinalizeStage();
+    const commandInventory = join(fixture.stage, "command-inventory.json");
+    await main([
+      "inventory",
+      "--stage-root",
+      fixture.stage,
+      "--target",
+      "macos-arm64",
+      "--inventory",
+      commandInventory,
+    ]);
+    expect(JSON.parse(readFileSync(commandInventory, "utf8"))).toEqual(
+      JSON.parse(readFileSync(fixture.inventoryPath, "utf8")),
+    );
+
+    const rootInventory = join(fixture.stage, "root-inventory.json");
+    await main([
+      "inventory-root",
+      "--payload-root",
+      join(fixture.stage, "payload", "Keiko"),
+      "--target",
+      "macos-arm64",
+      "--inventory",
+      rootInventory,
+    ]);
+    await expect(
+      main([
+        "compare-bytes",
+        "--expected-inventory",
+        commandInventory,
+        "--actual-inventory",
+        rootInventory,
+      ]),
+    ).resolves.toBeUndefined();
+
+    resetSidecarSbomForRebind(fixture);
+    await expect(
+      main(["rebind-payload", "--stage-root", fixture.stage, "--target", "macos-arm64"]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("promotes and validates only a complete macOS-qualified runtime payload", async () => {
+    const prepared = macFinalizeStage();
+    resetSidecarSbomForRebind(prepared);
+    await expect(
+      main([
+        "prepare-qualified-payload",
+        "--stage-root",
+        prepared.stage,
+        "--target",
+        "macos-arm64",
+      ]),
+    ).resolves.toBeUndefined();
+    const manifest = JSON.parse(readFileSync(prepared.manifestPath, "utf8"));
+    expect(manifest.runtimeActivation.trustAnchor).toBe("developer-id-app-resource-seal");
+    expect(manifest.nativeHelpers).toHaveLength(2);
+    expect(
+      manifest.nativeHelpers.every(
+        (helper) => helper.signing.verificationStatus === "verified-production",
+      ),
+    ).toBe(true);
+
+    const qualified = macFinalizeStage();
+    await expect(
+      main([
+        "validate-runtime-qualification",
+        "--stage-root",
+        qualified.stage,
+        "--target",
+        "macos-arm64",
+      ]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects incomplete macOS inventory authority and unsupported dispatcher input", async () => {
+    const fixture = macFinalizeStage();
+    const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+    manifest.nativeHelpers = [];
+    writeFileSync(fixture.manifestPath, JSON.stringify(manifest));
+    await expect(
+      main([
+        "inventory",
+        "--stage-root",
+        fixture.stage,
+        "--target",
+        "macos-arm64",
+        "--inventory",
+        join(fixture.stage, "rejected-inventory.json"),
+      ]),
+    ).rejects.toThrow(/complete native helper set/u);
+
+    await expect(main(["inventory", "--stage-root"])).rejects.toThrow(/invalid command arguments/u);
+    await expect(main(["unsupported"])).rejects.toThrow(/unsupported command/u);
   });
 
   it("finalizes a real macOS layout against app resources and canonical evidence", async () => {

@@ -389,13 +389,16 @@ function prepareQualifiedPayloadCommand(options) {
   markNativeHelpersVerified(manifest);
   rebindSignedPayload(stageRoot, manifest, WINDOWS_TARGET);
   manifest.runtimeActivation.trustAnchor = "authenticode-attestor";
+  manifest.releaseImpact.reviewedBinding.sidecarRuntimes = globalThis.structuredClone(
+    manifest.sidecarRuntimes,
+  );
   manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
     manifest.nativeHelpers,
   );
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-function bindRuntimeAttestation(stageRoot, manifest) {
+export function bindRuntimeAttestation(stageRoot, manifest) {
   const attestation = manifest.runtimeAttestation;
   if (
     attestation?.carrierKind !== "authenticode-executable" ||

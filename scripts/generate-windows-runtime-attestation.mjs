@@ -118,8 +118,11 @@ function required(options, name) {
   return value;
 }
 
-export function generateWindowsRuntimeAttestation(options) {
-  if (process.platform !== "win32") fail("generation requires Windows");
+export function generateWindowsRuntimeAttestation(
+  options,
+  { buildCarrierFn = buildWindowsRuntimeAttestationCarrier, platform = process.platform } = {},
+) {
+  if (platform !== "win32") fail("generation requires Windows");
   const stageRoot = resolve(required(options, "stage-root"));
   const receipt = readReceipt(resolve(required(options, "receipt")));
   const activation = join(stageRoot, "payload", "Keiko", ".portable", "runtime-activation.json");
@@ -128,7 +131,7 @@ export function generateWindowsRuntimeAttestation(options) {
   }
   const destination = join(stageRoot, "payload", "Keiko", ...EXECUTABLE_RELATIVE_PATH.split("/"));
   mkdirSync(dirname(destination), { recursive: true });
-  buildCarrier(destination, receipt);
+  buildCarrierFn(destination, receipt);
   bindCarrierManifest(stageRoot, destination);
   writeFileSync(
     resolve(required(options, "catalog")),
@@ -137,7 +140,15 @@ export function generateWindowsRuntimeAttestation(options) {
   );
 }
 
-function buildCarrier(destination, receipt) {
+export function buildWindowsRuntimeAttestationCarrier(
+  destination,
+  receipt,
+  {
+    environment = process.env,
+    spawnSyncImpl = spawnSync,
+    toolchain = windowsBuildToolchain(environment),
+  } = {},
+) {
   const scratch = mkdtempSync(join(tmpdir(), "keiko-runtime-attestation-"));
   try {
     const header = join(scratch, "runtime_attestation_payload.h");
@@ -145,8 +156,7 @@ function buildCarrier(destination, receipt) {
     writeFileSync(header, payloadHeader(Buffer.from(`${JSON.stringify(receipt)}\n`, "utf8")), {
       mode: 0o600,
     });
-    const toolchain = windowsBuildToolchain(process.env);
-    const result = spawnSync(
+    const result = spawnSyncImpl(
       toolchain.compiler,
       [
         "/nologo",
@@ -182,7 +192,10 @@ function allowedWindowsBuildPath(path) {
   });
 }
 
-function windowsBuildToolchain(environment) {
+export function windowsBuildToolchain(
+  environment,
+  { lstat = lstatSync, realpath = (path) => realpathSync.native(path) } = {},
+) {
   const compilerEnvironment = buildCompilerEnvironment("windows-x64", environment);
   const pathEntries = (compilerEnvironment.PATH ?? "")
     .split(win32.delimiter)
@@ -192,7 +205,10 @@ function windowsBuildToolchain(environment) {
     .map((path) => win32.join(path, "cl.exe"))
     .find((path) => {
       try {
-        const entry = lstatSync(realpathSync.native(path));
+        const sourceEntry = lstat(path);
+        const resolved = realpath(path);
+        const entry = lstat(resolved);
+        if (sourceEntry.isSymbolicLink() || !allowedWindowsBuildPath(resolved)) return false;
         return entry.isFile() && !entry.isSymbolicLink() && entry.nlink === 1;
       } catch {
         return false;
@@ -202,7 +218,7 @@ function windowsBuildToolchain(environment) {
     fail("approved MSVC compiler path is unavailable");
   }
   return {
-    compiler: realpathSync.native(compiler),
+    compiler: realpath(compiler),
     environment: { ...compilerEnvironment, PATH: pathEntries.join(win32.delimiter) },
   };
 }
