@@ -18,6 +18,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_CONNECTED_SOURCES,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
+  parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
   type Chat,
   type ChatLocalKnowledgeScope,
@@ -145,6 +146,45 @@ function pack(overrides: Partial<ConnectedContextPack> = {}): ConnectedContextPa
   };
 }
 
+describe("parseUpdateMemoryAutonomyPolicyWire", () => {
+  it("accepts a canonical policy update at revision zero", () => {
+    expect(
+      parseUpdateMemoryAutonomyPolicyWire({
+        requestedMode: "supervised-coding",
+        expectedRevision: 0,
+      }),
+    ).toEqual({
+      requestedMode: "supervised-coding",
+      expectedRevision: 0,
+    });
+  });
+
+  it("accepts the maximum safe revision", () => {
+    expect(
+      parseUpdateMemoryAutonomyPolicyWire({
+        requestedMode: "supervised-coding",
+        expectedRevision: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual({
+      requestedMode: "supervised-coding",
+      expectedRevision: Number.MAX_SAFE_INTEGER,
+    });
+  });
+
+  it.each([
+    {},
+    undefined,
+    null,
+    [],
+    { requestedMode: "invalid", expectedRevision: 0 },
+    { requestedMode: "governed-assist", expectedRevision: -1 },
+    { requestedMode: "governed-assist", expectedRevision: 0.5 },
+    { requestedMode: "governed-assist", expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+  ])("rejects malformed policy update payload %#", (value) => {
+    expect(parseUpdateMemoryAutonomyPolicyWire(value)).toBeUndefined();
+  });
+});
+
 describe("buildGroundedAnswerContextPackSummary", () => {
   it("produces a complete summary from a 2-file files-scope pack", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
@@ -164,6 +204,16 @@ describe("buildGroundedAnswerContextPackSummary", () => {
       elapsedMs: 1_812,
     };
     expect(summary).toStrictEqual(expected);
+  });
+
+  it("preserves stable UTF-16 hash identities for non-BMP scope ids", () => {
+    const summary = buildGroundedAnswerContextPackSummary(
+      pack({ scope: { ...scope("files", []), scopeId: "scope-😀" } }),
+      0,
+      0,
+    );
+
+    expect(summary.scopeId).toBe("scope-e3f282a7");
   });
 
   it("omits rankingSummary when the pack carries no diagnostics", () => {

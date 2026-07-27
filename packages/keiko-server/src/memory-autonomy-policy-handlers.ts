@@ -1,22 +1,30 @@
 import type { IncomingMessage } from "node:http";
 import {
-  isCodingWorkbenchMode,
+  parseUpdateMemoryAutonomyPolicyWire,
   type MemoryAutonomyPolicyWire,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { resolveMemoryCaptureAutonomyMode } from "./memory-capture-policy.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import type { MemoryAutonomyPolicyRecord } from "./store/index.js";
 
 const MAX_POLICY_BODY_BYTES = 1_024;
 const DEFAULT_MEMORY_AUTONOMY_MODE = "governed-assist" as const;
 
-function policyProjection(deps: UiHandlerDeps): MemoryAutonomyPolicyWire {
-  const requestedMode = deps.store.getMemoryAutonomyMode() ?? DEFAULT_MEMORY_AUTONOMY_MODE;
+function policyProjection(
+  deps: UiHandlerDeps,
+  stored = deps.store.readMemoryAutonomyPolicy(),
+): MemoryAutonomyPolicyWire {
+  const { requestedMode, revision } = stored ?? {
+    requestedMode: DEFAULT_MEMORY_AUTONOMY_MODE,
+    revision: 0,
+  };
   const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? DEFAULT_MEMORY_AUTONOMY_MODE;
   return {
     requestedMode,
     effectiveMode: resolveMemoryCaptureAutonomyMode(deps, requestedMode),
     deploymentCeiling,
+    revision,
   };
 }
 
@@ -54,12 +62,12 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-async function parseRequestedMode(req: IncomingMessage): Promise<unknown> {
+async function parseUpdate(req: IncomingMessage): Promise<unknown> {
   const raw = await readRequestBody(req);
   if (raw.length === 0) return undefined;
   const parsed: unknown = JSON.parse(raw);
   return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>).requestedMode
+    ? parsed
     : undefined;
 }
 
@@ -74,21 +82,35 @@ export async function handlePutMemoryAutonomyPolicy(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  let requestedMode: unknown;
+  let update: unknown;
   try {
-    requestedMode = await parseRequestedMode(ctx.req);
+    update = await parseUpdate(ctx.req);
   } catch {
     return {
       status: 400,
       body: errorBody("BAD_REQUEST", "Invalid memory autonomy policy.", ctx.correlationId),
     };
   }
-  if (!isCodingWorkbenchMode(requestedMode)) {
+  const parsed = parseUpdateMemoryAutonomyPolicyWire(update);
+  if (parsed === undefined) {
     return {
       status: 400,
-      body: errorBody("BAD_REQUEST", "Invalid memory autonomy mode.", ctx.correlationId),
+      body: errorBody("BAD_REQUEST", "Invalid memory autonomy policy update.", ctx.correlationId),
     };
   }
-  deps.store.setMemoryAutonomyMode(requestedMode);
-  return { status: 200, body: policyProjection(deps) };
+  const stored: MemoryAutonomyPolicyRecord | undefined = deps.store.updateMemoryAutonomyPolicy(
+    parsed.requestedMode,
+    parsed.expectedRevision,
+  );
+  if (stored === undefined) {
+    return {
+      status: 409,
+      body: errorBody(
+        "CONFLICT",
+        "Memory autonomy policy changed. Reload and retry.",
+        ctx.correlationId,
+      ),
+    };
+  }
+  return { status: 200, body: policyProjection(deps, stored) };
 }

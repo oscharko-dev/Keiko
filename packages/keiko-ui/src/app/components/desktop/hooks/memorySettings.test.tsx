@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  currentConversationMemoryModeRevision,
   resetConversationMemorySettingsForTests,
   useConversationMemorySettings,
 } from "./memorySettings";
@@ -42,5 +43,18 @@ describe("conversation memory settings store", () => {
       resetConversationMemorySettingsForTests();
     });
     expect(result.current.memoryMode).toBe("governed-assist");
+  });
+
+  it("tracks every effective settings change, including an ABA mode transition", () => {
+    const { result } = renderHook(() => useConversationMemorySettings());
+    const initialRevision = currentConversationMemoryModeRevision();
+    act(() => {
+      result.current.setMemoryBudgetTokens(800);
+      result.current.setMemoryMode("autonomous-delivery");
+      result.current.setMemoryMode("governed-assist");
+      result.current.setMemoryMode("governed-assist");
+    });
+
+    expect(currentConversationMemoryModeRevision()).toBe(initialRevision + 2);
   });
 });

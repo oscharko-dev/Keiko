@@ -38,7 +38,7 @@ import type { HtmlManualSourceKind } from "./html-manual-source.js";
 import type { KnowledgePodRetrievalActivity } from "./local-knowledge-retrieval-activity.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
-import type { CodingWorkbenchMode } from "./coding-workbench.js";
+import { isCodingWorkbenchMode, type CodingWorkbenchMode } from "./coding-workbench.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
 // ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
 // is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
@@ -274,14 +274,10 @@ export interface ProjectWithAvailability extends Project {
 // ─── Chat status (BFF wire — mirror of UiStore Chat["status"]) ───────────────────
 
 export type ChatStatus = "open" | "closed";
-export type ChatMessageRole = ChatRole;
-// Chat-side workflow status (issue #66). `cancelled` matches src/ui/runs.ts RunStatus so the
-// chat can faithfully record a terminal cancellation.
-export type ChatWorkflowStatus = WorkflowStatus;
 
 // PATCH body for /api/chats/messages?id=... (issue #66)
 export interface PatchChatMessageBody {
-  readonly workflowStatus?: ChatWorkflowStatus;
+  readonly workflowStatus?: WorkflowStatus;
   readonly shortResult?: string;
   readonly taskType?: string;
 }
@@ -373,10 +369,27 @@ export interface MemoryAutonomyPolicyWire {
   readonly requestedMode: CodingWorkbenchMode;
   readonly effectiveMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly revision: number;
 }
 
 export interface UpdateMemoryAutonomyPolicyWire {
   readonly requestedMode: CodingWorkbenchMode;
+  readonly expectedRevision: number;
+}
+
+export function parseUpdateMemoryAutonomyPolicyWire(
+  value: unknown,
+): UpdateMemoryAutonomyPolicyWire | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  return isCodingWorkbenchMode(candidate.requestedMode) &&
+    Number.isSafeInteger(candidate.expectedRevision) &&
+    Number(candidate.expectedRevision) >= 0
+    ? {
+        requestedMode: candidate.requestedMode,
+        expectedRevision: Number(candidate.expectedRevision),
+      }
+    : undefined;
 }
 
 export interface ConversationMemoryContextEntryWire {
@@ -927,8 +940,10 @@ function buildOmittedCounts(
 
 function hashString32(value: string): string {
   let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
+  for (let index = 0; index < value.length; index += 1) {
+    // Stable display ids retain the original UTF-16 code-unit hashing contract.
+    const codeUnit = value.slice(index, index + 1);
+    hash ^= codeUnit.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
@@ -936,6 +951,15 @@ function hashString32(value: string): string {
 
 function displayScopeId(scopeId: string): string {
   return `scope-${hashString32(scopeId)}`;
+}
+
+function compareEcosystemCount(
+  left: { readonly id: string; readonly count: number },
+  right: { readonly id: string; readonly count: number },
+): number {
+  if (left.count !== right.count) return right.count - left.count;
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? -1 : 1;
 }
 
 // Derives the path-free ranking aggregate from the pack diagnostics. Deterministic: bucket keys in
@@ -956,7 +980,7 @@ function buildRankingSummary(pack: ConnectedContextPack): GroundedAnswerRankingS
   }
   const ecosystems = [...ecosystemCounts.entries()]
     .map(([id, count]) => ({ id, count }))
-    .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.id < b.id ? -1 : 1));
+    .sort(compareEcosystemCount);
   return { bucketCounts, ecosystems };
 }
 

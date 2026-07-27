@@ -4,7 +4,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
@@ -94,10 +94,9 @@ import {
 } from "./workspaceManifests.js";
 import { validateProjectPath } from "./validation.js";
 import {
-  getMemoryAutonomyMode as sqlGetMemoryAutonomyMode,
-  setMemoryAutonomyMode as sqlSetMemoryAutonomyMode,
+  readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
+  updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
 } from "./memory-autonomy-policy.js";
-import { basename } from "node:path";
 import { invalidRequest } from "./errors.js";
 
 const DEFAULT_REDACT = (s: string): string => s;
@@ -665,10 +664,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
     replaceAssistantMessageContent: (id: string, content: string, timestamp: number): ChatMessage =>
       sqlReplaceAssistantMessageContent(db, id, content, timestamp),
-    getMemoryAutonomyMode: () => sqlGetMemoryAutonomyMode(db),
-    setMemoryAutonomyMode: (mode): void => {
-      sqlSetMemoryAutonomyMode(db, mode);
-    },
+    readMemoryAutonomyPolicy: () => sqlReadMemoryAutonomyPolicy(db),
+    updateMemoryAutonomyPolicy: (mode, expectedRevision) =>
+      sqlUpdateMemoryAutonomyPolicy(db, mode, expectedRevision),
     readWorkspaceTrustRecord: (rootRef: string): WorkspaceTrustRecordRow | undefined =>
       sqlReadWorkspaceTrustRecord(db, rootRef),
     writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput): void => {
