@@ -675,6 +675,7 @@ function expectCanonicalVoiceSend(
       enabled: expect.any(Boolean),
       budgetTokens: expect.any(Number),
       mode: expect.any(String),
+      surface: "voice",
       context: {
         userId: expect.any(String),
         workspaceId: projectPath,

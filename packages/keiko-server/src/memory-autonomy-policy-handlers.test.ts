@@ -36,11 +36,11 @@ describe("memory autonomy policy routes", () => {
     const handlerDeps = deps();
     expect(handleGetMemoryAutonomyPolicy(context(), handlerDeps)).toMatchObject({
       status: 200,
-      body: { requestedMode: "governed-assist", effectiveMode: "governed-assist" },
+      body: { requestedMode: "governed-assist", effectiveMode: "governed-assist", revision: 0 },
     });
 
     const updated = await handlePutMemoryAutonomyPolicy(
-      context(JSON.stringify({ requestedMode: "autonomous-delivery" })),
+      context(JSON.stringify({ requestedMode: "autonomous-delivery", expectedRevision: 0 })),
       handlerDeps,
     );
     expect(updated).toEqual({
@@ -49,9 +49,44 @@ describe("memory autonomy policy routes", () => {
         requestedMode: "autonomous-delivery",
         effectiveMode: "supervised-coding",
         deploymentCeiling: "supervised-coding",
+        revision: 1,
       },
     });
-    expect(handlerDeps.store.getMemoryAutonomyMode()).toBe("autonomous-delivery");
+    expect(handlerDeps.store.readMemoryAutonomyPolicy()).toEqual({
+      requestedMode: "autonomous-delivery",
+      revision: 1,
+    });
+  });
+
+  it("lets a stale downgrade win and rejects a stale authority increase", async () => {
+    const handlerDeps = deps();
+    await expect(
+      handlePutMemoryAutonomyPolicy(
+        context(JSON.stringify({ requestedMode: "autonomous-delivery", expectedRevision: 0 })),
+        handlerDeps,
+      ),
+    ).resolves.toMatchObject({ status: 200, body: { revision: 1 } });
+    await expect(
+      handlePutMemoryAutonomyPolicy(
+        context(JSON.stringify({ requestedMode: "governed-assist", expectedRevision: 0 })),
+        handlerDeps,
+      ),
+    ).resolves.toMatchObject({
+      status: 200,
+      body: { requestedMode: "governed-assist", revision: 2 },
+    });
+    await expect(
+      handlePutMemoryAutonomyPolicy(
+        context(JSON.stringify({ requestedMode: "autonomous-delivery", expectedRevision: 1 })),
+        handlerDeps,
+      ),
+    ).resolves.toMatchObject({
+      status: 409,
+      body: { error: { code: "CONFLICT" } },
+    });
+    expect(handleGetMemoryAutonomyPolicy(context(), handlerDeps)).toMatchObject({
+      body: { requestedMode: "governed-assist", revision: 2 },
+    });
   });
 
   it("rejects malformed and unknown modes without changing persisted policy", async () => {
@@ -61,11 +96,24 @@ describe("memory autonomy policy routes", () => {
     });
     await expect(
       handlePutMemoryAutonomyPolicy(
-        context(JSON.stringify({ requestedMode: "unbounded" })),
+        context(JSON.stringify({ requestedMode: "unbounded", expectedRevision: 0 })),
         handlerDeps,
       ),
     ).resolves.toMatchObject({ status: 400 });
-    expect(handlerDeps.store.getMemoryAutonomyMode()).toBeUndefined();
+    expect(handlerDeps.store.readMemoryAutonomyPolicy()).toBeUndefined();
+  });
+
+  it.each([
+    ["a missing revision", { requestedMode: "governed-assist" }],
+    ["a negative revision", { requestedMode: "governed-assist", expectedRevision: -1 }],
+    ["a fractional revision", { requestedMode: "governed-assist", expectedRevision: 1.5 }],
+    ["a string revision", { requestedMode: "governed-assist", expectedRevision: "0" }],
+  ])("rejects %s without changing persisted policy", async (_label, update) => {
+    const handlerDeps = deps();
+    await expect(
+      handlePutMemoryAutonomyPolicy(context(JSON.stringify(update)), handlerDeps),
+    ).resolves.toMatchObject({ status: 400 });
+    expect(handlerDeps.store.readMemoryAutonomyPolicy()).toBeUndefined();
   });
 
   it("rejects an empty request body without changing persisted policy", async () => {
@@ -73,7 +121,7 @@ describe("memory autonomy policy routes", () => {
     await expect(handlePutMemoryAutonomyPolicy(context(""), handlerDeps)).resolves.toMatchObject({
       status: 400,
     });
-    expect(handlerDeps.store.getMemoryAutonomyMode()).toBeUndefined();
+    expect(handlerDeps.store.readMemoryAutonomyPolicy()).toBeUndefined();
   });
 
   it("rejects a request body over the byte limit without changing persisted policy", async () => {
@@ -85,7 +133,7 @@ describe("memory autonomy policy routes", () => {
     await expect(
       handlePutMemoryAutonomyPolicy(context(oversized), handlerDeps),
     ).resolves.toMatchObject({ status: 400 });
-    expect(handlerDeps.store.getMemoryAutonomyMode()).toBeUndefined();
+    expect(handlerDeps.store.readMemoryAutonomyPolicy()).toBeUndefined();
   });
 
   it("settles with 400 instead of hanging when the client aborts mid-upload", async () => {
@@ -100,6 +148,6 @@ describe("memory autonomy policy routes", () => {
     const result = handlePutMemoryAutonomyPolicy(ctx, handlerDeps);
     req.emit("aborted");
     await expect(result).resolves.toMatchObject({ status: 400 });
-    expect(handlerDeps.store.getMemoryAutonomyMode()).toBeUndefined();
+    expect(handlerDeps.store.readMemoryAutonomyPolicy()).toBeUndefined();
   });
 });
