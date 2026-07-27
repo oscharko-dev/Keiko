@@ -51,7 +51,7 @@ describe("runRetrievalEval — vector-index threading", () => {
     const adapter: VectorIndexAdapter = {
       searchCapsule: () => {
         calls += 1;
-        return {
+        return Promise.resolve({
           ok: false,
           candidates: [],
           sawDimensionCompatible: false,
@@ -61,7 +61,7 @@ describe("runRetrievalEval — vector-index threading", () => {
             status: "fallback-unavailable",
             reason: "test-runtime-unavailable",
           },
-        };
+        });
       },
     };
 

@@ -292,8 +292,13 @@ function memoryPartitionRevision(
   return hash.digest("hex");
 }
 
+function compareMemoryEntryIds(left: UsearchVectorEntry, right: UsearchVectorEntry): number {
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? -1 : 1;
+}
+
 function memoryPortDiagnostics(
-  result: ReturnType<typeof searchUsearchAnnIndex>,
+  result: Awaited<ReturnType<typeof searchUsearchAnnIndex>>,
   vectorCount: number,
 ): VectorIndexDiagnostics {
   if (!result.ok) {
@@ -323,7 +328,7 @@ function createMemoryVectorIndexPort(
 ): VectorIndexPort {
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
   return {
-    search(query): VectorIndexResult {
+    async search(query): Promise<VectorIndexResult> {
       if (!isValidVectorIndexQuery(query)) return memoryPortFailure("invalid-query");
       if (query.namespace !== "memory") return memoryPortFailure("namespace-mismatch");
       if (embeddingIdentityKey(query.identity) !== embeddingIdentityKey(identity)) {
@@ -334,26 +339,27 @@ function createMemoryVectorIndexPort(
         const entry = byId.get(id);
         return entry === undefined ? [] : [entry];
       });
-      const result = searchUsearchAnnIndex({
+      const canonicalEntries = [...requestedEntries].sort(compareMemoryEntryIds);
+      const result = await searchUsearchAnnIndex({
         partition: {
           cacheKey: `keiko-memory-vector-partition-v2:${createHash("sha256")
             .update(JSON.stringify([query.partitionKey]), "utf8")
             .digest("hex")}`,
-          revision: memoryPartitionRevision(identity, requestedEntries),
+          revision: memoryPartitionRevision(identity, canonicalEntries),
           identity,
-          rowCount: requestedEntries.length,
-          loadEntries: () => requestedEntries,
+          rowCount: canonicalEntries.length,
+          loadEntries: () => canonicalEntries,
         },
         queryVector: query.queryVector,
         candidateLimit: query.candidateLimit,
       });
       if (!result.ok) {
-        return { ok: false, diagnostics: memoryPortDiagnostics(result, requestedEntries.length) };
+        return { ok: false, diagnostics: memoryPortDiagnostics(result, canonicalEntries.length) };
       }
       return {
         ok: true,
         candidates: result.candidates,
-        diagnostics: memoryPortDiagnostics(result, requestedEntries.length),
+        diagnostics: memoryPortDiagnostics(result, canonicalEntries.length),
       };
     },
   };
@@ -383,7 +389,7 @@ async function semanticScoresFrom(
   warnSkippedIncompatible(compatible.skipped, candidateIds.length, queryEmbedding.modelId);
   if (compatible.entries.length === 0) return new Map<MemoryId, number>();
   throwIfAborted(signal);
-  const result = createMemoryVectorIndexPort(queryIdentity, compatible.entries).search({
+  const result = await createMemoryVectorIndexPort(queryIdentity, compatible.entries).search({
     namespace: "memory",
     partitionKey: "conversation-retrieval",
     identity: queryIdentity,

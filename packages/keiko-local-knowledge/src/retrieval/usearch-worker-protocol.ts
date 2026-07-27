@@ -29,6 +29,10 @@ export const USEARCH_ERROR = Object.freeze({
   searchFailed: 3,
 });
 
+export type UsearchWorkerMessage =
+  | { readonly kind: "build-complete" }
+  | { readonly kind: "search-complete"; readonly sequence: number };
+
 export interface UsearchWorkerData {
   readonly binaryPath: string;
   readonly binarySha256: string;

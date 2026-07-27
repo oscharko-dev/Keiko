@@ -72,7 +72,7 @@ export type VectorIndexResult =
   | { readonly ok: false; readonly diagnostics: VectorIndexDiagnostics };
 
 export interface VectorIndexPort {
-  readonly search: (query: VectorIndexQuery) => VectorIndexResult;
+  readonly search: (query: VectorIndexQuery) => Promise<VectorIndexResult>;
 }
 
 // The canonical embedding-identity key. Two byte-equivalent copies of this existed in

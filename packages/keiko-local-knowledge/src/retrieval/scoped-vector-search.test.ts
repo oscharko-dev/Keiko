@@ -595,41 +595,42 @@ describe("searchVectorsForScope — composed capsule set", () => {
       .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id IN (:a, :b)")
       .run({ a: String(seededA.capsuleId), b: String(seededB.capsuleId) });
     const indexed: VectorIndexAdapter = {
-      searchCapsule: (request) => ({
-        ok: true,
-        candidates:
-          String(request.capsule.id) === "cap-lane-a"
-            ? [
-                {
-                  chunkId: String(aChunk),
-                  capsuleId: request.capsule.id,
-                  sourceId: seededA.sourceId,
-                  score: 0.1,
-                },
-              ]
-            : [
-                {
-                  chunkId: String(bFirst),
-                  capsuleId: request.capsule.id,
-                  sourceId: seededB.sourceId,
-                  score: 0.99,
-                },
-                {
-                  chunkId: String(bSecond),
-                  capsuleId: request.capsule.id,
-                  sourceId: seededB.sourceId,
-                  score: 0.98,
-                },
-              ],
-        sawDimensionCompatible: true,
-        sawIdentityIncompatible: false,
-        diagnostics: {
-          provider: "usearch",
-          status: "available",
-          indexName: "lane-local-test-index",
-          vectorCount: 1,
-        },
-      }),
+      searchCapsule: (request) =>
+        Promise.resolve({
+          ok: true,
+          candidates:
+            String(request.capsule.id) === "cap-lane-a"
+              ? [
+                  {
+                    chunkId: String(aChunk),
+                    capsuleId: request.capsule.id,
+                    sourceId: seededA.sourceId,
+                    score: 0.1,
+                  },
+                ]
+              : [
+                  {
+                    chunkId: String(bFirst),
+                    capsuleId: request.capsule.id,
+                    sourceId: seededB.sourceId,
+                    score: 0.99,
+                  },
+                  {
+                    chunkId: String(bSecond),
+                    capsuleId: request.capsule.id,
+                    sourceId: seededB.sourceId,
+                    score: 0.98,
+                  },
+                ],
+          sawDimensionCompatible: true,
+          sawIdentityIncompatible: false,
+          diagnostics: {
+            provider: "usearch",
+            status: "available",
+            indexName: "lane-local-test-index",
+            vectorCount: 1,
+          },
+        }),
     };
     const embeddedModels: string[] = [];
     const embeddingAdapter = scriptedAdapter({
@@ -695,41 +696,42 @@ describe("searchVectorsForScope — composed capsule set", () => {
       .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id IN (:a, :b)")
       .run({ a: String(seededA.capsuleId), b: String(seededB.capsuleId) });
     const indexed: VectorIndexAdapter = {
-      searchCapsule: (request) => ({
-        ok: true,
-        candidates:
-          String(request.capsule.id) === "cap-collision-a"
-            ? [
-                {
-                  chunkId: String(aChunk),
-                  capsuleId: request.capsule.id,
-                  sourceId: seededA.sourceId,
-                  score: 0.1,
-                },
-              ]
-            : [
-                {
-                  chunkId: String(bFirst),
-                  capsuleId: request.capsule.id,
-                  sourceId: seededB.sourceId,
-                  score: 0.99,
-                },
-                {
-                  chunkId: String(bSecond),
-                  capsuleId: request.capsule.id,
-                  sourceId: seededB.sourceId,
-                  score: 0.98,
-                },
-              ],
-        sawDimensionCompatible: true,
-        sawIdentityIncompatible: false,
-        diagnostics: {
-          provider: "usearch",
-          status: "available",
-          indexName: "hash-collision-test-index",
-          vectorCount: 1,
-        },
-      }),
+      searchCapsule: (request) =>
+        Promise.resolve({
+          ok: true,
+          candidates:
+            String(request.capsule.id) === "cap-collision-a"
+              ? [
+                  {
+                    chunkId: String(aChunk),
+                    capsuleId: request.capsule.id,
+                    sourceId: seededA.sourceId,
+                    score: 0.1,
+                  },
+                ]
+              : [
+                  {
+                    chunkId: String(bFirst),
+                    capsuleId: request.capsule.id,
+                    sourceId: seededB.sourceId,
+                    score: 0.99,
+                  },
+                  {
+                    chunkId: String(bSecond),
+                    capsuleId: request.capsule.id,
+                    sourceId: seededB.sourceId,
+                    score: 0.98,
+                  },
+                ],
+          sawDimensionCompatible: true,
+          sawIdentityIncompatible: false,
+          diagnostics: {
+            provider: "usearch",
+            status: "available",
+            indexName: "hash-collision-test-index",
+            vectorCount: 1,
+          },
+        }),
     };
     const embeddingAdapter = scriptedAdapter({
       responder: (req): OpenAIEmbeddingOutcome =>
@@ -787,35 +789,36 @@ describe("searchVectorsForScope — composed capsule set", () => {
       .run({ a: String(seededA.capsuleId), b: String(seededB.capsuleId) });
     const denseScore = 0.5;
     const indexed: VectorIndexAdapter = {
-      searchCapsule: (request) => ({
-        ok: true,
-        candidates:
-          String(request.capsule.id) === "cap-tie-a"
-            ? [
-                {
-                  chunkId: String(aChunk),
-                  capsuleId: request.capsule.id,
-                  sourceId: seededA.sourceId,
-                  score: denseScore,
-                },
-              ]
-            : [
-                {
-                  chunkId: String(bChunk),
-                  capsuleId: request.capsule.id,
-                  sourceId: seededB.sourceId,
-                  score: denseScore,
-                },
-              ],
-        sawDimensionCompatible: true,
-        sawIdentityIncompatible: false,
-        diagnostics: {
-          provider: "usearch",
-          status: "available",
-          indexName: "tie-break-test-index",
-          vectorCount: 1,
-        },
-      }),
+      searchCapsule: (request) =>
+        Promise.resolve({
+          ok: true,
+          candidates:
+            String(request.capsule.id) === "cap-tie-a"
+              ? [
+                  {
+                    chunkId: String(aChunk),
+                    capsuleId: request.capsule.id,
+                    sourceId: seededA.sourceId,
+                    score: denseScore,
+                  },
+                ]
+              : [
+                  {
+                    chunkId: String(bChunk),
+                    capsuleId: request.capsule.id,
+                    sourceId: seededB.sourceId,
+                    score: denseScore,
+                  },
+                ],
+          sawDimensionCompatible: true,
+          sawIdentityIncompatible: false,
+          diagnostics: {
+            provider: "usearch",
+            status: "available",
+            indexName: "tie-break-test-index",
+            vectorCount: 1,
+          },
+        }),
     };
     const embeddingAdapter = scriptedAdapter({
       responder: (req): OpenAIEmbeddingOutcome =>
@@ -905,7 +908,7 @@ describe("searchVectorsForScope — vector index adapter", () => {
     const adapter: VectorIndexAdapter = {
       searchCapsule: (request) => {
         calls.push(String(request.capsule.id));
-        return {
+        return Promise.resolve({
           ok: true,
           candidates: [
             {
@@ -923,7 +926,7 @@ describe("searchVectorsForScope — vector index adapter", () => {
             indexName: "fake-test-index",
             vectorCount: 1,
           },
-        };
+        });
       },
     };
 
@@ -963,18 +966,19 @@ describe("searchVectorsForScope — vector index adapter", () => {
         fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
     const adapter: VectorIndexAdapter = {
-      searchCapsule: () => ({
-        ok: false,
-        candidates: [],
-        sawDimensionCompatible: false,
-        sawIdentityIncompatible: false,
-        diagnostics: {
-          provider: "usearch",
-          status: "fallback-unavailable",
-          reason: "runtime-unavailable",
-          indexName: "fake-test-index",
-        },
-      }),
+      searchCapsule: () =>
+        Promise.resolve({
+          ok: false,
+          candidates: [],
+          sawDimensionCompatible: false,
+          sawIdentityIncompatible: false,
+          diagnostics: {
+            provider: "usearch",
+            status: "fallback-unavailable",
+            reason: "runtime-unavailable",
+            indexName: "fake-test-index",
+          },
+        }),
     };
 
     const outcome = await searchVectorsForScope(
@@ -1019,31 +1023,32 @@ describe("searchVectorsForScope — vector index adapter", () => {
       throw new Error("expected seeded chunks");
     }
     const adapter: VectorIndexAdapter = {
-      searchCapsule: (request) => ({
-        ok: true,
-        candidates: [
-          {
-            chunkId: String(disallowedChunk),
-            capsuleId: request.capsule.id,
-            sourceId: seededB.sourceId,
-            score: 1,
+      searchCapsule: (request) =>
+        Promise.resolve({
+          ok: true,
+          candidates: [
+            {
+              chunkId: String(disallowedChunk),
+              capsuleId: request.capsule.id,
+              sourceId: seededB.sourceId,
+              score: 1,
+            },
+            {
+              chunkId: String(allowedChunk),
+              capsuleId: request.capsule.id,
+              sourceId: seededA.sourceId,
+              score: 0.5,
+            },
+          ],
+          sawDimensionCompatible: true,
+          sawIdentityIncompatible: false,
+          diagnostics: {
+            provider: "usearch",
+            status: "available",
+            indexName: "fake-test-index",
+            vectorCount: 2,
           },
-          {
-            chunkId: String(allowedChunk),
-            capsuleId: request.capsule.id,
-            sourceId: seededA.sourceId,
-            score: 0.5,
-          },
-        ],
-        sawDimensionCompatible: true,
-        sawIdentityIncompatible: false,
-        diagnostics: {
-          provider: "usearch",
-          status: "available",
-          indexName: "fake-test-index",
-          vectorCount: 2,
-        },
-      }),
+        }),
     };
 
     const outcome = await searchVectorsForScope(

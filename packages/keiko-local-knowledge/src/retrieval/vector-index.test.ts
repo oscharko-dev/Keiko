@@ -83,7 +83,7 @@ describe("vector index service", () => {
     ).toMatchObject({ mode: "disabled" });
   });
 
-  it("delegates to the one explicit port adapter before built-in mode handling", () => {
+  it("delegates to the one explicit port adapter before built-in mode handling", async () => {
     const fixture = freshStore();
     try {
       const capsule = {
@@ -101,7 +101,7 @@ describe("vector index service", () => {
         },
       };
       expect(
-        searchVectorIndex(
+        await searchVectorIndex(
           {
             store: fixture.store,
             capsule,
@@ -110,7 +110,7 @@ describe("vector index service", () => {
           },
           {
             mode: "disabled",
-            adapter: { searchCapsule: () => expected },
+            adapter: { searchCapsule: () => Promise.resolve(expected) },
           },
         ),
       ).toBe(expected);
@@ -131,7 +131,7 @@ describe("vector index service", () => {
       expect(() => {
         fixture.store._internal.db.loadExtension("/not/allowed");
       }).toThrow(/extension loading is not allowed/i);
-      const result = searchVectorIndex(
+      const result = await searchVectorIndex(
         requestFor(fixture.store, String(seeded.capsuleId)),
         undefined,
       );
@@ -168,7 +168,7 @@ describe("vector index service", () => {
       const request = requestFor(fixture.store, "cap-scope");
       const chunkId = second.chunkIds[0];
       expect(chunkId).toBeDefined();
-      const filtered = searchVectorIndex(
+      const filtered = await searchVectorIndex(
         {
           ...request,
           sourceFilter: [second.sourceId],
@@ -214,9 +214,9 @@ describe("vector index service", () => {
         sourceFilter: [second.sourceId],
       };
 
-      expect(searchVectorIndex(firstRequest, undefined).candidates).not.toHaveLength(0);
-      expect(searchVectorIndex(secondRequest, undefined).candidates).not.toHaveLength(0);
-      const firstAgain = searchVectorIndex(firstRequest, undefined);
+      expect((await searchVectorIndex(firstRequest, undefined)).candidates).not.toHaveLength(0);
+      expect((await searchVectorIndex(secondRequest, undefined)).candidates).not.toHaveLength(0);
+      const firstAgain = await searchVectorIndex(firstRequest, undefined);
 
       expect(firstAgain.ok).toBe(true);
       expect(firstAgain.candidates).not.toHaveLength(0);
@@ -240,7 +240,7 @@ describe("vector index service", () => {
       });
       const request = requestFor(fixture.store, String(seeded.capsuleId));
       expect(
-        searchVectorIndex({ ...request, queryVector: new Float32Array(2) }, undefined),
+        await searchVectorIndex({ ...request, queryVector: new Float32Array(2) }, undefined),
       ).toMatchObject({
         ok: false,
         sawIdentityIncompatible: true,
@@ -252,7 +252,7 @@ describe("vector index service", () => {
           "UPDATE vectors SET embedding_space_fingerprint = :fingerprint WHERE capsule_id = :capsule",
         )
         .run({ capsule: String(seeded.capsuleId), fingerprint: "wrong-space" });
-      expect(searchVectorIndex(request, undefined)).toMatchObject({
+      expect(await searchVectorIndex(request, undefined)).toMatchObject({
         ok: false,
         sawIdentityIncompatible: true,
         diagnostics: { reason: "stored-vector-identity-mismatch" },
@@ -267,7 +267,7 @@ describe("vector index service", () => {
           fingerprint: DEFAULT_EMBEDDING.embeddingSpaceFingerprint ?? "",
           embedding: new Uint8Array([1, 2, 3]),
         });
-      expect(searchVectorIndex(request, undefined)).toMatchObject({
+      expect(await searchVectorIndex(request, undefined)).toMatchObject({
         ok: false,
         diagnostics: {
           provider: "usearch",
@@ -276,7 +276,7 @@ describe("vector index service", () => {
         },
       });
 
-      expect(searchVectorIndex(request, { maxIndexedVectorBytes: 1 })).toMatchObject({
+      expect(await searchVectorIndex(request, { maxIndexedVectorBytes: 1 })).toMatchObject({
         ok: false,
         diagnostics: {
           status: "fallback-index-too-large",

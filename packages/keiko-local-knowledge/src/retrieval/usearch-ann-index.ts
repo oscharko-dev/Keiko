@@ -16,6 +16,7 @@ import {
   USEARCH_ERROR,
   USEARCH_STATE,
   type UsearchWorkerData,
+  type UsearchWorkerMessage,
 } from "./usearch-worker-protocol.js";
 
 export interface UsearchVectorEntry {
@@ -109,6 +110,8 @@ interface AnnIndex {
   readonly worker: Worker;
   readonly buffers: AnnWorkerBuffers;
   readonly byteSize: number;
+  available: boolean;
+  queryQueue: Promise<void>;
 }
 
 type SearchIndex = ExactIndex | AnnIndex;
@@ -140,6 +143,7 @@ const QUERY_TIMEOUT_MS = 30_000;
 
 const INDEX_CACHE = new Map<string, CachedIndex>();
 let cachedIndexBytes = 0;
+let indexBuildQueue = Promise.resolve();
 
 function compareIds(left: string, right: string): number {
   if (left === right) return 0;
@@ -308,9 +312,55 @@ function targetRuntime(
   }
 }
 
-function waitForState(control: Int32Array, expected: number, timeout: number): boolean {
-  const result = Atomics.wait(control, USEARCH_CONTROL.state, expected, timeout);
-  return result !== "timed-out";
+function isUsearchWorkerMessage(value: unknown): value is UsearchWorkerMessage {
+  if (typeof value !== "object" || value === null || !("kind" in value)) return false;
+  const kind = value.kind;
+  if (kind === "build-complete") return true;
+  return (
+    kind === "search-complete" &&
+    "sequence" in value &&
+    typeof value.sequence === "number" &&
+    Number.isSafeInteger(value.sequence)
+  );
+}
+
+function waitForWorkerMessage(
+  worker: Worker,
+  matches: (message: UsearchWorkerMessage) => boolean,
+  timeout: number,
+): Promise<boolean> {
+  return new Promise((resolveMessage) => {
+    const finish = (matched: boolean): void => {
+      clearTimeout(timer);
+      worker.off("message", onMessage);
+      worker.off("error", onFailure);
+      worker.off("exit", onExit);
+      resolveMessage(matched);
+    };
+    const onMessage = (message: unknown): void => {
+      if (isUsearchWorkerMessage(message) && matches(message)) finish(true);
+    };
+    const onFailure = (): void => {
+      finish(false);
+    };
+    const onExit = (): void => {
+      finish(false);
+    };
+    const timer = setTimeout(() => {
+      finish(false);
+    }, timeout);
+    worker.on("message", onMessage);
+    worker.on("error", onFailure);
+    worker.on("exit", onExit);
+  });
+}
+
+function markUnavailableOnWorkerStop(index: AnnIndex): void {
+  const markUnavailable = (): void => {
+    index.available = false;
+  };
+  index.worker.once("error", markUnavailable);
+  index.worker.once("exit", markUnavailable);
 }
 
 function allocateAnnWorkerBuffers(
@@ -369,12 +419,12 @@ function workerDataFor(
   };
 }
 
-function startWorker(
+async function startWorker(
   partition: UsearchAnnPartition,
   vectors: SharedVectors,
   runtime: { readonly path: string; readonly sha256: string },
   resultCapacity: number,
-): AnnIndex | undefined {
+): Promise<AnnIndex | undefined> {
   const allocation = allocateAnnWorkerBuffers(partition, resultCapacity);
   const data = workerDataFor(partition, vectors, runtime, allocation);
   const workerUrl = import.meta.url.endsWith(".ts")
@@ -386,7 +436,13 @@ function startWorker(
   });
   worker.unref();
   const { buffers } = allocation;
-  if (!waitForState(buffers.control, USEARCH_STATE.building, BUILD_TIMEOUT_MS)) {
+  if (
+    !(await waitForWorkerMessage(
+      worker,
+      (message) => message.kind === "build-complete",
+      BUILD_TIMEOUT_MS,
+    ))
+  ) {
     void worker.terminate();
     return undefined;
   }
@@ -394,20 +450,24 @@ function startWorker(
     void worker.terminate();
     return undefined;
   }
-  return {
+  const index: AnnIndex = {
     mode: "ann",
     vectors,
     worker,
     buffers,
     byteSize: estimatedIndexBytes(partition.rowCount, partition.identity.vectorDimensions, true),
+    available: true,
+    queryQueue: Promise.resolve(),
   };
+  markUnavailableOnWorkerStop(index);
+  return index;
 }
 
 function stopIndex(index: SearchIndex): void {
   if (index.mode !== "ann") return;
+  index.available = false;
   Atomics.store(index.buffers.control, USEARCH_CONTROL.command, USEARCH_COMMAND.close);
   Atomics.notify(index.buffers.control, USEARCH_CONTROL.command);
-  waitForState(index.buffers.control, USEARCH_STATE.ready, QUERY_TIMEOUT_MS);
   void index.worker.terminate();
 }
 
@@ -459,11 +519,11 @@ function cacheIndex(partition: UsearchAnnPartition, index: SearchIndex): SearchI
   return index;
 }
 
-function buildSearchIndex(
+async function buildSearchIndex(
   request: UsearchAnnSearchRequest,
   exact: boolean,
   maxBytes: number,
-): SearchIndex | UsearchAnnSearchResult {
+): Promise<SearchIndex | UsearchAnnSearchResult> {
   const estimate = estimatedIndexBytes(
     request.partition.rowCount,
     request.partition.identity.vectorDimensions,
@@ -486,32 +546,58 @@ function buildSearchIndex(
   const runtime = targetRuntime(request.binaryPath);
   if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
   if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
-  const worker = startWorker(request.partition, vectors, runtime, HNSW_MAX_RESULTS);
+  const worker = await startWorker(request.partition, vectors, runtime, HNSW_MAX_RESULTS);
   return worker === undefined
     ? { ok: false, reason: "index-build-failed" }
     : cacheIndex(request.partition, worker);
 }
 
-function resolvedIndex(request: UsearchAnnSearchRequest): SearchIndex | UsearchAnnSearchResult {
+function cachedIndex(
+  request: UsearchAnnSearchRequest,
+  maxBytes: number,
+): SearchIndex | UsearchAnnSearchResult | undefined {
+  const key = revisionCacheKey(request.partition);
+  const cached = INDEX_CACHE.get(key);
+  if (cached === undefined) return undefined;
+  if (cached.index.byteSize > maxBytes) return { ok: false, reason: "index-bytes-over-bound" };
+  INDEX_CACHE.delete(key);
+  INDEX_CACHE.set(key, cached);
+  return cached.index;
+}
+
+function enqueueIndexBuild(
+  request: UsearchAnnSearchRequest,
+  exact: boolean,
+  maxBytes: number,
+): Promise<SearchIndex | UsearchAnnSearchResult> {
+  const operation = indexBuildQueue.then(async () => {
+    const existing = cachedIndex(request, maxBytes);
+    return existing ?? (await buildSearchIndex(request, exact, maxBytes));
+  });
+  indexBuildQueue = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return operation;
+}
+
+async function resolvedIndex(
+  request: UsearchAnnSearchRequest,
+): Promise<SearchIndex | UsearchAnnSearchResult> {
   const threshold = request.exactScanThreshold ?? DEFAULT_EXACT_SCAN_THRESHOLD;
   if (request.partition.rowCount > threshold) {
     const runtime = targetRuntime(request.binaryPath);
     if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
     if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
   }
-  const key = revisionCacheKey(request.partition);
-  const cached = INDEX_CACHE.get(key);
   const maxBytes = Math.min(
     request.maxIndexBytes ?? DEFAULT_MAX_INDEX_BYTES,
     DEFAULT_MAX_INDEX_BYTES,
   );
-  if (cached !== undefined) {
-    if (cached.index.byteSize > maxBytes) return { ok: false, reason: "index-bytes-over-bound" };
-    INDEX_CACHE.delete(key);
-    INDEX_CACHE.set(key, cached);
-    return cached.index;
-  }
-  return buildSearchIndex(request, request.partition.rowCount <= threshold, maxBytes);
+  const cached = cachedIndex(request, maxBytes);
+  return (
+    cached ?? (await enqueueIndexBuild(request, request.partition.rowCount <= threshold, maxBytes))
+  );
 }
 
 function allIndexes(rowCount: number): readonly number[] {
@@ -546,6 +632,7 @@ function annCandidateCount(request: UsearchAnnSearchRequest): number {
 }
 
 function discardAnnIndex(index: AnnIndex): UsearchAnnSearchResult {
+  index.available = false;
   for (const [key, cached] of INDEX_CACHE) {
     if (cached.index !== index) continue;
     INDEX_CACHE.delete(key);
@@ -566,25 +653,30 @@ function validAnnRowIndexes(rowIndexes: readonly number[], rowCount: number): bo
   return true;
 }
 
-function annSearch(request: UsearchAnnSearchRequest, index: AnnIndex): UsearchAnnSearchResult {
+async function waitForResponse(index: AnnIndex, sequence: number): Promise<boolean> {
+  return await waitForWorkerMessage(
+    index.worker,
+    (message) => message.kind === "search-complete" && message.sequence === sequence,
+    QUERY_TIMEOUT_MS,
+  );
+}
+
+async function annSearchExclusive(
+  request: UsearchAnnSearchRequest,
+  index: AnnIndex,
+): Promise<UsearchAnnSearchResult> {
+  if (!index.available) return { ok: false, reason: "index-query-failed" };
   const { control, query, resultKeys } = index.buffers;
   const candidateCount = annCandidateCount(request);
   query.set(request.queryVector);
   Atomics.add(control, USEARCH_CONTROL.requestSequence, 1);
   const sequence = Atomics.load(control, USEARCH_CONTROL.requestSequence);
+  const response = waitForResponse(index, sequence);
   Atomics.store(control, USEARCH_CONTROL.candidateLimit, candidateCount);
   Atomics.store(control, USEARCH_CONTROL.error, USEARCH_ERROR.none);
   Atomics.store(control, USEARCH_CONTROL.command, USEARCH_COMMAND.search);
   Atomics.notify(control, USEARCH_CONTROL.command);
-  while (Atomics.load(control, USEARCH_CONTROL.responseSequence) !== sequence) {
-    const observed = Atomics.load(control, USEARCH_CONTROL.responseSequence);
-    if (
-      Atomics.wait(control, USEARCH_CONTROL.responseSequence, observed, QUERY_TIMEOUT_MS) ===
-      "timed-out"
-    ) {
-      return discardAnnIndex(index);
-    }
-  }
+  if (!(await response)) return discardAnnIndex(index);
   if (Atomics.load(control, USEARCH_CONTROL.error) !== USEARCH_ERROR.none) {
     return discardAnnIndex(index);
   }
@@ -605,6 +697,18 @@ function annSearch(request: UsearchAnnSearchRequest, index: AnnIndex): UsearchAn
     examinedCandidates: count,
     estimatedIndexBytes: index.byteSize,
   };
+}
+
+function annSearch(
+  request: UsearchAnnSearchRequest,
+  index: AnnIndex,
+): Promise<UsearchAnnSearchResult> {
+  const operation = index.queryQueue.then(async () => await annSearchExclusive(request, index));
+  index.queryQueue = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return operation;
 }
 
 function validPartitionKey(value: string): boolean {
@@ -655,7 +759,9 @@ function invalidRequestReason(
   return undefined;
 }
 
-export function searchUsearchAnnIndex(request: UsearchAnnSearchRequest): UsearchAnnSearchResult {
+export async function searchUsearchAnnIndex(
+  request: UsearchAnnSearchRequest,
+): Promise<UsearchAnnSearchResult> {
   const invalid = invalidRequestReason(request);
   if (invalid !== undefined) return invalid;
   const threshold = request.exactScanThreshold ?? DEFAULT_EXACT_SCAN_THRESHOLD;
@@ -665,9 +771,9 @@ export function searchUsearchAnnIndex(request: UsearchAnnSearchRequest): Usearch
   ) {
     return { ok: false, reason: "unsupported-metric" };
   }
-  const index = resolvedIndex(request);
+  const index = await resolvedIndex(request);
   if ("ok" in index) return index;
-  return index.mode === "exact" ? exactSearch(request, index) : annSearch(request, index);
+  return index.mode === "exact" ? exactSearch(request, index) : await annSearch(request, index);
 }
 
 export function clearUsearchAnnCacheForTests(): void {

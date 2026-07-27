@@ -276,7 +276,7 @@ describe("USearch real-binary encrypted retrieval journey", () => {
       const encrypted = storedEmbedding(fixture.store);
       expect(encrypted).not.toEqual(float32Bytes(corpusVector(0)));
 
-      const result = search(fixture.store, corpus.capsuleId, {
+      const result = await search(fixture.store, corpus.capsuleId, {
         mode: "usearch",
         usearchBinaryPath: binaryPath,
       });
@@ -320,10 +320,12 @@ describe("USearch real-binary encrypted retrieval journey", () => {
       );
       expect(stateFor(fixture.store, corpus.capsuleId).status).toBe("dirty");
       expect(
-        search(fixture.store, corpus.capsuleId, {
-          mode: "usearch",
-          usearchBinaryPath: binaryPath,
-        }).ok,
+        (
+          await search(fixture.store, corpus.capsuleId, {
+            mode: "usearch",
+            usearchBinaryPath: binaryPath,
+          })
+        ).ok,
       ).toBe(true);
       expect(stateFor(fixture.store, corpus.capsuleId).vector_count).toBe(CORPUS_ROWS + 1);
     } finally {
@@ -336,7 +338,7 @@ describe("USearch real-binary encrypted retrieval journey", () => {
     try {
       const corpus = await seedLargeCorpus(fixture.store);
       expect(
-        search(fixture.store, corpus.capsuleId, {
+        await search(fixture.store, corpus.capsuleId, {
           mode: "usearch",
           usearchBinaryPath: join(fixture.directory, "missing.node"),
         }),
@@ -354,7 +356,7 @@ describe("USearch real-binary encrypted retrieval journey", () => {
       tampered[0] = (tampered[0] ?? 0) ^ 0xff;
       writeFileSync(tamperedPath, tampered);
       expect(
-        search(fixture.store, corpus.capsuleId, {
+        await search(fixture.store, corpus.capsuleId, {
           mode: "usearch",
           usearchBinaryPath: tamperedPath,
         }),
@@ -363,7 +365,7 @@ describe("USearch real-binary encrypted retrieval journey", () => {
         diagnostics: { reason: "runtime-integrity-failed" },
       });
       expect(
-        search(fixture.store, corpus.capsuleId, {
+        await search(fixture.store, corpus.capsuleId, {
           mode: "usearch",
           usearchBinaryPath: binaryPath,
           maxIndexedVectorBytes: 1,

@@ -67,7 +67,7 @@ function baseQuery(overrides: Partial<VectorIndexQuery> = {}): VectorIndexQuery 
 }
 
 describe("createLocalKnowledgeStoreVectorIndexPort", () => {
-  it("refuses malformed queries via isValidVectorIndexQuery, not a re-invented guard", () => {
+  it("refuses malformed queries via isValidVectorIndexQuery, not a re-invented guard", async () => {
     const fixture = freshStore();
     try {
       createTestCapsule(fixture.store);
@@ -90,7 +90,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
         const query = baseQuery(patch);
         // The canonical guard has already refused this shape — the port must too.
         expect(isValidVectorIndexQuery(query)).toBe(false);
-        const result = port.search(query);
+        const result = await port.search(query);
         expect(result).toStrictEqual({
           ok: false,
           diagnostics: {
@@ -105,7 +105,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
     }
   });
 
-  it("refuses cross-namespace answers even when the query is otherwise well-formed", () => {
+  it("refuses cross-namespace answers even when the query is otherwise well-formed", async () => {
     const fixture = freshStore();
     try {
       createTestCapsule(fixture.store);
@@ -121,7 +121,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
       const knowledgeQuery = baseQuery({ namespace: "knowledge" });
       const repoQuery = baseQuery({ namespace: "repo" });
 
-      expect(knowledgePort.search(repoQuery)).toMatchObject({
+      expect(await knowledgePort.search(repoQuery)).toMatchObject({
         ok: false,
         diagnostics: {
           provider: "brute-force",
@@ -129,7 +129,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
           reason: "expected-knowledge",
         },
       });
-      expect(repoPort.search(knowledgeQuery)).toMatchObject({
+      expect(await repoPort.search(knowledgeQuery)).toMatchObject({
         ok: false,
         diagnostics: {
           provider: "brute-force",
@@ -142,7 +142,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
     }
   });
 
-  it("fails closed with capsule-absent when the partition key names an unknown capsule", () => {
+  it("fails closed with capsule-absent when the partition key names an unknown capsule", async () => {
     const fixture = freshStore();
     try {
       createTestCapsule(fixture.store, "cap-port-a");
@@ -151,7 +151,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
         store: fixture.store,
       });
 
-      const result = port.search(baseQuery({ partitionKey: "cap-port-unknown" }));
+      const result = await port.search(baseQuery({ partitionKey: "cap-port-unknown" }));
       expect(result).toMatchObject({
         ok: false,
         diagnostics: {
@@ -165,7 +165,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
     }
   });
 
-  it("refuses on embedding-identity mismatch even when dimensions and metric agree", () => {
+  it("refuses on embedding-identity mismatch even when dimensions and metric agree", async () => {
     // Same vectorDimensions + vectorMetric as the capsule's identity, so `isValidVectorIndexQuery`
     // accepts the query and the shared service's dimension check would not fire.
     // What must fail closed is the CANONICAL identity tuple: `embeddingIdentityKey` folds in
@@ -188,7 +188,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
         embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v2:rogue",
       };
 
-      const result = port.search(baseQuery({ identity: roguesIdentity }));
+      const result = await port.search(baseQuery({ identity: roguesIdentity }));
       expect(result).toStrictEqual({
         ok: false,
         diagnostics: {
@@ -202,7 +202,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
     }
   });
 
-  it("fails closed with invalid-partition-key when the encoded partition cannot be decoded", () => {
+  it("fails closed with invalid-partition-key when the encoded partition cannot be decoded", async () => {
     // `parsePartitionKey` uses `decodeURIComponent` and returns `undefined` on any decode
     // failure — a malformed key MUST fail closed instead of silently narrowing to a partial
     // parse, because a mis-parsed key would address the wrong capsule and cross the partition
@@ -216,7 +216,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
         namespace: "knowledge",
         store: fixture.store,
       });
-      const result = port.search(baseQuery({ partitionKey: "%%" }));
+      const result = await port.search(baseQuery({ partitionKey: "%%" }));
       expect(result).toStrictEqual({
         ok: false,
         diagnostics: {
@@ -230,7 +230,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
     }
   });
 
-  it("round-trips a capsule id containing the partition-key separator without collision", () => {
+  it("round-trips a capsule id containing the partition-key separator without collision", async () => {
     // Regression: an earlier revision used a raw `::` delimiter without escaping, so a capsule
     // id like `victim|source-x` (or `victim::source-x` under the earlier scheme) would be
     // parsed as capsule `victim` with source `source-x` and cross the partition boundary the
@@ -257,7 +257,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
       // Round-trips to the capsule and reaches the deliberately disabled index service (not the
       // capsule-absent or invalid-key branches), proving the encoded key resolved back to the
       // capsule the caller named independent of host runtime availability.
-      const result = port.search(baseQuery({ partitionKey: encoded }));
+      const result = await port.search(baseQuery({ partitionKey: encoded }));
       expect(result.ok).toBe(false);
       expect(result.diagnostics.status).toBe("disabled");
       expect(result.diagnostics.status).not.toBe("port-capsule-absent");
@@ -267,7 +267,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
     }
   });
 
-  it("holds the partitionKey invariant: a query for capsule A never reads capsule B", () => {
+  it("holds the partitionKey invariant: a query for capsule A never reads capsule B", async () => {
     const fixture = freshStore();
     try {
       // Two independent capsules in the same store. Both have identical embedding identities so
@@ -284,8 +284,8 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
       // capsule, the vector-index path resolves to `runtime-unavailable`
       // fail-closed — which is fine: what matters is that the port DID NOT return any candidate
       // from the other partition, which is what a cross-partition leak would look like.
-      const aResult = port.search(baseQuery({ partitionKey: "cap-A" }));
-      const bResult = port.search(baseQuery({ partitionKey: "cap-B" }));
+      const aResult = await port.search(baseQuery({ partitionKey: "cap-A" }));
+      const bResult = await port.search(baseQuery({ partitionKey: "cap-B" }));
 
       if (aResult.ok) {
         for (const candidate of aResult.candidates) {
@@ -299,7 +299,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
       }
       // Positive framing: a rogue partition key that names no capsule at all is refused, so a
       // caller cannot escape the partition frame by asking for it.
-      expect(port.search(baseQuery({ partitionKey: "cap-C" }))).toMatchObject({
+      expect(await port.search(baseQuery({ partitionKey: "cap-C" }))).toMatchObject({
         ok: false,
         diagnostics: { status: "port-capsule-absent" },
       });
@@ -319,7 +319,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
 });
 
 describe("vectorIndexPortAsKnowledgeAdapter", () => {
-  it("preserves the LK-native diagnostics vocabulary for a deliberately disabled service", () => {
+  it("preserves the LK-native diagnostics vocabulary for a deliberately disabled service", async () => {
     // The shim must surface exactly the direct service status — same provider, status, and
     // reason — so the LK lane state stays byte-identical across composition. Disabled mode makes
     // this proof independent of both the exact crossover and host native-runtime availability.
@@ -336,7 +336,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
       });
       const adapter = vectorIndexPortAsKnowledgeAdapter(port);
 
-      const direct = searchVectorIndex(
+      const direct = await searchVectorIndex(
         {
           store: fixture.store,
           capsule,
@@ -348,7 +348,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
           now: () => 1_700_000_000_001,
         },
       );
-      const throughAdapter = adapter.searchCapsule({
+      const throughAdapter = await adapter.searchCapsule({
         store: fixture.store,
         capsule,
         queryVector: nonZeroQueryVector(capsule.embeddingModelIdentity.vectorDimensions),
@@ -365,7 +365,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
     }
   });
 
-  it("surfaces the LK identity-mismatch flag when the port refuses via that status", () => {
+  it("surfaces the LK identity-mismatch flag when the port refuses via that status", async () => {
     // A stub port is used here rather than the real one so the assertion isolates the adapter's
     // flag reconstruction (status label → LK-native `sawIdentityIncompatible: true`) from the
     // separate concern of "when does the real port emit that status".
@@ -373,17 +373,18 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
     try {
       const capsule = createTestCapsule(fixture.store);
       const stubPort: VectorIndexPort = {
-        search: (_query) => ({
-          ok: false,
-          diagnostics: {
-            provider: "usearch",
-            status: "fallback-incompatible-identity",
-            reason: "identity-mismatch",
-          },
-        }),
+        search: (_query) =>
+          Promise.resolve({
+            ok: false,
+            diagnostics: {
+              provider: "usearch",
+              status: "fallback-incompatible-identity",
+              reason: "identity-mismatch",
+            },
+          }),
       };
       const adapter = vectorIndexPortAsKnowledgeAdapter(stubPort);
-      const result = adapter.searchCapsule({
+      const result = await adapter.searchCapsule({
         store: fixture.store,
         capsule,
         queryVector: nonZeroQueryVector(capsule.embeddingModelIdentity.vectorDimensions),
@@ -398,7 +399,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
     }
   });
 
-  it("short-circuits per-source dispatch after the first fail-closed port call", () => {
+  it("short-circuits per-source dispatch after the first fail-closed port call", async () => {
     // Qodo perf fix: the earlier revision re-ran `port.search(...)` per source even when the
     // first call fell closed with `runtime-unavailable`, which meant N
     // `writeUnavailable(...)` state writes for the same vec-index-state row per source-filtered
@@ -412,18 +413,18 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
       const stubPort: VectorIndexPort = {
         search: (query) => {
           calls.push(query.partitionKey);
-          return {
+          return Promise.resolve({
             ok: false,
             diagnostics: {
               provider: "usearch",
               status: "fallback-unavailable",
               reason: "runtime-unavailable",
             },
-          };
+          });
         },
       };
       const adapter = vectorIndexPortAsKnowledgeAdapter(stubPort);
-      const result = adapter.searchCapsule({
+      const result = await adapter.searchCapsule({
         store: fixture.store,
         capsule,
         sourceFilter: [
@@ -444,7 +445,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
     }
   });
 
-  it("issues one port query per source when the request carries a source filter", () => {
+  it("issues one port query per source when the request carries a source filter", async () => {
     const fixture = freshStore();
     try {
       const capsule = createTestCapsule(fixture.store);
@@ -452,16 +453,16 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
       const stubPort: VectorIndexPort = {
         search: (query) => {
           calls.push(query.partitionKey);
-          return {
+          return Promise.resolve({
             ok: true,
             candidates: [],
             diagnostics: { provider: "usearch", status: "available" },
-          };
+          });
         },
       };
       const adapter = vectorIndexPortAsKnowledgeAdapter(stubPort);
 
-      adapter.searchCapsule({
+      await adapter.searchCapsule({
         store: fixture.store,
         capsule,
         sourceFilter: ["src-a" as KnowledgeSourceId, "src-b" as KnowledgeSourceId],
@@ -478,28 +479,29 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
     }
   });
 
-  it("merges per-source port candidates, applies minScore, and slices to candidateLimit", () => {
+  it("merges per-source port candidates, applies minScore, and slices to candidateLimit", async () => {
     const fixture = freshStore();
     try {
       const capsule = createTestCapsule(fixture.store);
       const stubPort: VectorIndexPort = {
-        search: (query) => ({
-          ok: true,
-          diagnostics: { provider: "usearch", status: "available" },
-          candidates:
-            query.partitionKey === encodePartitionKey(capsule.id, "src-a" as KnowledgeSourceId)
-              ? [
-                  { id: "chunk-a1", score: 0.9 },
-                  { id: "chunk-a2", score: 0.4 },
-                ]
-              : [
-                  { id: "chunk-b1", score: 0.7 },
-                  { id: "chunk-b2", score: 0.35 },
-                ],
-        }),
+        search: (query) =>
+          Promise.resolve({
+            ok: true,
+            diagnostics: { provider: "usearch", status: "available" },
+            candidates:
+              query.partitionKey === encodePartitionKey(capsule.id, "src-a" as KnowledgeSourceId)
+                ? [
+                    { id: "chunk-a1", score: 0.9 },
+                    { id: "chunk-a2", score: 0.4 },
+                  ]
+                : [
+                    { id: "chunk-b1", score: 0.7 },
+                    { id: "chunk-b2", score: 0.35 },
+                  ],
+          }),
       };
       const adapter = vectorIndexPortAsKnowledgeAdapter(stubPort);
-      const result = adapter.searchCapsule({
+      const result = await adapter.searchCapsule({
         store: fixture.store,
         capsule,
         sourceFilter: ["src-a" as KnowledgeSourceId, "src-b" as KnowledgeSourceId],
@@ -520,7 +522,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
 });
 
 describe("vectorIndexPortAsRepoAdapter", () => {
-  it("labels every port call with namespace: 'repo' when driven from the repo shim", () => {
+  it("labels every port call with namespace: 'repo' when driven from the repo shim", async () => {
     const fixture = freshStore();
     try {
       const capsule = createTestCapsule(fixture.store);
@@ -528,15 +530,15 @@ describe("vectorIndexPortAsRepoAdapter", () => {
       const stubPort: VectorIndexPort = {
         search: (query) => {
           namespaces.push(query.namespace);
-          return {
+          return Promise.resolve({
             ok: true,
             candidates: [],
             diagnostics: { provider: "usearch", status: "available" },
-          };
+          });
         },
       };
       const adapter = vectorIndexPortAsRepoAdapter(stubPort);
-      adapter.searchCapsule({
+      await adapter.searchCapsule({
         store: fixture.store,
         capsule,
         sourceFilter: ["src-a" as KnowledgeSourceId, "src-b" as KnowledgeSourceId],

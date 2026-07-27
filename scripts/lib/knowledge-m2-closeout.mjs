@@ -556,6 +556,12 @@ function measure(run) {
   return { value, elapsedMs: performance.now() - started };
 }
 
+async function measureAsync(run) {
+  const started = performance.now();
+  const value = await run();
+  return { value, elapsedMs: performance.now() - started };
+}
+
 function recallAtK(actual, expected) {
   const expectedIds = new Set(expected.map((candidate) => candidate.chunkId));
   return actual.filter((candidate) => expectedIds.has(candidate.chunkId)).length / TOP_K;
@@ -588,7 +594,7 @@ async function annMeasurements(store, capsule, rows, vectorIndex) {
   let partitionViolations = 0;
   for (const queryVector of QUERY_VECTORS) {
     const exact = measure(() => exactTopK(rows, queryVector));
-    const ann = measure(() =>
+    const ann = await measureAsync(() =>
       searchVectorIndex({ store, capsule, queryVector, candidateLimit: TOP_K }, vectorIndex),
     );
     if (!ann.value.ok) throw new Error(`ANN query failed:${ann.value.diagnostics.reason}`);
@@ -609,7 +615,7 @@ async function annMeasurements(store, capsule, rows, vectorIndex) {
 // dependency — the assertion here is exactly the one that fails when the injection is reverted.
 function degenerateVectorIndexAdapter(fixedChunkIds, capsuleId) {
   return {
-    searchCapsule: () => ({
+    searchCapsule: async () => ({
       ok: true,
       candidates: fixedChunkIds.map((chunkId) => ({ chunkId, capsuleId, score: 0.5 })),
       sawDimensionCompatible: true,
@@ -627,7 +633,7 @@ function degenerateVectorIndexAdapter(fixedChunkIds, capsuleId) {
   };
 }
 
-function measureDegenerateInjection(store, capsule, rows) {
+async function measureDegenerateInjection(store, capsule, rows) {
   // Pick K chunks from the END of the corpus (ordinals >= TOP_K * 3), which corpusVector maps to
   // [-1, 0, 0, 0] — antipodal to every QUERY_VECTORS entry. These CANNOT be in any healthy top-K, so
   // if `evaluateAnnProof.degenerateInjectionRecalls` observes any recall >= 0.95, the injection has
@@ -637,7 +643,7 @@ function measureDegenerateInjection(store, capsule, rows) {
   const recalls = [];
   for (const queryVector of QUERY_VECTORS) {
     const exact = exactTopK(rows, queryVector);
-    const result = searchVectorIndex(
+    const result = await searchVectorIndex(
       { store, capsule, queryVector, candidateLimit: TOP_K },
       { mode: "auto", adapter },
     );
@@ -677,9 +683,9 @@ async function verifiedLatencyIdentity() {
   return result.identity;
 }
 
-function measuredIndexBuild(store, capsule, vectorIndex, queryVector) {
+async function measuredIndexBuild(store, capsule, vectorIndex, queryVector) {
   const rssBefore = process.memoryUsage().rss;
-  const built = measure(() =>
+  const built = await measureAsync(() =>
     searchVectorIndex({ store, capsule, queryVector, candidateLimit: TOP_K }, vectorIndex),
   );
   if (!built.value.ok) {
@@ -692,17 +698,17 @@ function measuredIndexBuild(store, capsule, vectorIndex, queryVector) {
   };
 }
 
-function measureLatencyOnRows(store, capsule, rows, vectorIndex, queryVectors) {
+async function measureLatencyOnRows(store, capsule, rows, vectorIndex, queryVectors) {
   const firstQuery = queryVectors[0];
   if (firstQuery === undefined) throw new Error("missing latency query");
-  const build = measuredIndexBuild(store, capsule, vectorIndex, firstQuery);
+  const build = await measuredIndexBuild(store, capsule, vectorIndex, firstQuery);
   const annLatency = [];
   const exactLatency = [];
   const recalls = [];
   let examinedCandidateCount = 0;
   for (const queryVector of queryVectors) {
     const exact = measure(() => exactTopK(rows, queryVector));
-    const ann = measure(() =>
+    const ann = await measureAsync(() =>
       searchVectorIndex({ store, capsule, queryVector, candidateLimit: TOP_K }, vectorIndex),
     );
     if (!ann.value.ok) throw new Error(`latency ANN query failed:${ann.value.diagnostics.reason}`);
@@ -754,7 +760,7 @@ async function measureLatencyAt(vectorIndex, identity, rowCount, capsuleId, chun
     const queryVectors = Array.from({ length: LATENCY_QUERY_COUNT }, (_, index) =>
       latencyQueryVector(index),
     );
-    const measured = measureLatencyOnRows(store, capsule, rows, vectorIndex, queryVectors);
+    const measured = await measureLatencyOnRows(store, capsule, rows, vectorIndex, queryVectors);
     return { rows: rows.length, ...measured };
   } finally {
     store.close();
@@ -835,12 +841,12 @@ function annStoreVectorRows(store, capsuleId) {
 
 // Fallback-diagnostic probes that establish `load-fallback` and `disabled-negative-control` for
 // `evaluateAnnProof`. Both are cheap `searchVectorIndex` calls that never actually run ANN.
-function annFallbackDiagnostics(store, capsule) {
-  const missing = searchVectorIndex(
+async function annFallbackDiagnostics(store, capsule) {
+  const missing = await searchVectorIndex(
     { store, capsule, queryVector: QUERY_VECTORS[0], candidateLimit: TOP_K },
     { mode: "usearch", usearchBinaryPath: "/missing/keiko/m2-usearch.node" },
   );
-  const disabled = searchVectorIndex(
+  const disabled = await searchVectorIndex(
     { store, capsule, queryVector: QUERY_VECTORS[0], candidateLimit: TOP_K },
     { mode: "disabled" },
   );
@@ -919,7 +925,7 @@ async function evaluateAnnProofStore(store, identity, vectorIndex) {
   const capsule = requiredAnnCapsule(store, seeded.capsuleId);
   const rows = annStoreVectorRows(store, seeded.capsuleId);
   const measured = await annMeasurements(store, capsule, rows, vectorIndex);
-  const degenerateInjection = measureDegenerateInjection(store, capsule, rows);
+  const degenerateInjection = await measureDegenerateInjection(store, capsule, rows);
   const latency = await runLatencyBenchmark(vectorIndex);
   const pipelineMetrics = annPipelineMetrics(pipeline);
   return evaluateAnnProof({
@@ -934,7 +940,7 @@ async function evaluateAnnProofStore(store, identity, vectorIndex) {
     encryptedAnnStatus: pipelineMetrics.activeStatus,
     sqliteExtensionDenied: sqliteExtensionAuthorityDenied(store),
     persistenceApiReferences: usearchPersistenceApiReferences(),
-    ...annFallbackDiagnostics(store, capsule),
+    ...(await annFallbackDiagnostics(store, capsule)),
   });
 }
 

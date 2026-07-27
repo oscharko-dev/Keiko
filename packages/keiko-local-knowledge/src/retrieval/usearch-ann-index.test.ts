@@ -119,7 +119,7 @@ afterEach(() => {
 });
 
 describe("USearch ANN index", () => {
-  it("keeps the small-corpus path exact and snapshots mutable caller vectors", () => {
+  it("keeps the small-corpus path exact and snapshots mutable caller vectors", async () => {
     const first = new Float32Array([1, 0]);
     const identity: EmbeddingModelIdentity = {
       ...IDENTITY,
@@ -142,9 +142,9 @@ describe("USearch ANN index", () => {
       queryVector: new Float32Array([1, 0]),
       candidateLimit: 3,
     };
-    const beforeMutation = searchUsearchAnnIndex(request);
+    const beforeMutation = await searchUsearchAnnIndex(request);
     first.set([0, 1]);
-    const afterMutation = searchUsearchAnnIndex(request);
+    const afterMutation = await searchUsearchAnnIndex(request);
     expect(beforeMutation).toMatchObject({
       ok: true,
       mode: "exact",
@@ -160,7 +160,7 @@ describe("USearch ANN index", () => {
   it(
     "uses real HNSW for held-out noisy queries with bounded candidates and recall parity",
     { timeout: 60_000 },
-    () => {
+    async () => {
       const corpus = clusteredCorpus(20_001, IDENTITY);
       let minimumRecall = 1;
       for (let queryIndex = 0; queryIndex < 6; queryIndex += 1) {
@@ -171,7 +171,7 @@ describe("USearch ANN index", () => {
             (_, dimension) => (center?.[dimension] ?? 0) + (corpus.random() * 2 - 1) * 0.02,
           ),
         );
-        const result = searchUsearchAnnIndex({
+        const result = await searchUsearchAnnIndex({
           partition: partition(corpus.entries),
           queryVector: query,
           candidateLimit: 10,
@@ -189,7 +189,7 @@ describe("USearch ANN index", () => {
     },
   );
 
-  it("fails closed on runtime tampering, malformed vectors, and memory bounds", () => {
+  it("fails closed on runtime tampering, malformed vectors, and memory bounds", async () => {
     const corpus = clusteredCorpus(64, IDENTITY);
     const queryVector = corpus.entries[0]?.vector;
     if (queryVector === undefined) throw new Error("test corpus must contain a query vector");
@@ -198,7 +198,7 @@ describe("USearch ANN index", () => {
       const tampered = join(temp, "usearch.node");
       cpSync(runtimePath(), tampered);
       writeFileSync(tampered, "not the approved native runtime");
-      const invalidRuntime = searchUsearchAnnIndex({
+      const invalidRuntime = await searchUsearchAnnIndex({
         partition: partition(corpus.entries),
         queryVector,
         candidateLimit: 5,
@@ -215,14 +215,14 @@ describe("USearch ANN index", () => {
       { id: "malformed", vector: new Float32Array([Number.NaN]) },
     ];
     expect(
-      searchUsearchAnnIndex({
+      await searchUsearchAnnIndex({
         partition: partition(malformed),
         queryVector,
         candidateLimit: 5,
       }),
     ).toEqual({ ok: false, reason: "invalid-partition-entry" });
     expect(
-      searchUsearchAnnIndex({
+      await searchUsearchAnnIndex({
         partition: partition(corpus.entries),
         queryVector,
         candidateLimit: 5,
@@ -230,21 +230,21 @@ describe("USearch ANN index", () => {
       }),
     ).toEqual({ ok: false, reason: "index-bytes-over-bound" });
     expect(
-      searchUsearchAnnIndex({
+      await searchUsearchAnnIndex({
         partition: partition(corpus.entries),
         queryVector,
         candidateLimit: 10_001,
       }),
     ).toEqual({ ok: false, reason: "invalid-query" });
     expect(
-      searchUsearchAnnIndex({
+      await searchUsearchAnnIndex({
         partition: { ...partition(corpus.entries), cacheKey: "x".repeat(4_097) },
         queryVector,
         candidateLimit: 5,
       }),
     ).toEqual({ ok: false, reason: "invalid-partition" });
     expect(
-      searchUsearchAnnIndex({
+      await searchUsearchAnnIndex({
         partition: { ...partition(corpus.entries), cacheGroupKey: "" },
         queryVector: corpus.entries[0]?.vector ?? new Float32Array(64),
         candidateLimit: 5,
@@ -252,12 +252,12 @@ describe("USearch ANN index", () => {
     ).toEqual({ ok: false, reason: "invalid-partition" });
   });
 
-  it("does not create an index file or temporary sidecar", () => {
+  it("does not create an index file or temporary sidecar", async () => {
     const corpus = clusteredCorpus(128, IDENTITY);
     const temp = mkdtempSync(join(tmpdir(), "keiko-usearch-no-spill-"));
     try {
       const before = readdirSync(temp);
-      const result = searchUsearchAnnIndex({
+      const result = await searchUsearchAnnIndex({
         partition: partition(corpus.entries),
         queryVector: corpus.entries[0]?.vector ?? new Float32Array(64),
         candidateLimit: 5,
@@ -269,5 +269,29 @@ describe("USearch ANN index", () => {
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the event loop responsive while the worker builds an ANN index", async () => {
+    const corpus = clusteredCorpus(128, IDENTITY);
+    const queryVector = corpus.entries[0]?.vector;
+    if (queryVector === undefined) throw new Error("test corpus must contain a query vector");
+
+    const eventLoopTurn = new Promise<"event-loop">((resolveTurn) => {
+      setImmediate(() => {
+        resolveTurn("event-loop");
+      });
+    });
+    const search = searchUsearchAnnIndex({
+      partition: partition(corpus.entries, "non-blocking-build"),
+      queryVector,
+      candidateLimit: 5,
+      exactScanThreshold: 0,
+      binaryPath: runtimePath(),
+    });
+
+    expect(await Promise.race([eventLoopTurn, search.then(() => "search" as const)])).toBe(
+      "event-loop",
+    );
+    expect(await search).toMatchObject({ ok: true, mode: "ann" });
   });
 });

@@ -2073,9 +2073,9 @@ interface VectorIndexCapsuleInput {
   readonly state: SearchState;
 }
 
-function tryVectorIndexForCapsule(input: VectorIndexCapsuleInput): boolean {
+async function tryVectorIndexForCapsule(input: VectorIndexCapsuleInput): Promise<boolean> {
   const { store, capsule, lane, sourceFilter, embedded, options, profile, state } = input;
-  const indexed = searchVectorIndex(
+  const indexed = await searchVectorIndex(
     {
       store,
       capsule,
@@ -2170,7 +2170,7 @@ async function processCapsule(input: ProcessCapsuleInput): Promise<void> {
     return;
   }
   if (
-    tryVectorIndexForCapsule({
+    await tryVectorIndexForCapsule({
       store,
       capsule,
       lane,

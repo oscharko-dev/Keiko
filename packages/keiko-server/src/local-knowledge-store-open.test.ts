@@ -124,7 +124,7 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): v
     }
   });
 
-  it("dispatches retrieval through the shim, not the LK-native default", (): void => {
+  it("dispatches retrieval through the shim, not the LK-native default", async (): Promise<void> => {
     // Positive shim-in-chain proof: the shim converts each LK request into a port query whose
     // `partitionKey` is the capsule id. The port then performs an INDEPENDENT capsule lookup
     // by that id in the store — a step the LK-native default path does not run because the LK
@@ -148,7 +148,7 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): v
       if (seeded === undefined) return;
 
       const rogueCapsule = { ...seeded, id: "cap-not-in-store" as typeof seeded.id };
-      const result = searchVectorIndex(
+      const result = await searchVectorIndex(
         {
           store: opened.store,
           capsule: rogueCapsule,
@@ -167,7 +167,7 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): v
     }
   });
 
-  it("keeps exact search available for a real empty capsule without a native runtime", (): void => {
+  it("keeps exact search available for a real empty capsule without a native runtime", async (): Promise<void> => {
     // The shim must not silently MASK the underlying LK behaviour when it CAN reach the LK
     // path. On a real capsule with no vectors indexed and no USearch runtime configured,
     // the shim's port call reaches the shared service's deterministic exact crossover. That path
@@ -179,7 +179,7 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): v
       const [seeded] = listCapsules(opened.store);
       if (seeded === undefined) return;
 
-      const result = searchVectorIndex(
+      const result = await searchVectorIndex(
         {
           store: opened.store,
           capsule: seeded,

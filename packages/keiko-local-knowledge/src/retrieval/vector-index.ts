@@ -51,7 +51,7 @@ export interface VectorIndexSearchResult {
 }
 
 export interface VectorIndexAdapter {
-  readonly searchCapsule: (request: VectorIndexSearchRequest) => VectorIndexSearchResult;
+  readonly searchCapsule: (request: VectorIndexSearchRequest) => Promise<VectorIndexSearchResult>;
 }
 
 export interface VectorIndexOptions {
@@ -548,12 +548,12 @@ function earlyBuiltInResult(
   return undefined;
 }
 
-function runBuiltInSearch(
+async function runBuiltInSearch(
   request: VectorIndexSearchRequest,
   options: ResolvedVectorIndexOptions,
   stamp: VectorIndexStampRow,
-): UsearchAnnSearchResult {
-  return searchUsearchAnnIndex({
+): Promise<UsearchAnnSearchResult> {
+  return await searchUsearchAnnIndex({
     partition: {
       cacheKey: partitionCacheKey(request),
       cacheGroupKey: capsuleCacheGroup(request),
@@ -582,10 +582,10 @@ function failedBuiltInResult(
   return unavailable(statusForFailure(result), reason, filteredStamp.n);
 }
 
-function searchBuiltIn(
+async function searchBuiltIn(
   request: VectorIndexSearchRequest,
   options: ResolvedVectorIndexOptions,
-): VectorIndexSearchResult {
+): Promise<VectorIndexSearchResult> {
   const earlyResult = earlyBuiltInResult(request);
   if (earlyResult !== undefined) return earlyResult;
   const state = vectorIndexState(request);
@@ -596,7 +596,7 @@ function searchBuiltIn(
   if (state?.status !== "ready" && !storedIdentitiesCompatible(request)) {
     return unavailable("fallback-incompatible-identity", "stored-vector-identity-mismatch");
   }
-  const result = runBuiltInSearch(request, options, stamp);
+  const result = await runBuiltInSearch(request, options, stamp);
   if (!result.ok) {
     return failedBuiltInResult(request, options, fullStamp, stamp, result);
   }
@@ -604,15 +604,15 @@ function searchBuiltIn(
   return successfulResult(request, result, stamp.n);
 }
 
-export function searchVectorIndex(
+export async function searchVectorIndex(
   request: VectorIndexSearchRequest,
   options: VectorIndexOptions | undefined,
-): VectorIndexSearchResult {
+): Promise<VectorIndexSearchResult> {
   const resolved = resolveVectorIndexOptions(options);
-  if (resolved.adapter !== undefined) return resolved.adapter.searchCapsule(request);
+  if (resolved.adapter !== undefined) return await resolved.adapter.searchCapsule(request);
   if (resolved.mode === "disabled") return disabled();
   try {
-    return searchBuiltIn(request, resolved);
+    return await searchBuiltIn(request, resolved);
   } catch {
     return unavailable("fallback-query-error", "vector-index-query-failed");
   }

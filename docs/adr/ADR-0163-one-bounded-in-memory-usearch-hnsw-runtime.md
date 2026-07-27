@@ -83,6 +83,12 @@ by the structural estimate. Caller configuration may tighten, never widen, the p
 Oversize, malformed, non-finite, identity-incompatible, or failed partitions fail closed before
 their scores are used.
 
+The Node.js main thread never performs a blocking `Atomics.wait`: build and query completion arrive
+as correlated worker messages with bounded timeouts, while shared-memory waits remain isolated to
+the worker thread. Per-index queries are serialized because their request and result buffers are
+shared; unrelated request processing remains event-loop responsive during both index construction
+and search.
+
 ### D3 — The reviewed native runtime is portable and independently verified
 
 USearch 2.26.0 at commit `d92b5495b8451946c9d3e81d0b2d5cf9104579f8` is provisioned directly

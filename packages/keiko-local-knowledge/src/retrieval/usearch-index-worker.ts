@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { workerData } from "node:worker_threads";
+import { parentPort, workerData } from "node:worker_threads";
 
 import {
   USEARCH_COMMAND,
@@ -9,6 +9,7 @@ import {
   USEARCH_ERROR,
   USEARCH_STATE,
   type UsearchWorkerData,
+  type UsearchWorkerMessage,
 } from "./usearch-worker-protocol.js";
 
 type NativeSearchResult = readonly [BigUint64Array, Float32Array, BigUint64Array];
@@ -68,6 +69,11 @@ function publishFailure(control: Int32Array, error: number): void {
   Atomics.store(control, USEARCH_CONTROL.error, error);
   Atomics.store(control, USEARCH_CONTROL.state, USEARCH_STATE.failed);
   Atomics.notify(control, USEARCH_CONTROL.state);
+  postMessage({ kind: "build-complete" });
+}
+
+function postMessage(message: UsearchWorkerMessage): void {
+  parentPort?.postMessage(message);
 }
 
 function buildIndex(data: UsearchWorkerData): NativeCompiledIndex | undefined {
@@ -94,6 +100,7 @@ function buildIndex(data: UsearchWorkerData): NativeCompiledIndex | undefined {
     }
     Atomics.store(control, USEARCH_CONTROL.state, USEARCH_STATE.ready);
     Atomics.notify(control, USEARCH_CONTROL.state);
+    postMessage({ kind: "build-complete" });
     return index;
   } catch {
     publishFailure(control, USEARCH_ERROR.buildFailed);
@@ -125,6 +132,10 @@ function answerSearch(
   );
   Atomics.store(control, USEARCH_CONTROL.command, USEARCH_COMMAND.idle);
   Atomics.notify(control, USEARCH_CONTROL.responseSequence);
+  postMessage({
+    kind: "search-complete",
+    sequence: Atomics.load(control, USEARCH_CONTROL.responseSequence),
+  });
 }
 
 function serve(index: NativeCompiledIndex, data: UsearchWorkerData): void {

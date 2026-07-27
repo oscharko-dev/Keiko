@@ -198,7 +198,7 @@ export function createLocalKnowledgeStoreVectorIndexPort(
 ): VectorIndexPort {
   const { namespace, store } = options;
   return {
-    search(query: VectorIndexQuery): VectorIndexResult {
+    async search(query: VectorIndexQuery): Promise<VectorIndexResult> {
       if (!isValidVectorIndexQuery(query)) return portInvalidQuery();
       if (query.namespace !== namespace) return portNamespaceMismatch(namespace);
       const parsed = parsePartitionKey(query.partitionKey);
@@ -226,7 +226,7 @@ export function createLocalKnowledgeStoreVectorIndexPort(
       // an explicit `adapter: undefined` illegal, so destructure the field out entirely.
       // eslint-disable-next-line @typescript-eslint/no-unused-vars -- rest-sibling omit of adapter
       const { adapter: _adapter, ...flattened } = options.vectorIndexOptions ?? {};
-      return toPortResult(searchVectorIndex(request, flattened));
+      return toPortResult(await searchVectorIndex(request, flattened));
     },
   };
 }
@@ -340,29 +340,29 @@ interface PortDispatch {
 // failure — same store, same identity, same runtime absence — and re-write the same
 // `vector_index_state` row. Stop after the first failure so the merged result stays
 // fail-closed exactly as it would after N calls, without N-1 wasted round-trips.
-function dispatchPortCalls(
+async function dispatchPortCalls(
   port: VectorIndexPort,
   namespace: LocalKnowledgeStoreNamespace,
   request: VectorIndexSearchRequest,
-): readonly PortDispatch[] {
+): Promise<readonly PortDispatch[]> {
   const capsulePartition = encodePartitionKey(request.capsule.id);
-  const dispatchOne = (partitionKey: string): PortDispatch => ({
-    partitionKey,
-    result: port.search({
+  const dispatchOne = async (partitionKey: string): Promise<PortDispatch> => {
+    const result = await port.search({
       namespace,
       partitionKey,
       identity: request.capsule.embeddingModelIdentity,
       queryVector: request.queryVector,
       candidateLimit: request.candidateLimit,
       ...(request.chunkFilter !== undefined ? { candidateIds: request.chunkFilter } : {}),
-    }),
-  });
+    });
+    return { partitionKey, result };
+  };
   if (request.sourceFilter === undefined || request.sourceFilter.length === 0) {
-    return [dispatchOne(capsulePartition)];
+    return [await dispatchOne(capsulePartition)];
   }
   const dispatches: PortDispatch[] = [];
   for (const sourceId of request.sourceFilter) {
-    const dispatch = dispatchOne(encodePartitionKey(request.capsule.id, sourceId));
+    const dispatch = await dispatchOne(encodePartitionKey(request.capsule.id, sourceId));
     dispatches.push(dispatch);
     if (!dispatch.result.ok) break;
   }
@@ -375,8 +375,8 @@ function dispatchPortCalls(
 // `candidateLimit` — the same steps the store-backed query performs internally today.
 export function vectorIndexPortAsKnowledgeAdapter(port: VectorIndexPort): VectorIndexAdapter {
   return {
-    searchCapsule(request: VectorIndexSearchRequest): VectorIndexSearchResult {
-      return mergePortDispatches(dispatchPortCalls(port, "knowledge", request), request);
+    async searchCapsule(request: VectorIndexSearchRequest): Promise<VectorIndexSearchResult> {
+      return mergePortDispatches(await dispatchPortCalls(port, "knowledge", request), request);
     },
   };
 }
@@ -386,8 +386,8 @@ export function vectorIndexPortAsKnowledgeAdapter(port: VectorIndexPort): Vector
 // sort, slice, and diagnostic reconstruction stay symmetric between the two shims.
 export function vectorIndexPortAsRepoAdapter(port: VectorIndexPort): VectorIndexAdapter {
   return {
-    searchCapsule(request: VectorIndexSearchRequest): VectorIndexSearchResult {
-      return mergePortDispatches(dispatchPortCalls(port, "repo", request), request);
+    async searchCapsule(request: VectorIndexSearchRequest): Promise<VectorIndexSearchResult> {
+      return mergePortDispatches(await dispatchPortCalls(port, "repo", request), request);
     },
   };
 }
