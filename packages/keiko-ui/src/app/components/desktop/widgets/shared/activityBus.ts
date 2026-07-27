@@ -1,6 +1,6 @@
 // Global mutable bus intentionally outside React — Welle 4 AgentRun writes here
 // from outside the React tree, and TimelinePanel subscribes via custom event.
-import { useState, useEffect } from "react";
+import { useReducer, useEffect } from "react";
 
 export interface ActivityEvent {
   type:
@@ -45,10 +45,10 @@ export function getActivity(): readonly ActivityEvent[] {
 }
 
 export function useActivitySubscription(): readonly ActivityEvent[] {
-  const [tick, setTick] = useState(0);
+  const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     const h = (): void => {
-      setTick((n) => n + 1);
+      forceUpdate();
     };
     window.addEventListener(EVENT_NAME, h);
     return () => {
