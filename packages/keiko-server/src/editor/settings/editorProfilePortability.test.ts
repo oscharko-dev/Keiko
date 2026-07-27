@@ -42,6 +42,32 @@ function profile(
 }
 
 describe("editor profile portability", () => {
+  // The display name is user-chosen text that rides along in the manifest, and it was the one field
+  // the export classifier never saw — so a profile named after a customer directory exported the
+  // path verbatim, in a document the epic says carries no absolute paths.
+  it.each([
+    ["/Users/customer/private", "NON_PORTABLE_PATH"],
+    ["~/customer/private", "NON_PORTABLE_PATH"],
+    ["C:/customer/private", "NON_PORTABLE_PATH"],
+    ["ghp_0123456789abcdefghijklmnop", "SECRET_LIKE"],
+  ] as const)("replaces and reports a non-portable display name (%s)", (hostile, reasonCode) => {
+    const exported = assembleEditorProfileExport({ ...profile(), displayName: hostile });
+
+    expect(exported.serializedManifest).not.toContain(hostile);
+    expect(exported.manifest.displayName).not.toBe(hostile);
+    expect(exported.redactions).toContainEqual({
+      settingId: "profileDisplayName",
+      reasonCode,
+      rejectedCount: 1,
+    });
+  });
+
+  it("leaves an ordinary display name untouched and unreported", () => {
+    const exported = assembleEditorProfileExport(profile());
+    expect(exported.manifest.displayName).toBe("Focus");
+    expect(exported.redactions).toHaveLength(0);
+  });
+
   it.each([
     "/Users/customer/private/**",
     "~/customer/private/**",

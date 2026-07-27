@@ -4,8 +4,10 @@ import { join } from "node:path";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M11_DEFAULT_PROFILE_REF,
+  isReservedWorkspaceProfileDisplayName,
   isWorkspaceProfileRef,
   validateWorkspaceProfileManifest,
+  workspaceProfileDisplayNameKey,
   type EditorM11ProfileMutationAction,
   type WorkspaceProfileManifest,
   type WorkspaceProfileRef,
@@ -161,12 +163,18 @@ function parseProfiles(value: unknown): readonly WorkspaceProfileManifest[] | un
   return profilesAreUnique(defined) ? defined : undefined;
 }
 
+// The reserved-name and collision decisions belong to the one key that defines when two display
+// names are the same name to a reader (#2618): it trims as well as lower-cases. This function still
+// only lower-cased, so a persisted profile named " Default " passed both checks and shadowed the
+// built-in one in the picker — two entries reading "Default" with no way to tell which is which.
+// The looser `isWorkspaceProfileDisplayName` parse predicate stays untouched on purpose: this is
+// about identity, not about tightening what an already-persisted manifest may contain.
 function profilesAreUnique(profiles: readonly WorkspaceProfileManifest[]): boolean {
   const refs = profiles.map((profile) => profile.profileRef);
-  const names = profiles.map((profile) => profile.displayName.toLowerCase());
+  const names = profiles.map((profile) => workspaceProfileDisplayNameKey(profile.displayName));
   return (
     !refs.includes(EDITOR_M11_DEFAULT_PROFILE_REF) &&
-    !names.includes("default") &&
+    !profiles.some((profile) => isReservedWorkspaceProfileDisplayName(profile.displayName)) &&
     new Set(refs).size === refs.length &&
     new Set(names).size === names.length
   );

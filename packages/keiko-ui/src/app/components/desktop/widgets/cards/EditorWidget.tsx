@@ -30,6 +30,7 @@ import {
   type EditorPaneStateV2,
   type EditorSplitDirection,
   type EditorSplitDropZone,
+  type WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
@@ -405,6 +406,45 @@ function resolveTrustSettledAttribute(
     verification.catalog?.workspaceTrust.trust === "restricted" &&
     promptedTrustRoot !== workspaceRoot;
   return initialPromptPending ? "false" : "true";
+}
+
+/**
+ * Whether this binding still owes the human the one-per-binding "opening on an untrusted root"
+ * question, and whether answering it means raising the prompt.
+ *
+ * The latch is consumed on the FIRST resolved trust state whatever it says. Consuming it only for
+ * `restricted` left it unspent when the editor opened on a trusted root, so a later explicit
+ * revocation re-raised the first-open prompt and asked the human to grant back what they had just
+ * revoked. Lives outside the component, like `resolveTrustSettledAttribute` above, so the widget's
+ * cognitive complexity is unaffected.
+ */
+/**
+ * What the editor trust banner should report, if anything.
+ *
+ * `catalog === null` alone is not a failed read: it is also the state before the first read returns
+ * and right after a root switch resets it. Treating it as "load" made the banner assert "Workspace
+ * Trust could not be read safely" on every editor open — including for a fully trusted root, where
+ * it then vanished — inverting the #2625 requirement that a read FAILURE be distinguishable from
+ * every other state. `catalogSettled` turns true only once the read resolved or definitively failed.
+ *
+ * Outside the component, like its neighbours, so the widget's cognitive complexity is unaffected.
+ */
+function trustBannerIssue(
+  trustMutationIssue: "load" | "update" | undefined,
+  verification: EditorVerificationRunControls,
+): "load" | "update" | undefined {
+  if (trustMutationIssue !== undefined) return trustMutationIssue;
+  return verification.catalog === null && verification.catalogSettled ? "load" : undefined;
+}
+
+function initialTrustLatchDecision(
+  status: WorkspaceTrustStatus | undefined,
+  promptedTrustRoot: string | null,
+  workspaceRoot: string,
+): "skip" | "latch" | "latch-and-prompt" {
+  if (workspaceRoot.length === 0 || status === undefined) return "skip";
+  if (promptedTrustRoot === workspaceRoot) return "skip";
+  return status.trust === "restricted" ? "latch-and-prompt" : "latch";
 }
 
 // Issue #2747 — a line reveal is addressed to the file cfg named alongside it, and every pane below
@@ -1447,14 +1487,22 @@ export function EditorWidget({
     activeFile: activeFile.length > 0 ? activeFile : null,
   });
 
+  // The initial prompt answers one question — "this binding is opening on an untrusted root" — and
+  // it is answered once per binding. The latch used to be taken only when the FIRST resolved state
+  // was `restricted`, so opening on a trusted root left it unconsumed: a later explicit revocation
+  // by the human moved trust to `restricted` and re-raised the first-open prompt, asking them to
+  // grant what they had just deliberately revoked, and labelling it `initialPrompt`. Consuming the
+  // latch on the first resolved state whatever it says keeps the prompt for a genuine untrusted
+  // open and keeps a revoke a revoke.
   useEffect(() => {
-    const status = verification.catalog?.workspaceTrust;
-    if (
-      workspaceRoot.length > 0 &&
-      status?.trust === "restricted" &&
-      promptedTrustRoot !== workspaceRoot
-    ) {
-      setPromptedTrustRoot(workspaceRoot);
+    const decision = initialTrustLatchDecision(
+      verification.catalog?.workspaceTrust,
+      promptedTrustRoot,
+      workspaceRoot,
+    );
+    if (decision === "skip") return;
+    setPromptedTrustRoot(workspaceRoot);
+    if (decision === "latch-and-prompt") {
       setTrustDecision({ action: "grant", initialPrompt: true, root: workspaceRoot });
     }
   }, [promptedTrustRoot, verification.catalog?.workspaceTrust, workspaceRoot]);
@@ -1869,7 +1917,14 @@ export function EditorWidget({
       <div className={`ed-main ${trustStyles.cmpEditorMain}`}>
         <WorkspaceTrustBanner
           status={verification.catalog?.workspaceTrust}
-          issue={trustMutationIssue ?? (verification.catalog === null ? "load" : undefined)}
+          // `catalog === null` alone is not a failed read: it is also the state before the first
+          // read returns, and the state right after a root switch resets it. Treating it as "load"
+          // made the banner assert "Workspace Trust could not be read safely" on every editor open
+          // — including for a fully trusted root, where it then vanished — which is the opposite of
+          // the #2625 requirement that a read FAILURE be distinguishable from every other state.
+          // `catalogSettled` is the fact that separates them: it turns true only once the read has
+          // resolved or definitively failed.
+          issue={trustBannerIssue(trustMutationIssue, verification)}
           surface="editor"
           onManage={onOpenWorkspaceTrust}
           editor

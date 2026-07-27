@@ -119,6 +119,8 @@ export const EN_MESSAGES = {
     "Workspace Trust could not be read safely. Execution capabilities remain unavailable.",
   "workspaceTrust.updateFailed":
     "The server did not confirm the trust change. This workspace remains restricted.",
+  "workspaceTrust.updateFailedTrusted":
+    "The server did not confirm the trust change. This workspace remains trusted.",
   "workspaceTrust.errorCode": "Error code: {code}",
   "workspaceTrust.supportId": "Support ID: {correlationId}",
   "workspaceTrust.banner.editor":

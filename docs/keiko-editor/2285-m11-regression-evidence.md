@@ -5,23 +5,35 @@ Evidence prepared: 2026-07-20 against the Issue #2533 child branch created from
 24.18.0. The focused closeout receipts below are recorded only from commands actually executed.
 Linux-authoritative D12 evidence remains separately governed by ADR-0139.
 
+That milestone branch and that commit are historical: the branch was squash-merged into `dev` and
+deleted, so the SHA above is no longer reachable in the repository and is recorded only to say where
+the original measurement was taken. Anyone re-running this evidence uses `dev`, which carries the
+merged milestone and the repairs that followed it; the clean-checkout reproduction in
+[the demo](2285-m11-demo.md) is the executable form.
+
 Receipt provenance: the focused-closeout and supplemental-measurement numbers below were re-recorded
 under #2626 on `darwin-arm64` with Node.js 24.18.0, on the current `dev` line. The previous
 focused-closeout receipt reported only the first half of a two-command collection — the `keiko-ui`
 workspace half ran and passed but was absent from the number, so the figure understated the
 collection rather than overstating it. Both halves are reported now.
 
+The focused-closeout and Playwright numbers were re-recorded again on `darwin-arm64` with Node.js
+24.18.0 during the epic audit. The `keiko-ui` half moved from 9 files / 99 tests to 11 files / 120
+tests: it gained `MultiRootFilesWidget.a11y.test.tsx`, which scans the real multi-root Explorer
+instead of a mocked file tree, and `SelectionAwareWorkspaceHosts.test.tsx`, which owns the
+model-disposal assertion this document bullets and previously did not execute.
+
 ## Closeout status
 
-| Evidence                         | Disposition                                                                                                                                                        |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Dependency entry condition       | **PASS** — all thirteen prerequisite M11 child issues #2520–#2532 are closed.                                                                                      |
-| Adversarial matrix ownership     | **IMPLEMENTED** — 16 named rows are mapped to executable child tests and collected by one focused command.                                                         |
-| Migration and rollback ownership | **IMPLEMENTED** — four named drills cover pre-M11 upgrade, downgrade guard, corrupt trust, and explicit re-grant.                                                  |
-| Supplemental M11 measurement     | **PASS** — local `darwin-arm64` informational run; every deterministic disposition and every observed local budget passed.                                         |
-| Focused M11 closeout             | **PASS** — both halves of the one command: 18 files / 190 tests in the package collection, then 9 files / 99 tests in the `keiko-ui` workspace collection.         |
-| Real product-path Playwright     | **PASS WITH FILED FINDING** — one Chromium journey passed in 18.9 s on the #2626 re-run; the exact multi-root ARIA finding is still reproduced and owned by #2605. |
-| Exact epic-head CI               | **REMOTE RECEIPT AFTER PUSH** — the integration-branch push triggers the repository workflows; local evidence does not replace them.                               |
+| Evidence                         | Disposition                                                                                                                                                       |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dependency entry condition       | **PASS** — all thirteen prerequisite M11 child issues #2520–#2532 are closed.                                                                                     |
+| Adversarial matrix ownership     | **IMPLEMENTED** — 16 named rows are mapped to executable child tests and collected by one focused command.                                                        |
+| Migration and rollback ownership | **IMPLEMENTED** — four named drills cover pre-M11 upgrade, downgrade guard, corrupt trust, and explicit re-grant.                                                 |
+| Supplemental M11 measurement     | **PASS** — local `darwin-arm64` informational run; every deterministic disposition and every observed local budget passed.                                        |
+| Focused M11 closeout             | **PASS** — both halves of the one command: 18 files / 201 tests in the package collection, then 11 files / 120 tests in the `keiko-ui` workspace collection.      |
+| Real product-path Playwright     | **PASS** — one Chromium journey passed in 20.5 s; every scanned surface, the multi-root Explorer included, is now asserted free of serious/critical axe findings. |
+| Exact epic-head CI               | **REMOTE RECEIPT AFTER PUSH** — the integration-branch push triggers the repository workflows; local evidence does not replace them.                              |
 
 ## Focused executable collection
 
@@ -79,9 +91,10 @@ probe reads the context storage state for cookies, `localStorage`, and IndexedDB
 captured nothing cannot report a clean sink. Real-browser axe checks cover the populated multi-root
 Explorer, the Settings **Editor** tab carrying the profile controls, and the history panel; the
 journey opens that tab and asserts the active profile is on screen before scanning, because the
-settings window mounts on its Models tab. Settings and history have no serious/critical violations.
-The Explorer scan deterministically records the two-node critical `aria-required-children` defect
-filed as #2605; it neither suppresses the rule nor represents the surface as green.
+settings window mounts on its Models tab. All three surfaces — Settings, history and the populated
+multi-root Explorer — have no serious/critical violations. The Explorer scan recorded a two-node
+critical `aria-required-children` defect, filed as #2605, until that defect was repaired at the
+component that owns the tree markup; it is asserted green now, with no rule suppressed or excluded.
 
 ## Accessibility, visual, and i18n evidence
 
@@ -89,7 +102,9 @@ The focused UI collection executes existing component evidence rather than dupli
 system:
 
 - multi-root Explorer arrow navigation, collapse, 320 px/200% zoom behavior, and axe;
-- retained editor root session/layout behavior and model disposal after root removal;
+- retained editor root session/layout behavior, and model disposal after root removal — the
+  assertion that owns that claim is pinned as `MULTI-ROOT-REMOVED-ROOT-DISPOSAL`, because the
+  collection previously contained only the retarget case, which asserts disposal is NOT called;
 - trust prompt safe default, focus trap, malformed-success fail-closed handling, and English/German
   catalog ownership;
 - profile creation/switching/portability and Settings source-provenance controls;
@@ -136,5 +151,6 @@ The missing-dependency preflight and the macOS symlinked-temp fixture failure en
 building the measurement harness are setup/fixture failures, not passing evidence. The recorded
 performance receipt is the subsequent successful run after locked dependencies were restored and
 the fixture root was canonicalized. Browser repair runs exposed connection-pool-sensitive phase
-composition and the filed #2605 accessibility defect; only the final passing functional receipt
-and its exact, unsuppressed known-finding assertion count as closeout evidence.
+composition and the #2605 accessibility defect; only the final passing functional receipt and its
+unsuppressed axe assertions count as closeout evidence. #2605 has since been repaired, so that
+assertion is a zero-violation one rather than an exact known-finding one.

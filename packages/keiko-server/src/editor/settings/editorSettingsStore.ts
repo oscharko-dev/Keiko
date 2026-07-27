@@ -70,6 +70,15 @@ export interface EditorSettingsUserRecord extends EditorSettingsRecordBase {
 export interface EditorSettingsWorkspaceRecord extends EditorSettingsRecordBase {
   readonly kind: "workspace";
   readonly workspaceFingerprint: string;
+  /**
+   * Bound for the same reason as the root record below, and it matters more here: the workspace
+   * scope is where the governed capability opt-ins live (`debuggingEnabled`, `patchApply`,
+   * `testGeneration`). Its fingerprint is `sha256(realRoot)` — a path, not a directory — so while
+   * only the root record carried an identity, replacing a directory at a granted path handed the
+   * new occupant the previous one's opt-ins, which is precisely the ADR-0147 "root replacement at
+   * the same path" threat the root record already refuses.
+   */
+  readonly rootIdentityDigest: string;
 }
 
 export interface EditorSettingsRootRecord extends EditorSettingsRecordBase {
@@ -213,6 +222,7 @@ export function emptyEditorSettingsWorkspaceRecord(
     kind: "workspace",
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     workspaceFingerprint: editorSettingsWorkspaceFingerprint(realRoot),
+    rootIdentityDigest: editorSettingsRootIdentityDigest(realRoot) ?? "",
     revision: 0,
     values: {},
     idempotency: [],
@@ -365,10 +375,11 @@ function parseWorkspaceRecord(
 ): EditorSettingsWorkspaceRecord | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, recordKeys("workspace"))) return undefined;
   if (value.kind !== "workspace" || value.workspaceFingerprint !== fingerprint) return undefined;
+  const rootIdentityDigest = parsedRootIdentityBinding(value.rootIdentityDigest);
   const base = parseBase(value, "workspace");
-  return base === undefined
+  return base === undefined || rootIdentityDigest === undefined
     ? undefined
-    : { kind: "workspace", workspaceFingerprint: fingerprint, ...base };
+    : { kind: "workspace", workspaceFingerprint: fingerprint, rootIdentityDigest, ...base };
 }
 
 /**
@@ -397,7 +408,7 @@ function parseRootRecord(
 
 function recordKeys(kind: "user" | "workspace" | "root"): readonly string[] {
   const keys = ["kind", "schemaVersion", "revision", "values", "idempotency", "events"];
-  if (kind === "workspace") return [...keys, "workspaceFingerprint"];
+  if (kind === "workspace") return [...keys, "workspaceFingerprint", "rootIdentityDigest"];
   return kind === "root" ? [...keys, "rootFingerprint", "rootIdentityDigest"] : keys;
 }
 
@@ -458,9 +469,14 @@ function loadWorkspaceRecord(
     if (raw.kind === "missing") return { state: "absent", record: empty };
     if (raw.kind === "oversized") return { state: "unavailable", record: empty };
     const record = parseWorkspaceRecord(raw.value, empty.workspaceFingerprint);
-    return record === undefined
-      ? { state: "unavailable", record: empty }
-      : { state: "ready", record };
+    if (record === undefined) return { state: "unavailable", record: empty };
+    // Same two-fact rule as the root record below, and the same reason for `absent` rather than
+    // `unavailable`: a record written before this binding existed claims no identity, and must be
+    // supersedable by the next write instead of locking the scope out of every mutation.
+    const live = editorSettingsRootIdentityDigest(realRoot);
+    return live !== undefined && record.rootIdentityDigest === live
+      ? { state: "ready", record }
+      : { state: "absent", record: empty };
   } catch {
     return { state: "unavailable", record: empty };
   }
@@ -509,7 +525,12 @@ function recordForWrite(
     values: record.values,
     idempotency: record.idempotency,
     events: record.events,
-    ...(record.kind === "workspace" ? { workspaceFingerprint: record.workspaceFingerprint } : {}),
+    ...(record.kind === "workspace"
+      ? {
+          workspaceFingerprint: record.workspaceFingerprint,
+          rootIdentityDigest: record.rootIdentityDigest,
+        }
+      : {}),
     ...(record.kind === "root"
       ? { rootFingerprint: record.rootFingerprint, rootIdentityDigest: record.rootIdentityDigest }
       : {}),
@@ -533,6 +554,11 @@ export function createEditorSettingsStore(
     commitWorkspace: (realRoot, record): void => {
       if (record.workspaceFingerprint !== editorSettingsWorkspaceFingerprint(realRoot)) {
         throw new Error("editor settings workspace identity mismatch");
+      }
+      // Same refusal as commitRoot: a mutation racing a root replacement must not write the new
+      // directory's file carrying the old directory's binding.
+      if (record.rootIdentityDigest !== (editorSettingsRootIdentityDigest(realRoot) ?? "")) {
+        throw new EditorSettingsRootIdentityError();
       }
       if (containsPath(realRoot, options.stateDir)) {
         throw new Error("editor settings state directory must remain outside the workspace");

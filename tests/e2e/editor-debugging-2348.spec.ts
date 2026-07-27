@@ -915,7 +915,9 @@ async function prepareExceptionDebugging(page: Page): Promise<PreparedExceptionD
   await page.reload();
   const reloadedEditor = await openEditorWorkspace(page);
   const pane = firstPane(reloadedEditor);
-  await reloadedEditor.getByRole("button", { name: "Expand folder: src" }).click();
+  // The caret is aria-hidden since #2605 (role="tree" may own only treeitem/group), so it is
+  // addressed by selector rather than by role. Expansion is also reachable via Arrow Right.
+  await reloadedEditor.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   await openTreeFile(reloadedEditor, THROWS);
   const panel = debugWindow(page);
   await runPaletteCommand(page, "Open Debug");
@@ -956,7 +958,7 @@ async function prepareCapDebugging(page: Page, activeFile: string): Promise<Prep
   await page.reload();
   const editor = await openEditorWorkspace(page);
   const pane = firstPane(editor);
-  await editor.getByRole("button", { name: "Expand folder: src" }).click();
+  await editor.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   await openTreeFile(editor, activeFile);
   await runPaletteCommand(page, "Open Debug");
   const panel = debugWindow(page);

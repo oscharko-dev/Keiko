@@ -11,6 +11,7 @@ import {
   workspaceProfileDisplayNameKey,
   type EditorM7SettingId,
   type EditorM7SettingValue,
+  WORKSPACE_PROFILE_DISPLAY_NAME_FIELD,
   type WorkspaceProfileExportRedaction,
   type WorkspaceProfileExportResult,
   type WorkspaceProfileImportFailureCode,
@@ -151,6 +152,14 @@ function pathLike(value: string): boolean {
     /^[A-Za-z]:[/\\]/u.test(value) ||
     /^[A-Za-z][A-Za-z0-9+.-]*:\/\//u.test(value)
   );
+}
+
+// The single-string counterpart of `portabilityReason` below, which classifies array values.
+function displayNamePortabilityReason(
+  value: string,
+): "NON_PORTABLE_PATH" | "SECRET_LIKE" | undefined {
+  if (pathLike(value)) return "NON_PORTABLE_PATH";
+  return containsRedactableSecret(value) ? "SECRET_LIKE" : undefined;
 }
 
 function portabilityReason(value: unknown): "NON_PORTABLE_PATH" | "SECRET_LIKE" | undefined {
@@ -325,15 +334,38 @@ function sanitizeExportValues(rawValues: Readonly<Record<string, unknown>>): {
   return { values, redactions };
 }
 
+/**
+ * The display name is user-chosen text that rides along in the export manifest, so it can carry the
+ * very things every setting value is scrubbed for. It was the one field the classifier never saw,
+ * so `~/customers/acme` or `/Users/alice/secret` exported verbatim. On a hit the name is replaced
+ * with a portable substitute AND reported, because an export that quietly renames a profile is a
+ * different kind of dishonest.
+ */
+function sanitizeDisplayName(profile: WorkspaceProfileManifest): {
+  readonly displayName: string;
+  readonly redactions: readonly WorkspaceProfileExportRedaction[];
+} {
+  const name = profile.displayName;
+  const reason = displayNamePortabilityReason(name);
+  if (reason === undefined) return { displayName: name, redactions: [] };
+  return {
+    displayName: `Profile ${String(profile.revision)}`,
+    redactions: [
+      { settingId: WORKSPACE_PROFILE_DISPLAY_NAME_FIELD, reasonCode: reason, rejectedCount: 1 },
+    ],
+  };
+}
+
 export function assembleEditorProfileExport(
   profile: WorkspaceProfileManifest,
 ): WorkspaceProfileExportResult {
   const sanitized = sanitizeExportValues(profile.settings.values);
+  const name = sanitizeDisplayName(profile);
   const manifest: WorkspaceProfileManifest = {
     kind: "workspace-profile",
     schemaVersion: WORKSPACE_PROFILE_SCHEMA_VERSION,
     profileRef: profile.profileRef,
-    displayName: profile.displayName,
+    displayName: name.displayName,
     revision: profile.revision,
     settings: {
       kind: "editor-profile-settings",
@@ -348,6 +380,6 @@ export function assembleEditorProfileExport(
     schemaVersion: WORKSPACE_PROFILE_SCHEMA_VERSION,
     manifest,
     serializedManifest: `${JSON.stringify(manifest, null, 2)}\n`,
-    redactions: sanitized.redactions,
+    redactions: [...name.redactions, ...sanitized.redactions],
   };
 }

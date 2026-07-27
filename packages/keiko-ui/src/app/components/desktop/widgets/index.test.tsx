@@ -116,6 +116,25 @@ vi.mock("../context/ChatSessionContext", () => ({
   }),
 }));
 
+// These cases assert widget prop mapping, not workspace membership, but every execution surface
+// resolves its root through useWorkspaceManifest. Without a stub the real hook fetches, fails in
+// jsdom, and the window is denied for want of a provable root — correct product behaviour, and not
+// what these cases are about. A settled "this workspace has no V2 manifest" is the legacy state they
+// have always meant, stated explicitly instead of arriving via a failed request.
+vi.mock("../hooks/useWorkspaceManifest", () => ({
+  useWorkspaceManifest: () => ({
+    manifest: null,
+    loading: false,
+    mutating: false,
+    issue: null,
+    refresh: vi.fn(),
+    addRoot: vi.fn(),
+    removeRoot: vi.fn(),
+    reorderRoots: vi.fn(),
+    focusRoot: vi.fn(),
+  }),
+}));
+
 vi.mock("./panels/ProjectPanel", () => ({ ProjectPanel: () => <div>ProjectPanel</div> }));
 vi.mock("./panels/ChatHistoryPanel", () => ({
   ChatHistoryPanel: ({

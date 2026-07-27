@@ -37,8 +37,16 @@ export interface WorkspaceProfileManifest {
 export type WorkspaceProfilePortabilityReasonCode =
   EditorM7ReasonCode | "NON_PORTABLE_PATH" | "SECRET_LIKE";
 
+/**
+ * `settingId` also admits the profile's own display name. A name is user-chosen text that rides
+ * along in the export manifest, so it can carry an absolute or home-directory path exactly as a
+ * setting value can, and the epic forbids either in an export. It is not an `EditorM7SettingId`, so
+ * the field names it explicitly rather than being left unreportable.
+ */
+export const WORKSPACE_PROFILE_DISPLAY_NAME_FIELD = "profileDisplayName";
+
 export interface WorkspaceProfileExportRedaction {
-  readonly settingId: EditorM7SettingId;
+  readonly settingId: EditorM7SettingId | typeof WORKSPACE_PROFILE_DISPLAY_NAME_FIELD;
   readonly reasonCode: "INVALID_VALUE" | "NON_PORTABLE_PATH" | "SECRET_LIKE";
   readonly rejectedCount: number;
 }
