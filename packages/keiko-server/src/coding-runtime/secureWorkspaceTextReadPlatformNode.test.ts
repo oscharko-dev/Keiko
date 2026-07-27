@@ -122,14 +122,12 @@ describe("node portable secure workspace-read inspection", () => {
       calls.push({ args, command });
       return Promise.resolve(true);
     });
-    const readTeamIdentifier = vi.fn(() => Promise.resolve("AB12CD34EF"));
-
     await expect(
       provePortableImmutableResourceTree(
         "/Applications/Keiko.app/Contents/Resources",
         "darwin-arm64",
         run,
-        readTeamIdentifier,
+        "AB12CD34EF",
       ),
     ).resolves.toBe(true);
     await expect(
@@ -137,7 +135,7 @@ describe("node portable secure workspace-read inspection", () => {
         "/Applications/Keiko.app/Contents/Resources",
         "darwin-x64",
         run,
-        readTeamIdentifier,
+        "AB12CD34EF",
       ),
     ).resolves.toBe(true);
     await expect(provePortableImmutableResourceTree("C:\\Keiko", "win32-x64", run)).resolves.toBe(
@@ -174,7 +172,7 @@ describe("node portable secure workspace-read inspection", () => {
     const inspection = createNodePortableSecureWorkspaceReadInspection({
       resourceRoot: "/Applications/Keiko.app/Contents/Resources",
       macosRunCommand: run,
-      macosReadTeamIdentifier: () => Promise.resolve("AB12CD34EF"),
+      macosExpectedTeamIdentifier: "AB12CD34EF",
     });
 
     await expect(
@@ -193,7 +191,6 @@ describe("node portable secure workspace-read inspection", () => {
     const inspection = createNodePortableSecureWorkspaceReadInspection({
       resourceRoot: "/Applications/Keiko.app/Contents/Resources",
       macosRunCommand: run,
-      macosReadTeamIdentifier: () => Promise.resolve(undefined),
     });
 
     await expect(
@@ -206,7 +203,7 @@ describe("node portable secure workspace-read inspection", () => {
     const inspection = createNodePortableSecureWorkspaceReadInspection({
       resourceRoot: "/Applications/Keiko.app/Contents/Resources",
       macosRunCommand: () => Promise.resolve(false),
-      macosReadTeamIdentifier: () => Promise.resolve("AB12CD34EF"),
+      macosExpectedTeamIdentifier: "AB12CD34EF",
     });
 
     await expect(
@@ -214,7 +211,7 @@ describe("node portable secure workspace-read inspection", () => {
     ).resolves.toBe(false);
   });
 
-  it("fails closed when the default macOS app identity reader cannot verify the app", async () => {
+  it("fails closed when the macOS release team has not been bound", async () => {
     await expect(
       provePortableImmutableResourceTree(
         "/definitely/missing/Keiko.app/Contents/Resources",

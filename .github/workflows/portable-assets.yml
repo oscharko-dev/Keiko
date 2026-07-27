@@ -419,6 +419,8 @@ jobs:
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
       - name: Stage portable runtime from approved inputs
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
       - name: Functionally smoke the unsigned secure-read helper
         run: npm run smoke:portable-secure-read -- .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load

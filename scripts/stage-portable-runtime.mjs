@@ -42,6 +42,7 @@ const releaseImpactCatalog = JSON.parse(
   readFileSync(join(repoRoot, "release-impact.catalog.json"), "utf8"),
 );
 const ALLOWED_NODE_ARCHIVE_HOSTS = new Set(["nodejs.org", "dist.nodejs.org"]);
+const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const NODE_ARCHIVE_MAX_BYTES = 128 * 1024 * 1024;
 const NODE_ARCHIVE_TIMEOUT_MS = 300_000;
@@ -64,6 +65,15 @@ const SECURE_READ_SOURCE_ROOT = join(repoRoot, "native", "secure-workspace-read"
 const SECURE_READ_NAME = "keiko-secure-workspace-read";
 const RUNTIME_SUPERVISOR_NAME = "keiko-runtime-supervisor";
 const MACOS_SYSTEM_EXTENSION_ID = "com.oscharko.keiko.runtime-monitor.systemextension";
+const MACOS_RELEASE_TEAM_IDENTIFIER_PLACEHOLDER = "__KEIKO_APPLE_TEAM_ID__";
+const MACOS_RELEASE_TEAM_IDENTIFIER_MODULE = join(
+  "node_modules",
+  "@oscharko-dev",
+  "keiko-server",
+  "dist",
+  "coding-runtime",
+  "macosPortableCodeIdentity.js",
+);
 const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "package.json",
   "dist/index.js",
@@ -88,6 +98,7 @@ function fail(message) {
 
 function parseArgs(argv) {
   const options = {
+    appleTeamId: undefined,
     commitSha: process.env.GITHUB_SHA,
     dryRun: false,
     launcherBinary: undefined,
@@ -113,6 +124,7 @@ function parseArgs(argv) {
   if (target === undefined) fail(`unsupported target ${options.target}`);
   validateNodeRuntimeOptions(options);
   validateReleaseOptions(options);
+  validateAppleTeamIdentifierOption(options, target);
   if (options.nodeArchive !== undefined) {
     assertNodeArchiveIdentity(options.nodeArchive, target, options.nodeVersion);
   }
@@ -130,6 +142,7 @@ function applyArg(argv, index, options) {
     return index + 1;
   }
   const fields = new Map([
+    ["--apple-team-id", "appleTeamId"],
     ["--commit-sha", "commitSha"],
     ["--launcher-binary", "launcherBinary"],
     ["--node-archive", "nodeArchive"],
@@ -202,6 +215,16 @@ function validateReleaseOptions(options) {
   }
   if (rootPackage.version.includes("-") || options.releaseTag !== `v${rootPackage.version}`) {
     fail("--release-tag must match the stable package version for portable v1");
+  }
+}
+
+function validateAppleTeamIdentifierOption(options, target) {
+  if (options.appleTeamId === undefined) return;
+  if (target.platformTarget === "windows-x64") {
+    fail("--apple-team-id is accepted only for macOS targets");
+  }
+  if (!APPLE_TEAM_ID_PATTERN.test(options.appleTeamId)) {
+    fail("--apple-team-id must be a 10-character Apple team identifier");
   }
 }
 
@@ -797,6 +820,17 @@ function stagePackedPackage(tarball, extractRoot, stageRoot) {
     tarLinkPolicy: TAR_LINK_POLICY_SKIP_SAFE,
   });
   validateStagedAppSurface(appRoot);
+}
+
+export function bindMacosReleaseTeamIdentifier(appRoot, target, appleTeamId) {
+  if (target.platformTarget === "windows-x64" || appleTeamId === undefined) return;
+  const modulePath = join(appRoot, MACOS_RELEASE_TEAM_IDENTIFIER_MODULE);
+  const source = readFileSync(modulePath, "utf8");
+  const occurrences = source.split(MACOS_RELEASE_TEAM_IDENTIFIER_PLACEHOLDER).length - 1;
+  if (occurrences !== 1) {
+    fail("packaged macOS identity module must contain exactly one release team placeholder");
+  }
+  writeFileSync(modulePath, source.replace(MACOS_RELEASE_TEAM_IDENTIFIER_PLACEHOLDER, appleTeamId));
 }
 
 async function stageNodeRuntime(options, target, stageRoot) {
@@ -2069,6 +2103,7 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
   (hooks.preparePackageSurface ?? preparePackageSurface)();
   const tarball = packRoot(dirname(paths.extractRoot));
   stagePackedPackage(tarball, paths.extractRoot, paths.resourceRoot);
+  bindMacosReleaseTeamIdentifier(join(paths.resourceRoot, "app"), target, options.appleTeamId);
   stageLauncher(target, paths.payloadRoot, paths.resourceRoot, options, hooks);
   const nativeHelpers = [
     stageSecureReadHelper(target, paths.resourceRoot, options, hooks),

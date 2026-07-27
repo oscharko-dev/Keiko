@@ -79,6 +79,10 @@ Setup must refuse roots that are temporary directories, customer repositories, `
 directories, shared/network roots, symlinked paths, or noncanonical machine-wide locations. The
 sole macOS exception is `/Applications/Keiko.app`; macOS may request administrator, System
 Extension, and Full Disk Access approval once, or MDM may preapprove them.
+The canonical `/Applications` parent and every checked app component must remain root-owned,
+non-symlinked, and not group- or world-writable. A host policy that weakens those ownership or
+write boundaries makes activation fail closed; MDM must preserve or restore the canonical
+boundary instead of relocating the app to a writable parent.
 
 ## Update Journey
 

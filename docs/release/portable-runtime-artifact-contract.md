@@ -227,6 +227,12 @@ Artifact metadata may include counts, hashes, versions, platform labels, release
 relative paths, and bounded status codes. It must not include absolute customer paths, raw logs,
 asset URLs with credentials, or reconstructive customer content.
 
+The protected macOS production stage replaces the packaged server module's single build-time team
+placeholder with the reviewed `APPLE_TEAM_ID` before the app is signed. Any package that retains the
+placeholder remains intentionally unqualified. Runtime app, manager, Endpoint Security extension,
+and secure-read verification must all match that release-pinned team; the identifier is not emitted
+in manifests, diagnostics, or evidence.
+
 ## Optional Product-Owned Sidecar Runtimes
 
 Portable artifacts may carry optional product-owned coding sidecar runtimes in

@@ -740,6 +740,17 @@ describe("macOS portable production signing workflow", () => {
     }
   });
 
+  it("binds the reviewed Apple team during protected macOS staging", () => {
+    const stageStep = stageMacJob.slice(
+      stageMacJob.indexOf("Stage portable runtime from approved inputs"),
+      stageMacJob.indexOf("Functionally smoke the unsigned secure-read helper"),
+    );
+    expect(stageStep).toContain("APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}");
+    expect(stagingJob).not.toContain("APPLE_TEAM_ID:");
+    expect(nativeScript).toContain("MACOS_RELEASE_TEAM_IDENTIFIER");
+    expect(nativeScript).toContain("__KEIKO_APPLE_TEAM_ID__");
+  });
+
   it("keeps dispatch staging secret-free and production artifacts out of the staging job", () => {
     expect(stagingJob).toContain("github.event_name == 'workflow_dispatch'");
     expect(stagingJob).not.toContain("secrets.");

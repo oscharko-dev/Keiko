@@ -542,6 +542,8 @@ describe("macOS portable signing inventory", () => {
     expect(rebind).toBeGreaterThan(0);
     expect(rebind).toBeLessThan(outerSigning);
     expect(rebind).toBeLessThan(archive);
+    expect(script).toContain('const MACOS_RELEASE_TEAM_IDENTIFIER = \\"$APPLE_TEAM_ID\\";');
+    expect(script).toContain("__KEIKO_APPLE_TEAM_ID__");
   });
 
   it("detects thin/fat Mach-O content and assigns only Node the JIT role", () => {

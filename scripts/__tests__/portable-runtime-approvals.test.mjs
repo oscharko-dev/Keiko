@@ -580,6 +580,28 @@ describe("portable assets stage helper", () => {
     expect(args[args.indexOf("--workflow-run-id") + 1]).toBe("987654321");
     expect(args[args.indexOf("--workflow-run-attempt") + 1]).toBe("3");
     expect(args.filter((arg) => arg === "--sidecar-runtime-spec")).toHaveLength(1);
+
+    const macArgs = stageArgumentsForTarget(
+      { outDir: "/tmp/out", payloadRoot, target: "macos-arm64" },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
+      "AB12CD34EF",
+    );
+    expect(
+      macArgs.slice(macArgs.indexOf("--apple-team-id"), macArgs.indexOf("--apple-team-id") + 2),
+    ).toEqual(["--apple-team-id", "AB12CD34EF"]);
+    expect(() =>
+      stageArgumentsForTarget(
+        { outDir: "/tmp/out", payloadRoot, target: "macos-arm64" },
+        approvals,
+        "a".repeat(40),
+        "0.2.14",
+        { runAttempt: 3, runId: 987654321 },
+        "invalid",
+      ),
+    ).toThrow("APPLE_TEAM_ID is invalid");
   });
 });
 

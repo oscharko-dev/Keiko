@@ -938,6 +938,7 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRun
     {
       commitSha: COMMIT_SHA,
       dryRun: false,
+      appleTeamId: target === "windows-x64" ? undefined : "AB12CD34EF",
       nodeArchive: nodeArchive.path,
       nodeArchiveUrl: undefined,
       nodeCacheDir: join(dir, "cache"),
@@ -2376,8 +2377,28 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const assetPath = join(root, "keiko-macos-arm64.zip");
     const manifestPath = join(root, "manifest", "portable-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const identityModule = readFileSync(
+      join(
+        root,
+        "payload",
+        "Keiko",
+        "Keiko.app",
+        "Contents",
+        "Resources",
+        "app",
+        "node_modules",
+        "@oscharko-dev",
+        "keiko-server",
+        "dist",
+        "coding-runtime",
+        "macosPortableCodeIdentity.js",
+      ),
+      "utf8",
+    );
 
     expect(manifest.artifact.sha256).toBe(await sha256File(assetPath));
+    expect(identityModule).toContain('const MACOS_RELEASE_TEAM_IDENTIFIER = "AB12CD34EF";');
+    expect(identityModule).not.toContain("__KEIKO_APPLE_TEAM_ID__");
     expect(manifest.artifact.sizeBytes).toBe(statSync(assetPath).size);
     expect(manifest.runtime.nodeVersion).toBe(NODE_VERSION);
     expect(manifest.releaseImpact.reviewedBinding.nodeRuntimeIdentity).toBe(

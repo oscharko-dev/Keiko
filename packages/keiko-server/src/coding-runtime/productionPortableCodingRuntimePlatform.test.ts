@@ -175,7 +175,7 @@ describe("production portable runtime platform attestation", () => {
       commandResult({ stdout: "active\n" }),
     );
 
-    expect(readMacosAttestation(resourceRoot, "macos-arm64", runner.run)).toEqual({
+    expect(readMacosAttestation(resourceRoot, "macos-arm64", runner.run, "AB12CD34EF")).toEqual({
       result: "passed",
       backend: "endpoint-security",
     });
@@ -212,6 +212,7 @@ describe("production portable runtime platform attestation", () => {
           commandResult({ stderr: "TeamIdentifier=AB12CD34EF\n" }),
           commandResult({ status: 1 }),
         ).run,
+        "AB12CD34EF",
       ),
     ).toThrow("runtime-app-seal-invalid");
 
@@ -228,9 +229,9 @@ describe("production portable runtime platform attestation", () => {
         commandResult(),
         managerResult,
       );
-      expect(() => readMacosAttestation(resourceRoot, "macos-x64", runner.run)).toThrow(
-        "runtime-system-extension-inactive",
-      );
+      expect(() =>
+        readMacosAttestation(resourceRoot, "macos-x64", runner.run, "AB12CD34EF"),
+      ).toThrow("runtime-system-extension-inactive");
     }
   });
 
@@ -242,6 +243,7 @@ describe("production portable runtime platform attestation", () => {
         resourceRoot,
         "macos-arm64",
         recordingRunner(commandResult({ stderr: "TeamIdentifier=not set\n" })).run,
+        "AB12CD34EF",
       ),
     ).toThrow("runtime-app-seal-invalid");
   });
@@ -253,7 +255,21 @@ describe("production portable runtime platform attestation", () => {
     results[call] = commandResult({ status: 1 });
 
     expect(() =>
-      readMacosAttestation(resourceRoot, "macos-arm64", recordingRunner(...results).run),
+      readMacosAttestation(
+        resourceRoot,
+        "macos-arm64",
+        recordingRunner(...results).run,
+        "AB12CD34EF",
+      ),
+    ).toThrow("runtime-app-seal-invalid");
+  });
+
+  it("rejects an outer app that does not match the release-pinned team", () => {
+    const resourceRoot = macosFixture();
+    const runner = recordingRunner(commandResult({ stderr: "TeamIdentifier=ZZ98YX76WV\n" }));
+
+    expect(() =>
+      readMacosAttestation(resourceRoot, "macos-arm64", runner.run, "AB12CD34EF"),
     ).toThrow("runtime-app-seal-invalid");
   });
 });

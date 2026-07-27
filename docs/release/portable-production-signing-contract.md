@@ -391,11 +391,12 @@ ephemeral same-release comparison, not a committed thumbprint, public-key, or su
 preserves the approved Azure leaf-rotation contract while rejecting a valid binary from another
 publisher.
 
-macOS point-of-use checks derive the closed TeamIdentifier from the outer `Keiko.app` Developer ID
-signature after release qualification has matched that app to the reviewed `APPLE_TEAM_ID`. The app
-seal, system-extension manager, Endpoint Security extension, and secure workspace-read helper must
-then verify under that exact same team requirement. The raw team id is neither committed nor exposed
-as runtime evidence, and a separately signed object from another Apple developer fails closed.
+The protected macOS production stage binds its reviewed `APPLE_TEAM_ID` into the packaged server
+module before signing. An unbound development or dispatch package cannot qualify the native runtime.
+At startup and point of use, the outer `Keiko.app` seal, system-extension manager, Endpoint Security
+extension, and secure workspace-read helper must verify under that exact release-pinned team
+requirement. The raw team id is neither committed nor exposed as runtime evidence, and a separately
+signed object from another Apple developer fails closed.
 
 ## Child implementation interfaces
 

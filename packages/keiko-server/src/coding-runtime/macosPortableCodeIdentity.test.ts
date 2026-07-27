@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   macosDeveloperIdRequirement,
+  macosReleaseTeamIdentifier,
   macosTeamIdentifierFromOutput,
 } from "./macosPortableCodeIdentity.js";
 
@@ -25,5 +26,9 @@ describe("macOS portable code identity", () => {
       'anchor apple generic and certificate leaf[subject.OU] = "AB12CD34EF"',
     );
     expect(() => macosDeveloperIdRequirement("invalid")).toThrow(TypeError);
+  });
+
+  it("keeps an unbound development build unqualified", () => {
+    expect(macosReleaseTeamIdentifier()).toBeUndefined();
   });
 });

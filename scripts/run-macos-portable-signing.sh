@@ -11,12 +11,16 @@ verified_inventory="$5"
 static_result="$6"
 payload="$stage/payload/Keiko"
 app="$payload/Keiko.app"
+identity_module="$app/Contents/Resources/app/node_modules/@oscharko-dev/keiko-server/dist/coding-runtime/macosPortableCodeIdentity.js"
 scratch="$KEIKO_SIGNING_TEMP_ROOT/native"
 mkdir -m 700 "$scratch"
 
 case "$target" in macos-arm64) required_arch="arm64" ;; macos-x64) required_arch="x86_64" ;; *) exit 1 ;; esac
 case "$phase" in provisional|seal) ;; *) exit 1 ;; esac
 [[ "$(uname -m)" == "$required_arch" ]]
+[[ -f "$identity_module" ]]
+grep -Fq "const MACOS_RELEASE_TEAM_IDENTIFIER = \"$APPLE_TEAM_ID\";" "$identity_module"
+! grep -Fq "__KEIKO_APPLE_TEAM_ID__" "$identity_module"
 
 sign_file() {
   local relative="$1"

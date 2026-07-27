@@ -25,6 +25,7 @@ import {
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
 import {
   macosDeveloperIdRequirement,
+  macosReleaseTeamIdentifier,
   macosTeamIdentifierFromOutput,
 } from "./macosPortableCodeIdentity.js";
 import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
@@ -234,9 +235,13 @@ export function readMacosAttestation(
   resourceRoot: string,
   target: Extract<UpdatePortableTarget, "macos-arm64" | "macos-x64">,
   run: PortableRuntimeCommandRunner = runPortableRuntimeCommand,
+  expectedTeamIdentifier: string | undefined = macosReleaseTeamIdentifier(),
 ): unknown {
   const paths = macosRuntimeCodePaths(resourceRoot);
   const teamIdentifier = readMacosTeamIdentifier(paths.appRoot, run);
+  if (expectedTeamIdentifier === undefined || teamIdentifier !== expectedTeamIdentifier) {
+    throw new Error("runtime-app-seal-invalid");
+  }
   const bundleIdentifier = `dev.oscharko.keiko.${target}`;
   runMacosVerifier(
     "/usr/bin/codesign",
@@ -244,16 +249,16 @@ export function readMacosAttestation(
       "--verify",
       "--deep",
       "--strict",
-      `-R=${macosDeveloperIdRequirement(teamIdentifier, bundleIdentifier)}`,
+      `-R=${macosDeveloperIdRequirement(expectedTeamIdentifier, bundleIdentifier)}`,
       paths.appRoot,
     ],
     run,
   );
   runMacosVerifier("/usr/sbin/spctl", ["--assess", "--type", "execute", paths.appRoot], run);
-  verifyMacosNestedCode(paths.manager, macosDeveloperIdRequirement(teamIdentifier), run);
+  verifyMacosNestedCode(paths.manager, macosDeveloperIdRequirement(expectedTeamIdentifier), run);
   verifyMacosNestedCode(
     paths.systemExtension,
-    macosDeveloperIdRequirement(teamIdentifier, MACOS_SYSTEM_EXTENSION_IDENTIFIER),
+    macosDeveloperIdRequirement(expectedTeamIdentifier, MACOS_SYSTEM_EXTENSION_IDENTIFIER),
     run,
   );
   const status = run(paths.manager, ["--status"], {

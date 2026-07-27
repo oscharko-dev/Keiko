@@ -8,12 +8,16 @@ disposable="$2"
 scratch="$3"
 payload="$disposable/Keiko"
 app="$payload/Keiko.app"
+identity_module="$app/Contents/Resources/app/node_modules/@oscharko-dev/keiko-server/dist/coding-runtime/macosPortableCodeIdentity.js"
 mkdir -m 700 "$scratch"
 trap 'rm -rf "$scratch"' EXIT
 
 case "$target" in macos-arm64) required_arch="arm64" ;; macos-x64) required_arch="x86_64" ;; *) exit 1 ;; esac
 [[ "$(uname -m)" == "$required_arch" ]]
 [[ -n "${APPLE_DEVELOPER_ID_IDENTITY:-}" && -n "${APPLE_TEAM_ID:-}" ]]
+[[ -f "$identity_module" ]]
+grep -Fq "const MACOS_RELEASE_TEAM_IDENTIFIER = \"$APPLE_TEAM_ID\";" "$identity_module"
+! grep -Fq "__KEIKO_APPLE_TEAM_ID__" "$identity_module"
 
 inventory="$scratch/inventory.json"
 node scripts/macos-portable-signing.mjs inventory-root --payload-root "$payload" --target "$target" --inventory "$inventory"
