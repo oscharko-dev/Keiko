@@ -2,15 +2,25 @@ import { describe, expect, it } from "vitest";
 import { createInMemoryUiStore } from "./index.js";
 
 describe("memory autonomy policy store", () => {
-  it("persists one canonical requested mode and replaces it atomically", () => {
+  it("applies exact revisions, lets stale downgrades win, and rejects stale widening", () => {
     const store = createInMemoryUiStore();
-    expect(store.getMemoryAutonomyMode()).toBeUndefined();
+    expect(store.readMemoryAutonomyPolicy()).toBeUndefined();
 
-    store.setMemoryAutonomyMode("supervised-coding");
-    expect(store.getMemoryAutonomyMode()).toBe("supervised-coding");
+    expect(store.updateMemoryAutonomyPolicy("autonomous-delivery", 0)).toEqual({
+      requestedMode: "autonomous-delivery",
+      revision: 1,
+    });
+    expect(store.updateMemoryAutonomyPolicy("governed-assist", 0)).toEqual({
+      requestedMode: "governed-assist",
+      revision: 2,
+    });
+    expect(store.updateMemoryAutonomyPolicy("autonomous-delivery", 1)).toBeUndefined();
+    expect(store.updateMemoryAutonomyPolicy("supervised-coding", 3)).toBeUndefined();
 
-    store.setMemoryAutonomyMode("autonomous-delivery");
-    expect(store.getMemoryAutonomyMode()).toBe("autonomous-delivery");
+    expect(store.readMemoryAutonomyPolicy()).toEqual({
+      requestedMode: "governed-assist",
+      revision: 2,
+    });
     store.close();
   });
 });

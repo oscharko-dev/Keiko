@@ -5,7 +5,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { migrateLegacyProjectManifests } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 interface Migration {
   readonly version: number;
@@ -458,6 +458,14 @@ CREATE INDEX idx_workspace_manifest_roots_workspace
   ON workspace_manifest_roots(workspace_id, position);
 `;
 
+// V16 (issue #2549, epic #2537, ADR-0146 D1/D5) — monotonic server-owned revision for the
+// memory-autonomy singleton. Conditional writes use it to reject stale authority widening while
+// still permitting a stale, strictly safer downgrade.
+const V16_SQL = `
+ALTER TABLE memory_autonomy_policy
+  ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0);
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -474,6 +482,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 13, sql: V13_SQL },
   { version: 14, sql: V14_SQL },
   { version: 15, sql: V15_SQL, apply: migrateLegacyProjectManifests },
+  { version: 16, sql: V16_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

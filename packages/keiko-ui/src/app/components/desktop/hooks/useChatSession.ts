@@ -64,7 +64,10 @@ import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
-import { currentConversationMemoryMode, useConversationMemorySettings } from "./memorySettings";
+import {
+  currentConversationMemoryModeRevision,
+  useConversationMemorySettings,
+} from "./memorySettings";
 
 // ─── Attachment types (Issue #147) ────────────────────────────────────────────
 //
@@ -1262,8 +1265,8 @@ async function attemptRunSummaryFetch(
     return outcome.kind === "terminal"
       ? { kind: "summary", summary: outcome.summary }
       : { kind: "retry" };
-  } catch (caught) {
-    if (!(caught instanceof ApiError) || caught.status !== 404) return { kind: "abort" };
+  } catch (error_) {
+    if (!(error_ instanceof ApiError) || error_.status !== 404) return { kind: "abort" };
     return runSummaryFromManifestFallback(runId, fallbackKind);
   }
 }
@@ -1614,20 +1617,19 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setMemoryMode,
   } = useConversationMemorySettings();
   // Hydrate the server-persisted autonomy mode once per session mount so chat/voice requests use
-  // the user's actual selection even if the MemoriaViva window (the only other hydration site,
-  // MemoriaVivaWindow.tsx's useMemoryModePolicy) is never opened this session. The settings store
-  // is a module-level singleton, so redundant hydration across multiple mounted sessions is a
-  // harmless no-op (publish() skips an identical value); a failure leaves the safe
-  // "governed-assist" default untouched, matching the window's own hydrate-failure fallback.
+  // the user's actual selection even if no autonomy-settings surface is opened. The settings
+  // store is a module-level singleton, so redundant hydration across multiple mounted sessions is
+  // a harmless no-op (publish() skips an identical value); a failure leaves the safe
+  // "governed-assist" default untouched.
   useEffect(() => {
     let active = true;
-    const modeAtHydrationStart = currentConversationMemoryMode();
+    const revisionAtHydrationStart = currentConversationMemoryModeRevision();
     void loadMemoryAutonomyModeImpl()
       .then((policy) => {
         // A newer selection (this hydration in another mounted session, or a change made through
         // MemoriaVivaWindow) already landed while this request was in flight — applying the stale
         // response now would overwrite it, so skip.
-        if (active && currentConversationMemoryMode() === modeAtHydrationStart) {
+        if (active && currentConversationMemoryModeRevision() === revisionAtHydrationStart) {
           setMemoryMode(policy.requestedMode);
         }
       })
@@ -2040,8 +2042,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
                 };
           });
         }
-      } catch (caught) {
-        if (!cancelled) setError(errorMessage(caught));
+      } catch (error_) {
+        if (!cancelled) setError(errorMessage(error_));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -2256,8 +2258,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           selectedModel: created.chat.selectedModel,
         });
         return created.chat;
-      } catch (caught) {
-        setError(errorMessage(caught));
+      } catch (error_) {
+        setError(errorMessage(error_));
         return undefined;
       }
     },
@@ -2296,9 +2298,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           ),
         }));
         setLatestMemory(undefined);
-      } catch (caught) {
+      } catch (error_) {
         if (activeProjectPathRef.current !== project.path) return;
-        setError(errorMessage(caught));
+        setError(errorMessage(error_));
       }
     },
     [canonicalVoiceProjectionRef, openNewChat, state.models],
@@ -2341,9 +2343,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             ),
           };
         });
-      } catch (caught) {
+      } catch (error_) {
         if (!isStillActiveChat(chat.id)) return;
-        setError(errorMessage(caught));
+        setError(errorMessage(error_));
       }
     },
     [canonicalVoiceProjectionRef, state.activeChat?.id, state.models],
@@ -2359,8 +2361,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const projectPayload = await fetchProjects();
         setState((previous) => ({ ...previous, projects: Array.from(projectPayload.projects) }));
         await openNewChat(created.project);
-      } catch (caught) {
-        setError(errorMessage(caught));
+      } catch (error_) {
+        setError(errorMessage(error_));
       }
     },
     [openNewChat],
@@ -2640,9 +2642,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       updateOwnedSendStatus(signal, "contacting");
       try {
         return await streamUngrounded(request);
-      } catch (caught) {
+      } catch (error_) {
         // StreamingUnavailableError before SSE headers — fall back to buffered.
-        if (!(caught instanceof StreamingUnavailableError)) throw caught;
+        if (!(error_ instanceof StreamingUnavailableError)) throw error_;
       }
       return sendUngroundedBuffered(request);
     },
@@ -3256,12 +3258,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         notifyChatUpsert(result.chat);
         setLatestMemory(result.memory);
         updateOwnedSendStatus(controller.signal, "completed");
-      } catch (caught) {
-        if (caught instanceof DOMException && caught.name === "AbortError") {
+      } catch (error_) {
+        if (error_ instanceof DOMException && error_.name === "AbortError") {
           updateOwnedSendStatus(controller.signal, "cancelled");
           return;
         }
-        if (latestSendSignalRef.current === controller.signal) setError(errorMessage(caught));
+        if (latestSendSignalRef.current === controller.signal) setError(errorMessage(error_));
         updateOwnedSendStatus(controller.signal, "failed");
       } finally {
         if (sendControllerRef.current === controller) {

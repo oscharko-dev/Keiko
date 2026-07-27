@@ -31,7 +31,8 @@ describe("workspace manifest migration", () => {
     const legacy = new DatabaseSync(dbPath);
     legacy.exec(
       "DROP TABLE workspace_manifest_roots; DROP TABLE workspace_manifests; " +
-        "DROP TABLE workspace_trust_records; PRAGMA user_version = 13;",
+        "DROP TABLE workspace_trust_records; " +
+        "ALTER TABLE memory_autonomy_policy DROP COLUMN revision; PRAGMA user_version = 13;",
     );
     legacy.close();
 
