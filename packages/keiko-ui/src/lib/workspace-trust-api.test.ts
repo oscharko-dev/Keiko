@@ -80,15 +80,48 @@ describe("workspace trust API", () => {
       vi.fn().mockResolvedValue(new Response(JSON.stringify(status("/repo-b")), { status: 200 })),
     );
 
-    await expect(fetchWorkspaceTrustStatus("/repo-a")).rejects.toThrow("response invalid");
+    // #2625 AC1 / #2768 — a validation rejection must reach the surface as a REPORTABLE failure,
+    // not merely as a thrown value. Asserting the code (and, below, the correlation id) is what a
+    // bare Error cannot satisfy; a message-substring assertion passed either way.
+    await expect(fetchWorkspaceTrustStatus("/repo-a")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
   });
 
   it("rejects malformed and non-ok trust responses", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 200 })));
-    await expect(fetchWorkspaceTrustStatus("/repo-a")).rejects.toThrow("response invalid");
+    await expect(fetchWorkspaceTrustStatus("/repo-a")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not-json", { status: 503 })));
     await expect(fetchWorkspaceTrustStatus("/repo-a")).rejects.toThrow("request rejected");
+  });
+
+  it("gives a contract-validation failure a code and correlation id the surface can report (#2768)", async () => {
+    // The server answered 200 with a body that fails the contract. Before the fix this threw a bare
+    // Error: workspaceTrustFailure rejected it for having no `code`, so the trust surface showed a
+    // failure the user had no id to report and no code to act on — the one failure mode that
+    // reached the UI completely anonymous.
+    const correlationId = "trust-validation-2768";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ trust: "trusted" }), {
+          status: 200,
+          headers: { "X-Keiko-Correlation-Id": correlationId },
+        }),
+      ),
+    );
+
+    const error = await fetchWorkspaceTrustStatus("/repo-a").catch((thrown: unknown) => thrown);
+
+    expect(workspaceTrustFailure(error)).toEqual({
+      code: "CONTRACT_VALIDATION_FAILED",
+      correlationId,
+    });
   });
 
   it("projects only redacted API error metadata for trust surfaces", () => {
@@ -140,7 +173,10 @@ describe("workspace trust API", () => {
       vi.fn().mockResolvedValue(new Response(JSON.stringify({ trust: "trusted" }))),
     );
 
-    await expect(mutateWorkspaceTrust("/repo-a", "grant")).rejects.toThrow("response invalid");
+    await expect(mutateWorkspaceTrust("/repo-a", "grant")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
 
     expect(listener).not.toHaveBeenCalled();
     window.removeEventListener(WORKSPACE_TRUST_CHANGED_EVENT, listener);

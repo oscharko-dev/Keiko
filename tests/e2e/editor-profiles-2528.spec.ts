@@ -155,7 +155,19 @@ test("named profile settings and shortcuts switch live and persist", async ({ pa
   await window
     .getByRole("textbox", { name: "Search keyboard shortcuts" })
     .fill("Quick Access: files");
+  // #2618 gates Remove on the EDITED scope owning the override, not on one being merely in effect:
+  // `removable` reads the keybindingOverrides layer for the selected scope. The override this
+  // journey created lives on the profile layer, so asserting Remove at the panel's default "user"
+  // scope asserted a button the layer gate correctly disables — the suite was red on it (#2768).
+  // Selecting the profile scope is what the assertion was always about: the profile owns this
+  // binding in its own right, which is exactly what makes it removable here and not at user scope.
+  await window.getByRole("combobox", { name: "Scope" }).selectOption("profile");
   await expect(window.getByRole("button", { name: "Remove" })).toBeEnabled();
+  // The gate is a real gate, not an always-on button: the same row at user scope, where no user
+  // override exists, must stay disabled.
+  await window.getByRole("combobox", { name: "Scope" }).selectOption("user");
+  await expect(window.getByRole("button", { name: "Remove" })).toBeDisabled();
+  await window.getByRole("combobox", { name: "Scope" }).selectOption("profile");
 
   await mutateUserFont(request, workspace.root, "set");
   await expect(window.getByRole("spinbutton", { name: "Font size" })).toHaveValue("20");

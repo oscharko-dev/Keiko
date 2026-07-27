@@ -13,6 +13,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "quickAccess.placeholder.files": "Search files and symbols...  (prefix with > for commands)",
   "quickAccess.result.singular": "{count} result",
   "quickAccess.result.plural": "{count} results",
+  "quickAccess.result.truncatedSuffix": " Results were capped; refine the query.",
+  "quickAccess.result.truncatedPerRootSuffix":
+    " Results are capped per root and merged fairly; refine the query.",
   "browserWidget.error.unexpected": "Unexpected error.",
   "browserWidget.error.streamDisconnected":
     "Live browser events disconnected. Reopen the session to resume the feed.",

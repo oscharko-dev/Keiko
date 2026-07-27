@@ -34,7 +34,7 @@ const SEARCH_LIMIT = 30;
 
 type QuickAccessMode = "files" | "commands";
 
-interface FileResult {
+export interface FileResult {
   readonly kind: "file";
   readonly root: string;
   readonly rootLabel: string;
@@ -53,7 +53,7 @@ interface SymbolResult {
   readonly detail: string;
 }
 
-type SearchResult = FileResult | SymbolResult;
+export type SearchResult = FileResult | SymbolResult;
 type FileNameSearchResponse = Awaited<ReturnType<typeof fetchFilesSearch>>;
 type WorkspaceTextSearchResponse = Awaited<ReturnType<typeof fetchWorkspaceSearch>>;
 type WorkspaceSymbolSearchResponse = Awaited<ReturnType<typeof fetchWorkspaceSymbols>>;
@@ -161,11 +161,7 @@ function quickAccessSearchText(result: SearchResult): string {
     : `${result.path} ${result.snippet}`;
 }
 
-function rankedResults(
-  query: string,
-  responses: readonly QuickAccessRootResponse[],
-): readonly SearchResult[] {
-  const results = responses.flatMap((response) => [...response.files, ...response.symbols]);
+function rankByScore(query: string, results: readonly SearchResult[]): readonly SearchResult[] {
   return results
     .map((result, index) => ({
       result,
@@ -173,8 +169,50 @@ function rankedResults(
       score: fuzzyScore(query, quickAccessSearchText(result)) ?? Number.MAX_SAFE_INTEGER,
     }))
     .sort((left, right) => left.score - right.score || left.index - right.index)
-    .map(({ result }) => result)
-    .slice(0, SEARCH_LIMIT);
+    .map(({ result }) => result);
+}
+
+// Issue #2623 (SearchPanel) / #2768 (this surface) — concatenating every root's results and then
+// slicing the globally best-scoring SEARCH_LIMIT lets one root's sheer volume of decent matches
+// crowd out another root's few excellent ones, and a silent slice gives the user no way to know
+// anything was left out. Round-robin across each root's own best-first list instead, so every root
+// is represented up to its own quality before a later root's weaker matches are admitted, and report
+// whether the merge actually had to drop anything.
+export function rootFairMerge(
+  resultsByRoot: readonly (readonly SearchResult[])[],
+): readonly SearchResult[] {
+  const merged: SearchResult[] = [];
+  let resultIndex = 0;
+  let addedResult = true;
+  while (merged.length < SEARCH_LIMIT && addedResult) {
+    addedResult = false;
+    for (const rootResults of resultsByRoot) {
+      const result = rootResults[resultIndex];
+      if (result === undefined) continue;
+      merged.push(result);
+      addedResult = true;
+      if (merged.length === SEARCH_LIMIT) return merged;
+    }
+    resultIndex += 1;
+  }
+  return merged;
+}
+
+interface RankedResultsOutcome {
+  readonly results: readonly SearchResult[];
+  readonly truncated: boolean;
+}
+
+function rankedResults(
+  query: string,
+  responses: readonly QuickAccessRootResponse[],
+): RankedResultsOutcome {
+  const resultsByRoot = responses.map((response) =>
+    rankByScore(query, [...response.files, ...response.symbols]),
+  );
+  const availableResultCount = resultsByRoot.reduce((total, results) => total + results.length, 0);
+  const results = rootFairMerge(resultsByRoot);
+  return { results, truncated: availableResultCount > results.length };
 }
 
 async function searchQuickAccessRoot(
@@ -220,6 +258,21 @@ function quickAccessEmptyText(
     : t("quickAccess.empty.files");
 }
 
+// Issue #2768 — a silent slice gave no way to tell a complete list from one that dropped matches.
+// The count status now says so, the same way SearchPanel's does (#2623).
+function quickAccessResultsStatus(
+  t: OptionalWidgetTranslate,
+  itemCount: number,
+  truncated: boolean,
+  multiRoot: boolean,
+): string {
+  const resultKey = itemCount === 1 ? "quickAccess.result.singular" : "quickAccess.result.plural";
+  const suffixKey = multiRoot
+    ? "quickAccess.result.truncatedPerRootSuffix"
+    : "quickAccess.result.truncatedSuffix";
+  return `${t(resultKey, { count: itemCount })}${truncated ? t(suffixKey) : ""}`;
+}
+
 // Restores focus to whatever had it before the palette opened, once the palette closes.
 function useQuickAccessFocusRestore(inputRef: RefObject<HTMLInputElement | null>): void {
   const openerRef = useRef<HTMLElement | null>(
@@ -237,6 +290,7 @@ function useQuickAccessFocusRestore(inputRef: RefObject<HTMLInputElement | null>
 
 interface QuickAccessFileSearchState {
   readonly searchResults: readonly SearchResult[];
+  readonly truncated: boolean;
   readonly failedRoots: readonly string[];
 }
 
@@ -248,11 +302,13 @@ function useQuickAccessFileSearch(
   targets: readonly WorkspaceRootTarget[],
 ): QuickAccessFileSearchState {
   const [searchResults, setSearchResults] = useState<readonly SearchResult[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [failedRoots, setFailedRoots] = useState<readonly string[]>([]);
 
   useEffect(() => {
     if (mode !== "files" || targets.length === 0 || query.trim().length === 0) {
       setSearchResults([]);
+      setTruncated(false);
       setFailedRoots([]);
       return undefined;
     }
@@ -265,12 +321,15 @@ function useQuickAccessFileSearch(
         .then((outcomes) => {
           if (controller.signal.aborted) return;
           const { responses, failedLabels } = partitionSearchOutcomes(outcomes);
+          const ranked = rankedResults(trimmed, responses);
           setFailedRoots(failedLabels);
-          setSearchResults(rankedResults(trimmed, responses));
+          setSearchResults(ranked.results);
+          setTruncated(ranked.truncated);
         })
         .catch(() => {
           if (!controller.signal.aborted) {
             setSearchResults([]);
+            setTruncated(false);
             setFailedRoots([]);
           }
         });
@@ -281,7 +340,7 @@ function useQuickAccessFileSearch(
     };
   }, [mode, query, targets]);
 
-  return { searchResults, failedRoots };
+  return { searchResults, truncated, failedRoots };
 }
 
 function quickAccessKeyDownHandler(
@@ -332,7 +391,7 @@ export function UnifiedQuickAccessPalette({
   const multiRoot = targets.length > 1;
 
   useQuickAccessFocusRestore(inputRef);
-  const { searchResults, failedRoots } = useQuickAccessFileSearch(mode, query, targets);
+  const { searchResults, truncated, failedRoots } = useQuickAccessFileSearch(mode, query, targets);
 
   const commandResults = useMemo(
     () =>
@@ -380,7 +439,12 @@ export function UnifiedQuickAccessPalette({
 
   const optionId = (index: number): string => `${listId}-option-${String(index)}`;
   const emptyText = quickAccessEmptyText(t, mode, root, query);
-  const resultKey = itemCount === 1 ? "quickAccess.result.singular" : "quickAccess.result.plural";
+  const resultsStatus = quickAccessResultsStatus(
+    t,
+    itemCount,
+    mode === "files" && truncated,
+    multiRoot,
+  );
 
   return (
     <div className="cmdk-overlay" onPointerDown={onClose}>
@@ -424,7 +488,7 @@ export function UnifiedQuickAccessPalette({
           <span className="kbd">esc</span>
         </div>
         <output className="sr-only" style={NATIVE_BLOCK_STYLE}>
-          {itemCount === 0 ? emptyText : t(resultKey, { count: itemCount })}
+          {itemCount === 0 ? emptyText : resultsStatus}
         </output>
         {failedRoots.length > 0 ? (
           <div className="cmdk-empty" role="alert">

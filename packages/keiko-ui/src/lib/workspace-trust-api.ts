@@ -2,6 +2,7 @@
 // `mutateWorkspaceTrust`, the `WORKSPACE_TRUST_CHANGED_EVENT` broadcast contract, and the event-shape
 // guard `workspaceTrustEventProjectId`.
 import { isWorkspaceTrustStatus, type WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 
 const TRUST_URL = "/api/editor/verification/trust";
@@ -31,9 +32,18 @@ export function workspaceTrustFailure(error: unknown): WorkspaceTrustFailure | u
     : { code: error.code, correlationId: error.correlationId };
 }
 
+// Issue #2768 / #2625 AC1 — a bare Error carries no `code`, so `workspaceTrustFailure` rejected it
+// and the trust surface showed a failure with no code and no correlation id: the one case where the
+// server answered 200 was also the only one the user could not report. A coded ApiError puts a
+// validation failure on the same footing as every non-2xx trust failure (bffFetchJson attaches the
+// correlation id to it).
 function assertStatus(path: string, value: unknown, projectId: string): WorkspaceTrustStatus {
   if (!isWorkspaceTrustStatus(value) || value.projectId !== projectId) {
-    throw new Error(`Workspace trust response invalid for ${path}.`);
+    throw new ApiError(
+      "CONTRACT_VALIDATION_FAILED",
+      `BFF response for ${path} failed contract validation: workspace trust status invalid.`,
+      502,
+    );
   }
   return value;
 }
