@@ -1,15 +1,15 @@
 // SDK-level runAgent wrapper. The harness createSession remains the deterministic core; this wrapper
 // adds the #10 SDK contract that completed SDK runs persist a redacted EvidenceManifest by default.
 
-import { persistEvidence } from "@oscharko-dev/keiko-evidence";
-import type {
-  AuditRedactionConfig,
-  BuildOptions,
-  EvidenceBuildInput,
-  EvidenceDeps,
-  RetentionPolicy,
+import {
+  persistEvidence,
+  type AuditRedactionConfig,
+  type BuildOptions,
+  type EvidenceBuildInput,
+  type EvidenceDeps,
+  type EvidenceStore,
+  type RetentionPolicy,
 } from "@oscharko-dev/keiko-evidence";
-import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   createSession,
   DEFAULT_LIMITS,

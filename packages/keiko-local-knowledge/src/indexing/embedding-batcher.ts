@@ -19,7 +19,11 @@ import type {
   KnowledgeCapsuleId,
   VectorRecord,
 } from "@oscharko-dev/keiko-contracts";
-import { assertCompatibleEmbeddingIdentity } from "@oscharko-dev/keiko-model-gateway";
+import {
+  assertCompatibleEmbeddingIdentity,
+  EMBEDDING_NORMALIZATION,
+  l2NormalizeVector,
+} from "@oscharko-dev/keiko-model-gateway";
 import type {
   OpenAIEmbeddingAdapter,
   OpenAIEmbeddingBatchOutcome,
@@ -27,7 +31,6 @@ import type {
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingSuccess,
 } from "@oscharko-dev/keiko-model-gateway";
-import { EMBEDDING_NORMALIZATION, l2NormalizeVector } from "@oscharko-dev/keiko-model-gateway";
 
 import {
   composeVectorRecord,

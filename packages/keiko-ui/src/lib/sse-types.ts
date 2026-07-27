@@ -2,9 +2,11 @@
 // (harness, unit-test workflow, bug-investigation workflow). Run SSE frames are unnamed and carry
 // the event type in JSON, so useSSE consumes them through one EventSource.onmessage handler.
 
-import type { HarnessEvent as ContractsHarnessEvent } from "@oscharko-dev/keiko-contracts";
-import type { WorkflowEvent } from "@oscharko-dev/keiko-contracts";
-import type { BugInvestigationEvent } from "@oscharko-dev/keiko-contracts";
+import type {
+  BugInvestigationEvent,
+  HarnessEvent as ContractsHarnessEvent,
+  WorkflowEvent,
+} from "@oscharko-dev/keiko-contracts";
 
 interface ReadySentinel {
   readonly schemaVersion: "1";
