@@ -66,6 +66,17 @@ function macosFixture(receipt: unknown = { result: "passed" }): string {
   const resourceRoot = join(root, "Keiko.app", "Contents", "Resources");
   mkdirSync(join(resourceRoot, ".portable"), { recursive: true });
   mkdirSync(join(root, "Keiko.app", "Contents", "MacOS"), { recursive: true });
+  mkdirSync(
+    join(
+      root,
+      "Keiko.app",
+      "Contents",
+      "Library",
+      "SystemExtensions",
+      "com.oscharko.keiko.runtime-monitor.systemextension",
+    ),
+    { recursive: true },
+  );
   writeFileSync(
     join(root, "Keiko.app", "Contents", "MacOS", "KeikoSystemExtensionManager"),
     "signed manager",
@@ -156,6 +167,9 @@ describe("production portable runtime platform attestation", () => {
   it("verifies the sealed macOS app and active system extension before reading the receipt", () => {
     const resourceRoot = macosFixture({ result: "passed", backend: "endpoint-security" });
     const runner = recordingRunner(
+      commandResult({ stderr: "TeamIdentifier=AB12CD34EF\n" }),
+      commandResult(),
+      commandResult(),
       commandResult(),
       commandResult(),
       commandResult({ stdout: "active\n" }),
@@ -167,12 +181,24 @@ describe("production portable runtime platform attestation", () => {
     });
     expect(runner.calls.map(({ command }) => command)).toEqual([
       "/usr/bin/codesign",
+      "/usr/bin/codesign",
       "/usr/sbin/spctl",
+      "/usr/bin/codesign",
+      "/usr/bin/codesign",
       realpathSync(join(resourceRoot, "..", "MacOS", "KeikoSystemExtensionManager")),
     ]);
     expect(runner.calls[0]?.options.env).toEqual({ PATH: "/usr/bin:/usr/sbin" });
-    expect(runner.calls[0]?.args).toContain(
-      '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-arm64"',
+    expect(runner.calls[1]?.args).toContain(
+      '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-arm64"' +
+        ' and certificate leaf[subject.OU] = "AB12CD34EF"',
+    );
+    expect(runner.calls[3]?.args).toContain(
+      '-R=anchor apple generic and certificate leaf[subject.OU] = "AB12CD34EF"',
+    );
+    expect(runner.calls[4]?.args).toContain(
+      "-R=anchor apple generic and identifier " +
+        '"com.oscharko.keiko.runtime-monitor.systemextension"' +
+        ' and certificate leaf[subject.OU] = "AB12CD34EF"',
     );
   });
 
@@ -182,7 +208,10 @@ describe("production portable runtime platform attestation", () => {
       readMacosAttestation(
         resourceRoot,
         "macos-arm64",
-        recordingRunner(commandResult({ status: 1 })).run,
+        recordingRunner(
+          commandResult({ stderr: "TeamIdentifier=AB12CD34EF\n" }),
+          commandResult({ status: 1 }),
+        ).run,
       ),
     ).toThrow("runtime-app-seal-invalid");
 
@@ -191,10 +220,40 @@ describe("production portable runtime platform attestation", () => {
       commandResult({ stdout: "inactive" }),
       commandResult({ stdout: "active", stderr: "redacted failure" }),
     ]) {
-      const runner = recordingRunner(commandResult(), commandResult(), managerResult);
+      const runner = recordingRunner(
+        commandResult({ stderr: "TeamIdentifier=AB12CD34EF\n" }),
+        commandResult(),
+        commandResult(),
+        commandResult(),
+        commandResult(),
+        managerResult,
+      );
       expect(() => readMacosAttestation(resourceRoot, "macos-x64", runner.run)).toThrow(
         "runtime-system-extension-inactive",
       );
     }
+  });
+
+  it("fails closed when the outer app has no single valid team identity", () => {
+    const resourceRoot = macosFixture();
+
+    expect(() =>
+      readMacosAttestation(
+        resourceRoot,
+        "macos-arm64",
+        recordingRunner(commandResult({ stderr: "TeamIdentifier=not set\n" })).run,
+      ),
+    ).toThrow("runtime-app-seal-invalid");
+  });
+
+  it.each([3, 4])("rejects a differently signed nested macOS code object at call %i", (call) => {
+    const resourceRoot = macosFixture();
+    const results = Array.from({ length: 5 }, () => commandResult());
+    results[0] = commandResult({ stderr: "TeamIdentifier=AB12CD34EF\n" });
+    results[call] = commandResult({ status: 1 });
+
+    expect(() =>
+      readMacosAttestation(resourceRoot, "macos-arm64", recordingRunner(...results).run),
+    ).toThrow("runtime-app-seal-invalid");
   });
 });

@@ -4,6 +4,10 @@ import type { BigIntStats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 
+import {
+  macosDeveloperIdRequirement,
+  macosTeamIdentifierFromOutput,
+} from "./macosPortableCodeIdentity.js";
 import { safeRealFile } from "./nativeRuntimeProcessPaths.js";
 import type {
   PortableSecureWorkspaceReadMetadata,
@@ -21,10 +25,12 @@ const MAX_SIGNATURE_CHECK_MS = 10_000;
 type PortableNativeTarget = "win32-x64" | "darwin-arm64" | "darwin-x64";
 
 export type MacosCodeCommandRunner = (command: string, args: readonly string[]) => Promise<boolean>;
+export type MacosTeamIdentifierReader = (appRoot: string) => Promise<string | undefined>;
 
 export interface NodePortableSecureWorkspaceReadInspectionOptions {
   readonly resourceRoot?: string | undefined;
   readonly macosRunCommand?: MacosCodeCommandRunner | undefined;
+  readonly macosReadTeamIdentifier?: MacosTeamIdentifierReader | undefined;
   readonly windowsRunCommand?: WindowsAuthenticodeCommandRunner | undefined;
 }
 
@@ -123,7 +129,7 @@ function verifySignature(
 ): Promise<boolean> {
   return target === "win32-x64"
     ? verifyWindowsAuthenticode(executable, options)
-    : verifyMacosCode(executable, options.macosRunCommand ?? runMacosCodeCommand);
+    : verifyMacosCode(executable, options);
 }
 
 async function verifyWindowsAuthenticode(
@@ -148,25 +154,44 @@ function windowsLauncher(resourceRoot: string | undefined): string | undefined {
   }
 }
 
-function verifyMacosCode(executable: string, run: MacosCodeCommandRunner): Promise<boolean> {
-  return run("/usr/bin/codesign", ["--verify", "--strict", "-R=anchor apple generic", executable]);
+async function verifyMacosCode(
+  executable: string,
+  options: NodePortableSecureWorkspaceReadInspectionOptions,
+): Promise<boolean> {
+  if (options.resourceRoot === undefined) return false;
+  const appRoot = dirname(dirname(options.resourceRoot));
+  const readTeamIdentifier = options.macosReadTeamIdentifier ?? runMacosTeamIdentifier;
+  const teamIdentifier = await readTeamIdentifier(appRoot);
+  if (teamIdentifier === undefined) return false;
+  const run = options.macosRunCommand ?? runMacosCodeCommand;
+  return run("/usr/bin/codesign", [
+    "--verify",
+    "--strict",
+    `-R=${macosDeveloperIdRequirement(teamIdentifier)}`,
+    executable,
+  ]);
 }
 
-export function provePortableImmutableResourceTree(
+export async function provePortableImmutableResourceTree(
   resourceRoot: string,
   target: PortableNativeTarget,
   run: MacosCodeCommandRunner = runMacosCodeCommand,
+  readTeamIdentifier: MacosTeamIdentifierReader = runMacosTeamIdentifier,
 ): Promise<boolean> {
   // Windows has no immutable app-resource seal. The caller instead reopens and hashes the
   // receipt-bound helper, then independently matches its Authenticode signer on every admission.
-  if (target === "win32-x64") return Promise.resolve(true);
+  if (target === "win32-x64") return true;
   const manifestTarget = target === "darwin-arm64" ? "macos-arm64" : "macos-x64";
+  const appRoot = dirname(dirname(resourceRoot));
+  const teamIdentifier = await readTeamIdentifier(appRoot);
+  if (teamIdentifier === undefined) return false;
+  const bundleIdentifier = `dev.oscharko.keiko.${manifestTarget}`;
   return run("/usr/bin/codesign", [
     "--verify",
     "--deep",
     "--strict",
-    `-R=anchor apple generic and identifier "dev.oscharko.keiko.${manifestTarget}"`,
-    dirname(dirname(resourceRoot)),
+    `-R=${macosDeveloperIdRequirement(teamIdentifier, bundleIdentifier)}`,
+    appRoot,
   ]);
 }
 
@@ -183,6 +208,24 @@ function runMacosCodeCommand(command: string, args: readonly string[]): Promise<
       },
       (error) => {
         resolve(error === null);
+      },
+    );
+  });
+}
+
+function runMacosTeamIdentifier(appRoot: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      "/usr/bin/codesign",
+      ["-d", "--verbose=4", appRoot],
+      {
+        encoding: "utf8",
+        env: { PATH: "/usr/bin" },
+        shell: false,
+        timeout: MAX_SIGNATURE_CHECK_MS,
+      },
+      (error, stdout, stderr) => {
+        resolve(error === null ? macosTeamIdentifierFromOutput(`${stdout}\n${stderr}`) : undefined);
       },
     );
   });

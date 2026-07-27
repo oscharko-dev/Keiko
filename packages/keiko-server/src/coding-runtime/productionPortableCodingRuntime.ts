@@ -23,7 +23,11 @@ import {
   type PortableSidecarRuntimeVerification,
 } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
-import { safeRealFile } from "./nativeRuntimeProcessPaths.js";
+import {
+  macosDeveloperIdRequirement,
+  macosTeamIdentifierFromOutput,
+} from "./macosPortableCodeIdentity.js";
+import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
 import {
   windowsPublisherIdentityMatches,
   windowsSystemEnvironment,
@@ -33,6 +37,7 @@ const ACTIVATION_PATH = ".portable/runtime-activation.json";
 const MACOS_RECEIPT_PATH = ".portable/runtime-qualification.json";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const MAX_ATTESTATION_BYTES = 65_536;
+const MACOS_SYSTEM_EXTENSION_IDENTIFIER = "com.oscharko.keiko.runtime-monitor.systemextension";
 const TARGETS = new Set<UpdatePortableTarget>(["windows-x64", "macos-arm64", "macos-x64"]);
 
 export interface QualifiedPortableOpenCodeRuntime {
@@ -230,18 +235,28 @@ export function readMacosAttestation(
   target: Extract<UpdatePortableTarget, "macos-arm64" | "macos-x64">,
   run: PortableRuntimeCommandRunner = runPortableRuntimeCommand,
 ): unknown {
-  const appRoot = dirname(dirname(resourceRoot));
-  const requirement = `anchor apple generic and identifier "dev.oscharko.keiko.${target}"`;
+  const paths = macosRuntimeCodePaths(resourceRoot);
+  const teamIdentifier = readMacosTeamIdentifier(paths.appRoot, run);
+  const bundleIdentifier = `dev.oscharko.keiko.${target}`;
   runMacosVerifier(
     "/usr/bin/codesign",
-    ["--verify", "--deep", "--strict", `-R=${requirement}`, appRoot],
+    [
+      "--verify",
+      "--deep",
+      "--strict",
+      `-R=${macosDeveloperIdRequirement(teamIdentifier, bundleIdentifier)}`,
+      paths.appRoot,
+    ],
     run,
   );
-  runMacosVerifier("/usr/sbin/spctl", ["--assess", "--type", "execute", appRoot], run);
-  const manager = safeRealFile(
-    join(dirname(dirname(resourceRoot)), "Contents", "MacOS", "KeikoSystemExtensionManager"),
+  runMacosVerifier("/usr/sbin/spctl", ["--assess", "--type", "execute", paths.appRoot], run);
+  verifyMacosNestedCode(paths.manager, macosDeveloperIdRequirement(teamIdentifier), run);
+  verifyMacosNestedCode(
+    paths.systemExtension,
+    macosDeveloperIdRequirement(teamIdentifier, MACOS_SYSTEM_EXTENSION_IDENTIFIER),
+    run,
   );
-  const status = run(manager, ["--status"], {
+  const status = run(paths.manager, ["--status"], {
     env: {},
     timeout: 10_000,
   });
@@ -249,6 +264,46 @@ export function readMacosAttestation(
     throw new Error("runtime-system-extension-inactive");
   }
   return readRecord(safeRealFile(join(resourceRoot, ...MACOS_RECEIPT_PATH.split("/"))));
+}
+
+function macosRuntimeCodePaths(resourceRoot: string): {
+  readonly appRoot: string;
+  readonly manager: string;
+  readonly systemExtension: string;
+} {
+  const appRoot = safeRealDirectory(dirname(dirname(resourceRoot)));
+  return {
+    appRoot,
+    manager: safeRealFile(join(appRoot, "Contents", "MacOS", "KeikoSystemExtensionManager")),
+    systemExtension: safeRealDirectory(
+      join(appRoot, "Contents", "Library", "SystemExtensions", MACOS_SYSTEM_EXTENSION_IDENTIFIER),
+    ),
+  };
+}
+
+function readMacosTeamIdentifier(appRoot: string, run: PortableRuntimeCommandRunner): string {
+  const result = run("/usr/bin/codesign", ["-d", "--verbose=4", appRoot], {
+    env: { PATH: "/usr/bin:/usr/sbin" },
+    timeout: 15_000,
+  });
+  const identifier =
+    result.status === 0
+      ? macosTeamIdentifierFromOutput(`${result.stdout}\n${result.stderr}`)
+      : undefined;
+  if (identifier === undefined) throw new Error("runtime-app-seal-invalid");
+  return identifier;
+}
+
+function verifyMacosNestedCode(
+  path: string,
+  requirement: string,
+  run: PortableRuntimeCommandRunner,
+): void {
+  runMacosVerifier(
+    "/usr/bin/codesign",
+    ["--verify", "--deep", "--strict", `-R=${requirement}`, path],
+    run,
+  );
 }
 
 function runMacosVerifier(

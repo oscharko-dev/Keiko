@@ -1,25 +1,48 @@
 import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(
-  "native/runtime-supervisor/macos/system-extension/keiko_system_extension_manager.m",
+  new URL(
+    "../../native/runtime-supervisor/macos/system-extension/keiko_system_extension_manager.m",
+    import.meta.url,
+  ),
   "utf8",
 );
 const monitorSource = readFileSync(
-  "native/runtime-supervisor/macos/system-extension/keiko_runtime_monitor.m",
+  new URL(
+    "../../native/runtime-supervisor/macos/system-extension/keiko_runtime_monitor.m",
+    import.meta.url,
+  ),
   "utf8",
 );
 const supervisorSource = readFileSync(
-  "native/runtime-supervisor/macos/keiko_runtime_supervisor.c",
+  new URL("../../native/runtime-supervisor/macos/keiko_runtime_supervisor.c", import.meta.url),
   "utf8",
 );
-const protocolHarness = readFileSync("native/runtime-supervisor/macos/test-protocol.mjs", "utf8");
+const protocolHarness = readFileSync(
+  new URL("../../native/runtime-supervisor/macos/test-protocol.mjs", import.meta.url),
+  "utf8",
+);
 
 function methodBody(signature) {
   const start = source.indexOf(signature);
   if (start === -1) throw new Error(`missing Objective-C method: ${signature}`);
   const nextMethod = source.indexOf("\n- (", start + signature.length);
   return source.slice(start, nextMethod === -1 ? undefined : nextMethod);
+}
+
+function functionBody(sourceText, signature) {
+  const start = sourceText.indexOf(signature);
+  if (start === -1) throw new Error(`missing function: ${signature}`);
+  const open = sourceText.indexOf("{", start + signature.length);
+  let depth = 0;
+  for (let index = open; index < sourceText.length; index += 1) {
+    if (sourceText[index] === "{") depth += 1;
+    if (sourceText[index] === "}") depth -= 1;
+    if (depth === 0) return sourceText.slice(start, index + 1);
+  }
+  throw new Error(`unterminated function: ${signature}`);
 }
 
 describe("macOS system-extension activation manager", () => {
@@ -51,20 +74,28 @@ describe("macOS system-extension activation manager", () => {
   });
 
   it("fails closed for monitor transport, ownership, and connection exhaustion", () => {
-    expect(monitorSource).toContain("sent == (ssize_t)sizeof(reply)");
-    expect(monitorSource).toContain("shutdown(session->descriptor, SHUT_RDWR)");
-    expect(monitorSource).toContain("session->descriptor < 0 && session->uid == uid");
-    expect(monitorSource).toContain("KEIKO_MAX_CONNECTIONS");
-    expect(monitorSource).toContain("reserve_connection()");
-    expect(monitorSource).toContain("errno != EINTR && errno != ECONNABORTED");
+    const reply = functionBody(monitorSource, "static int reply_to(");
+    const reserve = functionBody(monitorSource, "static int reserve_connection(");
+    const connection = functionBody(monitorSource, "static void *serve_client(");
+    const main = functionBody(monitorSource, "int main(");
+
+    expect(reply).toContain("sent == (ssize_t)sizeof(reply)");
+    expect(reply).toContain("shutdown(session->descriptor, SHUT_RDWR)");
+    expect(connection).toContain("session->descriptor < 0 && session->uid == uid");
+    expect(reserve).toContain("KEIKO_MAX_CONNECTIONS");
+    expect(main).toContain("reserve_connection()");
+    expect(main).toContain("errno != EINTR && errno != ECONNABORTED");
   });
 
   it("terminates on monitor and poll failures and always reaps the protocol harness", () => {
-    expect(supervisorSource).toContain("if (poll_result < 0)");
-    expect(supervisorSource).toContain("if (errno == EINTR) continue;");
-    expect(supervisorSource).toMatch(/KEIKO_MONITOR_ZERO_LIVE[\s\S]*else \{\s*return 0;/u);
-    expect(protocolHarness).toContain("finally {");
-    expect(protocolHarness).toContain('child.kill("SIGKILL")');
-    expect(protocolHarness).toContain("await exited.catch");
+    const supervise = functionBody(supervisorSource, "static int supervise(");
+    const qualify = functionBody(protocolHarness, "async function qualify(");
+
+    expect(supervise).toContain("if (poll_result < 0)");
+    expect(supervise).toContain("if (errno == EINTR) continue;");
+    expect(supervise).toMatch(/KEIKO_MONITOR_ZERO_LIVE[\s\S]*else \{\s*return 0;/u);
+    expect(qualify).toContain("finally {");
+    expect(qualify).toContain('child.kill("SIGKILL")');
+    expect(qualify).toContain("await exited.catch");
   });
 });

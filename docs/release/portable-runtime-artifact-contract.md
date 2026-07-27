@@ -800,6 +800,9 @@ Validation rules:
   Authenticode publisher-chain verification. Windows point-of-use admission additionally invokes
   the fixed system verifier with a closed environment and requires every runtime attestation carrier
   and privileged helper to have the same verified leaf signer identity as `Keiko.exe`.
+- macOS point-of-use admission derives the qualified outer app's closed Developer ID TeamIdentifier
+  and requires the app seal, system-extension manager, Endpoint Security extension, and secure-read
+  helper to verify under that same team identity. Raw team ids remain forbidden in persisted evidence.
 - The release-impact entry must bind the full reviewed ADR-0121 tuple for the same artifact:
   release id/tag, asset id/name/size, package version, runtime identity, archive digest, build
   provenance, SBOM/license/checksum evidence, platform target, signing/notarization status, and any

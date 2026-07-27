@@ -391,6 +391,12 @@ ephemeral same-release comparison, not a committed thumbprint, public-key, or su
 preserves the approved Azure leaf-rotation contract while rejecting a valid binary from another
 publisher.
 
+macOS point-of-use checks derive the closed TeamIdentifier from the outer `Keiko.app` Developer ID
+signature after release qualification has matched that app to the reviewed `APPLE_TEAM_ID`. The app
+seal, system-extension manager, Endpoint Security extension, and secure workspace-read helper must
+then verify under that exact same team requirement. The raw team id is neither committed nor exposed
+as runtime evidence, and a separately signed object from another Apple developer fails closed.
+
 ## Child implementation interfaces
 
 - **#2200 (Windows):** implements the protected native Windows signing job, exact Azure trust/RBAC

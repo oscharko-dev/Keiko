@@ -552,6 +552,9 @@ describe("Windows portable production signing workflow", () => {
     expect(windowsVerifier).toContain("peInventorySha256");
     expect(windowsVerifier).toContain("Get-DirectoryTreeSha256");
     expect(windowsVerifier).toContain("payloadSha256 = Get-DirectoryTreeSha256");
+    expect(windowsVerifier).toContain("$rootEntry = Get-Item -LiteralPath $canonicalRoot -Force");
+    expect(windowsVerifier).toContain("foreach ($entry in Get-ChildItem");
+    expect(windowsVerifier).toContain("$entry.Attributes -band");
     expect(portableWorkflow).toContain(
       '--expected-inventory "$env:RUNNER_TEMP\\windows-pe-core-verified.json"',
     );

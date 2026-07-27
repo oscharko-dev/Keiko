@@ -103,9 +103,7 @@ describe("node portable secure workspace-read inspection", () => {
   it("executes the fixed platform signature verifiers without an ambient shell", async () => {
     const inspection = createNodePortableSecureWorkspaceReadInspection();
 
-    await expect(inspection.verifySignature("/usr/bin/true", "darwin-arm64")).resolves.toEqual(
-      expect.any(Boolean),
-    );
+    await expect(inspection.verifySignature("/usr/bin/true", "darwin-arm64")).resolves.toBe(false);
     await expect(
       inspection.verifySignature("/definitely/missing/keiko-helper", "darwin-x64"),
     ).resolves.toBe(false);
@@ -124,12 +122,14 @@ describe("node portable secure workspace-read inspection", () => {
       calls.push({ args, command });
       return Promise.resolve(true);
     });
+    const readTeamIdentifier = vi.fn(() => Promise.resolve("AB12CD34EF"));
 
     await expect(
       provePortableImmutableResourceTree(
         "/Applications/Keiko.app/Contents/Resources",
         "darwin-arm64",
         run,
+        readTeamIdentifier,
       ),
     ).resolves.toBe(true);
     await expect(
@@ -137,6 +137,7 @@ describe("node portable secure workspace-read inspection", () => {
         "/Applications/Keiko.app/Contents/Resources",
         "darwin-x64",
         run,
+        readTeamIdentifier,
       ),
     ).resolves.toBe(true);
     await expect(provePortableImmutableResourceTree("C:\\Keiko", "win32-x64", run)).resolves.toBe(
@@ -149,7 +150,8 @@ describe("node portable secure workspace-read inspection", () => {
           "--verify",
           "--deep",
           "--strict",
-          '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-arm64"',
+          '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-arm64"' +
+            ' and certificate leaf[subject.OU] = "AB12CD34EF"',
           "/Applications/Keiko.app",
         ],
       },
@@ -159,17 +161,20 @@ describe("node portable secure workspace-read inspection", () => {
           "--verify",
           "--deep",
           "--strict",
-          '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-x64"',
+          '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-x64"' +
+            ' and certificate leaf[subject.OU] = "AB12CD34EF"',
           "/Applications/Keiko.app",
         ],
       },
     ]);
   });
 
-  it("requires an Apple-anchored signature for the macOS helper", async () => {
+  it("requires the outer app's Developer ID team for the macOS helper", async () => {
     const run = vi.fn(() => Promise.resolve(true));
     const inspection = createNodePortableSecureWorkspaceReadInspection({
+      resourceRoot: "/Applications/Keiko.app/Contents/Resources",
       macosRunCommand: run,
+      macosReadTeamIdentifier: () => Promise.resolve("AB12CD34EF"),
     });
 
     await expect(
@@ -178,9 +183,44 @@ describe("node portable secure workspace-read inspection", () => {
     expect(run).toHaveBeenCalledWith("/usr/bin/codesign", [
       "--verify",
       "--strict",
-      "-R=anchor apple generic",
+      '-R=anchor apple generic and certificate leaf[subject.OU] = "AB12CD34EF"',
       "/Applications/Keiko/helper",
     ]);
+  });
+
+  it("rejects a macOS helper when the outer app team cannot be established", async () => {
+    const run = vi.fn(() => Promise.resolve(true));
+    const inspection = createNodePortableSecureWorkspaceReadInspection({
+      resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+      macosRunCommand: run,
+      macosReadTeamIdentifier: () => Promise.resolve(undefined),
+    });
+
+    await expect(
+      inspection.verifySignature("/Applications/Keiko/helper", "darwin-arm64"),
+    ).resolves.toBe(false);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("rejects a macOS helper signed by a different Developer ID team", async () => {
+    const inspection = createNodePortableSecureWorkspaceReadInspection({
+      resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+      macosRunCommand: () => Promise.resolve(false),
+      macosReadTeamIdentifier: () => Promise.resolve("AB12CD34EF"),
+    });
+
+    await expect(
+      inspection.verifySignature("/Applications/Keiko/helper", "darwin-arm64"),
+    ).resolves.toBe(false);
+  });
+
+  it("fails closed when the default macOS app identity reader cannot verify the app", async () => {
+    await expect(
+      provePortableImmutableResourceTree(
+        "/definitely/missing/Keiko.app/Contents/Resources",
+        "darwin-arm64",
+      ),
+    ).resolves.toBe(false);
   });
 
   it("accepts a Windows helper only when it matches the fixed launcher's signer", async () => {

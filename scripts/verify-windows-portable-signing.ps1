@@ -45,12 +45,26 @@ function Test-Rfc3161Timestamp([string]$Path) {
 
 function Get-DirectoryTreeSha256([string]$Root) {
   $canonicalRoot = [System.IO.Path]::GetFullPath($Root)
+  try {
+    $rootEntry = Get-Item -LiteralPath $canonicalRoot -Force
+  }
+  catch {
+    Fail-Bounded "sidecar payload root is invalid"
+  }
+  if (
+    -not $rootEntry.PSIsContainer -or
+    ($rootEntry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+  ) {
+    Fail-Bounded "sidecar payload root is invalid"
+  }
   $paths = [System.Collections.Generic.List[string]]::new()
   $files = @{}
-  foreach ($file in Get-ChildItem -LiteralPath $canonicalRoot -File -Recurse -Force) {
-    if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+  foreach ($entry in Get-ChildItem -LiteralPath $canonicalRoot -Recurse -Force) {
+    if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
       Fail-Bounded "sidecar payload contains a reparse point"
     }
+    if ($entry.PSIsContainer) { continue }
+    $file = $entry
     $relative = [System.IO.Path]::GetRelativePath($canonicalRoot, $file.FullName).Replace('\', '/')
     $paths.Add($relative)
     $files[$relative] = $file.FullName
