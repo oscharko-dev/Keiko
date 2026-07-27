@@ -87,7 +87,7 @@ async function response(reader) {
 
 async function compileFixture(path, architecture) {
   const child = spawn(
-    "xcrun",
+    "/usr/bin/xcrun",
     [
       "clang",
       "-std=c11",
@@ -101,7 +101,7 @@ async function compileFixture(path, architecture) {
       path,
       fixtureSource.pathname,
     ],
-    { stdio: ["ignore", "ignore", "pipe"] },
+    { env: {}, stdio: ["ignore", "ignore", "pipe"] },
   );
   const errors = [];
   child.stderr.on("data", (chunk) => errors.push(chunk));

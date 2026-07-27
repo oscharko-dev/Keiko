@@ -92,6 +92,8 @@ describe("Sonar analysis scope", () => {
 
   it("keeps local Keiko task workspaces outside the local Sonar TypeScript graph", () => {
     expect(localSonarGate).toContain("**/.keiko/**");
+    expect(localSonarGate).toContain("rev-parse --path-format=absolute --git-common-dir");
+    expect(localSonarGate).not.toContain("rev-parse --absolute-git-dir");
     expect(validProperties).toContain(
       "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
     );

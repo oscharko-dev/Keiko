@@ -6,7 +6,7 @@ export const RUNTIME_ACTIVATION_RELATIVE_PATH = ".portable/runtime-activation.js
 export const RUNTIME_QUALIFICATION_SUITE = "runtime-tree-qualification-v1";
 
 function clone(value) {
-  return JSON.parse(JSON.stringify(value));
+  return structuredClone(value);
 }
 
 export function runtimeActivationManifest(manifest) {

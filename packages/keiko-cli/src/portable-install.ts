@@ -122,13 +122,13 @@ function parseSetupManifestRecord(
   const primaryLauncher = raw.primaryLauncher;
   const bootstrapUpdateEligible = raw.bootstrapUpdateEligible;
   if (typeof packageName !== "string" || typeof packageVersion !== "string") {
-    throw new Error("portable setup manifest package fields are malformed");
+    throw new TypeError("portable setup manifest package fields are malformed");
   }
   if (typeof stable !== "boolean" || typeof bootstrapUpdateEligible !== "boolean") {
-    throw new Error("portable setup manifest state flags are malformed");
+    throw new TypeError("portable setup manifest state flags are malformed");
   }
   if (typeof primaryLauncher !== "string") {
-    throw new Error("portable setup manifest launcher field is malformed");
+    throw new TypeError("portable setup manifest launcher field is malformed");
   }
   return {
     schemaVersion: 1,

@@ -186,7 +186,7 @@ export function qualifyWindowsRuntimeRelease(options) {
     {
       cwd: resolve(import.meta.dirname, ".."),
       encoding: "utf8",
-      env: { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "C:\\Windows" },
+      env: { SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows` },
       timeout: 60_000,
     },
   );

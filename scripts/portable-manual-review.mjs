@@ -194,7 +194,8 @@ function ensureDir(path) {
 }
 
 function shellQuote(value) {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
+  const escapedQuote = String.raw`'\''`;
+  return `'${value.replaceAll("'", escapedQuote)}'`;
 }
 
 function targetByName(name) {
@@ -700,6 +701,11 @@ function writeNativeHelperPayload(resourceRoot, target) {
 function nativeHelper(target, version, signingVerified, name) {
   const runtimeTarget = targetByName(target);
   const secureRead = name === "keiko-secure-workspace-read";
+  let sourcePath = "native/secure-workspace-read";
+  if (!secureRead) {
+    const supervisorPlatform = target === "windows-x64" ? "windows" : "macos";
+    sourcePath = `native/runtime-supervisor/${supervisorPlatform}`;
+  }
   const bytes = nativeHelperBytes(target, name);
   const digest = sha256Bytes(bytes);
   const signing = componentSigningEvidence(target, signingVerified);
@@ -716,9 +722,7 @@ function nativeHelper(target, version, signingVerified, name) {
     },
     source: {
       commitSha: "a".repeat(40),
-      path: secureRead
-        ? "native/secure-workspace-read"
-        : `native/runtime-supervisor/${target === "windows-x64" ? "windows" : "macos"}`,
+      path: sourcePath,
       treeSha256: sha256Bytes(
         Buffer.from(
           `${secureRead ? "native/secure-workspace-read" : "native/runtime-supervisor"}\n`,
@@ -1280,12 +1284,7 @@ function jsonResponse(value) {
 function portableMode(target, scenario, packageVersion = CURRENT_VERSION) {
   if (scenario === "legacy-package-manager") return legacyInstallMode();
   const portable = {
-    status:
-      scenario === "unmanaged-bootstrap"
-        ? "bootstrap"
-        : scenario === "system-managed"
-          ? "it-managed"
-          : "managed",
+    status: portableModeStatus(scenario),
     target,
     updateEligible: scenario !== "unmanaged-bootstrap" && scenario !== "system-managed",
     packageVersion,
@@ -1304,6 +1303,12 @@ function portableMode(target, scenario, packageVersion = CURRENT_VERSION) {
     portable,
     recommendedAction: "portable-managed-update",
   };
+}
+
+function portableModeStatus(scenario) {
+  if (scenario === "unmanaged-bootstrap") return "bootstrap";
+  if (scenario === "system-managed") return "it-managed";
+  return "managed";
 }
 
 function unsupportedPortableMode(portable, reason) {
@@ -1613,10 +1618,15 @@ function writeScenarioReceipt(root, input, url) {
 
 function openBrowserIfRequested(url, open) {
   if (!open) return;
-  const command =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const command = browserOpenCommand(process.platform);
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   spawnSync(command, args, { stdio: "ignore", detached: true });
+}
+
+function browserOpenCommand(platform) {
+  if (platform === "darwin") return "/usr/bin/open";
+  if (platform === "win32") return String.raw`C:\Windows\System32\cmd.exe`;
+  return "/usr/bin/xdg-open";
 }
 
 export async function runPortableManualReview(argv = process.argv.slice(2)) {

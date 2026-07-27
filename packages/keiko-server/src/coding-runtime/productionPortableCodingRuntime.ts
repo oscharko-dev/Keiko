@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import {
@@ -171,6 +171,7 @@ const PLATFORM_ATTESTATION: PortableRuntimeAttestationPort = Object.freeze({
 });
 
 function readWindowsAttestation(resourceRoot: string): unknown {
+  const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
   const executable = safeRealFile(
     join(resourceRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
   );
@@ -178,8 +179,7 @@ function readWindowsAttestation(resourceRoot: string): unknown {
   const result = spawnSync(executable, ["--emit"], {
     encoding: "utf8",
     env: {
-      PATH: process.env.PATH ?? "",
-      SystemRoot: process.env.SystemRoot ?? "C:\\Windows",
+      SystemRoot: systemRoot,
     },
     shell: false,
     windowsHide: true,
@@ -193,17 +193,24 @@ function readWindowsAttestation(resourceRoot: string): unknown {
 }
 
 function verifyWindowsSignature(executable: string): void {
+  const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
+  const powershell = win32.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
   const script =
     "$s=Get-AuthenticodeSignature -LiteralPath $args[0];" +
     "if($s.Status -ne 'Valid' -or $null -eq $s.TimeStamperCertificate){exit 1}";
   const result = spawnSync(
-    "powershell.exe",
+    powershell,
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, executable],
     {
       encoding: "utf8",
       env: {
-        PATH: process.env.PATH ?? "",
-        SystemRoot: process.env.SystemRoot ?? "C:\\Windows",
+        SystemRoot: systemRoot,
       },
       shell: false,
       windowsHide: true,

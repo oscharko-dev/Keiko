@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { relative, resolve, sep, win32 } from "node:path";
 
 import type {
   PortableSecureWorkspaceReadMetadata,
@@ -95,18 +95,25 @@ function verifySignature(
 }
 
 function verifyWindowsAuthenticode(executable: string): boolean {
+  const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
+  const powershell = win32.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
   const script =
     "$s=Get-AuthenticodeSignature -LiteralPath $args[0];" +
     "if($s.Status -ne 'Valid' -or $null -eq $s.TimeStamperCertificate){exit 1}";
   return (
     spawnSync(
-      "powershell.exe",
+      powershell,
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, executable],
       {
         encoding: "utf8",
         env: {
-          PATH: process.env.PATH ?? "",
-          SystemRoot: process.env.SystemRoot ?? "C:\\Windows",
+          SystemRoot: systemRoot,
         },
         shell: false,
         windowsHide: true,

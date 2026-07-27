@@ -82,9 +82,7 @@ export function validateAzureArtifactSigningConfig(env) {
     fail("service endpoint is invalid");
   }
   if (
-    !/^1\.3\.6\.1\.4\.1\.311\.97\.[0-9]+(?:\.[0-9]+)*$/u.test(
-      env.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU,
-    )
+    !/^1\.3\.6\.1\.4\.1\.311\.97\.\d+(?:\.\d+)*$/u.test(env.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU)
   ) {
     fail("subscriber identity EKU is invalid");
   }
@@ -233,7 +231,8 @@ export function inventoryAddsOnlyRuntimeAttestation(expected, actual) {
 }
 
 export function catalogForInventory(inventory) {
-  return `${inventory.files.map((file) => `payload/Keiko/${file.relativePath}`).join("\n")}\n`;
+  const paths = inventory.files.map((file) => `payload/Keiko/${file.relativePath}`);
+  return `${paths.join("\n")}\n`;
 }
 
 function parseArgs(argv) {

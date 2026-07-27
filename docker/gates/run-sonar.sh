@@ -77,7 +77,11 @@ fi
 # credential regardless of how local the server is, and it would be copied into the next repository
 # that borrows this lane. It lives in the git directory, which is untracked by construction.
 say "Provisioning a local analysis token"
-credentials="$(git -C "${repo_root}" rev-parse --absolute-git-dir)/keiko-local-sonar"
+# The server is shared across linked worktrees, so its administrator credential must live in the
+# shared Git common directory too. Keeping it under each worktree's private gitdir lets concurrent
+# runs rotate the same server between different passwords even though project keys/tokens are
+# correctly checkout-scoped.
+credentials="$(git -C "${repo_root}" rev-parse --path-format=absolute --git-common-dir)/keiko-local-sonar"
 if [[ ! -f "${credentials}" ]]; then
   umask 077
   # Satisfies SonarQube's policy (upper, lower, digit, special) without ever being predictable.

@@ -158,7 +158,7 @@ function closedHelperSet(
 ): value is readonly Record<string, unknown>[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 2) return false;
   const helpers = value.map((candidate) => record(candidate));
-  if (helpers.some((candidate) => candidate === undefined)) return false;
+  if (helpers.includes(undefined)) return false;
   const names = helpers.map((candidate) => candidate?.name);
   if (new Set(names).size !== names.length || !names.includes("keiko-secure-workspace-read")) {
     return false;

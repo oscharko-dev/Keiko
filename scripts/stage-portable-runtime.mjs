@@ -775,7 +775,10 @@ function runNpm(args, options = {}) {
 
 function packRoot(packDir) {
   const result = runNpm(["pack", "--silent", "--ignore-scripts", "--pack-destination", packDir]);
-  const tarballName = result.stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
+  const tarballName = result.stdout
+    .trim()
+    .split(/\r?\n/u)
+    .findLast((line) => line.length > 0);
   if (tarballName === undefined) fail("npm pack did not report a tarball name");
   const tarball = join(packDir, tarballName);
   if (!existsSync(tarball)) fail(`expected npm pack tarball at ${tarball}`);
@@ -1985,7 +1988,7 @@ function manifestFor(options, target, digests, sidecarRuntimes = [], nativeHelpe
 }
 
 function cloneJson(value) {
-  return JSON.parse(JSON.stringify(value));
+  return structuredClone(value);
 }
 
 function supportLaunchersFor(target) {

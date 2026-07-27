@@ -8,11 +8,12 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, win32 } from "node:path";
 import { tmpdir } from "node:os";
 
 import { buildCompilerEnvironment } from "./build-secure-workspace-read.mjs";
@@ -22,6 +23,11 @@ const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
 const SOURCE = resolve("native/runtime-attestation/windows/keiko_runtime_attestation.c");
 const EXECUTABLE_RELATIVE_PATH = "runtime/native/keiko-runtime-attestation.exe";
+const WINDOWS_BUILD_ROOTS = [
+  String.raw`C:\Program Files`,
+  String.raw`C:\Program Files (x86)`,
+  String.raw`C:\Windows\System32`,
+];
 
 export class WindowsRuntimeAttestationError extends Error {}
 
@@ -139,8 +145,9 @@ function buildCarrier(destination, receipt) {
     writeFileSync(header, payloadHeader(Buffer.from(`${JSON.stringify(receipt)}\n`, "utf8")), {
       mode: 0o600,
     });
+    const toolchain = windowsBuildToolchain(process.env);
     const result = spawnSync(
-      "cl",
+      toolchain.compiler,
       [
         "/nologo",
         "/std:c11",
@@ -156,7 +163,7 @@ function buildCarrier(destination, receipt) {
       ],
       {
         stdio: "inherit",
-        env: buildCompilerEnvironment("windows-x64", process.env),
+        env: toolchain.environment,
       },
     );
     if (result.status !== 0) fail("native attestation carrier build failed");
@@ -165,6 +172,39 @@ function buildCarrier(destination, receipt) {
   }
   const entry = statSync(destination);
   if (!entry.isFile() || entry.size <= 0) fail("native attestation carrier build failed");
+}
+
+function allowedWindowsBuildPath(path) {
+  const normalized = win32.resolve(path).toLowerCase();
+  return WINDOWS_BUILD_ROOTS.some((root) => {
+    const normalizedRoot = win32.resolve(root).toLowerCase();
+    return normalized === normalizedRoot || normalized.startsWith(`${normalizedRoot}\\`);
+  });
+}
+
+function windowsBuildToolchain(environment) {
+  const compilerEnvironment = buildCompilerEnvironment("windows-x64", environment);
+  const pathEntries = (compilerEnvironment.PATH ?? "")
+    .split(win32.delimiter)
+    .map((path) => path.trim().replace(/^"|"$/gu, ""))
+    .filter((path) => path.length > 0 && allowedWindowsBuildPath(path));
+  const compiler = pathEntries
+    .map((path) => win32.join(path, "cl.exe"))
+    .find((path) => {
+      try {
+        const entry = lstatSync(realpathSync.native(path));
+        return entry.isFile() && !entry.isSymbolicLink() && entry.nlink === 1;
+      } catch {
+        return false;
+      }
+    });
+  if (compiler === undefined || pathEntries.length === 0) {
+    fail("approved MSVC compiler path is unavailable");
+  }
+  return {
+    compiler: realpathSync.native(compiler),
+    environment: { ...compilerEnvironment, PATH: pathEntries.join(win32.delimiter) },
+  };
 }
 
 function bindCarrierManifest(stageRoot, destination) {

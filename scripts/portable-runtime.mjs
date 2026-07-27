@@ -87,10 +87,19 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
   "windows-timestamp-unverified",
 ]);
 
-const SECRET_PATTERN =
-  /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{82}|npm_[A-Za-z0-9]{36}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
-const CREDENTIAL_VALUE_PATTERN =
-  /(?:(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization)\s*:\s*|(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization|auth)\s*=\s*)(?:bearer|basic)\s+\S+/iu;
+const SECRET_PATTERNS = Object.freeze([
+  /sk-[\w-]{8,}/iu,
+  /ghp_\w{8,}/iu,
+  /github_pat_\w{82}/iu,
+  /npm_[^\W_]{36}/iu,
+  /BEGIN [A-Z ]*PRIVATE KEY/iu,
+  /password=/iu,
+  /token=/iu,
+]);
+const CREDENTIAL_VALUE_PATTERNS = Object.freeze([
+  /(?<!\w)(?:proxy[-_ ]authorization|authorization)\s*:\s*(?:bearer|basic)\s+\S+/iu,
+  /(?<!\w)(?:proxy[-_ ]authorization|authorization|auth)\s*=\s*(?:bearer|basic)\s+\S+/iu,
+]);
 // Structural (non-regex) equivalent of /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u.
 // The original was an unanchored regex whose scheme-continuation class ([A-Za-z0-9+.-]*)
 // overlaps with the mandatory leading letter, letting the engine retry the scheme match at
@@ -1760,8 +1769,8 @@ function scanSemanticCredentialProperty(value, path, failures) {
 
 function scanForbiddenString(value, path, failures) {
   if (
-    SECRET_PATTERN.test(value) ||
-    CREDENTIAL_VALUE_PATTERN.test(value) ||
+    SECRET_PATTERNS.some((pattern) => pattern.test(value)) ||
+    CREDENTIAL_VALUE_PATTERNS.some((pattern) => pattern.test(value)) ||
     PRIVATE_PATH_PATTERN.test(value) ||
     containsCredentialUrl(value)
   ) {

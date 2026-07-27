@@ -593,14 +593,13 @@ export async function assemblePortableReleaseAssets(argv) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  assemblePortableReleaseAssets(process.argv.slice(2)).then(
-    (manifest) =>
-      console.log(
-        `portable release asset bundle assembled: ${manifest.artifacts.map((artifact) => artifact.platformTarget).join(", ")} (${BUNDLE_MANIFEST_NAME})`,
-      ),
-    (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    },
-  );
+  try {
+    const manifest = await assemblePortableReleaseAssets(process.argv.slice(2));
+    console.log(
+      `portable release asset bundle assembled: ${manifest.artifacts.map((artifact) => artifact.platformTarget).join(", ")} (${BUNDLE_MANIFEST_NAME})`,
+    );
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
