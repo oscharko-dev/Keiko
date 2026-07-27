@@ -252,11 +252,16 @@ function pageMetaSuffix(
   display: Pick<PdfCitationPreviewSafeWindowCfg, "pageLabel" | "pageNumber">,
   t: I18nTranslate,
 ): string {
-  if (display.pageLabel !== undefined) return ` · ${display.pageLabel}`;
-  if (display.pageNumber !== undefined) {
-    return ` · ${t("pdfCitationPreviewWindow.page", { pageNumber: display.pageNumber })}`;
+  let suffix: string;
+  if (display.pageLabel !== undefined) {
+    suffix = ` · ${display.pageLabel}`;
+  } else if (display.pageNumber !== undefined) {
+    const pageNumber = display.pageNumber;
+    suffix = ` · ${t("pdfCitationPreviewWindow.page", { pageNumber })}`;
+  } else {
+    suffix = "";
   }
-  return "";
+  return suffix;
 }
 
 function citationContextPageLabel(

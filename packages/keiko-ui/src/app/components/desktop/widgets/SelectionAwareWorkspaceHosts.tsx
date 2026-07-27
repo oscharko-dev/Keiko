@@ -286,17 +286,20 @@ export function ChatWindowSessionHost({
     [activeProject?.path, ctx],
   );
 
-  function renderBody(): ReactNode {
-    if (targetMissing) {
-      return (
-        <div className="lk-empty">
-          <p className="lk-empty-title">Chat not found</p>
-          <p className="lk-empty-body">This conversation was deleted or is no longer available.</p>
-        </div>
-      );
-    }
-    if (waitingForTarget) return <div className="lk-loading">Opening chat...</div>;
-    return (
+  let body: ReactNode;
+  if (targetMissing) {
+    body = (
+      <div className="lk-empty">
+        <p className="lk-empty-title">{"Chat not found"}</p>
+        <p className="lk-empty-body">
+          {"This conversation was deleted or is no longer available."}
+        </p>
+      </div>
+    );
+  } else if (waitingForTarget) {
+    body = <div className="lk-loading">{"Opening chat..."}</div>;
+  } else {
+    body = (
       <ChatWindow
         windowId={ctx.windowId}
         mini={ctx.mini === true}
@@ -317,7 +320,6 @@ export function ChatWindowSessionHost({
       />
     );
   }
-  const body = renderBody();
   return (
     <>
       {handoff.noticeKey === null ? null : (

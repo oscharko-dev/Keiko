@@ -523,13 +523,15 @@ function markerButtonLabel(marker: string, state: "available" | "recoverable" | 
 }
 
 function markerTipText(state: "available" | "recoverable" | "blocked"): string {
+  let tip: string;
   if (state === "blocked") {
-    return BLOCKED_CITATION_MESSAGE;
+    tip = BLOCKED_CITATION_MESSAGE;
+  } else if (state === "recoverable") {
+    tip = "Open PDF recovery";
+  } else {
+    tip = "Open PDF preview";
   }
-  if (state === "recoverable") {
-    return "Open PDF recovery";
-  }
-  return "Open PDF preview";
+  return tip;
 }
 
 function InlineCitationMarker({
