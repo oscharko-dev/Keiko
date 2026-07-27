@@ -33,10 +33,23 @@ const skipPackageWatchForTest =
 const skipBffWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_BFF_WATCH === "1";
 export function resolveNextBundler(preference) {
-  return preference === "webpack" ? "webpack" : "turbopack";
+  if (preference === "auto" || preference === "turbopack") return "turbopack";
+  if (preference === "webpack") return "webpack";
+  throw new TypeError(
+    `Invalid KEIKO_DEV_NEXT_BUNDLER: ${preference}. Use auto, turbopack, or webpack.`,
+  );
 }
 
-let nextBundler = resolveNextBundler(nextBundlerPreference);
+function resolveConfiguredNextBundler(preference) {
+  try {
+    return resolveNextBundler(preference);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Invalid KEIKO_DEV_NEXT_BUNDLER.");
+    process.exit(2);
+  }
+}
+
+let nextBundler = resolveConfiguredNextBundler(nextBundlerPreference);
 let server;
 let shuttingDown = false;
 let publicReady = false;
@@ -113,13 +126,6 @@ function redirectToCanonicalLocalhost(req, res) {
   });
   res.end();
   return true;
-}
-
-if (!["auto", "turbopack", "webpack"].includes(nextBundlerPreference)) {
-  console.error(
-    `Invalid KEIKO_DEV_NEXT_BUNDLER: ${nextBundlerPreference}. Use auto, turbopack, or webpack.`,
-  );
-  process.exit(2);
 }
 
 if (!Number.isInteger(maxRestarts) || maxRestarts < 0) {

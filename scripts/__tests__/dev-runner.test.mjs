@@ -161,6 +161,11 @@ describe("resolveNextBundler", () => {
     expect(resolveNextBundler("turbopack")).toBe("turbopack");
     expect(resolveNextBundler("webpack")).toBe("webpack");
   });
+
+  it("rejects unsupported preferences", () => {
+    expect(() => resolveNextBundler("wepback")).toThrow(TypeError);
+    expect(() => resolveNextBundler("")).toThrow(TypeError);
+  });
 });
 
 describe("bffChildEnv", () => {
