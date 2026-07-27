@@ -221,22 +221,30 @@ export function MultiRootEditorHost({
   // Manual activation keeps the roving tab stop separate from the selection: arrowing moves focus
   // (and the single tabIndex=0) without firing the server-side focusRoot a selection would.
   const [focusedRootRef, setFocusedRootRef] = useState<WorkspaceRootRef>(activeRoot.rootRef);
+  // ...but only ARROWING may hold the tab stop away from the selection. A selection that moves on
+  // its own must take it back: `activeRoot` is derived from `configuredRoot`/the manifest, so
+  // `openEditorFile` writing another root into cfg — or a `focusRoot` raised elsewhere — changes the
+  // selected tab without `selectRoot` ever running, and the only tabbable tab would stay on the
+  // root that is no longer selected or shown (Qodo review, PR #2770; the resync
+  // MultiRootFilesWidget took in #2753).
+  //
+  // Adjusted DURING RENDER rather than in an effect, which is React's documented shape for "adjust
+  // state when a prop changes": React re-runs this component before committing to the DOM, so the
+  // desynced tabindex is never painted. An effect resyncs only after paint, leaving a frame in
+  // which a Tab press or a screen reader still lands on the deselected tab.
+  const [selectionAtLastSync, setSelectionAtLastSync] = useState<WorkspaceRootRef>(
+    activeRoot.rootRef,
+  );
+  if (selectionAtLastSync !== activeRoot.rootRef) {
+    setSelectionAtLastSync(activeRoot.rootRef);
+    setFocusedRootRef(activeRoot.rootRef);
+  }
   const activeRootRef = useRef(activeRoot.rootRef);
   const manifestRef = useRef(manifest);
   const updateCfgRef = useRef(updateCfg);
   activeRootRef.current = activeRoot.rootRef;
   manifestRef.current = manifest;
   updateCfgRef.current = updateCfg;
-  // The roving tab stop is separate from the selection only for MANUAL activation — arrowing moves
-  // focus without selecting. A selection that changes on its own is the other case: `activeRoot` is
-  // derived from `configuredRoot`/the manifest, so `openEditorFile` writing another root into cfg,
-  // or a `focusRoot` raised elsewhere, moves the selected tab without `selectRoot` ever running.
-  // Without this resync the only tabbable tab stays on the previously selected root while
-  // `aria-selected` and the visible tabpanel are on another — the tablist contract says the tab stop
-  // belongs to the selected tab when focus is outside the tablist (Qodo review, PR #2770; the same
-  // resync MultiRootFilesWidget took in #2753). Arrowing is unaffected: it does not change
-  // `activeRoot`, so this effect does not fire and cannot steal focus back.
-  useEffect(() => setFocusedRootRef(activeRoot.rootRef), [activeRoot.rootRef]);
   useEffect(() => setSessions(parsedSessions), [parsedSessions]);
   // openEditorFile targets an existing editor window by writing root/file/openFiles/layoutJson into
   // its cfg. Per-root sessions take precedence over cfg, so once a root had a session that request
