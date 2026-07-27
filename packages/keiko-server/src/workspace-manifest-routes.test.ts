@@ -425,15 +425,31 @@ describe("workspace manifest routes", () => {
     const restoreDiagnostic = diagnostics.find(
       (record) => record.operation === "workspace.root.restore",
     );
+    // The count must actually reach the record, not just be interpolated into a message string the
+    // diagnostic sink never reads (#2768): occurrenceCount is a real field on the record, unlike
+    // the discarded `WORKSPACE_ROOT_NOT_RESTORED count=…` message the pre-fix code only built.
     expect(restoreDiagnostic).toMatchObject({
       correlationId: manifest.workspaceId,
       source: "workspace-manifest-routes",
+      errorClass: "WorkspaceRootNotRestoredError",
+      occurrenceCount: 1,
     });
-    // The reason travels with the report, not just the count: a vanished directory and an exhausted
-    // identity space are different operational stories (Qodo review, PR #2714). The class name is
-    // content-free — no path, no message text.
-    expect(restoreDiagnostic?.errorClass).toBeDefined();
     expect(JSON.stringify(restoreDiagnostic)).not.toContain(rootB);
+
+    // The reason travels with the report, not just the count: a vanished directory and an exhausted
+    // identity space are different operational stories (Qodo review, PR #2714), and
+    // `restoreFailureClasses` must actually be consumed rather than computed and discarded (#2768).
+    // The class name is content-free — no path, no message text.
+    const reasonDiagnostic = diagnostics.find(
+      (record) => record.operation === "workspace.root.restore.reason",
+    );
+    expect(reasonDiagnostic).toMatchObject({
+      correlationId: manifest.workspaceId,
+      source: "workspace-manifest-routes",
+      occurrenceCount: 1,
+    });
+    expect(reasonDiagnostic?.errorClass).toBeDefined();
+    expect(JSON.stringify(reasonDiagnostic)).not.toContain(rootB);
 
     // A new directory taking the departed root's place inherits nothing: the record binds the old
     // filesystem identity, so it stays inert whether or not the invalidation rewrite landed. The

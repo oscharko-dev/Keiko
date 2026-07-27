@@ -47,8 +47,7 @@ const ROOT = "/repo";
 const ADDRESSED = "src/addressed.ts";
 const SIBLING = "src/sibling.ts";
 
-// Two panes, each showing a different file — the state the whole guard is about.
-function splitLayoutJson(): string {
+function splitLayout(): ReturnType<typeof editorLayoutReducer> {
   const base = createEditorLayoutStateV2({
     root: ROOT,
     file: ADDRESSED,
@@ -59,13 +58,31 @@ function splitLayoutJson(): string {
   });
   // Split the addressed file out into the new pane, which becomes the active one — the shape
   // `openEditorFile` produces, where the file it just opened is what the user is looking at.
-  const split = editorLayoutReducer(base, {
+  return editorLayoutReducer(base, {
     type: "split-pane",
     paneId: activeEditorPane(base).id,
     direction: "row",
     file: ADDRESSED,
   });
-  return serializeEditorLayoutStateV2(split);
+}
+
+// Two panes, each showing a different file — the state the whole guard is about.
+function splitLayoutJson(): string {
+  return serializeEditorLayoutStateV2(splitLayout());
+}
+
+// Same two panes, but focus is back on the SIBLING pane — the shape an established session settles
+// into once the user has looked at something else since ADDRESSED was last opened.
+function splitLayoutJsonWithSiblingActive(): string {
+  const split = splitLayout();
+  const addressedPaneId = activeEditorPane(split).id;
+  const siblingPane = Object.values(split.panes).find((pane) => pane.id !== addressedPaneId);
+  if (siblingPane === undefined) throw new Error("expected two panes after split");
+  const refocused = editorLayoutReducer(split, {
+    type: "set-active-pane",
+    paneId: siblingPane.id,
+  });
+  return serializeEditorLayoutStateV2(refocused);
 }
 
 function revealOf(paneProps: EditorRuntimeWidgetProps): string {
@@ -120,6 +137,34 @@ describe("EditorWidget line-reveal addressing across panes (#2747)", (): void =>
     await screen.findByText(ADDRESSED);
 
     expect(revealsByFile().get(ADDRESSED)).toEqual(["7:10:reveal-1"]);
+    expect(revealsByFile().get(SIBLING)).toEqual(["::"]);
+  });
+
+  it("withholds a later reveal against an already-settled session instead of firing in the active pane (#2768)", async (): Promise<void> => {
+    // MultiRootEditorHost hands a root that already holds a session only `{ layoutJson }` —
+    // `initialSessionProps` returns nothing else once `sessions.get(root.rootRef)` is defined. The
+    // session here has ADDRESSED open in a background pane while the user is focused on SIBLING, the
+    // shape it settles into once the user has looked at something else since ADDRESSED was opened.
+    const layoutJson = splitLayoutJsonWithSiblingActive();
+    const { rerender } = render(<EditorWidget root={ROOT} layoutJson={layoutJson} />);
+    await screen.findByText(SIBLING);
+    panes.length = 0;
+
+    // A later, independent reveal for ADDRESSED arrives — e.g. a go-to-definition into this root —
+    // with no `file` prop and no layout change, exactly what an already-sessioned root is handed.
+    // The addressed pane is not the active one, so falling back to "the active pane" would fire the
+    // reveal against SIBLING's content instead of withholding it.
+    rerender(
+      <EditorWidget
+        root={ROOT}
+        layoutJson={layoutJson}
+        revealLineStart={7}
+        revealLineEnd={10}
+        revealRequestId="reveal-2"
+      />,
+    );
+
+    expect(revealsByFile().get(ADDRESSED)).toEqual(["::"]);
     expect(revealsByFile().get(SIBLING)).toEqual(["::"]);
   });
 });

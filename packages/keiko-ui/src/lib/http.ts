@@ -136,5 +136,18 @@ export async function bffFetchJson<T>(
   }
 
   const value = (await res.json()) as unknown;
-  return opts?.validator === undefined ? (value as T) : opts.validator(path, value);
+  if (opts?.validator === undefined) return value as T;
+  try {
+    return opts.validator(path, value);
+  } catch (error) {
+    // RB-6 (#2768): a contract-validation failure is as traceable as a non-2xx — the request DID
+    // reach the server and produced a server-side record under this id. Attaching it here, at the
+    // layer that owns the correlation id, means every validator gets it without each one having to
+    // thread the id through; a validator throwing a coded ApiError otherwise reached the surface
+    // with no support id at all.
+    if (error instanceof ApiError && error.correlationId === undefined) {
+      error.correlationId = res.headers.get(CORRELATION_HEADER) ?? correlationId;
+    }
+    throw error;
+  }
 }

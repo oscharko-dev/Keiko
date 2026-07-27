@@ -14,6 +14,7 @@ import type {
   WorkspaceRootDispatch,
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
+import { contentFreeErrorClass } from "./diagnostics-log.js";
 import type {
   Project,
   UiStore,
@@ -326,7 +327,7 @@ function persistRevision(
     rootProjects: rootProjects(next.roots, projects),
     releasedProjectPaths: released,
     onReleasedRestoreFailure: (_projectPath, error): void => {
-      restoreFailureClasses.push(error instanceof Error ? error.name : "UnknownError");
+      restoreFailureClasses.push(contentFreeErrorClass(error));
     },
   });
   if (!replaced || row.revision !== current.revision) {

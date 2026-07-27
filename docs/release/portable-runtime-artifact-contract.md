@@ -39,12 +39,12 @@ unsigned, unnotarized where required, or not represented in reviewed release-imp
 
 ## Current Staging Status
 
-Issue #1948 stages the packed Keiko package, acquires and verifies the target Node.js runtime
-archive, extracts that runtime into the portable payload, and validates redacted artifact manifests.
-Issue #1983 extends that same substrate with optional product-owned coding sidecar runtime payloads.
-It does not perform production signing, macOS notarization, release upload, native launcher
-implementation, first-run setup, updater swap, sidecar launch, permission bridging, or model
-routing.
+The portable release pipeline stages the packed Keiko package, acquires and verifies the target
+Node.js runtime and the approved OpenCode runtime, builds the native launcher and governed runtime
+helpers, and validates redacted artifact manifests. Stable-tag production jobs additionally perform
+Windows signing, macOS signing and notarization, native runtime qualification, release upload, and
+published-asset verification. First-run setup promotes the verified bundle into the managed install
+root before the Coding Workbench may activate the bundled runtime.
 
 Manifest schema v1 has three explicit validation contexts. Staging manifests use
 `verificationPolicy: "staging"`,
@@ -93,6 +93,8 @@ windows-x64/
       runtime/
         native/
           keiko-secure-workspace-read.exe
+          keiko-runtime-supervisor.exe
+          keiko-runtime-attestation.exe
         node/
           node.exe
           LICENSE
@@ -127,6 +129,14 @@ macos-arm64/
           Info.plist
           MacOS/
             Keiko
+            KeikoSystemExtensionManager
+          Library/
+            SystemExtensions/
+              com.oscharko.keiko.runtime-monitor.systemextension/
+                Contents/
+                  Info.plist
+                  MacOS/
+                    KeikoRuntimeMonitor
           Resources/
             .portable/
               setup-manifest.json
@@ -138,6 +148,7 @@ macos-arm64/
             runtime/
               native/
                 keiko-secure-workspace-read
+                keiko-runtime-supervisor
               node/
                 bin/node
                 LICENSE
@@ -165,10 +176,10 @@ Layout rules:
   only the source archive. It is private to this Keiko artifact and must not be installed globally.
 - `runtime/node/NODE_RUNTIME_SOURCE.json` records the content-free source archive identity, target,
   version, and SHA-256 digest used to populate the runtime payload.
-- `runtime/sidecars/<runtime-name>/` may contain optional product-owned coding sidecar runtime
-  payloads. These payloads are inert delivery assets until a later governed runtime adapter owns
-  launch authority. They are never downloaded during customer install, first run, app launch, or
-  portable update outside the normal Keiko release asset download.
+- `runtime/sidecars/opencode-compatible/` contains the one approved OpenCode coding runtime payload.
+  The governed runtime adapter owns its launch authority. The payload is never downloaded during
+  customer install, first run, app launch, or portable update outside the normal Keiko release asset
+  download.
 - `manifest/portable-manifest.json` is the sidecar artifact contract record for build, setup,
   release, and updater children.
 - `.portable/setup-manifest.json` is the payload-local first-run setup manifest. It contains the
@@ -233,13 +244,13 @@ placeholder remains intentionally unqualified. Runtime app, manager, Endpoint Se
 and secure-read verification must all match that release-pinned team; the identifier is not emitted
 in manifests, diagnostics, or evidence.
 
-## Optional Product-Owned Sidecar Runtimes
+## Mandatory Product-Owned Coding Runtime
 
-Portable artifacts may carry optional product-owned coding sidecar runtimes in
-`sidecarRuntimes[]`. The field is optional, and an empty array is valid, so stable releases can ship
-without Coding Workbench enabled. When present, the contract is generic: it can describe one or
-more Keiko-owned coding runtimes. `opencode-compatible` is the first fixture shape, not a hard-coded
-single-runtime limit.
+Every newly staged, candidate, and published customer artifact must contain exactly one
+`opencode-compatible` coding runtime entry in `sidecarRuntimes[]`. The field remains optional only
+for parsing legacy manifests; an absent or empty array is not valid for any newly produced customer
+artifact. No second coding runtime, global executable, `PATH` fallback, package-manager install, or
+first-run download may satisfy this requirement.
 
 Sidecar payloads are staged from controlled Keiko release inputs by the release pipeline. The
 controlled release input is the schema-v2 committed
@@ -273,8 +284,8 @@ adapter compatibility, platform target, contained relative payload and executabl
 digests, byte sizes, license/SBOM evidence paths and digests, and target-specific signing or
 notarization status. It must not record local `sourceRoot` values, absolute paths, customer data,
 repository content, prompts, diffs, model output, raw logs, package-manager output, credentials, or
-private paths. Execution authority for coding sidecars remains deferred to the Coding Workbench
-runtime adapter work; this contract only delivers an inert verified payload.
+private paths. The Coding Workbench runtime adapter may launch only this verified bundled payload
+through the governed native supervisor.
 
 ## Manifest Schema Draft
 
@@ -755,8 +766,9 @@ Validation rules:
   application surface to the same reviewed release artifact; gate names alone are not provenance.
 - All path fields are relative to the sidecar staging root or payload resource root. Absolute paths
   are forbidden in manifests.
-- `sidecarRuntimes[]` is optional. When present, each entry name must be unique and must use the
-  exact payload root `runtime/sidecars/<runtime-name>`.
+- `sidecarRuntimes[]` remains optional only for legacy manifest parsing. Newly produced staging,
+  candidate, and published manifests require exactly one entry named `opencode-compatible` at the
+  exact payload root `runtime/sidecars/opencode-compatible`.
 - OpenCode entries are exact-key bound to repository `anomalyco/opencode`, version `1.17.17`, tag
   `v1.17.17`, commit `474abdd7ee60f4b67476cfcef7e5311beff4a824`, and HTTP/SSE transport.
 - OpenCode protocol compatibility is the raw-byte SHA-256 of commit-addressed
@@ -824,7 +836,8 @@ This contract intentionally leaves implementation to the remaining portable runt
 - #1949 implements thin native launchers and first-run managed setup.
 - #1950 implements native app registration and reversible content-free install records.
 - #1951 implements signing, notarization, checksum, provenance, and artifact verification gates.
-- #1983 implements optional product-owned coding sidecar payload staging and manifest validation.
+- #1983 introduced product-owned coding sidecar payload staging and manifest validation; ADR-0163
+  and #2762 make the single approved OpenCode payload mandatory for customer artifacts.
 - #1952 attaches all three portable assets and reviewed evidence to GitHub Releases.
 - #1953 adds portable launch/setup smoke tests and operator documentation.
 - #1945 consumes the managed install and manifest contract for portable updater v2.

@@ -552,19 +552,35 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     }
   };
 
-  // #2628 — listeners are contracted to receive the CANONICAL root (revoke and the
-  // isTrusted invalidation path both notify with canonicalRoot). Passing the caller's
-  // raw root here would let a symlink or alias reach managed-LSP restriction with a
-  // non-real identity and miss the pool entry keyed on the canonical path. Canonicalize
-  // via the same resolver trustLevelForRoot uses, and skip the notification when the
-  // path cannot be canonicalized (the trust decision already fails closed to
-  // "restricted", so nothing is left silently open — only the notification is dropped
-  // because there is no canonical identity to notify with).
+  /**
+   * The one identity every restriction notification is emitted under. #2628 contracted listeners
+   * to receive the CANONICAL root because the managed-LSP process pool is keyed on it, but
+   * `recomputeForRoots` derived it with `WorkspaceFs.realPath` while `revoke` and the `isTrusted`
+   * invalidation path derive it with `resolveCanonicalRoot` — which ends in `realpathSync.native`
+   * (#2615). Those two are not the same function: on a case-insensitive filesystem `.native`
+   * returns the on-disk spelling while plain `realpath` preserves the caller's, so the same root
+   * reached this seam under two spellings and only one of them could ever match the pool key. The
+   * pool entry survived a revocation with a restricted root's language server still live.
+   *
+   * Resolving through `resolveCanonicalRoot` here means all three notification sites share one
+   * derivation, so they cannot drift apart again (#2768).
+   */
+  private notificationRootFor(root: string): string | undefined {
+    try {
+      return resolveCanonicalRoot(this.store, this.fs, root);
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Skip the notification when the path cannot be canonicalized: without a canonical identity there
+  // is no legitimate value to hand a downstream listener. The trust decision itself already fails
+  // closed to "restricted", so nothing is left silently open — only the notification is dropped.
   public readonly recomputeForRoots = (roots: readonly string[]): readonly WorkspaceTrustLevel[] =>
     roots.map((root): WorkspaceTrustLevel => {
       const level = this.trustLevelForRoot(root);
       if (level === "restricted") {
-        const canonicalRoot = realPathOrUndefined(this.fs, root);
+        const canonicalRoot = this.notificationRootFor(root);
         if (canonicalRoot !== undefined) this.notifyRestricted(canonicalRoot);
       }
       return level;

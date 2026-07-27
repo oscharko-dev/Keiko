@@ -2887,8 +2887,29 @@ function EditorRuntimeWidget({
       const sameDocument =
         restoreSessionKey !== null && activeSessionKeyRef.current === restoreSessionKey;
       const adopted = adoption.text;
-      if (!restored && sameDocument && adopted !== null && contentRef.current === adopted) {
-        revertRestoredBuffer(bufferBeforeRestore, modelBeforeRestore);
+      if (!restored && adopted !== null) {
+        if (sameDocument && contentRef.current === adopted) {
+          revertRestoredBuffer(bufferBeforeRestore, modelBeforeRestore);
+        } else if (!sameDocument && restoreSessionKey !== null) {
+          // The pane switching file does NOT discard the adopted text: an effect mirrors every
+          // commit into sessionCacheRef, so the failed restore's content is still the cached state
+          // of the document it was made against, and re-opening that file would show checkpoint
+          // content the server never accepted. Undo it where the buffer now lives.
+          //
+          // The identity guard is the same conservative one the live path uses — only revert when
+          // the cached content is exactly what this restore adopted. A background document cannot
+          // be edited, so this cannot overwrite a newer legitimate state.
+          const cached = sessionCacheRef.current.get(restoreSessionKey);
+          // `adopted` is non-null inside this branch, so an absent cache entry compares unequal —
+          // the optional chain keeps the explicit-undefined check's exact semantics (S6582).
+          if (cached?.content === adopted) {
+            sessionCacheRef.current.set(restoreSessionKey, {
+              ...cached,
+              content: bufferBeforeRestore,
+              fileModel: modelBeforeRestore,
+            });
+          }
+        }
       }
       return restored;
     },

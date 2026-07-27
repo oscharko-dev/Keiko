@@ -1,7 +1,17 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Activity, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Activity,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import type {
   EditorAgentRootBinding,
   WorkspaceManifest,
@@ -18,6 +28,7 @@ import {
 import type { WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import { WorkspaceTrustBadge } from "../workspace-trust/WorkspaceTrustSurfaces";
 import { useWorkspaceTrust } from "../workspace-trust/useWorkspaceTrust";
+import { rovingTabTargetFile } from "./cards/editorPaneGeometry";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import styles from "./MultiRootEditorHost.module.css";
 
@@ -119,23 +130,66 @@ function parsedSessionsWithLegacyFallback(
   );
 }
 
+function tabElementId(prefix: string, rootRef: WorkspaceRootRef): string {
+  return `${prefix}-tab-${rootRef}`;
+}
+
+function panelElementId(prefix: string, rootRef: WorkspaceRootRef): string {
+  return `${prefix}-panel-${rootRef}`;
+}
+
+/**
+ * Issue #2768 — `role="tablist"`/`role="tab"` is a contract, not a label: it promises arrow-key
+ * traversal, a single tab stop, and a tab that names its panel. Without them the switcher was
+ * announced as a tablist while behaving like a plain button row — every tab a separate tab stop,
+ * no arrow navigation, and no way for a screen reader to tell which region a tab governs.
+ *
+ * Activation is MANUAL (arrows move focus, Enter/Space activates, which the native button already
+ * does). WAI-ARIA APG only recommends automatic activation when the panel appears without
+ * noticeable latency; selecting a root here calls `workspace.focusRoot`, a server round trip, so
+ * arrowing through the tabs must not fire one per key press.
+ */
+function rootTabTraversalTarget(
+  rootRefs: readonly WorkspaceRootRef[],
+  current: WorkspaceRootRef,
+  key: string,
+): WorkspaceRootRef | undefined {
+  if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") {
+    return undefined;
+  }
+  // Reused rather than reimplemented: the same wrap-around/Home/End rule the editor's own tab strip
+  // already roams by, so the two roving tab stops cannot drift apart.
+  const target = rovingTabTargetFile(rootRefs, current, key);
+  return target === undefined ? undefined : (target as WorkspaceRootRef);
+}
+
 function EditorRootTab({
   root,
   selected,
+  focused,
+  idPrefix,
   onSelect,
+  onKeyDown,
 }: {
   readonly root: WorkspaceRootDescriptor;
   readonly selected: boolean;
+  readonly focused: boolean;
+  readonly idPrefix: string;
   readonly onSelect: () => void;
+  readonly onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
 }): ReactNode {
   const trust = useWorkspaceTrust(root.canonicalRoot);
   return (
     <button
       type="button"
       role="tab"
+      id={tabElementId(idPrefix, root.rootRef)}
       className={styles.cmpRootTab}
       aria-selected={selected}
+      aria-controls={panelElementId(idPrefix, root.rootRef)}
+      tabIndex={focused ? 0 : -1}
       onClick={onSelect}
+      onKeyDown={onKeyDown}
     >
       <span>{root.displayName}</span>
       <WorkspaceTrustBadge status={trust.status} issue={trust.issue} />
@@ -163,6 +217,28 @@ export function MultiRootEditorHost({
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const activeRoot = selectedRoot(manifest, configuredRoot);
+  const idPrefix = useId();
+  // Manual activation keeps the roving tab stop separate from the selection: arrowing moves focus
+  // (and the single tabIndex=0) without firing the server-side focusRoot a selection would.
+  const [focusedRootRef, setFocusedRootRef] = useState<WorkspaceRootRef>(activeRoot.rootRef);
+  // ...but only ARROWING may hold the tab stop away from the selection. A selection that moves on
+  // its own must take it back: `activeRoot` is derived from `configuredRoot`/the manifest, so
+  // `openEditorFile` writing another root into cfg — or a `focusRoot` raised elsewhere — changes the
+  // selected tab without `selectRoot` ever running, and the only tabbable tab would stay on the
+  // root that is no longer selected or shown (Qodo review, PR #2770; the resync
+  // MultiRootFilesWidget took in #2753).
+  //
+  // Adjusted DURING RENDER rather than in an effect, which is React's documented shape for "adjust
+  // state when a prop changes": React re-runs this component before committing to the DOM, so the
+  // desynced tabindex is never painted. An effect resyncs only after paint, leaving a frame in
+  // which a Tab press or a screen reader still lands on the deselected tab.
+  const [selectionAtLastSync, setSelectionAtLastSync] = useState<WorkspaceRootRef>(
+    activeRoot.rootRef,
+  );
+  if (selectionAtLastSync !== activeRoot.rootRef) {
+    setSelectionAtLastSync(activeRoot.rootRef);
+    setFocusedRootRef(activeRoot.rootRef);
+  }
   const activeRootRef = useRef(activeRoot.rootRef);
   const manifestRef = useRef(manifest);
   const updateCfgRef = useRef(updateCfg);
@@ -245,7 +321,23 @@ export function MultiRootEditorHost({
     [manifest.roots, updateSession],
   );
 
+  const onTabKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    from: WorkspaceRootRef,
+  ): void => {
+    const target = rootTabTraversalTarget(
+      manifest.roots.map((root) => root.rootRef),
+      from,
+      event.key,
+    );
+    if (target === undefined) return;
+    event.preventDefault();
+    setFocusedRootRef(target);
+    document.getElementById(tabElementId(idPrefix, target))?.focus();
+  };
+
   const selectRoot = (root: WorkspaceRootDescriptor): void => {
+    setFocusedRootRef(root.rootRef);
     const session = sessionsRef.current.get(root.rootRef);
     updateCfg({
       root: root.canonicalRoot,
@@ -274,7 +366,17 @@ export function MultiRootEditorHost({
           <EditorRootTab
             root={root}
             selected={root.rootRef === activeRoot.rootRef}
+            // The tab stop follows focus, but only a tab that still exists can hold it: a removed
+            // root would otherwise leave the tablist with no tabIndex=0 and no way in by keyboard.
+            focused={
+              root.rootRef ===
+              (manifest.roots.some((candidate) => candidate.rootRef === focusedRootRef)
+                ? focusedRootRef
+                : activeRoot.rootRef)
+            }
+            idPrefix={idPrefix}
             onSelect={() => selectRoot(root)}
+            onKeyDown={(event) => onTabKeyDown(event, root.rootRef)}
             key={root.rootRef}
           />
         ))}
@@ -288,7 +390,14 @@ export function MultiRootEditorHost({
         const active = root.rootRef === activeRoot.rootRef;
         const baseProps = buildBaseProps(root.canonicalRoot);
         return (
-          <div className={styles.cmpSession} hidden={!active} key={root.rootRef}>
+          <div
+            className={styles.cmpSession}
+            role="tabpanel"
+            id={panelElementId(idPrefix, root.rootRef)}
+            aria-labelledby={tabElementId(idPrefix, root.rootRef)}
+            hidden={!active}
+            key={root.rootRef}
+          >
             <Activity mode={active ? "visible" : "hidden"}>
               <EditorWidget
                 {...baseProps}

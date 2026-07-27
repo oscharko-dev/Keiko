@@ -464,6 +464,62 @@ export function paneLineRevealProps(
   return { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined };
 }
 
+interface RevealAddresseeDecision {
+  readonly key: string;
+  readonly file: string | undefined;
+}
+
+/**
+ * Issue #2747 / #2748 review — the addressee of a line reveal is normally the `file` prop. A
+ * session-driven render has none: a multi-root root that already holds a session is handed only
+ * `layoutJson`, so falling back to the active pane's file is what keeps a reveal that arrives
+ * alongside a freshly (re)built layout — the layout was just shaped to show that file — from being
+ * dropped outright.
+ *
+ * Issue #2768 — that fallback also fired for a LATER, unrelated reveal against a root that was
+ * already sitting open: `root`/`layoutJson` stay unchanged, the active pane is whatever the user
+ * last focused, and the request was silently answered there instead of the pane it actually
+ * addressed. The fallback is trustworthy only on the render that (re)establishes the layout from
+ * `root`/`layoutJson` — exactly the #2748 case. A later reveal id against an otherwise-unchanged,
+ * already-settled layout is withheld instead of guessed, the same withhold-don't-translate rule
+ * `paneLineRevealProps` already applies once the addressee is known. The decision is pinned to the
+ * reveal's own identity so an unrelated re-render (e.g. the layout-sync effect below settling into
+ * state right after mount) cannot re-evaluate the same request against a pane the user has since
+ * switched away from.
+ */
+function useAddressedRevealFile(
+  workspaceRoot: string,
+  file: string | undefined,
+  activeFile: string,
+  layoutJson: string | undefined,
+  revealLineStart: number | undefined,
+  revealLineEnd: number | undefined,
+  revealRequestId: string | undefined,
+): string | undefined {
+  const seededRef = useRef(false);
+  const layoutOriginRef = useRef<{
+    readonly root: string;
+    readonly layoutJson: string | undefined;
+  }>({ root: workspaceRoot, layoutJson });
+  const layoutJustEstablished =
+    !seededRef.current ||
+    layoutOriginRef.current.root !== workspaceRoot ||
+    layoutOriginRef.current.layoutJson !== layoutJson;
+  seededRef.current = true;
+  layoutOriginRef.current = { root: workspaceRoot, layoutJson };
+
+  const decisionRef = useRef<RevealAddresseeDecision | null>(null);
+  const direct = normalizeEditorFile(workspaceRoot, file);
+  if (direct.length > 0) return direct;
+  if (revealLineStart === undefined) return activeFile || undefined;
+  const key = `${revealRequestId ?? ""}:${String(revealLineStart)}:${String(revealLineEnd ?? "")}`;
+  const cached = decisionRef.current;
+  if (cached !== null && cached.key === key) return cached.file;
+  const resolved = layoutJustEstablished ? activeFile || undefined : undefined;
+  decisionRef.current = { key, file: resolved };
+  return resolved;
+}
+
 export function EditorWidget({
   root,
   file,
@@ -638,13 +694,15 @@ export function EditorWidget({
   const dirtyFileList = useMemo(() => allDirtyFiles(dirtyByPane), [dirtyByPane]);
   const currentPane = activeEditorPane(layout);
   const activeFile = currentPane.activeFile;
-  // Issue #2747 — the addressee of a line reveal is the file it was requested for. It normally
-  // arrives as the `file` prop, normalized here so it is comparable to a pane's own root-relative
-  // file. A session-driven render has no such prop: a multi-root root that already holds a session
-  // is handed only `layoutJson`, while the reveal still comes through the shared props. The layout's
-  // active file is that same requested file there, so falling back to it is what keeps the per-pane
-  // guard from suppressing every pane and dropping the reveal outright.
-  const addressedRevealFile = normalizeEditorFile(workspaceRoot, file) || activeFile || undefined;
+  const addressedRevealFile = useAddressedRevealFile(
+    workspaceRoot,
+    file,
+    activeFile,
+    layoutJson,
+    props.revealLineStart,
+    props.revealLineEnd,
+    props.revealRequestId,
+  );
 
   useEffect(() => {
     if (dirtyFileList.length === 0) return;

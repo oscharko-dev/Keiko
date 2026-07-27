@@ -13,6 +13,7 @@ import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import {
   cleanupEditorWorkspaces,
   createEditorWorkspace,
+  EDITOR_SELECTORS,
   firstPane,
   openEditorWorkspace,
   typeIntoActiveEditor,
@@ -25,6 +26,10 @@ const SETTINGS_WINDOW = '.window[data-window-id="issue-2533-settings"]';
 const INITIAL_VERSION = 'export const historyValue = "initial";\n';
 const VERSION_ONE = 'export const historyValue = "one";\n';
 const VERSION_TWO = 'export const historyValue = "two";\n';
+// Deliberately UNSAVED, and deliberately carrying `historyValue` like every saved version: this is
+// the buffer the hot-exit route persists an index record for, so the leak assertion below is asked
+// about a body that genuinely exists and is genuinely pending (#2768).
+const UNSAVED_VERSION = 'export const historyValue = "unsaved-hot-exit";\n';
 
 type WorkspaceFixture = ReturnType<typeof createEditorWorkspace>;
 
@@ -284,6 +289,40 @@ async function saveVersion(page: Page, pane: Locator, content: string): Promise<
   expect((await saved).ok()).toBe(true);
 }
 
+/**
+ * Issue #2768 — the leak probe reads three sinks, but only two could ever answer. The journey
+ * saved every edit, so the editor was never dirty, so the hot-exit effect never ran and the
+ * IndexedDB index was not merely clean — it did not exist. Both halves of that arm were vacuous:
+ * "did the reader work" and "is there a leak" were answered by the same empty result, and the
+ * `localStorage`-seeded control could not tell them apart because it is a different sink.
+ *
+ * The fix is to make the journey produce the state, not to relax the assertion: one deliberate
+ * unsaved edit, driven through the product's own hot-exit write route (the dirty-buffer effect in
+ * EditorRuntimeWidget, debounced, which POSTs the body to the server and persists a CONTENT-FREE
+ * index record to IndexedDB). Waiting on that POST anchors the wait on the product's own signal
+ * rather than on a sleep, and it is the request whose body is the thing that must not also land in
+ * the browser.
+ */
+async function leaveUnsavedHotExitEdit(page: Page, pane: Locator): Promise<void> {
+  // `restoreOldest` leaves the history panel open, and it overlays the editor surface — typing has
+  // to reach Monaco, so close it through its own control rather than clicking past it.
+  await pane.getByRole("button", { name: "Close file history" }).click();
+  await expect(page.locator("aside[aria-label='File history']")).toHaveCount(0);
+  const persisted = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/editor/hot-exit/write"),
+  );
+  await typeIntoActiveEditor(page, pane, UNSAVED_VERSION);
+  expect((await persisted).ok()).toBe(true);
+  // The index write is a separate IndexedDB transaction the POST only precedes, so settle on the
+  // product's own observable outcome — the dirty marker the same effect gates on — before dumping.
+  await expect(pane.locator(`${EDITOR_SELECTORS.tab}[data-dirty="true"]`).first()).toBeVisible();
+  // Restore the surface this journey still scans for accessibility further down.
+  await pane.getByRole("button", { name: "Open file history" }).click();
+  await expect(page.locator("aside[aria-label='File history']")).toBeVisible();
+}
+
 async function restoreOldest(page: Page, pane: Locator): Promise<number> {
   await pane.getByRole("button", { name: "Open file history" }).click();
   const rows = pane.locator("li[data-entry-ref]");
@@ -401,19 +440,29 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   await saveVersion(journeyPage, pane, VERSION_TWO);
   const historyRestoreMs = await restoreOldest(journeyPage, pane);
   expect(readFileSync(join(harness.alpha.root, FILE), "utf8")).toBe(oldestContent);
+  await leaveUnsavedHotExitEdit(journeyPage, pane);
   const storage = await browserStorageDump(journeyPage);
   // Assert on booleans and carry the diagnosis in the message, never in the subject: a failing
   // `toContain` prints what it searched, and here that is every browser sink including cookies —
   // the failure report would publish into CI logs the very content this assertion exists to prove
   // absent, plus session material besides.
   //
-  // Self-check both readers before trusting their negative, or a dump that captured nothing
-  // satisfies the leak assertion vacuously. The window descriptor proves the storage-state arm
-  // (cookies/localStorage/IndexedDB) read real state; the seeded control proves the sessionStorage
-  // arm did too.
-  expect(storage.includes("keiko.workspace.v4"), "storage-state arm read no state").toBe(true);
+  // Self-check EVERY reader before trusting its negative, or a dump that captured nothing satisfies
+  // the leak assertion vacuously. One control per sink, because a control in one sink says nothing
+  // about another: `keiko.workspace.v4` is localStorage, the seeded probe is sessionStorage, and
+  // `snapshotRef` is a field only a real EditorHotExitIndexRecordV2 carries — so it proves the
+  // IndexedDB arm reached the `keiko-editor-hot-exit` database, its store, AND a record inside it.
+  //
+  // #2768: that third control did not exist, and neither did the state it needed. The journey saved
+  // every edit, so the editor was never dirty and the hot-exit index was never written — the
+  // IndexedDB arm of this probe reported "clean" about a database that did not exist and could not
+  // have failed. `leaveUnsavedHotExitEdit` above is what makes this arm answerable.
+  expect(storage.includes("keiko.workspace.v4"), "localStorage arm read no state").toBe(true);
   expect(storage.includes("session-sink-reachable"), "sessionStorage arm read no state").toBe(true);
-  // `historyValue` is the one identifier every saved version shares, so any leaked body carries it.
+  expect(storage.includes("snapshotRef"), "IndexedDB arm read no hot-exit index record").toBe(true);
+  // `historyValue` is the one identifier every version shares — saved AND the pending unsaved one —
+  // so any leaked body carries it. The hot-exit index is content-free by contract: it holds hashes,
+  // sizes, and a server-side `snapshotRef`, never the buffer. That contract is what is under test.
   expect(storage.includes("historyValue"), "a checkpoint body reached browser storage").toBe(false);
   await expectAxeGreen(journeyPage, "[data-multi-root-explorer]");
   await openProfileSettingsSurface(journeyPage);

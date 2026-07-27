@@ -712,3 +712,55 @@ test("flags mismatched keys across a changed feature catalog pair", async () => 
     },
   );
 });
+
+// The optional-widget catalog pair (`useOptionalWidgetTranslate`) is a real English/German catalog
+// that predates the `-i18n.{en,de}.ts` naming, so the guard used to send a component reading it to
+// shared catalogs it never touches (#2768). These pin that the pair satisfies the requirement
+// WITHOUT weakening the English-and-German guarantee: one half alone still fails.
+const OPTIONAL_EN = "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts";
+const OPTIONAL_DE = "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts";
+const optionalUiSource =
+  'const t = useOptionalWidgetTranslate();\nexport const label = t("quickAccess.title");\n';
+
+test("accepts a changed optional-widget catalog pair in place of the shared catalogs", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]: optionalUiSource,
+      [OPTIONAL_EN]:
+        'export const OPTIONAL_WIDGET_EN_MESSAGES = {\n  "quickAccess.title": "Quick access",\n} as const;\n',
+      [OPTIONAL_DE]:
+        'export const OPTIONAL_WIDGET_DE_MESSAGES = {\n  "quickAccess.title": "Schnellzugriff",\n} satisfies OptionalWidgetMessageCatalog;\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [UI_FILE, OPTIONAL_EN, OPTIONAL_DE],
+      });
+
+      expect(result.problems.join("\n")).toBe("");
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+test("rejects a one-sided optional-widget catalog change and names the missing half", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]: optionalUiSource,
+      [OPTIONAL_EN]:
+        'export const OPTIONAL_WIDGET_EN_MESSAGES = {\n  "quickAccess.title": "Quick access",\n} as const;\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [UI_FILE, OPTIONAL_EN],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toContain("without its counterpart");
+      expect(result.problems.join("\n")).toContain("i18n-messages.optional.de.ts");
+    },
+  );
+});

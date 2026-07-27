@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -93,6 +93,14 @@ function identityDigestFor(fsPath: string): string {
   return inspectWorkspaceRootIdentity(canonical).identityDigest;
 }
 
+// A store whose project is registered under `projectPath` verbatim, for the cases that need the
+// registered spelling to differ from the on-disk canonical one.
+function storeWithProject(projectPath: string): UiStore {
+  const scoped = createInMemoryUiStore();
+  scoped.createProject(projectPath, "fixture");
+  return scoped;
+}
+
 function successfulSpawn(): SpawnFn {
   return vi.fn(() => {
     const child = new EventEmitter() as ChildProcess;
@@ -126,7 +134,11 @@ describe("WorkspaceScriptTrustService", () => {
     const symlinkRoot = `${root}-link`;
     symlinkSync(root, symlinkRoot, "dir");
     try {
-      store.createProject(symlinkRoot, "symlink-fixture");
+      // `root` is already registered (beforeEach); resolveCanonicalRoot/registeredProjectPathForRoot
+      // resolve `symlinkRoot` to that same project by canonical identity, so no second registration
+      // is needed here. Registering `symlinkRoot` as its own project would collide on the same
+      // canonical root the store's UNIQUE constraints key workspace manifests by and is now rejected
+      // with PROJECT_EXISTS (#2768) rather than silently committing a project with no manifest.
       const trust = createWorkspaceScriptTrustService({ store });
 
       expect(trust.grant(symlinkRoot)).toEqual({ trusted: true });
@@ -170,6 +182,40 @@ describe("WorkspaceScriptTrustService", () => {
     const missing = join(root, "does-not-exist");
     expect(trust.recomputeForRoots?.([missing])).toEqual(["restricted"]);
     expect(notified).toEqual([]);
+  });
+
+  it("emits ONE canonical identity from recomputeForRoots and revoke, not two spellings (#2768)", () => {
+    // On a case-insensitive filesystem `realpathSync` preserves the caller's casing while
+    // `realpathSync.native` returns the on-disk spelling, so `recomputeForRoots` (WorkspaceFs
+    // .realPath) and `revoke` (resolveCanonicalRoot, which ends in `.native`) reached the same
+    // listener under two different strings — and the managed-LSP pool key is a raw string, so at
+    // most one of them could ever match. A restricted root kept its language server alive.
+    //
+    // Linux has no case-insensitive tmpdir to reproduce that on, so the SAME divergence is staged
+    // through the one seam that produces it: a WorkspaceFs whose `realPath` does not resolve what
+    // `.native` resolves. The symlink is the divergence `.native` collapses and this stub does not
+    // — exactly the shape the casing difference takes on macOS.
+    const symlinkRoot = `${root}-native-divergence-link`;
+    symlinkSync(root, symlinkRoot, "dir");
+    try {
+      const stubFs: WorkspaceFs = { ...nodeWorkspaceFs, realPath: (path): string => path };
+      const notified: string[] = [];
+      const trust = createWorkspaceScriptTrustService({
+        store: storeWithProject(symlinkRoot),
+        fs: stubFs,
+        onRestricted: (canonicalRoot) => notified.push(canonicalRoot),
+      });
+      const onDiskCanonical = realpathSync.native(symlinkRoot);
+
+      expect(trust.recomputeForRoots?.([symlinkRoot])).toEqual(["restricted"]);
+
+      // The pre-fix code notified with the stub's `realPath` answer — the alias itself — which is
+      // not the identity `revoke` and the `isTrusted` invalidation path emit.
+      expect(notified).toEqual([onDiskCanonical]);
+      expect(notified).not.toContain(symlinkRoot);
+    } finally {
+      rmSync(symlinkRoot, { force: true });
+    }
   });
 
   it("fails closed, grants explicitly, and invalidates the grant after a manifest change", () => {
