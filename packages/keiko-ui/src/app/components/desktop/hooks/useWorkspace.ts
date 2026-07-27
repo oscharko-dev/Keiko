@@ -805,7 +805,9 @@ const KEEPALIVE_BODY_BUDGET_BYTES = 60 * 1024;
 // including throwing on a lone (unpaired) surrogate: that is invalid UTF-16, and
 // `encodeURIComponent` rejects it too, so the replacement fails the same way.
 // (typescript:S1874 — unescape/encodeURIComponent-as-byte-length are both deprecated.)
-function utf8ByteLength(body: string): number {
+// Exported so tests can exercise this path directly (a pure function of its input)
+// instead of stubbing away the global `Blob`/`TextEncoder` to force the fallback.
+export function utf8ByteLength(body: string): number {
   let bytes = 0;
   for (const char of body) {
     // Every code point yielded by for..of on a string is non-empty, so codePointAt(0)
