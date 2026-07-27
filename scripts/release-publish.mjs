@@ -684,7 +684,7 @@ function normalizePortableTargetAsset(
   const manifest = manifestStat
     ? readPortableManifestSafely(manifestPath, target.platformTarget, failures)
     : {};
-  validatePortableAssetFiles(
+  validatePortableAssetFiles({
     target,
     archivePath,
     archiveStat,
@@ -693,7 +693,7 @@ function normalizePortableTargetAsset(
     rootManifest,
     qualification,
     failures,
-  );
+  });
   return [
     portableAssetRecord(target, archivePath, manifestPath, manifest, entry, baseDir, failures),
   ];
@@ -721,7 +721,7 @@ function readPortableManifestSafely(path, platformTarget, failures) {
   }
 }
 
-function validatePortableAssetFiles(
+function validatePortableAssetFiles({
   target,
   archivePath,
   archiveStat,
@@ -730,7 +730,7 @@ function validatePortableAssetFiles(
   rootManifest,
   qualification,
   failures,
-) {
+}) {
   if (basename(archivePath) !== target.assetName) {
     failures.push(`${target.platformTarget}.archivePath must be named ${target.assetName}.`);
   }
