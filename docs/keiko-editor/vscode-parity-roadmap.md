@@ -87,7 +87,7 @@ Legend: ✅ present · 🟧 partial · ⬜ absent · 🚫 out of scope.
 | Integrated terminal                                     |  🟧   | Governed command execution exists; no interactive terminal panel in the editor.                                                                                                              |
 | Debugging (DAP)                                         |  🚫   | Out of scope for the governed editor.                                                                                                                                                        |
 | Extension host / marketplace                            |  🚫   | Out of scope.                                                                                                                                                                                |
-| Settings / keybinding customization UI                  |  ⬜   | No in-app editor-settings surface yet.                                                                                                                                                       |
+| Settings / keybinding customization UI                  |  🟧   | #2527: in-app settings edit the governed registry per scope (user / workspace / root / profile); shortcuts record / remove / reset. No settings.json editing, `when` clauses, or chords.     |
 
 ---
 
