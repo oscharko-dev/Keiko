@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -8,11 +10,17 @@ import {
   budgetDisposition,
   directoryBytes,
   EDITOR_M11_CLOSEOUT_LIMITS,
+  gcSettlingAvailable,
+  measurementRefusalReason,
   percentile,
   runEditorM11CloseoutMeasurement,
   shouldFailBudget,
   summarizeSamples,
 } from "../measure-editor-m11-closeout.mjs";
+
+const HARNESS_URL = pathToFileURL(
+  join(import.meta.dirname, "..", "measure-editor-m11-closeout.mjs"),
+).href;
 
 const roots = [];
 
@@ -48,7 +56,7 @@ describe("editor M11 closeout measurement", () => {
       searchFanoutP95: true,
       editorSessionRoundTripP95: true,
       historyPruneP95: true,
-      rssPerAdditionalRoot: true,
+      historyCaptureRssPerRoot: true,
       historyDisk: true,
       retainedHistoryVersions: true,
     };
@@ -65,7 +73,7 @@ describe("editor M11 closeout measurement", () => {
       searchFanout: { p95Ms: 1 },
       editorSessionRoundTrip: { p95Ms: 1 },
       historyPrune: { p95Ms: 1 },
-      rssPerAdditionalRootBytes: 1,
+      historyCaptureRssPerRootBytes: 1,
       historyDiskBytes: 1,
       retainedHistoryVersions: 50,
     };
@@ -87,5 +95,43 @@ describe("editor M11 closeout measurement", () => {
     expect(result.historyChainLength).toBe(64);
     expect(result.historyRootCount).toBe(8);
     expect(result.passed).toBe(true);
+    // #2626: the RSS row is named for the local-history capture it measures, so the old name must
+    // not come back under a rename. Shape only — the value's meaning is covered by the two tests
+    // below, which exercise the settling branches themselves.
+    expect(typeof result.measurement.historyCaptureRssPerRootBytes).toBe("number");
+    expect(result.measurement).not.toHaveProperty("rssPerAdditionalRootBytes");
+  });
+
+  // The predicate decides; this proves the run obeys it, and that the refusal happens before any
+  // measurement work rather than after. Vitest runs without --expose-gc, which is the refusable
+  // state — asserted first so a runtime that ever gains the flag fails here with its own reason
+  // instead of as a confusing missing rejection.
+  it("refuses a controlled run in a process that cannot settle the heap", async () => {
+    expect(gcSettlingAvailable()).toBe(false);
+    await expect(runEditorM11CloseoutMeasurement({ controlled: true })).rejects.toThrow(
+      /gc-settling-required/u,
+    );
+  });
+
+  // A controlled run enforces the RSS budget, so it must not proceed on an unsettled delta. Pure
+  // over both inputs, because the interesting case is the one this process cannot reach on its own.
+  it("refuses only the controlled run that cannot settle the heap", () => {
+    expect(measurementRefusalReason(true, false)).toBe("gc-settling-required");
+    expect(measurementRefusalReason(true, true)).toBeUndefined();
+    expect(measurementRefusalReason(false, false)).toBeUndefined();
+    expect(measurementRefusalReason(false, true)).toBeUndefined();
+  });
+
+  // The reported flag has to follow the real runtime, and this process can only ever be one of the
+  // two. Asserting it against the same helper that produced it would prove the field is copied and
+  // nothing else, so each branch is observed in a node started the corresponding way.
+  it("reports gc settling from the runtime it actually ran in", () => {
+    const probe = `import(${JSON.stringify(HARNESS_URL)}).then((harness) => {
+      process.stdout.write(String(harness.gcSettlingAvailable()));
+    });`;
+    const observe = (nodeArgs) =>
+      execFileSync(process.execPath, [...nodeArgs, "-e", probe], { encoding: "utf8" });
+    expect(observe([])).toBe("false");
+    expect(observe(["--expose-gc"])).toBe("true");
   });
 });

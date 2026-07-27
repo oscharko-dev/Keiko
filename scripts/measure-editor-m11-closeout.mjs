@@ -17,10 +17,31 @@ export const EDITOR_M11_CLOSEOUT_LIMITS = Object.freeze({
   searchFanoutP95Ms: 30,
   editorSessionRoundTripP95Ms: 15,
   historyPruneP95Ms: 100,
-  rssPerAdditionalRootBytes: 2 * MIB,
+  // Named for what the probe below actually does: it captures one checkpoint per history root in
+  // the SERVER local-history store and divides the process RSS delta by the root count. That is
+  // the marginal cost of admitting a root to local history, not the cost of an additional root in
+  // the workspace manifest or its UI projection — the label this row carried until #2626, which no
+  // part of this harness measured.
+  historyCaptureRssPerRootBytes: 2 * MIB,
   historyDiskBytes: MIB,
   retainedHistoryVersions: 50,
 });
+
+// The two settle points below only mean something when the process was started with --expose-gc
+// (the `check:editor-m11-performance` script does). Without it `globalThis.gc` is undefined, the
+// optional calls are no-ops, and the RSS delta is unsettled allocator noise rather than a retained
+// cost — so the run reports which of the two it produced instead of presenting both as one number.
+export function gcSettlingAvailable() {
+  return typeof globalThis.gc === "function";
+}
+
+// A controlled run ENFORCES the RSS budget, and enforcing a budget against an unsettled delta is
+// enforcing it against allocator noise — a verdict the number cannot support. Reporting
+// `gcSettled` is enough for an informational run, where the RSS row is not a gate; a controlled one
+// has to refuse instead.
+export function measurementRefusalReason(controlled, gcSettled) {
+  return controlled && !gcSettled ? "gc-settling-required" : undefined;
+}
 
 export function percentile(samples, percentileValue) {
   const ordered = [...samples].sort((left, right) => left - right);
@@ -180,7 +201,7 @@ async function measureHistory(stateDir, roots, createStore) {
   return {
     historyPrune: summarizeSamples(timings),
     retainedHistoryVersions: store.list(primary.scope, "src/app.ts", 2_000).length,
-    rssPerAdditionalRootBytes: Math.round(rssPerRoot),
+    historyCaptureRssPerRootBytes: Math.round(rssPerRoot),
     historyDiskBytes: await directoryBytes(join(stateDir, "editor-local-history")),
   };
 }
@@ -195,8 +216,9 @@ export function budgetDisposition(measurement) {
       measurement.editorSessionRoundTrip.p95Ms <=
       EDITOR_M11_CLOSEOUT_LIMITS.editorSessionRoundTripP95Ms,
     historyPruneP95: measurement.historyPrune.p95Ms <= EDITOR_M11_CLOSEOUT_LIMITS.historyPruneP95Ms,
-    rssPerAdditionalRoot:
-      measurement.rssPerAdditionalRootBytes <= EDITOR_M11_CLOSEOUT_LIMITS.rssPerAdditionalRootBytes,
+    historyCaptureRssPerRoot:
+      measurement.historyCaptureRssPerRootBytes <=
+      EDITOR_M11_CLOSEOUT_LIMITS.historyCaptureRssPerRootBytes,
     historyDisk: measurement.historyDiskBytes <= EDITOR_M11_CLOSEOUT_LIMITS.historyDiskBytes,
     retainedHistoryVersions:
       measurement.retainedHistoryVersions === EDITOR_M11_CLOSEOUT_LIMITS.retainedHistoryVersions,
@@ -211,6 +233,14 @@ export function shouldFailBudget(disposition, controlled) {
 
 export async function runEditorM11CloseoutMeasurement(options = {}) {
   const controlled = options.controlled ?? process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1";
+  const gcSettled = gcSettlingAvailable();
+  const refusal = measurementRefusalReason(controlled, gcSettled);
+  if (refusal !== undefined) {
+    throw new Error(
+      `M11 closeout measurement refused (${refusal}): a controlled run enforces the RSS budget, ` +
+        "so it requires Node started with --expose-gc.",
+    );
+  }
   const samples = options.samples ?? DEFAULT_SAMPLES;
   const root = await realpath(
     await mkdtemp(join(await realpath(tmpdir()), "keiko-editor-m11-performance-")),
@@ -230,6 +260,10 @@ export async function runEditorM11CloseoutMeasurement(options = {}) {
       platform: `${process.platform}-${process.arch}`,
       node: process.version,
       measurementMode: controlled ? "controlled-enforced" : "informational-local",
+      // False means `historyCaptureRssPerRootBytes` was taken without a heap settle around it and
+      // is allocator noise, not a retained cost. An informational run may still report it, clearly
+      // labelled; a controlled run refuses above rather than gate on it.
+      gcSettled,
       samples,
       historyChainLength: HISTORY_CHAIN_LENGTH,
       historyRootCount: HISTORY_ROOT_COUNT,

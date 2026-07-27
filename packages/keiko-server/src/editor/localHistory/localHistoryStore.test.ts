@@ -36,10 +36,21 @@ function readAllFiles(dir: string): readonly string[] {
     .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"));
 }
 
-function bodyFiles(stateDir: string): readonly string[] {
+function workspaceStateDir(stateDir: string): string {
   const historyRoot = join(stateDir, "editor-local-history");
-  const workspaceDir = join(historyRoot, readdirSync(historyRoot)[0] ?? "missing");
-  return readdirSync(join(workspaceDir, "checkpoints"));
+  return join(historyRoot, readdirSync(historyRoot)[0] ?? "missing");
+}
+
+function bodyFiles(stateDir: string): readonly string[] {
+  return readdirSync(join(workspaceStateDir(stateDir), "checkpoints"));
+}
+
+// The metadata index, read by name rather than as one anonymous member of the directory walk. The
+// HISTORY-PLAINTEXT-LEAK row claims the index specifically, and the index is the one store file
+// that is *supposed* to hold per-checkpoint structure — so it is where a body would be least
+// conspicuous (#2626).
+function indexJson(stateDir: string): string {
+  return readFileSync(join(workspaceStateDir(stateDir), "index.json"), "utf8");
 }
 
 function tempDir(prefix: string): string {
@@ -134,6 +145,11 @@ describe("editor local-history store", () => {
     for (const bytes of stored) {
       for (const content of contents) expect(bytes).not.toContain(content.trim());
     }
+    // Name the index explicitly so the claim is readable at the assertion rather than implied by
+    // the walk above: it carries one metadata entry per checkpoint and none of their bodies.
+    const index = indexJson(fx.stateDir);
+    for (const ref of refs) expect(index).toContain(ref);
+    for (const content of contents) expect(index).not.toContain(content.trim());
   });
 
   it("coalesces only rapid identical saves", () => {

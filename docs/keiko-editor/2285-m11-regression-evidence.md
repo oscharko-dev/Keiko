@@ -5,22 +5,30 @@ Evidence prepared: 2026-07-20 against the Issue #2533 child branch created from
 24.18.0. The focused closeout receipts below are recorded only from commands actually executed.
 Linux-authoritative D12 evidence remains separately governed by ADR-0139.
 
+Receipt provenance: the focused-closeout and supplemental-measurement numbers below were re-recorded
+under #2626 on `darwin-arm64` with Node.js 24.18.0, on the current `dev` line. The previous
+focused-closeout receipt reported only the first half of a two-command collection — the `keiko-ui`
+workspace half ran and passed but was absent from the number, so the figure understated the
+collection rather than overstating it. Both halves are reported now.
+
 ## Closeout status
 
-| Evidence                         | Disposition                                                                                                                          |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Dependency entry condition       | **PASS** — all thirteen prerequisite M11 child issues #2520–#2532 are closed.                                                        |
-| Adversarial matrix ownership     | **IMPLEMENTED** — 16 named rows are mapped to executable child tests and collected by one focused command.                           |
-| Migration and rollback ownership | **IMPLEMENTED** — four named drills cover pre-M11 upgrade, downgrade guard, corrupt trust, and explicit re-grant.                    |
-| Supplemental M11 measurement     | **PASS** — local `darwin-arm64` informational run; every deterministic disposition and every observed local budget passed.           |
-| Focused M11 closeout             | **PASS** — 18 files and 137 tests passed in the issue-scoped package/UI collection.                                                  |
-| Real product-path Playwright     | **PASS WITH FILED FINDING** — one Chromium journey passed in 45.4 s; the exact multi-root ARIA finding is owned by #2605.            |
-| Exact epic-head CI               | **REMOTE RECEIPT AFTER PUSH** — the integration-branch push triggers the repository workflows; local evidence does not replace them. |
+| Evidence                         | Disposition                                                                                                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Dependency entry condition       | **PASS** — all thirteen prerequisite M11 child issues #2520–#2532 are closed.                                                                                      |
+| Adversarial matrix ownership     | **IMPLEMENTED** — 16 named rows are mapped to executable child tests and collected by one focused command.                                                         |
+| Migration and rollback ownership | **IMPLEMENTED** — four named drills cover pre-M11 upgrade, downgrade guard, corrupt trust, and explicit re-grant.                                                  |
+| Supplemental M11 measurement     | **PASS** — local `darwin-arm64` informational run; every deterministic disposition and every observed local budget passed.                                         |
+| Focused M11 closeout             | **PASS** — both halves of the one command: 18 files / 190 tests in the package collection, then 9 files / 99 tests in the `keiko-ui` workspace collection.         |
+| Real product-path Playwright     | **PASS WITH FILED FINDING** — one Chromium journey passed in 18.9 s on the #2626 re-run; the exact multi-root ARIA finding is still reproduced and owned by #2605. |
+| Exact epic-head CI               | **REMOTE RECEIPT AFTER PUSH** — the integration-branch push triggers the repository workflows; local evidence does not replace them.                               |
 
 ## Focused executable collection
 
 `npm run test:editor-m11-closeout` builds internal packages and executes only the files that can
-prove #2533. The collection includes:
+prove #2533. It is one command with two halves — a root Vitest run over the package and
+repository-level files, then the `keiko-ui` workspace run — and a receipt for it must report both.
+The collection includes:
 
 - closed manifest, trust, profile, and local-history contract tests;
 - canonical trust persistence, manifest migration/mutation, explicit dispatch, agent-root, managed
@@ -35,12 +43,18 @@ to this child-to-epic closeout command.
 
 ## Migration and rollback drills
 
-| Row                                | Drill                                                         | Fail-closed result                                                                                    | Executable owner                   |
-| ---------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `MIGRATION-PRE-M11-UPGRADE`        | Open a user-version 11 store containing a legacy project.     | Migration creates one deterministic manifest, preserves the project registry, and remains idempotent. | `store/workspaceManifests.test.ts` |
-| `MIGRATION-DOWNGRADE-GUARD`        | Open state written by a schema newer than the current binary. | The typed `UI_STORE_SCHEMA_NEWER` error is returned; state is not quarantined or reinterpreted as V1. | `store/workspaceManifests.test.ts` |
-| `MIGRATION-CORRUPT-TRUST-RECOVERY` | Read malformed persisted trust JSON.                          | Trust projects to restricted and no corrupt bytes become authority.                                   | `workspace-script-trust.test.ts`   |
-| `MIGRATION-TRUST-REGRANT`          | Change the bound manifest/basis after an explicit grant.      | The old grant stays invalid; only a new explicit server grant restores trusted state.                 | `workspace-script-trust.test.ts`   |
+| Row                                | Drill                                                                                   | Fail-closed result                                                                                                                                                                                                   | Executable owner                   |
+| ---------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `MIGRATION-PRE-M11-UPGRADE`        | Open a user-version 11 store containing a legacy project.                               | Migration creates one deterministic manifest, preserves the project registry, and remains idempotent.                                                                                                                | `store/workspaceManifests.test.ts` |
+| `MIGRATION-DOWNGRADE-GUARD`        | Open state written by a schema newer than the current binary.                           | The typed `UI_STORE_SCHEMA_NEWER` error is returned; state is not quarantined or reinterpreted as V1.                                                                                                                | `store/workspaceManifests.test.ts` |
+| `MIGRATION-CORRUPT-TRUST-RECOVERY` | Read malformed persisted trust JSON.                                                    | Trust projects to restricted and no corrupt bytes become authority.                                                                                                                                                  | `workspace-script-trust.test.ts`   |
+| `MIGRATION-TRUST-REGRANT`          | Change the trust basis after an explicit grant, then roll it back to the granted bytes. | The demotion is read back at the same revision from a closed and reopened database, restored bytes do not resurrect the grant, and only a new explicit server grant returns the root to trusted at a newer revision. | `workspace-script-trust.test.ts`   |
+
+Every drill above names the assertion that runs it, and the matrix guard
+[`tests/qa/editor-m11-closeout-evidence.test.ts`](../../tests/qa/editor-m11-closeout-evidence.test.ts)
+pins the mapping. `MIGRATION-TRUST-REGRANT` was mapped until #2626 to a test that grants once on a
+fresh store and never touches the trust basis — it performed no leg of this drill, so the row rested
+on its own wording. It now owns a test that runs the whole loop.
 
 Profiles and local history have no legacy records. Missing state remains `absent`; corrupt or
 future state remains `unavailable`. Rollback may remove M11 state, but it cannot reinterpret a V2
@@ -59,11 +73,15 @@ clean state → two-root manifest → trusted Alpha + restricted Beta
 
 The journey proves that root focus does not copy trust, Restricted Mode remains visible, a profile
 switch does not alter trust, restore writes only through the governed file route, the pre-restore
-checkpoint is retained, and checkpoint content does not enter browser storage. Real-browser axe
-checks cover the populated multi-root Explorer, Settings/profile surface, and history panel.
-Settings and history have no serious/critical violations. The Explorer scan deterministically
-records the two-node critical `aria-required-children` defect filed as #2605; it neither suppresses
-the rule nor represents the surface as green.
+checkpoint is retained, and checkpoint content enters none of the browser's storage sinks — the
+probe reads the context storage state for cookies, `localStorage`, and IndexedDB, plus
+`sessionStorage` enumerated from the page. Each reader carries a positive control, so a probe that
+captured nothing cannot report a clean sink. Real-browser axe checks cover the populated multi-root
+Explorer, the Settings **Editor** tab carrying the profile controls, and the history panel; the
+journey opens that tab and asserts the active profile is on screen before scanning, because the
+settings window mounts on its Models tab. Settings and history have no serious/critical violations.
+The Explorer scan deterministically records the two-node critical `aria-required-children` defect
+filed as #2605; it neither suppresses the rule nor represents the surface as green.
 
 ## Accessibility, visual, and i18n evidence
 

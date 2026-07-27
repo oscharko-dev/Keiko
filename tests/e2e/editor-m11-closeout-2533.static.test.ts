@@ -2,9 +2,11 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+const SPEC = "tests/e2e/editor-m11-closeout-2533.spec.ts";
+
 describe("editor M11 browser closeout source contract (#2533)", () => {
   it("uses real product routes and retains mixed-trust, profile, history, axe, and visual proof", () => {
-    const spec = readFileSync("tests/e2e/editor-m11-closeout-2533.spec.ts", "utf8");
+    const spec = readFileSync(SPEC, "utf8");
     expect(spec).not.toContain("page.route(");
     expect(spec).toContain("/api/workspaces");
     expect(spec).toContain("/api/editor/verification/trust");
@@ -15,5 +17,30 @@ describe("editor M11 browser closeout source contract (#2533)", () => {
     expect(spec).toContain("MULTI_ROOT_ARIA_FINDING = 2605");
     expect(spec).toContain("editor-m11-closeout.png");
     expect(spec).toContain("FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET");
+  });
+
+  // Both repairs of #2626 are about WHICH surface and WHICH sinks the journey inspects, and both
+  // are the kind of thing a refactor silently undoes: the settings window reverts to its default
+  // Models tab whenever the page is replaced, and a storage probe narrowed back to localStorage
+  // still passes. Pin the two call sites so the scanned surface and the probed sinks cannot drift
+  // away from what the closeout documents claim.
+  it("scans the profile settings surface and probes every browser storage sink", () => {
+    const spec = readFileSync(SPEC, "utf8");
+    expect(spec).toContain("await openProfileSettingsSurface(journeyPage);");
+    expect(spec).toContain('settings.getByRole("button", { name: "Editor" })');
+    expect(spec).toContain('settings.getByRole("combobox", { name: "Profile" })');
+    expect(spec).toContain("storageState({ indexedDB: true })");
+    // Read through the documented API, never by serializing the `Storage` object: whether named
+    // properties are own-enumerable is an engine detail, and the probe must not rest on it.
+    expect(spec).toContain("window.sessionStorage.key(index)");
+    expect(spec).not.toContain("JSON.stringify(window.sessionStorage)");
+    expect(spec).toContain("const storage = await browserStorageDump(journeyPage);");
+    expect(spec).toContain('storage.includes("keiko.workspace.v4")');
+    expect(spec).toContain('storage.includes("session-sink-reachable")');
+    expect(spec).toContain('storage.includes("historyValue")');
+    // The dump is never the subject of a matcher: a failing `toContain` prints what it searched,
+    // which here is every browser sink — the failure report would leak what the test proves absent.
+    expect(spec).not.toContain("expect(storage).toContain");
+    expect(spec).not.toContain("expect(storage).not.toContain");
   });
 });

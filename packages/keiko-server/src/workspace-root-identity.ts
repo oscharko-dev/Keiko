@@ -62,13 +62,11 @@ export function inspectWorkspaceRootIdentity(path: string): WorkspaceRootIdentit
   const canonicalRoot = realpathSync.native(path);
   const stat = lstatSync(canonicalRoot);
   if (!stat.isDirectory()) throw new Error("WORKSPACE_ROOT_INVALID");
-  const identityDigest = framedDigest("keiko.m11.root-identity.fs.v1", [
-    canonicalRoot,
-    String(stat.dev),
-    String(stat.ino),
-    String(stat.mode),
-    String(stat.uid),
-  ]) as WorkspaceRootIdentityDigest;
+  // Through the exported helper, not a second inline copy of the same framed digest. The producer
+  // and the debug-launch validator drifting onto two formulas is exactly what broke every Linux
+  // debug launch in #2643; two derivations of one digest in one file is the same latent defect,
+  // one edit away.
+  const identityDigest = workspaceRootIdentityDigestFor(canonicalRoot, stat);
   return Object.freeze({
     canonicalRoot,
     identityDigest,

@@ -2,10 +2,19 @@
 
 ## Scope and reuse
 
+Governing decision:
+[ADR-0147](../adr/ADR-0147-multi-root-workspaces-trust-profiles-local-history.md) D3 — canonical
+per-root Workspace Trust and Restricted Mode. Its trust-record binding dimensions are since
+narrowed by [ADR-0155](../adr/ADR-0155-root-scoped-workspace-trust-binding.md): the
+workspace-level manifest revision and digest no longer participate in validity, so focusing or
+reordering roots cannot demote a granted root. Every other ADR-0147 decision, including every
+boundary reviewed below, stands.
+
 Issue #2523 adds the human-facing prompt, Restricted Mode banners, and per-root management view
-defined by ADR-0144. It extends the existing `WorkspaceScriptTrustService`, verification catalog,
-command catalog, managed-language status, window registry, and confirmation-dialog patterns. It
-does not introduce another trust store, policy reducer, execution path, or durable browser store.
+defined by that decision. It extends the existing `WorkspaceScriptTrustService`, verification
+catalog, command catalog, managed-language status, window registry, and confirmation-dialog
+patterns. It does not introduce another trust store, policy reducer, execution path, or durable
+browser store.
 
 ## Boundary review
 
