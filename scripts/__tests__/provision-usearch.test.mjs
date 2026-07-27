@@ -161,6 +161,7 @@ describe("provisioned USearch runtime trust", () => {
       binaries: { curl: "/approved/curl", tar: "/approved/tar" },
       execute,
       exists: () => true,
+      inspect: () => ({ isFile: () => true, size: 1024 }),
     };
 
     download("/tmp/runtime.tgz", { tarballUrl: "https://example.test/runtime.tgz" }, options);
@@ -186,6 +187,26 @@ describe("provisioned USearch runtime trust", () => {
       "/tmp/runtime.tgz",
       "https://example.test/runtime.tgz",
     ]);
+  });
+
+  it("deletes and rejects a downloaded archive that exceeds the hard byte limit", () => {
+    const removed = [];
+    const failures = [];
+    download(
+      "/tmp/oversized-runtime.tgz",
+      { tarballUrl: "https://example.test/runtime.tgz" },
+      {
+        binaries: { curl: "/approved/curl" },
+        execute: () => undefined,
+        exists: () => true,
+        failWith: (message) => failures.push(message),
+        inspect: () => ({ isFile: () => true, size: 64 * 1024 * 1024 + 1 }),
+        remove: (...args) => removed.push(args),
+      },
+    );
+
+    expect(removed).toEqual([["/tmp/oversized-runtime.tgz", { force: true }]]);
+    expect(failures).toEqual(["downloaded archive exceeds the 67108864 byte limit"]);
   });
 
   it("keeps platform-neutral trust and failure adapters deterministic", () => {

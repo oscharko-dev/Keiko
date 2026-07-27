@@ -107,7 +107,14 @@ export function systemBinary(
 export function download(
   destination,
   runtimeManifest,
-  { binaries = SYSTEM_BINARIES, execute = execFileSync, exists = existsSync } = {},
+  {
+    binaries = SYSTEM_BINARIES,
+    execute = execFileSync,
+    exists = existsSync,
+    failWith = fail,
+    inspect = lstatSync,
+    remove = rmSync,
+  } = {},
 ) {
   execute(
     systemBinary("curl", binaries, { exists }),
@@ -127,6 +134,10 @@ export function download(
     ],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
+  const downloaded = inspect(destination);
+  if (downloaded.isFile() && downloaded.size <= DOWNLOAD_MAX_BYTES) return;
+  remove(destination, { force: true });
+  failWith(`downloaded archive exceeds the ${String(DOWNLOAD_MAX_BYTES)} byte limit`);
 }
 
 export function provisionedUsearchBinaryPath(
