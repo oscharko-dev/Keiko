@@ -121,6 +121,23 @@ describe("manual-pod route success + service-error mapping (injected service)", 
     expect(JSON.stringify(result.body)).toContain("corr-xyz");
   });
 
+  // LK-003: refresh must fail closed with a 409 (not silently start a second job) when the
+  // service reports a job already running for this capsule.
+  it("maps a job-already-running service result to a 409 with a correlation id", async () => {
+    const service: ManualPodRouteService = {
+      startRefresh: vi.fn().mockReturnValue({ ok: false, reason: "job-already-running" }),
+      startCreate: vi.fn(),
+    };
+    const result = await handleRefreshHtmlManualPod(
+      ctxFor({}, { capsuleId: "cap", sourceId: "src" }),
+      FAKE_DEPS,
+      service,
+    );
+    expect(result.status).toBe(409);
+    expect(JSON.stringify(result.body)).toContain("corr-xyz");
+    expect(JSON.stringify(result.body)).toContain("MANUAL_POD_JOB_ALREADY_RUNNING");
+  });
+
   it("returns 202 for a create job and maps invalid-source to 400", async () => {
     const job = initialJob("route-create", "create", "cap", "src");
     const okService: ManualPodRouteService = {

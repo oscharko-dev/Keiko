@@ -640,6 +640,33 @@ describe("reconcileClaimEntailment", () => {
     expect(result.unavailableClaims).toBe(1);
   });
 
+  it("treats a truncated excerpt as unavailable instead of judging a partial excerpt", async () => {
+    // The contradicting fact sits past the default 900-char maxExcerptChars cut. If the judge were
+    // ever handed the truncated prefix, scriptedJudge's default verdict is "supported" — exactly the
+    // silent false-positive this reconciliation exists to prevent. maxClaims/maxTotalMs both already
+    // degrade to `unavailable` on their own budget exhaustion; excerpt-character truncation must too.
+    const resolve = judgeFixturePack(`${"filler ".repeat(150)}[[CONTRADICTS]]`);
+    let judgeCalls = 0;
+    const countingJudge: EntailmentJudge = {
+      judge: (input): Promise<EntailmentVerdict> => {
+        judgeCalls += 1;
+        return scriptedJudge().judge(input);
+      },
+    };
+    const result = await reconcileClaimEntailment(
+      "The retention period is 30 days [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      countingJudge,
+    );
+    expect(judgeCalls).toBe(0);
+    expect(result.unentailed).toHaveLength(0);
+    // The claim was never actually submitted to the judge, so it must not count as judged (the
+    // entailment-stage diagnostic reports "unavailable for X of Y judged claims" from this count).
+    expect(result.judgedClaims).toBe(0);
+    expect(result.unavailableClaims).toBe(1);
+  });
+
   it("stops calling the judge and marks remaining claims unavailable when the signal is aborted", async () => {
     // Finding #2063/#2555 review: an already-cancelled request must not run the sequential judge
     // calls. With the caller signal aborted, no judge call is made and every cited claim is counted

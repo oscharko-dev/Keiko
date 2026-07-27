@@ -1640,7 +1640,7 @@ export async function resolveNewCapsuleEmbeddingIdentity(
   };
 }
 
-function latestRunningJobId(
+export function latestRunningJobId(
   store: ReturnType<typeof openKnowledgeStore>,
   capsuleId: KnowledgeCapsule["id"],
 ): string | undefined {

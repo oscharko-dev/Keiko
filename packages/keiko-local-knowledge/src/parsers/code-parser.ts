@@ -30,11 +30,22 @@ const CODE_PARSER_VERSION = "1";
 // were missing while their JavaScript siblings were present, which routed every `.mts`/`.cts` file
 // to the permissive text adapter — whole-file chunking with no symbol anchor, and the anchor label
 // is a citation section path. Pinned by "routes the mts TypeScript extension to the code parser".
+// rb/php/swift/c/cc/cpp/h/hpp were missing while Local Knowledge's own file-selection contract
+// (`LOCAL_KNOWLEDGE_SCRIPT_FILE_EXTENSIONS` / `LOCAL_KNOWLEDGE_SOURCE_CODE_FILE_EXTENSIONS`) already
+// advertised them as supported source-code formats — the same .mts/.cts defect class, just still
+// open for eight more mainstream extensions. `SYMBOL_PATTERNS_SHARED` already matches Ruby's
+// `def foo(`, PHP's `function foo(`, and Swift's `func foo(`; C/C++ match the shared C-style method
+// declaration pattern applied per-extension below.
 const CODE_LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = Object.freeze({
+  c: "c",
+  cc: "cpp",
   cjs: "javascript",
+  cpp: "cpp",
   cs: "csharp",
   cts: "typescript",
   go: "go",
+  h: "c",
+  hpp: "cpp",
   java: "java",
   js: "javascript",
   jsx: "javascript",
@@ -42,9 +53,12 @@ const CODE_LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = Object.free
   kts: "kotlin",
   mjs: "javascript",
   mts: "typescript",
+  php: "php",
   py: "python",
   pyi: "python",
+  rb: "ruby",
   rs: "rust",
+  swift: "swift",
   ts: "typescript",
   tsx: "typescript",
 });
