@@ -364,16 +364,16 @@ async function resolvePortableEvidence(
   ) {
     return checksumResolution(target, checksum === undefined ? "missing" : "mismatch");
   }
-  return eligibleResolution(
+  return eligibleResolution({
     release,
     target,
     archive,
     manifestAsset,
     checksumAsset,
-    manifestText.sha256,
-    validated.archiveSha256,
-    validated.sidecarRuntimes,
-  );
+    manifestSha256: manifestText.sha256,
+    archiveSha256: validated.archiveSha256,
+    sidecarRuntimes: validated.sidecarRuntimes,
+  });
 }
 
 function validateManifestSafely(
@@ -471,34 +471,34 @@ function sidecarResolution(target: UpdatePortableTarget): PortableAssetResolutio
   };
 }
 
-function eligibleResolution(
-  release: PortableRelease,
-  target: UpdatePortableTarget,
-  archive: GitHubAsset,
-  manifestAsset: GitHubAsset,
-  checksumAsset: GitHubAsset,
-  manifestSha256: string,
-  archiveSha256: string,
-  sidecarRuntimes: readonly UpdatePortableSidecarSummary[],
-): PortableAssetResolution {
+function eligibleResolution(input: {
+  readonly release: PortableRelease;
+  readonly target: UpdatePortableTarget;
+  readonly archive: GitHubAsset;
+  readonly manifestAsset: GitHubAsset;
+  readonly checksumAsset: GitHubAsset;
+  readonly manifestSha256: string;
+  readonly archiveSha256: string;
+  readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
+}): PortableAssetResolution {
   return {
     installability: {
       source: "github-release-asset",
-      target,
-      requiredAssetName: archive.name,
+      target: input.target,
+      requiredAssetName: input.archive.name,
       status: "eligible",
       asset: {
-        target,
-        assetName: archive.name,
-        assetId: archive.id,
-        releaseId: release.id,
-        sizeBytes: archive.size,
-        sha256: archiveSha256,
-        manifestAssetName: manifestAsset.name,
-        manifestSha256,
-        checksumAssetName: checksumAsset.name,
+        target: input.target,
+        assetName: input.archive.name,
+        assetId: input.archive.id,
+        releaseId: input.release.id,
+        sizeBytes: input.archive.size,
+        sha256: input.archiveSha256,
+        manifestAssetName: input.manifestAsset.name,
+        manifestSha256: input.manifestSha256,
+        checksumAssetName: input.checksumAsset.name,
         checksumVerified: true,
-        ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
+        ...(input.sidecarRuntimes.length > 0 ? { sidecarRuntimes: input.sidecarRuntimes } : {}),
       },
     },
     blockers: [],
