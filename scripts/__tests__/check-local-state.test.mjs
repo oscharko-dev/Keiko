@@ -958,21 +958,17 @@ describe("parseArgs — --state-dir value must not look like a flag", () => {
     expect(parsed).toEqual({ kind: "args", stateDir: "/tmp/keiko-state", selfTest: false });
   });
 
-  it("rejects a short flag standing in for the value (--state-dir -h)", () => {
-    // Before the fix, only a "--"-prefixed value was rejected, so "-h" was accepted as a
-    // literal directory named "-h" instead of being treated as the missing-value usage error.
-    const parsed = _cliTestables.parseArgs(["--state-dir", "-h"]);
-    expect(parsed).toEqual({ kind: "usage" });
-  });
-
-  it("still rejects a long-flag-shaped value the same way", () => {
-    const parsed = _cliTestables.parseArgs(["--state-dir", "--self-test"]);
-    expect(parsed).toEqual({ kind: "usage" });
-  });
-
-  it("rejects a missing --state-dir value at the end of argv", () => {
-    const parsed = _cliTestables.parseArgs(["--state-dir"]);
-    expect(parsed).toEqual({ kind: "usage" });
+  it.each([
+    [
+      // Before the fix, only a "--"-prefixed value was rejected, so "-h" was accepted as a
+      // literal directory named "-h" instead of being treated as the missing-value usage error.
+      "a short flag standing in for the value (--state-dir -h)",
+      ["--state-dir", "-h"],
+    ],
+    ["a long-flag-shaped value the same way", ["--state-dir", "--self-test"]],
+    ["a missing value at the end of argv", ["--state-dir"]],
+  ])("rejects %s", (_label, argv) => {
+    expect(_cliTestables.parseArgs(argv)).toEqual({ kind: "usage" });
   });
 
   it("rejects an empty --state-dir value rather than silently using it as a path", () => {
