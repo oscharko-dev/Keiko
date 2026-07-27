@@ -493,9 +493,9 @@ function output(result: ToolCallResult): EditorAgentToolOutput {
   return JSON.parse(result.output) as EditorAgentToolOutput;
 }
 
-async function registerSnapshot(fixture: Fixture, root: string): Promise<void> {
+async function postSnapshot(fixture: Fixture, root: string): Promise<Response> {
   const port = (fixture.server.address() as AddressInfo).port;
-  const response = await fetch(`http://${UI_HOST}:${String(port)}/api/editor/agent/snapshot`, {
+  return fetch(`http://${UI_HOST}:${String(port)}/api/editor/agent/snapshot`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
     body: JSON.stringify({
@@ -504,6 +504,10 @@ async function registerSnapshot(fixture: Fixture, root: string): Promise<void> {
       snapshot: snapshot(root),
     }),
   });
+}
+
+async function registerSnapshot(fixture: Fixture, root: string): Promise<void> {
+  const response = await postSnapshot(fixture, root);
   expect(response.status).toBe(200);
   bridgeDisconnects.push(editorAgentRegistry.connect(SESSION_ID, () => undefined));
 }
@@ -776,26 +780,15 @@ describe("docked-agent managed-LSP integration (#2281)", () => {
     expect(fixture.spawnedMethods.flat()).toContain("textDocument/diagnostic");
   });
 
-  it("fails authority after a workspace switch before provider dispatch", async () => {
+  it("fails an unregistered workspace switch before provider dispatch", async () => {
     const fixture = await createFixture();
     await activate(fixture, "python", 0);
     const switchedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-agent-lsp-switched-")));
     fixture.extraRoots.push(switchedRoot);
     writeFileSync(join(switchedRoot, "main.py"), "value = switched\n", "utf8");
-    await registerSnapshot(fixture, switchedRoot);
 
-    const switched = output(await call(fixture, "diagnostics", "main.py", "python", "switched"));
-    expect(switched).toMatchObject({
-      ok: true,
-      result: { status: "conflict", conflict: { code: "POLICY_DENIED" } },
-    });
+    expect((await postSnapshot(fixture, switchedRoot)).status).toBe(403);
     expect(fixture.spawnedMethods).toHaveLength(0);
-    expect(listEditorAgentActionAudit(SESSION_ID).at(-1)).toMatchObject({
-      disposition: "denied",
-      denyReason: "authority-invalid",
-      outcome: "conflict",
-      conflictCode: "POLICY_DENIED",
-    });
   });
 
   it("fails closed with PROVIDER_UNAVAILABLE when the activated tool is no longer resolvable, without spawning it", async () => {
