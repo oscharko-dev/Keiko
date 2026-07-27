@@ -322,6 +322,19 @@ describe("parseGatewayConfig", () => {
     }
   });
 
+  it("rejects a reranker block with no baseUrl in config or environment", () => {
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        reranker: {
+          modelId: "qwen3-reranker",
+          apiKey: "rerank-secret",
+          timeoutMs: 12_000,
+        },
+      }),
+    ).toThrow(/reranker\.baseUrl must be set via config or environment/u);
+  });
+
   it("parses explicit enterprise egress settings and applies them to providers", () => {
     const raw = {
       ...(validRaw() as Record<string, unknown>),

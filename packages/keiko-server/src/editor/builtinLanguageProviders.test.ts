@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { stripTrailingSpacesAndTabsPerLine } from "./builtinLanguageProviders.js";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { createDeadlineCancellation } from "./languageCancellation.js";
+import type { LanguageProviderContext } from "./languageProvider.js";
+import {
+  formatByLanguage,
+  genericFormatting,
+  stripTrailingSpacesAndTabsPerLine,
+} from "./builtinLanguageProviders.js";
+
+function ctx(languageId: string, overlayText: string): LanguageProviderContext {
+  return {
+    fs: nodeWorkspaceFs,
+    root: "/workspace",
+    overlayPath: "/workspace/src/doc",
+    overlayText,
+    languageId,
+    limits: DEFAULT_LANGUAGE_SERVICE_LIMITS,
+    cancellation: createDeadlineCancellation({
+      deadlineMs: DEFAULT_LANGUAGE_SERVICE_LIMITS.deadlineMs,
+      now: () => 0,
+    }),
+  };
+}
 
 describe("stripTrailingSpacesAndTabsPerLine", () => {
   it("strips trailing spaces and tabs from each line", () => {
@@ -55,5 +78,36 @@ describe("stripTrailingSpacesAndTabsPerLine", () => {
     const elapsedMs = Date.now() - start;
     expect(elapsedMs).toBeLessThan(1500);
     expect(result).toBe(adversarialLine);
+  });
+});
+
+describe("formatByLanguage", () => {
+  it.each(["css", "scss", "less"] as const)(
+    "formats %s through the CSS-like brace/statement formatter",
+    (languageId) => {
+      const result = formatByLanguage(ctx(languageId, "a{color:red;}"), undefined);
+      expect(result).toBe("a{\n  color:red;\n}\n");
+    },
+  );
+
+  it("formats html through the tag-nesting formatter", () => {
+    const result = formatByLanguage(ctx("html", "<div><span>hi</span></div>"), undefined);
+    expect(result).toBe("<div>\n  <span>hi</span>\n</div>\n");
+  });
+
+  it("falls back to trailing-whitespace normalization for other builtin text languages", () => {
+    const result = formatByLanguage(ctx("markdown", "Title  \nBody\t\n"), undefined);
+    expect(result).toBe("Title\nBody\n");
+  });
+});
+
+describe("genericFormatting", () => {
+  it("emits a full-document edit carrying the language-dispatched formatted text", () => {
+    const text = "a{color:red;}";
+    const result = genericFormatting(ctx("css", text), undefined);
+
+    expect(result.truncated).toBe(false);
+    expect(result.edits).toHaveLength(1);
+    expect(result.edits[0]?.newText).toBe("a{\n  color:red;\n}\n");
   });
 });

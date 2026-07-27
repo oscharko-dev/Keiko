@@ -716,6 +716,23 @@ describe("AppShell grounding connections", () => {
     rafSpy.mockRestore();
   });
 
+  // Issue #2723 — the connected-scope rebind scan (chatWindowIdOf via useEffect) must reach its
+  // per-connection body at least once; when neither endpoint is a chat window and no bind-time
+  // snapshot exists, chatWindowIdOf returns null and the scan skips the connection entirely.
+  it("skips the connected-scope rebind scan when neither endpoint of a connection is a chat window", async () => {
+    const api = workspaceApi();
+    const filesA = win("files", {}, "files-a");
+    const filesB = win("files", {}, "files-b");
+    mocks.state.workspaceResult = workspaceResult(
+      [filesA, filesB],
+      [{ id: "conn-1", a: "files-a", b: "files-b" }],
+      api,
+    );
+    await renderMounted();
+
+    expect(api.updateConnBoundScope).not.toHaveBeenCalled();
+  });
+
   it("focuses or restores an existing Search window without toggling it closed", () => {
     const api = workspaceApi();
     const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {

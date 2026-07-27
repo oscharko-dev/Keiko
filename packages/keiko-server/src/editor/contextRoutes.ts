@@ -21,6 +21,7 @@ import {
   type CodingContextPurpose,
   type CodingContextRequest,
   type RetrievalQuery,
+  type RetrievalQueryKind,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_SEARCH_LIMITS,
@@ -385,14 +386,15 @@ function buildRepoSearchScope(realRoot: string, input: RepoSearchInput): SearchS
   };
 }
 
+function repoSearchQueryKind(input: RepoSearchQueryInput): RetrievalQueryKind {
+  if (input.operation === "findFiles") return "file-pattern";
+  if (input.symbol !== undefined) return "exact-symbol";
+  return "natural-language";
+}
+
 function buildRepoSearchQuery(input: RepoSearchQueryInput, nowMs: number): RetrievalQuery {
   return {
-    kind:
-      input.operation === "findFiles"
-        ? "file-pattern"
-        : input.symbol !== undefined
-          ? "exact-symbol"
-          : "natural-language",
+    kind: repoSearchQueryKind(input),
     text: input.operation === "findFiles" ? input.queryText : (input.symbol ?? input.queryText),
     caseSensitive: false,
     maxResults: input.maxResults,

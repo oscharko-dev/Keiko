@@ -385,6 +385,51 @@ describe("buildPatchPreview — bounding and truncation (AC5)", () => {
     expect(file?.modified).toBe("中".repeat(3));
   });
 
+  // The three cases below go through a deleted file's ORIGINAL side (`clampToLimit` /
+  // `utf8ByteLength`), unlike the created-file case above (which clamps through the separate
+  // `applyTextEditsToTextWithinLimit` edit-application path and never calls `utf8ByteLength`).
+  it("clamps 3-byte-per-code-point original content on the byte budget without splitting a code point", () => {
+    // 20 × "中" = 60 UTF-8 bytes (3 bytes each). A code-unit slice would overrun; a byte clamp
+    // must stay within the budget and cut on a code-point boundary (no replacement characters).
+    const model = buildPatchPreview({
+      patch: patch([change({ uri: "keiko://doc/cjk.ts", isDeletion: true })]),
+      sources: { "keiko://doc/cjk.ts": source("src/cjk.ts", "中".repeat(20)) },
+      limits: { maxBytesPerFile: 10 },
+    });
+    const file = model.files[0];
+    expect(file?.truncated).toBe(true);
+    expect(new TextEncoder().encode(file?.original ?? "").length).toBeLessThanOrEqual(10);
+    expect(file?.original).toBe("中".repeat(3));
+  });
+
+  it("clamps 2-byte-per-code-point original content on the byte budget without splitting a code point", () => {
+    // 10 × "é" = 20 UTF-8 bytes (2 bytes each). With a 7-byte budget, only 3 whole code points
+    // (6 bytes) fit — the 4th would push the running total to 8, over budget.
+    const model = buildPatchPreview({
+      patch: patch([change({ uri: "keiko://doc/latin1.ts", isDeletion: true })]),
+      sources: { "keiko://doc/latin1.ts": source("src/latin1.ts", "é".repeat(10)) },
+      limits: { maxBytesPerFile: 7 },
+    });
+    const file = model.files[0];
+    expect(file?.truncated).toBe(true);
+    expect(new TextEncoder().encode(file?.original ?? "").length).toBeLessThanOrEqual(7);
+    expect(file?.original).toBe("é".repeat(3));
+  });
+
+  it("clamps 4-byte-per-code-point original content on the byte budget without splitting a code point", () => {
+    // 5 × "😀" (a surrogate-pair code point) = 20 UTF-8 bytes (4 bytes each). With a 10-byte
+    // budget, only 2 whole code points (8 bytes) fit — the 3rd would push the total to 12.
+    const model = buildPatchPreview({
+      patch: patch([change({ uri: "keiko://doc/emoji.ts", isDeletion: true })]),
+      sources: { "keiko://doc/emoji.ts": source("src/emoji.ts", "😀".repeat(5)) },
+      limits: { maxBytesPerFile: 10 },
+    });
+    const file = model.files[0];
+    expect(file?.truncated).toBe(true);
+    expect(new TextEncoder().encode(file?.original ?? "").length).toBeLessThanOrEqual(10);
+    expect(file?.original).toBe("😀".repeat(2));
+  });
+
   it("always renders the first file even when it alone exceeds the total byte budget", () => {
     const model = buildPatchPreview({
       patch: patch([

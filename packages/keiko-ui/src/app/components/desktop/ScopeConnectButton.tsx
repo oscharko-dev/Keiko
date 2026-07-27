@@ -139,7 +139,14 @@ export function ScopeConnectButton({
   const accessibleLabel =
     targetName !== undefined ? t("scope.connect.targetAria", { label, target: targetName }) : label;
   const emptyHint = t("scope.connect.selectFirst");
-  const tooltip = empty ? emptyHint : atLimit ? limitHint : accessibleLabel;
+  let tooltip: string;
+  if (empty) {
+    tooltip = emptyHint;
+  } else if (atLimit) {
+    tooltip = limitHint;
+  } else {
+    tooltip = accessibleLabel;
+  }
 
   async function handleClick(): Promise<void> {
     if (disabled) return;

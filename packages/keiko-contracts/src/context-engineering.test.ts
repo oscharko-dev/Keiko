@@ -3,7 +3,7 @@
 // mutation is caught and the failure points at the broken invariant. Estimator tests assert
 // totality, determinism, monotonicity, and the conservatism bounds from ADR-0052 gate 2.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_EVICTION_POLICIES,
@@ -19,6 +19,7 @@ import {
   estimateTokens,
   estimateTokensForSegments,
   maxUtf8BytesForTokenBudget,
+  utf8ByteWidth,
 } from "./context-engineering.js";
 import type {
   ContextAssemblyDiagnostics,
@@ -300,6 +301,45 @@ describe("estimateTokens", () => {
     for (const input of cases) {
       const bytes = new TextEncoder().encode(input).length;
       expect(estimateTokens(input)).toBeLessThanOrEqual(denseTokenBudgetForBytes(bytes));
+    }
+  });
+});
+
+// ─── utf8ByteWidth ────────────────────────────────────────────────────────────────
+// Per-code-point UTF-8 byte width used by the manual fallback encoder (no global TextEncoder).
+describe("utf8ByteWidth", () => {
+  it.each([
+    [0x41, 1], // 'A' - well within the 1-byte range
+    [0x7f, 1], // last code point still encoded in 1 byte
+    [0x80, 2], // first code point that needs 2 bytes
+    [0x7ff, 2], // last code point still encoded in 2 bytes
+    [0x800, 3], // first code point that needs 3 bytes
+    [0xffff, 3], // last code point still encoded in 3 bytes (BMP ceiling)
+    [0x10000, 4], // first astral code point, needs 4 bytes
+  ])("reports %i UTF-8 bytes for code point 0x%s", (codePoint, expectedBytes) => {
+    expect(utf8ByteWidth(codePoint)).toBe(expectedBytes);
+  });
+});
+
+// ─── utf8ByteLength manual fallback (no global TextEncoder) ─────────────────────────
+// tokenTextEncoder is resolved once at module load from `typeof TextEncoder`, so exercising the
+// manual per-code-point fallback requires reloading the module with the global unavailable.
+describe("estimateTokens without a global TextEncoder", () => {
+  it("matches the TextEncoder-based estimate via the manual UTF-8 byte-counting fallback", async () => {
+    // Mixed 1/2/3/4-byte-wide code points so the fallback loop exercises every utf8ByteWidth branch.
+    const input = "aé中\u{1f600}";
+    const originalTextEncoder = globalThis.TextEncoder;
+    const expectedTokens = estimateTokens(input);
+
+    // Deliberately remove the global to force the module's manual UTF-8 fallback path on reload.
+    delete (globalThis as { TextEncoder?: typeof TextEncoder }).TextEncoder;
+    vi.resetModules();
+    try {
+      const fallbackModule = await import("./context-engineering.js");
+      expect(fallbackModule.estimateTokens(input)).toBe(expectedTokens);
+    } finally {
+      globalThis.TextEncoder = originalTextEncoder;
+      vi.resetModules();
     }
   });
 });

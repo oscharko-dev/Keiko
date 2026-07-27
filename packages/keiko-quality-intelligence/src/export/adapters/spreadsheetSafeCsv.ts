@@ -17,7 +17,7 @@
 // Pure-domain leaf. NO IO, NO new runtime dependency, NO regex.
 
 import type { QualityIntelligenceExportBundle } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligenceTestCaseCandidate } from "@oscharko-dev/keiko-contracts";
 
 /**
@@ -250,7 +250,7 @@ export function adaptToSpreadsheetSafeCsv(
     byId.set(candidate.id, candidate);
   }
   const entryIds = bundle.contents.map((entry) => entry.candidateId);
-  const sortedIds = [...entryIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const sortedIds = [...entryIds].sort(compareStrings);
   let body = encodeSpreadsheetSafeRow(SPREADSHEET_SAFE_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

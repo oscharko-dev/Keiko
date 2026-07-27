@@ -38,7 +38,11 @@ import {
   type EditorAgentEvent,
   type EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
-import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
+import {
+  PatchApplyError,
+  PatchValidationError,
+  type WorkspaceWriter,
+} from "@oscharko-dev/keiko-tools";
 import type { GitProcessOptions, GitProcessResult } from "@oscharko-dev/keiko-git";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { STREAMING, type RouteContext } from "../routes.js";
@@ -51,6 +55,7 @@ import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSess
 import {
   _resetEditorAgentStateForTests,
   _setEditorAgentPatchWriterForTests,
+  applyChangesetErrorMessage,
   handleEditorAgentActions as handleEditorAgentActionsRoute,
   handleEditorAgentAuthority,
   handleEditorAgentAudit,
@@ -4579,6 +4584,29 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       effectClass: "content-mutation",
       reviewReason: "workspace-restricted",
     });
+  });
+});
+
+describe("applyChangesetErrorMessage (Issue #2117)", () => {
+  it("reports a write-and-rollback failure for a PatchApplyError", () => {
+    expect(
+      applyChangesetErrorMessage(new PatchApplyError("apply failed, rolled back", "src/a.txt")),
+    ).toBe("The changeset write failed and was rolled back.");
+  });
+
+  it("reports a stale-validation failure for a PatchValidationError", () => {
+    expect(
+      applyChangesetErrorMessage(new PatchValidationError("patch failed validation", [], [])),
+    ).toBe("The selected changeset no longer passes patch validation.");
+  });
+
+  it("falls back to a generic atomic-apply failure for any other error", () => {
+    expect(applyChangesetErrorMessage(new Error("unexpected"))).toBe(
+      "The changeset could not be applied atomically.",
+    );
+    expect(applyChangesetErrorMessage("not an Error instance")).toBe(
+      "The changeset could not be applied atomically.",
+    );
   });
 });
 

@@ -288,6 +288,47 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
       <p data-testid="problems-empty">{t("problems.empty")}</p>
     ) : null;
 
+  // #2723 (S3358): the allProblems/snapshot ternary chain nested a second ternary inside the
+  // first branch; extracted to a named render function that early-returns each state instead.
+  const renderProblemsBody = (): ReactNode => {
+    if (allProblems.length === 0) return emptyStateContent;
+    if (snapshot.problems.length === 0) {
+      return <p data-testid="problems-no-match">{t("problems.noMatch")}</p>;
+    }
+    return (
+      <div
+        role="listbox"
+        aria-label={t("problems.title")}
+        aria-live="polite"
+        aria-relevant="additions"
+        data-testid="problems-list"
+        tabIndex={-1}
+        style={LIST_STYLE}
+        onKeyDown={onListKeyDown}
+      >
+        {snapshot.problems.map((problem) => (
+          <ProblemRow
+            key={problem.id}
+            problem={problem}
+            focused={problem.id === activeFocusId}
+            canJump={openEditorFile !== undefined && problem.line !== undefined}
+            t={t}
+            rowRef={(node) => {
+              if (node === null) rowRefs.current.delete(problem.id);
+              else rowRefs.current.set(problem.id, node);
+            }}
+            onFocus={() => {
+              setFocusId(problem.id);
+            }}
+            onActivate={() => {
+              activate(problem);
+            }}
+          />
+        ))}
+      </div>
+    );
+  };
+
   return (
     <section aria-label={t("problems.panelLabel")} style={PANEL_STYLE}>
       {/* #2721 — the filter row groups two real form controls, so it is a <fieldset> (the element
@@ -313,42 +354,7 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
         {t("problems.openFilesOnly")}
       </p>
       <VerificationSourceHealth health={verificationSourceHealth} t={t} />
-      {allProblems.length === 0 ? (
-        emptyStateContent
-      ) : snapshot.problems.length === 0 ? (
-        <p data-testid="problems-no-match">{t("problems.noMatch")}</p>
-      ) : (
-        <div
-          role="listbox"
-          aria-label={t("problems.title")}
-          aria-live="polite"
-          aria-relevant="additions"
-          data-testid="problems-list"
-          tabIndex={-1}
-          style={LIST_STYLE}
-          onKeyDown={onListKeyDown}
-        >
-          {snapshot.problems.map((problem) => (
-            <ProblemRow
-              key={problem.id}
-              problem={problem}
-              focused={problem.id === activeFocusId}
-              canJump={openEditorFile !== undefined && problem.line !== undefined}
-              t={t}
-              rowRef={(node) => {
-                if (node === null) rowRefs.current.delete(problem.id);
-                else rowRefs.current.set(problem.id, node);
-              }}
-              onFocus={() => {
-                setFocusId(problem.id);
-              }}
-              onActivate={() => {
-                activate(problem);
-              }}
-            />
-          ))}
-        </div>
-      )}
+      {renderProblemsBody()}
     </section>
   );
 }

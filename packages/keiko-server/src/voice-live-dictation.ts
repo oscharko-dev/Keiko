@@ -97,6 +97,18 @@ function isTranscriptionLanguage(value: unknown): value is string {
   );
 }
 
+// Resolves the requested transcription language: `undefined` when none was requested, the
+// validated hint when present and well-formed, or `null` when present but invalid.
+export function resolveRequestedTranscriptionLanguage(value: unknown): string | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (isTranscriptionLanguage(value)) {
+    return value;
+  }
+  return null;
+}
+
 function isLiveTranscribeUpgrade(req: IncomingMessage): boolean {
   let url: URL;
   try {
@@ -521,12 +533,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
       ws.close(1008, "profile/negotiation mismatch");
       return undefined;
     }
-    const language =
-      parsed.transcriptionLanguage === undefined
-        ? undefined
-        : isTranscriptionLanguage(parsed.transcriptionLanguage)
-          ? parsed.transcriptionLanguage
-          : null;
+    const language = resolveRequestedTranscriptionLanguage(parsed.transcriptionLanguage);
     if (language === null) {
       emitStandaloneError(ws, sessionId, "invalid-message", deps.redactor);
       ws.close(1008, "invalid transcription language");

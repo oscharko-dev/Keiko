@@ -29,6 +29,7 @@ import {
   type EditorPosition,
   type EditorRange,
   type EditorReferencesResolver,
+  type EditorRuntimeStatus,
   type EditorSaveRequest,
   type EditorSaveStatus,
   type EditorSignatureHelpResolver,
@@ -135,6 +136,23 @@ export interface EditorSurfaceProps {
   readonly editorConflicts?: KeikoCodeEditorProps["editorConflicts"] | undefined;
 }
 
+// Resolves the effective load state: an unsupported runtime always reports its error, a
+// supported runtime waits for the active language to finish loading, and otherwise defers to the
+// host-provided file-load state.
+function resolveLoadState(
+  runtime: EditorRuntimeStatus,
+  languageReady: boolean,
+  hostLoadState: KeikoEditorLoadState,
+): KeikoEditorLoadState {
+  if (!runtime.supported) {
+    return { status: "error", message: runtime.message };
+  }
+  if (!languageReady) {
+    return { status: "loading" };
+  }
+  return hostLoadState;
+}
+
 function EditorSurface(props: EditorSurfaceProps): ReactElement {
   // Idempotent and cheap after the first call; computing it in render means the very first paint
   // already reflects an unsupported runtime instead of flashing an editor that cannot mount.
@@ -169,11 +187,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
     };
   }, [languageId, onRuntimeError, runtime.supported]);
 
-  const loadState: KeikoEditorLoadState = runtime.supported
-    ? languageReady
-      ? props.fileLoadState
-      : { status: "loading" }
-    : { status: "error", message: runtime.message };
+  const loadState = resolveLoadState(runtime, languageReady, props.fileLoadState);
 
   return (
     <div className={`${styles.editorSurface} ${conflictStyles.editorSurface}`}>

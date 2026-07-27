@@ -40,6 +40,14 @@ function lineKindLabel(kind: DiffLine["kind"], labels?: DiffViewLabels): string 
     : (labels?.metadataLine ?? "Diff metadata");
 }
 
+// gutter sign provides a non-color channel for add/del/ctx (WCAG 1.4.1)
+function gutterSign(kind: DiffLine["kind"]): string {
+  if (kind === "add") return "+";
+  if (kind === "del") return "−";
+  if (kind === "ctx") return "·";
+  return "";
+}
+
 interface TokensProps {
   readonly tokens: readonly Token[];
 }
@@ -64,9 +72,7 @@ interface DiffLineViewProps {
 }
 
 function DiffLineView({ line, lang, kindLabel, labels }: DiffLineViewProps): ReactNode {
-  // gutter sign provides a non-color channel for add/del/ctx (WCAG 1.4.1)
-  const sign =
-    line.kind === "add" ? "+" : line.kind === "del" ? "−" : line.kind === "ctx" ? "·" : "";
+  const sign = gutterSign(line.kind);
   const cls = line.kind === "ctx" ? "" : ` rv-${line.kind}`;
 
   let content: ReactNode;

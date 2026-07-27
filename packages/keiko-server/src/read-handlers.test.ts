@@ -12,7 +12,9 @@ import {
   handleEvidenceDetail,
   isVoiceDictationCapable,
   isVoiceRealtimeCapable,
+  workspaceErrorStatus,
 } from "./read-handlers.js";
+import { WORKSPACE_CODES } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -613,6 +615,23 @@ describe("GET /api/workspace", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("workspaceErrorStatus", () => {
+  it("maps NOT_FOUND to 404", () => {
+    expect(workspaceErrorStatus(WORKSPACE_CODES.NOT_FOUND)).toBe(404);
+  });
+
+  it("maps FILE_TOO_LARGE and READ_FAILED to 422", () => {
+    expect(workspaceErrorStatus(WORKSPACE_CODES.FILE_TOO_LARGE)).toBe(422);
+    expect(workspaceErrorStatus(WORKSPACE_CODES.READ_FAILED)).toBe(422);
+  });
+
+  it("falls back to 400 for every other workspace error code", () => {
+    expect(workspaceErrorStatus(WORKSPACE_CODES.PATH_ESCAPE)).toBe(400);
+    expect(workspaceErrorStatus(WORKSPACE_CODES.PATH_DENIED)).toBe(400);
+    expect(workspaceErrorStatus(WORKSPACE_CODES.REPO_SEARCH_INVALID_QUERY)).toBe(400);
   });
 });
 

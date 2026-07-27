@@ -13,6 +13,10 @@ import {
   type Risk,
 } from "../../context/TwinContext";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const EvalPassIcon = Icons.check;
+const EvalFailIcon = Icons.close;
+
 const DEC_META: Readonly<Record<Decision, readonly [string, string]>> = {
   allow: ["Allow", "var(--accent)"],
   ask: ["Ask", "var(--warn)"],
@@ -117,13 +121,9 @@ function EvalTab({ decide }: { decide: (kind: GateKind, risk: Risk) => Decision 
       {results.map((r) => (
         <div className="evl-row" key={r.id} data-state={!run ? "idle" : r.pass ? "pass" : "fail"}>
           <span className="evl-ico">
-            {!run ? (
-              <span className="evl-dot" />
-            ) : r.pass ? (
-              <Icons.check size={13} />
-            ) : (
-              <Icons.close size={13} />
-            )}
+            {!run && <span className="evl-dot" />}
+            {run && r.pass && <EvalPassIcon size={13} />}
+            {run && !r.pass && <EvalFailIcon size={13} />}
           </span>
           <span className="evl-label">{r.label}</span>
           {run && (

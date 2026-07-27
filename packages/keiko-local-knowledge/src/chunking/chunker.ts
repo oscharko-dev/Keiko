@@ -245,6 +245,10 @@ function boundaryAfterMatch(start: number, matchIndex: number, matchText: string
   return start + matchIndex + matchText.length;
 }
 
+export function boundaryBeforeMatch(start: number, matchIndex: number, matchText: string): number {
+  return start + matchIndex + (matchText.startsWith("\n") ? 1 : 0);
+}
+
 function collectBoundaryMatches(
   sourceText: string,
   start: number,
@@ -261,7 +265,7 @@ function collectBoundaryMatches(
     const boundary =
       mode === "after-match"
         ? boundaryAfterMatch(start, match.index, match[0])
-        : start + match.index + (match[0].startsWith("\n") ? 1 : 0);
+        : boundaryBeforeMatch(start, match.index, match[0]);
     out.push(boundary);
   }
   return out;

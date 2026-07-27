@@ -113,6 +113,22 @@ function resolveTypeaheadStartIndex(activeIndex: number, selectedIndex: number):
   return activeIndex >= 0 ? activeIndex : Math.max(selectedIndex, 0);
 }
 
+// S3358 — the index to open the menu on, in priority order: an explicit still-enabled
+// preferred index, then the still-enabled current selection, then the first enabled option.
+function resolveOpenMenuIndex(
+  options: readonly FlatOption[],
+  preferredIndex: number | undefined,
+  selectedIndex: number,
+): number {
+  if (preferredIndex !== undefined && options[preferredIndex]?.disabled !== true) {
+    return preferredIndex;
+  }
+  if (selectedIndex >= 0 && options[selectedIndex]?.disabled !== true) {
+    return selectedIndex;
+  }
+  return firstEnabledIndex(options);
+}
+
 function triggerOpenDirectionClass(openUp: boolean): string {
   return openUp ? "ksel-trigger-open-up" : "ksel-trigger-open-down";
 }
@@ -474,12 +490,7 @@ export default function KeikoSelect({
 
   const openMenu = (preferredIndex?: number): void => {
     if (disabled || flatOptions.length === 0) return;
-    const fallbackIndex =
-      preferredIndex !== undefined && flatOptions[preferredIndex]?.disabled !== true
-        ? preferredIndex
-        : selectedIndex >= 0 && flatOptions[selectedIndex]?.disabled !== true
-          ? selectedIndex
-          : firstEnabledIndex(flatOptions);
+    const fallbackIndex = resolveOpenMenuIndex(flatOptions, preferredIndex, selectedIndex);
     setOpen(true);
     setActiveIndex(fallbackIndex);
   };

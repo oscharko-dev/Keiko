@@ -218,6 +218,14 @@ function outgoingCalls(
     });
 }
 
+function callHierarchyRoots(
+  prepared: ts.CallHierarchyItem | ts.CallHierarchyItem[] | undefined,
+): readonly ts.CallHierarchyItem[] {
+  if (prepared === undefined) return [];
+  if (Array.isArray(prepared)) return prepared;
+  return [prepared];
+}
+
 export function resolveTypescriptCallHierarchy(
   project: TypescriptProjectHandle,
   position: LanguagePosition,
@@ -227,7 +235,7 @@ export function resolveTypescriptCallHierarchy(
     project.overlayPath,
     offsetFor(project, position),
   );
-  const roots = prepared === undefined ? [] : Array.isArray(prepared) ? prepared : [prepared];
+  const roots = callHierarchyRoots(prepared);
   const budget: HierarchyBudget = { itemCount: 0, callSiteCount: 0, truncated: false };
   const mappedRoots = roots.flatMap((root): LanguageCallHierarchyResult["roots"] => {
     const item = takeHierarchyItem(project, root, budget);

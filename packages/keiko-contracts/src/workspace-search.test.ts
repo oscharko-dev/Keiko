@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  validateWorkspaceReplaceApplyRequest,
   validateWorkspaceReplacePreviewRequest,
   validateWorkspaceSearchRequest,
   validateWorkspaceSymbolSearchRequest,
   type ValidationResult,
+  type WorkspaceReplaceApplyRequest,
   type WorkspaceReplacePreviewRequest,
   type WorkspaceSearchRequest,
   type WorkspaceSymbolSearchRequest,
@@ -53,6 +55,28 @@ function symbolRequest(
     root: "/workspace",
     query: "parseConfig",
     maxResults: 50,
+    ...overrides,
+  };
+}
+
+function applyRequest(
+  overrides: Partial<WorkspaceReplaceApplyRequest> = {},
+): WorkspaceReplaceApplyRequest {
+  return {
+    root: "/workspace",
+    files: [
+      {
+        path: "src/config.ts",
+        baseContentHash: "a".repeat(64),
+        edits: [
+          {
+            range: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 10 },
+            originalText: "old",
+            newText: "new",
+          },
+        ],
+      },
+    ],
     ...overrides,
   };
 }
@@ -184,6 +208,35 @@ describe("workspace replace preview wire validators", () => {
     expectInvalidWithReason(
       validateWorkspaceReplacePreviewRequest(replaceRequest({ mode: "regex", query: "(a+)+" })),
       "regex",
+    );
+  });
+});
+
+describe("workspace replace apply wire validators", () => {
+  it("accepts a valid replace apply request", () => {
+    expect(validateWorkspaceReplaceApplyRequest(applyRequest())).toEqual({ ok: true });
+  });
+
+  it("rejects an edit whose range fields are not positive integers", () => {
+    expectInvalidWithReason(
+      validateWorkspaceReplaceApplyRequest(
+        applyRequest({
+          files: [
+            {
+              path: "src/config.ts",
+              baseContentHash: "a".repeat(64),
+              edits: [
+                {
+                  range: { startLine: 0, startColumn: 1, endLine: 1, endColumn: 10 },
+                  originalText: "old",
+                  newText: "new",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+      "edit range",
     );
   });
 });

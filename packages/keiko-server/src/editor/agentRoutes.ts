@@ -1836,6 +1836,16 @@ function projectChangeset(
   }
 }
 
+// Exported for direct regression coverage (Issue #2723): pure, no closures, otherwise only reachable
+// by forcing applyPatch to fail deep inside a queued changeset commit.
+export function applyChangesetErrorMessage(error: unknown): string {
+  if (error instanceof PatchApplyError) return "The changeset write failed and was rolled back.";
+  if (error instanceof PatchValidationError) {
+    return "The selected changeset no longer passes patch validation.";
+  }
+  return "The changeset could not be applied atomically.";
+}
+
 function applyChangeset(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
@@ -1857,12 +1867,7 @@ function applyChangeset(
     });
     return changesetTerminalResult(action, projection.selectedPaths, "succeeded");
   } catch (error) {
-    const message =
-      error instanceof PatchApplyError
-        ? "The changeset write failed and was rolled back."
-        : error instanceof PatchValidationError
-          ? "The selected changeset no longer passes patch validation."
-          : "The changeset could not be applied atomically.";
+    const message = applyChangesetErrorMessage(error);
     emitChangesetDiagnostic(action, "editor.agent.commitChangeset", error, message);
     return changesetTerminalResult(action, projection.selectedPaths, "failed", message);
   }

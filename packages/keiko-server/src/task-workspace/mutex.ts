@@ -16,6 +16,8 @@
 // process crash it simply vanishes — nothing it protected survives either, and the durable record is the
 // persisted advisory lock + visible lifecycle state (#447 reconciliation/repair resolve any stale lock).
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
+
 export interface WorkspaceMutexRegistry {
   // Runs `fn()` with exclusive access to every key in `keys`, queuing behind any in-flight holder of an
   // overlapping key. Keys are acquired in a single canonical order so that, even when a flow takes more
@@ -55,7 +57,7 @@ function keyTier(key: string): number {
 function compareKeys(a: string, b: string): number {
   const tierDelta = keyTier(a) - keyTier(b);
   if (tierDelta !== 0) return tierDelta;
-  return a < b ? -1 : a > b ? 1 : 0;
+  return compareStrings(a, b);
 }
 
 export function createWorkspaceMutexRegistry(): WorkspaceMutexRegistry {

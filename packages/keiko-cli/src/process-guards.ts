@@ -12,13 +12,14 @@ export interface ProcessGuardSink {
   readonly exit: (code: number) => void;
 }
 
+function describeFatalReason(reason: unknown): string {
+  if (reason instanceof Error) return `${reason.name}: ${reason.message}`;
+  if (typeof reason === "string") return reason;
+  return "unknown cause";
+}
+
 export function fatalProcessLine(kind: string, reason: unknown): string {
-  const named =
-    reason instanceof Error
-      ? `${reason.name}: ${reason.message}`
-      : typeof reason === "string"
-        ? reason
-        : "unknown cause";
+  const named = describeFatalReason(reason);
   return `keiko: fatal ${kind} (${named}). The process will exit.\n`;
 }
 

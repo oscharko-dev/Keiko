@@ -181,16 +181,24 @@ function jsonFormatting(
   };
 }
 
-function genericFormatting(
+// Exported for direct regression coverage (Issue #2723): pure, no closures, otherwise only reachable
+// indirectly through the builtin-text language provider's formatting operation.
+export function formatByLanguage(
+  ctx: LanguageProviderContext,
+  options: LanguageFormattingOptions | undefined,
+): string {
+  if (ctx.languageId === "css" || ctx.languageId === "scss" || ctx.languageId === "less") {
+    return formatCssLike(ctx.overlayText, options);
+  }
+  if (ctx.languageId === "html") return formatHtml(ctx.overlayText, options);
+  return normalizeTrailingWhitespace(ctx.overlayText);
+}
+
+export function genericFormatting(
   ctx: LanguageProviderContext,
   options: LanguageFormattingOptions | undefined,
 ): LanguageFormattingRaw {
-  const formatted =
-    ctx.languageId === "css" || ctx.languageId === "scss" || ctx.languageId === "less"
-      ? formatCssLike(ctx.overlayText, options)
-      : ctx.languageId === "html"
-        ? formatHtml(ctx.overlayText, options)
-        : normalizeTrailingWhitespace(ctx.overlayText);
+  const formatted = formatByLanguage(ctx, options);
   return { edits: fullDocumentEdit(ctx.overlayText, formatted), truncated: false };
 }
 

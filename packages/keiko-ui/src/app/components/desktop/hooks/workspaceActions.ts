@@ -918,6 +918,13 @@ function otherEndpointId(c: Connection, id: string): string | null {
   return null;
 }
 
+/** The window in the pair whose `type` matches, preferring `a`, or null when neither does. */
+function windowOfType(a: AppWindow, b: AppWindow, type: AppWindow["type"]): AppWindow | null {
+  if (a.type === type) return a;
+  if (b.type === type) return b;
+  return null;
+}
+
 // Resolves whether a Files↔Chat / Connector↔Chat bind was ACCEPTED by the composition root's
 // veto callback. Extracted from confirmConnect (cognitive-complexity cleanup): isolates the
 // nested accept/veto decision tree so confirmConnect itself stays a linear sequence of steps.
@@ -1333,14 +1340,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
 
   const filesContextFor = (w: AppWindow): FilesWindowContext | null => {
     if (w.type !== "files") return null;
-    const resolvedRoot = w.cfg["resolvedRoot"];
-    const configuredRoot = w.cfg["root"];
-    const root =
-      typeof resolvedRoot === "string" && resolvedRoot.length > 0
-        ? resolvedRoot
-        : typeof configuredRoot === "string" && configuredRoot.length > 0
-          ? configuredRoot
-          : null;
+    const root = preferredRoot(w);
     // No real root available — do not fabricate a sentinel (mirrors resolvedFilesRoot).
     // Returning null prevents a spurious "Context src/" badge in the Chat header and avoids
     // forwarding a non-absolute path to the QI Generate route.
@@ -1360,9 +1360,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     // connection order must NOT hide a Files window connected afterwards (Issue #714).
     const filesWindows: AppWindow[] = [];
     for (const c of connectionsFor(id)) {
-      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
-      if (otherId === null) continue;
-      const w = winById(otherId);
+      const w = connectedWindow(c, id);
       if (w?.type !== "files") continue;
       filesWindows.push(w);
     }
@@ -1388,10 +1386,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const roots: string[] = [];
     for (const c of connectionsFor(id)) {
       if (roots.length >= MAX_SCOPES) break;
-      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
-      if (otherId === null) continue;
-      const w = winById(otherId);
-      if (w === undefined) continue;
+      const w = connectedWindow(c, id);
+      if (w === null) continue;
       const root = resolvedFilesRoot(w);
       if (root === null || seen.has(root)) continue;
       seen.add(root);
@@ -1517,6 +1513,17 @@ function isAbsoluteRoot(root: string): boolean {
 }
 
 /**
+ * Prefers the resolved root over the configured root when both are present, non-empty strings.
+ * Shared by resolvedFilesRoot and filesContextFor so the two never drift apart.
+ */
+function preferredRoot(w: AppWindow): string | null {
+  const resolvedRoot = w.cfg["resolvedRoot"];
+  if (typeof resolvedRoot === "string" && resolvedRoot.length > 0) return resolvedRoot;
+  const configuredRoot = w.cfg["root"];
+  return typeof configuredRoot === "string" && configuredRoot.length > 0 ? configuredRoot : null;
+}
+
+/**
  * Strips trailing path separators from an absolute root, normalising Windows backslashes to
  * forward slashes. Windows drive roots ("C:/") are kept intact — trimming them would produce
  * an invalid path. Mirrors the trimTrailingSeparators() logic in connectedSources.ts so that
@@ -1535,14 +1542,7 @@ function normaliseRoot(root: string): string {
  */
 export function resolvedFilesRoot(w: AppWindow): string | null {
   if (w.type !== "files") return null;
-  const resolvedRoot = w.cfg["resolvedRoot"];
-  const configuredRoot = w.cfg["root"];
-  const root =
-    typeof resolvedRoot === "string" && resolvedRoot.length > 0
-      ? resolvedRoot
-      : typeof configuredRoot === "string" && configuredRoot.length > 0
-        ? configuredRoot
-        : null;
+  const root = preferredRoot(w);
   return root !== null && isAbsoluteRoot(root) ? root : null;
 }
 
@@ -1595,8 +1595,8 @@ export function filesVisibleScope(w: AppWindow, connectedAtMs: number): ChatConn
  * window and the other is a Chat window; otherwise null. Used to detect a Files↔Chat binding edge.
  */
 export function filesChatBindRoot(a: AppWindow, b: AppWindow): string | null {
-  const files = a.type === "files" ? a : b.type === "files" ? b : null;
-  const chat = a.type === "chat" ? a : b.type === "chat" ? b : null;
+  const files = windowOfType(a, b, "files");
+  const chat = windowOfType(a, b, "chat");
   if (files === null || chat === null) return null;
   return resolvedFilesRoot(files);
 }
@@ -1606,8 +1606,8 @@ export function filesChatBindScope(
   b: AppWindow,
   connectedAtMs: number,
 ): ChatConnectedScope | null {
-  const files = a.type === "files" ? a : b.type === "files" ? b : null;
-  const chat = a.type === "chat" ? a : b.type === "chat" ? b : null;
+  const files = windowOfType(a, b, "files");
+  const chat = windowOfType(a, b, "chat");
   if (files === null || chat === null) return null;
   return filesVisibleScope(files, connectedAtMs);
 }
@@ -1843,8 +1843,8 @@ export function boundConnectorScopeOf(conn: {
  * is a `"chat"` window; otherwise null.
  */
 export function connectorChatBind(a: AppWindow, b: AppWindow): ChatLocalKnowledgeScope | null {
-  const connector = a.type === "connector" ? a : b.type === "connector" ? b : null;
-  const chatWin = a.type === "chat" ? a : b.type === "chat" ? b : null;
+  const connector = windowOfType(a, b, "connector");
+  const chatWin = windowOfType(a, b, "chat");
   if (connector === null || chatWin === null) return null;
   const kind = connector.cfg["selectedKind"];
   const id = connector.cfg["selectedId"];

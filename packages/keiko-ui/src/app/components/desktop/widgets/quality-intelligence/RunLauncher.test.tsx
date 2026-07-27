@@ -189,6 +189,42 @@ function makeAcceptedStallingFake(runId: string): {
   };
 }
 
+// Like makeAcceptedStallingFake, but also delivers one `finding:recorded` event before stalling —
+// used to exercise the findings > 0 branch of the in-progress announcement / progress text.
+function makeAcceptedStallingFakeWithFinding(runId: string): {
+  startImpl: StartQiRunFn;
+  resolveStall: () => void;
+} {
+  let resolve!: () => void;
+
+  const startImpl = vi.fn(
+    async (
+      _request: Parameters<StartQiRunFn>[0],
+      _signal: AbortSignal,
+      onMessage: Parameters<StartQiRunFn>[2],
+    ): Promise<void> => {
+      onMessage({
+        type: "accepted",
+        runId,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      });
+      onMessage({ type: "event", kind: "finding:recorded", sequence: 1 });
+      await new Promise<void>((res) => {
+        resolve = res;
+      });
+    },
+  ) as unknown as StartQiRunFn;
+
+  return {
+    startImpl,
+    resolveStall: () => {
+      resolve();
+    },
+  };
+}
+
 function fakeFetchCapsules(capsules: readonly unknown[]): FetchCapsulesFn {
   return vi.fn().mockResolvedValue({ capsules }) as unknown as FetchCapsulesFn;
 }
@@ -335,6 +371,18 @@ describe("RunLauncher — initial render", () => {
     const last = sourceTypeRadio("Knowledge Pod Set");
     expect(last).toHaveAttribute("aria-checked", "true");
     expect(document.activeElement).toBe(last);
+  });
+
+  it("is a no-op for a non-arrow key on the source-type radiogroup (#45)", () => {
+    render(<RunLauncher />);
+    const requirements = sourceTypeRadio("Requirements");
+    requirements.focus();
+
+    fireEvent.keyDown(requirements, { key: "Enter" });
+
+    // A key that is not one of the four arrow keys must not move selection or focus.
+    expect(sourceTypeRadio("Requirements")).toHaveAttribute("aria-checked", "true");
+    expect(document.activeElement).toBe(requirements);
   });
 
   it("is a no-op for arrow keys while a run is in progress (#45)", async () => {
@@ -1436,6 +1484,24 @@ describe("RunLauncher — progress announcement (a11y M-01)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("qi-launch-progress-sr").textContent).not.toBe("");
     });
+    act(() => {
+      resolveStall();
+    });
+  });
+
+  it("includes the finding count in both the visible progress block and the sr-only announcement", async () => {
+    const user = userEvent.setup();
+    const { startImpl, resolveStall } = makeAcceptedStallingFakeWithFinding("run-with-finding");
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Track findings");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-launch-progress")).toHaveTextContent(/1 finding/i);
+    });
+    expect(screen.getByTestId("qi-launch-progress-sr").textContent).toMatch(/1 finding/i);
+
     act(() => {
       resolveStall();
     });

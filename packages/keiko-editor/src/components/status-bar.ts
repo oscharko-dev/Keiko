@@ -235,7 +235,14 @@ function diagnosticsField(summary: EditorDiagnosticsSummary | null): EditorStatu
       assertive: false,
     };
   }
-  const tone: EditorStatusTone = errors > 0 ? "error" : warnings > 0 ? "warn" : "default";
+  let tone: EditorStatusTone;
+  if (errors > 0) {
+    tone = "error";
+  } else if (warnings > 0) {
+    tone = "warn";
+  } else {
+    tone = "default";
+  }
   const parts: string[] = [];
   if (errors > 0) parts.push(pluralize(errors, "error"));
   if (warnings > 0) parts.push(pluralize(warnings, "warning"));

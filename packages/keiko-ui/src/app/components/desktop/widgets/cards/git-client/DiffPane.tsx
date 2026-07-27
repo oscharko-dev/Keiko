@@ -145,9 +145,8 @@ export function DiffPane({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, flex: 1 }}>
-      {selectedCommit !== null ? (
-        <CommitDetailHeader entry={selectedCommit} />
-      ) : selectedChangePath !== null ? (
+      {selectedCommit !== null && <CommitDetailHeader entry={selectedCommit} />}
+      {selectedCommit === null && selectedChangePath !== null && (
         <div style={DIFF_HEADER_STYLE}>
           <DiffPathLabel path={selectedChangePath} />
           <span style={{ flex: 1 }} />
@@ -168,7 +167,7 @@ export function DiffPane({
             })}
           </div>
         </div>
-      ) : null}
+      )}
       <section
         style={{ flex: 1, minHeight: 0, overflow: "auto" }}
         className="review"

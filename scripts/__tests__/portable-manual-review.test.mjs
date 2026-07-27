@@ -7,15 +7,19 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import yauzl from "yauzl";
 
 import {
+  browserOpenCommand,
   latestManualArtifactRoot,
   manualReviewPlan,
+  openBrowserIfRequested,
+  portableModeStatus,
   prepareManualReview,
   prepareScenarioFixture,
   targetRoot,
@@ -25,6 +29,14 @@ import {
   PORTABLE_TARGETS,
   validatePortablePublishedManifest,
 } from "../portable-runtime.mjs";
+
+// Wraps the real spawnSync so every OTHER call in this file (e.g. the manual-review plan's own
+// `git rev-parse` lookup) still runs for real; only the "open a browser" test below overrides the
+// next call's implementation so this suite never actually launches a real browser process.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 const SCENARIO_COUNT = 17;
 
@@ -190,5 +202,56 @@ describe("portable manual review harness", () => {
     expect(manifest.releaseImpact.reviewedBinding.nativeHelpers).toEqual(manifest.nativeHelpers);
     expect(manifest.updateEligibility.rollbackSupported).toBe(false);
     expect(JSON.stringify(sidecar)).not.toMatch(/selfUpdate|independentUpdate|rollback/iu);
+  });
+});
+
+describe("portableModeStatus", () => {
+  it("reports bootstrap for an unmanaged-bootstrap install", () => {
+    expect(portableModeStatus("unmanaged-bootstrap")).toBe("bootstrap");
+  });
+
+  it("reports it-managed for a system-managed install", () => {
+    expect(portableModeStatus("system-managed")).toBe("it-managed");
+  });
+
+  it("reports managed for every other scenario", () => {
+    expect(portableModeStatus("happy-update")).toBe("managed");
+  });
+});
+
+describe("browserOpenCommand", () => {
+  it("uses the macOS opener on darwin", () => {
+    expect(browserOpenCommand("darwin")).toBe("/usr/bin/open");
+  });
+
+  it("uses the Windows opener on win32", () => {
+    expect(browserOpenCommand("win32")).toBe(String.raw`C:\Windows\System32\cmd.exe`);
+  });
+
+  it("falls back to xdg-open on every other platform", () => {
+    expect(browserOpenCommand("linux")).toBe("/usr/bin/xdg-open");
+  });
+});
+
+describe("openBrowserIfRequested", () => {
+  afterEach(() => {
+    vi.mocked(spawnSync).mockClear();
+  });
+
+  it("does not spawn anything when open was not requested", () => {
+    openBrowserIfRequested("http://127.0.0.1:19830", false);
+
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("spawns the platform opener with the scenario URL when open was requested", () => {
+    vi.mocked(spawnSync).mockImplementationOnce(() => ({ status: 0 }));
+
+    openBrowserIfRequested("http://127.0.0.1:19830", true);
+
+    expect(spawnSync).toHaveBeenCalledTimes(1);
+    const [command, args] = vi.mocked(spawnSync).mock.calls[0];
+    expect(command).toBe(browserOpenCommand(process.platform));
+    expect(args).toContain("http://127.0.0.1:19830");
   });
 });
