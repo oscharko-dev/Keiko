@@ -71,7 +71,7 @@ describe("workspace manifest registration (#2768)", () => {
     // target (#2615) without depending on an actual case-insensitive filesystem — the same
     // collision a case-insensitive host produces from two spellings of one directory.
     const alias = join(tmp, "alias");
-    symlinkSync(project, alias);
+    symlinkSync(project, alias, "dir");
 
     const store = createNodeUiStore(dbPath, { now: () => 1 });
     store.createProject(project, "Project");

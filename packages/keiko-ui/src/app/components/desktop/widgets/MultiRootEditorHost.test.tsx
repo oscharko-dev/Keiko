@@ -350,3 +350,40 @@ describe("MultiRootEditorHost tablist keyboard contract (#2768)", () => {
     expect(panel).toHaveAttribute("aria-labelledby", tab.id);
   });
 });
+
+// Qodo review on PR #2770 — the roving tab stop is deliberately separate from the selection so
+// ARROWING can move focus without selecting. A selection that changes on its own is the other case:
+// `activeRoot` derives from `configuredRoot`/the manifest, so `openEditorFile` writing another root
+// into cfg, or a `focusRoot` raised elsewhere, moves the selected tab without `selectRoot` running.
+describe("MultiRootEditorHost roving tab stop vs external selection (#2770 review)", () => {
+  function hostAt(current: WorkspaceManifest, configuredRoot: string): ReactNode {
+    return (
+      <I18nProvider>
+        <MultiRootEditorHost
+          manifest={current}
+          workspace={workspace(current)}
+          configuredRoot={configuredRoot}
+          cfg={{ root: configuredRoot }}
+          buildBaseProps={() => ({ windowId: "editor-window" })}
+          updateCfg={vi.fn()}
+        />
+      </I18nProvider>
+    );
+  }
+
+  it("moves the tab stop to a root selected without selectRoot ever running", () => {
+    const current = manifest();
+    const { rerender } = render(hostAt(current, "/repo-a"));
+
+    expect(screen.getByRole("tab", { name: /Repo A/u })).toHaveAttribute("tabindex", "0");
+
+    rerender(hostAt(current, "/repo-b"));
+
+    // Selection and tab stop must not part company: leaving tabIndex=0 on Repo A while Repo B is
+    // aria-selected and its tabpanel is the visible one points keyboard and screen-reader users at
+    // the wrong panel.
+    expect(screen.getByRole("tab", { name: /Repo B/u })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /Repo B/u })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tab", { name: /Repo A/u })).toHaveAttribute("tabindex", "-1");
+  });
+});

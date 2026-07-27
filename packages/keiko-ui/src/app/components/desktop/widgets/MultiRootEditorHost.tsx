@@ -227,6 +227,16 @@ export function MultiRootEditorHost({
   activeRootRef.current = activeRoot.rootRef;
   manifestRef.current = manifest;
   updateCfgRef.current = updateCfg;
+  // The roving tab stop is separate from the selection only for MANUAL activation — arrowing moves
+  // focus without selecting. A selection that changes on its own is the other case: `activeRoot` is
+  // derived from `configuredRoot`/the manifest, so `openEditorFile` writing another root into cfg,
+  // or a `focusRoot` raised elsewhere, moves the selected tab without `selectRoot` ever running.
+  // Without this resync the only tabbable tab stays on the previously selected root while
+  // `aria-selected` and the visible tabpanel are on another — the tablist contract says the tab stop
+  // belongs to the selected tab when focus is outside the tablist (Qodo review, PR #2770; the same
+  // resync MultiRootFilesWidget took in #2753). Arrowing is unaffected: it does not change
+  // `activeRoot`, so this effect does not fire and cannot steal focus back.
+  useEffect(() => setFocusedRootRef(activeRoot.rootRef), [activeRoot.rootRef]);
   useEffect(() => setSessions(parsedSessions), [parsedSessions]);
   // openEditorFile targets an existing editor window by writing root/file/openFiles/layoutJson into
   // its cfg. Per-root sessions take precedence over cfg, so once a root had a session that request
