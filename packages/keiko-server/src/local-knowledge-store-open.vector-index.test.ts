@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { localKnowledgeVectorIndexOptions } from "./local-knowledge-store-open.js";
 
 describe("localKnowledgeVectorIndexOptions", () => {
@@ -56,5 +57,35 @@ describe("localKnowledgeVectorIndexOptions", () => {
       mode: "usearch",
       usearchBinaryPath: "/opt/keiko/usearch.node",
     });
+  });
+
+  it("routes unexpected failures to a correlation-keyed body-free server diagnostic", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const resolved = localKnowledgeVectorIndexOptions({
+      env: {},
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+    });
+    const failure = new Error("secret query content");
+
+    resolved.onUnexpectedFailure?.({
+      correlationId: "vector-index-correlation",
+      operation: "vector-index.search",
+      source: "keiko-local-knowledge.vector-index",
+      error: failure,
+    });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: "vector-index-correlation",
+      operation: "vector-index.search",
+      source: "keiko-local-knowledge.vector-index",
+      errorClass: "Error",
+      message: "Local knowledge vector-index search failed.",
+    });
+    expect(JSON.stringify(records)).not.toContain(failure.message);
   });
 });

@@ -141,6 +141,7 @@ function portIdentityMismatch(): VectorIndexResult {
 function toPortDiagnostics(source: RetrievalVectorIndexDiagnostics): VectorIndexDiagnostics {
   return {
     ...diagnostic(source.provider, source.status, source.reason),
+    ...(source.correlationId !== undefined ? { correlationId: source.correlationId } : {}),
     ...(source.indexName !== undefined ? { indexName: source.indexName } : {}),
     ...(source.vectorCount !== undefined ? { vectorCount: source.vectorCount } : {}),
     ...(source.searchMode !== undefined ? { searchMode: source.searchMode } : {}),
@@ -289,6 +290,7 @@ function toLkDiagnostics(source: VectorIndexDiagnostics): RetrievalVectorIndexDi
     provider: toLkProvider(source.provider),
     status: toLkStatus(source.status),
     ...(source.reason !== undefined ? { reason: source.reason } : {}),
+    ...(source.correlationId !== undefined ? { correlationId: source.correlationId } : {}),
     ...(source.indexName !== undefined ? { indexName: source.indexName } : {}),
     ...(source.vectorCount !== undefined ? { vectorCount: source.vectorCount } : {}),
     ...(source.searchMode !== undefined ? { searchMode: source.searchMode } : {}),

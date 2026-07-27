@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type {
   EmbeddingModelIdentity,
@@ -54,12 +54,22 @@ export interface VectorIndexAdapter {
   readonly searchCapsule: (request: VectorIndexSearchRequest) => Promise<VectorIndexSearchResult>;
 }
 
+export interface VectorIndexUnexpectedFailureDiagnostic {
+  readonly correlationId: string;
+  readonly operation: "vector-index.search";
+  readonly source: "keiko-local-knowledge.vector-index";
+  // The sink owns redaction/classification. This value must never be persisted or logged directly.
+  readonly error: unknown;
+}
+
 export interface VectorIndexOptions {
   readonly mode?: VectorIndexMode;
   readonly adapter?: VectorIndexAdapter;
   readonly usearchBinaryPath?: string;
   readonly maxIndexedVectorBytes?: number;
   readonly now?: () => number;
+  readonly newCorrelationId?: () => string;
+  readonly onUnexpectedFailure?: (diagnostic: VectorIndexUnexpectedFailureDiagnostic) => void;
 }
 
 export interface VectorIndexEnvironment {
@@ -73,6 +83,8 @@ interface ResolvedVectorIndexOptions {
   readonly usearchBinaryPath?: string;
   readonly maxIndexedVectorBytes: number;
   readonly now: () => number;
+  readonly newCorrelationId: () => string;
+  readonly onUnexpectedFailure?: (diagnostic: VectorIndexUnexpectedFailureDiagnostic) => void;
 }
 
 interface VectorIndexStampRow {
@@ -352,6 +364,10 @@ export function resolveVectorIndexOptions(
     ...(usearchBinaryPath !== undefined ? { usearchBinaryPath } : {}),
     maxIndexedVectorBytes: resolvedMaxBytes(supplied.maxIndexedVectorBytes),
     now: supplied.now ?? Date.now,
+    newCorrelationId: supplied.newCorrelationId ?? randomUUID,
+    ...(supplied.onUnexpectedFailure !== undefined
+      ? { onUnexpectedFailure: supplied.onUnexpectedFailure }
+      : {}),
   };
 }
 
@@ -359,6 +375,7 @@ function unavailable(
   status: RetrievalVectorIndexDiagnostics["status"],
   reason: string,
   vectorCount?: number,
+  correlationId?: string,
 ): VectorIndexSearchResult {
   return {
     ok: false,
@@ -370,6 +387,7 @@ function unavailable(
       status,
       reason,
       ...(vectorCount !== undefined ? { vectorCount } : {}),
+      ...(correlationId !== undefined ? { correlationId } : {}),
     },
   };
 }
@@ -587,17 +605,38 @@ async function searchBuiltIn(
   return successfulResult(request, result, stamp.n);
 }
 
+function reportUnexpectedFailure(options: ResolvedVectorIndexOptions, error: unknown): string {
+  const correlationId = options.newCorrelationId();
+  try {
+    options.onUnexpectedFailure?.({
+      correlationId,
+      operation: "vector-index.search",
+      source: "keiko-local-knowledge.vector-index",
+      error,
+    });
+  } catch {
+    // A diagnostic sink failure must not turn a safe brute-force fallback into an unhandled error.
+  }
+  return correlationId;
+}
+
 export async function searchVectorIndex(
   request: VectorIndexSearchRequest,
   options: VectorIndexOptions | undefined,
 ): Promise<VectorIndexSearchResult> {
   const resolved = resolveVectorIndexOptions(options);
-  if (resolved.adapter !== undefined) return await resolved.adapter.searchCapsule(request);
-  if (resolved.mode === "disabled") return disabled();
   try {
+    if (resolved.adapter !== undefined) return await resolved.adapter.searchCapsule(request);
+    if (resolved.mode === "disabled") return disabled();
     return await searchBuiltIn(request, resolved);
-  } catch {
-    return unavailable("fallback-query-error", "vector-index-query-failed");
+  } catch (error) {
+    const correlationId = reportUnexpectedFailure(resolved, error);
+    return unavailable(
+      "fallback-query-error",
+      "vector-index-query-failed",
+      undefined,
+      correlationId,
+    );
   }
 }
 

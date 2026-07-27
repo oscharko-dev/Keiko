@@ -73,6 +73,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "The bounded diff read was unavailable.",
   "The bounded blame read was unavailable.",
   "The server-resolved editor operation failed.",
+  "Local knowledge vector-index search failed.",
 ] as const;
 
 export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];

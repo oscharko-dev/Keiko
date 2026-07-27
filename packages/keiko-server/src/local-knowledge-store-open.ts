@@ -1,6 +1,10 @@
 import { dirname } from "node:path";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import type { KnowledgeStore, VectorIndexOptions } from "@oscharko-dev/keiko-local-knowledge";
+import type {
+  KnowledgeStore,
+  VectorIndexOptions,
+  VectorIndexUnexpectedFailureDiagnostic,
+} from "@oscharko-dev/keiko-local-knowledge";
 import {
   createLocalKnowledgeStoreVectorIndexPort,
   KnowledgeStoreError,
@@ -13,6 +17,7 @@ import {
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
 import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
 interface RecoverableRunningJobRow {
   readonly id: string;
@@ -150,7 +155,29 @@ export function openKnowledgeStoreForDeps(
 }
 
 export function localKnowledgeVectorIndexOptions(
-  deps: Pick<UiHandlerDeps, "env">,
+  deps: Pick<UiHandlerDeps, "diagnostics" | "env">,
 ): VectorIndexOptions {
-  return resolveVectorIndexOptions(undefined, deps.env);
+  return {
+    ...resolveVectorIndexOptions(undefined, deps.env),
+    onUnexpectedFailure: (failure): void => {
+      reportUnexpectedVectorIndexFailure(deps.diagnostics, failure);
+    },
+  };
+}
+
+function reportUnexpectedVectorIndexFailure(
+  diagnostics: UiHandlerDeps["diagnostics"],
+  failure: VectorIndexUnexpectedFailureDiagnostic,
+): void {
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId: failure.correlationId,
+      operation: failure.operation,
+      source: failure.source,
+      error: failure.error,
+      summary: "Local knowledge vector-index search failed.",
+      redact: () => "Local knowledge vector-index search failed.",
+    }),
+  );
 }

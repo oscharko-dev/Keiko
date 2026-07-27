@@ -24,6 +24,7 @@ export {
   type VectorIndexOptions,
   type VectorIndexSearchRequest,
   type VectorIndexSearchResult,
+  type VectorIndexUnexpectedFailureDiagnostic,
 } from "./vector-index.js";
 
 export {

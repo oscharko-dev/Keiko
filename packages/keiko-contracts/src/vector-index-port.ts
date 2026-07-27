@@ -56,6 +56,8 @@ export interface VectorIndexDiagnostics {
   readonly provider: string;
   readonly status: string;
   readonly reason?: string;
+  // Opaque link to a body-free operator diagnostic for unexpected internal failures.
+  readonly correlationId?: string;
   readonly indexName?: string;
   readonly vectorCount?: number;
   readonly searchMode?: "exact" | "ann";

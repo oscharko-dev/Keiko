@@ -119,6 +119,55 @@ describe("vector index service", () => {
     }
   });
 
+  it("correlates and reports an unexpected adapter failure without exposing its message", async () => {
+    const fixture = freshStore();
+    const failure = new Error("secret query content");
+    const reported: unknown[] = [];
+    try {
+      const capsule = {
+        id: "cap-adapter-failure",
+        embeddingModelIdentity: DEFAULT_EMBEDDING,
+      } as VectorIndexSearchRequest["capsule"];
+      const result = await searchVectorIndex(
+        {
+          store: fixture.store,
+          capsule,
+          queryVector: new Float32Array(DEFAULT_EMBEDDING.vectorDimensions).fill(1),
+          candidateLimit: 5,
+        },
+        {
+          adapter: {
+            searchCapsule: () => Promise.reject(failure),
+          },
+          newCorrelationId: () => "vector-index-correlation",
+          onUnexpectedFailure: (diagnostic) => {
+            reported.push(diagnostic);
+          },
+        },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        diagnostics: {
+          status: "fallback-query-error",
+          reason: "vector-index-query-failed",
+          correlationId: "vector-index-correlation",
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain(failure.message);
+      expect(reported).toEqual([
+        {
+          correlationId: "vector-index-correlation",
+          operation: "vector-index.search",
+          source: "keiko-local-knowledge.vector-index",
+          error: failure,
+        },
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("scores encrypted-store vectors in memory without SQLite extension authority", async () => {
     const fixture = encryptedStore();
     try {
