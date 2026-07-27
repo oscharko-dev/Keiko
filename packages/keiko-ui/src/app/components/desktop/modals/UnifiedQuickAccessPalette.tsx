@@ -11,8 +11,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type RefObject,
+  type SetStateAction,
 } from "react";
 import { fetchFilesSearch, fetchWorkspaceSearch, fetchWorkspaceSymbols } from "@/lib/api";
 import {
@@ -217,43 +220,41 @@ function quickAccessEmptyText(
     : t("quickAccess.empty.files");
 }
 
-export function UnifiedQuickAccessPalette({
-  initialMode,
-  root,
-  roots,
-  commands,
-  openEditorFile,
-  onClose,
-}: UnifiedQuickAccessPaletteProps): ReactNode {
-  const t = useOptionalWidgetTranslate();
-  const [query, setQuery] = useState(initialMode === "commands" ? ">" : "");
-  const [searchResults, setSearchResults] = useState<readonly SearchResult[]>([]);
-  const [failedRoots, setFailedRoots] = useState<readonly string[]>([]);
-  const [selected, setSelected] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const listId = useId();
+// Restores focus to whatever had it before the palette opened, once the palette closes.
+function useQuickAccessFocusRestore(inputRef: RefObject<HTMLInputElement | null>): void {
   const openerRef = useRef<HTMLElement | null>(
     typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null),
   );
-  const mode: QuickAccessMode = query.startsWith(">") ? "commands" : "files";
-  const commandQuery = query.startsWith(">") ? query.slice(1).trim() : "";
-  const targets = useMemo(() => quickAccessTargets(root, roots), [root, roots]);
-  const multiRoot = targets.length > 1;
-
   useEffect(() => {
     const opener = openerRef.current;
     inputRef.current?.focus();
-    return () => {
+    return (): void => {
       if (opener?.isConnected === true) opener.focus();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+}
+
+interface QuickAccessFileSearchState {
+  readonly searchResults: readonly SearchResult[];
+  readonly failedRoots: readonly string[];
+}
+
+// Debounced workspace file/symbol search: re-queries targets shortly after the query settles,
+// aborting the in-flight request if the query or target set changes first.
+function useQuickAccessFileSearch(
+  mode: QuickAccessMode,
+  query: string,
+  targets: readonly WorkspaceRootTarget[],
+): QuickAccessFileSearchState {
+  const [searchResults, setSearchResults] = useState<readonly SearchResult[]>([]);
+  const [failedRoots, setFailedRoots] = useState<readonly string[]>([]);
 
   useEffect(() => {
     if (mode !== "files" || targets.length === 0 || query.trim().length === 0) {
       setSearchResults([]);
       setFailedRoots([]);
-      return;
+      return undefined;
     }
     const controller = new AbortController();
     const trimmed = query.trim();
@@ -274,11 +275,64 @@ export function UnifiedQuickAccessPalette({
           }
         });
     }, SEARCH_DEBOUNCE_MS);
-    return () => {
+    return (): void => {
       clearTimeout(handle);
       controller.abort();
     };
   }, [mode, query, targets]);
+
+  return { searchResults, failedRoots };
+}
+
+function quickAccessKeyDownHandler(
+  itemCount: number,
+  selected: number,
+  setSelected: Dispatch<SetStateAction<number>>,
+  activate: (index: number) => void,
+  onClose: () => void,
+  inputRef: RefObject<HTMLInputElement | null>,
+): (event: ReactKeyboardEvent<HTMLInputElement>) => void {
+  return (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (itemCount > 0) setSelected((current) => (current + 1) % itemCount);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (itemCount > 0) setSelected((current) => (current - 1 + itemCount) % itemCount);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      activate(selected);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      inputRef.current?.focus();
+    }
+  };
+}
+
+export function UnifiedQuickAccessPalette({
+  initialMode,
+  root,
+  roots,
+  commands,
+  openEditorFile,
+  onClose,
+}: UnifiedQuickAccessPaletteProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  const [query, setQuery] = useState(initialMode === "commands" ? ">" : "");
+  const [selected, setSelected] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const mode: QuickAccessMode = query.startsWith(">") ? "commands" : "files";
+  const commandQuery = query.startsWith(">") ? query.slice(1).trim() : "";
+  const targets = useMemo(() => quickAccessTargets(root, roots), [root, roots]);
+  const multiRoot = targets.length > 1;
+
+  useQuickAccessFocusRestore(inputRef);
+  const { searchResults, failedRoots } = useQuickAccessFileSearch(mode, query, targets);
 
   const commandResults = useMemo(
     () =>
@@ -315,24 +369,14 @@ export function UnifiedQuickAccessPalette({
     [commandResults, mode, onClose, openEditorFile, searchResults],
   );
 
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      if (itemCount > 0) setSelected((current) => (current + 1) % itemCount);
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      if (itemCount > 0) setSelected((current) => (current - 1 + itemCount) % itemCount);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      activate(selected);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    } else if (event.key === "Tab") {
-      event.preventDefault();
-      inputRef.current?.focus();
-    }
-  };
+  const onKeyDown = quickAccessKeyDownHandler(
+    itemCount,
+    selected,
+    setSelected,
+    activate,
+    onClose,
+    inputRef,
+  );
 
   const optionId = (index: number): string => `${listId}-option-${String(index)}`;
   const emptyText = quickAccessEmptyText(t, mode, root, query);

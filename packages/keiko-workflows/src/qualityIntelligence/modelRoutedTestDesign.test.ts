@@ -11,14 +11,14 @@ import {
   createInMemoryQualityIntelligenceLocalStore,
   type QualityIntelligenceEvidenceManifest,
 } from "@oscharko-dev/keiko-evidence";
-import { runQualityIntelligenceModelRoutedTestDesign } from "../modelRoutedTestDesign.js";
-import { QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS } from "../descriptors.js";
+import { runQualityIntelligenceModelRoutedTestDesign } from "./modelRoutedTestDesign.js";
+import { QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS } from "./descriptors.js";
 import type {
   QualityIntelligenceJudgeInput,
   QualityIntelligenceModelRoutedTestDesignInput,
   QualityIntelligenceModelRoutedTestDesignDeps,
   QualityIntelligenceJudgePort,
-} from "../modelRoutedTestDesign.js";
+} from "./modelRoutedTestDesign.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
