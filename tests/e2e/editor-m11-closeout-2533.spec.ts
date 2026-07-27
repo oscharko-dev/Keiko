@@ -343,6 +343,20 @@ async function expectAxeGreen(page: Page, selector: string): Promise<void> {
 // so the Explorer is held to the same zero-violation bar as Settings and history. This is
 // deliberately a strengthening: the previous form would have FAILED once the surface became clean.
 
+/**
+ * The grant read back from the governed route, which is what "the profile switch did not alter
+ * trust" actually means. Asserting the absence of the trust banner instead would also assert that
+ * the catalog read succeeded on the replaced page — a different property, and one this journey does
+ * not control.
+ */
+async function expectRootStillTrusted(request: APIRequestContext, root: string): Promise<void> {
+  const response = await request.get("/api/editor/verification/trust", {
+    params: { projectId: root },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  expect((await response.json()) as { readonly trust: string }).toMatchObject({ trust: "trusted" });
+}
+
 test.afterAll(() => {
   cleanupEditorWorkspaces();
 });
@@ -375,17 +389,7 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   await expect(journeyPage.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(
     0,
   );
-  // …and the grant itself is read back from the governed route, which is what "the switch did not
-  // alter trust" actually means. Asserting the absence of the trust banner instead would also
-  // assert that the catalog read succeeded on the replaced page — a different property, and one
-  // this journey does not control.
-  const trustAfterSwitch = await request.get("/api/editor/verification/trust", {
-    params: { projectId: harness.alpha.root },
-  });
-  expect(trustAfterSwitch.ok(), await trustAfterSwitch.text()).toBe(true);
-  expect((await trustAfterSwitch.json()) as { readonly trust: string }).toMatchObject({
-    trust: "trusted",
-  });
+  await expectRootStillTrusted(request, harness.alpha.root);
   const pane = firstPane(editor);
   await saveVersion(journeyPage, pane, VERSION_ONE);
   // Read the oldest checkpoint's content from disk instead of hard-coding it (the sibling #2531
