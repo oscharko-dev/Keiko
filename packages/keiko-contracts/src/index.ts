@@ -2186,6 +2186,7 @@ export type {
   SideFileWriteResult,
 } from "./evidence.js";
 export { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
+export { parseUpdateMemoryAutonomyPolicyWire } from "./bff-wire.js";
 
 // ─── BFF wire types (ADR-0013; entity shapes that travel over the HTTP wire) ──────────────
 // NOTE: WorkflowStatus and ChatMessage are NOT re-exported here because those names are already

@@ -48,6 +48,7 @@ interface ChatFixture {
 }
 
 interface RecentCapture {
+  readonly eventId: string;
   readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected";
   readonly mode?: CodingWorkbenchMode;
   readonly provenance: { readonly initiatorSurface: string };
@@ -213,9 +214,37 @@ async function waitForCapture(
   return capture;
 }
 
-function recordCorrectCapture(metrics: MetricCounters): void {
-  metrics.correctCaptures += 1;
-  metrics.totalCaptures += 1;
+function recordObservedCaptures(
+  metrics: MetricCounters,
+  before: readonly RecentCapture[],
+  after: readonly RecentCapture[],
+  correctMarker: string,
+): void {
+  const previousEventIds = new Set(before.map(({ eventId }) => eventId));
+  const emitted = after.filter(
+    (capture) => capture.outcome !== "rejected" && !previousEventIds.has(capture.eventId),
+  );
+  metrics.totalCaptures += emitted.length;
+  metrics.correctCaptures += emitted.filter(
+    (capture) => capture.bodyExcerpt?.includes(correctMarker) === true,
+  ).length;
+  metrics.totalProposals += emitted.filter(({ outcome }) => outcome === "proposed").length;
+}
+
+async function sendMeasuredTurn(
+  context: CertificationContext,
+  text: string,
+  marker: string,
+  mode: CodingWorkbenchMode,
+  outcome: "proposed" | "auto-accepted",
+  metrics: MetricCounters,
+): Promise<RecentCapture> {
+  const before = (await recent(context.request, context.since)).captures;
+  await sendTurn(context.chatWindow, text);
+  const capture = await waitForCapture(context, marker, mode, outcome);
+  const after = (await recent(context.request, context.since)).captures;
+  recordObservedCaptures(metrics, before, after, marker);
+  return capture;
 }
 
 async function certifyGovernedJournal(
@@ -243,39 +272,37 @@ async function certifyModeCaptures(
   metrics: MetricCounters,
 ): Promise<string> {
   await setMode(context.page, "governed-assist");
-  await sendTurn(
-    context.chatWindow,
-    "M1_GOVERNED_CAPTURE establishes the fixture release cadence.",
-  );
-  const governed = await waitForCapture(
+  const governed = await sendMeasuredTurn(
     context,
+    "M1_GOVERNED_CAPTURE establishes the fixture release cadence.",
     "M1_GOVERNED_CAPTURE",
     "governed-assist",
     "proposed",
+    metrics,
   );
   expect(governed.memoryId).toBeDefined();
-  recordCorrectCapture(metrics);
-  metrics.totalProposals += 1;
   await certifyGovernedJournal(context, governed.memoryId ?? "", metrics);
 
   await setMode(context.page, "supervised-coding");
-  await sendTurn(
-    context.chatWindow,
-    "M1_SUPERVISED_CAPTURE establishes the certified-supervised detail.",
-  );
-  const supervised = await waitForCapture(
+  const supervised = await sendMeasuredTurn(
     context,
+    "M1_SUPERVISED_CAPTURE establishes the certified-supervised detail.",
     "M1_SUPERVISED_CAPTURE",
     "supervised-coding",
     "auto-accepted",
+    metrics,
   );
   expect(supervised.memoryId).toBeDefined();
-  recordCorrectCapture(metrics);
 
   await setMode(context.page, "autonomous-delivery");
-  await sendTurn(context.chatWindow, "M1_AUTONOMOUS_CAPTURE establishes a silent-learn fact.");
-  await waitForCapture(context, "M1_AUTONOMOUS_CAPTURE", "autonomous-delivery", "auto-accepted");
-  recordCorrectCapture(metrics);
+  await sendMeasuredTurn(
+    context,
+    "M1_AUTONOMOUS_CAPTURE establishes a silent-learn fact.",
+    "M1_AUTONOMOUS_CAPTURE",
+    "autonomous-delivery",
+    "auto-accepted",
+    metrics,
+  );
   return supervised.memoryId ?? "";
 }
 
@@ -332,7 +359,7 @@ async function certifyVoicePath(
   const after = (await recent(context.request, context.since)).captures;
   assertTypedTurnsUnchangedAndDesktopAttributed(before, after, captureMarkers.slice(0, -1));
   expect(countMarker(after, "M1_VOICE_CAPTURE") - countMarker(before, "M1_VOICE_CAPTURE")).toBe(1);
-  recordCorrectCapture(metrics);
+  recordObservedCaptures(metrics, before, after, "M1_VOICE_CAPTURE");
 }
 
 // The voice turn must add exactly one capture without disturbing the typed ones, and every capture
@@ -380,9 +407,14 @@ async function certifyCorrectionMetrics(
     },
   ] as const;
   for (const sample of samples) {
-    await sendTurn(context.chatWindow, sample.text);
-    await waitForCapture(context, sample.marker, "autonomous-delivery", "auto-accepted");
-    recordCorrectCapture(metrics);
+    await sendMeasuredTurn(
+      context,
+      sample.text,
+      sample.marker,
+      "autonomous-delivery",
+      "auto-accepted",
+      metrics,
+    );
     metrics.totalCorrectiveTurns += 1;
     if (sample.repeated) metrics.repeatedCorrectionTurns += 1;
   }
@@ -445,6 +477,11 @@ async function certifyContentFreeJournalRefusal(context: CertificationContext): 
   await expect(row.getByText("Capture refused by policy. No content was retained.")).toBeVisible();
   await expect(row.getByText("Refused", { exact: true })).toBeVisible();
   await expect(row.getByRole("button")).toHaveCount(0);
+  const voiceRow = window
+    .getByTestId("memory-journal-row")
+    .filter({ hasText: "M1_VOICE_CAPTURE" })
+    .first();
+  await expect(voiceRow.getByText("Surface Voice")).toBeVisible();
   for (const input of DENIED_INPUTS) await expect(row).not.toContainText(input.text);
   await closeMemoryWindow(context.page);
 }

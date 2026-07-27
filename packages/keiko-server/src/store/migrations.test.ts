@@ -61,6 +61,38 @@ describe("runMigrations", () => {
         "capture",
       );
     }).toThrow();
+    expect(
+      db.prepare("SELECT revision FROM memory_autonomy_policy WHERE id = ?").get("capture"),
+    ).toEqual({ revision: 0 });
+    expect(() => {
+      db.prepare("UPDATE memory_autonomy_policy SET revision = -1 WHERE id = ?").run("capture");
+    }).toThrow();
+  });
+
+  it("v16 gives an existing memory autonomy policy a zero revision", () => {
+    const db = openMem();
+    db.exec(`
+      CREATE TABLE memory_autonomy_policy (
+        id TEXT NOT NULL PRIMARY KEY,
+        requested_mode TEXT NOT NULL,
+        CHECK (
+          id = 'capture'
+          AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
+        )
+      ) STRICT;
+      INSERT INTO memory_autonomy_policy (id, requested_mode)
+        VALUES ('capture', 'supervised-coding');
+      PRAGMA user_version = 15;
+    `);
+
+    runMigrations(db);
+
+    expect(userVersion(db)).toBe(16);
+    expect(
+      db
+        .prepare("SELECT requested_mode, revision FROM memory_autonomy_policy WHERE id = 'capture'")
+        .get(),
+    ).toEqual({ requested_mode: "supervised-coding", revision: 0 });
   });
 
   it("v10 creates the strict, content-free coding runtime snapshot ledger and active-slot index", () => {

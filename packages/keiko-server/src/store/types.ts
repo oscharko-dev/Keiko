@@ -44,6 +44,11 @@ export type {
   WorkflowStatus,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
+export interface MemoryAutonomyPolicyRecord {
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly revision: number;
+}
+
 export type ChatTurnAdmission =
   | { readonly kind: "admitted"; readonly userMessage: ChatMessage }
   | {
@@ -132,8 +137,11 @@ export interface UiStore {
     timestamp: number,
   ) => ChatMessage;
 
-  readonly getMemoryAutonomyMode: () => CodingWorkbenchMode | undefined;
-  readonly setMemoryAutonomyMode: (mode: CodingWorkbenchMode) => void;
+  readonly readMemoryAutonomyPolicy: () => MemoryAutonomyPolicyRecord | undefined;
+  readonly updateMemoryAutonomyPolicy: (
+    mode: CodingWorkbenchMode,
+    expectedRevision: number,
+  ) => MemoryAutonomyPolicyRecord | undefined;
 
   // Canonical workspace-trust persistence (issue #2521, ADR-0147 D3/D8). The store persists opaque,
   // content-free rows; all trust semantics (derivation, validation, projection) live above the port.

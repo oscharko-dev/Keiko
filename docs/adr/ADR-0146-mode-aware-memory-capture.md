@@ -49,9 +49,14 @@ coding-flavored contract home. No memory-local mode union, approval vocabulary, 
 parallel authority evaluator is introduced.
 
 The MemoriaViva settings surface stores one user-selected **requested mode** in the existing local
-UI SQLite store and projects it through `GET`/`PUT /api/memory/autonomy-policy`. Desktop chat adds
-that canonical value to the existing `ConversationMemoryRequestWire.mode?` field. The field is
-optional: an absent field preserves the pre-amendment request shape and behavior.
+UI SQLite store and projects it with a server-owned monotonic `revision` through
+`GET`/`PUT /api/memory/autonomy-policy`. Every `PUT` supplies the revision it observed. An exact
+revision may apply any valid mode; a stale revision may apply only a strictly lower-authority mode.
+A stale equal or authority-widening request fails with a content-free conflict. This conditional
+write is atomic in the store, so a higher-authority request whose client deadline expires can never
+land after and overwrite a later downgrade. Desktop chat adds that canonical value to the existing
+`ConversationMemoryRequestWire.mode?` field. The field is optional: an absent field preserves the
+pre-amendment request shape and behavior.
 
 The effective mode remains server-owned. For a request that carries a mode, the server resolves
 `min(requested mode, deps.codingRuntimeDeploymentCeiling)` through the canonical
@@ -129,6 +134,10 @@ response unaffected — capture failure never breaks a turn, mode-aware or not. 
 resolution cannot determine an effective mode (D1's fail-closed fallback), the outcome is
 `governed-assist`. A failed UI hydration also explicitly restores `governed-assist`, while a failed
 persist leaves the previously persisted selection unchanged and surfaces a content-free error.
+Revision conflicts are not retried as authority changes: the client retains its prior confirmed
+mode and must hydrate fresh state before a widening request can be accepted. A stale downgrade
+remains admissible at the atomic store boundary, preserving the safer operator intent regardless of
+network completion order.
 
 Diagnostics emitted for a captured turn stay strictly content-free, per the evidence-redaction
 invariant in `AGENTS.md` §1/§7: mode plus per-status counts and hashes only, never candidate

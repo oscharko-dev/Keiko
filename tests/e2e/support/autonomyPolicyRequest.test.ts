@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { parsedRequestedMode } from "./autonomyPolicyRequest.js";
+import { parsedAutonomyPolicyUpdate } from "./autonomyPolicyRequest.js";
 
-describe("parsedRequestedMode", (): void => {
+describe("parsedAutonomyPolicyUpdate", (): void => {
   it("accepts each product mode the contracts define", (): void => {
-    expect(parsedRequestedMode('{"requestedMode":"governed-assist"}')).toBe("governed-assist");
-    expect(parsedRequestedMode('{"requestedMode":"supervised-coding"}')).toBe("supervised-coding");
-    expect(parsedRequestedMode('{"requestedMode":"autonomous-delivery"}')).toBe(
-      "autonomous-delivery",
-    );
+    expect(
+      parsedAutonomyPolicyUpdate('{"requestedMode":"governed-assist","expectedRevision":0}'),
+    ).toEqual({ requestedMode: "governed-assist", expectedRevision: 0 });
+    expect(
+      parsedAutonomyPolicyUpdate('{"requestedMode":"supervised-coding","expectedRevision":2}'),
+    ).toEqual({ requestedMode: "supervised-coding", expectedRevision: 2 });
+    expect(
+      parsedAutonomyPolicyUpdate('{"requestedMode":"autonomous-delivery","expectedRevision":3}'),
+    ).toEqual({ requestedMode: "autonomous-delivery", expectedRevision: 3 });
   });
 
   it.each([
@@ -17,10 +21,13 @@ describe("parsedRequestedMode", (): void => {
     ["a JSON array", '["governed-assist"]'],
     ["JSON null", "null"],
     ["a missing mode", "{}"],
-    ["an unknown mode", '{"requestedMode":"root-access"}'],
-    ["a non-string mode", '{"requestedMode":42}'],
-    ["a case-shifted mode", '{"requestedMode":"Governed-Assist"}'],
+    ["an unknown mode", '{"requestedMode":"root-access","expectedRevision":0}'],
+    ["a non-string mode", '{"requestedMode":42,"expectedRevision":0}'],
+    ["a case-shifted mode", '{"requestedMode":"Governed-Assist","expectedRevision":0}'],
+    ["a missing revision", '{"requestedMode":"governed-assist"}'],
+    ["a negative revision", '{"requestedMode":"governed-assist","expectedRevision":-1}'],
+    ["a fractional revision", '{"requestedMode":"governed-assist","expectedRevision":1.5}'],
   ])("refuses %s", (_label, payload): void => {
-    expect(parsedRequestedMode(payload)).toBeNull();
+    expect(parsedAutonomyPolicyUpdate(payload)).toBeNull();
   });
 });

@@ -577,6 +577,9 @@ export const DE_MESSAGES = {
   "memoria.journal.contentUnavailable": "Erinnerungsinhalt ist nicht verfügbar",
   "memoria.journal.refusedBody":
     "Erfassung durch Richtlinie abgelehnt. Es wurde kein Inhalt gespeichert.",
+  "memoria.journal.surface": "Oberfläche {surface}",
+  "memoria.journal.surface.conversationCenter": "Unterhaltung",
+  "memoria.journal.surface.voice": "Sprache",
   "memoria.journal.source": "Quelle {source}",
   "memoria.journal.reason": "Erfassungsgrund {reason}",
   "memoria.journal.capturedAt": "Erfasst {time}",
