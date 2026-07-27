@@ -18,6 +18,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_CONNECTED_SOURCES,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
+  parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
   type Chat,
   type ChatLocalKnowledgeScope,
@@ -144,6 +145,31 @@ function pack(overrides: Partial<ConnectedContextPack> = {}): ConnectedContextPa
     ...overrides,
   };
 }
+
+describe("parseUpdateMemoryAutonomyPolicyWire", () => {
+  it("accepts a canonical policy update at revision zero", () => {
+    expect(
+      parseUpdateMemoryAutonomyPolicyWire({
+        requestedMode: "supervised-coding",
+        expectedRevision: 0,
+      }),
+    ).toEqual({
+      requestedMode: "supervised-coding",
+      expectedRevision: 0,
+    });
+  });
+
+  it.each([
+    undefined,
+    null,
+    [],
+    { requestedMode: "invalid", expectedRevision: 0 },
+    { requestedMode: "governed-assist", expectedRevision: -1 },
+    { requestedMode: "governed-assist", expectedRevision: 0.5 },
+  ])("rejects malformed policy update payload %#", (value) => {
+    expect(parseUpdateMemoryAutonomyPolicyWire(value)).toBeUndefined();
+  });
+});
 
 describe("buildGroundedAnswerContextPackSummary", () => {
   it("produces a complete summary from a 2-file files-scope pack", () => {

@@ -798,9 +798,7 @@ export async function fetchWorkspaceSummary(
   if (filters.budget !== undefined) {
     params.set("budget", String(filters.budget));
   }
-  const qs = params.toString();
-  const path = qs.length > 0 ? `/api/workspace?${qs}` : "/api/workspace";
-  return fetchJson(path);
+  return fetchJson(`/api/workspace?${params.toString()}`);
 }
 
 // ---------------------------------------------------------------------------
