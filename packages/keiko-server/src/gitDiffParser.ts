@@ -127,14 +127,15 @@ function splitDiffHeader(line: string): readonly [string, string] | undefined {
   return separator < 0 ? undefined : [value.slice(0, separator), value.slice(separator + 1)];
 }
 
+function relativePathUnderPrefix(path: string, normalizedPrefix: string): string | undefined {
+  if (normalizedPrefix.length === 0) return path;
+  if (path.startsWith(`${normalizedPrefix}/`)) return path.slice(normalizedPrefix.length + 1);
+  return undefined;
+}
+
 function relativeToSelectedRoot(path: string, prefix: string): string | undefined {
   const normalizedPrefix = prefix === "." ? "" : prefix.replace(/\/$/u, "");
-  const relative =
-    normalizedPrefix.length === 0
-      ? path
-      : path.startsWith(`${normalizedPrefix}/`)
-        ? path.slice(normalizedPrefix.length + 1)
-        : undefined;
+  const relative = relativePathUnderPrefix(path, normalizedPrefix);
   return relative !== undefined && isRootRelativeFileIdentifier(relative) ? relative : undefined;
 }
 

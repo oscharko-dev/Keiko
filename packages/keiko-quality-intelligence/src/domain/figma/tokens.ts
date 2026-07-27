@@ -10,6 +10,7 @@
 // many nodes carry it or in what order. Every family is sorted by its canonical key before emit, so
 // output never depends on traversal or map-insertion order.
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import {
   asNode,
   nodeType,
@@ -105,6 +106,9 @@ const toColorTokens = (values: ReadonlySet<string>): readonly ColorToken[] =>
 const compareTokenNumbersLexically = (a: number, b: number): number =>
   String(a).localeCompare(String(b));
 
+const compareById = (a: { readonly id: string }, b: { readonly id: string }): number =>
+  compareStrings(a.id, b.id);
+
 const toSpacingTokens = (values: ReadonlySet<number>): readonly SpacingToken[] =>
   [...values]
     .sort(compareTokenNumbersLexically)
@@ -127,9 +131,7 @@ export const extractDesignTokens = (screens: readonly PrunedNode[]): DesignToken
 
   return {
     colors: toColorTokens(acc.colors),
-    typography: [...acc.typography.values()].sort((a, b) =>
-      a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-    ),
+    typography: [...acc.typography.values()].sort(compareById),
     spacing: toSpacingTokens(acc.spacing),
     radius: toRadiusTokens(acc.radius),
   };

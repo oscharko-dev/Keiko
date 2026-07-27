@@ -37,6 +37,7 @@ import {
   planAndGovern,
   rankCandidates,
   type ClarificationPrompt,
+  type ClarificationReason,
   type ExcerptWindow,
   type ExplorationPlan,
   type GovernorState,
@@ -202,14 +203,15 @@ export class ClarificationNeededError extends Error {
 // ("clarification needed: too-generic") told the user nothing actionable; the HTTP message now
 // says what the planner needs and folds in the planner's own suggested questions. Static text
 // plus planner-built suggestions only — no user/file content, so nothing to redact.
+function clarificationIntro(reason: ClarificationReason): string {
+  if (reason === "scope-empty") return "Die verbundene Quelle enthält nichts Durchsuchbares.";
+  if (reason === "scope-invalid") return "Die verbundene Quelle konnte nicht durchsucht werden.";
+  return "Keiko braucht mehr Kontext, um die verbundenen Quellen gezielt zu durchsuchen.";
+}
+
 export function clarificationUserMessage(error: ClarificationNeededError): string {
   const { reason, suggestedQuestions } = error.clarification;
-  const intro =
-    reason === "scope-empty"
-      ? "Die verbundene Quelle enthält nichts Durchsuchbares."
-      : reason === "scope-invalid"
-        ? "Die verbundene Quelle konnte nicht durchsucht werden."
-        : "Keiko braucht mehr Kontext, um die verbundenen Quellen gezielt zu durchsuchen.";
+  const intro = clarificationIntro(reason);
   const anchorHint =
     reason === "no-anchors" || reason === "too-generic"
       ? " Nenne eine konkrete Datei, einen Identifier, eine Fehlermeldung oder eine exakte Phrase."

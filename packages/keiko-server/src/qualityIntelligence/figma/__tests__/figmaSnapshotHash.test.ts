@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
-import { hashScreen, hashSnapshot } from "../figmaSnapshotHash.js";
+import { compareByScreenId, hashScreen, hashSnapshot } from "../figmaSnapshotHash.js";
 
 type IrNode = QualityIntelligenceFigma.IrNode;
 type ScreenIr = QualityIntelligenceFigma.ScreenIr;
@@ -120,6 +120,20 @@ describe("hashSnapshot — order-independent in screenId (sort step #753)", () =
     // The snapshot identity sorts per-screen entries by screenId before hashing, so document order
     // must not affect the hash. RED if the .sort() is dropped from hashSnapshot.
     expect(hashSnapshot(1, "v-pinned-1", perScreen)).toBe(hashSnapshot(1, "v-pinned-1", reversed));
+  });
+});
+
+describe("compareByScreenId — screenId ordering comparator (sort step #753)", () => {
+  it("returns -1 when the first screenId sorts before the second", () => {
+    expect(compareByScreenId({ screenId: "a:1" }, { screenId: "z:9" })).toBe(-1);
+  });
+
+  it("returns 1 when the first screenId sorts after the second", () => {
+    expect(compareByScreenId({ screenId: "z:9" }, { screenId: "a:1" })).toBe(1);
+  });
+
+  it("returns 0 when the screenIds are equal", () => {
+    expect(compareByScreenId({ screenId: "s:1" }, { screenId: "s:1" })).toBe(0);
   });
 });
 

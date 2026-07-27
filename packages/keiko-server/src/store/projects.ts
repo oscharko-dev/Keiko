@@ -69,6 +69,13 @@ export function upsertProject(
   return rowToProject(row);
 }
 
+function resolveFavoriteParam(favorite: boolean | undefined): number | null {
+  if (favorite === undefined) {
+    return null;
+  }
+  return favorite ? 1 : 0;
+}
+
 export function updateProject(
   db: DatabaseSync,
   path: string,
@@ -76,7 +83,7 @@ export function updateProject(
   now: number,
 ): Project {
   const nameParam = patch.name ?? null;
-  const favoriteParam = patch.favorite === undefined ? null : patch.favorite ? 1 : 0;
+  const favoriteParam = resolveFavoriteParam(patch.favorite);
   const row = db.prepare(SQL_UPDATE).get(nameParam, favoriteParam, now, path) as unknown as
     ProjectRow | undefined;
   if (row === undefined) throw notFound("Project");

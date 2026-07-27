@@ -8,7 +8,7 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
 import { encodeSpreadsheetSafeRow } from "./spreadsheetSafeCsv.js";
 
 /** Schema headers for the Keiko-native CSV format. */
@@ -30,6 +30,9 @@ export const CSV_HEADERS: readonly string[] = Object.freeze([
 
 const joinSemicolon = (values: readonly string[]): string => values.join(" ; ");
 
+const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number =>
+  compareStrings(a.candidateId, b.candidateId);
+
 export function adaptToCsv(
   bundle: QualityIntelligenceExportBundle,
   candidates: readonly QualityIntelligenceTestCaseCandidate[],
@@ -39,9 +42,7 @@ export function adaptToCsv(
   for (const candidate of candidates) {
     byId.set(candidate.id, candidate);
   }
-  const sortedEntries = [...bundle.contents].sort((a, b) =>
-    a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0,
-  );
+  const sortedEntries = [...bundle.contents].sort(byCandidateIdAsc);
   let body = encodeSpreadsheetSafeRow(CSV_HEADERS);
   for (const entry of sortedEntries) {
     const candidate = byId.get(entry.candidateId);

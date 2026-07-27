@@ -121,4 +121,45 @@ describe("ConnectorScopePill", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("offline");
     });
   });
+
+  it("announces removal once the last connector is disconnected via a prop change", async () => {
+    const chat = makeChat({ localKnowledgeScopes: [makeCapsule("c1")] });
+    const { rerender } = render(<ConnectorScopePill chat={chat} updateScopes={vi.fn()} />);
+    rerender(
+      <ConnectorScopePill chat={makeChat({ localKnowledgeScopes: [] })} updateScopes={vi.fn()} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("connector-scope-announcer")).toHaveTextContent(
+        "Connected Knowledge Pod removed.",
+      );
+    });
+  });
+
+  it("announces a binding update with singular/plural noun as the connector count changes", async () => {
+    const { rerender } = render(
+      <ConnectorScopePill chat={makeChat({ localKnowledgeScopes: [] })} updateScopes={vi.fn()} />,
+    );
+    rerender(
+      <ConnectorScopePill
+        chat={makeChat({ localKnowledgeScopes: [makeCapsule("c1")] })}
+        updateScopes={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("connector-scope-announcer")).toHaveTextContent(
+        "Connected Knowledge Pods updated: 1 source.",
+      );
+    });
+    rerender(
+      <ConnectorScopePill
+        chat={makeChat({ localKnowledgeScopes: [makeCapsule("c1"), makeSet("s1")] })}
+        updateScopes={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("connector-scope-announcer")).toHaveTextContent(
+        "Connected Knowledge Pods updated: 2 sources.",
+      );
+    });
+  });
 });

@@ -9,10 +9,15 @@ import {
   type WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
 import { I18nProvider } from "@/lib/i18n";
+import type { Chat, ProjectWithAvailability } from "@/lib/types";
 import type { WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { EditorWidgetProps } from "./cards/EditorWidget";
-import { EditorWindowSessionHost, FilesWindowSessionHost } from "./SelectionAwareWorkspaceHosts";
+import {
+  ChatWindowSessionHost,
+  EditorWindowSessionHost,
+  FilesWindowSessionHost,
+} from "./SelectionAwareWorkspaceHosts";
 
 const addRoot = vi.hoisted(() => vi.fn());
 const disposeRoot = vi.hoisted(() => vi.fn());
@@ -36,6 +41,21 @@ vi.mock("../hooks/useWorkspaceManifest", () => ({
 
 vi.mock("@oscharko-dev/keiko-editor", () => ({
   disposeEditorModelRegistryRoot: (...args: unknown[]) => disposeRoot(...args),
+}));
+
+// Minimal chat-session double for ChatWindowSessionHost's own branches (target-missing / found).
+// Kept separate from the manifest/editor mocks above because those hosts never call this hook.
+const chatSessionState = vi.hoisted(() => ({
+  activeChat: undefined as Chat | undefined,
+  activeProject: undefined as ProjectWithAvailability | undefined,
+  chats: [] as Chat[],
+  loading: false,
+  openChat: vi.fn(async (_chat: Chat): Promise<void> => undefined),
+  openNewChat: vi.fn(async (): Promise<Chat | undefined> => undefined),
+}));
+
+vi.mock("../context/ChatSessionContext", () => ({
+  useChatSessionContext: () => chatSessionState,
 }));
 
 // Records the root identity and the reveal triple each mounted editor was handed, so a test can see
@@ -171,6 +191,10 @@ afterEach(() => {
   editorProps.length = 0;
   editorHandlers.length = 0;
   manifestRef.current = null;
+  chatSessionState.activeChat = undefined;
+  chatSessionState.activeProject = undefined;
+  chatSessionState.chats = [];
+  chatSessionState.loading = false;
 });
 
 // Issue #2621 — the removed-root disposal and the reveal both belong to this host, because it is the
@@ -476,6 +500,27 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
 
     expect(revealsFor("/repo-a")).toEqual(["::"]);
     expect(revealsFor("/repo-b")).toEqual(["::"]);
+  });
+});
+
+describe("ChatWindowSessionHost target missing", () => {
+  it("renders a not-found message when the configured chat has no live match", async () => {
+    // targetMissing requires: no selectionHandoffId, a configured chatId, session not loading,
+    // the active chat not already that id, and no open (non-closed) chat with that id either.
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-missing" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    expect(
+      screen.getByText("This conversation was deleted or is no longer available."),
+    ).toBeInTheDocument();
   });
 });
 

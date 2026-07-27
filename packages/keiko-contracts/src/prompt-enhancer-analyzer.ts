@@ -414,6 +414,12 @@ function scoreTaskClassRule(
   return { score: strongHits * 2 + weakHits, strong: strongHits > 0 };
 }
 
+function resolveTaskClassConfidence(score: number, strong: boolean): PromptSignalStrength {
+  if (strong) return "strong";
+  if (score >= 2) return "moderate";
+  return "weak";
+}
+
 function detectBaseTaskClass(lower: string): TaskClassResult {
   let best: { rule: TaskClassRule; score: number; strong: boolean } | undefined;
   for (const rule of TASK_CLASS_RULES) {
@@ -425,11 +431,7 @@ function detectBaseTaskClass(lower: string): TaskClassResult {
   if (best === undefined) {
     return { taskClass: "factual-qa", confidence: "weak" };
   }
-  const confidence: PromptSignalStrength = best.strong
-    ? "strong"
-    : best.score >= 2
-      ? "moderate"
-      : "weak";
+  const confidence = resolveTaskClassConfidence(best.score, best.strong);
   return { taskClass: best.rule.taskClass, confidence };
 }
 

@@ -5,7 +5,8 @@ import type {
   WorkspaceReplacePreviewResponse,
 } from "@oscharko-dev/keiko-contracts";
 
-import { buildWorkspaceReplacePatchModel } from "./EditorDiffSurface";
+import type { EditorRuntimeStatus, KeikoEditorLoadState } from "@oscharko-dev/keiko-editor";
+import { buildWorkspaceReplacePatchModel, resolveLoadState } from "./EditorDiffSurface";
 
 // `EditorDiffSurface.tsx` imports `./editorMonacoRuntime` for its side-effecting, browser-only Monaco
 // bootstrap (real `monaco-editor` value imports, documented as reachable only via a client-only
@@ -165,5 +166,41 @@ describe("buildWorkspaceReplacePatchModel — omitted file count merge", () => {
     expect(model.omittedFileCount).toBe(0);
     expect(model.totalFileCount).toBe(1);
     expect(model.truncated).toBe(false);
+  });
+});
+
+describe("resolveLoadState", () => {
+  const readyHostState: KeikoEditorLoadState = { status: "ready" };
+
+  it("reports the runtime's own error when the runtime is unsupported, regardless of host state", () => {
+    const unsupportedRuntime: EditorRuntimeStatus = {
+      supported: false,
+      reason: "web-workers-unavailable",
+      message: "This browser cannot run the Monaco diff editor.",
+    };
+
+    const state = resolveLoadState(unsupportedRuntime, false, readyHostState);
+
+    expect(state).toEqual({
+      status: "error",
+      message: "This browser cannot run the Monaco diff editor.",
+    });
+  });
+
+  it("reports loading when the runtime is supported but diff languages are not ready yet", () => {
+    const supportedRuntime: EditorRuntimeStatus = { supported: true };
+
+    const state = resolveLoadState(supportedRuntime, false, readyHostState);
+
+    expect(state).toEqual({ status: "loading" });
+  });
+
+  it("defers to the host-provided load state once the runtime is supported and languages are ready", () => {
+    const supportedRuntime: EditorRuntimeStatus = { supported: true };
+    const hostError: KeikoEditorLoadState = { status: "error", message: "host-reported failure" };
+
+    const state = resolveLoadState(supportedRuntime, true, hostError);
+
+    expect(state).toBe(hostError);
   });
 });

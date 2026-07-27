@@ -389,6 +389,27 @@ describe("RelationshipListPanel", () => {
         "+2 more relationships",
       );
     });
+
+    // #2723 (S1301): formatActivityLabel's "high-throughput" branch — the default fallback
+    // branch is already exercised above by "processing"/"blocked" overflow activities.
+    it("labels a high-throughput overflow relationship in the aggregate", async () => {
+      const entries = Array.from({ length: 26 }, (_, i) => makeRelationship(`rel-${i}`));
+      mockListRelationships.mockResolvedValue({
+        entries,
+        truncated: false,
+        nextCursor: null,
+      });
+      renderPanel({
+        filters: { relDensity: "dense" },
+        activityMap: new Map([["rel-25", "high-throughput"]]),
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId("animation-cap-aggregate")).toBeDefined();
+      });
+      expect(screen.getByTestId("animation-cap-aggregate").textContent).toContain(
+        "+1 more: 1 high-throughput relationship",
+      );
+    });
   });
 
   describe("filter → URL params", () => {

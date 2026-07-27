@@ -94,6 +94,32 @@ function safetyFailScorecard(): EvalScorecard {
   };
 }
 
+// Scorecard where one dimension never ran (no pass, no fail — every fixture reported it
+// "not-applicable"). Its dimension-table verdict must read "n/a", not PASS or FAIL.
+function notApplicableDimensionScorecard(
+  naDimension: (typeof EVALUATION_DIMENSIONS)[number],
+): EvalScorecard {
+  const dimResults = EVALUATION_DIMENSIONS.map((d) =>
+    makeDimensionResult(d, d === naDimension ? "not-applicable" : "pass"),
+  );
+  return {
+    schemaVersion: EVAL_SCORECARD_SCHEMA_VERSION,
+    evaluatedAt: "2024-01-01T00:00:00.000Z",
+    mode: "offline",
+    dimensions: EVALUATION_DIMENSIONS.map((d) =>
+      makeScorecardEntry(d, d === naDimension ? 0 : 1, 0),
+    ),
+    surfaceParity: { allPassed: true, checks: [] },
+    fixtureResults: [makeFixtureResult("happy-path", dimResults)],
+    summary: {
+      totalFixtures: 1,
+      fullyPassedFixtures: 1,
+      safetyGatePassed: true,
+      pilotReadyIndicator: true,
+    },
+  };
+}
+
 // ─── All-pass scorecard output ────────────────────────────────────────────────
 
 describe("fully-passing scorecard", () => {
@@ -165,6 +191,15 @@ describe("safetyGatePassed:false", () => {
     const output = renderEvalSummary(safetyFailScorecard());
     // Should not contain "GO — pilot ready"; may contain "NO-GO"
     expect(output).not.toContain("GO — pilot ready");
+  });
+});
+
+// ─── Dimension with zero pass and zero fail ───────────────────────────────────
+
+describe("scorecard with a not-applicable-only dimension", () => {
+  it("dimension line shows 'n/a' verdict when neither passCount nor failCount is positive", () => {
+    const output = renderEvalSummary(notApplicableDimensionScorecard("task-completion"));
+    expect(output).toMatch(/task-completion\s+n\/a\s+pass=0 fail=0/);
   });
 });
 

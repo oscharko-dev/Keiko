@@ -10,6 +10,7 @@
 //   4. Sort members oldest-first (createdAt ASC, id ASC). Sort clusters by canonical (oldest)
 //      member id so the output is byte-stable across input shuffles.
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 
 import { compareRecordsByAge, scopeCoordinateKey } from "./_ordering.js";
@@ -301,6 +302,11 @@ function clusterPartition(
   return { clusters: finalizeClusters(ordered, uf, evidenceByRoot), canceled };
 }
 
+// Stable cluster ordering: by canonical id (the oldest member's id is unique per cluster).
+function compareByCanonicalId(a: DuplicateCluster, b: DuplicateCluster): number {
+  return compareStrings(a.canonicalId, b.canonicalId);
+}
+
 // Public entry point. Returns clusters of size >= 2 only; singletons are filtered out.
 // Output is deterministic for any permutation of `records`.
 export function scanDuplicateClusters(
@@ -328,11 +334,9 @@ export function scanDuplicateClusters(
     }
     if (canceled) break;
   }
-  // Stable cluster ordering: by canonical id (the oldest member's id is unique per cluster).
+  clusters.sort(compareByCanonicalId);
   return {
-    clusters: clusters.sort((a, b) =>
-      a.canonicalId < b.canonicalId ? -1 : a.canonicalId > b.canonicalId ? 1 : 0,
-    ),
+    clusters,
     canceled,
   };
 }

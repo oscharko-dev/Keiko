@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  connectionBadgeAriaLabel,
   resolveConnections,
   resolveConnectionsCached,
   shouldRenderConnectionBadge,
@@ -98,5 +99,31 @@ describe("resolveConnectionsCached (GEN-PERF-WORKSPACE-006)", () => {
     const pruned = [conn("c-2", "agents-1", "chat-1")];
     resolveConnectionsCached(cache, wins, pruned);
     expect(cache.size).toBe(1); // c-1 swept once its connection is gone
+  });
+});
+
+describe("connectionBadgeAriaLabel", () => {
+  it("names the in-progress data exchange when the connection is active and unarmed", () => {
+    expect(
+      connectionBadgeAriaLabel(resolvedConn({ label: "uses docs/" }), true, false, "heavy"),
+    ).toBe("uses docs/ — heavy data exchange in progress. Activate to remove connection.");
+  });
+
+  it("prefers the armed confirmation label over the active label when both are true", () => {
+    expect(
+      connectionBadgeAriaLabel(resolvedConn({ label: "uses docs/" }), true, true, "heavy"),
+    ).toBe("Confirm removal of connection: uses docs/. Activate again to remove.");
+  });
+
+  it("prefers the armed confirmation label even when the connection is inactive", () => {
+    expect(
+      connectionBadgeAriaLabel(resolvedConn({ label: "uses docs/" }), false, true, "light"),
+    ).toBe("Confirm removal of connection: uses docs/. Activate again to remove.");
+  });
+
+  it("names the plain removal action when the connection is inactive and unarmed", () => {
+    expect(
+      connectionBadgeAriaLabel(resolvedConn({ label: "uses docs/" }), false, false, "light"),
+    ).toBe("Remove connection: uses docs/");
   });
 });

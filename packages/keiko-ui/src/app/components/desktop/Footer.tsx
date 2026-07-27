@@ -3,12 +3,19 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchHealth } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "./Icons";
 import type { TwinMode } from "./hooks/useTwinMode";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
 import { subText } from "./windows/connectionUtils";
 import type { AppWindow } from "./windows/types";
+
+// S3358 — the window-palette card's state label has three distinct states.
+function windowStateLabel(win: AppWindow, t: I18nTranslate): string {
+  if (win.minimized === true) return t("footer.minimized");
+  if (win.max) return t("footer.fullscreen");
+  return t("footer.visible");
+}
 
 interface FooterProps {
   readonly winCount: number;
@@ -155,12 +162,7 @@ function FooterImpl({
                 const def = WIN_TYPES[win.type];
                 const Icon = Icons[def.icon];
                 const sub = subText(win.type, win.cfg);
-                const stateLabel =
-                  win.minimized === true
-                    ? t("footer.minimized")
-                    : win.max
-                      ? t("footer.fullscreen")
-                      : t("footer.visible");
+                const stateLabel = windowStateLabel(win, t);
                 const actionLabel =
                   win.minimized === true ? t("footer.restore") : t("footer.focus");
                 const actionSuffix = sub !== null ? ` - ${sub}` : "";

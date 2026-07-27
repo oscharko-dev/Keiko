@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeOpenCodeSafeActivityHistory } from "./opencodeSafeActivity.js";
+import { millisFromValue, normalizeOpenCodeSafeActivityHistory } from "./opencodeSafeActivity.js";
 
 function row(
   sequence: number,
@@ -361,5 +361,19 @@ describe("OpenCode safe-activity normalization", () => {
       }),
     ]);
     expect(normalized).toEqual({ signals: [], dropped: 0 });
+  });
+});
+
+describe("millisFromValue", () => {
+  it("parses a date-time string into its epoch millisecond value", () => {
+    expect(millisFromValue("2024-07-18T17:20:00.000Z")).toBe(
+      Date.parse("2024-07-18T17:20:00.000Z"),
+    );
+  });
+
+  it("returns NaN for a value that is neither a number nor a string", () => {
+    expect(Number.isNaN(millisFromValue(null))).toBe(true);
+    expect(Number.isNaN(millisFromValue(undefined))).toBe(true);
+    expect(Number.isNaN(millisFromValue({}))).toBe(true);
   });
 });

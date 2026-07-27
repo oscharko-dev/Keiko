@@ -37,6 +37,9 @@ export { binaryNdcgAtK, mean } from "./eval-metrics.js";
 
 // ─── Shared stable ordering helpers ─────────────────────────────────────────────
 export { sortedStrings } from "./stable-order.js";
+// Deterministic code-unit comparator for `Array#sort` callbacks (epic #2719 W4, issue #2723) —
+// plain `<`/`>` order, not locale-aware like sortedStrings above.
+export { compareStrings } from "./comparators.js";
 
 // ─── Shared coded-HTTP-error mechanism (GEN-DUP-NEAR-008) ───────────────────────
 export { CodedHttpError, httpStatusFor } from "./http-error.js";

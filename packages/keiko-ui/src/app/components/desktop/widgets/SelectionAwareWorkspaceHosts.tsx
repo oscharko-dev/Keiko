@@ -286,33 +286,40 @@ export function ChatWindowSessionHost({
     [activeProject?.path, ctx],
   );
 
-  const body = targetMissing ? (
-    <div className="lk-empty">
-      <p className="lk-empty-title">Chat not found</p>
-      <p className="lk-empty-body">This conversation was deleted or is no longer available.</p>
-    </div>
-  ) : waitingForTarget ? (
-    <div className="lk-loading">Opening chat...</div>
-  ) : (
-    <ChatWindow
-      windowId={ctx.windowId}
-      mini={ctx.mini === true}
-      minimalChat={ctx.minimalChat === true}
-      compact={ctx.compact === true}
-      controlsNarrow={ctx.controlsNarrow === true}
-      barCompact={ctx.barCompact === true}
-      workflowCompact={ctx.workflowCompact === true}
-      linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
-      linkedRoots={ctx.linkedRoots}
-      openEditorFile={ctx.openEditorFile}
-      previewWindows={{
-        add: ctx.openWindow,
-        focus: ctx.focusWindow,
-        update: ctx.updateWindow,
-      }}
-      onOpenRunResult={openRunResult}
-    />
-  );
+  let body: ReactNode;
+  if (targetMissing) {
+    body = (
+      <div className="lk-empty">
+        <p className="lk-empty-title">{"Chat not found"}</p>
+        <p className="lk-empty-body">
+          {"This conversation was deleted or is no longer available."}
+        </p>
+      </div>
+    );
+  } else if (waitingForTarget) {
+    body = <div className="lk-loading">{"Opening chat..."}</div>;
+  } else {
+    body = (
+      <ChatWindow
+        windowId={ctx.windowId}
+        mini={ctx.mini === true}
+        minimalChat={ctx.minimalChat === true}
+        compact={ctx.compact === true}
+        controlsNarrow={ctx.controlsNarrow === true}
+        barCompact={ctx.barCompact === true}
+        workflowCompact={ctx.workflowCompact === true}
+        linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
+        linkedRoots={ctx.linkedRoots}
+        openEditorFile={ctx.openEditorFile}
+        previewWindows={{
+          add: ctx.openWindow,
+          focus: ctx.focusWindow,
+          update: ctx.updateWindow,
+        }}
+        onOpenRunResult={openRunResult}
+      />
+    );
+  }
   return (
     <>
       {handoff.noticeKey === null ? null : (

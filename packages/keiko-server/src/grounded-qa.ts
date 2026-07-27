@@ -182,11 +182,17 @@ export function internalError(message: string): RouteResult {
 // enum and the fixed cancellation string carry no caller data and stay verbatim. Reading the LIVE
 // secrets via currentRedactionSecrets(deps) (not the startup snapshot) scrubs apiKey/baseUrl values
 // added through PATCH /api/gateway/config after process start (Epic #177).
+export function gatewayErrorStatus(error: GatewayError): number {
+  if (error.code === "GATEWAY_AUTHENTICATION") return 401;
+  if (error.retryable) return 503;
+  return 502;
+}
+
 function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResult {
   if (error instanceof CancelledError) {
     return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
   }
-  const status = error.code === "GATEWAY_AUTHENTICATION" ? 401 : error.retryable ? 503 : 502;
+  const status = gatewayErrorStatus(error);
   const message = redact(error.message, currentRedactionSecrets(deps));
   return { status, body: errorBody(error.code, message) };
 }

@@ -4,6 +4,7 @@ import type {
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import {
   canonicalMetadataEcosystem,
   isCanonicalMetadataFile,
@@ -349,7 +350,7 @@ function normalizedHintPaths(paths: readonly string[] | undefined): readonly str
         .map((path) => normalizedScopePath(path))
         .filter((path): path is string => path !== undefined),
     ),
-  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  ].sort(compareStrings);
 }
 
 function pathSegments(scopePath: string): readonly string[] {
@@ -1103,7 +1104,7 @@ function compareRankedCandidateDiagnostic(
   b: RankedCandidateDiagnostic,
 ): number {
   if (a.score !== b.score) return b.score - a.score;
-  return a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0;
+  return compareStrings(a.scopePath, b.scopePath);
 }
 
 export function withSemanticRankingDiagnostics(

@@ -21,6 +21,7 @@
 // (validateWorkspaceActivation / WORKSPACE_ACTIVATION_ALLOWED_KEYS) — so a downstream persistence
 // layer that trusts `.ok` cannot store smuggled content through any shape.
 
+import { compareStrings } from "./comparators.js";
 import {
   hasOnlyWorkspaceKeys,
   isCanonicalWorkspaceRoot,
@@ -1616,7 +1617,7 @@ export function resolveActiveRestoration(
     const activeIds = entries
       .filter((entry) => entry.lifecycleState === "active")
       .map((entry) => entry.workspaceId)
-      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      .sort(compareStrings);
     if (activeIds.length >= 2) return { kind: "ambiguous", ambiguousWorkspaceIds: activeIds };
     return { kind: "none" };
   }

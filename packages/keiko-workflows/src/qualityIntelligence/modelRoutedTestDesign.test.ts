@@ -11,14 +11,14 @@ import {
   createInMemoryQualityIntelligenceLocalStore,
   type QualityIntelligenceEvidenceManifest,
 } from "@oscharko-dev/keiko-evidence";
-import { runQualityIntelligenceModelRoutedTestDesign } from "../modelRoutedTestDesign.js";
-import { QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS } from "../descriptors.js";
+import { runQualityIntelligenceModelRoutedTestDesign } from "./modelRoutedTestDesign.js";
+import { QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS } from "./descriptors.js";
 import type {
   QualityIntelligenceJudgeInput,
   QualityIntelligenceModelRoutedTestDesignInput,
   QualityIntelligenceModelRoutedTestDesignDeps,
   QualityIntelligenceJudgePort,
-} from "../modelRoutedTestDesign.js";
+} from "./modelRoutedTestDesign.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -326,6 +326,69 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     expect(manifest?.modelId).toBe("seeded-model");
     expect(manifest?.seedUsed).toBe(42);
     expect(manifest?.modelParameters).toEqual({ responseFormat: "json_schema", seed: 42 });
+  });
+
+  // seedUsedField's three branches: (1) modelId reported → `seedUsed ?? null` (covered above by
+  // both prior tests); (2) no modelId but a real dispatch happened (modelCallCount > 0) and the
+  // port still reports a seed; (3) no modelId and no seed at all. Both (2) and (3) are only
+  // reachable when the model-routed path is taken (modelCallCount > 0) WITHOUT a modelId, since
+  // modelId===undefined && modelCallCount===0 instead takes the separate baseline-generation path.
+  it("threads a seed from a generation result that made a call but never reported a modelId", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [makeIngestedAtom("atom-1", "Requirement atom 1")];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    await runQualityIntelligenceModelRoutedTestDesign(input, {
+      sink: { emit: () => undefined },
+      evidenceStore: store,
+      candidatesSink: { record: () => undefined },
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText: MODEL_OUTPUT_COVERING_TWO,
+            modelCallCount: 1,
+            seedUsed: 7,
+          }),
+      },
+      clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    });
+
+    const manifest = store.load(String(PLAN.id));
+    expect(manifest?.modelId).toBeUndefined();
+    expect(manifest?.seedUsed).toBe(7);
+  });
+
+  it("omits seedUsed when a generation result that made a call reports neither modelId nor seed", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [makeIngestedAtom("atom-1", "Requirement atom 1")];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    await runQualityIntelligenceModelRoutedTestDesign(input, {
+      sink: { emit: () => undefined },
+      evidenceStore: store,
+      candidatesSink: { record: () => undefined },
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText: MODEL_OUTPUT_COVERING_TWO,
+            modelCallCount: 1,
+          }),
+      },
+      clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    });
+
+    const manifest = store.load(String(PLAN.id));
+    expect(manifest?.modelId).toBeUndefined();
+    expect(manifest?.seedUsed).toBeUndefined();
+    expect(manifest).not.toHaveProperty("seedUsed");
   });
 
   it("uses the deterministic structural baseline when generation is model-free", async () => {

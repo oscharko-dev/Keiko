@@ -11,6 +11,9 @@
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
       } catch (e) {
+        // localStorage can throw when storage is disabled or restricted (private browsing,
+        // blocked cookies); the hardcoded fallback below is the complete, correct handling —
+        // there is no logging sink on a static doc page to report to.
         document.documentElement.dataset.theme = "dark";
       }
     </script>

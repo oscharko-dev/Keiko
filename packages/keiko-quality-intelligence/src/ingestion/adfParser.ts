@@ -230,6 +230,21 @@ const parseStatusNode = (
   };
 };
 
+const parseInlineChild = (
+  childNode: Record<string, unknown>,
+  path: string,
+  type: string,
+  state: ParserState,
+): RunOrLink | undefined => {
+  if (type === "text") {
+    return parseTextNode(childNode, path, state);
+  }
+  if (type === "status") {
+    return parseStatusNode(childNode, path, state);
+  }
+  return undefined;
+};
+
 const parseInlineContent = (
   rawChildren: readonly unknown[],
   pathPrefix: string,
@@ -244,12 +259,7 @@ const parseInlineContent = (
     const childNode = assertObjectNode(child, path);
     markSeen(state, childNode, path);
     const type = getNodeType(childNode, path);
-    const parsed =
-      type === "text"
-        ? parseTextNode(childNode, path, state)
-        : type === "status"
-          ? parseStatusNode(childNode, path, state)
-          : undefined;
+    const parsed = parseInlineChild(childNode, path, type, state);
     if (parsed === undefined) {
       throw new AdfParserError("UNKNOWN_NODE_TYPE", path, `Expected inline text, got "${type}"`);
     }

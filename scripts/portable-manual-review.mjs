@@ -1305,7 +1305,7 @@ function portableMode(target, scenario, packageVersion = CURRENT_VERSION) {
   };
 }
 
-function portableModeStatus(scenario) {
+export function portableModeStatus(scenario) {
   if (scenario === "unmanaged-bootstrap") return "bootstrap";
   if (scenario === "system-managed") return "it-managed";
   return "managed";
@@ -1616,14 +1616,14 @@ function writeScenarioReceipt(root, input, url) {
   });
 }
 
-function openBrowserIfRequested(url, open) {
+export function openBrowserIfRequested(url, open) {
   if (!open) return;
   const command = browserOpenCommand(process.platform);
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   spawnSync(command, args, { stdio: "ignore", detached: true });
 }
 
-function browserOpenCommand(platform) {
+export function browserOpenCommand(platform) {
   if (platform === "darwin") return "/usr/bin/open";
   if (platform === "win32") return String.raw`C:\Windows\System32\cmd.exe`;
   return "/usr/bin/xdg-open";

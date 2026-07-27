@@ -14,12 +14,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import {
   buildAppShellCommands,
+  chatWindowIdOf,
   chromeWindowsSignatureOf,
+  deepLinkToolFor,
   headerStatus,
   normalizeEditorWindowCfg,
   opensDirectlyFromPalette,
 } from "./AppShell";
-import type { AppWindow } from "./windows/types";
+import type { AppWindow, Connection } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 
 function fakeApi(): WorkspaceApi {
@@ -647,5 +649,74 @@ describe("chromeWindowsSignatureOf (GEN-PERF-WORKSPACE-008)", () => {
     expect(chromeWindowsSignatureOf([{ ...base[0]!, z: 9 }, base[1]!])).not.toBe(signature);
     expect(chromeWindowsSignatureOf([base[1]!, base[0]!])).not.toBe(signature);
     expect(chromeWindowsSignatureOf(null)).toBe("");
+  });
+});
+
+// Issue #2723 — chatWindowIdOf's three fallbacks (bind-time snapshot, endpoint a, endpoint b)
+// and its "neither endpoint is a chat window" null case.
+describe("chatWindowIdOf (S3358)", () => {
+  const win = (patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow => ({
+    x: 0,
+    y: 0,
+    w: 400,
+    h: 300,
+    z: 1,
+    cfg: {},
+    max: false,
+    ...patch,
+  });
+  const conn = (patch: Partial<Connection> & Pick<Connection, "id" | "a" | "b">): Connection => ({
+    ...patch,
+  });
+
+  it("prefers the bind-time boundChatWindowId snapshot over either endpoint's current type", () => {
+    const filesA = win({ id: "files-a", type: "files" });
+    const filesB = win({ id: "files-b", type: "files" });
+    expect(
+      chatWindowIdOf(
+        conn({ id: "c1", a: "files-a", b: "files-b", boundChatWindowId: "chat-elsewhere" }),
+        filesA,
+        filesB,
+      ),
+    ).toBe("chat-elsewhere");
+  });
+
+  it("falls back to endpoint a when it is the chat window and no snapshot is bound", () => {
+    const chatA = win({ id: "chat-a", type: "chat" });
+    const filesB = win({ id: "files-b", type: "files" });
+    expect(chatWindowIdOf(conn({ id: "c1", a: "chat-a", b: "files-b" }), chatA, filesB)).toBe(
+      "chat-a",
+    );
+  });
+
+  it("falls back to endpoint b when it is the chat window and a is not", () => {
+    const filesA = win({ id: "files-a", type: "files" });
+    const chatB = win({ id: "chat-b", type: "chat" });
+    expect(chatWindowIdOf(conn({ id: "c1", a: "files-a", b: "chat-b" }), filesA, chatB)).toBe(
+      "chat-b",
+    );
+  });
+
+  it("returns null when neither endpoint is a chat window and no snapshot is bound", () => {
+    const filesA = win({ id: "files-a", type: "files" });
+    const filesB = win({ id: "files-b", type: "files" });
+    expect(
+      chatWindowIdOf(conn({ id: "c1", a: "files-a", b: "files-b" }), filesA, filesB),
+    ).toBeNull();
+  });
+});
+
+// Issue #2723 — deepLinkToolFor's two deep-linked routes and its null default.
+describe("deepLinkToolFor (S3358)", () => {
+  it("maps /relationships to the relationships singleton window", () => {
+    expect(deepLinkToolFor("/relationships")).toBe("relationships");
+  });
+
+  it("maps /local-knowledge to the localKnowledge singleton window", () => {
+    expect(deepLinkToolFor("/local-knowledge")).toBe("localKnowledge");
+  });
+
+  it("returns null for any other path", () => {
+    expect(deepLinkToolFor("/settings")).toBeNull();
   });
 });

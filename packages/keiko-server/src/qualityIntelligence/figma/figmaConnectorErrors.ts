@@ -239,6 +239,16 @@ const mapOutboundCodeFallback = (
   return undefined;
 };
 
+// Finds the OutboundHttpEgressError to classify, preferring the top-level error over its cause.
+const resolveOutboundEgressError = (
+  err: unknown,
+  cause: unknown,
+): OutboundHttpEgressError | undefined => {
+  if (err instanceof OutboundHttpEgressError) return err;
+  if (cause instanceof OutboundHttpEgressError) return cause;
+  return undefined;
+};
+
 // (a) OutboundHttpEgressError path — a proxy was genuinely in play.
 // FIGMA_PROXY_* codes are ONLY reachable through this function.
 const classifyOutbound = (
@@ -247,12 +257,7 @@ const classifyOutbound = (
   topCode: string | undefined,
   causeCode: string | undefined,
 ): FigmaConnectorErrorCode | undefined => {
-  const outbound =
-    err instanceof OutboundHttpEgressError
-      ? err
-      : cause instanceof OutboundHttpEgressError
-        ? cause
-        : undefined;
+  const outbound = resolveOutboundEgressError(err, cause);
   if (outbound !== undefined) return mapOutboundCode(outbound.code) ?? "FIGMA_PROXY_EGRESS_FAILED";
   return mapOutboundCodeFallback(topCode, causeCode);
 };

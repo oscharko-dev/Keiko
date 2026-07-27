@@ -51,6 +51,7 @@ import {
   isInsidePath,
   resolveStateDir,
   scanRuntimeState,
+  type RetainedNode,
   type RuntimeStateScan,
   type StateRootInspection,
 } from "./state-paths.js";
@@ -318,14 +319,15 @@ function removeOwnedFiles(scan: RuntimeStateScan, io: CliIo, dryRun: boolean): v
   }
 }
 
+function retainedReasonLabel(reason: RetainedNode["reason"]): string {
+  if (reason === "symlink") return "symlink — not followed";
+  if (reason === "hardlink") return "hardlink — not modified or removed";
+  return "not a recognized Keiko artifact";
+}
+
 function reportRetained(scan: RuntimeStateScan, io: CliIo): void {
   for (const entry of scan.retained) {
-    const why =
-      entry.reason === "symlink"
-        ? "symlink — not followed"
-        : entry.reason === "hardlink"
-          ? "hardlink — not modified or removed"
-          : "not a recognized Keiko artifact";
+    const why = retainedReasonLabel(entry.reason);
     io.out(`kept: ${entry.absPath} (${why})\n`);
   }
 }

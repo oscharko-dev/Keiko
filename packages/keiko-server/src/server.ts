@@ -192,18 +192,23 @@ async function dispatchApi(
   writeJson(req, res, outcome.status, outcome.body, outcome.headers);
 }
 
+function resolveStaticTargets(pathname: string): readonly string[] {
+  if (pathname === "/") {
+    return ["/index.html"];
+  }
+  if (extname(pathname) === "") {
+    return [pathname, `${pathname}.html`, `${pathname}/index.html`];
+  }
+  return [pathname];
+}
+
 async function serveStatic(
   req: IncomingMessage,
   res: ServerResponse,
   staticRoot: string,
   pathname: string,
 ): Promise<void> {
-  const targets =
-    pathname === "/"
-      ? ["/index.html"]
-      : extname(pathname) === ""
-        ? [pathname, `${pathname}.html`, `${pathname}/index.html`]
-        : [pathname];
+  const targets = resolveStaticTargets(pathname);
   for (const target of targets) {
     const resolved = resolveContainedPath(staticRoot, target);
     if (

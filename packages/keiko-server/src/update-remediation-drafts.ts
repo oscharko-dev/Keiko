@@ -135,12 +135,12 @@ function countsForDraft(
     : counts;
 }
 
-function draftMessage(
-  kind: UpdateRemediationActionKind,
-  store: UpdateStateStore,
-  noLocalKnowledge: boolean,
-): string {
-  return noLocalKnowledge ? "No Local Knowledge capsules are present." : messageFor(kind, store);
+function draftMessageForMissingLocalKnowledge(): string {
+  return "No Local Knowledge capsules are present.";
+}
+
+function draftMessageForAction(kind: UpdateRemediationActionKind, store: UpdateStateStore): string {
+  return messageFor(kind, store);
 }
 
 function draftForStore(
@@ -164,7 +164,9 @@ function draftForStore(
     userApprovalRequired: kind !== "restart",
     featureIds: featureIdsFor(store.store),
     scopeCounts: counts,
-    message: draftMessage(kind, store.store, noLocalKnowledge),
+    message: noLocalKnowledge
+      ? draftMessageForMissingLocalKnowledge()
+      : draftMessageForAction(kind, store.store),
     ...(instructionsFor(kind) === undefined ? {} : { instructions: instructionsFor(kind) }),
     ...(cliFallbackFor(kind) === undefined ? {} : { cliFallback: cliFallbackFor(kind) }),
   };

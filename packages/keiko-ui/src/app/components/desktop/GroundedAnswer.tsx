@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
   RepositoryReferenceInline,
@@ -122,6 +123,12 @@ export function MetricRow({
   );
 }
 
+// Descending by count; ties break ascending alphabetically by bucket name.
+function compareBucketEntries(a: readonly [string, number], b: readonly [string, number]): number {
+  if (b[1] !== a[1]) return b[1] - a[1];
+  return a[0] < b[0] ? -1 : 1;
+}
+
 // Path-free explainable-ranking panel (enterprise retrieval M2). Renders ONLY the bucket and
 // ecosystem aggregate counts the BFF summary carries — no file paths, scores, or per-file signals
 // (those live solely in the regulated audit evidence). Collapsed by default so it never disrupts
@@ -133,7 +140,7 @@ function RankingRationale({
 }): ReactNode {
   const buckets = Object.entries(summary.bucketCounts)
     .filter(([, count]) => count > 0)
-    .sort((a, b) => (b[1] !== a[1] ? b[1] - a[1] : a[0] < b[0] ? -1 : 1));
+    .sort(compareBucketEntries);
   if (buckets.length === 0) {
     return null;
   }
@@ -158,6 +165,22 @@ function RankingRationale({
   );
 }
 
+// workspace-root and directory scopes do not have an atomic file count: workspace-root is
+// unbounded (fileCount sentinel -1), directory scopes contain whatever files the planner
+// selected at search time, not a fixed count of "what was bound". Only the "files" scope
+// kind has a meaningful count to display (Copilot PR #264 — "1 file in directory" reads
+// as "this directory contains exactly one file" which it doesn't).
+function contextPackHeadline(contextPack: GroundedAnswerContextPackSummary, scope: string): string {
+  let headline: string;
+  if (contextPack.scopeKind !== "files") {
+    headline = `Scope: ${scope}`;
+  } else {
+    const suffix = contextPack.fileCount === 1 ? "" : "s";
+    headline = `Scope: ${String(contextPack.fileCount)} file${suffix} in ${scope}`;
+  }
+  return headline;
+}
+
 function ContextPackSummary({
   contextPack,
 }: {
@@ -165,15 +188,7 @@ function ContextPackSummary({
 }): ReactNode {
   const { usage, budget } = contextPack;
   const scope = formatScopeLabel(contextPack);
-  // workspace-root and directory scopes do not have an atomic file count: workspace-root is
-  // unbounded (fileCount sentinel -1), directory scopes contain whatever files the planner
-  // selected at search time, not a fixed count of "what was bound". Only the "files" scope
-  // kind has a meaningful count to display (Copilot PR #264 — "1 file in directory" reads
-  // as "this directory contains exactly one file" which it doesn't).
-  const headline =
-    contextPack.scopeKind === "files"
-      ? `Scope: ${String(contextPack.fileCount)} file${contextPack.fileCount === 1 ? "" : "s"} in ${scope}`
-      : `Scope: ${scope}`;
+  const headline = contextPackHeadline(contextPack, scope);
   return (
     <section className="grounded-context-pack" aria-label="Context inspection summary">
       <div className="grounded-context-pack-headline">{headline}</div>
@@ -677,6 +692,21 @@ function manualCitationActionLabel(manual: HtmlManualCitationMetadata): string {
   return MANUAL_UNAVAILABLE_REASON_COPY[manual.open.reason];
 }
 
+function manualCitationChipActionLabel(
+  state: "idle" | "opened" | "failed",
+  manual: HtmlManualCitationMetadata,
+): string {
+  let label: string;
+  if (state === "opened") {
+    label = "Opened";
+  } else if (state === "failed") {
+    label = "Open failed";
+  } else {
+    label = manualCitationActionLabel(manual);
+  }
+  return label;
+}
+
 function ManualCitationChip({
   citation,
   label,
@@ -690,12 +720,7 @@ function ManualCitationChip({
   const [state, setState] = useState<"idle" | "opened" | "failed">("idle");
   if (manual === undefined) return null;
   const unavailable = manual.open.state === "unavailable";
-  const actionLabel =
-    state === "opened"
-      ? "Opened"
-      : state === "failed"
-        ? "Open failed"
-        : manualCitationActionLabel(manual);
+  const actionLabel = manualCitationChipActionLabel(state, manual);
   const target = manual.open.state === "unavailable" ? undefined : manual.open.target;
   const modifier = unavailable || state === "failed" ? " grounded-citation-action--blocked" : "";
   return (
@@ -756,18 +781,18 @@ function KnowledgeCitationChip({
 
   const blocked = affordance.state === "blocked";
   const opening = citationPreview?.isOpening(citation) ?? false;
-  const actionLabel =
-    affordance.state === "recoverable"
-      ? "Recover PDF"
-      : affordance.state === "blocked"
-        ? "PDF unavailable"
-        : "Open PDF";
-  const actionTitle =
-    affordance.state === "recoverable"
-      ? "Open PDF recovery"
-      : affordance.state === "blocked"
-        ? "PDF preview unavailable"
-        : "Open PDF preview";
+  let actionLabel: string;
+  let actionTitle: string;
+  if (affordance.state === "recoverable") {
+    actionLabel = "Recover PDF";
+    actionTitle = "Open PDF recovery";
+  } else if (affordance.state === "blocked") {
+    actionLabel = "PDF unavailable";
+    actionTitle = "PDF preview unavailable";
+  } else {
+    actionLabel = "Open PDF";
+    actionTitle = "Open PDF preview";
+  }
 
   return (
     <button
@@ -812,6 +837,15 @@ function UncertaintyLine({
   );
 }
 
+function compareOmittedReasonEntries(
+  a: readonly [string, number],
+  b: readonly [string, number],
+): number {
+  const [reasonA] = a;
+  const [reasonB] = b;
+  return compareStrings(reasonA, reasonB);
+}
+
 function OmittedLine({
   omittedCount,
   omittedCounts,
@@ -822,7 +856,7 @@ function OmittedLine({
   if (omittedCount <= 0) return null;
   const reasonSummary = Object.entries(omittedCounts)
     .filter(([, count]) => count > 0)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(compareOmittedReasonEntries)
     .map(([reason, count]) => `${humanizeToken(reason)}: ${String(count)}`)
     .join(", ");
   const suffix = reasonSummary.length > 0 ? ` (${reasonSummary})` : "";

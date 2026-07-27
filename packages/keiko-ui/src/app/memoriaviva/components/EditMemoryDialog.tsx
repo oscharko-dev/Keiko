@@ -151,6 +151,16 @@ export function EditMemoryDialog({
     t,
   ]);
 
+  // One of four mutually exclusive save-button labels — extracted as early
+  // returns instead of a nested ternary chain (mirrors ReviewRowActions in
+  // ReviewQueue.tsx).
+  function resolveSaveButtonLabel(): string {
+    if (saving && isCorrectMode) return t("memoria.dialog.submitting");
+    if (saving) return t("memoria.dialog.saving");
+    if (isCorrectMode) return t("memoria.dialog.submitCorrection");
+    return t("memoria.dialog.save");
+  }
+
   return (
     <div
       ref={backdropRef}
@@ -258,13 +268,7 @@ export function EditMemoryDialog({
             disabled={saving}
             aria-busy={saving}
           >
-            {saving
-              ? isCorrectMode
-                ? t("memoria.dialog.submitting")
-                : t("memoria.dialog.saving")
-              : isCorrectMode
-                ? t("memoria.dialog.submitCorrection")
-                : t("memoria.dialog.save")}
+            {resolveSaveButtonLabel()}
           </button>
         </div>
       </div>

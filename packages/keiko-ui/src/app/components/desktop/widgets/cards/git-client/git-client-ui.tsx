@@ -110,6 +110,24 @@ function outcomeTone(status: GitMutationOutcome["status"]): PillTone {
   return "neutral";
 }
 
+export function outcomeRingColor(tone: PillTone): string {
+  let color: string;
+  switch (tone) {
+    case "success":
+      color = "color-mix(in oklch, var(--ok) 42%, var(--line))";
+      break;
+    case "warning":
+      color = "color-mix(in oklch, var(--warn) 42%, var(--line))";
+      break;
+    case "danger":
+      color = "color-mix(in oklch, var(--danger) 42%, var(--line))";
+      break;
+    default:
+      color = "var(--line)";
+  }
+  return color;
+}
+
 // Renders the result of a stage / unstage / commit mutation (or a transport error). Shows the
 // action kind + outcome label and every typed reason/finding/approver code as text.
 export function MutationOutcome({
@@ -148,14 +166,7 @@ export function MutationOutcome({
     ...(outcome.executionErrorCode !== undefined ? [`error: ${outcome.executionErrorCode}`] : []),
     ...(outcome.messageViolations ?? []).map((v) => violationLabel(v)),
   ];
-  const ringColor =
-    tone === "success"
-      ? "color-mix(in oklch, var(--ok) 42%, var(--line))"
-      : tone === "warning"
-        ? "color-mix(in oklch, var(--warn) 42%, var(--line))"
-        : tone === "danger"
-          ? "color-mix(in oklch, var(--danger) 42%, var(--line))"
-          : "var(--line)";
+  const ringColor = outcomeRingColor(tone);
   return (
     // The banner is block-level structure (a pill, a headline, a code list), which <output> —
     // phrasing content — may not contain, so the container stays a plain <div>; a bare <div>

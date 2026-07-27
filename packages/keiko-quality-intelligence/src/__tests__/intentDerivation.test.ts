@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveIntent } from "../domain/intentDerivation.js";
+import { compareLowercase, deriveIntent } from "../domain/intentDerivation.js";
 import { bankingDefault, insuranceDefault } from "../domain/policyProfile.js";
 import { loadFixture } from "./_fixtureLoader.js";
 
@@ -162,5 +162,15 @@ describe("deriveIntent", () => {
     expect(summary.themes).not.toEqual(
       expect.arrayContaining(["der", "die", "und", "fuer", "muss"]),
     );
+  });
+});
+
+describe("compareLowercase", () => {
+  it("returns 1 when the left value sorts after the right value", () => {
+    expect(compareLowercase("b", "a")).toBe(1);
+  });
+
+  it("returns 0 for equal values", () => {
+    expect(compareLowercase("a", "a")).toBe(0);
   });
 });

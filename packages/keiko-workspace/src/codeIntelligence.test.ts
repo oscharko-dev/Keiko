@@ -4,6 +4,7 @@ import { memFs } from "./_memfs.js";
 import {
   buildCodeIntelligenceIndex,
   lookupCodeIntelligenceAtoms,
+  openApiComponentSchemas,
   queryCodeIntelligenceIndex,
   type CodeIntelligenceIndex,
 } from "./codeIntelligence.js";
@@ -1232,6 +1233,21 @@ describe("buildCodeIntelligenceIndex", () => {
       ".keiko/code-intelligence/stale.json",
     ]);
     expect(files[".keiko/code-intelligence/stale.json"]).toBe(stale);
+  });
+});
+
+describe("openApiComponentSchemas", () => {
+  it("returns undefined when the parsed document is not an object (e.g. a JSON array)", () => {
+    expect(openApiComponentSchemas(["not", "an", "object"])).toBeUndefined();
+  });
+
+  it("returns undefined when the document has no components object", () => {
+    expect(openApiComponentSchemas({ paths: {} })).toBeUndefined();
+  });
+
+  it("returns the components.schemas value when present", () => {
+    const schemas = { WidgetDto: { type: "object", properties: {} } };
+    expect(openApiComponentSchemas({ components: { schemas } })).toBe(schemas);
   });
 });
 

@@ -10,11 +10,11 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
 import { inlineField, inlineFields } from "../textSafety.js";
 
 const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number =>
-  a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0;
+  compareStrings(a.candidateId, b.candidateId);
 
 const RULE = "=".repeat(60);
 const DIVIDER = "-".repeat(40);
