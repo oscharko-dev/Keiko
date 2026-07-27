@@ -1683,8 +1683,10 @@ export function FilesWidget({
   const renderDirectory = (path: string, depth: number, state = directories[path]): ReactNode => {
     const { notices, rows, trailer } = directorySections(path, depth, state);
     return (
-      // NOSONAR typescript:S6819 — required ARIA tree level, see the note above.
-      <div className="tr-dir" role="group">
+      <div
+        className="tr-dir"
+        role="group" // NOSONAR typescript:S6819 — required ARIA tree level, see the note above.
+      >
         {notices}
         {rows}
         {trailer}

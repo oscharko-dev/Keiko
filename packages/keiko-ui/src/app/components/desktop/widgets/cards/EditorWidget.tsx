@@ -418,6 +418,25 @@ function resolveTrustSettledAttribute(
  * revoked. Lives outside the component, like `resolveTrustSettledAttribute` above, so the widget's
  * cognitive complexity is unaffected.
  */
+/**
+ * What the editor trust banner should report, if anything.
+ *
+ * `catalog === null` alone is not a failed read: it is also the state before the first read returns
+ * and right after a root switch resets it. Treating it as "load" made the banner assert "Workspace
+ * Trust could not be read safely" on every editor open — including for a fully trusted root, where
+ * it then vanished — inverting the #2625 requirement that a read FAILURE be distinguishable from
+ * every other state. `catalogSettled` turns true only once the read resolved or definitively failed.
+ *
+ * Outside the component, like its neighbours, so the widget's cognitive complexity is unaffected.
+ */
+function trustBannerIssue(
+  trustMutationIssue: "load" | "update" | undefined,
+  verification: EditorVerificationRunControls,
+): "load" | "update" | undefined {
+  if (trustMutationIssue !== undefined) return trustMutationIssue;
+  return verification.catalog === null && verification.catalogSettled ? "load" : undefined;
+}
+
 function initialTrustLatchDecision(
   status: WorkspaceTrustStatus | undefined,
   promptedTrustRoot: string | null,
@@ -1905,10 +1924,7 @@ export function EditorWidget({
           // the #2625 requirement that a read FAILURE be distinguishable from every other state.
           // `catalogSettled` is the fact that separates them: it turns true only once the read has
           // resolved or definitively failed.
-          issue={
-            trustMutationIssue ??
-            (verification.catalog === null && verification.catalogSettled ? "load" : undefined)
-          }
+          issue={trustBannerIssue(trustMutationIssue, verification)}
           surface="editor"
           onManage={onOpenWorkspaceTrust}
           editor
