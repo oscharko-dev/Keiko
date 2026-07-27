@@ -62,6 +62,7 @@ export interface DebugSpawnArtifactIdentity {
 export interface DebugWorkspaceIdentity {
   readonly realPath: string;
   readonly identityDigest: string;
+  readonly objectIdentityDigest: string;
   readonly device: number;
   readonly inode: number;
   readonly mode: number;

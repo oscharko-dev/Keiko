@@ -57,7 +57,7 @@ async function seedEditorWindow(page: Page, root: string): Promise<void> {
               h: 760,
               z: 10,
               cfg: { root: projectRoot, file: active, openFiles: files },
-              max: false,
+              max: true,
             },
           ]),
         );
@@ -71,6 +71,7 @@ async function seedEditorWindow(page: Page, root: string): Promise<void> {
 async function openEditor(page: Page): Promise<Locator> {
   const workspace = page.locator(".editor-workspace").first();
   await expect(workspace.locator(".ed-tablist").first()).toBeVisible();
+  await expect(workspace.locator(".ed-tab-label")).toHaveCount(OPEN_FILES.length);
   return workspace;
 }
 

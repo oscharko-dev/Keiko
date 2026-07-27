@@ -11,7 +11,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildRedactor, createInMemoryUiStore } from "../../index.js";
 import {
   createFakeSessionPairingPort,
@@ -113,6 +113,13 @@ function capture(): string {
   });
   const identity = resolveEditorLocalHistoryRoot(deps, root);
   return history.list(identity, "src/app.ts", nowMs + 1)[0]?.entryRef ?? "missing";
+}
+
+function replaceRootObject(): void {
+  renameSync(root, join(outside, "authorized-root"));
+  mkdirSync(root);
+  mkdirSync(join(root, "src"));
+  writeFileSync(join(root, "src", "app.ts"), "replacement marker\n", "utf8");
 }
 
 describe("editor local-history routes", () => {
@@ -303,6 +310,72 @@ describe("editor local-history routes", () => {
 
     expect(read).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
   });
+
+  it.each(["read", "pin", "delete"] as const)(
+    "revalidates root identity after containment and before the %s effect",
+    async (operation) => {
+      const entryRef = capture();
+      const originalStore = store;
+      let manifestReads = 0;
+      const swappingStore: UiStore = {
+        ...originalStore,
+        findWorkspaceManifestRecordByRoot: (
+          rootRef: string,
+        ): ReturnType<UiStore["findWorkspaceManifestRecordByRoot"]> => {
+          const record = originalStore.findWorkspaceManifestRecordByRoot(rootRef);
+          manifestReads += 1;
+          // The second lookup is authorizedEntry's final identity comparison. Queueing the swap
+          // after that synchronous lookup lets authorizedEntry settle first; the handler's await
+          // then yields to this microtask before revalidateEffectRoot and the store effect.
+          if (manifestReads === 2) queueMicrotask(replaceRootObject);
+          return record;
+        },
+      };
+      const readEffect = vi.fn(history.read);
+      const pinEffect = vi.fn(history.setPinned);
+      const deleteEffect = vi.fn(history.delete);
+      deps = {
+        ...deps,
+        store: swappingStore,
+        editorLocalHistoryStore: {
+          ...history,
+          read: readEffect,
+          setPinned: pinEffect,
+          delete: deleteEffect,
+        },
+      };
+      const query = `?root=${encodeURIComponent(root)}`;
+      const routeParams = { entryRef };
+      const result =
+        operation === "read"
+          ? await handleReadEditorLocalHistory(
+              context("GET", `/api/editor/local-history/${entryRef}${query}`, routeParams),
+              deps,
+            )
+          : operation === "pin"
+            ? await handlePinEditorLocalHistory(
+                context("PATCH", `/api/editor/local-history/${entryRef}${query}`, routeParams, {
+                  pinned: true,
+                }),
+                deps,
+              )
+            : await handleDeleteEditorLocalHistory(
+                context("DELETE", `/api/editor/local-history/${entryRef}${query}`, routeParams),
+                deps,
+              );
+
+      expect(result).toMatchObject({
+        status: 503,
+        body: { error: { code: "INVALID_CAPTURE" } },
+      });
+      expect(
+        { read: readEffect, pin: pinEffect, delete: deleteEffect }[operation],
+      ).not.toHaveBeenCalled();
+      expect(manifestReads).toBe(3);
+      expect(JSON.stringify(result.body)).not.toContain("checkpoint marker");
+      expect(JSON.stringify(result.body)).not.toContain("replacement marker");
+    },
+  );
 
   it("refuses a stored path that now resolves onto a denied location inside the root", async () => {
     const entryRef = capture();

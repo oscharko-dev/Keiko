@@ -4,6 +4,7 @@ import { expect, test, type Locator, type Page, type TestInfo } from "@playwrigh
 import { validateWorkspaceManifest, type WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 
 import { cleanupEditorWorkspaces, createEditorWorkspace } from "./support/editorWorkspace.js";
+import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const WORKSPACE_KEY = "keiko.workspace.v4";
@@ -127,6 +128,8 @@ function createIssueHarness(): IssueHarness {
 }
 
 async function setupIssue(page: Page, harness: IssueHarness): Promise<void> {
+  await page.goto(`/${editorM11PairingFragment("2526")}`);
+  await expect.poll(() => page.url()).not.toContain("keiko-app-session");
   await registerProject(page, harness.rootA.root, "Root A");
   await registerProject(page, harness.rootB.root, "Root B");
   await addSecondRoot(page, harness.rootA.root, harness.rootB.root);
@@ -164,18 +167,34 @@ async function verifyDiscovery(
   return { search, editor };
 }
 
-async function verifySequentialReplace(search: Locator, harness: IssueHarness): Promise<void> {
+async function verifySequentialReplace(
+  page: Page,
+  search: Locator,
+  harness: IssueHarness,
+): Promise<void> {
   await search.getByLabel("Replacement").fill("thread");
   await search.getByRole("button", { name: "Preview replace" }).click();
   const applyA = search.getByRole("button", { name: "Apply reviewed replace in Root A" });
   const applyB = search.getByRole("button", { name: "Apply reviewed replace in Root B" });
   await expect(applyA).toBeVisible({ timeout: 45_000 });
   await expect(applyB).toBeVisible();
+  const appliedA = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/editor/workspace-search/replace-apply"),
+  );
   await applyA.click();
+  expect((await appliedA).ok()).toBe(true);
   await expect(applyA).toBeDisabled();
   expect(readFileSync(join(harness.rootA.root, "src/shared.ts"), "utf8")).toContain("thread");
   expect(readFileSync(join(harness.rootB.root, "src/shared.ts"), "utf8")).toContain("needle");
+  const appliedB = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/editor/workspace-search/replace-apply"),
+  );
   await applyB.click();
+  expect((await appliedB).ok()).toBe(true);
   await expect(applyB).toBeDisabled();
   expect(readFileSync(join(harness.rootB.root, "src/shared.ts"), "utf8")).toContain("thread");
 }
@@ -212,6 +231,6 @@ test("search, Quick Open, replace, and bound windows retain explicit root identi
   const harness = createIssueHarness();
   await setupIssue(page, harness);
   const { search, editor } = await verifyDiscovery(page, testInfo);
-  await verifySequentialReplace(search, harness);
+  await verifySequentialReplace(page, search, harness);
   await verifyExplicitCommandRoot(page, editor, harness.rootB.root);
 });

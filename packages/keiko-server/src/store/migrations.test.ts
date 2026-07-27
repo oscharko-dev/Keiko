@@ -1,7 +1,11 @@
 // ADR-0013 D5 — Versioned migration runner using PRAGMA user_version. Forward-only, idempotent.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
 import { runMigrations, SCHEMA_VERSION } from "./index.js";
 
 function openMem(): DatabaseSync {
@@ -20,7 +24,287 @@ function tableNames(db: DatabaseSync): string[] {
   return rows.map((r) => r.name);
 }
 
+function seedV16WorkspaceTables(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE workspace_manifest_roots (
+      workspace_id TEXT NOT NULL,
+      root_ref TEXT NOT NULL UNIQUE,
+      position INTEGER NOT NULL,
+      project_path TEXT NOT NULL UNIQUE,
+      canonical_root TEXT NOT NULL UNIQUE,
+      identity_digest TEXT NOT NULL UNIQUE,
+      PRIMARY KEY (workspace_id, root_ref)
+    ) STRICT;
+    CREATE TABLE workspace_trust_records (
+      root_ref TEXT NOT NULL PRIMARY KEY,
+      revision INTEGER NOT NULL,
+      trust TEXT NOT NULL,
+      record_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT;
+    PRAGMA user_version = 16;
+  `);
+}
+
+interface V16RootSeed {
+  readonly workspaceId: string;
+  readonly rootRef: string;
+  readonly canonicalRoot: string;
+  readonly identityDigest: string;
+}
+
+function insertV16Root(db: DatabaseSync, seed: V16RootSeed): void {
+  db.prepare(
+    `INSERT INTO workspace_manifest_roots (
+       workspace_id, root_ref, position, project_path, canonical_root, identity_digest
+     ) VALUES (?, ?, 0, ?, ?, ?)`,
+  ).run(
+    seed.workspaceId,
+    seed.rootRef,
+    seed.canonicalRoot,
+    seed.canonicalRoot,
+    seed.identityDigest,
+  );
+}
+
+function insertV16Trust(db: DatabaseSync, rootRef: string): void {
+  db.prepare(
+    `INSERT INTO workspace_trust_records (
+       root_ref, revision, trust, record_json, updated_at
+     ) VALUES (?, 1, 'trusted', '{}', 1)`,
+  ).run(rootRef);
+}
+
+type RootIdentity = ReturnType<typeof inspectWorkspaceRootIdentity>;
+type RootInspector = (path: string) => RootIdentity;
+
+function syntheticRootIdentity(
+  seed: Pick<V16RootSeed, "canonicalRoot" | "identityDigest" | "rootRef">,
+  objectIdentityDigest: string | undefined,
+): RootIdentity {
+  return {
+    canonicalRoot: seed.canonicalRoot,
+    identityDigest: seed.identityDigest as RootIdentity["identityDigest"],
+    objectIdentityDigest,
+    rootRef: seed.rootRef as RootIdentity["rootRef"],
+    device: 1,
+    inode: 1,
+    mode: 0o40_700,
+    ownerUid: 1,
+  };
+}
+
+async function runMigrationsWithRootInspector(
+  db: DatabaseSync,
+  inspect: RootInspector,
+): Promise<void> {
+  vi.resetModules();
+  vi.doMock("../workspace-root-identity.js", async () => {
+    const actual = await vi.importActual<typeof import("../workspace-root-identity.js")>(
+      "../workspace-root-identity.js",
+    );
+    return { ...actual, inspectWorkspaceRootIdentity: inspect };
+  });
+  try {
+    const schema = await import("./schema.js");
+    schema.runMigrations(db);
+  } finally {
+    vi.doUnmock("../workspace-root-identity.js");
+    vi.resetModules();
+  }
+}
+
 describe("runMigrations", () => {
+  it("v17 backfills private object identity and revokes every legacy trust grant", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-v17-root-"));
+    const identity = inspectWorkspaceRootIdentity(root);
+    const db = openMem();
+    try {
+      seedV16WorkspaceTables(db);
+      db.prepare(
+        `INSERT INTO workspace_manifest_roots (
+           workspace_id, root_ref, position, project_path, canonical_root, identity_digest
+         ) VALUES (?, ?, 0, ?, ?, ?)`,
+      ).run("workspace-1", identity.rootRef, root, root, identity.identityDigest);
+      db.prepare(
+        `INSERT INTO workspace_trust_records (
+           root_ref, revision, trust, record_json, updated_at
+         ) VALUES (?, 1, 'trusted', '{}', 1)`,
+      ).run(identity.rootRef);
+
+      runMigrations(db);
+
+      expect(userVersion(db)).toBe(17);
+      expect(
+        db.prepare("SELECT object_identity_digest FROM workspace_manifest_roots").get(),
+      ).toEqual({ object_identity_digest: identity.objectIdentityDigest });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_trust_records").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("v17 prevents two public roots from claiming one filesystem object", () => {
+    const db = openMem();
+    try {
+      seedV16WorkspaceTables(db);
+      runMigrations(db);
+      const insert = db.prepare(
+        `INSERT INTO workspace_manifest_roots (
+           workspace_id, root_ref, position, project_path, canonical_root, identity_digest,
+           object_identity_digest
+         ) VALUES (?, ?, 0, ?, ?, ?, ?)`,
+      );
+      insert.run(
+        "workspace-1",
+        "root-a",
+        "/project-a",
+        "/canonical-a",
+        "a".repeat(64),
+        "f".repeat(64),
+      );
+
+      expect(() =>
+        insert.run(
+          "workspace-2",
+          "root-b",
+          "/project-b",
+          "/canonical-b",
+          "b".repeat(64),
+          "f".repeat(64),
+        ),
+      ).toThrow(/UNIQUE constraint failed/iu);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("v17 leaves mismatched, unavailable, and ambiguous roots unbound", async () => {
+    const seeds: readonly V16RootSeed[] = [
+      {
+        workspaceId: "workspace-mismatch",
+        rootRef: "root-mismatch",
+        canonicalRoot: "/mismatch",
+        identityDigest: "a".repeat(64),
+      },
+      {
+        workspaceId: "workspace-unreadable",
+        rootRef: "root-unreadable",
+        canonicalRoot: "/unreadable",
+        identityDigest: "b".repeat(64),
+      },
+      {
+        workspaceId: "workspace-unsupported",
+        rootRef: "root-unsupported",
+        canonicalRoot: "/unsupported",
+        identityDigest: "c".repeat(64),
+      },
+      {
+        workspaceId: "workspace-duplicate-a",
+        rootRef: "root-duplicate-a",
+        canonicalRoot: "/duplicate-a",
+        identityDigest: "d".repeat(64),
+      },
+      {
+        workspaceId: "workspace-duplicate-b",
+        rootRef: "root-duplicate-b",
+        canonicalRoot: "/duplicate-b",
+        identityDigest: "e".repeat(64),
+      },
+    ];
+    const firstSeed = seeds[0];
+    if (firstSeed === undefined) throw new Error("missing V17 negative seed");
+    const db = openMem();
+    try {
+      seedV16WorkspaceTables(db);
+      for (const seed of seeds) {
+        insertV16Root(db, seed);
+        insertV16Trust(db, seed.rootRef);
+      }
+      const byPath = new Map(seeds.map((seed) => [seed.canonicalRoot, seed] as const));
+      const duplicateDigest = "f".repeat(64);
+      await runMigrationsWithRootInspector(db, (path) => {
+        const seed = byPath.get(path);
+        if (seed === undefined || path === "/unreadable") throw new Error("unreadable root");
+        if (path === "/mismatch") {
+          return syntheticRootIdentity(
+            { ...seed, identityDigest: "0".repeat(64) },
+            duplicateDigest,
+          );
+        }
+        return syntheticRootIdentity(seed, path === "/unsupported" ? undefined : duplicateDigest);
+      });
+
+      const rows = db
+        .prepare(
+          `SELECT root_ref, object_identity_digest FROM workspace_manifest_roots
+           ORDER BY root_ref`,
+        )
+        .all() as unknown as readonly {
+        readonly root_ref: string;
+        readonly object_identity_digest: string | null;
+      }[];
+      expect(rows).toEqual(
+        seeds
+          .map((seed) => ({ root_ref: seed.rootRef, object_identity_digest: null }))
+          .sort((left, right) => left.root_ref.localeCompare(right.root_ref)),
+      );
+      expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_trust_records").get()).toEqual({
+        count: 0,
+      });
+
+      insertV16Trust(db, firstSeed.rootRef);
+      runMigrations(db);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_trust_records").get()).toEqual({
+        count: 1,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("v17 rolls back identity backfill when legacy trust revocation fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-v17-rollback-"));
+    const identity = inspectWorkspaceRootIdentity(root);
+    const db = openMem();
+    try {
+      seedV16WorkspaceTables(db);
+      insertV16Root(db, {
+        workspaceId: "workspace-rollback",
+        rootRef: identity.rootRef,
+        canonicalRoot: root,
+        identityDigest: identity.identityDigest,
+      });
+      insertV16Trust(db, identity.rootRef);
+      db.exec(`
+        CREATE TRIGGER reject_v17_trust_revoke
+        BEFORE DELETE ON workspace_trust_records
+        BEGIN
+          SELECT RAISE(ABORT, 'trust revoke failed');
+        END;
+      `);
+
+      expect(() => {
+        runMigrations(db);
+      }).toThrow(/trust revoke failed/u);
+      expect(userVersion(db)).toBe(16);
+      expect(
+        (db.prepare("PRAGMA table_info(workspace_manifest_roots)").all() as { name: string }[]).map(
+          (column) => column.name,
+        ),
+      ).not.toContain("object_identity_digest");
+      expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_trust_records").get()).toEqual({
+        count: 1,
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("v13 adds content-free canonical turn identity, content digest, and uniqueness", () => {
     const db = openMem();
     runMigrations(db);
@@ -71,6 +355,7 @@ describe("runMigrations", () => {
 
   it("v16 gives an existing memory autonomy policy a zero revision", () => {
     const db = openMem();
+    seedV16WorkspaceTables(db);
     db.exec(`
       CREATE TABLE memory_autonomy_policy (
         id TEXT NOT NULL PRIMARY KEY,
@@ -87,7 +372,7 @@ describe("runMigrations", () => {
 
     runMigrations(db);
 
-    expect(userVersion(db)).toBe(16);
+    expect(userVersion(db)).toBe(SCHEMA_VERSION);
     expect(
       db
         .prepare("SELECT requested_mode, revision FROM memory_autonomy_policy WHERE id = 'capture'")

@@ -3,6 +3,7 @@ import { defineConfig } from "@playwright/test";
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "../support/file-history-2531.js";
 import baseConfig from "./playwright.config.js";
 
+const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32183");
 const baseWebServer = baseConfig.webServer;
 if (!Array.isArray(baseWebServer)) throw new Error("Issue #2533 requires the shared web servers.");
 
@@ -22,5 +23,6 @@ export default defineConfig({
   ...baseConfig,
   testMatch: ["editor-m11-closeout-2533.spec.ts"],
   timeout: 180_000,
+  use: { ...baseConfig.use, baseURL: `http://localhost:${String(publicPort)}` },
   webServer,
 });

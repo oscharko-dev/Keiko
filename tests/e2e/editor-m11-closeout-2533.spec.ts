@@ -205,8 +205,10 @@ async function seedWindows(page: Page, root: string): Promise<void> {
   await page.addInitScript((windows) => {
     window.localStorage.setItem("keiko.theme", "dark");
     window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-    if (window.localStorage.getItem("keiko.workspace.v4") !== null) return;
+    const seededKey = "keiko.e2e.issue-2533-seeded";
+    if (window.sessionStorage.getItem(seededKey) === "1") return;
     window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(windows));
+    window.sessionStorage.setItem(seededKey, "1");
   }, seededWindows(root));
 }
 
@@ -243,7 +245,9 @@ async function grantAlphaAndRestrictBeta(page: Page): Promise<void> {
   await page.getByRole("tab", { name: /M11 Root Beta/u }).click();
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "Stay restricted" }).click();
-  await expect(page.getByTestId("workspace-trust-banner-editor")).toContainText("Restricted Mode");
+  await expect(page.getByRole("note", { name: "Restricted Mode", exact: true })).toContainText(
+    "Restricted Mode",
+  );
   await expect(
     page.getByRole("treeitem", { name: "M11 Root Alpha" }).getByLabel("Trusted workspace"),
   ).toBeVisible();
@@ -402,16 +406,17 @@ test.afterAll(() => {
 
 test("mixed-trust multi-root, profile switching, and local-history restore compose end to end", async ({
   page,
-  request,
 }, testInfo) => {
   const harness = createHarness();
-  await registerProject(request, harness.alpha.root, "M11 Root Alpha");
-  await registerProject(request, harness.beta.root, "M11 Root Beta");
-  await addSecondRoot(request, harness);
-  const profileRef = await createFocusedProfile(request, harness.alpha.root);
+  await page.goto(`/${pairingFragment()}`);
+  await expect.poll(() => page.url()).not.toContain("keiko-app-session");
+  await registerProject(page.request, harness.alpha.root, "M11 Root Alpha");
+  await registerProject(page.request, harness.beta.root, "M11 Root Beta");
+  await addSecondRoot(page.request, harness);
+  const profileRef = await createFocusedProfile(page.request, harness.alpha.root);
   await seedWindows(page, harness.alpha.root);
   await page.setViewportSize({ width: 1920, height: 1080 });
-  await page.goto(`/${pairingFragment()}`);
+  await page.goto("/");
   await openEditorWorkspace(page, { dismissTrustPrompt: false });
   await grantAlphaAndRestrictBeta(page);
   const switched = await switchProfile(page, harness.alpha.root, profileRef);
@@ -428,7 +433,7 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   await expect(journeyPage.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(
     0,
   );
-  await expectRootStillTrusted(request, harness.alpha.root);
+  await expectRootStillTrusted(journeyPage.request, harness.alpha.root);
   const pane = firstPane(editor);
   await saveVersion(journeyPage, pane, VERSION_ONE);
   // Read the oldest checkpoint's content from disk instead of hard-coding it (the sibling #2531

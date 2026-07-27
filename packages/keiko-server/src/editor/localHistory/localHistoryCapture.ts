@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type {
   EditorLocalHistoryOrigin,
+  WorkspaceRootDescriptor,
   WorkspaceRootIdentityDigest,
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
@@ -15,6 +16,7 @@ export interface EditorLocalHistoryResolvedRoot {
   readonly workspaceId: string;
   readonly rootRef: WorkspaceRootRef;
   readonly rootIdentityDigest: WorkspaceRootIdentityDigest;
+  readonly objectIdentityDigest: string;
   readonly realRoot: string;
 }
 
@@ -24,6 +26,35 @@ function unavailableRoot(detail: string): never {
     "Local-history workspace is unavailable.",
     detail,
   );
+}
+
+function storedObjectIdentity(
+  deps: Pick<UiHandlerDeps, "store">,
+  rootRef: WorkspaceRootRef,
+): string | undefined {
+  const value = deps.store
+    .findWorkspaceManifestRecordByRoot(rootRef)
+    ?.rootProjects.find(
+      (candidate): boolean => candidate.rootRef === rootRef,
+    )?.objectIdentityDigest;
+  return typeof value === "string" ? value : undefined;
+}
+
+type DurableWorkspaceRootIdentity = ReturnType<typeof inspectWorkspaceRootIdentity> & {
+  readonly objectIdentityDigest: string;
+};
+
+function rootIdentityMatches(
+  inspected: ReturnType<typeof inspectWorkspaceRootIdentity>,
+  root: WorkspaceRootDescriptor,
+  storedObjectIdentityDigest: string | undefined,
+): inspected is DurableWorkspaceRootIdentity {
+  return [
+    inspected.rootRef === root.rootRef,
+    inspected.identityDigest === root.identityDigest,
+    inspected.objectIdentityDigest !== undefined,
+    inspected.objectIdentityDigest === storedObjectIdentityDigest,
+  ].every(Boolean);
 }
 
 export function resolveEditorLocalHistoryRoot(
@@ -47,7 +78,7 @@ export function resolveEditorLocalHistoryRoot(
     } catch {
       return unavailableRoot("IDENTITY_UNREADABLE");
     }
-    if (inspected.rootRef !== root.rootRef || inspected.identityDigest !== root.identityDigest) {
+    if (!rootIdentityMatches(inspected, root, storedObjectIdentity(deps, root.rootRef))) {
       return unavailableRoot("IDENTITY_DRIFT");
     }
     // Membership still decides ACCESS — a root outside every manifest has no history surface. It
@@ -58,6 +89,7 @@ export function resolveEditorLocalHistoryRoot(
       workspaceId: editorLocalHistoryWorkspaceId(root.rootRef),
       rootRef: root.rootRef,
       rootIdentityDigest: root.identityDigest,
+      objectIdentityDigest: inspected.objectIdentityDigest,
       realRoot,
     };
   }

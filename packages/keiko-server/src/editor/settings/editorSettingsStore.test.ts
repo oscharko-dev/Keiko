@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -193,6 +194,53 @@ describe("editor settings store — direct coverage", () => {
     const reloaded = store.loadRoot(root);
     expect(reloaded.state).toBe("absent");
     expect(reloaded.record.values).toEqual({});
+  });
+
+  it("adopts a valid legacy root binding into the private object identity without losing values", () => {
+    const stateDir = temporaryDirectory("editor-settings-store-root-adopt-state");
+    const root = temporaryDirectory("editor-settings-store-root-adopt");
+    const path = editorSettingsRootRecordPath(stateDir, root);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...emptyEditorSettingsRootRecord(root),
+        rootObjectIdentityDigest: "",
+        revision: 2,
+        values: { fontSize: 18 },
+      }),
+      "utf8",
+    );
+
+    expect(createEditorSettingsStore({ stateDir }).loadRoot(root)).toMatchObject({
+      state: "ready",
+      record: { revision: 2, values: { fontSize: 18 } },
+    });
+    const persisted: unknown = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (typeof persisted !== "object" || persisted === null || Array.isArray(persisted)) {
+      throw new Error("persisted settings record is not an object");
+    }
+    const persistedRecord = persisted as Readonly<Record<string, unknown>>;
+    expect(persistedRecord.rootObjectIdentityDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("treats a mismatched private object identity as an absent root binding", () => {
+    const stateDir = temporaryDirectory("editor-settings-store-root-object-state");
+    const root = temporaryDirectory("editor-settings-store-root-object");
+    writeFileSync(
+      editorSettingsRootRecordPath(stateDir, root),
+      JSON.stringify({
+        ...emptyEditorSettingsRootRecord(root),
+        rootObjectIdentityDigest: "f".repeat(64),
+        revision: 2,
+        values: { fontSize: 18 },
+      }),
+      "utf8",
+    );
+
+    expect(createEditorSettingsStore({ stateDir }).loadRoot(root)).toMatchObject({
+      state: "absent",
+      record: { values: {} },
+    });
   });
 
   it("reports a foreign or unbound root record as absent, never as unavailable", () => {
