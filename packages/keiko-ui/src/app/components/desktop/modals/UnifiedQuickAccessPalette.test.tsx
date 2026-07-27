@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchFilesSearch, fetchWorkspaceSearch, fetchWorkspaceSymbols } from "@/lib/api";
-import { UnifiedQuickAccessPalette } from "./UnifiedQuickAccessPalette";
+import {
+  rootFairMerge,
+  UnifiedQuickAccessPalette,
+  type FileResult,
+} from "./UnifiedQuickAccessPalette";
 import type { QuickAccessCommand } from "../quickAccessRegistry";
 
 vi.mock("@/lib/api", async () => {
@@ -267,6 +271,70 @@ describe("UnifiedQuickAccessPalette", () => {
     });
   });
 
+  it("keeps a second root represented and reports truncation when one root fills the cap (#2768)", async () => {
+    function fileFixture(
+      root: string,
+      index: number,
+    ): {
+      root: string;
+      path: string;
+      name: string;
+      directory: string;
+      extension: string;
+      sizeBytes: number;
+      modifiedAt: number;
+    } {
+      const name = `match-${index.toString()}.ts`;
+      return {
+        root,
+        path: `src/${name}`,
+        name,
+        directory: "src",
+        extension: ".ts",
+        sizeBytes: 10,
+        modifiedAt: 1,
+      };
+    }
+    fetchFilesSearchMock.mockImplementation((root) =>
+      Promise.resolve({
+        root,
+        query: "match",
+        // Root A alone fills the SEARCH_LIMIT (30). Root B's indices are double-digit, the same
+        // fuzzyScore tier as root A's own 20 double-digit files (`target.length - lastMatch`
+        // penalizes the longer "match-NN.ts" tail): a global sort-then-slice ranks all of root A's
+        // double-digit matches ahead of root B's on flatMap index alone and cuts root B off
+        // entirely, where a fair per-root merge still gives root B its share.
+        results:
+          root === "/repo/a"
+            ? Array.from({ length: 30 }, (_, index) => fileFixture("/repo/a", index))
+            : [97, 98, 99].map((index) => fileFixture("/repo/b", index)),
+        truncated: false,
+        scannedFileCount: 30,
+      }),
+    );
+
+    render(
+      <UnifiedQuickAccessPalette
+        initialMode="files"
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+        commands={[]}
+        openEditorFile={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await userEvent.type(screen.getByRole("combobox"), "match");
+    await screen.findAllByRole("option", { name: /Root B/ });
+
+    expect(screen.getAllByRole("option", { name: /Root A/ })).not.toHaveLength(0);
+    expect(screen.getAllByRole("option", { name: /Root B/ })).toHaveLength(3);
+    expect(screen.getByRole("status")).toHaveTextContent(/capped/i);
+  });
+
   it("has no axe violations in file and command modes", async () => {
     fetchFilesSearchMock.mockResolvedValue({
       root: "/repo",
@@ -312,5 +380,39 @@ describe("UnifiedQuickAccessPalette", () => {
 
     await screen.findByRole("option", { name: /Toggle light \/ dark theme/ });
     expect(await axe(commandMode.container)).toHaveNoViolations();
+  });
+});
+
+describe("rootFairMerge (#2768)", () => {
+  function fileResult(root: string, path: string): FileResult {
+    return { kind: "file", root, rootLabel: root, path, line: 1, snippet: path };
+  }
+
+  it("round-robins one result per root instead of exhausting one root first", () => {
+    const rootA = [fileResult("/a", "a0.ts"), fileResult("/a", "a1.ts")];
+    const rootB = [fileResult("/b", "b0.ts"), fileResult("/b", "b1.ts")];
+
+    expect(rootFairMerge([rootA, rootB])).toEqual([rootA[0], rootB[0], rootA[1], rootB[1]]);
+  });
+
+  it("keeps every root represented even when one root has far more matches", () => {
+    const rootA = Array.from({ length: 40 }, (_, index) =>
+      fileResult("/a", `a${index.toString()}.ts`),
+    );
+    const rootB = [fileResult("/b", "b0.ts"), fileResult("/b", "b1.ts"), fileResult("/b", "b2.ts")];
+
+    const merged = rootFairMerge([rootA, rootB]);
+
+    expect(merged).toHaveLength(30);
+    // A global sort-then-slice over root A's 40-result lead would have starved every one of root
+    // B's results; the fair merge guarantees all three still make it in.
+    expect(merged.filter((result) => result.root === "/b")).toHaveLength(3);
+  });
+
+  it("returns everything, unmerged-order preserved per root, when nothing needs to be dropped", () => {
+    const rootA = [fileResult("/a", "a0.ts")];
+    const rootB = [fileResult("/b", "b0.ts"), fileResult("/b", "b1.ts")];
+
+    expect(rootFairMerge([rootA, rootB])).toEqual([rootA[0], rootB[0], rootB[1]]);
   });
 });
