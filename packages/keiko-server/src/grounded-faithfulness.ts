@@ -552,11 +552,19 @@ export interface EntailmentReconciliation {
 /** Resolve the bounded excerpt text for a membership-valid citation, or `undefined` if none. */
 export type ExcerptTextResolver = (citation: ParsedInlineCitation) => string | undefined;
 
+interface CollectedExcerptText {
+  readonly text: string;
+  // True when the joined excerpt text exceeded `maxExcerptChars` and was cut down for the judge —
+  // the judge then never sees the tail of the cited evidence, so a claim whose contradiction sits
+  // past the cut must not be judged against the truncated prefix (see `verdictForClaim`).
+  readonly truncated: boolean;
+}
+
 function collectExcerptText(
   citations: readonly ParsedInlineCitation[],
   resolveExcerptText: ExcerptTextResolver,
   maxExcerptChars: number,
-): string {
+): CollectedExcerptText {
   const seen = new Set<string>();
   const parts: string[] = [];
   for (const citation of citations) {
@@ -567,7 +575,8 @@ function collectExcerptText(
     seen.add(text);
     parts.push(text);
   }
-  return parts.join("\n\n").slice(0, maxExcerptChars);
+  const joined = parts.join("\n\n");
+  return { text: joined.slice(0, maxExcerptChars), truncated: joined.length > maxExcerptChars };
 }
 
 async function verdictForClaim(
@@ -578,9 +587,19 @@ async function verdictForClaim(
   maxExcerptChars: number,
   signal: AbortSignal | undefined,
 ): Promise<EntailmentVerdict> {
-  const excerptText = collectExcerptText(validCitations, resolveExcerptText, maxExcerptChars);
+  const { text: excerptText, truncated } = collectExcerptText(
+    validCitations,
+    resolveExcerptText,
+    maxExcerptChars,
+  );
   if (excerptText.length === 0 || claim.claimText.length === 0) {
     // No usable excerpt/claim text to judge against — undecidable, never assumed supported.
+    return "unavailable";
+  }
+  if (truncated) {
+    // The judge would only see a prefix of the cited evidence, exactly like an exhausted
+    // maxClaims/maxTotalMs budget — count it unavailable rather than risk a "supported" verdict
+    // that never saw the excerpt text past the cut.
     return "unavailable";
   }
   return judge.judge({ claimText: claim.claimText, excerptText }, signal);

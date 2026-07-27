@@ -40,10 +40,22 @@ const PROGRESS: HtmlManualIndexingProgress = {
   remediations: [],
 };
 
-// A context whose env/fetcher are never touched (the run thunk is injected in these tests).
-function stubContext(): ManualPodJobContext {
+// A context whose env/fetcher are never touched (the run thunk is injected in these tests). The
+// store fakes just enough of `_internal.db` for the LK-003 running-job guard's query; by default no
+// job is running for any capsule, matching every pre-existing test's expectations.
+function stubContext(runningJobIdForCapsule?: string): ManualPodJobContext {
+  const db = {
+    prepare: (): { get: () => { readonly id: string } | undefined } => ({
+      get: (): { readonly id: string } | undefined =>
+        runningJobIdForCapsule === undefined ? undefined : { id: runningJobIdForCapsule },
+    }),
+  };
   return {
-    env: { store: {} as never, close: vi.fn(), embeddingAdapter: {} as never },
+    env: {
+      store: { _internal: { db } } as never,
+      close: vi.fn(),
+      embeddingAdapter: {} as never,
+    },
     fetcher: {} as never,
   };
 }
@@ -266,6 +278,24 @@ describe("startManualPodRefresh (injected seams)", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(getManualPodJob(result.job.jobId)?.state).toBe("succeeded");
     }
+  });
+
+  // LK-003 (Epic #189): the general reindex/repair paths already refuse a second concurrent
+  // indexer for the same capsule (local-knowledge-handlers.ts, local-knowledge-remediation.ts). The
+  // manual create/refresh trigger shared the same `indexing_jobs` table but never checked it, so a
+  // double-click, a reload-and-retry, or a general reindex from another tab could race an in-flight
+  // manual refresh and silently corrupt the persisted fingerprint baseline (last-writer-wins, no
+  // version check). This must fail closed with no second job ever starting.
+  it("refuses to start when a job is already running for the capsule (LK-003)", () => {
+    const run = vi.fn().mockResolvedValue({ progress: PROGRESS, state: "succeeded" });
+    const result = startManualPodRefresh(
+      {} as UiHandlerDeps,
+      { capsuleId: "cap", sourceId: "src" },
+      { context: stubContext("already-running-job"), run },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("job-already-running");
+    expect(run).not.toHaveBeenCalled();
   });
 });
 

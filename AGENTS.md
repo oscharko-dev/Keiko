@@ -68,7 +68,7 @@ This shapes the product _and_ how you work on it:
 
 ```bash
 npm install               # installs all workspaces from the single root lockfile
-npm run provision:sqlite-vec  # ONCE per checkout — see below; without it `npm test` is red
+npm run provision:usearch # ONCE per checkout — see below; without it `npm test` is red
 npm run build             # build:packages (tsc -b) then the root build
 npm run dev:start         # Node BFF + Next.js UI on ONE loopback URL (http://127.0.0.1:1983)
 npm run dev:stop
@@ -77,13 +77,14 @@ npm run dev:stop
 The dev UI and BFF bind loopback port **1983** (not Vite's 5173, not 3000). If 1983 is taken,
 `dev:start` picks the next free loopback port and prints it.
 
-**`provision:sqlite-vec` is a real prerequisite, not an optional extra.** The sqlite-vec loadable
-extension is deliberately not an npm dependency (upstream publishes an invalid SPDX license string
-that two supply-chain gates reject), so it is fetched and SHA-256-verified by that script instead.
-CI runs it as a setup step before every test lane. `npm test` does **not** run it for you, so on a
+**`provision:usearch` is a real prerequisite, not an optional extra.** The pinned USearch HNSW ANN
+runtime (ADR-0164; sqlite-vec was retired — it performed exhaustive KNN, not ANN) is deliberately not
+an npm dependency (upstream publishes an invalid SPDX license string that two supply-chain gates
+reject), so the exact upstream tarball is fetched and SHA-256-verified by that script instead. CI
+runs it as a setup step before every test lane. `npm test` does **not** run it for you, so on a
 fresh checkout the two Knowledge-M2 proof suites — `knowledge-m2-closeout` (its `ann-active` proof)
 and `knowledge-m2-clean-checkout-demo` — fail until you have run it once. They fail rather than skip
-on purpose: a missing extension must never quietly mask a real ANN regression.
+on purpose: a missing runtime must never quietly mask a real ANN regression.
 
 Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
 pnpm/yarn/bun lockfile. Do not add one.

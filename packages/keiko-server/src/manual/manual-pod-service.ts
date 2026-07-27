@@ -35,7 +35,10 @@ import {
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import { computeManualRootFingerprint } from "../docs-browser-proposal.js";
 import { createEmbeddingAdapter, openStoreForDeps } from "../local-knowledge-grounded-qa.js";
-import { resolveNewCapsuleEmbeddingIdentity } from "../local-knowledge-handlers.js";
+import {
+  latestRunningJobId,
+  resolveNewCapsuleEmbeddingIdentity,
+} from "../local-knowledge-handlers.js";
 import { currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import { createGatewayManualFetcher } from "./manual-crawl-fetcher.js";
 
@@ -239,7 +242,10 @@ function fetcherFor(deps: UiHandlerDeps): ReturnType<typeof createGatewayManualF
 
 export type StartManualPodJobResult =
   | { readonly ok: true; readonly job: HtmlManualPodJob }
-  | { readonly ok: false; readonly reason: "no-embedding-model" | "invalid-source" };
+  | {
+      readonly ok: false;
+      readonly reason: "no-embedding-model" | "invalid-source" | "job-already-running";
+    };
 
 // A background job runner: emits crawl events and resolves the domain progress. Injectable so tests
 // exercise the start/registry/projection path without a real store, fetcher, or network.
@@ -376,6 +382,14 @@ export function startManualPodRefresh(
 ): StartManualPodJobResult {
   const ctx = overrides.context ?? resolveManualPodContext(deps);
   if (ctx === undefined) return { ok: false, reason: "no-embedding-model" };
+  // LK-003 (Epic #189): refuse to start a second concurrent indexer for this capsule — the
+  // orchestrator persists running jobs under the same capsule_id whether the run started from
+  // the manual path or the general reindex/repair path, so a duplicate refresh would race the
+  // in-flight one and corrupt the fingerprint baseline (last-writer-wins, no version check).
+  if (latestRunningJobId(ctx.env.store, request.capsuleId as KnowledgeCapsuleId) !== undefined) {
+    ctx.env.close();
+    return { ok: false, reason: "job-already-running" };
+  }
   const run = overrides.run;
   const job = startJob(
     "refresh",
