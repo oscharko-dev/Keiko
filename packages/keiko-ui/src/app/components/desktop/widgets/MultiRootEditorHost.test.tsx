@@ -275,3 +275,78 @@ describe("MultiRootEditorHost", () => {
     expect(cfgPatch["revealRequestId"]).toBeUndefined();
   });
 });
+
+// Issue #2768 — `role="tablist"`/`role="tab"` is a contract: arrow-key traversal, ONE tab stop, and
+// a tab that names the panel it governs. Declaring the roles without them announced the switcher as
+// a tablist while it behaved like a plain button row.
+describe("MultiRootEditorHost tablist keyboard contract (#2768)", () => {
+  it("keeps exactly one tab stop and moves it with the arrow keys", async () => {
+    const user = userEvent.setup();
+    render(<Harness current={manifest()} />);
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(2);
+    // A roving tab stop is what keeps Tab from walking through every root before reaching the
+    // editor; without it each tab was its own stop.
+    expect(tabs.filter((tab) => tab.getAttribute("tabindex") === "0")).toHaveLength(1);
+    expect(screen.getByRole("tab", { name: /Repo A/u })).toHaveAttribute("tabindex", "0");
+
+    await user.tab();
+    await user.tab();
+    expect(screen.getByRole("tab", { name: /Repo A/u })).toHaveFocus();
+
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: /Repo B/u })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: /Repo B/u })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tab", { name: /Repo A/u })).toHaveAttribute("tabindex", "-1");
+
+    // Wrap-around, and Home/End, are part of the same contract.
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: /Repo A/u })).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: /Repo B/u })).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("tab", { name: /Repo A/u })).toHaveFocus();
+  });
+
+  it("moves focus without selecting, so arrowing does not fire a focusRoot per key press", async () => {
+    const user = userEvent.setup();
+    const current = manifest();
+    const view = workspace(current);
+    render(
+      <I18nProvider>
+        <MultiRootEditorHost
+          manifest={current}
+          workspace={view}
+          configuredRoot="/repo-a"
+          cfg={{ root: "/repo-a" }}
+          buildBaseProps={() => ({ windowId: "editor-window" })}
+          updateCfg={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    await user.tab();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: /Repo B/u })).toHaveFocus();
+    // Manual activation (WAI-ARIA APG): selecting a root is a server round trip, so it must not
+    // happen once per arrow key. Repo A is still the selected tab until Enter commits the move.
+    expect(view.focusRoot).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: /Repo B/u })).toHaveAttribute("aria-selected", "false");
+
+    await user.keyboard("{Enter}");
+    expect(view.focusRoot).toHaveBeenCalledWith("root-b");
+  });
+
+  it("names the panel each tab governs so the relationship is discoverable", () => {
+    render(<Harness current={manifest()} />);
+
+    const tab = screen.getByRole("tab", { name: /Repo A/u });
+    // `hidden` panels are excluded from the a11y tree, so only the selected root's panel is exposed
+    // — which is exactly the one a screen reader follows the tab into.
+    const panel = screen.getByRole("tabpanel");
+
+    expect(tab).toHaveAttribute("aria-controls", panel.id);
+    expect(panel).toHaveAttribute("aria-labelledby", tab.id);
+  });
+});
