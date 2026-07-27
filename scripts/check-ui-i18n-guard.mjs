@@ -299,8 +299,12 @@ export function isUiProductionSource(file) {
   return UI_SOURCE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
+// The indentation class is HORIZONTAL whitespace, not `\s`: under `m`, `^` already anchors at every
+// line start, so a `\s*` that can also consume newlines lets one match begin many lines above its
+// quote — overlapping start positions the engine has to backtrack through, which is the super-linear
+// shape SonarJS flags. `[ \t]*` matches the same real catalog lines with no ambiguity.
 export function extractCatalogKeys(source) {
-  return new Set(Array.from(source.matchAll(/^\s*"([^"]+)":/gm), (match) => match[1]));
+  return new Set(Array.from(source.matchAll(/^[ \t]*"([^"]+)":/gm), (match) => match[1]));
 }
 
 function readText(repoRoot, file) {
@@ -565,7 +569,6 @@ function pushEventFallbackRanges(ranges, eventName, baseRef) {
   if (eventName === "push" && !baseRef) {
     pushRange(ranges, "origin/dev...HEAD");
     pushRange(ranges, "HEAD^1..HEAD");
-    return;
   }
 }
 
