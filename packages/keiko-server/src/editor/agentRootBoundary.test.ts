@@ -670,6 +670,51 @@ describe("editor agent root boundary", () => {
     });
   });
 
+  it("rejects a session when the private filesystem object binding changed", () => {
+    const guardedStore: UiStore = {
+      ...store,
+      findWorkspaceManifestRecordByProject: (projectPath) => {
+        const row = store.findWorkspaceManifestRecordByProject(projectPath);
+        if (row === undefined) return undefined;
+        return {
+          ...row,
+          rootProjects: row.rootProjects.map((root) => ({
+            ...root,
+            objectIdentityDigest: "f".repeat(64),
+          })),
+        };
+      },
+    };
+
+    expect(
+      resolveEditorAgentSessionRoot(
+        snapshot(rootA, binding(0), "session-object-replaced"),
+        guardedStore,
+      ),
+    ).toEqual({ ok: false, reason: "root-binding-invalid" });
+  });
+
+  it("fails closed on a missing manifest row when a store is available", () => {
+    const legacy = snapshot(rootA, undefined, "session-missing-manifest");
+    const noManifestStore: UiStore = {
+      ...store,
+      findWorkspaceManifestRecordByProject: () => undefined,
+    };
+
+    expect(resolveEditorAgentSessionRoot(legacy, noManifestStore)).toEqual({
+      ok: false,
+      reason: "root-binding-invalid",
+    });
+    expect(resolveEditorAgentSessionRoot(legacy)).toEqual({
+      ok: true,
+      root: {
+        workspaceRoot: rootA,
+        binding: undefined,
+        explicitBindingRequired: false,
+      },
+    });
+  });
+
   it("omits caller-supplied root attribution for an unknown session", async () => {
     const unknown = snapshot(rootA, binding(0), "session-unknown");
     const response = await handleEditorAgentActions(

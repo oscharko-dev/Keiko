@@ -28,7 +28,7 @@ import {
   type DebugCapsuleLauncherDeps,
   type DebugCapsuleSpawnProcess,
 } from "./dapNodeCapsuleLauncher.js";
-import { workspaceRootIdentityDigestFor } from "../../workspace-root-identity.js";
+import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 
 type ChildProcess = ReturnType<DebugCapsuleSpawnProcess>;
 type SpawnOptions = Parameters<DebugCapsuleSpawnProcess>[2];
@@ -84,6 +84,10 @@ function fixture(): {
   const workspace = join(root, "workspace");
   mkdirSync(workspace, { mode: 0o700 });
   const workspaceStat = lstatSync(workspace);
+  const workspaceIdentity = inspectWorkspaceRootIdentity(workspace);
+  if (workspaceIdentity.objectIdentityDigest === undefined) {
+    throw new Error("fixture filesystem has no object identity");
+  }
   const runtimeStat = lstatSync(runtime);
   const runtimeIdentity = hash([
     runtime,
@@ -138,12 +142,8 @@ function fixture(): {
       // (workspace-root-identity.ts): the framed digest is the shared canonical formula since
       // #2520. Pre-#2643 fixture re-derived the pre-#2520 `hash([...])` and never noticed the
       // producer/verifier drift because macOS skipped the launch path entirely.
-      identityDigest: workspaceRootIdentityDigestFor(workspace, {
-        dev: workspaceStat.dev,
-        ino: workspaceStat.ino,
-        mode: workspaceStat.mode,
-        uid: workspaceStat.uid,
-      }),
+      identityDigest: workspaceIdentity.identityDigest,
+      objectIdentityDigest: workspaceIdentity.objectIdentityDigest,
       device: workspaceStat.dev,
       inode: workspaceStat.ino,
       mode: workspaceStat.mode,
@@ -805,6 +805,7 @@ describe("production debug capsule launcher", () => {
     for (const drift of [
       { realPath: dirname(identity.realPath) },
       { identityDigest: "0".repeat(64) },
+      { objectIdentityDigest: "0".repeat(64) },
       { device: identity.device + 1 },
       { inode: identity.inode + 1 },
       { mode: identity.mode ^ 0o100 },
@@ -840,6 +841,7 @@ describe("production debug capsule launcher", () => {
         workspaceIdentity: Object.freeze({
           realPath: file,
           identityDigest: hash([file, stat.dev, stat.ino, stat.mode, stat.uid]),
+          objectIdentityDigest: "0".repeat(64),
           device: stat.dev,
           inode: stat.ino,
           mode: stat.mode,

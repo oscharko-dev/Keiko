@@ -42,9 +42,34 @@ const ADVERSARIAL_ROWS: readonly EvidenceRow[] = [
     markers: ["rechecks live trust immediately before pool acquisition"],
   },
   {
+    id: "TRUST-BASIS-ABSENT-DURABLE",
+    file: "packages/keiko-server/src/workspace-script-trust.test.ts",
+    markers: ["durably invalidates a known basis that becomes absent and never resurrects it"],
+  },
+  {
+    id: "TRUST-COMMAND-EFFECT-RECHECK",
+    file: "packages/keiko-server/src/workspace-script-trust.test.ts",
+    markers: ["stops a command when the real trust basis drifts after task derivation"],
+  },
+  {
+    id: "TRUST-VERIFICATION-EFFECT-RECHECK",
+    file: "packages/keiko-server/src/workspace-script-trust.test.ts",
+    markers: ["stops verification when the real trust basis drifts after plan derivation"],
+  },
+  {
+    id: "TRUST-PRIVATE-OBJECT-DRIFT",
+    file: "packages/keiko-server/src/workspace-script-trust.test.ts",
+    markers: ["invalidates a grant when only the private filesystem object binding differs"],
+  },
+  {
     id: "RESTRICTED-AGENT-EXECUTION",
     file: "packages/keiko-server/src/editor/agentRootBoundary.test.ts",
     markers: ["denies execution on restricted root B"],
+  },
+  {
+    id: "AGENT-MANIFEST-BINDING-REQUIRED",
+    file: "packages/keiko-server/src/editor/agentRootBoundary.test.ts",
+    markers: ["fails closed on a missing manifest row when a store is available"],
   },
   {
     id: "CROSS-ROOT-PATH-ALIAS",
@@ -68,6 +93,16 @@ const ADVERSARIAL_ROWS: readonly EvidenceRow[] = [
     ],
   },
   {
+    id: "ROOT-OBJECT-IDENTITY-EXACT",
+    file: "packages/keiko-server/src/workspace-root-identity.test.ts",
+    markers: ["keeps bigint identity fields exact beyond Number precision"],
+  },
+  {
+    id: "ROOT-OBJECT-DISPATCH-DRIFT",
+    file: "packages/keiko-server/src/workspace-manifests.test.ts",
+    markers: ["rejects dispatch when the private filesystem object binding changed"],
+  },
+  {
     id: "PROFILE-PATH-SECRET-SMUGGLING",
     file: "packages/keiko-server/src/editor/settings/editorProfilePortability.test.ts",
     markers: ["strips path and secret classes deterministically"],
@@ -78,9 +113,27 @@ const ADVERSARIAL_ROWS: readonly EvidenceRow[] = [
     markers: ["refuses future versions and excessive JSON depth"],
   },
   {
+    id: "SETTINGS-ROOT-REPLACEMENT-RACE",
+    file: "packages/keiko-server/src/editor/settings/editorSettingsControl.test.ts",
+    markers: ["drops pre-await root-bound layers when managed-language loading races replacement"],
+  },
+  {
     id: "HISTORY-PATH-ESCAPE",
     file: "packages/keiko-server/src/editor/localHistory/localHistoryStore.test.ts",
     markers: ["refuses a checkpoint whose resolved file escapes"],
+  },
+  {
+    id: "HISTORY-INDEX-PREPARSE-BOUND",
+    file: "packages/keiko-server/src/editor/localHistory/localHistoryStore.test.ts",
+    markers: [
+      "rejects symlinked and non-regular index files before reading them",
+      "rejects an oversized index from metadata before reading or parsing its bytes",
+    ],
+  },
+  {
+    id: "HISTORY-EFFECT-ROOT-RECHECK",
+    file: "packages/keiko-server/src/editor/localHistory/localHistoryRoutes.test.ts",
+    markers: ["revalidates root identity after containment and before the %s effect"],
   },
   {
     id: "HISTORY-PAYLOAD-TAMPER",
@@ -105,6 +158,23 @@ const ADVERSARIAL_ROWS: readonly EvidenceRow[] = [
     id: "HISTORY-APP-SESSION-BYPASS",
     file: "packages/keiko-server/src/editor/localHistory/localHistoryRoutes.test.ts",
     markers: ["content-free projections before any lookup without an app session"],
+  },
+  {
+    id: "MANIFEST-UNPAIRED-PATH-DISCLOSURE",
+    file: "packages/keiko-server/src/workspace-manifest-routes.test.ts",
+    markers: [
+      "withholds canonical roots from an unpaired caller and serves them to the paired app",
+    ],
+  },
+  {
+    id: "MANIFEST-PAIRING-BOOT-ORDER",
+    file: "packages/keiko-ui/src/lib/coding-app-session-manifest-boot.integration.test.tsx",
+    markers: ["waits for successful pairing when the child read effect runs before the parent"],
+  },
+  {
+    id: "DEBUG-OBJECT-EFFECT-RECHECK",
+    file: "packages/keiko-server/src/editor/dap/dapNodeCapsuleLauncher.test.ts",
+    markers: ["rejects every workspace identity field and hostile filesystem replacement"],
   },
   {
     // The regression evidence bullets "model disposal after root removal" as executed by the
@@ -146,6 +216,26 @@ const MIGRATION_ROWS: readonly EvidenceRow[] = [
     // describes. The named test now runs the whole loop — invalidate, prove the demotion survives
     // a restart, prove restoring the granted bytes does not resurrect it, then re-grant.
     markers: ["keeps an invalidated grant invalid and restores trust only through an explicit"],
+  },
+  {
+    id: "MIGRATION-ROOT-OBJECT-BINDING",
+    file: "packages/keiko-server/src/store/migrations.test.ts",
+    markers: [
+      "v17 backfills private object identity and revokes every legacy trust grant",
+      "v17 prevents two public roots from claiming one filesystem object",
+      "v17 leaves mismatched, unavailable, and ambiguous roots unbound",
+      "v17 rolls back identity backfill when legacy trust revocation fails",
+    ],
+  },
+  {
+    id: "MIGRATION-SETTINGS-OBJECT-BINDING",
+    file: "packages/keiko-server/src/editor/settings/editorSettingsStore.test.ts",
+    markers: ["adopts a valid legacy root binding into the private object identity"],
+  },
+  {
+    id: "MIGRATION-HISTORY-OBJECT-BINDING",
+    file: "packages/keiko-server/src/editor/localHistory/localHistoryStore.test.ts",
+    markers: ["adopts a matching legacy index without resealing its encrypted payloads"],
   },
 ] as const;
 
@@ -217,6 +307,25 @@ describe("editor M11 quality closeout evidence (#2533)", () => {
     expect(docs).toContain("Capability delta against #2088");
     expect(docs).toContain("Linux-authoritative");
     expect(docs).not.toMatch(/unresolved (critical|high)/iu);
+  });
+
+  it("states the real successful-artifact retention boundary", () => {
+    const docs = closeoutDocs();
+    expect(docs).not.toContain("Artifact retention is CI-owned.");
+    expect(docs).toContain("Successful closeout attachments are ephemeral");
+    expect(docs).toContain("not uploaded by the required UI lane");
+  });
+
+  it("preserves the historical delivery nonconformance instead of retroactively greening it", () => {
+    const docs = closeoutDocs();
+    for (const marker of [
+      "PR #2612 exact head",
+      "PR #2765 exact head",
+      "PR #2770 exact head",
+      "native auto-merge receipt",
+    ]) {
+      expect(docs).toContain(marker);
+    }
   });
 
   // The assertions above check that the demo SAYS certain things; none of them can notice that the

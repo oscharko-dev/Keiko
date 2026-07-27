@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { validateWorkspaceManifest, type WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 
 import { cleanupEditorWorkspaces, createEditorWorkspace } from "./support/editorWorkspace.js";
+import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const SETTINGS_WINDOW = '.window[data-window-id="issue-2527-settings"]';
@@ -190,7 +191,6 @@ test.afterEach(() => {
 
 test("two roots resolve independent settings and managed-language composition", async ({
   page,
-  request,
 }) => {
   const rootA = createEditorWorkspace([
     { path: "a.ts", content: "export const a = 1;\n" },
@@ -200,34 +200,41 @@ test("two roots resolve independent settings and managed-language composition", 
     { path: "b.ts", content: "export const b = 2;\n" },
     { path: "package.json", content: '{"name":"settings-root-b","private":true}\n' },
   ]);
-  await registerProject(request, rootA.root, "Settings root A");
-  await registerProject(request, rootB.root, "Settings root B");
-  await addRoot(request, rootA.root, rootB.root);
+  await page.goto(`/${editorM11PairingFragment("2527")}`);
+  await expect.poll(() => page.url()).not.toContain("keiko-app-session");
+  await registerProject(page.request, rootA.root, "Settings root A");
+  await registerProject(page.request, rootB.root, "Settings root B");
+  await addRoot(page.request, rootA.root, rootB.root);
 
-  await mutateSetting(request, rootA.root, "user", "set", 12);
-  await mutateSetting(request, rootA.root, "workspace", "set", 14);
-  expect(fontSize(await mutateSetting(request, rootA.root, "root", "set", 16))).toMatchObject({
+  await mutateSetting(page.request, rootA.root, "user", "set", 12);
+  await mutateSetting(page.request, rootA.root, "workspace", "set", 14);
+  expect(fontSize(await mutateSetting(page.request, rootA.root, "root", "set", 16))).toMatchObject({
     value: 16,
     source: "root",
   });
-  expect(fontSize(await mutateSetting(request, rootB.root, "root", "set", 18))).toMatchObject({
+  expect(fontSize(await mutateSetting(page.request, rootB.root, "root", "set", 18))).toMatchObject({
     value: 18,
     source: "root",
   });
-  expect(fontSize(await mutateSetting(request, rootA.root, "root", "reset"))).toMatchObject({
+  expect(fontSize(await mutateSetting(page.request, rootA.root, "root", "reset"))).toMatchObject({
     value: 14,
     source: "workspace",
   });
-  expect(fontSize(await mutateSetting(request, rootA.root, "workspace", "reset"))).toMatchObject({
+  expect(
+    fontSize(await mutateSetting(page.request, rootA.root, "workspace", "reset")),
+  ).toMatchObject({
     value: 12,
     source: "user",
   });
-  await mutateSetting(request, rootA.root, "workspace", "set", 14);
-  await mutateSetting(request, rootA.root, "root", "set", 16);
+  await mutateSetting(page.request, rootA.root, "workspace", "set", 14);
+  await mutateSetting(page.request, rootA.root, "root", "set", 16);
 
-  await grantTrust(request, rootA.root);
-  await activatePython(request, rootA.root);
-  const [a, b] = await Promise.all([settings(request, rootA.root), settings(request, rootB.root)]);
+  await grantTrust(page.request, rootA.root);
+  await activatePython(page.request, rootA.root);
+  const [a, b] = await Promise.all([
+    settings(page.request, rootA.root),
+    settings(page.request, rootB.root),
+  ]);
   const pythonA = a.managedLanguages?.languages?.find((language) => language.language === "python");
   const pythonB = b.managedLanguages?.languages?.find((language) => language.language === "python");
   expect(pythonA?.reasonCode).not.toBe("WORKSPACE_UNTRUSTED");

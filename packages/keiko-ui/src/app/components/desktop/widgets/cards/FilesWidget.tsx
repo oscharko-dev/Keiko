@@ -327,6 +327,10 @@ function cssEscape(value: string): string {
   return value.replaceAll("\\", String.raw`\\`).replaceAll('"', String.raw`\"`);
 }
 
+function fileTreeItemLabelId(prefix: string, path: string): string {
+  return `${prefix}-file-${encodeURIComponent(path)}`;
+}
+
 // Indent per tree depth. The step equals the caret column (11px caret + 7px row gap), so a
 // child level nests exactly one caret width and file rows (which render an invisible caret
 // placeholder) align with sibling folders (audit C143/C216).
@@ -346,7 +350,7 @@ const TREE_NAV_KEYS = new Set(["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft"
 // Arrow-key traversal for the file tree (APG tree pattern subset, audit C215). Directory rows use
 // a separate caret button for expansion, so Right/Left dispatch to that caret while Enter/Space on
 // the row enters the folder.
-function focusParentRow(rows: readonly HTMLButtonElement[], index: number): void {
+function focusParentRow(rows: readonly HTMLElement[], index: number): void {
   const level = Number(rows[index]?.getAttribute("aria-level") ?? "1");
   for (let i = index - 1; i >= 0; i -= 1) {
     if (Number(rows[i]?.getAttribute("aria-level") ?? "1") < level) {
@@ -356,7 +360,7 @@ function focusParentRow(rows: readonly HTMLButtonElement[], index: number): void
   }
 }
 
-function handleTreeNavKey(rows: readonly HTMLButtonElement[], index: number, key: string): void {
+function handleTreeNavKey(rows: readonly HTMLElement[], index: number, key: string): void {
   const row = rows[index];
   if (row === undefined) return;
   const toggle = row
@@ -549,8 +553,9 @@ function handleTreeMutationKey(
 ): boolean {
   if (!options.enabled || (event.key !== "F2" && event.key !== "Delete")) return false;
   const focusedRow =
-    event.target instanceof HTMLElement
-      ? event.target.closest<HTMLButtonElement>("button.tr-row[data-readable='true']")
+    event.target instanceof HTMLElement &&
+    event.target.matches("[role='treeitem'].tr-row[data-readable='true']")
+      ? event.target
       : null;
   const path = focusedRow?.dataset.path;
   const entry = path === undefined ? null : options.findEntry(path);
@@ -618,6 +623,7 @@ export function FilesWidget({
   // Shared ARIA description for unreadable symlink rows (audit C196): the rows stay focusable
   // via aria-disabled, and this single hidden span explains WHY they cannot be opened.
   const unreadableReasonId = useId();
+  const fileTreeItemLabelPrefix = useId();
   const [gitStatusState, setGitStatusState] = useState<GitStatusState>({
     loading: false,
     status: null,
@@ -663,7 +669,7 @@ export function FilesWidget({
   }, [clearTreeTooltipTimer]);
 
   const scheduleTreeTooltip = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>, text: string): void => {
+    (event: ReactPointerEvent<HTMLElement>, text: string): void => {
       clearTreeTooltipTimer();
       setTreeTooltip(null);
       const name = event.currentTarget.querySelector<HTMLElement>(".tr-name");
@@ -687,7 +693,7 @@ export function FilesWidget({
   // every windowed row). Instead, move the tooltip imperatively: write the portal element's
   // left/top directly and only keep text/visibility in React state. No commit per move.
   const treeTooltipElRef = useRef<HTMLDivElement | null>(null);
-  const moveTreeTooltip = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+  const moveTreeTooltip = useCallback((event: ReactPointerEvent<HTMLElement>): void => {
     treeTooltipPointerRef.current = { x: event.clientX, y: event.clientY };
     const el = treeTooltipElRef.current;
     if (el === null) return;
@@ -701,7 +707,7 @@ export function FilesWidget({
     const path = restoreFocusPathRef.current;
     if (path === null) return;
     restoreFocusPathRef.current = null;
-    const row = filesRef.current?.querySelector<HTMLButtonElement>(
+    const row = filesRef.current?.querySelector<HTMLElement>(
       `.tr-file[data-path="${cssEscape(path)}"]`,
     );
     (row ?? filesRef.current)?.focus({ preventScroll: true });
@@ -1104,7 +1110,7 @@ export function FilesWidget({
       // Remember the row the menu opened on so focus returns there on close (GEN-UI-KEYBOARD-003).
       const opener =
         event.currentTarget instanceof HTMLElement
-          ? event.currentTarget.closest<HTMLElement>("button.tr-row")
+          ? event.currentTarget.closest<HTMLElement>("[role='treeitem'].tr-row")
           : null;
       menuReturnFocusRef.current =
         opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -1245,7 +1251,7 @@ export function FilesWidget({
   );
 
   // Arrow-key navigation across the currently visible rows (audit C215). Scope-connect pills
-  // are intentionally NOT part of the arrow order — only `.tr-row` buttons are traversed.
+  // are intentionally NOT part of the arrow order — only `.tr-row` treeitems are traversed.
   const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     // F2 renames and Delete removes the focused readable row (VS Code parity), reusing the same
     // inline-edit / confirm flows as the context menu.
@@ -1263,10 +1269,10 @@ export function FilesWidget({
     if (!TREE_NAV_KEYS.has(event.key)) return;
     const target = event.target;
     const row =
-      target instanceof HTMLElement ? target.closest<HTMLButtonElement>("button.tr-row") : null;
+      target instanceof HTMLElement && target.matches("[role='treeitem'].tr-row") ? target : null;
     if (row === null) return;
     const rows = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>("button.tr-row"),
+      event.currentTarget.querySelectorAll<HTMLElement>("[role='treeitem'].tr-row"),
     );
     const index = rows.indexOf(row);
     if (index < 0) return;
@@ -1506,70 +1512,97 @@ export function FilesWidget({
     const change = gitChangeByPath.get(entry.path);
     const ignored = ignoredGitPaths.has(entry.path);
     const decoration = change === undefined ? null : gitChangeDecoration(change);
+    const labelIdBase = fileTreeItemLabelId(fileTreeItemLabelPrefix, entry.path);
+    const nameId = `${labelIdBase}-name`;
+    const symlinkId = `${labelIdBase}-symlink`;
+    const gitBadgeId = `${labelIdBase}-git`;
+    const metaId = `${labelIdBase}-meta`;
+    const labelledBy = [
+      nameId,
+      ...(entry.symlink ? [symlinkId] : []),
+      ...(decoration === null ? [] : [gitBadgeId]),
+      metaId,
+    ].join(" ");
     return (
       <div
-        className="tr-row-wrap tr-file-wrap"
+        className="tr-row tr-file"
         key={entry.path}
+        role="treeitem"
+        aria-level={depth + 1}
+        aria-selected={activeTreePath === entry.path}
+        aria-label={ignored ? `${entry.name}, ${tGit("git.ignored")}` : undefined}
+        aria-labelledby={ignored ? undefined : labelledBy}
+        aria-disabled={entry.readable ? undefined : true}
+        aria-describedby={entry.readable ? undefined : unreadableReasonId}
+        tabIndex={0}
+        data-active={activeTreePath === entry.path}
+        data-readable={entry.readable}
+        data-path={entry.path}
         data-git-ignored={ignored || undefined}
-        style={ignored ? { opacity: 0.55 } : undefined}
+        draggable={mutationsEnabled && entry.readable}
+        onContextMenu={(event) => openContextMenu(event, entry)}
+        onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
+        onPointerMove={moveTreeTooltip}
+        onPointerLeave={hideTreeTooltip}
+        onBlur={hideTreeTooltip}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", entry.path);
+          setDraggedPath(entry.path);
+        }}
+        onDragEnd={() => setDraggedPath(null)}
+        onClick={() => openFileEntry(entry)}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          openFileEntry(entry);
+        }}
+        style={
+          ignored
+            ? { opacity: 0.55, paddingLeft: treeIndent(depth) }
+            : { paddingLeft: treeIndent(depth) }
+        }
       >
-        <button
-          className="tr-row tr-file"
-          onContextMenu={(event) => openContextMenu(event, entry)}
-          role="treeitem"
-          aria-level={depth + 1}
-          aria-selected={activeTreePath === entry.path}
-          aria-label={ignored ? `${entry.name}, ${tGit("git.ignored")}` : undefined}
-          data-active={activeTreePath === entry.path}
-          data-readable={entry.readable}
-          data-path={entry.path}
-          style={{ paddingLeft: treeIndent(depth) }}
-          type="button"
-          draggable={mutationsEnabled && entry.readable}
-          aria-disabled={entry.readable ? undefined : true}
-          aria-describedby={entry.readable ? undefined : unreadableReasonId}
-          onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
-          onPointerMove={moveTreeTooltip}
-          onPointerLeave={hideTreeTooltip}
-          onBlur={hideTreeTooltip}
-          onDragStart={(event) => {
-            event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData("text/plain", entry.path);
-            setDraggedPath(entry.path);
-          }}
-          onDragEnd={() => setDraggedPath(null)}
-          onClick={() => openFileEntry(entry)}
-        >
-          <span className="tr-caret tr-caret-ghost" aria-hidden="true">
-            <ChevronRIcon size={11} />
+        <span className="tr-caret tr-caret-ghost" aria-hidden="true">
+          <ChevronRIcon size={11} />
+        </span>
+        <FileIcon name={entry.name} />
+        <span className="tr-name" id={nameId}>
+          {entry.name}
+        </span>
+        {entry.symlink ? (
+          <span className="tr-badge" id={symlinkId}>
+            {t("filesWidget.tree.symlinkBadge")}
           </span>
-          <FileIcon name={entry.name} />
-          <span className="tr-name">{entry.name}</span>
-          {entry.symlink ? (
-            <span className="tr-badge">{t("filesWidget.tree.symlinkBadge")}</span>
-          ) : null}
-          {decoration !== null ? (
-            <span
-              className="tr-badge tr-git"
-              data-git-state={decoration.state}
-              aria-label={tGit(decoration.labelKey, { path: entry.path })}
-              title={tGit(decoration.labelKey, { path: entry.path })}
-              style={
-                decoration.state === "conflicted"
-                  ? { outline: "1px solid currentColor", fontWeight: 700 }
-                  : undefined
-              }
-            >
-              {decoration.badge}
-            </span>
-          ) : null}
-          <span className="tr-meta mono">{formatBytes(entry.sizeBytes)}</span>
-        </button>
+        ) : null}
+        {decoration !== null ? (
+          <span
+            className="tr-badge tr-git"
+            id={gitBadgeId}
+            data-git-state={decoration.state}
+            aria-label={tGit(decoration.labelKey, { path: entry.path })}
+            title={tGit(decoration.labelKey, { path: entry.path })}
+            style={
+              decoration.state === "conflicted"
+                ? { outline: "1px solid currentColor", fontWeight: 700 }
+                : undefined
+            }
+          >
+            {decoration.badge}
+          </span>
+        ) : null}
+        <span className="tr-meta mono" id={metaId}>
+          {formatBytes(entry.sizeBytes)}
+        </span>
         {change !== undefined && entry.readable ? (
           <button
             className="tr-git-diff"
             type="button"
-            onClick={() => openDiff(entry.path)}
+            onClick={(event) => {
+              event.stopPropagation();
+              openDiff(entry.path);
+            }}
             aria-label={t("filesWidget.tree.viewGitDiff", { path: entry.path })}
           >
             <DiffIcon size={13} />

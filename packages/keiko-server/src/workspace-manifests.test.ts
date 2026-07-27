@@ -438,4 +438,28 @@ describe("WorkspaceManifestService", () => {
       ),
     ).toBe("WORKSPACE_DISPATCH_INVALID");
   });
+
+  it("rejects dispatch when the private filesystem object binding changed", () => {
+    const manifest = alphaWorkspace();
+    const guardedStore: UiStore = {
+      ...store,
+      readWorkspaceManifestRecord: (workspaceId) => {
+        const row = store.readWorkspaceManifestRecord(workspaceId);
+        if (row === undefined) return undefined;
+        return {
+          ...row,
+          rootProjects: row.rootProjects.map((root) => ({
+            ...root,
+            objectIdentityDigest: "f".repeat(64),
+          })),
+        };
+      },
+    };
+
+    expect(
+      errorCode(() =>
+        new WorkspaceManifestService(guardedStore).resolveDispatch(dispatch(manifest, 0)),
+      ),
+    ).toBe("WORKSPACE_ROOT_IDENTITY_CHANGED");
+  });
 });

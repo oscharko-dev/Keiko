@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import { createSingleRootWorkspaceManifest } from "../workspace-manifest-identity.js";
+import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
 import { projectExists } from "./errors.js";
 import type {
   WorkspaceManifestMutationInput,
@@ -41,11 +42,11 @@ const SQL_FIND_BY_PROJECT = `${SQL_SELECT.trim()} WHERE workspace_id = (
   SELECT workspace_id FROM workspace_manifest_roots WHERE project_path = ?
 )`;
 const SQL_ROOT_IDENTITIES = `
-SELECT root_ref, identity_digest FROM workspace_manifest_roots
+SELECT root_ref, identity_digest, object_identity_digest FROM workspace_manifest_roots
 WHERE workspace_id = ?
 `;
 const SQL_ROOT_PROJECTS = `
-SELECT root_ref, project_path FROM workspace_manifest_roots
+SELECT root_ref, project_path, object_identity_digest FROM workspace_manifest_roots
 WHERE workspace_id = ? ORDER BY position
 `;
 const SQL_INSERT_MANIFEST = `
@@ -56,8 +57,9 @@ INSERT INTO workspace_manifests (
 `;
 const SQL_INSERT_ROOT = `
 INSERT INTO workspace_manifest_roots (
-  workspace_id, root_ref, position, project_path, canonical_root, identity_digest
-) VALUES (?, ?, ?, ?, ?, ?)
+  workspace_id, root_ref, position, project_path, canonical_root, identity_digest,
+  object_identity_digest
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 `;
 
 const MAX_WORKSPACE_IDENTITY_ATTEMPTS = 8;
@@ -69,16 +71,38 @@ function rootProjects(
   const rows = db.prepare(SQL_ROOT_PROJECTS).all(workspaceId) as unknown as readonly {
     readonly root_ref: string;
     readonly project_path: string;
+    readonly object_identity_digest: string | null;
   }[];
-  return rows.map((row) => ({ rootRef: row.root_ref, projectPath: row.project_path }));
+  return rows.map((row) => ({
+    rootRef: row.root_ref,
+    projectPath: row.project_path,
+    objectIdentityDigest: row.object_identity_digest,
+  }));
 }
 
-function rootIdentities(db: DatabaseSync, workspaceId: string): ReadonlyMap<string, string> {
+interface StoredRootIdentity {
+  readonly identityDigest: string;
+  readonly objectIdentityDigest: string | null;
+}
+
+function rootIdentities(
+  db: DatabaseSync,
+  workspaceId: string,
+): ReadonlyMap<string, StoredRootIdentity> {
   const rows = db.prepare(SQL_ROOT_IDENTITIES).all(workspaceId) as unknown as readonly {
     readonly root_ref: string;
     readonly identity_digest: string;
+    readonly object_identity_digest: string | null;
   }[];
-  return new Map(rows.map((row) => [row.root_ref, row.identity_digest]));
+  return new Map(
+    rows.map((row) => [
+      row.root_ref,
+      {
+        identityDigest: row.identity_digest,
+        objectIdentityDigest: row.object_identity_digest,
+      },
+    ]),
+  );
 }
 
 /**
@@ -89,18 +113,20 @@ function rootIdentities(db: DatabaseSync, workspaceId: string): ReadonlyMap<stri
  * plain focus click, which made persisted trust (#2521) unobservable in practice.
  */
 function invalidatedRootRefs(
-  previous: ReadonlyMap<string, string>,
-  next: readonly { readonly rootRef: string; readonly identityDigest: string }[],
+  previous: ReadonlyMap<string, StoredRootIdentity>,
+  next: ReadonlyMap<string, StoredRootIdentity>,
 ): ReadonlySet<string> {
   const invalidated = new Set<string>();
-  const nextRefs = new Set(next.map((root) => root.rootRef));
   for (const rootRef of previous.keys()) {
-    if (!nextRefs.has(rootRef)) invalidated.add(rootRef);
+    if (!next.has(rootRef)) invalidated.add(rootRef);
   }
-  for (const root of next) {
-    const previousIdentity = previous.get(root.rootRef);
-    if (previousIdentity === undefined || previousIdentity !== root.identityDigest) {
-      invalidated.add(root.rootRef);
+  for (const [rootRef, nextIdentity] of next) {
+    const previousIdentity = previous.get(rootRef);
+    if (
+      previousIdentity?.identityDigest !== nextIdentity.identityDigest ||
+      previousIdentity.objectIdentityDigest !== nextIdentity.objectIdentityDigest
+    ) {
+      invalidated.add(rootRef);
     }
   }
   return invalidated;
@@ -165,6 +191,10 @@ function insertRootRows(
   manifest.roots.forEach((root, position) => {
     const projectPath = projects.get(root.rootRef);
     if (projectPath === undefined) throw new Error("WORKSPACE_ROOT_PROJECT_MISSING");
+    const inspected = inspectWorkspaceRootIdentity(root.canonicalRoot);
+    if (inspected.rootRef !== root.rootRef || inspected.identityDigest !== root.identityDigest) {
+      throw new Error("WORKSPACE_ROOT_IDENTITY_CHANGED");
+    }
     insert.run(
       manifest.workspaceId,
       root.rootRef,
@@ -172,8 +202,50 @@ function insertRootRows(
       projectPath,
       root.canonicalRoot,
       root.identityDigest,
+      inspected.objectIdentityDigest ?? null,
     );
   });
+}
+
+interface LegacyRootIdentityRow {
+  readonly root_ref: string;
+  readonly canonical_root: string;
+  readonly identity_digest: string;
+}
+
+function liveObjectIdentity(row: LegacyRootIdentityRow): string | undefined {
+  try {
+    const live = inspectWorkspaceRootIdentity(row.canonical_root);
+    if (live.rootRef !== row.root_ref || live.identityDigest !== row.identity_digest) {
+      return undefined;
+    }
+    return live.objectIdentityDigest;
+  } catch {
+    return undefined;
+  }
+}
+
+export function migrateWorkspaceRootObjectIdentities(db: DatabaseSync): void {
+  const rows = db
+    .prepare("SELECT root_ref, canonical_root, identity_digest FROM workspace_manifest_roots")
+    .all() as unknown as readonly LegacyRootIdentityRow[];
+  const candidates = rows
+    .map((row) => ({ row, digest: liveObjectIdentity(row) }))
+    .filter(
+      (candidate): candidate is { readonly row: LegacyRootIdentityRow; readonly digest: string } =>
+        candidate.digest !== undefined,
+    );
+  const counts = new Map<string, number>();
+  for (const candidate of candidates) {
+    counts.set(candidate.digest, (counts.get(candidate.digest) ?? 0) + 1);
+  }
+  const update = db.prepare(
+    "UPDATE workspace_manifest_roots SET object_identity_digest = ? WHERE root_ref = ?",
+  );
+  for (const candidate of candidates) {
+    if (counts.get(candidate.digest) === 1) update.run(candidate.digest, candidate.row.root_ref);
+  }
+  db.prepare("DELETE FROM workspace_trust_records").run();
 }
 
 function insertManifest(
@@ -258,7 +330,10 @@ export function migrateLegacyProjectManifests(db: DatabaseSync): void {
       continue;
     }
   }
-  if (listWorkspaceManifestRecords(db).length > 0) {
+  const count = db.prepare("SELECT COUNT(*) AS count FROM workspace_manifests").get() as {
+    readonly count?: number;
+  };
+  if ((count.count ?? 0) > 0) {
     db.prepare("DELETE FROM workspace_trust_records").run();
   }
 }
@@ -365,8 +440,11 @@ export function replaceWorkspaceManifest(
       db.prepare("DELETE FROM workspace_manifests WHERE workspace_id = ?").run(workspaceId);
     }
     updateTargetManifest(db, input, now);
+    // `insertRootRows` already performed the fail-closed live inspection. Compare the identities
+    // that transaction actually persisted instead of probing the filesystem a second time.
+    const nextIdentities = rootIdentities(db, input.manifest.workspaceId);
     const removeTrust = db.prepare("DELETE FROM workspace_trust_records WHERE root_ref = ?");
-    for (const rootRef of invalidatedRootRefs(previousIdentities, input.manifest.roots)) {
+    for (const rootRef of invalidatedRootRefs(previousIdentities, nextIdentities)) {
       removeTrust.run(rootRef);
     }
     // After the trust rows are gone, so a restored workspace can never carry a grant forward.

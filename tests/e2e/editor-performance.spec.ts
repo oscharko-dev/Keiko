@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Response } from "@playwright/test";
+import { expect, test, type CDPSession, type Page, type Response } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -478,7 +478,7 @@ async function openTreePath(
   filesWindow: ReturnType<Page["getByRole"]>,
   path: string,
 ): Promise<void> {
-  const row = filesWindow.locator(`button.tr-row[data-path="${path}"]`);
+  const row = filesWindow.locator(`[role="treeitem"].tr-row[data-path="${path}"]`);
   await expect(row).toBeVisible();
   await row.click();
 }
@@ -1226,6 +1226,11 @@ async function measureIdleDebugTyping(
 }
 
 /** B11: per-cycle baseline (no editor) -> peak (editor open) -> residual (editor closed) heap. */
+async function collectedHeapBytes(client: CDPSession): Promise<number> {
+  await client.send("HeapProfiler.collectGarbage");
+  return (await client.send("Runtime.getHeapUsage")).usedSize;
+}
+
 async function measureMemory(page: Page, cycles: number): Promise<MemoryMetrics> {
   const supported = await page.evaluate(
     () => typeof (performance as unknown as { memory?: unknown }).memory !== "undefined",
@@ -1239,24 +1244,23 @@ async function measureMemory(page: Page, cycles: number): Promise<MemoryMetrics>
       cycles: 0,
     };
   }
-  const readHeap = async (): Promise<number> =>
-    page.evaluate(
-      () =>
-        (performance as unknown as { memory: { usedJSHeapSize: number } }).memory.usedJSHeapSize,
-    );
+  const client = await page.context().newCDPSession(page);
   let baseline = 0;
   let peak = 0;
   let residual = 0;
-  for (let cycle = 0; cycle < cycles; cycle += 1) {
-    await page.goto("/");
-    await expect(page.getByRole("region", { name: /^Files/u })).toBeVisible();
-    baseline = Math.max(baseline, await readHeap());
-    const card = await openEditorCard(page);
-    peak = Math.max(peak, await readHeap());
-    await card.getByRole("button", { name: "Close Editor window" }).click();
-    await expect(card).toBeHidden();
-    await page.waitForTimeout(400);
-    residual = Math.max(residual, await readHeap());
+  try {
+    for (let cycle = 0; cycle < cycles; cycle += 1) {
+      await page.goto("/");
+      await expect(page.getByRole("region", { name: /^Files/u })).toBeVisible();
+      baseline = Math.max(baseline, await collectedHeapBytes(client));
+      const card = await openEditorCard(page);
+      peak = Math.max(peak, await collectedHeapBytes(client));
+      await card.getByRole("button", { name: "Close Editor window" }).click();
+      await expect(card).toBeHidden();
+      residual = Math.max(residual, await collectedHeapBytes(client));
+    }
+  } finally {
+    await client.detach();
   }
   return {
     supported: true,

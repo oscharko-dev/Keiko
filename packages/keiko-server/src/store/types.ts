@@ -218,6 +218,8 @@ export interface WorkspaceManifestMutationInput {
 export interface WorkspaceManifestRootProject {
   readonly rootRef: string;
   readonly projectPath: string;
+  /** Server-private, path-free filesystem object identity. Missing/NULL denies durable authority. */
+  readonly objectIdentityDigest?: string | null;
 }
 
 export interface UpdateChatOptions {

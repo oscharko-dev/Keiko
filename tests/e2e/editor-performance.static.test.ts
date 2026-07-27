@@ -13,4 +13,10 @@ describe("editor performance worker capture", () => {
     expect(source).toContain("if (D12_COMPARISON) return;");
     expect(source).not.toContain("EDITOR_PERF_WORKER_CAPTURE_TIMEOUT");
   });
+
+  it("settles B11 heap measurements through the browser instead of a fixed delay", () => {
+    expect(source).toContain('client.send("HeapProfiler.collectGarbage")');
+    expect(source).toContain('client.send("Runtime.getHeapUsage")');
+    expect(source).not.toContain("page.waitForTimeout(");
+  });
 });

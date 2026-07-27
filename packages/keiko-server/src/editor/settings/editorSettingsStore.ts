@@ -79,6 +79,8 @@ export interface EditorSettingsWorkspaceRecord extends EditorSettingsRecordBase 
    * the same path" threat the root record already refuses.
    */
   readonly rootIdentityDigest: string;
+  /** Server-private exact filesystem-object binding; never projected through editor contracts. */
+  readonly rootObjectIdentityDigest: string;
 }
 
 export interface EditorSettingsRootRecord extends EditorSettingsRecordBase {
@@ -92,6 +94,8 @@ export interface EditorSettingsRootRecord extends EditorSettingsRecordBase {
    * self-invalidating, so a missed invalidation signal still fails closed.
    */
   readonly rootIdentityDigest: string;
+  /** Server-private exact filesystem-object binding; never projected through editor contracts. */
+  readonly rootObjectIdentityDigest: string;
 }
 
 interface EditorSettingsLoadResult<T extends EditorSettingsRecordBase> {
@@ -218,11 +222,13 @@ export function emptyEditorSettingsUserRecord(): EditorSettingsUserRecord {
 export function emptyEditorSettingsWorkspaceRecord(
   realRoot: string,
 ): EditorSettingsWorkspaceRecord {
+  const identity = editorSettingsRootIdentity(realRoot);
   return {
     kind: "workspace",
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     workspaceFingerprint: editorSettingsWorkspaceFingerprint(realRoot),
-    rootIdentityDigest: editorSettingsRootIdentityDigest(realRoot) ?? "",
+    rootIdentityDigest: identity?.identityDigest ?? "",
+    rootObjectIdentityDigest: identity?.objectIdentityDigest ?? "",
     revision: 0,
     values: {},
     idempotency: [],
@@ -235,20 +241,38 @@ export function emptyEditorSettingsWorkspaceRecord(
  * path that is no longer a directory, or a symlink alias. `undefined` never equals a stored digest,
  * so an unreadable root fails closed: its record neither applies nor accepts a write.
  */
-function editorSettingsRootIdentityDigest(realRoot: string): string | undefined {
+function editorSettingsRootIdentity(
+  realRoot: string,
+): ReturnType<typeof inspectWorkspaceRootIdentity> | undefined {
   try {
-    return inspectWorkspaceRootIdentity(realRoot).identityDigest;
+    return inspectWorkspaceRootIdentity(realRoot);
   } catch {
     return undefined;
   }
 }
 
+function recordMatchesLiveRoot(
+  realRoot: string,
+  record: Pick<EditorSettingsWorkspaceRecord, "rootIdentityDigest" | "rootObjectIdentityDigest">,
+): boolean {
+  const live = editorSettingsRootIdentity(realRoot);
+  if (live?.objectIdentityDigest === undefined) {
+    return record.rootIdentityDigest === "" && record.rootObjectIdentityDigest === "";
+  }
+  return (
+    record.rootIdentityDigest === live.identityDigest &&
+    record.rootObjectIdentityDigest === live.objectIdentityDigest
+  );
+}
+
 export function emptyEditorSettingsRootRecord(realRoot: string): EditorSettingsRootRecord {
+  const identity = editorSettingsRootIdentity(realRoot);
   return {
     kind: "root",
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     rootFingerprint: editorSettingsWorkspaceFingerprint(realRoot),
-    rootIdentityDigest: editorSettingsRootIdentityDigest(realRoot) ?? "",
+    rootIdentityDigest: identity?.identityDigest ?? "",
+    rootObjectIdentityDigest: identity?.objectIdentityDigest ?? "",
     revision: 0,
     values: {},
     idempotency: [],
@@ -376,10 +400,19 @@ function parseWorkspaceRecord(
   if (!isRecord(value) || !hasOnlyKeys(value, recordKeys("workspace"))) return undefined;
   if (value.kind !== "workspace" || value.workspaceFingerprint !== fingerprint) return undefined;
   const rootIdentityDigest = parsedRootIdentityBinding(value.rootIdentityDigest);
+  const rootObjectIdentityDigest = parsedRootIdentityBinding(value.rootObjectIdentityDigest);
   const base = parseBase(value, "workspace");
-  return base === undefined || rootIdentityDigest === undefined
+  return base === undefined ||
+    rootIdentityDigest === undefined ||
+    rootObjectIdentityDigest === undefined
     ? undefined
-    : { kind: "workspace", workspaceFingerprint: fingerprint, rootIdentityDigest, ...base };
+    : {
+        kind: "workspace",
+        workspaceFingerprint: fingerprint,
+        rootIdentityDigest,
+        rootObjectIdentityDigest,
+        ...base,
+      };
 }
 
 /**
@@ -400,16 +433,29 @@ function parseRootRecord(
   if (!isRecord(value) || !hasOnlyKeys(value, recordKeys("root"))) return undefined;
   if (value.kind !== "root" || value.rootFingerprint !== fingerprint) return undefined;
   const rootIdentityDigest = parsedRootIdentityBinding(value.rootIdentityDigest);
+  const rootObjectIdentityDigest = parsedRootIdentityBinding(value.rootObjectIdentityDigest);
   const base = parseBase(value, "workspace");
-  return base === undefined || rootIdentityDigest === undefined
+  return base === undefined ||
+    rootIdentityDigest === undefined ||
+    rootObjectIdentityDigest === undefined
     ? undefined
-    : { kind: "root", rootFingerprint: fingerprint, rootIdentityDigest, ...base };
+    : {
+        kind: "root",
+        rootFingerprint: fingerprint,
+        rootIdentityDigest,
+        rootObjectIdentityDigest,
+        ...base,
+      };
 }
 
 function recordKeys(kind: "user" | "workspace" | "root"): readonly string[] {
   const keys = ["kind", "schemaVersion", "revision", "values", "idempotency", "events"];
-  if (kind === "workspace") return [...keys, "workspaceFingerprint", "rootIdentityDigest"];
-  return kind === "root" ? [...keys, "rootFingerprint", "rootIdentityDigest"] : keys;
+  if (kind === "workspace") {
+    return [...keys, "workspaceFingerprint", "rootIdentityDigest", "rootObjectIdentityDigest"];
+  }
+  return kind === "root"
+    ? [...keys, "rootFingerprint", "rootIdentityDigest", "rootObjectIdentityDigest"]
+    : keys;
 }
 
 function safeUserRecordPath(path: string): boolean {
@@ -455,6 +501,34 @@ function loadUserRecord(
   }
 }
 
+type RootBoundSettingsRecord = EditorSettingsWorkspaceRecord | EditorSettingsRootRecord;
+
+function reconcileRootBinding<T extends RootBoundSettingsRecord>(
+  record: T,
+  empty: T,
+  realRoot: string,
+  path: string,
+  options: EditorSettingsStoreOptions,
+): EditorSettingsLoadResult<T> {
+  // Readiness requires both public and private live identity. A mismatch is absent rather than
+  // unavailable so the next valid write can replace stale or legacy state instead of permanently
+  // locking every settings scope that shares this root.
+  const live = editorSettingsRootIdentity(realRoot);
+  if (
+    live?.objectIdentityDigest === undefined ||
+    record.rootIdentityDigest !== live.identityDigest
+  ) {
+    return { state: "absent", record: empty };
+  }
+  if (record.rootObjectIdentityDigest === live.objectIdentityDigest) {
+    return { state: "ready", record };
+  }
+  if (record.rootObjectIdentityDigest !== "") return { state: "absent", record: empty };
+  const adopted: T = { ...record, rootObjectIdentityDigest: live.objectIdentityDigest };
+  (options.save ?? savePrivateJson)(path, recordForWrite(adopted));
+  return { state: "ready", record: adopted };
+}
+
 function loadWorkspaceRecord(
   realRoot: string,
   options: EditorSettingsStoreOptions,
@@ -470,13 +544,7 @@ function loadWorkspaceRecord(
     if (raw.kind === "oversized") return { state: "unavailable", record: empty };
     const record = parseWorkspaceRecord(raw.value, empty.workspaceFingerprint);
     if (record === undefined) return { state: "unavailable", record: empty };
-    // Same two-fact rule as the root record below, and the same reason for `absent` rather than
-    // `unavailable`: a record written before this binding existed claims no identity, and must be
-    // supersedable by the next write instead of locking the scope out of every mutation.
-    const live = editorSettingsRootIdentityDigest(realRoot);
-    return live !== undefined && record.rootIdentityDigest === live
-      ? { state: "ready", record }
-      : { state: "absent", record: empty };
+    return reconcileRootBinding(record, empty, realRoot, path, options);
   } catch {
     return { state: "unavailable", record: empty };
   }
@@ -497,19 +565,7 @@ function loadRootRecord(
     if (raw.kind === "oversized") return { state: "unavailable", record: empty };
     const record = parseRootRecord(raw.value, empty.rootFingerprint);
     if (record === undefined) return { state: "unavailable", record: empty };
-    // Ready demands BOTH a readable live identity and an exact match. Comparing against the empty
-    // record's digest alone would let a record claiming no identity read as ready whenever the live
-    // root is unreadable, because both collapse to the same sentinel — "claims no identity" and
-    // "identity cannot be read" are different facts and must not alias.
-    //
-    // Anything else is ABSENT, not unavailable, and the distinction is load-bearing: `unavailable`
-    // rejects every settings mutation carrying this root, user and workspace scope included, with
-    // no way back through the API. `absent` contributes nothing and lets the next write supersede
-    // the stale record with a correctly bound one (#2620, ADR-0147 D9 keeps the two tags distinct).
-    const live = editorSettingsRootIdentityDigest(realRoot);
-    return live !== undefined && record.rootIdentityDigest === live
-      ? { state: "ready", record }
-      : { state: "absent", record: empty };
+    return reconcileRootBinding(record, empty, realRoot, path, options);
   } catch {
     return { state: "unavailable", record: empty };
   }
@@ -529,10 +585,15 @@ function recordForWrite(
       ? {
           workspaceFingerprint: record.workspaceFingerprint,
           rootIdentityDigest: record.rootIdentityDigest,
+          rootObjectIdentityDigest: record.rootObjectIdentityDigest,
         }
       : {}),
     ...(record.kind === "root"
-      ? { rootFingerprint: record.rootFingerprint, rootIdentityDigest: record.rootIdentityDigest }
+      ? {
+          rootFingerprint: record.rootFingerprint,
+          rootIdentityDigest: record.rootIdentityDigest,
+          rootObjectIdentityDigest: record.rootObjectIdentityDigest,
+        }
       : {}),
   };
 }
@@ -557,7 +618,7 @@ export function createEditorSettingsStore(
       }
       // Same refusal as commitRoot: a mutation racing a root replacement must not write the new
       // directory's file carrying the old directory's binding.
-      if (record.rootIdentityDigest !== (editorSettingsRootIdentityDigest(realRoot) ?? "")) {
+      if (!recordMatchesLiveRoot(realRoot, record)) {
         throw new EditorSettingsRootIdentityError();
       }
       if (containsPath(realRoot, options.stateDir)) {
@@ -576,7 +637,7 @@ export function createEditorSettingsStore(
       // Both sides fall back to the same unreadable sentinel, so clearing the record of a root that
       // has left the disk stays possible. That sentinel is inert on load: readiness demands a
       // READABLE live identity, so a record carrying it applies to nothing.
-      if (record.rootIdentityDigest !== (editorSettingsRootIdentityDigest(realRoot) ?? "")) {
+      if (!recordMatchesLiveRoot(realRoot, record)) {
         throw new EditorSettingsRootIdentityError();
       }
       if (containsPath(realRoot, options.stateDir)) {

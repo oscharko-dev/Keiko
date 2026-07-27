@@ -3,6 +3,8 @@
 - Status: Accepted
 - Amends: [ADR-0147](ADR-0147-multi-root-workspaces-trust-profiles-local-history.md) (trust-record
   binding dimensions only; every other ADR-0147 decision stands)
+- Amended by: Issue #2772 (Epic #2285, 2026-07-27), adding the server-private filesystem-object
+  binding while preserving the public V1 root identity.
 - Related: [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md),
   [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md)
 
@@ -41,7 +43,8 @@ The **validity comparison** is narrowed to the dimensions that describe the trus
 | --- | --- | --- |
 | `manifestRef` | yes | The root moving to a different workspace is a different authority context. |
 | `rootRef` | yes | Identifies which root was granted. |
-| `rootIdentityDigest` | yes | A directory replaced under the same reference must invalidate. |
+| public V1 `rootIdentityDigest` | yes | Preserves dispatch/contract compatibility and detects public binding drift. |
+| private object identity digest | yes | Path-free exact `dev`/`ino`/`birthtimeNs` binding detects replacement and aliases. |
 | `trustBasisDigest` | yes | The approved `package.json` bytes changing must invalidate. |
 | `manifestRevision` | **no** | Workspace-level; changes on focus and reorder. |
 | `manifestDigest` | **no** | Workspace-level; changes on focus and reorder. |
@@ -50,12 +53,24 @@ Membership changes keep invalidating, unchanged, through the two mechanisms ADR-
 mandates: removing a root deletes its trust row atomically with the manifest revision, and adding
 or removing a root recomputes every member's effective trust.
 
+The public V1 `rootRef` and `rootIdentityDigest` remain unchanged. They do not become sufficient
+durable authority. The server persists a second, non-public identity: domain-separated,
+length-framed SHA-256 over the filesystem's exact bigint `dev`, `ino`, and positive `birthtimeNs`,
+with no path input. Every trust projection and effect compares that persisted value with a fresh
+inspection. `NULL`, unsupported birth identity, ambiguity, and mismatch all project restricted and
+deny durable authority.
+
+The V17 migration backfills only live roots whose public V1 identity still matches and whose private
+object digest is unique. It leaves every other private binding `NULL` and revokes all pre-V17 trust
+rows once, because those grants predate the new authority fact.
+
 ## Consequences
 
 This widens trust relative to ADR-0147 as written, so the argument has to be that nothing the
 removed dimensions protected is now unprotected. Enumerated:
 
-- **Root directory swapped** — `rootIdentityDigest` changes. Still invalidated.
+- **Root directory swapped or path-aliased** — the private object digest changes or collides. Still
+  invalidated even when the public compatibility identity alone would be insufficient.
 - **Approved `package.json` changed, including changed-then-restored** — `trustBasisDigest` changes
   and a restricted record is persisted at a newer revision, so restoring the old bytes does not
   resurrect the grant. Unchanged from ADR-0147.

@@ -241,6 +241,7 @@ function eventSequence(record: MutableRecord): number {
 
 interface SnapshotRecords {
   readonly realRoot?: string | undefined;
+  readonly identity: RootIdentity | undefined;
   readonly user: {
     readonly state: EditorSettingsStoreState;
     readonly record: EditorSettingsUserRecord;
@@ -327,7 +328,7 @@ function snapshotFromRecords(args: SnapshotRecords): EditorM11SettingsSnapshot {
   const rootRevision = optionalRecordRevision(args.rootLayer.record);
   const userRevision = args.user.record.revision;
   const profileRevision = args.profiles.record.revision;
-  const identity = liveRootIdentity(args.realRoot);
+  const identity = args.identity;
   const settings = effectiveSettings(
     args.user.record,
     args.workspace.record,
@@ -639,6 +640,32 @@ function loadScopedRecords(
   return { workspace: store.loadWorkspace(realRoot), rootLayer: store.loadRoot(realRoot) };
 }
 
+function recordMatchesIdentity(
+  record: EditorSettingsWorkspaceRecord | EditorSettingsRootRecord | undefined,
+  identity: RootIdentity | undefined,
+): boolean {
+  return (
+    record !== undefined &&
+    identity?.objectIdentityDigest !== undefined &&
+    record.rootIdentityDigest === identity.identityDigest &&
+    record.rootObjectIdentityDigest === identity.objectIdentityDigest
+  );
+}
+
+function reconcileScopedRecords(
+  records: Pick<SnapshotRecords, "rootLayer" | "workspace">,
+  identity: RootIdentity | undefined,
+): Pick<SnapshotRecords, "rootLayer" | "workspace"> & { readonly identityStable: boolean } {
+  const workspaceMatches = recordMatchesIdentity(records.workspace.record, identity);
+  const rootMatches = recordMatchesIdentity(records.rootLayer.record, identity);
+  const absent = { state: "absent" as const, record: undefined };
+  return {
+    workspace: workspaceMatches ? records.workspace : absent,
+    rootLayer: rootMatches ? records.rootLayer : absent,
+    identityStable: workspaceMatches && rootMatches,
+  };
+}
+
 async function loadManagedLanguageSnapshot(
   realRoot: string | undefined,
   control: ManagedLspControlService | undefined,
@@ -690,14 +717,22 @@ async function loadSnapshot(
     realRoot,
     options.managedLspControl,
   );
+  // Loading managed-language state is the only asynchronous gap in snapshot assembly. Re-inspect
+  // after it settles and compare BOTH private bindings loaded before the await. A directory that
+  // replaced the prior occupant at the same path inherits neither scoped values nor the unbound LSP
+  // snapshot; user/profile layers remain global and continue to apply. The same final identity is
+  // used for every root projection so old state can never be retagged as the replacement object.
+  const identity = liveRootIdentity(realRoot);
+  const reconciled = reconcileScopedRecords({ workspace, rootLayer }, identity);
   const snapshot = snapshotFromRecords({
     realRoot,
+    identity,
     user,
-    workspace,
-    rootLayer,
+    workspace: reconciled.workspace,
+    rootLayer: reconciled.rootLayer,
     profiles,
     ceiling: options.policyCeiling?.(),
-    managedLanguageSnapshot,
+    managedLanguageSnapshot: reconciled.identityStable ? managedLanguageSnapshot : undefined,
   });
   return addAiAssistanceProjection(
     addDebuggingProjection(snapshot, realRoot, options.debugActivation),

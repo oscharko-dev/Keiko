@@ -131,7 +131,7 @@ function requireDispatchRoot(
   dispatch: WorkspaceRootDispatch,
   manifest: WorkspaceManifest,
 ): WorkspaceRootDescriptor {
-  const root = manifest.roots.find((candidate) => candidate.rootRef === dispatch.rootRef);
+  const root = manifest.roots.find((candidate): boolean => candidate.rootRef === dispatch.rootRef);
   if (root === undefined) {
     throw new WorkspaceManifestError(
       "WORKSPACE_ROOT_NOT_MEMBER",
@@ -141,7 +141,11 @@ function requireDispatchRoot(
   return root;
 }
 
-function revalidateRoot(dispatch: WorkspaceRootDispatch, root: WorkspaceRootDescriptor): void {
+function revalidateRoot(
+  dispatch: WorkspaceRootDispatch,
+  root: WorkspaceRootDescriptor,
+  row: WorkspaceManifestRecordRow,
+): void {
   let inspected: ReturnType<typeof inspectWorkspaceRootIdentity>;
   try {
     inspected = inspectWorkspaceRootIdentity(root.canonicalRoot);
@@ -154,7 +158,11 @@ function revalidateRoot(dispatch: WorkspaceRootDispatch, root: WorkspaceRootDesc
   if (
     inspected.rootRef !== root.rootRef ||
     inspected.identityDigest !== root.identityDigest ||
-    dispatch.rootIdentityDigest !== root.identityDigest
+    dispatch.rootIdentityDigest !== root.identityDigest ||
+    inspected.objectIdentityDigest === undefined ||
+    inspected.objectIdentityDigest !==
+      row.rootProjects.find((candidate): boolean => candidate.rootRef === root.rootRef)
+        ?.objectIdentityDigest
   ) {
     throw new WorkspaceManifestError(
       "WORKSPACE_ROOT_IDENTITY_CHANGED",
@@ -174,14 +182,15 @@ function authorizeDispatch(
     );
   }
   const dispatch = input as WorkspaceRootDispatch;
-  const manifest = parseManifest(requireManifest(store, dispatch.workspaceId));
+  const row = requireManifest(store, dispatch.workspaceId);
+  const manifest = parseManifest(row);
   if (!dispatchMatchesManifest(dispatch, manifest)) {
     throw new WorkspaceManifestError(
       "WORKSPACE_DISPATCH_STALE",
       "Workspace root dispatch is stale.",
     );
   }
-  revalidateRoot(dispatch, requireDispatchRoot(dispatch, manifest));
+  revalidateRoot(dispatch, requireDispatchRoot(dispatch, manifest), row);
   return { dispatch, manifest };
 }
 
