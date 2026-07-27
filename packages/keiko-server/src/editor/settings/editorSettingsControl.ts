@@ -301,13 +301,33 @@ function latestEventSequence(args: SnapshotRecords): number {
   );
 }
 
+/**
+ * The live identity of a root, or `undefined` when it cannot be read — a removed root, a path that
+ * is no longer a directory, a symlink alias. The same fail-closed rule the store already applies:
+ * an unreadable root's record neither applies nor accepts a write.
+ *
+ * Letting `inspectWorkspaceRootIdentity` throw here escaped both `read()` and `mutateLocked()` as
+ * an opaque 500 whenever a root disappeared between resolving the request root and assembling the
+ * snapshot — the untyped sibling of the very condition the commit path already reports as a typed
+ * state. A root that vanishes mid-request is an expected race, not an internal error.
+ */
+function liveRootIdentity(
+  realRoot: string | undefined,
+): ReturnType<typeof inspectWorkspaceRootIdentity> | undefined {
+  if (realRoot === undefined) return undefined;
+  try {
+    return inspectWorkspaceRootIdentity(realRoot);
+  } catch {
+    return undefined;
+  }
+}
+
 function snapshotFromRecords(args: SnapshotRecords): EditorM11SettingsSnapshot {
   const workspaceRevision = optionalRecordRevision(args.workspace.record);
   const rootRevision = optionalRecordRevision(args.rootLayer.record);
   const userRevision = args.user.record.revision;
   const profileRevision = args.profiles.record.revision;
-  const identity =
-    args.realRoot === undefined ? undefined : inspectWorkspaceRootIdentity(args.realRoot);
+  const identity = liveRootIdentity(args.realRoot);
   const settings = effectiveSettings(
     args.user.record,
     args.workspace.record,

@@ -953,6 +953,33 @@ describe("editor settings control service", () => {
     ).toMatchObject({ source: "builtInDefault" });
   });
 
+  it("reports a root that disappears mid-request as state, not as an internal error", async () => {
+    // resolveRequestRoot proves the root exists, then the snapshot re-inspects it. A root removed
+    // between those two points made inspectWorkspaceRootIdentity throw straight out of read() and
+    // mutateLocked(), so an ordinary race answered an opaque 500 — while the commit path already
+    // reports the very same physical event as a typed state.
+    const stateDir = temporaryDirectory("editor-settings-vanished-state");
+    const parent = temporaryDirectory("editor-settings-vanished");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const control = service(stateDir);
+    await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "vanished-before",
+      realRoot: root,
+      scope: "root",
+      values: { fontSize: 18 },
+    });
+
+    rmSync(root, { recursive: true, force: true });
+
+    const snapshot = await control.read(root);
+    expect(snapshot.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
+      source: "builtInDefault",
+    });
+  });
+
   it("keeps every settings scope writable after the root directory is replaced", async () => {
     // The blast radius of getting the store state wrong: `loadMutationState` rejects EVERY mutation
     // carrying a root whose record is unavailable, so tagging a superseded root record as
