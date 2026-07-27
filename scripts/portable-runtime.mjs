@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import {
+  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeTargetKey,
+} from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
 
@@ -148,6 +152,11 @@ function containsCredentialUrl(value) {
   }
   return false;
 }
+
+function matchesAnyPattern(value, patterns) {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
 const PRIVATE_PATH_PATTERN =
   /(?:^|[\s"'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\Users\\|\\\\[^\\]+\\[^\\]+)/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
@@ -162,6 +171,21 @@ const NATIVE_HELPER_KEYS = Object.freeze([
   "architecture",
   "executablePath",
   "protocol",
+  "source",
+  "unsignedSha256",
+  "shippedSha256",
+  "sizeBytes",
+  "sbomBomRef",
+  "signing",
+]);
+const NATIVE_ADDON_KEYS = Object.freeze([
+  "name",
+  "kind",
+  "version",
+  "platformTarget",
+  "architecture",
+  "executablePath",
+  "licensePath",
   "source",
   "unsignedSha256",
   "shippedSha256",
@@ -668,6 +692,76 @@ function validateNativeHelper(manifest, helper, index, names, failures, options)
   );
   const { target } = identity;
   validateNativeHelperSigning(helper, target, path, failures, options);
+}
+
+function validateNativeAddons(manifest, failures, options) {
+  const addons = manifest.nativeAddons;
+  if (addons === undefined) return;
+  if (!Array.isArray(addons) || addons.length !== 1) {
+    push(failures, "nativeAddons", "must contain exactly one addon when present");
+    return;
+  }
+  const addon = addons[0];
+  const path = "nativeAddons[0]";
+  if (!isRecord(addon)) {
+    push(failures, path, "must be an object");
+    return;
+  }
+  const target = portableTargetByName(manifest.artifact?.platformTarget);
+  exactKeysAt(addon, NATIVE_ADDON_KEYS, path, failures);
+  literalAt(addon, "name", "usearch", path, failures);
+  literalAt(addon, "kind", "node-native-addon", path, failures);
+  literalAt(addon, "version", USEARCH_RUNTIME_MANIFEST.version, path, failures);
+  literalAt(addon, "platformTarget", target?.platformTarget, path, failures);
+  literalAt(addon, "architecture", target?.nodeArchitecture, path, failures);
+  literalAt(addon, "executablePath", "runtime/native/usearch.node", path, failures);
+  literalAt(addon, "licensePath", "runtime/licenses/usearch/LICENSE", path, failures);
+  validateNativeAddonSource(addon, target, path, failures, options);
+  digestAt(addon, "unsignedSha256", path, failures, options);
+  digestAt(addon, "shippedSha256", path, failures, options);
+  positiveNumberAt(addon, "sizeBytes", path, failures);
+  literalAt(
+    addon,
+    "sbomBomRef",
+    `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target?.platformTarget ?? ""}`,
+    path,
+    failures,
+  );
+  validateNativeHelperSigning(addon, target, path, failures, options);
+}
+
+function validateNativeAddonSource(addon, target, path, failures, options) {
+  const source = recordAt(addon, "source", path, failures);
+  exactKeysAt(
+    source,
+    ["commitSha", "tarballUrl", "tarballSha256", "binarySha256", "licenseSha256"],
+    `${path}.source`,
+    failures,
+  );
+  literalAt(source, "commitSha", USEARCH_RUNTIME_MANIFEST.sourceCommit, `${path}.source`, failures);
+  literalAt(source, "tarballUrl", USEARCH_RUNTIME_MANIFEST.tarballUrl, `${path}.source`, failures);
+  literalAt(
+    source,
+    "tarballSha256",
+    USEARCH_RUNTIME_MANIFEST.tarballSha256,
+    `${path}.source`,
+    failures,
+  );
+  literalAt(
+    source,
+    "licenseSha256",
+    USEARCH_RUNTIME_MANIFEST.licenseSha256,
+    `${path}.source`,
+    failures,
+  );
+  const targetKey =
+    target === undefined
+      ? undefined
+      : usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
+  const approved =
+    targetKey === undefined ? undefined : USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  literalAt(source, "binarySha256", approved?.binarySha256, `${path}.source`, failures);
+  digestAt(source, "binarySha256", `${path}.source`, failures, options);
 }
 
 function validateNativeHelperIdentity(manifest, helper, path, names, failures) {
@@ -1528,6 +1622,7 @@ function reviewedBindingChecks(manifest) {
     ...securityBindingChecks(manifest),
     ...sidecarBindingChecks(manifest),
     ...nativeHelperBindingChecks(manifest),
+    ...nativeAddonBindingChecks(manifest),
     ...runtimeAttestationBindingChecks(manifest),
     ...runtimeQualificationBindingChecks(manifest),
   ];
@@ -1579,6 +1674,10 @@ function sidecarBindingChecks(manifest) {
 
 function nativeHelperBindingChecks(manifest) {
   return Array.isArray(manifest.nativeHelpers) ? [["nativeHelpers", manifest.nativeHelpers]] : [];
+}
+
+function nativeAddonBindingChecks(manifest) {
+  return Array.isArray(manifest.nativeAddons) ? [["nativeAddons", manifest.nativeAddons]] : [];
 }
 
 function runtimeAttestationBindingChecks(manifest) {
@@ -1769,8 +1868,8 @@ function scanSemanticCredentialProperty(value, path, failures) {
 
 function scanForbiddenString(value, path, failures) {
   if (
-    SECRET_PATTERNS.some((pattern) => pattern.test(value)) ||
-    CREDENTIAL_VALUE_PATTERNS.some((pattern) => pattern.test(value)) ||
+    matchesAnyPattern(value, SECRET_PATTERNS) ||
+    matchesAnyPattern(value, CREDENTIAL_VALUE_PATTERNS) ||
     PRIVATE_PATH_PATTERN.test(value) ||
     containsCredentialUrl(value)
   ) {
@@ -1819,6 +1918,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateRuntimeQualification(manifest, failures, normalized);
   validateSidecarRuntimes(manifest, failures, normalized);
   validateNativeHelpers(manifest, failures, normalized);
+  validateNativeAddons(manifest, failures, normalized);
   validatePackageSurface(manifest, failures);
   validateEntrypoints(manifest, failures);
   validateInstallLayout(manifest, failures);
@@ -1882,9 +1982,27 @@ export function portableVerificationSummaryForManifest(manifest) {
     platformSignatureLocallyVerified: platformSignatureVerified(manifest),
     reasonCodes: security.verificationReasonCodes ?? [],
     nativeHelpers: nativeHelperVerificationSummaries(manifest),
+    nativeAddons: nativeAddonVerificationSummaries(manifest),
     sidecarRuntimes: sidecarVerificationSummaries(manifest),
     verificationChecks: security.verificationChecks ?? {},
   };
+}
+
+function nativeAddonVerificationSummaries(manifest) {
+  if (!Array.isArray(manifest.nativeAddons)) return [];
+  return manifest.nativeAddons.map((addon) => ({
+    name: addon.name,
+    version: addon.version,
+    platformTarget: addon.platformTarget,
+    architecture: addon.architecture,
+    executablePath: addon.executablePath,
+    shippedSha256: addon.shippedSha256,
+    signingStatus: addon.signing?.verificationStatus,
+    signatureKind: addon.signing?.signatureKind,
+    signatureVerified: addon.signing?.signatureVerified,
+    notarizationRequired: addon.signing?.notarizationRequired,
+    notarizationVerified: addon.signing?.notarizationVerified,
+  }));
 }
 
 function nativeHelperVerificationSummaries(manifest) {

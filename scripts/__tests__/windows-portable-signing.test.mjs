@@ -27,6 +27,10 @@ import {
 import { assertWindowsProductionVerificationInput } from "../windows-portable-verification-input.mjs";
 import { hashDirectoryTree } from "../portable-runtime.mjs";
 import { qualificationReceiptFor } from "../qualify-windows-runtime-release.mjs";
+import {
+  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeTargetKey,
+} from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 
 const roots = [];
 
@@ -89,6 +93,47 @@ function validStage() {
   return { payload, stage };
 }
 
+function addWindowsUsearchFixture(payload, manifest) {
+  const targetKey = usearchRuntimeTargetKey("win32", "x64");
+  if (targetKey === undefined) throw new Error("missing Windows USearch fixture target");
+  const approved = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  const executablePath = "runtime/native/usearch.node";
+  const licensePath = "runtime/licenses/usearch/LICENSE";
+  const addonBytes = portableExecutable(8);
+  write(join(payload, ...executablePath.split("/")), addonBytes);
+  write(join(payload, ...licensePath.split("/")), Buffer.from("Apache-2.0 fixture"));
+  manifest.nativeAddons = [
+    {
+      name: "usearch",
+      kind: "node-native-addon",
+      version: USEARCH_RUNTIME_MANIFEST.version,
+      platformTarget: "windows-x64",
+      architecture: "x64",
+      executablePath,
+      licensePath,
+      source: {
+        commitSha: USEARCH_RUNTIME_MANIFEST.sourceCommit,
+        tarballUrl: USEARCH_RUNTIME_MANIFEST.tarballUrl,
+        tarballSha256: USEARCH_RUNTIME_MANIFEST.tarballSha256,
+        binarySha256: approved.binarySha256,
+        licenseSha256: USEARCH_RUNTIME_MANIFEST.licenseSha256,
+      },
+      unsignedSha256: approved.binarySha256,
+      shippedSha256: sha256(addonBytes),
+      sizeBytes: addonBytes.length,
+      sbomBomRef: `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=windows-x64`,
+      signing: {
+        signatureKind: "authenticode",
+        verificationStatus: "unverified-staging",
+        signatureVerified: false,
+        notarizationRequired: false,
+        notarizationVerified: false,
+      },
+    },
+  ];
+  manifest.releaseImpact.reviewedBinding.nativeAddons = structuredClone(manifest.nativeAddons);
+}
+
 function windowsPrepareStage() {
   const { payload, stage } = validStage();
   const manifest = contractManifest();
@@ -108,6 +153,7 @@ function windowsPrepareStage() {
     helper.unsignedSha256 = sha256(bytes);
   }
   manifest.releaseImpact.reviewedBinding.nativeHelpers = structuredClone(manifest.nativeHelpers);
+  addWindowsUsearchFixture(payload, manifest);
 
   const sidecar = manifest.sidecarRuntimes[0];
   const sidecarBytes = portableExecutable(9);
@@ -147,10 +193,17 @@ function windowsPrepareStage() {
     join(stage, "evidence", "sbom.cdx.json"),
     `${JSON.stringify({
       bomFormat: "CycloneDX",
-      components: manifest.nativeHelpers.map((helper) => ({
-        "bom-ref": helper.sbomBomRef,
-        hashes: [{ alg: "SHA-256", content: helper.shippedSha256 }],
-      })),
+      components: manifest.nativeHelpers
+        .map((helper) => ({
+          "bom-ref": helper.sbomBomRef,
+          hashes: [{ alg: "SHA-256", content: helper.shippedSha256 }],
+        }))
+        .concat(
+          manifest.nativeAddons.map((addon) => ({
+            "bom-ref": addon.sbomBomRef,
+            hashes: [{ alg: "SHA-256", content: addon.shippedSha256 }],
+          })),
+        ),
     })}\n`,
   );
   mkdirSync(join(payload, ".portable"), { recursive: true });

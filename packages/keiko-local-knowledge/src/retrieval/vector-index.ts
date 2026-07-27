@@ -1,27 +1,29 @@
-import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts";
+import { createHash, randomUUID } from "node:crypto";
+
 import type {
   EmbeddingModelIdentity,
-  EmbeddingVectorMetric,
-  EmbeddingVectorNormalization,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { assertCompatibleEmbeddingIdentity } from "@oscharko-dev/keiko-model-gateway";
-import type { DatabaseSync } from "node:sqlite";
+import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts";
 
 import {
   readVectorIndexState,
   writeVectorIndexState,
-  type VectorIndexProvider,
+  type VectorIndexStateRecord,
 } from "../indexing/vector-index-state.js";
-import type { StoreContentCipher } from "../store-content-cipher.js";
 import type { KnowledgeStore } from "../store.js";
-import { tempStoreIsMemory } from "../store-temp-store.js";
 
 import type { RetrievalVectorIndexDiagnostics } from "./types.js";
+import {
+  clearUsearchAnnCacheForGroup,
+  searchUsearchAnnIndex,
+  type UsearchAnnSearchResult,
+  type UsearchVectorEntry,
+} from "./usearch-ann-index.js";
 
-export type VectorIndexMode = "disabled" | "auto" | "sqlite-vec";
+export type VectorIndexMode = "disabled" | "auto" | "usearch";
 
 export interface VectorIndexCandidate {
   readonly chunkId: string;
@@ -34,6 +36,7 @@ export interface VectorIndexSearchRequest {
   readonly store: KnowledgeStore;
   readonly capsule: KnowledgeCapsule;
   readonly sourceFilter?: readonly KnowledgeSourceId[];
+  readonly chunkFilter?: readonly string[];
   readonly queryVector: Float32Array;
   readonly candidateLimit: number;
   readonly minScore?: number;
@@ -48,37 +51,40 @@ export interface VectorIndexSearchResult {
 }
 
 export interface VectorIndexAdapter {
-  readonly searchCapsule: (request: VectorIndexSearchRequest) => VectorIndexSearchResult;
+  readonly searchCapsule: (request: VectorIndexSearchRequest) => Promise<VectorIndexSearchResult>;
 }
 
-export interface SqliteVecModule {
-  readonly load: (db: DatabaseSync) => void;
+export interface VectorIndexUnexpectedFailureDiagnostic {
+  readonly correlationId: string;
+  readonly operation: "vector-index.search";
+  readonly source: "keiko-local-knowledge.vector-index";
+  // The sink owns redaction/classification. This value must never be persisted or logged directly.
+  readonly error: unknown;
 }
 
 export interface VectorIndexOptions {
   readonly mode?: VectorIndexMode;
   readonly adapter?: VectorIndexAdapter;
-  readonly sqliteVec?: SqliteVecModule;
-  readonly sqliteVecExtensionPath?: string;
-  // Tightens the ADR-0153 D3 bound on how much vector payload may be held in the in-memory index.
-  // It can only be lowered: a supplied value above the default is clamped back to it, so the bound
-  // is never a widening knob.
+  readonly usearchBinaryPath?: string;
   readonly maxIndexedVectorBytes?: number;
   readonly now?: () => number;
+  readonly newCorrelationId?: () => string;
+  readonly onUnexpectedFailure?: (diagnostic: VectorIndexUnexpectedFailureDiagnostic) => void;
 }
 
 export interface VectorIndexEnvironment {
   readonly KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX?: string;
-  readonly KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH?: string;
+  readonly KEIKO_USEARCH_BINARY_PATH?: string;
 }
 
 interface ResolvedVectorIndexOptions {
   readonly mode: VectorIndexMode;
   readonly adapter?: VectorIndexAdapter;
-  readonly sqliteVec?: SqliteVecModule;
-  readonly sqliteVecExtensionPath?: string;
+  readonly usearchBinaryPath?: string;
   readonly maxIndexedVectorBytes: number;
   readonly now: () => number;
+  readonly newCorrelationId: () => string;
+  readonly onUnexpectedFailure?: (diagnostic: VectorIndexUnexpectedFailureDiagnostic) => void;
 }
 
 interface VectorIndexStampRow {
@@ -86,11 +92,7 @@ interface VectorIndexStampRow {
   readonly max_created_at: number | null;
 }
 
-interface SqliteVecIndexRow {
-  readonly chunk_id: string;
-  readonly capsule_id: string;
-  readonly source_id: string;
-  readonly embedding: Uint8Array;
+interface StoredVectorIdentityRow {
   readonly embedding_model_provider: string;
   readonly embedding_model_id: string;
   readonly embedding_model_revision: string | null;
@@ -100,155 +102,297 @@ interface SqliteVecIndexRow {
   readonly embedding_dimensions_param: number | null;
   readonly vector_dimensions: number;
   readonly vector_metric: string;
-  readonly created_at: number;
 }
 
-// One row on its way into the vec0 index: identity columns plus the DECRYPTED embedding. Kept
-// distinct from `SqliteVecIndexRow` (which carries the stored, possibly sealed bytes) so the two
-// cannot be confused at a call site.
-interface SqliteVecIndexEntry {
+interface StoredVectorRow extends StoredVectorIdentityRow {
   readonly chunk_id: string;
-  readonly capsule_id: string;
-  readonly source_id: string;
   readonly embedding: Uint8Array;
 }
 
-interface SqliteVecCandidateRow {
+interface CandidateMetadataRow {
   readonly chunk_id: string;
-  readonly capsule_id: string;
   readonly source_id: string;
-  readonly distance: number;
 }
 
-interface SqliteTempTableRow {
-  readonly n: number;
+const USEARCH_PROVIDER = "usearch";
+const VECTOR_METRICS = new Set(["cosine", "dot", "euclidean"]);
+const VECTOR_NORMALIZATIONS = new Set(["l2", "none", "unknown"]);
+const DEFAULT_MAX_INDEX_BYTES = 256 * 1024 * 1024;
+const STORE_TAGS = new WeakMap<KnowledgeStore, string>();
+let storeTagCounter = 0;
+
+function codeUnitCompare(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }
 
-type SqliteVecLoadResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+function sourceFilterClause(sourceFilter: readonly KnowledgeSourceId[] | undefined): string {
+  if (sourceFilter === undefined) return "";
+  if (sourceFilter.length === 0) return " AND 0";
+  return " AND source_id IN (SELECT CAST(value AS TEXT) FROM json_each(:source_filter_json))";
+}
 
-// ADR-0153 D3. Pinning `temp_store` to memory buys the no-spill guarantee by making the vec0 index
-// RAM-resident, which turns an unbounded index into an unbounded allocation. The bound is expressed
-// in decrypted vector bytes because that is what actually occupies memory: 256 MiB is roughly 43k
-// vectors at 1536 dimensions, comfortably above any local capsule and far below a heap that would
-// destabilise the host process. A capsule over the bound is not refused retrieval — it falls back to
-// brute force, which streams vectors instead of holding them.
-export const DEFAULT_MAX_INDEXED_VECTOR_BYTES = 256 * 1024 * 1024;
+function sourceFilterParams(
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+): Record<string, string> {
+  if (sourceFilter === undefined || sourceFilter.length === 0) return {};
+  return { source_filter_json: JSON.stringify(sourceFilter.map(String)) };
+}
 
-const BYTES_PER_FLOAT32 = 4;
+function chunkFilterClause(chunkFilter: readonly string[] | undefined): string {
+  if (chunkFilter === undefined) return "";
+  if (chunkFilter.length === 0) return " AND 0";
+  return " AND chunk_id IN (SELECT CAST(value AS TEXT) FROM json_each(:chunk_filter_json))";
+}
 
-// A store is only permitted to build the ANN index over decrypted vectors while SQLite is pinned to
-// keep TEMP pages in memory (ADR-0153 D1). Plaintext stores carry no such condition: their vectors
-// are already on disk in the clear, so a TEMP spill exposes nothing the database does not.
-const ENCRYPTED_STORE_UNPINNED_REASON = "encrypted-store-temp-store-unpinned";
-const INDEX_OVER_BOUND_REASON = "index-bytes-over-bound";
-const VECTOR_DECRYPT_FAILED_REASON = "stored-vector-decrypt-failed";
+function chunkFilterParams(chunkFilter: readonly string[] | undefined): Record<string, string> {
+  if (chunkFilter === undefined || chunkFilter.length === 0) return {};
+  return { chunk_filter_json: JSON.stringify(chunkFilter) };
+}
 
-function clampIndexedVectorBytes(value: number | undefined): number {
+function requestParams(request: VectorIndexSearchRequest): Record<string, string> {
+  return {
+    capsule_id: String(request.capsule.id),
+    ...sourceFilterParams(request.sourceFilter),
+    ...chunkFilterParams(request.chunkFilter),
+  };
+}
+
+function requestWhere(request: VectorIndexSearchRequest): string {
+  return [
+    "capsule_id = :capsule_id",
+    sourceFilterClause(request.sourceFilter),
+    chunkFilterClause(request.chunkFilter),
+  ].join("");
+}
+
+function vectorStamp(request: VectorIndexSearchRequest, filtered: boolean): VectorIndexStampRow {
+  const where = filtered ? requestWhere(request) : "capsule_id = :capsule_id";
+  const row = request.store._internal.db
+    .prepare(
+      [
+        "SELECT COUNT(DISTINCT chunk_id) AS n, MAX(created_at) AS max_created_at",
+        "FROM vectors",
+        `WHERE ${where}`,
+      ].join(" "),
+    )
+    .get(filtered ? requestParams(request) : { capsule_id: String(request.capsule.id) }) as
+    VectorIndexStampRow | undefined;
+  return row ?? { n: 0, max_created_at: null };
+}
+
+function validStoredIdentityRow(row: StoredVectorIdentityRow): boolean {
+  const normalization = row.embedding_normalization;
+  return (
+    Number.isSafeInteger(row.vector_dimensions) &&
+    row.vector_dimensions > 0 &&
+    VECTOR_METRICS.has(row.vector_metric) &&
+    (normalization === null || VECTOR_NORMALIZATIONS.has(normalization))
+  );
+}
+
+function identityFromRow(row: StoredVectorIdentityRow): EmbeddingModelIdentity | undefined {
+  const normalization = row.embedding_normalization;
+  if (!validStoredIdentityRow(row)) return undefined;
+  return {
+    provider: row.embedding_model_provider,
+    modelId: row.embedding_model_id,
+    ...(row.embedding_model_revision !== null
+      ? { modelRevision: row.embedding_model_revision }
+      : {}),
+    vectorDimensions: row.vector_dimensions,
+    vectorMetric: row.vector_metric as EmbeddingModelIdentity["vectorMetric"],
+    ...(normalization !== null
+      ? {
+          normalization: normalization as NonNullable<EmbeddingModelIdentity["normalization"]>,
+        }
+      : {}),
+    ...(row.embedding_instruction_version !== null
+      ? { instructionVersion: row.embedding_instruction_version }
+      : {}),
+    ...(row.embedding_space_fingerprint !== null
+      ? { embeddingSpaceFingerprint: row.embedding_space_fingerprint }
+      : {}),
+    ...(row.embedding_dimensions_param !== null
+      ? { dimensionsParam: row.embedding_dimensions_param }
+      : {}),
+  };
+}
+
+function storedIdentitiesCompatible(request: VectorIndexSearchRequest): boolean {
+  const rows = request.store._internal.db
+    .prepare(
+      [
+        "SELECT DISTINCT embedding_model_provider, embedding_model_id,",
+        "  embedding_model_revision, embedding_normalization, embedding_instruction_version,",
+        "  embedding_space_fingerprint, embedding_dimensions_param,",
+        "  vector_dimensions, vector_metric FROM (",
+        "  SELECT *, ROW_NUMBER() OVER (",
+        "    PARTITION BY chunk_id ORDER BY created_at DESC, id DESC",
+        "  ) AS vector_rank",
+        "  FROM vectors",
+        "  WHERE capsule_id = :capsule_id",
+        ") WHERE vector_rank = 1",
+      ].join(" "),
+    )
+    .all({
+      capsule_id: String(request.capsule.id),
+    }) as unknown as readonly StoredVectorIdentityRow[];
+  return rows.every((row) => {
+    const identity = identityFromRow(row);
+    return (
+      identity !== undefined &&
+      embeddingIdentityKey(request.capsule.embeddingModelIdentity) ===
+        embeddingIdentityKey(identity)
+    );
+  });
+}
+
+function storedVectorRows(request: VectorIndexSearchRequest): readonly StoredVectorRow[] {
+  return request.store._internal.db
+    .prepare(
+      [
+        "SELECT chunk_id, embedding, embedding_model_provider, embedding_model_id,",
+        "  embedding_model_revision, embedding_normalization, embedding_instruction_version,",
+        "  embedding_space_fingerprint, embedding_dimensions_param,",
+        "  vector_dimensions, vector_metric FROM (",
+        "  SELECT *, ROW_NUMBER() OVER (",
+        "    PARTITION BY chunk_id ORDER BY created_at DESC, id DESC",
+        "  ) AS vector_rank",
+        "  FROM vectors",
+        `  WHERE ${requestWhere(request)}`,
+        ") WHERE vector_rank = 1",
+        "ORDER BY chunk_id ASC",
+      ].join(" "),
+    )
+    .all(requestParams(request)) as unknown as readonly StoredVectorRow[];
+}
+
+function decodeStoredVectors(request: VectorIndexSearchRequest): readonly UsearchVectorEntry[] {
+  const expectedBytes =
+    request.capsule.embeddingModelIdentity.vectorDimensions * Float32Array.BYTES_PER_ELEMENT;
+  return storedVectorRows(request).map((row) => {
+    const opened = request.store._internal.contentCipher.openVector(row.embedding, expectedBytes);
+    if (opened.byteLength !== expectedBytes) throw new RangeError("stored vector length mismatch");
+    const detached = new Uint8Array(opened);
+    return {
+      id: row.chunk_id,
+      vector: new Float32Array(
+        detached.buffer,
+        detached.byteOffset,
+        request.capsule.embeddingModelIdentity.vectorDimensions,
+      ),
+    };
+  });
+}
+
+function storeIdentity(store: KnowledgeStore): string {
+  const location = store._internal.db.location();
+  if (location !== null && location.length > 0 && location !== ":memory:") return location;
+  const existing = STORE_TAGS.get(store);
+  if (existing !== undefined) return existing;
+  storeTagCounter += 1;
+  const created = `memory-store-${String(storeTagCounter)}`;
+  STORE_TAGS.set(store, created);
+  return created;
+}
+
+function normalizedFilter(values: readonly string[] | undefined): string | null {
+  if (values === undefined) return null;
+  const normalized = [...new Set(values)].sort(codeUnitCompare);
+  return createHash("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
+}
+
+function capsuleCacheGroup(request: VectorIndexSearchRequest): string {
+  return `keiko-vector-cache-group-v2:${createHash("sha256")
+    .update(JSON.stringify([storeIdentity(request.store), String(request.capsule.id)]), "utf8")
+    .digest("hex")}`;
+}
+
+function partitionCacheKey(request: VectorIndexSearchRequest): string {
+  return JSON.stringify([
+    "keiko-vector-partition-v2",
+    capsuleCacheGroup(request),
+    normalizedFilter(request.sourceFilter?.map(String)),
+    normalizedFilter(request.chunkFilter),
+  ]);
+}
+
+function revisionFor(request: VectorIndexSearchRequest, stamp: VectorIndexStampRow): string {
+  return `keiko-vector-revision-v2:${createHash("sha256")
+    .update(
+      JSON.stringify([
+        embeddingIdentityKey(request.capsule.embeddingModelIdentity),
+        stamp.n,
+        stamp.max_created_at,
+      ]),
+      "utf8",
+    )
+    .digest("hex")}`;
+}
+
+function resolvedMaxBytes(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value) || value < 0) {
-    return DEFAULT_MAX_INDEXED_VECTOR_BYTES;
+    return DEFAULT_MAX_INDEX_BYTES;
   }
-  return Math.min(value, DEFAULT_MAX_INDEXED_VECTOR_BYTES);
+  return Math.min(Math.trunc(value), DEFAULT_MAX_INDEX_BYTES);
 }
 
-const SQLITE_VEC_PROVIDER: VectorIndexProvider = "sqlite-vec";
-const SQLITE_VEC_TABLE_PREFIX = "keiko_lk_vec";
-const SQLITE_VEC_LOADS = new WeakMap<KnowledgeStore, Map<string, SqliteVecLoadResult>>();
+function parseMode(value: string | undefined): VectorIndexMode {
+  if (value === "disabled" || value === "auto" || value === "usearch") return value;
+  return "auto";
+}
 
-const SELECT_VECTOR_INDEX_STAMP_SQL = [
-  "SELECT COUNT(*) AS n, MAX(created_at) AS max_created_at",
-  "FROM vectors",
-  "WHERE capsule_id = :capsule_id",
-  "  AND vector_dimensions = :vector_dimensions",
-  "  AND vector_metric = :vector_metric",
-].join(" ");
+function resolvedUsearchBinaryPath(
+  supplied: VectorIndexOptions,
+  environment: VectorIndexEnvironment,
+): string | undefined {
+  if (supplied.usearchBinaryPath !== undefined) return supplied.usearchBinaryPath;
+  return environment.KEIKO_USEARCH_BINARY_PATH;
+}
 
-const SELECT_SQLITE_VEC_INDEX_ROWS_SQL = [
-  "SELECT chunk_id, capsule_id, source_id, embedding,",
-  "  embedding_model_provider, embedding_model_id, embedding_model_revision,",
-  "  embedding_normalization, embedding_instruction_version, embedding_space_fingerprint,",
-  "  embedding_dimensions_param, vector_dimensions, vector_metric, created_at",
-  "FROM vectors",
-  "WHERE capsule_id = :capsule_id",
-  "  AND vector_dimensions = :vector_dimensions",
-  "  AND vector_metric = :vector_metric",
-  "ORDER BY chunk_id ASC",
-].join(" ");
-
-// There is deliberately no bundled sqlite-vec module. The npm package publishes the license string
-// "MIT OR Apache", which is not valid SPDX, so the dependency-review policy and
-// `check:workspace-supply-chain` both reject it — and the latter has no exception mechanism by
-// design. The extension is therefore operator-provisioned through
-// KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH (ADR-0152 D2), or injected directly for tests.
-// With neither supplied the resolver yields no module and retrieval keeps using brute force, which
-// is the same fail-closed outcome an unavailable runtime already produced.
-//
-// Issue #2631 flipped the mode default from `disabled` to `auto`, so activation is decided by
-// runtime CAPABILITY rather than by discovering an environment variable. The downstream gate at
-// `openKnowledgeStore.vectorIndexRuntimeConfigured` still requires a module or an extension path
-// before it grants `allowExtension: true` (ADR-0152 D2 obligations preserved), and
-// `searchSqliteVecIndex` still fails closed with `sqlite-vec-runtime-not-configured` when there is
-// nothing to load — so an unqualified or missing binary still falls closed. `"disabled"` remains
-// the explicit opt-out for operators who want the vector index off regardless of capability.
 export function resolveVectorIndexOptions(
   options: VectorIndexOptions | undefined,
   environment: VectorIndexEnvironment = process.env,
 ): ResolvedVectorIndexOptions {
-  return resolvedVectorIndexOptions(options, environment);
-}
-
-function resolvedVectorIndexOptions(
-  options: VectorIndexOptions | undefined,
-  environment: VectorIndexEnvironment,
-): ResolvedVectorIndexOptions {
   const supplied = options ?? {};
-  const mode = parseVectorIndexMode(
-    supplied.mode ?? environment.KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX,
-  );
-  const resolved: {
-    mode: VectorIndexMode;
-    adapter?: VectorIndexAdapter;
-    sqliteVec?: SqliteVecModule;
-    sqliteVecExtensionPath?: string;
-    maxIndexedVectorBytes: number;
-    now: () => number;
-  } = {
+  const mode = parseMode(supplied.mode ?? environment.KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX);
+  const usearchBinaryPath = resolvedUsearchBinaryPath(supplied, environment);
+  return {
     mode,
-    maxIndexedVectorBytes: clampIndexedVectorBytes(supplied.maxIndexedVectorBytes),
+    ...(supplied.adapter !== undefined ? { adapter: supplied.adapter } : {}),
+    ...(usearchBinaryPath !== undefined ? { usearchBinaryPath } : {}),
+    maxIndexedVectorBytes: resolvedMaxBytes(supplied.maxIndexedVectorBytes),
     now: supplied.now ?? Date.now,
+    newCorrelationId: supplied.newCorrelationId ?? randomUUID,
+    ...(supplied.onUnexpectedFailure !== undefined
+      ? { onUnexpectedFailure: supplied.onUnexpectedFailure }
+      : {}),
   };
-  if (supplied.adapter !== undefined) resolved.adapter = supplied.adapter;
-  const extensionPath = vectorIndexExtensionPath(supplied, environment);
-  if (extensionPath !== undefined) resolved.sqliteVecExtensionPath = extensionPath;
-  const sqliteVec = selectedSqliteVec(supplied, mode);
-  if (sqliteVec !== undefined) resolved.sqliteVec = sqliteVec;
-  return resolved;
 }
 
-function selectedSqliteVec(
-  options: VectorIndexOptions,
-  mode: VectorIndexMode,
-): SqliteVecModule | undefined {
-  if (mode === "disabled") return undefined;
-  return options.sqliteVec;
+function unavailable(
+  status: RetrievalVectorIndexDiagnostics["status"],
+  reason: string,
+  vectorCount?: number,
+  correlationId?: string,
+): VectorIndexSearchResult {
+  return {
+    ok: false,
+    candidates: [],
+    sawDimensionCompatible: false,
+    sawIdentityIncompatible: status === "fallback-incompatible-identity",
+    diagnostics: {
+      provider: USEARCH_PROVIDER,
+      status,
+      reason,
+      ...(vectorCount !== undefined ? { vectorCount } : {}),
+      ...(correlationId !== undefined ? { correlationId } : {}),
+    },
+  };
 }
 
-function parseVectorIndexMode(value: string | undefined): VectorIndexMode {
-  if (value === "auto" || value === "sqlite-vec" || value === "disabled") return value;
-  // Issue #2631: default-on by capability. Unset and unrecognised values resolve to `auto`; the only
-  // way to switch the vector index off is the explicit `disabled` value above.
-  return "auto";
-}
-
-function vectorIndexExtensionPath(
-  options: VectorIndexOptions,
-  environment: VectorIndexEnvironment,
-): string | undefined {
-  const value =
-    options.sqliteVecExtensionPath ?? environment.KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH;
-  return value === undefined || value.length === 0 ? undefined : value;
-}
-
-function disabledResult(): VectorIndexSearchResult {
+function disabled(): VectorIndexSearchResult {
   return {
     ok: false,
     candidates: [],
@@ -262,577 +406,247 @@ function disabledResult(): VectorIndexSearchResult {
   };
 }
 
-function unavailableResult(
-  status: RetrievalVectorIndexDiagnostics["status"],
-  reason: string,
-  indexName?: string,
-): VectorIndexSearchResult {
-  return {
-    ok: false,
-    candidates: [],
-    sawDimensionCompatible: false,
-    sawIdentityIncompatible: false,
-    diagnostics: {
-      provider: SQLITE_VEC_PROVIDER,
-      status,
-      reason,
-      ...(indexName !== undefined ? { indexName } : {}),
-    },
-  };
+function statusForFailure(
+  result: Extract<UsearchAnnSearchResult, { readonly ok: false }>,
+): RetrievalVectorIndexDiagnostics["status"] {
+  if (result.reason === "index-bytes-over-bound") return "fallback-index-too-large";
+  if (result.reason === "unsupported-metric") return "fallback-unsupported-metric";
+  if (result.reason === "runtime-unavailable") return "fallback-unavailable";
+  if (result.reason === "query-dimension-mismatch") return "fallback-incompatible-identity";
+  return "fallback-query-error";
 }
 
-export function searchVectorIndex(
+function candidateMetadata(
   request: VectorIndexSearchRequest,
-  options: VectorIndexOptions | undefined,
-): VectorIndexSearchResult {
-  const resolved = resolvedVectorIndexOptions(options, process.env);
-  if (resolved.adapter !== undefined) return resolved.adapter.searchCapsule(request);
-  if (resolved.mode === "disabled") return disabledResult();
-  return searchSqliteVecIndex(request, resolved);
-}
-
-type SqliteVecPrecheck =
-  | { readonly ok: true; readonly stamp: VectorIndexStampRow }
-  | { readonly ok: false; readonly result: VectorIndexSearchResult };
-
-// Encryption alone no longer refuses the index (ADR-0153 D1, superseding the ADR-0152 D2
-// carve-out). Brute force already decrypts every vector into process memory to compare it, and the
-// vec0 index is a TEMP table that never persists — the one unreconciled risk was SQLite spilling
-// that TEMP database to a file. What is checked here is therefore the guarantee itself, read from
-// the live connection, not the intent to have set it: a store that cannot prove TEMP pages stay in
-// memory keeps the pre-existing fail-closed outcome.
-function encryptedStoreIndexPermitted(store: KnowledgeStore): boolean {
-  if (!store._internal.contentCipher.isEncrypted) return true;
-  return tempStoreIsMemory(store._internal.db);
-}
-
-function indexedVectorBytes(stamp: VectorIndexStampRow, identity: EmbeddingModelIdentity): number {
-  return stamp.n * identity.vectorDimensions * BYTES_PER_FLOAT32;
-}
-
-function precheckSqliteVecIndex(
-  request: VectorIndexSearchRequest,
-  options: ResolvedVectorIndexOptions,
-  indexName: string,
-): SqliteVecPrecheck {
-  const identity = request.capsule.embeddingModelIdentity;
-  if (!encryptedStoreIndexPermitted(request.store)) {
-    writeUnavailable(request, options, indexName, ENCRYPTED_STORE_UNPINNED_REASON);
-    return {
-      ok: false,
-      result: unavailableResult(
-        "fallback-encrypted-store",
-        ENCRYPTED_STORE_UNPINNED_REASON,
-        indexName,
-      ),
-    };
-  }
-  if (identity.vectorMetric !== "cosine") {
-    writeUnavailable(request, options, indexName, "unsupported-metric");
-    return {
-      ok: false,
-      result: unavailableResult("fallback-unsupported-metric", "unsupported-metric", indexName),
-    };
-  }
-  if (request.queryVector.length !== identity.vectorDimensions) {
-    return { ok: false, result: identityMismatchResult("query-dimension-mismatch", indexName) };
-  }
-  const stamp = vectorIndexStamp(request.store, request.capsule);
-  if (indexedVectorBytes(stamp, identity) > options.maxIndexedVectorBytes) {
-    writeUnavailable(request, options, indexName, INDEX_OVER_BOUND_REASON);
-    return { ok: false, result: overBoundResult(indexName, stamp.n) };
-  }
-  return { ok: true, stamp };
-}
-
-function identityMismatchResult(reason: string, indexName: string): VectorIndexSearchResult {
-  return {
-    ok: false,
-    candidates: [],
-    sawDimensionCompatible: false,
-    sawIdentityIncompatible: true,
-    diagnostics: {
-      provider: SQLITE_VEC_PROVIDER,
-      status: "fallback-incompatible-identity",
-      reason,
-      indexName,
-    },
-  };
-}
-
-// Counts only. The bound diagnostic never carries the byte budget's provenance, a path, or anything
-// derived from the vectors themselves.
-function overBoundResult(indexName: string, vectorCount: number): VectorIndexSearchResult {
-  return {
-    ok: false,
-    candidates: [],
-    sawDimensionCompatible: false,
-    sawIdentityIncompatible: false,
-    diagnostics: {
-      provider: SQLITE_VEC_PROVIDER,
-      status: "fallback-index-too-large",
-      reason: INDEX_OVER_BOUND_REASON,
-      indexName,
-      vectorCount,
-    },
-  };
-}
-
-function searchSqliteVecIndex(
-  request: VectorIndexSearchRequest,
-  options: ResolvedVectorIndexOptions,
-): VectorIndexSearchResult {
-  const indexName = sqliteVecIndexName(request.capsule.embeddingModelIdentity);
-  const precheck = precheckSqliteVecIndex(request, options, indexName);
-  if (!precheck.ok) return precheck.result;
-
-  const load = loadSqliteVec(request.store, options);
-  if (!load.ok) {
-    writeUnavailable(request, options, indexName, load.reason);
-    return unavailableResult("fallback-unavailable", load.reason, indexName);
-  }
-
-  try {
-    const build = ensureSqliteVecIndex(request, options, indexName, precheck.stamp);
-    if (!build.ok) return build.result;
-    return querySqliteVecIndex(request, indexName);
-  } catch {
-    writeUnavailable(request, options, indexName, "sqlite-vec-query-error");
-    return unavailableResult("fallback-query-error", "sqlite-vec-query-error", indexName);
-  }
-}
-
-function writeUnavailable(
-  request: VectorIndexSearchRequest,
-  options: ResolvedVectorIndexOptions,
-  indexName: string,
-  reason: string,
-): void {
-  const stamp = vectorIndexStamp(request.store, request.capsule);
-  writeVectorIndexState(request.store._internal.db, {
-    capsuleId: request.capsule.id,
-    provider: SQLITE_VEC_PROVIDER,
-    indexName,
-    vectorDimensions: request.capsule.embeddingModelIdentity.vectorDimensions,
-    vectorMetric: request.capsule.embeddingModelIdentity.vectorMetric,
-    embeddingIdentityKey: embeddingIdentityKey(request.capsule.embeddingModelIdentity),
-    vectorCount: stamp.n,
-    vectorMaxCreatedAt: stamp.max_created_at,
-    status: "unavailable",
-    reason,
-    updatedAt: options.now(),
-  });
-}
-
-function loadSqliteVec(
-  store: KnowledgeStore,
-  options: ResolvedVectorIndexOptions,
-): SqliteVecLoadResult {
-  const key = options.sqliteVec !== undefined ? "module" : (options.sqliteVecExtensionPath ?? "");
-  const cachedByKey = SQLITE_VEC_LOADS.get(store);
-  const cached = cachedByKey?.get(key);
-  if (cached !== undefined) return cached;
-
-  const result = loadSqliteVecUncached(store._internal.db, options);
-  const nextByKey = cachedByKey ?? new Map<string, SqliteVecLoadResult>();
-  nextByKey.set(key, result);
-  SQLITE_VEC_LOADS.set(store, nextByKey);
-  return result;
-}
-
-function loadSqliteVecUncached(
-  db: DatabaseSync,
-  options: ResolvedVectorIndexOptions,
-): SqliteVecLoadResult {
-  if (options.sqliteVec !== undefined) {
-    return loadSqliteVecModule(db, options.sqliteVec);
-  }
-  if (options.sqliteVecExtensionPath === undefined) {
-    return { ok: false, reason: "sqlite-vec-runtime-not-configured" };
-  }
-  if (typeof db.enableLoadExtension !== "function" || typeof db.loadExtension !== "function") {
-    return { ok: false, reason: "sqlite-load-extension-unavailable" };
-  }
-  let result: SqliteVecLoadResult = {
-    ok: false,
-    reason: "sqlite-vec-extension-load-failed",
-  };
-  try {
-    db.enableLoadExtension(true);
-    db.loadExtension(options.sqliteVecExtensionPath);
-    result = { ok: true };
-  } catch {
-    // The fail-closed result is initialized above so the existing diagnostic stays pinned.
-  } finally {
-    if (!disableSqliteExtensionLoading(db)) {
-      result = { ok: false, reason: "sqlite-vec-extension-load-failed" };
-    }
-  }
-  return result;
-}
-
-function loadSqliteVecModule(db: DatabaseSync, sqliteVec: SqliteVecModule): SqliteVecLoadResult {
-  let result: SqliteVecLoadResult = { ok: false, reason: "sqlite-vec-module-load-failed" };
-  try {
-    sqliteVec.load(db);
-    result = { ok: true };
-  } catch {
-    // The fail-closed result is initialized above so the existing diagnostic stays pinned.
-  } finally {
-    if (!disableSqliteExtensionLoading(db)) {
-      result = { ok: false, reason: "sqlite-vec-module-load-failed" };
-    }
-  }
-  return result;
-}
-
-function disableSqliteExtensionLoading(db: DatabaseSync): boolean {
-  if (typeof db.enableLoadExtension !== "function") return true;
-  try {
-    db.enableLoadExtension(false);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function ensureSqliteVecIndex(
-  request: VectorIndexSearchRequest,
-  options: ResolvedVectorIndexOptions,
-  indexName: string,
-  stamp: VectorIndexStampRow,
-): { readonly ok: true } | { readonly ok: false; readonly result: VectorIndexSearchResult } {
-  createSqliteVecTempTable(request.store._internal.db, indexName, request.capsule);
-  const state = readVectorIndexState(request.store._internal.db, {
-    capsuleId: request.capsule.id,
-    provider: SQLITE_VEC_PROVIDER,
-    indexName,
-    vectorDimensions: request.capsule.embeddingModelIdentity.vectorDimensions,
-    vectorMetric: request.capsule.embeddingModelIdentity.vectorMetric,
-    embeddingIdentityKey: embeddingIdentityKey(request.capsule.embeddingModelIdentity),
-  });
-  if (
-    state?.status === "ready" &&
-    state.vectorCount === stamp.n &&
-    state.vectorMaxCreatedAt === stamp.max_created_at &&
-    sqliteVecTempTableHasRows(request.store._internal.db, indexName, request.capsule.id)
-  ) {
-    return { ok: true };
-  }
-
-  const build = rebuildSqliteVecIndex(request, options, indexName, stamp);
-  if (!build.ok) return build;
-  return { ok: true };
-}
-
-function createSqliteVecTempTable(
-  db: DatabaseSync,
-  indexName: string,
-  capsule: KnowledgeCapsule,
-): void {
-  db.exec(
-    [
-      `CREATE VIRTUAL TABLE IF NOT EXISTS temp.${indexName} USING vec0(`,
-      "  capsule_id TEXT partition key,",
-      "  source_id TEXT,",
-      "  identity_key TEXT,",
-      "  chunk_id TEXT,",
-      `  embedding float[${String(capsule.embeddingModelIdentity.vectorDimensions)}] distance_metric=cosine`,
-      ");",
-    ].join("\n"),
-  );
-}
-
-function sqliteVecTempTableHasRows(
-  db: DatabaseSync,
-  indexName: string,
-  capsuleId: KnowledgeCapsuleId,
-): boolean {
-  const row = db
-    .prepare(`SELECT COUNT(*) AS n FROM temp.${indexName} WHERE capsule_id = :capsule_id LIMIT 1`)
-    .get({ capsule_id: String(capsuleId) }) as unknown as SqliteTempTableRow | undefined;
-  return (row?.n ?? 0) > 0;
-}
-
-function rebuildSqliteVecIndex(
-  request: VectorIndexSearchRequest,
-  options: ResolvedVectorIndexOptions,
-  indexName: string,
-  stamp: VectorIndexStampRow,
-): { readonly ok: true } | { readonly ok: false; readonly result: VectorIndexSearchResult } {
-  const compatible = compatibleSqliteVecRows(request);
-  if (!compatible.ok) {
-    return {
-      ok: false,
-      result:
-        compatible.kind === "identity"
-          ? identityMismatchResult("stored-vector-identity-mismatch", indexName)
-          : unavailableResult("fallback-query-error", VECTOR_DECRYPT_FAILED_REASON, indexName),
-    };
-  }
-  replaceSqliteVecRows(request, indexName, compatible.rows);
-  writeReadySqliteVecState(request, options, indexName, stamp);
-  return { ok: true };
-}
-
-// Opens one stored vector into the plaintext float32 bytes vec0 indexes. On a plaintext store the
-// cipher is the identity function, so this is the same read as before; on an encrypted store it is
-// the same decryption the brute-force path already performs (`scoped-vector-search.ts`), and the
-// result is copied out of the decrypted envelope rather than aliasing it. A wrong length or a failed
-// authentication yields nothing, which the caller turns into a fail-closed fallback — a partially
-// decrypted index would silently answer from garbage.
-function plaintextEmbedding(
-  cipher: StoreContentCipher,
-  row: SqliteVecIndexRow,
-): Uint8Array | undefined {
-  const expectedBytes = row.vector_dimensions * BYTES_PER_FLOAT32;
-  try {
-    const opened = cipher.openVector(row.embedding, expectedBytes);
-    return opened.byteLength === expectedBytes ? new Uint8Array(opened) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function compatibleSqliteVecRows(
-  request: VectorIndexSearchRequest,
-):
-  | { readonly ok: true; readonly rows: readonly SqliteVecIndexEntry[] }
-  | { readonly ok: false; readonly kind: "identity" | "decrypt" } {
-  const rows = readSqliteVecIndexRows(request.store, request.capsule);
-  const cipher = request.store._internal.contentCipher;
-  const entries: SqliteVecIndexEntry[] = [];
-  for (const row of rows) {
-    const rowIdentity = identityFromSqliteVecRow(row);
-    if (
-      rowIdentity === undefined ||
-      !assertCompatibleEmbeddingIdentity(request.capsule.embeddingModelIdentity, rowIdentity).ok
-    ) {
-      return { ok: false, kind: "identity" };
-    }
-    const embedding = plaintextEmbedding(cipher, row);
-    if (embedding === undefined) return { ok: false, kind: "decrypt" };
-    entries.push({
-      chunk_id: row.chunk_id,
-      capsule_id: row.capsule_id,
-      source_id: row.source_id,
-      embedding,
-    });
-  }
-  return { ok: true, rows: entries };
-}
-
-function replaceSqliteVecRows(
-  request: VectorIndexSearchRequest,
-  indexName: string,
-  rows: readonly SqliteVecIndexEntry[],
-): void {
-  const db = request.store._internal.db;
-  const identityKey = embeddingIdentityKey(request.capsule.embeddingModelIdentity);
-  db.prepare(
-    `DELETE FROM temp.${indexName} WHERE capsule_id = :capsule_id AND identity_key = :identity_key`,
-  ).run({
-    capsule_id: String(request.capsule.id),
-    identity_key: identityKey,
-  });
-  const insert = db.prepare(
-    [
-      `INSERT INTO temp.${indexName} (capsule_id, source_id, identity_key, chunk_id, embedding)`,
-      "VALUES (:capsule_id, :source_id, :identity_key, :chunk_id, :embedding)",
-    ].join(" "),
-  );
-  for (const row of rows) {
-    insert.run({
-      capsule_id: row.capsule_id,
-      source_id: row.source_id,
-      identity_key: identityKey,
-      chunk_id: row.chunk_id,
-      embedding: row.embedding,
-    });
-  }
-}
-
-function writeReadySqliteVecState(
-  request: VectorIndexSearchRequest,
-  options: ResolvedVectorIndexOptions,
-  indexName: string,
-  stamp: VectorIndexStampRow,
-): void {
-  const identityKey = embeddingIdentityKey(request.capsule.embeddingModelIdentity);
-  writeVectorIndexState(request.store._internal.db, {
-    capsuleId: request.capsule.id,
-    provider: SQLITE_VEC_PROVIDER,
-    indexName,
-    vectorDimensions: request.capsule.embeddingModelIdentity.vectorDimensions,
-    vectorMetric: request.capsule.embeddingModelIdentity.vectorMetric,
-    embeddingIdentityKey: identityKey,
-    vectorCount: stamp.n,
-    vectorMaxCreatedAt: stamp.max_created_at,
-    status: "ready",
-    updatedAt: options.now(),
-  });
-}
-
-function querySqliteVecIndex(
-  request: VectorIndexSearchRequest,
-  indexName: string,
-): VectorIndexSearchResult {
-  const identityKey = embeddingIdentityKey(request.capsule.embeddingModelIdentity);
-  const rows =
-    request.sourceFilter === undefined
-      ? querySqliteVecIndexForSource(request, indexName, identityKey)
-      : request.sourceFilter.flatMap((sourceId) =>
-          querySqliteVecIndexForSource(request, indexName, identityKey, sourceId),
-        );
-  const candidates = rows
-    .map(sqliteVecRowToCandidate)
-    .filter((candidate) => request.minScore === undefined || candidate.score >= request.minScore)
-    .sort(scoreDesc)
-    .slice(0, request.candidateLimit);
-  return {
-    ok: true,
-    candidates,
-    sawDimensionCompatible: true,
-    sawIdentityIncompatible: false,
-    diagnostics: {
-      provider: SQLITE_VEC_PROVIDER,
-      status: "available",
-      indexName,
-      vectorCount: candidates.length,
-    },
-  };
-}
-
-function compareChunkIds(left: string, right: string): number {
-  if (left === right) return 0;
-  return left < right ? -1 : 1;
-}
-
-function querySqliteVecIndexForSource(
-  request: VectorIndexSearchRequest,
-  indexName: string,
-  identityKey: string,
-  sourceId?: KnowledgeSourceId,
-): readonly SqliteVecCandidateRow[] {
-  const sourceClause = sourceId === undefined ? "" : " AND source_id = :source_id";
+  chunkIds: readonly string[],
+): ReadonlyMap<string, KnowledgeSourceId> {
+  if (chunkIds.length === 0) return new Map();
   const rows = request.store._internal.db
     .prepare(
       [
-        "SELECT chunk_id, capsule_id, source_id, distance",
-        `FROM temp.${indexName}`,
-        "WHERE embedding MATCH :query",
-        "  AND k = :k",
-        "  AND capsule_id = :capsule_id",
-        "  AND identity_key = :identity_key",
-        sourceClause,
-        // Distance only: sqlite-vec's KNN table cannot satisfy a secondary sort key and rejects the
-        // statement outright, which fails the query closed into the brute-force fallback. The
-        // tie-break is applied below, on the rows it returns.
-        "ORDER BY distance ASC",
+        "SELECT chunk_id, source_id FROM vectors",
+        "WHERE capsule_id = :capsule_id",
+        "  AND chunk_id IN (SELECT CAST(value AS TEXT) FROM json_each(:candidate_ids_json))",
       ].join(" "),
     )
     .all({
-      query: float32Bytes(request.queryVector),
-      k: request.candidateLimit,
       capsule_id: String(request.capsule.id),
-      identity_key: identityKey,
-      ...(sourceId !== undefined ? { source_id: String(sourceId) } : {}),
-    }) as unknown as readonly SqliteVecCandidateRow[];
-  // Exact distance ties are left in whatever order the vec index emitted, which is not guaranteed
-  // to be stable across runs or hosts; chunk_id makes the returned ordering reproducible. Which
-  // rows survive the `k` truncation on a tie is decided inside sqlite-vec's KNN search and cannot
-  // be influenced from here, so this pins everything downstream of that point, not the cut itself.
-  return [...rows].sort(
-    (left, right) =>
-      left.distance - right.distance || compareChunkIds(left.chunk_id, right.chunk_id),
-  );
+      candidate_ids_json: JSON.stringify(chunkIds),
+    }) as unknown as readonly CandidateMetadataRow[];
+  return new Map(rows.map((row) => [row.chunk_id, row.source_id as KnowledgeSourceId]));
 }
 
-function sqliteVecRowToCandidate(row: SqliteVecCandidateRow): VectorIndexCandidate {
+function successfulResult(
+  request: VectorIndexSearchRequest,
+  result: Extract<UsearchAnnSearchResult, { readonly ok: true }>,
+  vectorCount: number,
+): VectorIndexSearchResult {
+  const filtered = result.candidates.filter(
+    (candidate) => request.minScore === undefined || candidate.score >= request.minScore,
+  );
+  const metadata = candidateMetadata(
+    request,
+    filtered.map((candidate) => candidate.id),
+  );
   return {
-    chunkId: row.chunk_id,
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
-    sourceId: row.source_id as KnowledgeSourceId,
-    score: 1 - row.distance,
+    ok: true,
+    candidates: filtered.map((candidate) => {
+      const sourceId = metadata.get(candidate.id);
+      return {
+        chunkId: candidate.id,
+        capsuleId: request.capsule.id,
+        ...(sourceId !== undefined ? { sourceId } : {}),
+        score: candidate.score,
+      };
+    }),
+    sawDimensionCompatible: true,
+    sawIdentityIncompatible: false,
+    diagnostics: {
+      provider: USEARCH_PROVIDER,
+      status: "available",
+      indexName: usearchIndexName(request.capsule.embeddingModelIdentity),
+      vectorCount,
+      searchMode: result.mode,
+      examinedCandidateCount: result.examinedCandidates,
+      estimatedIndexBytes: result.estimatedIndexBytes,
+    },
   };
 }
 
-function readSqliteVecIndexRows(
-  store: KnowledgeStore,
-  capsule: KnowledgeCapsule,
-): readonly SqliteVecIndexRow[] {
-  return store._internal.db.prepare(SELECT_SQLITE_VEC_INDEX_ROWS_SQL).all({
-    capsule_id: String(capsule.id),
-    vector_dimensions: capsule.embeddingModelIdentity.vectorDimensions,
-    vector_metric: capsule.embeddingModelIdentity.vectorMetric,
-  }) as unknown as readonly SqliteVecIndexRow[];
+function writeIndexState(
+  request: VectorIndexSearchRequest,
+  options: ResolvedVectorIndexOptions,
+  stamp: VectorIndexStampRow,
+  status: "ready" | "unavailable",
+  reason?: string,
+): void {
+  const identity = request.capsule.embeddingModelIdentity;
+  writeVectorIndexState(request.store._internal.db, {
+    capsuleId: request.capsule.id,
+    provider: USEARCH_PROVIDER,
+    indexName: usearchIndexName(identity),
+    vectorDimensions: identity.vectorDimensions,
+    vectorMetric: identity.vectorMetric,
+    embeddingIdentityKey: embeddingIdentityKey(identity),
+    vectorCount: stamp.n,
+    vectorMaxCreatedAt: stamp.max_created_at,
+    status,
+    ...(reason !== undefined ? { reason } : {}),
+    updatedAt: options.now(),
+  });
 }
 
-function vectorIndexStamp(store: KnowledgeStore, capsule: KnowledgeCapsule): VectorIndexStampRow {
-  return store._internal.db.prepare(SELECT_VECTOR_INDEX_STAMP_SQL).get({
-    capsule_id: String(capsule.id),
-    vector_dimensions: capsule.embeddingModelIdentity.vectorDimensions,
-    vector_metric: capsule.embeddingModelIdentity.vectorMetric,
-  }) as unknown as VectorIndexStampRow;
+function vectorIndexState(request: VectorIndexSearchRequest): VectorIndexStateRecord | undefined {
+  const identity = request.capsule.embeddingModelIdentity;
+  return readVectorIndexState(request.store._internal.db, {
+    capsuleId: request.capsule.id,
+    provider: USEARCH_PROVIDER,
+    indexName: usearchIndexName(identity),
+    vectorDimensions: identity.vectorDimensions,
+    vectorMetric: identity.vectorMetric,
+    embeddingIdentityKey: embeddingIdentityKey(identity),
+  });
 }
 
-// Exported so the port adapter shim in `local-vector-index-port.ts` can rebuild the
-// `indexName` diagnostic the port's shape does not carry, without a second copy of this
-// formatter drifting away from the one that decides the actual sqlite-vec table name.
-export function sqliteVecIndexName(identity: EmbeddingModelIdentity): string {
-  return `${SQLITE_VEC_TABLE_PREFIX}_${String(identity.vectorDimensions)}_${identity.vectorMetric}`;
+function fullVectorStamp(
+  request: VectorIndexSearchRequest,
+  state: VectorIndexStateRecord | undefined,
+): VectorIndexStampRow {
+  // The schema-owned vectors mutation triggers make `ready` a trustworthy constant-time content
+  // revision. Missing, dirty, and unavailable states still derive their stamp from stored rows.
+  if (state?.status !== "ready") return vectorStamp(request, false);
+  return { n: state.vectorCount, max_created_at: state.vectorMaxCreatedAt };
 }
 
-function float32Bytes(vector: Float32Array): Uint8Array {
-  return new Uint8Array(
-    vector.buffer.slice(vector.byteOffset, vector.byteOffset + vector.byteLength),
-  );
+function prepareCacheState(
+  request: VectorIndexSearchRequest,
+  state: VectorIndexStateRecord | undefined,
+): void {
+  if (state?.status !== "ready") {
+    clearUsearchAnnCacheForGroup(capsuleCacheGroup(request));
+  }
 }
 
-function scoreDesc(
-  a: { readonly score: number; readonly chunkId: string },
-  b: { readonly score: number; readonly chunkId: string },
-): number {
-  if (b.score !== a.score) return b.score - a.score;
-  return a.chunkId.localeCompare(b.chunkId);
-}
-
-function vectorMetricFromRow(value: string): EmbeddingVectorMetric | undefined {
-  if (value === "cosine" || value === "dot" || value === "euclidean") return value;
+function earlyBuiltInResult(
+  request: VectorIndexSearchRequest,
+): VectorIndexSearchResult | undefined {
+  if (request.chunkFilter?.length === 0 || request.sourceFilter?.length === 0) {
+    return successfulResult(
+      request,
+      {
+        ok: true,
+        mode: "exact",
+        candidates: [],
+        examinedCandidates: 0,
+        estimatedIndexBytes: 0,
+      },
+      0,
+    );
+  }
+  if (request.queryVector.length !== request.capsule.embeddingModelIdentity.vectorDimensions) {
+    return unavailable("fallback-incompatible-identity", "query-dimension-mismatch");
+  }
   return undefined;
 }
 
-function normalizationFromRow(value: string | null): EmbeddingVectorNormalization | undefined {
-  if (value === "l2" || value === "none" || value === "unknown") return value;
-  return undefined;
+async function runBuiltInSearch(
+  request: VectorIndexSearchRequest,
+  options: ResolvedVectorIndexOptions,
+  stamp: VectorIndexStampRow,
+): Promise<UsearchAnnSearchResult> {
+  return await searchUsearchAnnIndex({
+    partition: {
+      cacheKey: partitionCacheKey(request),
+      cacheGroupKey: capsuleCacheGroup(request),
+      revision: revisionFor(request, stamp),
+      identity: request.capsule.embeddingModelIdentity,
+      rowCount: stamp.n,
+      loadEntries: () => decodeStoredVectors(request),
+    },
+    queryVector: request.queryVector,
+    candidateLimit: request.candidateLimit,
+    ...(options.usearchBinaryPath !== undefined ? { binaryPath: options.usearchBinaryPath } : {}),
+    maxIndexBytes: options.maxIndexedVectorBytes,
+  });
 }
 
-function identityFromSqliteVecRow(row: SqliteVecIndexRow): EmbeddingModelIdentity | undefined {
-  const vectorMetric = vectorMetricFromRow(row.vector_metric);
-  if (vectorMetric === undefined) return undefined;
-  const normalization = normalizationFromRow(row.embedding_normalization);
-  return {
-    provider: row.embedding_model_provider,
-    modelId: row.embedding_model_id,
-    vectorDimensions: row.vector_dimensions,
-    vectorMetric,
-    ...(row.embedding_model_revision !== null
-      ? { modelRevision: row.embedding_model_revision }
-      : {}),
-    ...(normalization !== undefined ? { normalization } : {}),
-    ...(row.embedding_instruction_version !== null
-      ? { instructionVersion: row.embedding_instruction_version }
-      : {}),
-    ...(row.embedding_space_fingerprint !== null
-      ? { embeddingSpaceFingerprint: row.embedding_space_fingerprint }
-      : {}),
-    ...(row.embedding_dimensions_param !== null
-      ? { dimensionsParam: row.embedding_dimensions_param }
-      : {}),
-  };
+function failedBuiltInResult(
+  request: VectorIndexSearchRequest,
+  options: ResolvedVectorIndexOptions,
+  fullStamp: VectorIndexStampRow,
+  filteredStamp: VectorIndexStampRow,
+  result: Extract<UsearchAnnSearchResult, { readonly ok: false }>,
+): VectorIndexSearchResult {
+  const reason =
+    result.reason === "partition-load-failed" ? "stored-vector-decrypt-failed" : result.reason;
+  writeIndexState(request, options, fullStamp, "unavailable", reason);
+  return unavailable(statusForFailure(result), reason, filteredStamp.n);
 }
 
-// The identity key now lives in keiko-contracts (ADR-0152 D1). It was one of two byte-equivalent
-// copies in this package; a drifting copy is a silent fail-open, because vectors from incompatible
-// embedding spaces would compare as if they were comparable.
-export { embeddingIdentityKey };
+async function searchBuiltIn(
+  request: VectorIndexSearchRequest,
+  options: ResolvedVectorIndexOptions,
+): Promise<VectorIndexSearchResult> {
+  const earlyResult = earlyBuiltInResult(request);
+  if (earlyResult !== undefined) return earlyResult;
+  const state = vectorIndexState(request);
+  const fullStamp = fullVectorStamp(request, state);
+  prepareCacheState(request, state);
+  const filtered = request.sourceFilter !== undefined || request.chunkFilter !== undefined;
+  const stamp = filtered ? vectorStamp(request, true) : fullStamp;
+  if (state?.status !== "ready" && !storedIdentitiesCompatible(request)) {
+    return unavailable("fallback-incompatible-identity", "stored-vector-identity-mismatch");
+  }
+  const result = await runBuiltInSearch(request, options, stamp);
+  if (!result.ok) {
+    return failedBuiltInResult(request, options, fullStamp, stamp, result);
+  }
+  writeIndexState(request, options, fullStamp, "ready");
+  return successfulResult(request, result, stamp.n);
+}
+
+function reportUnexpectedFailure(options: ResolvedVectorIndexOptions, error: unknown): string {
+  const correlationId = options.newCorrelationId();
+  try {
+    options.onUnexpectedFailure?.({
+      correlationId,
+      operation: "vector-index.search",
+      source: "keiko-local-knowledge.vector-index",
+      error,
+    });
+  } catch {
+    // A diagnostic sink failure must not turn a safe brute-force fallback into an unhandled error.
+  }
+  return correlationId;
+}
+
+export async function searchVectorIndex(
+  request: VectorIndexSearchRequest,
+  options: VectorIndexOptions | undefined,
+): Promise<VectorIndexSearchResult> {
+  const resolved = resolveVectorIndexOptions(options);
+  try {
+    if (resolved.adapter !== undefined) return await resolved.adapter.searchCapsule(request);
+    if (resolved.mode === "disabled") return disabled();
+    return await searchBuiltIn(request, resolved);
+  } catch (error) {
+    const correlationId = reportUnexpectedFailure(resolved, error);
+    return unavailable(
+      "fallback-query-error",
+      "vector-index-query-failed",
+      undefined,
+      correlationId,
+    );
+  }
+}
+
+export function usearchIndexName(identity: EmbeddingModelIdentity): string {
+  return [
+    "keiko-hnsw",
+    String(identity.vectorDimensions),
+    identity.vectorMetric,
+    embeddingIdentityKey(identity),
+  ].join(":");
+}
+
+export const DEFAULT_MAX_INDEXED_VECTOR_BYTES = DEFAULT_MAX_INDEX_BYTES;

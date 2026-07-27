@@ -219,6 +219,10 @@ export function inventoryPathsMatch(expected, actual) {
   );
 }
 
+function catalogPathForFile(file) {
+  return `payload/Keiko/${file.relativePath}`;
+}
+
 export function inventoryAddsOnlyRuntimeAttestation(expected, actual) {
   const expectedPaths = expected.files.map((file) => file.relativePath);
   const actualPaths = actual.files.map((file) => file.relativePath);
@@ -231,8 +235,7 @@ export function inventoryAddsOnlyRuntimeAttestation(expected, actual) {
 }
 
 export function catalogForInventory(inventory) {
-  const paths = inventory.files.map((file) => `payload/Keiko/${file.relativePath}`);
-  return `${paths.join("\n")}\n`;
+  return `${inventory.files.map(catalogPathForFile).join("\n")}\n`;
 }
 
 function parseArgs(argv) {
@@ -420,6 +423,19 @@ export function bindRuntimeAttestation(stageRoot, manifest) {
     notarizationRequired: false,
     notarizationVerified: false,
   };
+  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
+    fail("manifest must contain exactly one native addon");
+  }
+  manifest.nativeAddons[0].signing = {
+    signatureKind: "authenticode",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: false,
+    notarizationVerified: false,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeAddons = globalThis.structuredClone(
+    manifest.nativeAddons,
+  );
   bindRuntimeAttestationSbom(stageRoot, manifest, attestation);
   manifest.releaseImpact.reviewedBinding.runtimeAttestation =
     globalThis.structuredClone(attestation);

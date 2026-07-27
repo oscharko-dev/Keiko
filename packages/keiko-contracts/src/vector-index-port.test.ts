@@ -50,20 +50,22 @@ describe("embeddingIdentityKey", () => {
     );
   });
 
-  // The absent-field sentinels are literal strings, so a free-text field carrying the sentinel
-  // value collides with "field absent". `normalization` cannot collide (its union excludes
-  // "legacy"), but `instructionVersion` and `embeddingSpaceFingerprint` are unconstrained strings.
-  // This pins the collision as known and accepted rather than leaving it undiscovered: an
-  // instructionVersion of literally "legacy" is indistinguishable from having none.
-  it("collides only where a hardening field is free text carrying the sentinel", () => {
-    expect(embeddingIdentityKey({ ...IDENTITY, instructionVersion: "legacy" })).toBe(
-      embeddingIdentityKey(IDENTITY),
-    );
-    expect(embeddingIdentityKey({ ...IDENTITY, embeddingSpaceFingerprint: "unverified" })).toBe(
-      embeddingIdentityKey(IDENTITY),
-    );
-    expect(embeddingIdentityKey({ ...IDENTITY, instructionVersion: "v1" })).not.toBe(
-      embeddingIdentityKey(IDENTITY),
+  it("distinguishes absent fields, former sentinel values, and delimiter-bearing values", () => {
+    for (const patch of [
+      { instructionVersion: "legacy" },
+      { embeddingSpaceFingerprint: "unverified" },
+      { modelId: "model|with|delimiters" },
+      { instructionVersion: "a|b" },
+    ] as const) {
+      expect(embeddingIdentityKey({ ...IDENTITY, ...patch })).not.toBe(
+        embeddingIdentityKey(IDENTITY),
+      );
+    }
+  });
+
+  it("has an explicit format version and preserves typed tuple members", () => {
+    expect(embeddingIdentityKey(IDENTITY)).toBe(
+      'keiko-embedding-identity:v2:["openai","text-embedding-3-small",4,"cosine",null,null,null,null]',
     );
   });
 });
@@ -85,7 +87,13 @@ describe("isValidVectorIndexQuery", () => {
     ["a zero candidate limit", { candidateLimit: 0 }],
     ["a negative candidate limit", { candidateLimit: -1 }],
     ["a fractional candidate limit", { candidateLimit: 1.5 }],
+    ["an excessive candidate limit", { candidateLimit: 10_001 }],
     ["a query vector of the wrong width", { queryVector: new Float32Array([1, 0]) }],
+    ["a non-finite query vector", { queryVector: new Float32Array([1, Number.NaN, 0]) }],
+    ["a zero query vector", { queryVector: new Float32Array(3) }],
+    ["duplicate candidate ids", { candidateIds: ["a", "a"] }],
+    ["an overlong candidate id", { candidateIds: ["a".repeat(4_097)] }],
+    ["an overlong partition key", { partitionKey: "p".repeat(4_097) }],
   ])("rejects %s", (_case, patch) => {
     expect(isValidVectorIndexQuery(query(patch))).toBe(false);
   });

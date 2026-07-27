@@ -3,7 +3,9 @@
 ## Status
 
 Accepted (maintainer decision, 2026-07-18; recorded by Issue #2565 for Epic #2556 and
-program Epic #2554).
+program Epic #2554). D1–D3 are amended by
+[ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md); the sqlite-vec activation and
+memory-deferral passages below remain as historical activation records, not the current runtime.
 
 ## Related decisions
 
@@ -123,8 +125,21 @@ receive only `semanticById`; the shared port never becomes a dependency of that 
 > **Superseded (2026-07-20, Issue #2632).** D3 composition is now built for `knowledge` and
 > `repo`; `memory` is still deferred with a recorded shape-mismatch reason. See the activation
 > record on D3 for the wiring points and the deferral rationale.
+>
+> **Amended (2026-07-27) by
+> [ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md).** The port now carries a
+> bounded candidate-id allow-list, which resolves the recorded memory shape mismatch without
+> widening its authorized partition. Knowledge, repository pods, and memory all compose the one
+> shared service; the vault and final ranker remain owners of their existing behavior.
 
 ### D2 — sqlite-vec remains dormant until its runtime is explicitly and safely configured
+
+> **Mechanism superseded (2026-07-27) by
+> [ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md).** The paragraphs in D2 record
+> the wave's prior sqlite-vec decisions. The current product uses a digest-pinned, portable,
+> in-memory USearch HNSW runtime, never enables SQLite extensions, and has deleted the sqlite-vec
+> provisioner and TEMP-index path. The closed namespaces, fail-closed posture, encryption
+> invariant, and bounded-memory requirement survive.
 
 > **Activation record (2026-07-20).** Locks 2 and 3 below describe the PRE-activation state and are
 > no longer true at the head of this wave. M2.2 discharged the activation obligation this decision
@@ -148,8 +163,9 @@ receive only `semanticById`; the shared port never becomes a dependency of that 
 > `scripts/provision-sqlite-vec.mjs` fetches the upstream release asset against a pinned SHA-256 for
 > local and CI verification only — the product never calls it. With nothing provisioned the resolver
 > yields no module and retrieval keeps using brute force, which is the same fail-closed outcome an
-> unavailable runtime already produced. Binary provenance and platform qualification are recorded in
-> [`docs/qa/sqlite-vec-ann-evidence.md`](../qa/sqlite-vec-ann-evidence.md).
+> unavailable runtime already produced. The retired sqlite-vec evidence note was deleted when this
+> mechanism was superseded; current binary provenance and platform qualification are recorded in
+> [`docs/qa/usearch-hnsw-evidence.md`](../qa/usearch-hnsw-evidence.md).
 >
 > The constraint that survives activation is unchanged and remains binding: encrypted stores return
 > `fallback-encrypted-store` and use brute force by design. Because keiko-server injects a key
@@ -271,6 +287,13 @@ conditions into an empty successful result that suppresses candidates.
 > within #2632. Memory composition follows when the port has a shape that admits a
 > caller-supplied candidate set, or when memory retrieval gains its own ANN backend and can
 > generate candidates from the vault partition directly.
+>
+> **Superseded (2026-07-27) by
+> [ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md) D1.** `candidateIds` is the
+> tighten-only port shape anticipated above. Memory passes its already selected, authorized,
+> decrypted candidate IDs through the same service; its vault ownership, signal fusion, weights,
+> MMR, and final ranking remain unchanged. Repository search is now durable-pod-only and the
+> retired per-request whole-file embedding/cache path has been deleted.
 
 ### D4 — One server reranker facade absorbs orchestration without moving consumer ports
 

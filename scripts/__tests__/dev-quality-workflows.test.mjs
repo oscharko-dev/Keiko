@@ -6,6 +6,8 @@ const root = resolve(import.meta.dirname, "..", "..");
 const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security.yml"), "utf8");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
 const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.mjs"), "utf8");
+const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
+const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
 const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 
 describe("dev quality workflows", () => {
@@ -109,6 +111,26 @@ describe("dev quality workflows", () => {
     expect(ci).toContain("node scripts/check-sonar-main-quality-gate.mjs");
   });
 
+  it("isolates local Sonar state by repository and selectable loopback port", () => {
+    expect(localSonar).toContain('sonar_port="${KEIKO_LOCAL_SONAR_PORT:-9234}"');
+    expect(localSonar).toContain("--path-format=absolute --git-common-dir");
+    expect(localSonar).toContain(
+      'compose_project="${COMPOSE_PROJECT_NAME:-keiko-sonar-${repository_id}-${sonar_port}}"',
+    );
+    expect(localSonar).toContain(
+      'credentials="${git_common_dir}/keiko-local-sonar-${instance_id}"',
+    );
+    expect(localSonar).toContain('--stop) action="stop"');
+    expect(localSonar).toContain(
+      'git -C "${repo_root}" diff -z --name-only --diff-filter=ACMR HEAD',
+    );
+    expect(localSonar).toContain('git -C "${repo_root}" ls-files -z --others --exclude-standard');
+    expect(localSonar).not.toContain("-Dsonar.javascript.node.maxspace=4096");
+    expect(localSonar).toContain('"-Dsonar.test.inclusions=${inclusions}"');
+    expect(localSonarCompose).toContain('"127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"');
+    expect(packageJson.scripts["gates:sonar:stop"]).toBe("./docker/gates/run-sonar.sh --stop");
+  });
+
   it("keeps scanner files, logs, and working data outside the repository", () => {
     expect(ci).toContain('scanner_zip="$RUNNER_TEMP/sonar-scanner-cli.zip"');
     expect(ci).toContain("SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64");
@@ -178,7 +200,7 @@ describe("dev quality workflows", () => {
       expect(block, `${job} job block must exist`).toBeDefined();
       expect(block).toContain("Install sandbox isolation backend (bubblewrap)");
       expect(block).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
-      expect(block).toContain("npm run provision:sqlite-vec");
+      expect(block).toContain("npm run provision:usearch");
     }
   });
 

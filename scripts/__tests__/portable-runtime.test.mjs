@@ -42,6 +42,10 @@ import {
   validatePortableReleaseSet,
 } from "../assemble-portable-release-assets.mjs";
 import { writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
+import {
+  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeTargetKey,
+} from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { runtimeActivationManifest } from "../runtime-activation-manifest.mjs";
 
 const DIGEST_A = "a".repeat(64);
@@ -143,6 +147,27 @@ describe("findPortableMetadataRedactionFailures", () => {
       ).not.toEqual([]);
     },
   );
+
+  it.each([
+    `sk-${"aA0_-".repeat(2)}`,
+    `ghp_${"aA0_".repeat(2)}`,
+    "-----BEGIN PRIVATE KEY-----",
+    "metadata password=opaque",
+    "metadata token=opaque",
+  ])("retains every secret-text signature after matcher decomposition", (value) => {
+    expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
+  });
+
+  it.each([
+    `sk-${"a".repeat(7)}`,
+    `ghp_${"a".repeat(7)}`,
+    `github_pat_${"a".repeat(81)}`,
+    `npm_${"a".repeat(35)}_`,
+    "xauthorization: Bearer opaque-value",
+    "authorization: Digest opaque-value",
+  ])("does not broaden secret-text signatures after matcher decomposition", (value) => {
+    expect(findPortableMetadataRedactionFailures(value)).toEqual([]);
+  });
 
   it("detects terminal credential labels and inline authorization syntax without rejecting qualified metadata", () => {
     for (const value of [
@@ -957,6 +982,7 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRun
       buildRuntimeSupervisor: writeRuntimeSupervisorFixture,
       buildSecureReadHelper: writeSecureReadHelperFixture,
       preparePackageSurface: preparePackageSurfaceForTest,
+      stageUsearchAddon: writeUsearchAddonFixture,
     },
   );
 }
@@ -967,6 +993,49 @@ function writePrimaryLauncherFixture(target, destination) {
 
 function writeSecureReadHelperFixture(target, destination) {
   writeFileSync(destination, `fixture secure read helper for ${target.platformTarget}\n`);
+}
+
+function writeUsearchAddonFixture(target, resourceRoot) {
+  const targetKey = usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
+  if (targetKey === undefined) throw new Error("missing USearch fixture target");
+  const approved = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  const executablePath = "runtime/native/usearch.node";
+  const licensePath = "runtime/licenses/usearch/LICENSE";
+  const destination = join(resourceRoot, ...executablePath.split("/"));
+  const licenseDestination = join(resourceRoot, ...licensePath.split("/"));
+  mkdirSync(dirname(destination), { recursive: true });
+  mkdirSync(dirname(licenseDestination), { recursive: true });
+  writeFileSync(destination, "fixture USearch addon");
+  writeFileSync(licenseDestination, "fixture USearch license");
+  return [
+    {
+      name: "usearch",
+      kind: "node-native-addon",
+      version: USEARCH_RUNTIME_MANIFEST.version,
+      platformTarget: target.platformTarget,
+      architecture: target.nodeArchitecture,
+      executablePath,
+      licensePath,
+      source: {
+        commitSha: USEARCH_RUNTIME_MANIFEST.sourceCommit,
+        tarballUrl: USEARCH_RUNTIME_MANIFEST.tarballUrl,
+        tarballSha256: USEARCH_RUNTIME_MANIFEST.tarballSha256,
+        binarySha256: approved.binarySha256,
+        licenseSha256: USEARCH_RUNTIME_MANIFEST.licenseSha256,
+      },
+      unsignedSha256: approved.binarySha256,
+      shippedSha256: approved.binarySha256,
+      sizeBytes: statSync(destination).size,
+      sbomBomRef: `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target.platformTarget}`,
+      signing: {
+        signatureKind: target.signatureKind,
+        verificationStatus: "unverified-staging",
+        signatureVerified: false,
+        notarizationRequired: target.nodePlatform === "darwin",
+        notarizationVerified: false,
+      },
+    },
+  ];
 }
 
 function writeRuntimeSupervisorFixture(target, destination) {
@@ -2398,6 +2467,34 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const assetPath = join(root, "keiko-macos-arm64.zip");
     const manifestPath = join(root, "manifest", "portable-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.nativeAddons).toMatchObject([
+      {
+        name: "usearch",
+        kind: "node-native-addon",
+        version: USEARCH_RUNTIME_MANIFEST.version,
+        platformTarget: "macos-arm64",
+        executablePath: "runtime/native/usearch.node",
+        licensePath: "runtime/licenses/usearch/LICENSE",
+      },
+    ]);
+    expect(
+      existsSync(
+        join(stagedMacResourcesRoot(outDir, "macos-arm64"), "runtime", "native", "usearch.node"),
+      ),
+    ).toBe(true);
+    const sbom = JSON.parse(readFileSync(join(root, "evidence", "sbom.cdx.json"), "utf8"));
+    const helperBuildScripts = Object.fromEntries(
+      sbom.components
+        .filter((component) => component.name.startsWith("keiko-"))
+        .map((component) => [
+          component.name,
+          component.properties.find((property) => property.name === "keiko:build-script")?.value,
+        ]),
+    );
+    expect(helperBuildScripts).toMatchObject({
+      "keiko-runtime-supervisor": "scripts/build-runtime-supervisor.mjs",
+      "keiko-secure-workspace-read": "scripts/build-secure-workspace-read.mjs",
+    });
     const identityModule = readFileSync(
       join(
         root,
@@ -2704,6 +2801,15 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const manifest = JSON.parse(
       readFileSync(join(outDir, "macos-x64", "manifest", "portable-manifest.json"), "utf8"),
     );
+    expect(manifest.nativeAddons).toMatchObject([
+      {
+        name: "usearch",
+        kind: "node-native-addon",
+        version: USEARCH_RUNTIME_MANIFEST.version,
+        platformTarget: "macos-x64",
+        executablePath: "runtime/native/usearch.node",
+      },
+    ]);
     expect(manifest.sidecarRuntimes[0]).toMatchObject({
       platformTarget: "macos-x64",
       executablePath: "runtime/sidecars/opencode-compatible/bin/opencode",

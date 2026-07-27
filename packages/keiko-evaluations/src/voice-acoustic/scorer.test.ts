@@ -78,6 +78,19 @@ describe("voice-acoustic scorer latency and barge-in gates", () => {
     expect(check(slowDuck, "local-barge-in-duck-latency")).toBe(false);
     expect(slowDuck.gatePassed).toBe(true);
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "fails closed for a non-finite acoustic ceiling (%s)",
+    (value) => {
+      const source = fixture("headset-clean");
+      const result = scoreVoiceAcousticFixture({
+        ...source,
+        budgets: { ...source.budgets, maxWer: value },
+      });
+      expect(check(result, "wer")).toBe(false);
+      expect(result.qualityPassed).toBe(false);
+    },
+  );
 });
 
 describe("voice-acoustic scorer endpointing and grounded ordering", () => {

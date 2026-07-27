@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateFloors, runRegressionProbes } from "./quality-helpers.js";
+import {
+  evaluateCeilings,
+  evaluateFloors,
+  meetsFiniteCeiling,
+  meetsFiniteFloor,
+  runRegressionProbes,
+} from "./quality-helpers.js";
 
 const SAMPLES = [0, 0.5, 0.999, 1, 1.5] as const;
 
@@ -36,6 +42,44 @@ describe("evaluateFloors", () => {
       ok: true,
       failures: [],
     });
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "fails closed for a non-finite metric value (%s)",
+    (value) => {
+      expect(evaluateFloors({ quality: value }, { quality: 0 })).toEqual({
+        ok: false,
+        failures: ["quality"],
+      });
+      expect(meetsFiniteFloor(value, 0)).toBe(false);
+    },
+  );
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "fails closed for a non-finite floor (%s)",
+    (floor) => {
+      expect(evaluateFloors({ quality: 1 }, { quality: floor })).toEqual({
+        ok: false,
+        failures: ["quality"],
+      });
+      expect(meetsFiniteFloor(1, floor)).toBe(false);
+    },
+  );
+});
+
+describe("evaluateCeilings", () => {
+  it("reports strict, missing, and non-finite failures through the shared evaluator", () => {
+    expect(
+      evaluateCeilings(
+        { within: 1, over: 3, nonFinite: Number.POSITIVE_INFINITY },
+        { within: 1, over: 2, missing: 1, nonFinite: 10 },
+      ),
+    ).toEqual({
+      ok: false,
+      failures: ["over", "missing", "nonFinite"],
+    });
+    expect(meetsFiniteCeiling(1, 1)).toBe(true);
+    expect(meetsFiniteCeiling(1, Number.POSITIVE_INFINITY)).toBe(false);
   });
 });
 

@@ -1,17 +1,17 @@
 // Clean-checkout demo runner for Issue #2634 (Epic #2556's Definition of Done). It drives the
-// REAL production retrieval/grounding path — no fixtures, no scripted ports — end-to-end on any
-// host:
+// The acceptance CLI drives the REAL production retrieval/grounding path with configured
+// providers. An explicitly labelled `hermetic-test` mode exists only for regression tests and is
+// never acceptance-eligible:
 //
-//   1. A fresh encrypted in-memory knowledge store (proves the ADR-0153 encrypted-store ANN
-//      boundary in the same run).
+//   1. A fresh encrypted in-memory knowledge store.
 //   2. A repository pod seeded via `refreshRepositoryPod` over a small, real subset of this repo.
-//   3. Three grounded queries through `runLocalKnowledgeRetrieval`, verifying:
-//        - the pipeline's ANN diagnostic reports `provider=sqlite-vec, status=available` (not
-//          `fallback-encrypted-store` and not `sqlite-vec-runtime-not-configured`);
-//        - a multi-file question resolves to citations across ≥ 2 files with file-and-line ranges;
+//   3. Grounded answers through the production conversation runner, verifying:
+//        - the pipeline reports the verified shared USearch provider as available and exposes its
+//          honest small-corpus exact crossover instead of pretending that HNSW ran;
+//        - a provider-generated answer attaches citations across ≥ 2 files with line ranges;
 //        - a deliberately evidence-free question abstains rather than fabricates;
-//        - the reranker facade's answer path differs where its `externalReranking` policy says it
-//          should (allow → transport-driven ordering; deny → deterministic fallback).
+//        - the provider-backed reranker and production answer generator run through their real
+//          configured transports in acceptance mode.
 //   4. Content-free evidence: counts, timings, statuses, and hashes; no excerpts, no answers, no
 //      repository content — validated before it leaves the runner.
 //
@@ -25,6 +25,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  ModelGatewayAnswerGenerator,
   createDefaultParserRegistry,
   createRepositoryPodShell,
   listRepositoryChunkLineRanges,
@@ -32,40 +33,53 @@ import {
   readRepositoryFileFingerprints,
   refreshRepositoryPod,
   resolveVectorIndexOptions,
-  runLocalKnowledgeRetrieval,
+  runGroundedAnswer,
 } from "@oscharko-dev/keiko-local-knowledge";
 import {
   EMBEDDING_INSTRUCTION_VERSION,
+  Gateway,
+  findConfiguredCapability,
   requestOpenAIEmbedding,
+  requestOpenAIEmbeddingBatch,
   verifyEmbeddingCapability,
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, rerankSelection } from "@oscharko-dev/keiko-server";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const EXTENSION_SUFFIX_BY_PLATFORM = { darwin: "dylib", win32: "dll" };
 const EMBEDDING_MODEL_ID = "keiko-clean-checkout-embedding";
 const RERANK_MODEL_ID = "keiko-clean-checkout-rerank";
+const ANSWER_MODEL_ID = "keiko-clean-checkout-answer";
 const DEMO_CAPSULE_ID = "clean-checkout-demo-capsule";
 const DEMO_SOURCE_ID = "clean-checkout-demo-source";
 const DEMO_TOP_K = 5;
 const DEMO_TOP_N = 3;
-// Retrieval floor for the deliberately evidence-free question. The multi-file query returns
-// scores well above this floor because the deterministic embedding gives it a high overlap with
-// two of the three indexed files; the abstention query — chosen from a different domain
-// entirely — reliably falls beneath. If a future embedding change lifts the abstention score
-// above this floor the AC turns red, so the demo cannot silently paper over a fabrication.
+// Strict retrieval floor for the deliberately evidence-free question. The unrelated query should
+// fall beneath it for both the hermetic vector model and a suitable acceptance provider. If it
+// does not, the AC turns red rather than silently papering over a generated response.
 const DEMO_ABSTENTION_MIN_SCORE = 0.995;
 const ANN_STATUS_AVAILABLE = "available";
-const ANN_PROVIDER_SQLITE_VEC = "sqlite-vec";
-const ANN_FORBIDDEN_STATUSES = ["fallback-encrypted-store", "sqlite-vec-runtime-not-configured"];
-const EVIDENCE_SCHEMA_VERSION = "1";
+const ANN_PROVIDER_USEARCH = "usearch";
+const ANN_FORBIDDEN_STATUSES = Object.freeze([
+  "disabled",
+  "fallback-unavailable",
+  "fallback-encrypted-store",
+  "fallback-unsupported-metric",
+  "fallback-incompatible-identity",
+  "fallback-index-too-large",
+  "fallback-query-error",
+]);
+export const CLEAN_CHECKOUT_EXECUTION_MODES = Object.freeze({
+  acceptance: "acceptance",
+  hermeticTest: "hermetic-test",
+});
+const EVIDENCE_SCHEMA_VERSION = "3";
 const EVIDENCE_DEMO_ID = "knowledge-m2-clean-checkout";
 const EVIDENCE_ISSUE_REF = "#2634";
 
 // A small, real slice of this repository — chosen because these three files SHARE the
-// vocabulary a multi-file grounded question needs (sqlite-vec loading, capsule stores, cosine
-// retrieval), so a query about the sqlite-vec extension resolves to chunks in ≥ 2 of them.
+// vocabulary a multi-file grounded question needs (USearch loading, the shared vector port, and
+// scoped retrieval), so a query about the provider resolves to chunks in ≥ 2 of them.
 //
 // The repository pod's `walkSource` recurses the whole `repositoryRoot`, so the pod's root is
 // scoped to this directory — indexing the entire workspace would drag `node_modules` in. The
@@ -83,7 +97,7 @@ export const DEMO_INDEXED_PATHS = Object.freeze(
 
 // Both queries live here so the CLI, the regression test, and the runbook all use the same text.
 export const MULTI_FILE_QUERY =
-  "How does the sqlite-vec extension get loaded and consulted by the vector index port?";
+  "Which files implement the USearch vector index provider, its port integration, and scoped retrieval? Cite at least two distinct files.";
 export const ABSTENTION_QUERY = "What is the recipe for a properly extracted moka-pot espresso?";
 
 export const ACCEPTANCE_CRITERIA = Object.freeze([
@@ -92,9 +106,9 @@ export const ACCEPTANCE_CRITERIA = Object.freeze([
     label: "Runs from a fresh clone with no build artifacts, no .keiko state, no pre-seeded store",
   },
   {
-    id: "ann-active",
+    id: "vector-index-active",
     label:
-      "ANN is active during the run (not fallback-encrypted-store, not sqlite-vec-runtime-not-configured)",
+      "The verified USearch provider is available and reports the honest small-corpus exact crossover",
   },
   {
     id: "multi-file-citations",
@@ -129,22 +143,44 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
-// Build an OpenAI-compatible embedding adapter pointing at the given loopback endpoint. Uses the
-// SAME `requestOpenAIEmbedding` the production model gateway ships (no scripted override): the
-// only difference from a real provider call is that the endpoint is our loopback mock.
-function buildDemoEmbeddingAdapter({ origin, apiKey, dimensions }) {
-  const endpoint = `${origin}/v1`;
+function requireConfiguredProvider(gatewayConfig, modelId, expectedKind) {
+  const capability = findConfiguredCapability(gatewayConfig, modelId);
+  if (capability?.kind !== expectedKind) {
+    throw new Error(
+      `clean-checkout demo: model '${modelId}' must have kind '${expectedKind}' in the configured gateway`,
+    );
+  }
+  const provider = gatewayConfig.providers.find((entry) => entry.modelId === modelId);
+  if (provider === undefined) {
+    throw new Error(`clean-checkout demo: provider '${modelId}' is not configured`);
+  }
+  return provider;
+}
+
+// Uses the same OpenAI-compatible scalar and batch transports as production indexing. Acceptance
+// mode supplies a parsed operator configuration; hermetic tests supply an explicitly labelled
+// loopback configuration and never become acceptance-eligible evidence.
+function buildDemoEmbeddingAdapter({ gatewayConfig, modelId, dimensions }) {
+  const provider = requireConfiguredProvider(gatewayConfig, modelId, "embedding");
   return {
-    endpoint,
-    apiKey,
+    modelId,
+    endpoint: provider.baseUrl,
+    apiKey: provider.apiKey,
+    ...(provider.apiKeyHeaderName === undefined
+      ? {}
+      : { apiKeyHeaderName: provider.apiKeyHeaderName }),
+    ...((provider.egress ?? gatewayConfig.egress) === undefined
+      ? {}
+      : { egress: provider.egress ?? gatewayConfig.egress }),
     request: (input) => requestOpenAIEmbedding(input),
+    requestBatch: (input) => requestOpenAIEmbeddingBatch(input),
     dimensions,
   };
 }
 
-function embeddingProbeInput(dimensions) {
+function embeddingProbeInput(dimensions, modelId) {
   return {
-    modelId: EMBEDDING_MODEL_ID,
+    modelId,
     provider: "openai",
     vectorMetric: "cosine",
     expectedDimensions: dimensions,
@@ -154,33 +190,33 @@ function embeddingProbeInput(dimensions) {
   };
 }
 
-// Provisioned sqlite-vec extension resolution. Mirrors the discipline in
-// `scripts/lib/knowledge-m2-closeout.mjs`: honour an operator-supplied path via env, otherwise fall
-// back to the `.sqlite-vec/<version>/vec0.<suffix>` layout the `provision:sqlite-vec` script writes.
-export function resolveProvisionedSqliteVecPath(repoRoot = REPO_ROOT_DEFAULT) {
-  const configured = process.env.KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH;
+// Resolve only a provisioned USearch binary. The acceptance CLI verifies its pinned digest before
+// calling the runner; the native provider repeats verification whenever HNSW loads it.
+export function resolveProvisionedUsearchPath({
+  repoRoot = REPO_ROOT_DEFAULT,
+  env = process.env,
+  platform = process.platform,
+  arch = process.arch,
+} = {}) {
+  const configured = env.KEIKO_USEARCH_BINARY_PATH;
   if (typeof configured === "string" && configured.length > 0 && existsSync(configured)) {
     return configured;
   }
-  const suffix = EXTENSION_SUFFIX_BY_PLATFORM[process.platform] ?? "so";
-  const candidate = join(repoRoot, ".sqlite-vec", "0.1.9", `vec0.${suffix}`);
+  const target = `${platform}-${arch}`;
+  const candidate = join(repoRoot, ".usearch", "2.26.0", target, "usearch.node");
   return existsSync(candidate) ? candidate : undefined;
 }
 
-function resolveDemoVectorIndex(sqliteVecExtensionPath) {
+function resolveDemoVectorIndex(usearchBinaryPath) {
   return resolveVectorIndexOptions(undefined, {
-    KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto",
-    ...(sqliteVecExtensionPath === undefined
-      ? {}
-      : { KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH: sqliteVecExtensionPath }),
+    KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "usearch",
+    ...(usearchBinaryPath === undefined ? {} : { KEIKO_USEARCH_BINARY_PATH: usearchBinaryPath }),
   });
 }
 
-// Encryption is on (ADR-0153 D1 boundary): the store pins TEMP storage to memory when opened with
-// the vector runtime, so the ANN path is REACHABLE on an encrypted store. This is the same check
-// the closeout gate certifies — the demo replays it end-to-end. Key material is generated per
-// invocation (`randomBytes`) rather than hard-coded, so nothing that could look like a committed
-// secret exists in the tree, and two runs open two distinct encrypted stores.
+// Encryption is on (ADR-0153 D1): the SQLite store is in memory and decrypted vectors are handed
+// only to the bounded in-process USearch engine. This runner exposes no index serialization path.
+// Key material is generated per invocation rather than hard-coded, and two runs use distinct keys.
 function openDemoStore(vectorIndex, encryptionKey) {
   return openKnowledgeStore({
     dbPath: ":memory:",
@@ -195,7 +231,7 @@ function openDemoStore(vectorIndex, encryptionKey) {
   });
 }
 
-function buildGatewayConfig(mockOrigin, secrets, _dimensions) {
+function buildHermeticGatewayConfig(mockOrigin, secrets) {
   return {
     providers: [
       {
@@ -249,15 +285,15 @@ function generateDemoSecrets() {
 }
 
 // A minimal `UiHandlerDeps`-shaped record — enough for `rerankSelection`. The facade only reads
-// `deps.env`, `deps.config`, `deps.redactor`, and the optional `deps.rerankRequest`, which we
-// leave as the default so the transport runs against our loopback rerank endpoint.
+// `deps.env`, `deps.config`, `deps.redactor`, and the optional `deps.rerankRequest`, which we leave
+// as the default so the transport runs against the configured rerank endpoint.
 //
 // The redactor is the standard `buildRedactor(env, config)` used across the server so this demo
 // exercises the same audit-redaction path as production, not a permissive string-cast. Nothing
-// hostile ever enters the demo's rerank documents (each is a synthetic `path:startLine-endLine`
-// string), but the point is that a future refactor that DID route sensitive text through this
-// path would find the standard redactor in place, not a pass-through that lets it slip out.
-function buildMinimalRerankDeps(gatewayConfig) {
+// Only citation-safe display names enter the rerank documents, but a future refactor that routed
+// sensitive text through this path would still find the standard redactor rather than a permissive
+// pass-through.
+function buildMinimalRerankDeps(gatewayConfig, env) {
   // Only the four fields `rerankSelection` actually reads: config, configPresent, env, egress,
   // redactor. `rerankRequest` deliberately left off so the facade uses the default
   // `requestLiteLLMRerank` transport (the production path we want the demo to exercise). No
@@ -265,16 +301,16 @@ function buildMinimalRerankDeps(gatewayConfig) {
   return {
     config: gatewayConfig,
     configPresent: true,
-    env: process.env,
+    env,
     egress: undefined,
-    redactor: buildRedactor(process.env, gatewayConfig),
+    redactor: buildRedactor(env, gatewayConfig),
   };
 }
 
 async function indexDemoRepositoryPod({ store, embeddingAdapter, repoRoot, signal }) {
   const identity = await verifyEmbeddingCapability(
     embeddingAdapter,
-    embeddingProbeInput(embeddingAdapter.dimensions),
+    embeddingProbeInput(embeddingAdapter.dimensions, embeddingAdapter.modelId),
   );
   if (!identity.ok) {
     throw new Error(`clean-checkout demo: embedding verification failed: ${identity.reason}`);
@@ -323,34 +359,68 @@ function toWorkspaceRelativePath(relativePath) {
   return `${DEMO_REPOSITORY_SUBDIR}/${relativePath}`;
 }
 
-function citationsForReferences(references, chunkLineRanges) {
+function lineRangesForAttachedCitations(citations, chunkLineRanges) {
   const byChunkId = new Map(chunkLineRanges.map((entry) => [entry.chunkId, entry]));
-  return references
-    .map((reference) => byChunkId.get(reference.citation.chunkId))
+  return citations
+    .map((entry) => byChunkId.get(entry.reference.citation.chunkId))
     .filter((entry) => entry !== undefined);
 }
 
-async function retrieveAndAssembleCitations({
+function instrumentAnswerGenerator(answerGenerator) {
+  let calls = 0;
+  return {
+    generator: {
+      generate: async (input) => {
+        calls += 1;
+        return answerGenerator.generate(input);
+      },
+    },
+    calls: () => calls,
+  };
+}
+
+function buildReferenceReranker({ gatewayConfig, env, policy }) {
+  return {
+    rerank: async (input) => {
+      const outcome = await rerankSelection({
+        deps: buildMinimalRerankDeps(gatewayConfig, env),
+        query: input.query.text,
+        candidates: input.references,
+        documentFor: (reference) => reference.citation.safeDisplayName,
+        topN: Math.min(DEMO_TOP_N, input.references.length),
+        fallbackMode: "slice-topN",
+        policy,
+        gatewayConfig,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+      return { references: outcome.selected, diagnostics: outcome.diagnostics };
+    },
+  };
+}
+
+async function runDemoGroundedAnswer({
   store,
   embeddingAdapter,
   vectorIndex,
+  answerGenerator,
+  referenceReranker,
   query,
-  chunkLineRanges,
   minScore,
 }) {
-  const result = await runLocalKnowledgeRetrieval(
-    { store, embeddingAdapter, vectorIndex },
+  return runGroundedAnswer(
     {
+      retrieval: { store, embeddingAdapter, vectorIndex },
+      answerGenerator,
+      ...(referenceReranker === undefined ? {} : { referenceReranker }),
+    },
+    {
+      conversationId: "clean-checkout-demo",
       text: query,
       capsuleId: DEMO_CAPSULE_ID,
       topK: DEMO_TOP_K,
       ...(minScore === undefined ? {} : { minScore }),
     },
   );
-  return {
-    result,
-    citations: citationsForReferences(result.references, chunkLineRanges),
-  };
 }
 
 // Deterministic byte-order string comparator used to keep the evidence's `citationFiles` list in
@@ -375,39 +445,17 @@ function fileLineHashForCitations(citations) {
   );
 }
 
-function rerankInputsFrom(citations) {
-  // The facade only needs a document text and an ordered candidate array to prove policy gating.
-  // We don't need to reproduce the answer prompt — the demo asserts the ORDER differs, which is a
-  // property of the `selected` list the facade returns.
-  return citations.map((entry) => ({
-    id: entry.chunkId,
-    document: `${entry.relativePath}:${String(entry.startLine)}-${String(entry.endLine)}`,
-  }));
-}
-
-async function exerciseRerankerFacade({ query, citations, gatewayConfig, policy }) {
-  const candidates = rerankInputsFrom(citations);
-  const deps = buildMinimalRerankDeps(gatewayConfig);
-  const outcome = await rerankSelection({
-    deps,
-    query,
-    candidates,
-    documentFor: (candidate) => candidate.document,
-    topN: Math.min(DEMO_TOP_N, candidates.length),
-    fallbackMode: "slice-topN",
-    policy,
-    gatewayConfig,
-  });
-  const orderedIds = outcome.selected.map((entry) => entry.id);
+function rerankerSummary(result) {
+  const diagnostics = result.reranker;
   return {
-    diagnosticStatus: outcome.diagnostics.status,
-    diagnosticFailureKind: outcome.diagnostics.failureKind,
-    candidateCount: outcome.diagnostics.candidateCount,
-    documentCount: outcome.diagnostics.documentCount,
-    keptCount: outcome.diagnostics.keptCount,
-    // The hash captures the ORDER of the selected candidates. Two runs whose facade paths agree
-    // produce the same hash; two runs whose paths differ produce different hashes.
-    selectedOrderHash: sha256Hex(stableStringify(orderedIds)),
+    diagnosticStatus: diagnostics?.status ?? "missing",
+    diagnosticFailureKind: diagnostics?.failureKind,
+    candidateCount: diagnostics?.candidateCount ?? 0,
+    documentCount: diagnostics?.documentCount ?? 0,
+    keptCount: diagnostics?.keptCount ?? 0,
+    selectedOrderHash: sha256Hex(
+      stableStringify(result.references.map((reference) => reference.chunkId)),
+    ),
   };
 }
 
@@ -422,94 +470,180 @@ function checkoutHygieneSummary(repoRoot) {
   };
 }
 
-// The ANN diagnostic proving the extension is loaded, the encrypted-store TEMP pin holds, and
-// retrieval is answering through the vec0 KNN path — not any of the fail-closed fallbacks.
-function extractAnnDiagnostic(retrievalResult) {
-  const vectorIndex = retrievalResult.diagnostics?.vectorIndex;
+function definedFields(record) {
+  return Object.fromEntries(Object.entries(record).filter((entry) => entry[1] !== undefined));
+}
+
+// The clean-demo corpus is intentionally below the USearch HNSW crossover. The provider must be
+// verified and available, while `searchMode=exact` truthfully records that the shared engine chose
+// its bounded exact lane. The separate >20k closeout proof certifies real HNSW execution.
+function extractVectorIndexDiagnostic(groundedResult) {
+  const vectorIndex = groundedResult.retrievalDiagnostics?.vectorIndex ?? {};
   return {
-    provider: vectorIndex?.provider ?? "unknown",
-    status: vectorIndex?.status ?? "unknown",
-    reason: vectorIndex?.reason,
-    indexName: vectorIndex?.indexName,
-    vectorCount: vectorIndex?.vectorCount,
+    provider: vectorIndex.provider ?? "unknown",
+    status: vectorIndex.status ?? "unknown",
+    ...definedFields({
+      reason: vectorIndex.reason,
+      indexName: vectorIndex.indexName,
+      vectorCount: vectorIndex.vectorCount,
+      searchMode: vectorIndex.searchMode,
+      examinedCandidateCount: vectorIndex.examinedCandidateCount,
+      estimatedIndexBytes: vectorIndex.estimatedIndexBytes,
+    }),
   };
 }
 
-// The abstention path is the "no references + noEvidence" branch of retrieval. It is content-free
-// by construction — no answer is generated, no LLM is called — so the demo needs only to prove
-// the retrieval reported `noEvidence: true` for the adversarial question, without matching any of
-// the indexed chunks.
-function abstentionSummary(retrievalResult) {
+function abstentionSummary(groundedResult) {
   return {
-    references: retrievalResult.references.length,
-    noEvidence: retrievalResult.noEvidence === true,
-    reason: retrievalResult.reason,
+    references: groundedResult.references.length,
+    citations: groundedResult.citations.length,
+    generatedCharacters: groundedResult.answer.length,
+    noEvidence: groundedResult.noEvidence === true,
+    reason: groundedResult.reason,
   };
 }
 
-function requireDemoOptions({ mockOrigin, embeddingDimensions }) {
-  if (mockOrigin === undefined || mockOrigin.length === 0) {
-    throw new Error("clean-checkout demo: mockOrigin is required (start the mock server first)");
+function requireDemoOptions({
+  executionMode,
+  gatewayConfig,
+  embeddingModelId,
+  answerModelId,
+  embeddingDimensions,
+  testAnswerGenerator,
+  usearchBinaryPath,
+}) {
+  if (!Object.values(CLEAN_CHECKOUT_EXECUTION_MODES).includes(executionMode)) {
+    throw new Error(`clean-checkout demo: unsupported execution mode '${String(executionMode)}'`);
   }
   if (embeddingDimensions === undefined) {
     throw new Error("clean-checkout demo: embeddingDimensions is required");
   }
+  if (gatewayConfig === undefined) {
+    throw new Error("clean-checkout demo: a parsed gateway configuration is required");
+  }
+  if (usearchBinaryPath === undefined) {
+    throw new Error(
+      "clean-checkout demo: verified USearch runtime is required; run npm run provision:usearch",
+    );
+  }
+  requireConfiguredProvider(gatewayConfig, embeddingModelId, "embedding");
+  if (gatewayConfig.reranker === undefined) {
+    throw new Error("clean-checkout demo: a configured provider-backed reranker is required");
+  }
+  if (executionMode === CLEAN_CHECKOUT_EXECUTION_MODES.acceptance) {
+    if (testAnswerGenerator !== undefined) {
+      throw new Error("clean-checkout demo: acceptance mode refuses an injected answer adapter");
+    }
+    requireConfiguredProvider(gatewayConfig, answerModelId, "chat");
+    return;
+  }
+  if (testAnswerGenerator === undefined) {
+    throw new Error("clean-checkout demo: hermetic-test mode requires an injected answer adapter");
+  }
 }
 
-// Drives the three grounded queries and returns the raw results the evidence builder needs. Kept
-// separate from `runCleanCheckoutDemo` so both stay under the LOC / complexity ceilings and the
-// query wiring is testable in isolation from evidence assembly.
+function answerGeneratorFor({ executionMode, gatewayConfig, answerModelId, testAnswerGenerator }) {
+  if (executionMode === CLEAN_CHECKOUT_EXECUTION_MODES.hermeticTest) {
+    return testAnswerGenerator;
+  }
+  return new ModelGatewayAnswerGenerator({
+    chatGateway: new Gateway(gatewayConfig),
+    modelId: answerModelId,
+    policy: "require-citations-or-state-no-evidence",
+  });
+}
+
+async function runMultiFileAnswers({
+  store,
+  embeddingAdapter,
+  vectorIndex,
+  answerGenerator,
+  gatewayConfig,
+  env,
+}) {
+  const shared = { store, embeddingAdapter, vectorIndex, answerGenerator, query: MULTI_FILE_QUERY };
+  const enabled = await runDemoGroundedAnswer({
+    ...shared,
+    referenceReranker: buildReferenceReranker({
+      gatewayConfig,
+      env,
+      policy: { externalReranking: "allow", localReranking: "deny" },
+    }),
+  });
+  const disabled = await runDemoGroundedAnswer({
+    ...shared,
+    referenceReranker: buildReferenceReranker({
+      gatewayConfig,
+      env,
+      policy: { externalReranking: "deny", localReranking: "deny" },
+    }),
+  });
+  return { enabled, disabled };
+}
+
 async function runDemoQueriesAndFacade({
   store,
   embeddingAdapter,
   vectorIndex,
   gatewayConfig,
+  env,
   index,
+  answerGenerator,
 }) {
-  const multiFile = await retrieveAndAssembleCitations({
+  const instrumented = instrumentAnswerGenerator(answerGenerator);
+  const { enabled, disabled } = await runMultiFileAnswers({
     store,
     embeddingAdapter,
     vectorIndex,
-    query: MULTI_FILE_QUERY,
-    chunkLineRanges: index.chunkLineRanges,
+    answerGenerator: instrumented.generator,
+    gatewayConfig,
+    env,
   });
-  const abstention = await retrieveAndAssembleCitations({
+  const beforeAbstention = instrumented.calls();
+  const abstention = await runDemoGroundedAnswer({
     store,
     embeddingAdapter,
     vectorIndex,
+    answerGenerator: instrumented.generator,
     query: ABSTENTION_QUERY,
-    chunkLineRanges: index.chunkLineRanges,
-    // The deterministic mock embedding still produces a non-zero cosine similarity for any pair
-    // of L2-normalised vectors (they share the shared-dimension floor). Force retrieval to
-    // reject anything that does not decisively match — the abstention query is chosen so no real
-    // chunk clears this bar, and a chunk that DID clear it would fail the AC anyway, so a
-    // shrinking min score cannot silently hide a fabricated citation.
     minScore: DEMO_ABSTENTION_MIN_SCORE,
   });
-  const rerankerEnabled = await exerciseRerankerFacade({
-    query: MULTI_FILE_QUERY,
-    citations: multiFile.citations,
-    gatewayConfig,
-    policy: { externalReranking: "allow", localReranking: "deny" },
-  });
-  const rerankerDisabled = await exerciseRerankerFacade({
-    query: MULTI_FILE_QUERY,
-    citations: multiFile.citations,
-    gatewayConfig,
-    policy: { externalReranking: "deny", localReranking: "deny" },
-  });
-  return { multiFile, abstention, rerankerEnabled, rerankerDisabled };
+  return {
+    multiFile: {
+      result: enabled,
+      citations: lineRangesForAttachedCitations(enabled.citations, index.chunkLineRanges),
+    },
+    abstention: {
+      result: abstention,
+      generationCalls: instrumented.calls() - beforeAbstention,
+    },
+    rerankerEnabled: rerankerSummary(enabled),
+    rerankerDisabled: rerankerSummary(disabled),
+  };
 }
 
-function buildAnnEvidence(ann) {
+function buildVectorIndexEvidence(vectorIndex) {
   return {
-    provider: ann.provider,
-    status: ann.status,
-    ...(ann.reason === undefined ? {} : { reason: ann.reason }),
-    ...(ann.indexName === undefined ? {} : { indexName: ann.indexName }),
-    ...(ann.vectorCount === undefined ? {} : { vectorCount: ann.vectorCount }),
+    provider: vectorIndex.provider,
+    status: vectorIndex.status,
+    ...(vectorIndex.reason === undefined ? {} : { reason: vectorIndex.reason }),
+    ...(vectorIndex.indexName === undefined
+      ? {}
+      : { indexIdentityHash: sha256Hex(vectorIndex.indexName) }),
+    ...(vectorIndex.vectorCount === undefined ? {} : { vectorCount: vectorIndex.vectorCount }),
+    ...(vectorIndex.searchMode === undefined ? {} : { searchMode: vectorIndex.searchMode }),
+    ...(vectorIndex.examinedCandidateCount === undefined
+      ? {}
+      : { examinedCandidateCount: vectorIndex.examinedCandidateCount }),
+    ...(vectorIndex.estimatedIndexBytes === undefined
+      ? {}
+      : { estimatedIndexBytes: vectorIndex.estimatedIndexBytes }),
     forbiddenStatusesAvoided: ANN_FORBIDDEN_STATUSES,
-    active: ann.provider === ANN_PROVIDER_SQLITE_VEC && ann.status === ANN_STATUS_AVAILABLE,
+    providerAvailable:
+      vectorIndex.provider === ANN_PROVIDER_USEARCH &&
+      vectorIndex.status === ANN_STATUS_AVAILABLE &&
+      vectorIndex.searchMode === "exact",
+    hnswQualifiedBy: "npm run check:knowledge-m2-closeout",
   };
 }
 
@@ -520,16 +654,20 @@ function buildMultiFileEvidence(multiFile) {
   return {
     queryHash: sha256Hex(MULTI_FILE_QUERY),
     referenceCount: multiFile.result.references.length,
+    attachedCitationCount: multiFile.result.citations.length,
     citationCount: multiFile.citations.length,
+    generatedCharacters: multiFile.result.answer.length,
+    generationHash: sha256Hex(multiFile.result.answer),
+    noEvidence: multiFile.result.noEvidence,
     distinctFileCount: distinctFiles.size,
     spansMultipleFiles: distinctFiles.size >= 2,
     // Byte-order comparator (see `byteOrderCompare` below) for a deterministic list across
     // every host. Sorting with the default `.sort()` uses the runtime's locale-aware string
     // ordering, so the recorded evidence would differ on hosts with a non-C locale.
     citationFiles: [...distinctFiles].sort(byteOrderCompare),
-    citationLinesResolved: multiFile.citations.every(
-      (entry) => entry.startLine > 0 && entry.endLine >= entry.startLine,
-    ),
+    citationLinesResolved:
+      multiFile.citations.length === multiFile.result.citations.length &&
+      multiFile.citations.every((entry) => entry.startLine > 0 && entry.endLine >= entry.startLine),
     fileLineHash: fileLineHashForCitations(multiFile.citations),
   };
 }
@@ -538,10 +676,13 @@ function buildAbstentionEvidence(abstention) {
   return {
     queryHash: sha256Hex(ABSTENTION_QUERY),
     ...abstentionSummary(abstention.result),
-    // A distinct summary field per the DoD wording — the abstention path must return an
-    // abstention rather than fabricate. `abstained` is true when retrieval reported noEvidence
-    // AND no citations were emitted.
-    abstained: abstention.result.noEvidence === true && abstention.citations.length === 0,
+    generationCalls: abstention.generationCalls,
+    abstained:
+      abstention.result.noEvidence === true &&
+      abstention.result.references.length === 0 &&
+      abstention.result.citations.length === 0 &&
+      abstention.result.answer.length === 0 &&
+      abstention.generationCalls === 0,
   };
 }
 
@@ -565,27 +706,28 @@ function buildRerankerEvidence(rerankerEnabled, rerankerDisabled) {
       documentCount: rerankerDisabled.documentCount,
       keptCount: rerankerDisabled.keptCount,
     },
-    // The DoD wording: the answer path must differ only where the facade's policy says it
-    // should. With external reranking allowed AND our loopback rerank endpoint online, the
-    // facade's transport reorders; with it denied, the facade returns the identity/slice order.
-    // Different order hashes are the observable proof of that difference.
+    // With external reranking allowed, the configured transport must produce an applied ordering;
+    // with it denied, the facade returns the governed fallback. Different hashes prove that the
+    // selected reference path—not merely a diagnostic label—changed.
     answerPathDiffers: rerankerEnabled.selectedOrderHash !== rerankerDisabled.selectedOrderHash,
   };
 }
 
-function assembleEvidence({ hygieneAtStart, index, queries, elapsedMs }) {
-  const ann = extractAnnDiagnostic(queries.multiFile.result);
+function assembleEvidence({ executionMode, hygieneAtStart, index, queries, elapsedMs }) {
+  const vectorIndex = extractVectorIndexDiagnostic(queries.multiFile.result);
   return {
     demo: EVIDENCE_DEMO_ID,
     issue: EVIDENCE_ISSUE_REF,
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
+    executionMode,
+    acceptanceEligible: executionMode === CLEAN_CHECKOUT_EXECUTION_MODES.acceptance,
     cleanCheckout: {
       ...hygieneAtStart,
       indexedPathsRequested: DEMO_INDEXED_PATHS.length,
       indexedPathsResolved: index.indexedPathCount,
       fingerprintCount: index.fingerprintCount,
     },
-    annActive: buildAnnEvidence(ann),
+    vectorIndex: buildVectorIndexEvidence(vectorIndex),
     multiFileQuery: buildMultiFileEvidence(queries.multiFile),
     abstention: buildAbstentionEvidence(queries.abstention),
     reranker: buildRerankerEvidence(queries.rerankerEnabled, queries.rerankerDisabled),
@@ -598,45 +740,55 @@ function assembleEvidence({ hygieneAtStart, index, queries, elapsedMs }) {
   };
 }
 
-export async function runCleanCheckoutDemo({
-  repoRoot = REPO_ROOT_DEFAULT,
-  mockOrigin,
-  embeddingDimensions,
-  sqliteVecExtensionPath = resolveProvisionedSqliteVecPath(repoRoot),
-  now = () => Date.now(),
+function resolveDemoGatewayConfig({ gatewayConfig, executionMode, mockOrigin }, secrets) {
+  if (gatewayConfig !== undefined) return gatewayConfig;
+  if (
+    executionMode !== CLEAN_CHECKOUT_EXECUTION_MODES.hermeticTest ||
+    typeof mockOrigin !== "string" ||
+    mockOrigin.length === 0
+  ) {
+    return undefined;
+  }
+  return buildHermeticGatewayConfig(mockOrigin, secrets);
+}
+
+async function executeCleanCheckoutDemo({
+  repoRoot,
+  runtime,
+  usearchBinaryPath,
+  env,
+  now,
   signal,
-} = {}) {
-  requireDemoOptions({ mockOrigin, embeddingDimensions });
-  const startedAtMs = now();
-  // Hygiene snapshot BEFORE anything runs. The field names imply this is what the caller's
-  // checkout looked like at start-of-run, so measuring it after indexing would be a lie —
-  // anything that writes `.keiko` or a build tree mid-run would go undetected. The rest of the
-  // demo runs against `:memory:` and never writes to disk, but the discipline is worth keeping.
-  const hygieneAtStart = checkoutHygieneSummary(repoRoot);
-  const secrets = generateDemoSecrets();
-  const vectorIndex = resolveDemoVectorIndex(sqliteVecExtensionPath);
+  secrets,
+  startedAtMs,
+  hygieneAtStart,
+}) {
+  const vectorIndex = resolveDemoVectorIndex(usearchBinaryPath);
   const store = openDemoStore(vectorIndex, secrets.storeEncryptionKey);
   try {
     const embeddingAdapter = buildDemoEmbeddingAdapter({
-      origin: mockOrigin,
-      apiKey: secrets.embeddingApiKey,
-      dimensions: embeddingDimensions,
+      gatewayConfig: runtime.gatewayConfig,
+      modelId: runtime.embeddingModelId,
+      dimensions: runtime.embeddingDimensions,
     });
-    const index = await indexDemoRepositoryPod({
-      store,
-      embeddingAdapter,
-      repoRoot,
-      ...(signal === undefined ? {} : { signal }),
+    const index = await indexDemoRepositoryPod({ store, embeddingAdapter, repoRoot, signal });
+    const answerGenerator = answerGeneratorFor({
+      executionMode: runtime.executionMode,
+      gatewayConfig: runtime.gatewayConfig,
+      answerModelId: runtime.answerModelId,
+      testAnswerGenerator: runtime.testAnswerGenerator,
     });
-    const gatewayConfig = buildGatewayConfig(mockOrigin, secrets, embeddingDimensions);
     const queries = await runDemoQueriesAndFacade({
       store,
       embeddingAdapter,
       vectorIndex,
-      gatewayConfig,
+      gatewayConfig: runtime.gatewayConfig,
+      env,
       index,
+      answerGenerator,
     });
     return assembleEvidence({
+      executionMode: runtime.executionMode,
       hygieneAtStart,
       index,
       queries,
@@ -645,6 +797,56 @@ export async function runCleanCheckoutDemo({
   } finally {
     store.close();
   }
+}
+
+export async function runCleanCheckoutDemo({
+  repoRoot = REPO_ROOT_DEFAULT,
+  executionMode = CLEAN_CHECKOUT_EXECUTION_MODES.acceptance,
+  mockOrigin,
+  gatewayConfig,
+  embeddingModelId = EMBEDDING_MODEL_ID,
+  answerModelId = ANSWER_MODEL_ID,
+  embeddingDimensions,
+  testAnswerGenerator,
+  usearchBinaryPath = resolveProvisionedUsearchPath({ repoRoot }),
+  env = process.env,
+  now = () => Date.now(),
+  signal,
+} = {}) {
+  const secrets = generateDemoSecrets();
+  const resolvedGatewayConfig = resolveDemoGatewayConfig(
+    { gatewayConfig, executionMode, mockOrigin },
+    secrets,
+  );
+  requireDemoOptions({
+    executionMode,
+    gatewayConfig: resolvedGatewayConfig,
+    embeddingModelId,
+    answerModelId,
+    embeddingDimensions,
+    testAnswerGenerator,
+    usearchBinaryPath,
+  });
+  const startedAtMs = now();
+  const hygieneAtStart = checkoutHygieneSummary(repoRoot);
+  return executeCleanCheckoutDemo({
+    repoRoot,
+    runtime: {
+      executionMode,
+      gatewayConfig: resolvedGatewayConfig,
+      embeddingModelId,
+      answerModelId,
+      embeddingDimensions,
+      testAnswerGenerator,
+    },
+    usearchBinaryPath,
+    env,
+    now,
+    signal,
+    secrets,
+    startedAtMs,
+    hygieneAtStart,
+  });
 }
 
 // ─── Evidence contract (validated before the runner returns / before the CLI prints) ─────────
@@ -673,8 +875,8 @@ function failuresForCriterion(id, evidence) {
   switch (id) {
     case "clean-checkout":
       return failuresCleanCheckout(evidence);
-    case "ann-active":
-      return failuresAnnActive(evidence);
+    case "vector-index-active":
+      return failuresVectorIndexActive(evidence);
     case "multi-file-citations":
       return failuresMultiFileCitations(evidence);
     case "abstention":
@@ -728,15 +930,46 @@ function failuresCleanCheckout(evidence) {
   return failures;
 }
 
-function failuresAnnActive(evidence) {
+function addFailureWhen(failures, condition, message) {
+  if (condition) failures.push(message);
+}
+
+function failuresVectorIndexActive(evidence) {
   const failures = [];
-  const record = evidence.annActive;
-  if (record === undefined) return ["missing:annActive"];
-  if (record.active !== true) failures.push(`ann-not-active:${record.status ?? "unknown"}`);
-  if (record.provider !== ANN_PROVIDER_SQLITE_VEC)
-    failures.push(`unexpected-provider:${record.provider ?? "unknown"}`);
+  const record = evidence.vectorIndex;
+  if (record === undefined) return ["missing:vectorIndex"];
+  addFailureWhen(
+    failures,
+    record.providerAvailable !== true,
+    `vector-index-not-available:${record.status ?? "unknown"}`,
+  );
+  addFailureWhen(
+    failures,
+    record.provider !== ANN_PROVIDER_USEARCH,
+    `unexpected-provider:${record.provider ?? "unknown"}`,
+  );
+  addFailureWhen(
+    failures,
+    record.status !== ANN_STATUS_AVAILABLE,
+    `provider-not-available:${record.status ?? "unknown"}`,
+  );
+  addFailureWhen(
+    failures,
+    record.searchMode !== "exact",
+    `unexpected-small-corpus-search-mode:${record.searchMode ?? "unknown"}`,
+  );
+  addFailureWhen(
+    failures,
+    record.hnswQualifiedBy !== "npm run check:knowledge-m2-closeout",
+    "missing-hnsw-qualification-reference",
+  );
+  addFailureWhen(
+    failures,
+    stableStringify(record.forbiddenStatusesAvoided) !== stableStringify(ANN_FORBIDDEN_STATUSES),
+    "forbidden-status-set-mismatch",
+  );
   for (const forbidden of ANN_FORBIDDEN_STATUSES) {
-    if (record.status === forbidden) failures.push(`forbidden-status:${forbidden}`);
+    addFailureWhen(failures, record.status === forbidden, `forbidden-status:${forbidden}`);
   }
   return failures;
 }
@@ -745,11 +978,22 @@ function failuresMultiFileCitations(evidence) {
   const failures = [];
   const record = evidence.multiFileQuery;
   if (record === undefined) return ["missing:multiFileQuery"];
-  if (record.citationCount <= 0) failures.push("no-citations");
-  if (record.distinctFileCount < 2)
-    failures.push(`single-file-only:${String(record.distinctFileCount)}`);
-  if (record.spansMultipleFiles !== true) failures.push("does-not-span-multiple-files");
-  if (record.citationLinesResolved !== true) failures.push("lines-unresolved");
+  addFailureWhen(failures, record.generatedCharacters <= 0, "no-generated-text");
+  addFailureWhen(
+    failures,
+    !/^[0-9a-f]{64}$/u.test(record.generationHash ?? ""),
+    "invalid-generation-hash",
+  );
+  addFailureWhen(failures, record.noEvidence !== false, "generation-reported-no-evidence");
+  addFailureWhen(failures, record.attachedCitationCount <= 0, "no-attached-citations");
+  addFailureWhen(failures, record.citationCount <= 0, "no-citations");
+  addFailureWhen(
+    failures,
+    record.distinctFileCount < 2,
+    `single-file-only:${String(record.distinctFileCount)}`,
+  );
+  addFailureWhen(failures, record.spansMultipleFiles !== true, "does-not-span-multiple-files");
+  addFailureWhen(failures, record.citationLinesResolved !== true, "lines-unresolved");
   return failures;
 }
 
@@ -759,6 +1003,12 @@ function failuresAbstention(evidence) {
   if (record === undefined) return ["missing:abstention"];
   if (record.abstained !== true) failures.push("did-not-abstain");
   if (record.references > 0) failures.push(`references-emitted:${String(record.references)}`);
+  if (record.citations > 0) failures.push(`citations-emitted:${String(record.citations)}`);
+  if (record.generatedCharacters > 0)
+    failures.push(`generated-characters:${String(record.generatedCharacters)}`);
+  if (record.generationCalls > 0)
+    failures.push(`generation-calls:${String(record.generationCalls)}`);
+  if (record.noEvidence !== true) failures.push("no-evidence-not-stated");
   return failures;
 }
 
@@ -766,13 +1016,31 @@ function failuresRerankerToggle(evidence) {
   const failures = [];
   const record = evidence.reranker;
   if (record === undefined) return ["missing:reranker"];
-  if (record.enabled?.policyExternalReranking !== "allow")
-    failures.push("enabled-policy-not-allow");
-  if (record.disabled?.policyExternalReranking !== "deny")
-    failures.push("disabled-policy-not-deny");
-  if (record.answerPathDiffers !== true) failures.push("answer-path-does-not-differ");
-  if (record.enabled?.selectedOrderHash === record.disabled?.selectedOrderHash)
-    failures.push("order-hashes-identical");
+  const enabled = record.enabled ?? {};
+  const disabled = record.disabled ?? {};
+  addFailureWhen(failures, enabled.policyExternalReranking !== "allow", "enabled-policy-not-allow");
+  addFailureWhen(failures, disabled.policyExternalReranking !== "deny", "disabled-policy-not-deny");
+  addFailureWhen(
+    failures,
+    enabled.diagnosticStatus !== "applied",
+    `enabled-reranker-not-applied:${enabled.diagnosticStatus ?? "missing"}`,
+  );
+  addFailureWhen(
+    failures,
+    disabled.diagnosticStatus !== "denied",
+    `disabled-reranker-not-denied:${disabled.diagnosticStatus ?? "missing"}`,
+  );
+  addFailureWhen(
+    failures,
+    disabled.diagnosticFailureKind !== "policy-denied",
+    "disabled-reranker-failure-kind",
+  );
+  addFailureWhen(failures, record.answerPathDiffers !== true, "answer-path-does-not-differ");
+  addFailureWhen(
+    failures,
+    enabled.selectedOrderHash === disabled.selectedOrderHash,
+    "order-hashes-identical",
+  );
   return failures;
 }
 
@@ -786,6 +1054,11 @@ function envelopeFailures(evidence) {
   if (evidence.issue !== EVIDENCE_ISSUE_REF) failures.push(`issue-ref:${String(evidence.issue)}`);
   if (evidence.schemaVersion !== EVIDENCE_SCHEMA_VERSION)
     failures.push(`schema-version:${String(evidence.schemaVersion)}`);
+  if (!Object.values(CLEAN_CHECKOUT_EXECUTION_MODES).includes(evidence.executionMode)) {
+    failures.push(`execution-mode:${String(evidence.executionMode)}`);
+  }
+  const eligible = evidence.executionMode === CLEAN_CHECKOUT_EXECUTION_MODES.acceptance;
+  if (evidence.acceptanceEligible !== eligible) failures.push("acceptance-eligibility");
   if (typeof evidence.elapsedMs !== "number" || evidence.elapsedMs < 0) failures.push("elapsed-ms");
   return failures;
 }

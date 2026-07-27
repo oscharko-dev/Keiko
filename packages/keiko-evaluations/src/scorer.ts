@@ -15,6 +15,7 @@ import {
   type SurfaceParityResult,
 } from "./types.js";
 import { mean } from "./metrics.js";
+import { meetsFiniteCeiling } from "./quality-helpers.js";
 
 // Everything the scorer needs about a single run. The runner builds this from the workflow report +
 // the recording writer's observed write count, so the scorer stays pure and report-shape-agnostic.
@@ -95,13 +96,13 @@ function scoreVerificationCompleteness(
 }
 
 function scorePatchSize(oracle: EvaluationFixture["oracle"], input: ScoringInput): DimensionResult {
-  if (input.changedFileCount > oracle.maxExpectedChangedFiles) {
+  if (!meetsFiniteCeiling(input.changedFileCount, oracle.maxExpectedChangedFiles)) {
     return fail(
       "patch-size",
       `changed ${String(input.changedFileCount)} files (limit ${String(oracle.maxExpectedChangedFiles)})`,
     );
   }
-  if (input.patchBytes > oracle.maxExpectedPatchBytes) {
+  if (!meetsFiniteCeiling(input.patchBytes, oracle.maxExpectedPatchBytes)) {
     return fail(
       "patch-size",
       `patch ${String(input.patchBytes)} bytes (limit ${String(oracle.maxExpectedPatchBytes)})`,

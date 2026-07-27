@@ -132,7 +132,7 @@ export interface RetrievalDiagnostics {
 }
 
 export interface RetrievalVectorIndexDiagnostics {
-  readonly provider: "brute-force" | "sqlite-vec";
+  readonly provider: "brute-force" | "usearch";
   readonly status:
     | "disabled"
     | "available"
@@ -145,8 +145,14 @@ export interface RetrievalVectorIndexDiagnostics {
     | "fallback-index-too-large"
     | "fallback-query-error";
   readonly reason?: string;
+  // Opaque identifier for an unexpected internal failure. The server uses the same value for its
+  // body-free operator diagnostic; no error message, query, path, or content crosses this surface.
+  readonly correlationId?: string;
   readonly indexName?: string;
   readonly vectorCount?: number;
+  readonly searchMode?: "exact" | "ann";
+  readonly examinedCandidateCount?: number;
+  readonly estimatedIndexBytes?: number;
 }
 
 // ─── Defaults ────────────────────────────────────────────────────────────────

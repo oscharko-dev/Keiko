@@ -1,8 +1,11 @@
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts";
-import type { CandidateFile, EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
+import type {
+  CandidateFile,
+  EvidenceAtom,
+  RetrievalQuery,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import type { RerankResult } from "@oscharko-dev/keiko-model-gateway";
 import type { RerankerSeam } from "@oscharko-dev/keiko-workflows";
-import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
@@ -69,7 +72,8 @@ export function configuredContextPackRerankerFor(
   query: RetrievalQuery,
   signal: AbortSignal | undefined,
 ): RerankerSeam | undefined {
-  const reranker = currentGatewayConfig(deps)?.reranker;
+  const gatewayConfig = currentGatewayConfig(deps);
+  const reranker = gatewayConfig?.reranker;
   if (reranker === undefined) {
     return undefined;
   }
@@ -79,6 +83,7 @@ export function configuredContextPackRerankerFor(
     rerank: async (candidates, atomsByPath, topK): Promise<readonly CandidateFile[]> => {
       const result = await rerankSelection({
         deps,
+        gatewayConfig,
         query: query.text,
         candidates,
         documentFor: (candidate) => candidateDocument(deps, candidate, atomsByPath),

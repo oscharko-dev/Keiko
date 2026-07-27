@@ -201,6 +201,8 @@ tests/memory-eval/scorecard.json
 
 # Checksum-verified sqlite-vec loadable extension for local/CI verification (scripts/provision-sqlite-vec.mjs).
 .sqlite-vec/
+# Checksum-verified USearch HNSW runtime for local/CI verification (scripts/provision-usearch.mjs).
+.usearch/
 
 # Vitest blob reports produced by a sharded coverage run and consumed by `--mergeReports`
 # (scripts test:coverage:packages:shard / :merge). Intermediate measurement evidence, never committed.

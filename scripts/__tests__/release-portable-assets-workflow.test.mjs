@@ -219,6 +219,20 @@ describe("portable secure-read qualification", () => {
     expect(secureReadNative).toMatch(/_write\(3, &byte, 1\).*_read\(4, &byte, 1\)/su);
     expect(secureReadNative.match(/pause_after_final_open\(\);/gu)).toHaveLength(2);
   });
+
+  it("configures MSVC through an analyzable PowerShell step", () => {
+    const windowsStage = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
+    const start = windowsStage.indexOf("      - name: Configure MSVC environment");
+    const end = windowsStage.indexOf("\n      - name:", start + 1);
+    const step = windowsStage.slice(start, end);
+
+    expect(step).toContain("shell: pwsh");
+    expect(step).not.toContain("shell: cmd");
+    expect(step).toContain('Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"');
+    expect(step).toContain("$environment = & cmd.exe /d /c $vcvarsWrapper");
+    expect(step).toContain('foreach ($name in @("PATH", "INCLUDE", "LIB", "LIBPATH"))');
+    expect(step).toContain("$line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append");
+  });
 });
 
 function productionStepPolicies() {

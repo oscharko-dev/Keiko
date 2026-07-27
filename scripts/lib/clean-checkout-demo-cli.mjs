@@ -1,6 +1,6 @@
 // The clean-checkout demo CLI's testable core (Issue #2634). The entry point at
 // `scripts/knowledge-m2-clean-checkout-demo.mjs` is a two-line shim that imports `main()` from
-// here — the heavy lifting (env parsing, extension resolution, mock server orchestration, evidence
+// here — the heavy lifting (env/config parsing, USearch resolution, evidence
 // validation, exit-code discipline) lives in this module so unit tests can drive every branch
 // directly without a subprocess boundary.
 //
@@ -8,17 +8,25 @@
 // spawned processes, so lcov (and Sonar) would see the CLI as unreachable dead code. Splitting the
 // logic out is the same pattern `scripts/lib/knowledge-m2-closeout.mjs` uses.
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { assetFor, extensionPathFor } from "../provision-sqlite-vec.mjs";
-import { startCleanCheckoutMockServer } from "./clean-checkout-demo-mock-server.mjs";
+import { loadConfigFromFile } from "@oscharko-dev/keiko-model-gateway";
+
+import {
+  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeTargetKey,
+} from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import { provisionedUsearchBinaryPath } from "../provision-usearch.mjs";
 import {
   ACCEPTANCE_CRITERIA,
+  CLEAN_CHECKOUT_EXECUTION_MODES,
   evaluateAcceptanceCriteria,
   evidenceRedactionFailures,
   renderAcceptanceReport,
-  resolveProvisionedSqliteVecPath,
+  resolveProvisionedUsearchPath,
   runCleanCheckoutDemo,
   validateEvidenceContract,
 } from "./clean-checkout-demo.mjs";
@@ -26,6 +34,9 @@ import {
 // Two-levels-up from this file lands on the repo root (`scripts/lib/<file>.mjs` → repo root).
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DEFAULT_DIMENSIONS = 32;
+const CONFIG_PATH_ENV = "KEIKO_CONFIG_FILE";
+const EMBEDDING_MODEL_ENV = "KEIKO_CLEAN_CHECKOUT_DEMO_EMBEDDING_MODEL_ID";
+const ANSWER_MODEL_ENV = "KEIKO_CLEAN_CHECKOUT_DEMO_ANSWER_MODEL_ID";
 
 // Labelled error so a top-level catch can distinguish "we chose to fail loudly" from an unhandled
 // runtime crash. Both map to `exitCode = 1`; the tests only need the identity.
@@ -33,6 +44,11 @@ export class CleanCheckoutDemoFailure extends Error {}
 
 function throwFailure(message) {
   throw new CleanCheckoutDemoFailure(message);
+}
+
+function failClosed(fail, message) {
+  fail(message);
+  throwFailure(message);
 }
 
 // Everything a test needs to inject into the CLI's runtime seams: env, argv, stdout/stderr, and
@@ -52,16 +68,29 @@ function resolveOutputs(stderr, stdout) {
   };
 }
 
+function defaultOrRequiredDimensions({ required, defaultDimensions, fail }) {
+  if (required) {
+    return failClosed(fail, "KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS is required in acceptance mode");
+  }
+  return defaultDimensions;
+}
+
 export function requestedDimensions({
   env,
   defaultDimensions = DEFAULT_DIMENSIONS,
+  required = false,
   fail = throwFailure,
 } = {}) {
   const raw = resolveEnv(env).KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS;
-  if (raw === undefined || raw.length === 0) return defaultDimensions;
+  if (raw === undefined || raw.length === 0) {
+    return defaultOrRequiredDimensions({ required, defaultDimensions, fail });
+  }
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed) || parsed < 8 || parsed > 4_096) {
-    fail(`KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS must be an integer in 8..4096, got '${raw}'`);
+    return failClosed(
+      fail,
+      `KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS must be an integer in 8..4096, got '${raw}'`,
+    );
   }
   return parsed;
 }
@@ -70,35 +99,92 @@ export function shouldPrettyPrint({ argv } = {}) {
   return resolveArgv(argv).includes("--pretty");
 }
 
-// The vec0 loadable extension is operator-provisioned (see `scripts/provision-sqlite-vec.mjs`).
-// This helper turns any missing-extension state into an actionable failure — the reader gets a
-// path hint AND the fix command, and the process exits non-zero before wasting time booting the
-// mock server. Tests substitute the platform/arch to exercise the "unsupported host" branch.
-export function requireProvisionedExtension({
-  repoRoot = REPO_ROOT_DEFAULT,
-  platform = process.platform,
-  arch = process.arch,
-  resolveExtensionPath = resolveProvisionedSqliteVecPath,
-  fail = throwFailure,
-} = {}) {
-  const provisioned = resolveExtensionPath(repoRoot);
-  if (provisioned !== undefined) return provisioned;
-  const asset = assetFor(platform, arch);
-  if (asset === undefined) {
-    fail(
-      `sqlite-vec has no published loadable extension for ${platform}-${arch}; the ANN diagnostic cannot reach 'available' on this host.`,
+function requireApprovedUsearchTarget(platform, arch, fail) {
+  const target = usearchRuntimeTargetKey(platform, arch);
+  if (target !== undefined) return target;
+  return failClosed(
+    fail,
+    `USearch has no approved Keiko runtime for ${platform}-${arch}; the vector provider cannot reach 'available' on this host.`,
+  );
+}
+
+function requireVerifiedProvisionedPath({
+  provisioned,
+  expectedSha256,
+  verifyRuntime,
+  expectedPath,
+  fail,
+}) {
+  if (provisioned !== undefined) {
+    if (verifyRuntime(provisioned, expectedSha256)) return provisioned;
+    return failClosed(
+      fail,
+      "USearch native runtime failed its platform-pinned SHA-256 verification",
     );
-    return "";
   }
-  const expected = extensionPathFor(resolve(repoRoot, ".sqlite-vec", "0.1.9"), platform);
-  fail(
+  return failClosed(
+    fail,
     [
-      "sqlite-vec loadable extension is not provisioned.",
-      `  expected: ${expected}`,
-      "  fix:      npm run provision:sqlite-vec",
+      "USearch native runtime is not provisioned.",
+      `  expected: ${expectedPath}`,
+      `  version:  ${USEARCH_RUNTIME_MANIFEST.version}`,
+      "  fix:      npm run provision:usearch",
     ].join("\n"),
   );
-  return "";
+}
+
+export function requireProvisionedUsearchRuntime({
+  repoRoot = REPO_ROOT_DEFAULT,
+  env = process.env,
+  platform = process.platform,
+  arch = process.arch,
+  resolveRuntimePath = resolveProvisionedUsearchPath,
+  verifyRuntime = verifyUsearchRuntime,
+  fail = throwFailure,
+} = {}) {
+  const target = requireApprovedUsearchTarget(platform, arch, fail);
+  const provisioned = resolveRuntimePath({ repoRoot, env, platform, arch });
+  return requireVerifiedProvisionedPath({
+    provisioned,
+    expectedSha256: USEARCH_RUNTIME_MANIFEST.targets[target].binarySha256,
+    verifyRuntime,
+    expectedPath: provisionedUsearchBinaryPath(repoRoot, platform, arch),
+    fail,
+  });
+}
+
+function verifyUsearchRuntime(path, expectedSha256) {
+  try {
+    const actual = createHash("sha256").update(readFileSync(path)).digest("hex");
+    return actual === expectedSha256;
+  } catch {
+    return false;
+  }
+}
+
+function requiredEnv(env, name, fail) {
+  const value = env[name]?.trim();
+  if (value === undefined || value.length === 0) {
+    return failClosed(fail, `${name} is required in acceptance mode`);
+  }
+  return value;
+}
+
+export function loadAcceptanceRuntime({
+  env = process.env,
+  loadConfig = loadConfigFromFile,
+  fail = throwFailure,
+} = {}) {
+  const configPath = requiredEnv(env, CONFIG_PATH_ENV, fail);
+  const embeddingModelId = requiredEnv(env, EMBEDDING_MODEL_ENV, fail);
+  const answerModelId = requiredEnv(env, ANSWER_MODEL_ENV, fail);
+  let gatewayConfig;
+  try {
+    gatewayConfig = loadConfig(configPath, env);
+  } catch {
+    return failClosed(fail, "could not load or validate the configured model provider");
+  }
+  return { gatewayConfig, embeddingModelId, answerModelId };
 }
 
 function logLine(stderr, message) {
@@ -107,52 +193,39 @@ function logLine(stderr, message) {
 
 function refuseFailedEvidence({ evidence, contractFailures, redactionFailures, acceptance, fail }) {
   if (redactionFailures.length > 0) {
-    fail(`evidence carries redaction violations: ${redactionFailures.join(", ")}`);
+    return failClosed(
+      fail,
+      `evidence carries redaction violations: ${redactionFailures.join(", ")}`,
+    );
   }
   if (!acceptance.ok || contractFailures.length > 0) {
     const detail =
       contractFailures.length === 0 ? "acceptance-not-ok" : contractFailures.join(", ");
-    fail(`evidence contract violations: ${detail}`);
+    return failClosed(fail, `evidence contract violations: ${detail}`);
   }
   return evidence;
 }
 
-async function runDemoWithMock({
-  mockOrigin,
-  dimensions,
-  sqliteVecExtensionPath,
-  repoRoot,
-  runDemo,
-}) {
-  return runDemo({
-    repoRoot,
-    mockOrigin,
-    embeddingDimensions: dimensions,
-    sqliteVecExtensionPath,
-  });
-}
-
 async function collectEvidence({
-  bootMock,
-  runDemo,
+  runtime,
   dimensions,
-  sqliteVecExtensionPath,
+  usearchBinaryPath,
   repoRoot,
+  runDemo,
+  env,
   log,
 }) {
-  const mock = await bootMock({ embeddingDimensions: dimensions });
-  log(`mock server: ready on loopback (dimensions=${String(dimensions)})`);
-  try {
-    return await runDemoWithMock({
-      mockOrigin: mock.origin,
-      dimensions,
-      sqliteVecExtensionPath,
-      repoRoot,
-      runDemo,
-    });
-  } finally {
-    await mock.close();
-  }
+  log(`configured providers: ready (dimensions=${String(dimensions)})`);
+  return runDemo({
+    repoRoot,
+    executionMode: CLEAN_CHECKOUT_EXECUTION_MODES.acceptance,
+    gatewayConfig: runtime.gatewayConfig,
+    embeddingModelId: runtime.embeddingModelId,
+    answerModelId: runtime.answerModelId,
+    embeddingDimensions: dimensions,
+    usearchBinaryPath,
+    env,
+  });
 }
 
 function emitAcceptanceAndEnforce({ evidence, log, fail }) {
@@ -162,6 +235,12 @@ function emitAcceptanceAndEnforce({ evidence, log, fail }) {
   log("Acceptance report:");
   for (const line of renderAcceptanceReport(evidence)) {
     log(`  ${line}`);
+  }
+  if (
+    evidence.executionMode !== CLEAN_CHECKOUT_EXECUTION_MODES.acceptance ||
+    evidence.acceptanceEligible !== true
+  ) {
+    return failClosed(fail, "evidence is not acceptance-eligible");
   }
   refuseFailedEvidence({ evidence, contractFailures, redactionFailures, acceptance, fail });
 }
@@ -179,23 +258,26 @@ export async function main({
   stdout,
   repoRoot = REPO_ROOT_DEFAULT,
   runDemo = runCleanCheckoutDemo,
-  bootMock = startCleanCheckoutMockServer,
-  requireExtension = requireProvisionedExtension,
+  requireRuntime = requireProvisionedUsearchRuntime,
+  loadRuntime = loadAcceptanceRuntime,
   parseDimensions = requestedDimensions,
   detectPretty = shouldPrettyPrint,
   fail = throwFailure,
 } = {}) {
   const outputs = resolveOutputs(stderr, stdout);
   const log = (message) => logLine(outputs.stderr, message);
-  const dimensions = parseDimensions({ env, fail });
-  const sqliteVecExtensionPath = requireExtension({ repoRoot, fail });
-  log("sqlite-vec extension: resolved (provisioned)");
+  const resolvedEnv = resolveEnv(env);
+  const dimensions = parseDimensions({ env: resolvedEnv, required: true, fail });
+  const usearchBinaryPath = requireRuntime({ repoRoot, env: resolvedEnv, fail });
+  const runtime = loadRuntime({ env: resolvedEnv, fail });
+  log("USearch runtime: resolved (platform-pinned SHA-256 verified)");
   const evidence = await collectEvidence({
-    bootMock,
+    runtime,
     runDemo,
     dimensions,
-    sqliteVecExtensionPath,
+    usearchBinaryPath,
     repoRoot,
+    env: resolvedEnv,
     log,
   });
   emitAcceptanceAndEnforce({ evidence, log, fail });

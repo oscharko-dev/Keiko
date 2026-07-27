@@ -34,6 +34,10 @@ import {
   verifySha256File,
 } from "./portable-runtime.mjs";
 import { writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
+import {
+  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeTargetKey,
+} from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -1344,6 +1348,88 @@ function assertNodeArchiveMagic(path, target) {
   fail(`Node archive bytes do not match ${target.nodeArchiveExtension}`);
 }
 
+function nativeHelperBuildScript(name) {
+  return name === SECURE_READ_NAME
+    ? "scripts/build-secure-workspace-read.mjs"
+    : "scripts/build-runtime-supervisor.mjs";
+}
+
+function nativeHelperSbomComponent(helper) {
+  return {
+    type: "application",
+    "bom-ref": helper.sbomBomRef,
+    name: helper.name,
+    version: rootPackage.version,
+    licenses: [{ license: { id: "Apache-2.0" } }],
+    hashes: [{ alg: "SHA-256", content: helper.shippedSha256 }],
+    properties: [
+      { name: "keiko:platform-target", value: helper.platformTarget },
+      { name: "keiko:architecture", value: helper.architecture },
+      { name: "keiko:source-commit", value: helper.source.commitSha },
+      { name: "keiko:source-tree-sha256", value: helper.source.treeSha256 },
+      { name: "keiko:unsigned-sha256", value: helper.unsignedSha256 },
+      { name: "keiko:build-script", value: nativeHelperBuildScript(helper.name) },
+      { name: "keiko:executable-path", value: helper.executablePath },
+      { name: "keiko:protocol-request-magic", value: helper.protocol.requestMagic },
+      { name: "keiko:protocol-response-magic", value: helper.protocol.responseMagic },
+      { name: "keiko:protocol-schema-version", value: String(helper.protocol.schemaVersion) },
+      { name: "keiko:source-path", value: helper.source.path },
+    ],
+  };
+}
+
+function nativeAddonSbomComponent(addon) {
+  return {
+    type: "library",
+    "bom-ref": addon.sbomBomRef,
+    name: addon.name,
+    version: addon.version,
+    purl: `pkg:npm/usearch@${addon.version}`,
+    licenses: [{ license: { id: "Apache-2.0" } }],
+    hashes: [{ alg: "SHA-256", content: addon.shippedSha256 }],
+    externalReferences: [
+      {
+        type: "distribution",
+        url: addon.source.tarballUrl,
+        hashes: [{ alg: "SHA-256", content: addon.source.tarballSha256 }],
+      },
+    ],
+    properties: [
+      { name: "keiko:platform-target", value: addon.platformTarget },
+      { name: "keiko:architecture", value: addon.architecture },
+      { name: "keiko:source-commit", value: addon.source.commitSha },
+      { name: "keiko:unsigned-sha256", value: addon.unsignedSha256 },
+      { name: "keiko:executable-path", value: addon.executablePath },
+      { name: "keiko:license-path", value: addon.licensePath },
+    ],
+  };
+}
+
+function sbomForManifest(manifest) {
+  return {
+    bomFormat: "CycloneDX",
+    specVersion: "1.6",
+    version: 1,
+    components: [
+      ...manifest.nativeHelpers.map(nativeHelperSbomComponent),
+      ...(manifest.nativeAddons ?? []).map(nativeAddonSbomComponent),
+    ],
+  };
+}
+
+function thirdPartyNotices() {
+  return [
+    "Portable runtime notices are assembled by the release pipeline.",
+    "",
+    `USearch ${USEARCH_RUNTIME_MANIFEST.version}`,
+    "Copyright Unum Cloud and contributors.",
+    "Licensed under Apache-2.0.",
+    "The complete upstream license is included at runtime/licenses/usearch/LICENSE.",
+    `Source: ${USEARCH_RUNTIME_MANIFEST.tarballUrl}`,
+    "",
+  ].join("\n");
+}
+
 function writeEvidence(stageRoot, manifest, provenanceStatement) {
   const evidenceRoot = join(stageRoot, "evidence");
   mkdirSync(evidenceRoot, { recursive: true });
@@ -1353,52 +1439,14 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
   );
   writeFileSync(
     join(evidenceRoot, "sbom.cdx.json"),
-    JSON.stringify(
-      {
-        bomFormat: "CycloneDX",
-        specVersion: "1.6",
-        version: 1,
-        components: manifest.nativeHelpers.map((helper) => ({
-          type: "application",
-          "bom-ref": helper.sbomBomRef,
-          name: helper.name,
-          version: rootPackage.version,
-          licenses: [{ license: { id: "Apache-2.0" } }],
-          hashes: [{ alg: "SHA-256", content: helper.shippedSha256 }],
-          properties: [
-            { name: "keiko:platform-target", value: helper.platformTarget },
-            { name: "keiko:architecture", value: helper.architecture },
-            { name: "keiko:source-commit", value: helper.source.commitSha },
-            { name: "keiko:source-tree-sha256", value: helper.source.treeSha256 },
-            { name: "keiko:unsigned-sha256", value: helper.unsignedSha256 },
-            { name: "keiko:build-script", value: nativeHelperBuildScript(helper.name) },
-            { name: "keiko:executable-path", value: helper.executablePath },
-            { name: "keiko:protocol-request-magic", value: helper.protocol.requestMagic },
-            { name: "keiko:protocol-response-magic", value: helper.protocol.responseMagic },
-            { name: "keiko:protocol-schema-version", value: String(helper.protocol.schemaVersion) },
-            { name: "keiko:source-path", value: helper.source.path },
-          ],
-        })),
-      },
-      null,
-      2,
-    ) + "\n",
+    JSON.stringify(sbomForManifest(manifest), null, 2) + "\n",
   );
-  writeFileSync(
-    join(evidenceRoot, "third-party-notices.txt"),
-    "Portable runtime notices are assembled by the release pipeline.\n",
-  );
+  writeFileSync(join(evidenceRoot, "third-party-notices.txt"), thirdPartyNotices());
   writeFileSync(
     join(evidenceRoot, "signing-verification.json"),
     JSON.stringify(portableVerificationSummaryForManifest(manifest), null, 2) + "\n",
   );
   writeFileSync(join(evidenceRoot, "provenance.intoto.jsonl"), provenanceStatement);
-}
-
-function nativeHelperBuildScript(name) {
-  return name === SECURE_READ_NAME
-    ? "scripts/build-secure-workspace-read.mjs"
-    : "scripts/build-runtime-supervisor.mjs";
 }
 
 function writeManifest(stageRoot, manifest) {
@@ -1409,7 +1457,14 @@ function writeManifest(stageRoot, manifest) {
   );
 }
 
-function provenanceStatementFor(options, target, digests, sidecarRuntimes, nativeHelpers) {
+function provenanceStatementFor(
+  options,
+  target,
+  digests,
+  sidecarRuntimes,
+  nativeHelpers,
+  nativeAddons,
+) {
   return (
     JSON.stringify({
       artifact: target.assetName,
@@ -1427,6 +1482,19 @@ function provenanceStatementFor(options, target, digests, sidecarRuntimes, nativ
         notarizationVerified: helper.signing.notarizationVerified,
         sourceTreeSha256: helper.source.treeSha256,
         unsignedSha256: helper.unsignedSha256,
+      })),
+      nativeAddons: nativeAddons.map((addon) => ({
+        architecture: addon.architecture,
+        executablePath: addon.executablePath,
+        name: addon.name,
+        shippedSha256: addon.shippedSha256,
+        signatureKind: addon.signing.signatureKind,
+        signatureVerified: addon.signing.signatureVerified,
+        notarizationVerified: addon.signing.notarizationVerified,
+        sourceCommitSha: addon.source.commitSha,
+        tarballSha256: addon.source.tarballSha256,
+        unsignedSha256: addon.unsignedSha256,
+        version: addon.version,
       })),
       sidecarRuntimeNames: sidecarRuntimes.map((runtime) => runtime.name),
       subjectDigest: digests.assetSha256,
@@ -1493,6 +1561,87 @@ function stageSecureReadHelper(target, resourceRoot, options, hooks) {
     unsignedSha256,
     sizeBytes: entry.size,
   });
+}
+
+function provisionedUsearchRuntime(target) {
+  const targetKey = usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
+  if (targetKey === undefined) fail("USearch has no approved runtime for the portable target");
+  const approved = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  const provisionedRoot = join(repoRoot, ".usearch", USEARCH_RUNTIME_MANIFEST.version, targetKey);
+  const sourceBinary = join(provisionedRoot, "usearch.node");
+  const sourceLicense = join(provisionedRoot, "LICENSE");
+  if (
+    !existsSync(sourceBinary) ||
+    !existsSync(sourceLicense) ||
+    sha256Bytes(readFileSync(sourceBinary)) !== approved.binarySha256 ||
+    sha256Bytes(readFileSync(sourceLicense)) !== USEARCH_RUNTIME_MANIFEST.licenseSha256
+  ) {
+    fail("USearch runtime is absent or failed its pinned digest");
+  }
+  return { approved, sourceBinary, sourceLicense };
+}
+
+function stageUsearchFiles(resourceRoot, runtime, copyFile) {
+  const executablePath = "runtime/native/usearch.node";
+  const licensePath = "runtime/licenses/usearch/LICENSE";
+  const destination = join(resourceRoot, ...executablePath.split("/"));
+  const licenseDestination = join(resourceRoot, ...licensePath.split("/"));
+  mkdirSync(dirname(destination), { recursive: true });
+  mkdirSync(dirname(licenseDestination), { recursive: true });
+  copyFile(runtime.sourceBinary, destination);
+  copyFile(runtime.sourceLicense, licenseDestination);
+  chmodLauncher(destination);
+  return { destination, executablePath, licensePath };
+}
+
+function failUsearchStaging(onFailure, message) {
+  onFailure(message);
+  throw new Error("portable USearch staging aborted");
+}
+
+export function stageUsearchAddon(
+  target,
+  resourceRoot,
+  { copyFile = copyFileSync, onFailure = fail, resolveRuntime = provisionedUsearchRuntime } = {},
+) {
+  const runtime = resolveRuntime(target);
+  const staged = stageUsearchFiles(resourceRoot, runtime, copyFile);
+  const shippedSha256 = sha256Bytes(readFileSync(staged.destination));
+  if (shippedSha256 !== runtime.approved.binarySha256) {
+    return failUsearchStaging(
+      onFailure,
+      "USearch staged runtime failed its platform-pinned digest",
+    );
+  }
+  return [
+    {
+      name: "usearch",
+      kind: "node-native-addon",
+      version: USEARCH_RUNTIME_MANIFEST.version,
+      platformTarget: target.platformTarget,
+      architecture: target.nodeArchitecture,
+      executablePath: staged.executablePath,
+      licensePath: staged.licensePath,
+      source: {
+        commitSha: USEARCH_RUNTIME_MANIFEST.sourceCommit,
+        tarballUrl: USEARCH_RUNTIME_MANIFEST.tarballUrl,
+        tarballSha256: USEARCH_RUNTIME_MANIFEST.tarballSha256,
+        binarySha256: runtime.approved.binarySha256,
+        licenseSha256: USEARCH_RUNTIME_MANIFEST.licenseSha256,
+      },
+      unsignedSha256: runtime.approved.binarySha256,
+      shippedSha256,
+      sizeBytes: lstatSync(staged.destination).size,
+      sbomBomRef: `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target.platformTarget}`,
+      signing: {
+        signatureKind: target.signatureKind,
+        verificationStatus: "unverified-staging",
+        signatureVerified: false,
+        notarizationRequired: target.nodePlatform === "darwin",
+        notarizationVerified: false,
+      },
+    },
+  ];
 }
 
 function buildSecureReadHelper(target, destination) {
@@ -1899,15 +2048,17 @@ function manifestEvidence() {
   };
 }
 
-function manifestReviewedBinding(
-  options,
-  target,
-  digests,
-  nodeIdentity,
-  security,
-  sidecarRuntimes,
-  nativeHelpers,
-) {
+function manifestReviewedBinding(input) {
+  const {
+    options,
+    target,
+    digests,
+    nodeIdentity,
+    security,
+    sidecarRuntimes,
+    nativeHelpers,
+    nativeAddons,
+  } = input;
   const binding = {
     releaseId: options.releaseId,
     releaseTag: options.releaseTag,
@@ -1934,26 +2085,18 @@ function manifestReviewedBinding(
   };
   if (sidecarRuntimes.length > 0) binding.sidecarRuntimes = cloneJson(sidecarRuntimes);
   binding.nativeHelpers = cloneJson(nativeHelpers);
+  binding.nativeAddons = cloneJson(nativeAddons);
   return binding;
 }
 
 function manifestReleaseImpact(input) {
-  const { options, target, digests, nodeIdentity, security, sidecarRuntimes, nativeHelpers } =
-    input;
+  const { options } = input;
   return {
     catalogPath: "app/release-impact.catalog.json",
     entryId: input.releaseImpactEntry.id,
     entryPackageVersion: rootPackage.version,
     entryReleaseTag: options.releaseTag,
-    reviewedBinding: manifestReviewedBinding(
-      options,
-      target,
-      digests,
-      nodeIdentity,
-      security,
-      sidecarRuntimes,
-      nativeHelpers,
-    ),
+    reviewedBinding: manifestReviewedBinding(input),
   };
 }
 
@@ -1980,7 +2123,14 @@ function manifestUpdateEligibility() {
   };
 }
 
-function manifestFor(options, target, digests, sidecarRuntimes = [], nativeHelpers = []) {
+function manifestFor(
+  options,
+  target,
+  digests,
+  sidecarRuntimes = [],
+  nativeHelpers = [],
+  nativeAddons = [],
+) {
   const assetSha = digests.assetSha256;
   const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
   const security = manifestSecurity(target);
@@ -1993,6 +2143,7 @@ function manifestFor(options, target, digests, sidecarRuntimes = [], nativeHelpe
     provenance: manifestProvenance(options, digests),
     runtime: manifestRuntime(options, target, digests),
     nativeHelpers,
+    nativeAddons,
     packageSurface: manifestPackageSurface(),
     entrypoints: {
       primaryLauncher: target.primaryLauncher,
@@ -2011,6 +2162,7 @@ function manifestFor(options, target, digests, sidecarRuntimes = [], nativeHelpe
       releaseImpactEntry,
       sidecarRuntimes,
       nativeHelpers,
+      nativeAddons,
     }),
     updateEligibility: manifestUpdateEligibility(),
   };
@@ -2109,11 +2261,13 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
     stageSecureReadHelper(target, paths.resourceRoot, options, hooks),
     stageRuntimeSupervisor(target, paths.resourceRoot, options, hooks),
   ];
+  const nativeAddons = (hooks.stageUsearchAddon ?? stageUsearchAddon)(target, paths.resourceRoot);
   const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
   const staged = {
     nodeArchiveSha256,
     sidecarRuntimes,
     nativeHelpers,
+    nativeAddons,
   };
   const firstPass = await manifestInputFor(options, target, paths, tarball, staged);
   writeRuntimeActivationManifest(paths.resourceRoot, firstPass.manifest);
@@ -2134,6 +2288,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
     { assetSha256 },
     staged.sidecarRuntimes,
     staged.nativeHelpers,
+    staged.nativeAddons,
   );
   const provenanceSha256 = sha256Text(provenanceStatement);
   return {
@@ -2150,6 +2305,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
       },
       staged.sidecarRuntimes,
       staged.nativeHelpers,
+      staged.nativeAddons,
     ),
     provenanceStatement,
   };

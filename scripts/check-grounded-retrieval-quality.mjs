@@ -14,6 +14,7 @@ import {
   evaluateGroundedRetrievalBudget,
   runGroundedRetrievalQualityEval,
 } from "@oscharko-dev/keiko-server";
+import { runRegressionProbes as runSharedRegressionProbes } from "@oscharko-dev/keiko-evaluations";
 
 function formatPct(value) {
   return `${(value * 100).toFixed(1)}%`;
@@ -27,32 +28,36 @@ function formatScorecard(scorecard) {
   );
 }
 
-async function runRegressionProbes(onLog) {
-  const reports = [];
-  for (const mode of GROUNDED_RETRIEVAL_REGRESSION_MODES) {
-    const scorecard = await runGroundedRetrievalQualityEval(mode);
-    const result = evaluateGroundedRetrievalBudget(scorecard);
-    onLog(
-      `grounded-retrieval-quality regression: ${formatScorecard(scorecard)} -> ok=${result.ok}`,
-    );
-    reports.push({ mode, ok: result.ok });
-  }
-  return reports;
+async function runGroundedRetrievalRegressionProbes(onLog) {
+  return runSharedRegressionProbes({
+    fixtures: GROUNDED_RETRIEVAL_REGRESSION_MODES,
+    probeFixtureIds: GROUNDED_RETRIEVAL_REGRESSION_MODES,
+    fixtureId: (mode) => mode,
+    regressFixture: (mode) => mode,
+    runFixture: async (mode) => {
+      const scorecard = await runGroundedRetrievalQualityEval(mode);
+      const result = evaluateGroundedRetrievalBudget(scorecard);
+      onLog(
+        `grounded-retrieval-quality regression: ${formatScorecard(scorecard)} -> ok=${result.ok}`,
+      );
+      return result;
+    },
+    droppedBelowFloors: (result) => !result.ok,
+  });
 }
 
-function collectFailures(baselineResult, rerankerOffResult, regressionReports) {
+export function collectFailures(baselineResult, rerankerOffResult, regression) {
   const failures = [];
   if (!baselineResult.ok)
     failures.push(`baseline below floors (${baselineResult.failures.join(", ")})`);
   if (!rerankerOffResult.ok)
     failures.push(`reranker-off control below floors (${rerankerOffResult.failures.join(", ")})`);
-  for (const report of regressionReports) {
-    if (report.ok) {
-      failures.push(
-        `injected regression '${report.mode}' did NOT drop below floors (tautological gate)`,
-      );
-    }
+  for (const mode of regression.tautological) {
+    failures.push(`injected regression '${mode}' did NOT drop below floors (tautological gate)`);
   }
+  if (regression.probed === 0) failures.push("injected regressions did not run");
+  if (regression.unresolved.length > 0)
+    failures.push(`unresolved injected regressions: ${regression.unresolved.join(", ")}`);
   return failures;
 }
 
@@ -84,9 +89,9 @@ export async function runGroundedRetrievalQualityGate({ log, fail } = {}) {
   onLog(`grounded-retrieval-quality control: ${formatScorecard(rerankerOff)}`);
 
   // 3. Non-tautology proof: every injected ranking / reranker regression MUST drop below the floors.
-  const regressionReports = await runRegressionProbes(onLog);
+  const regression = await runGroundedRetrievalRegressionProbes(onLog);
 
-  const failures = collectFailures(baselineResult, rerankerOffResult, regressionReports);
+  const failures = collectFailures(baselineResult, rerankerOffResult, regression);
   if (failures.length > 0) {
     onFail(failures.join("; "));
     return { ok: false, failures };

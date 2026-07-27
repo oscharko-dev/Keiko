@@ -135,6 +135,30 @@ function required(options, name) {
   return options[name];
 }
 
+function assertNativeHelperInventory(manifest, paths) {
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 2) {
+    fail("manifest must contain the complete native helper set");
+  }
+  for (const helper of manifest.nativeHelpers) {
+    const executable = `Keiko.app/Contents/Resources/${helper.executablePath}`;
+    if (!paths.has(executable)) fail("manifest native helper is missing from the Mach-O inventory");
+  }
+}
+
+function assertManifestCodeObjects(manifest, paths) {
+  for (const sidecar of manifest.sidecarRuntimes ?? []) {
+    const executable = `Keiko.app/Contents/Resources/${sidecar.executablePath}`;
+    if (!paths.has(executable))
+      fail("manifest sidecar executable is missing from the Mach-O inventory");
+  }
+  assertNativeHelperInventory(manifest, paths);
+  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
+    fail("manifest must contain exactly one native addon");
+  }
+  const addon = `Keiko.app/Contents/Resources/${manifest.nativeAddons[0].executablePath}`;
+  if (!paths.has(addon)) fail("manifest native addon is missing from the Mach-O inventory");
+}
+
 function inventoryCommand(options) {
   const stage = resolve(required(options, "stage-root"));
   const inventory = inventoryMacPortableCode(
@@ -145,20 +169,7 @@ function inventoryCommand(options) {
     readFileSync(join(stage, "manifest", "portable-manifest.json"), "utf8"),
   );
   const paths = new Set(inventory.codeObjects.map((entry) => entry.relativePath));
-  for (const sidecar of manifest.sidecarRuntimes ?? []) {
-    const executable = `Keiko.app/Contents/Resources/${sidecar.executablePath}`;
-    if (!paths.has(executable))
-      fail("manifest sidecar executable is missing from the Mach-O inventory");
-  }
-  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 2) {
-    fail("manifest must contain the complete native helper set");
-  }
-  for (const helper of manifest.nativeHelpers) {
-    const helperExecutable = `Keiko.app/Contents/Resources/${helper.executablePath}`;
-    if (!paths.has(helperExecutable)) {
-      fail("manifest native helper is missing from the Mach-O inventory");
-    }
-  }
+  assertManifestCodeObjects(manifest, paths);
   writeFileSync(
     resolve(required(options, "inventory")),
     `${JSON.stringify(inventory, null, 2)}\n`,
@@ -247,7 +258,24 @@ function prepareQualifiedPayloadCommand(options) {
   manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
     manifest.nativeHelpers,
   );
+  markNativeAddonVerified(manifest);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function markNativeAddonVerified(manifest) {
+  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
+    fail("manifest must contain exactly one native addon");
+  }
+  manifest.nativeAddons[0].signing = {
+    signatureKind: "developer-id-notarized",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: true,
+    notarizationVerified: true,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeAddons = globalThis.structuredClone(
+    manifest.nativeAddons,
+  );
 }
 
 function markNativeHelpersVerified(manifest) {
@@ -330,6 +358,7 @@ async function finalize(options) {
   assertProductionInput(inputPath, manifest);
   markMacosProductionState(manifest);
   markNativeHelpersVerified(manifest);
+  markNativeAddonVerified(manifest);
   bindRuntimeQualification(stage, manifest);
   manifest.runtimeActivation.trustAnchor = "developer-id-app-resource-seal";
   const archivePath = join(stage, manifest.artifact.assetName);

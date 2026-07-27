@@ -3,6 +3,7 @@
 #   npm run gates:sonar          # analyse the working tree, report findings on files you changed
 #   npm run gates:sonar:all      # the same, but report every finding in the project
 #   npm run gates:sonar:stop     # shut the server down and keep its cache for next time
+#   KEIKO_LOCAL_SONAR_PORT=9235 npm run gates:sonar # isolated server when 9234 is occupied
 #
 # WHY THIS EXISTS: `npm run check:sonar-rules` runs eslint-plugin-sonarjs, which carries 279 rules.
 # SonarCloud runs the full SonarJS analyzer, which carries hundreds more — and the rules that have
@@ -26,7 +27,7 @@ services:
       # bootstrap checks is what lets it start on Docker Desktop without a host sysctl change.
       SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
     ports:
-      - "127.0.0.1:9234:9000"
+      - "127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"
     # No container healthcheck: the image carries no wget, curl, bash or python, so nothing
     # inside it can probe the port. `run-sonar.sh` waits from the host, which can.
     volumes:
