@@ -739,17 +739,46 @@ describe("WorkspaceScriptTrust package-manifest basis edge cases", () => {
     }
   });
 
-  it("keeps a grant durable across a transient unreadable manifest (no permanent demotion)", () => {
+  it("durably invalidates a known basis that becomes absent and never resurrects it (#2772)", () => {
+    const notified: string[] = [];
+    const trust = createWorkspaceScriptTrustService({
+      store,
+      onRestricted: (canonicalRoot) => notified.push(canonicalRoot),
+    });
+    const workspace = validWorkspace();
+    const canonicalRoot = nodeWorkspaceFs.realPath(root);
+    const rootRef = deriveWorkspaceRootRef(canonicalRoot);
+    trust.grant(root);
+    expect(trust.isTrusted(root, workspace)).toBe(true);
+
+    rmSync(join(root, "package.json"), { force: true });
+    expect(trust.isTrusted(root, workspace)).toBe(false);
+    const row = store.readWorkspaceTrustRecord(rootRef);
+    expect(readTrustFrom(row?.recordJson)).toBe("restricted");
+    expect(row?.revision).toBe(1);
+    expect(readReasonFrom(row?.recordJson)).toBe("trust-basis-changed");
+    expect(notified).toEqual([canonicalRoot]);
+
+    writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
+    expect(trust.isTrusted(root, workspace)).toBe(false);
+    const restored = store.readWorkspaceTrustRecord(rootRef);
+    expect(readTrustFrom(restored?.recordJson)).toBe("restricted");
+    expect(restored?.revision).toBe(1);
+  });
+
+  it("keeps a grant durable across a transient unavailable manifest", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     const workspace = validWorkspace();
     trust.grant(root);
     expect(trust.isTrusted(root, workspace)).toBe(true);
-    rmSync(join(root, "package.json"), { force: true });
+
+    writeFileSync(join(root, "package.json"), "[]", "utf8");
     expect(trust.isTrusted(root, workspace)).toBe(false);
     const row = store.readWorkspaceTrustRecord(
       deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(root)),
     );
     expect(readTrustFrom(row?.recordJson)).toBe("trusted");
+
     writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
     expect(trust.isTrusted(root, workspace)).toBe(true);
   });

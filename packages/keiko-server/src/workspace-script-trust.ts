@@ -411,9 +411,10 @@ function invalidationReason(
 // without an `identity-changed` revision being written, and without notifyRestricted reaching the
 // managed LSP pool, leaving a language server running against a directory the grant never covered.
 //
-// The basis-only path keeps requiring `known`. A `package.json` that disappears leaves an `absent`
-// basis, and the regression pin "keeps a grant durable across a transient unreadable manifest"
-// holds that a vanished manifest is transient and must not permanently revoke the grant.
+// The basis-only path accepts both determinate outcomes: `known` and `absent`. Moving between them
+// is a real basis change and must durably demote the grant, otherwise restoring deleted manifest
+// bytes would resurrect old authority. Only `unavailable` is transient/unknown and therefore
+// remains fail-closed without permanent invalidation.
 function invalidatedTrustedRecord(
   assessment: WorkspaceTrustAssessment,
   expected: WorkspaceTrustBinding,
@@ -426,7 +427,10 @@ function invalidatedTrustedRecord(
     stored.rootIdentityDigest !== expected.rootIdentityDigest ||
     stored.manifestRef !== expected.manifestRef;
   if (determinateMismatch) return assessment.value;
-  return expected.trustBasisDigest.outcome === "known" ? assessment.value : undefined;
+  return expected.trustBasisDigest.outcome === "known" ||
+    expected.trustBasisDigest.outcome === "absent"
+    ? assessment.value
+    : undefined;
 }
 
 class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
