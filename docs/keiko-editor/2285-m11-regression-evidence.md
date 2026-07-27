@@ -18,22 +18,23 @@ workspace half ran and passed but was absent from the number, so the figure unde
 collection rather than overstating it. Both halves are reported now.
 
 The focused-closeout and Playwright numbers were re-recorded again on `darwin-arm64` with Node.js
-24.18.0 during the epic audit. The `keiko-ui` half moved from 9 files / 99 tests to 11 files / 120
-tests: it gained `MultiRootFilesWidget.a11y.test.tsx`, which scans the real multi-root Explorer
-instead of a mocked file tree, and `SelectionAwareWorkspaceHosts.test.tsx`, which owns the
-model-disposal assertion this document bullets and previously did not execute.
+24.18.0 during the epic audit. The consolidated Wave 3 closeout now covers 28 root test files with
+483 passing tests and one explicit platform skip, plus 14 `keiko-ui` test files with 140 passing
+tests. The UI half includes `MultiRootFilesWidget.a11y.test.tsx`, which scans the real multi-root
+Explorer instead of a mocked file tree, `SelectionAwareWorkspaceHosts.test.tsx`, which owns the
+model-disposal assertion, and the paired manifest boot integration pin.
 
 ## Closeout status
 
-| Evidence                         | Disposition                                                                                                                                                          |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dependency entry condition       | **PASS** — all thirteen prerequisite M11 child issues #2520–#2532 are closed.                                                                                        |
-| Adversarial matrix ownership     | **IMPLEMENTED** — 30 named rows are mapped to executable child tests and collected by one focused command.                                                           |
-| Migration and rollback ownership | **IMPLEMENTED** — seven named drills cover pre-M11 upgrade, object-identity adoption and rejection, rollback, downgrade guard, corrupt trust, and explicit re-grant. |
-| Supplemental M11 measurement     | **PASS** — local `darwin-arm64` informational run; every deterministic disposition and every observed local budget passed.                                           |
-| Focused M11 closeout             | **PASS** — both halves of the one command: 18 files / 201 tests in the package collection, then 11 files / 120 tests in the `keiko-ui` workspace collection.         |
-| Real product-path Playwright     | **PASS** — one Chromium journey passed in 20.5 s; every scanned surface, the multi-root Explorer included, is now asserted free of serious/critical axe findings.    |
-| Exact epic-head CI               | **REMOTE RECEIPT AFTER PUSH** — the integration-branch push triggers the repository workflows; local evidence does not replace them.                                 |
+| Evidence                         | Disposition                                                                                                                                                                |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dependency entry condition       | **PASS** — all thirteen prerequisite M11 child issues #2520–#2532 are closed.                                                                                              |
+| Adversarial matrix ownership     | **IMPLEMENTED** — 30 named rows are mapped to executable child tests and collected by one focused command.                                                                 |
+| Migration and rollback ownership | **IMPLEMENTED** — seven named drills cover pre-M11 upgrade, object-identity adoption and rejection, rollback, downgrade guard, corrupt trust, and explicit re-grant.       |
+| Supplemental M11 measurement     | **PASS** — local `darwin-arm64` informational run; every deterministic disposition and every observed local budget passed.                                                 |
+| Focused M11 closeout             | **PASS** — both halves of the one command: 28 files / 483 passing tests plus one platform skip in the package collection, then 14 files / 140 passing tests in `keiko-ui`. |
+| Real product-path Playwright     | **PASS** — one Chromium journey passed in 20.5 s; every scanned surface, the multi-root Explorer included, is now asserted free of serious/critical axe findings.          |
+| Exact epic-head CI               | **REMOTE RECEIPT AFTER PUSH** — the integration-branch push triggers the repository workflows; local evidence does not replace them.                                       |
 
 ## Focused executable collection
 
