@@ -12,9 +12,9 @@ The normal user path is intentionally simple:
 2. Extract the ZIP.
 3. Open the extracted `Keiko` folder.
 4. Double-click `Keiko.exe` on Windows or `Keiko.app` on macOS.
-5. Choose the suggested user-owned install location unless the user has a clear reason to choose a
-   different user-owned Keiko location.
-6. Click `Set up Keiko`.
+5. On macOS, approve the one-time Administrator, System Extension, and Full Disk Access dialogs when
+   macOS presents them; organization-managed Macs may have these permissions preapproved by MDM.
+6. Keiko continues automatically after the required approval and opens its local UI.
 7. Start Keiko afterward from the same app surface, Windows search, the Start Menu entry, Finder, or
    Spotlight.
 
@@ -60,7 +60,7 @@ Attestation verification is optional; it is not part of the managed setup journe
 ## Managed Setup
 
 The first launch is a bootstrap launch. It validates the payload, copies Keiko into a stable
-user-owned managed install root, creates user-local app registration, and records a content-free
+target-specific managed install root, creates native app registration, and records a content-free
 install attestation under the local Keiko state root.
 
 Default managed roots:
@@ -68,16 +68,21 @@ Default managed roots:
 | Platform target | Default managed root              | User-visible registration                     |
 | --------------- | --------------------------------- | --------------------------------------------- |
 | `windows-x64`   | `%LOCALAPPDATA%\\Programs\\Keiko` | Windows search and Start Menu entry for Keiko |
-| `macos-arm64`   | `~/Applications/Keiko.app`        | Finder and Spotlight launch for the Keiko app |
-| `macos-x64`     | `~/Applications/Keiko.app`        | Finder and Spotlight launch for the Keiko app |
+| `macos-arm64`   | `/Applications/Keiko.app`         | Finder and Spotlight launch for the Keiko app |
+| `macos-x64`     | `/Applications/Keiko.app`         | Finder and Spotlight launch for the Keiko app |
 
 The managed install root is separate from `.keiko` runtime state. Runtime state stores local app
 state, evidence, and content-free install/update registration; it does not store the portable
 payload, customer repositories, credentials, prompts, model output, or raw logs.
 
 Setup must refuse roots that are temporary directories, customer repositories, `.keiko` state
-directories, shared/network roots, symlinked paths, machine-wide locations, or locations that need
-administrator rights by default.
+directories, shared/network roots, symlinked paths, or noncanonical machine-wide locations. The
+sole macOS exception is `/Applications/Keiko.app`; macOS may request administrator, System
+Extension, and Full Disk Access approval once, or MDM may preapprove them.
+The canonical `/Applications` parent and every checked app component must remain root-owned,
+non-symlinked, and not group- or world-writable. A host policy that weakens those ownership or
+write boundaries makes activation fail closed; MDM must preserve or restore the canonical
+boundary instead of relocating the app to a writable parent.
 
 ## Update Journey
 

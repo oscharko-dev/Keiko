@@ -23,7 +23,7 @@ import {
   type PortableInstallRegistration,
 } from "./portable-registration.js";
 import {
-  installUserLocalRegistration,
+  installNativeRegistration,
   parseWindowsStartMenuRegistration,
   removePortableManagedInstall,
   windowsStartMenuRegistrationPath,
@@ -260,7 +260,7 @@ function promoteToManaged(
   stateDir: string,
   dryRun: boolean,
 ): PortableLayout {
-  assertManagedRootAllowed(managedRoot, stateDir);
+  assertManagedRootAllowed(managedRoot, stateDir, target);
   if (sameRealPath(source.installRoot, managedRoot)) return source;
   if (existsSync(managedRoot)) throw new Error("managed install root already exists");
   if (dryRun) return layoutFor(target, managedRoot);
@@ -286,8 +286,12 @@ export function validatePortableRoot(target: PortableTarget, root: string): Vali
   return { layout, manifest };
 }
 
-function createPortableUpgradePaths(managedRoot: string, stateDir: string): PortableUpgradePaths {
-  assertManagedRootAllowed(managedRoot, stateDir);
+function createPortableUpgradePaths(
+  target: PortableTarget,
+  managedRoot: string,
+  stateDir: string,
+): PortableUpgradePaths {
+  assertManagedRootAllowed(managedRoot, stateDir, target);
   const parent = dirname(managedRoot);
   mkdirSync(parent, { recursive: true, mode: 0o755 });
   const stagingRoot = mkdtempSync(join(parent, ".keiko-portable-upgrade-"));
@@ -351,7 +355,7 @@ export function upgradeManagedInstall(input: PortableManagedUpgradeInput): Porta
   if (!portableSourceCanReplaceManaged(input.source, input.current)) {
     throw new Error("portable upgrade candidate must be newer than or target-corrective");
   }
-  const paths = createPortableUpgradePaths(input.managedRoot, input.stateDir);
+  const paths = createPortableUpgradePaths(input.target, input.managedRoot, input.stateDir);
   try {
     copyTreeSafe(input.source.layout.installRoot, paths.stagedTarget);
     const stagedSource = validatePortableRoot(input.target, paths.stagedTarget);
@@ -384,15 +388,24 @@ export function attestedExistingPortableInstall(
   managedRoot: string,
   stateDir: string,
 ): ValidatedPortableRoot | undefined {
+  for (const target of PORTABLE_TARGETS) {
+    if (!managedRootAllowedForTarget(managedRoot, stateDir, target)) continue;
+    const attested = attestedPortableRootForTarget(target, managedRoot);
+    if (attested !== undefined) return attested;
+  }
+  return undefined;
+}
+
+function managedRootAllowedForTarget(
+  managedRoot: string,
+  stateDir: string,
+  target: PortableTarget,
+): boolean {
   try {
-    assertManagedRootAllowed(managedRoot, stateDir);
-    for (const target of PORTABLE_TARGETS) {
-      const attested = attestedPortableRootForTarget(target, managedRoot);
-      if (attested !== undefined) return attested;
-    }
-    return undefined;
+    assertManagedRootAllowed(managedRoot, stateDir, target);
+    return true;
   } catch {
-    return undefined;
+    return false;
   }
 }
 
@@ -438,13 +451,7 @@ function finalizeManagedSetup(
   now: Date,
 ): void {
   validatePortableRoot(options.target, layout.installRoot);
-  installUserLocalRegistration(
-    layout,
-    options.target,
-    options.managedRoot,
-    options.env,
-    options.home,
-  );
+  installNativeRegistration(layout, options.target, options.managedRoot, options.env, options.home);
   writeManagedRegistration({
     stateDir: options.stateDir,
     layout,
@@ -544,7 +551,7 @@ function attestedManagedLayout(
   stateDir: string,
 ): { readonly layout: PortableLayout; readonly manifest: SetupManifest } | undefined {
   try {
-    assertManagedRootAllowed(managedRoot, stateDir);
+    assertManagedRootAllowed(managedRoot, stateDir, registration.platformTarget);
     const { layout, manifest } = validatePortableRoot(registration.platformTarget, managedRoot);
     return registrationMatches(registration, layout, manifest) ? { layout, manifest } : undefined;
   } catch {

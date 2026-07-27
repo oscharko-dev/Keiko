@@ -41,6 +41,9 @@ const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
 const DIGEST_C = "c".repeat(64);
 const DIGEST_D = "d".repeat(64);
+const DIGEST_E = "e".repeat(64);
+const DIGEST_F = "f".repeat(64);
+const DIGEST_1 = "1".repeat(64);
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567";
 const ROOT_PACKAGE_VERSION = JSON.parse(readFileSync("package.json", "utf8")).version;
 const ROOT_RELEASE_TAG = `v${ROOT_PACKAGE_VERSION}`;
@@ -114,23 +117,31 @@ function stagingSecurity() {
   };
 }
 
-function stagingNativeHelper(shippedSha256) {
+function stagingNativeHelper(name, shippedSha256) {
+  const secureRead = name === "keiko-secure-workspace-read";
+  const executablePath = secureRead
+    ? HELPER_RELATIVE_PATH
+    : "runtime/native/keiko-runtime-supervisor.exe";
   return {
-    name: "keiko-secure-workspace-read",
-    kind: "secure-workspace-text-read",
+    name,
+    kind: secureRead ? "secure-workspace-text-read" : "runtime-process-supervisor",
     platformTarget: "windows-x64",
     architecture: "x64",
-    executablePath: HELPER_RELATIVE_PATH,
-    protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+    executablePath,
+    protocol: {
+      schemaVersion: 1,
+      requestMagic: secureRead ? "KSR1" : "KRP1",
+      responseMagic: secureRead ? "KSS1" : "KRS1",
+    },
     source: {
       commitSha: COMMIT_SHA,
-      path: "native/secure-workspace-read",
+      path: secureRead ? "native/secure-workspace-read" : "native/runtime-supervisor/windows",
       treeSha256: DIGEST_B,
     },
     unsignedSha256: DIGEST_C,
     shippedSha256,
     sizeBytes: 4096,
-    sbomBomRef: `pkg:generic/keiko-secure-workspace-read@${ROOT_PACKAGE_VERSION}?platform=windows-x64`,
+    sbomBomRef: `pkg:generic/${name}@${ROOT_PACKAGE_VERSION}?platform=windows-x64`,
     signing: {
       signatureKind: "authenticode",
       verificationStatus: "unverified-staging",
@@ -141,7 +152,82 @@ function stagingNativeHelper(shippedSha256) {
   };
 }
 
-function stagingReviewedBinding(security, nativeHelpers) {
+function stagingSidecarRuntime() {
+  const root = "runtime/sidecars/opencode-compatible";
+  return {
+    approvalSchemaVersion: 2,
+    name: "opencode-compatible",
+    kind: "coding-runtime",
+    upstream: {
+      owner: "anomalyco",
+      repository: "opencode",
+      name: "opencode",
+      version: "1.17.17",
+      tag: "v1.17.17",
+      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+    },
+    adapterCompatibility: {
+      adapterName: "keiko-coding-sidecar",
+      adapterVersion: "1",
+      transport: "http-sse",
+    },
+    protocolSchema: {
+      path: "packages/sdk/openapi.json",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
+      sha256: DIGEST_A,
+      hashAlgorithm: "sha256",
+      hashEncoding: "lowercase-hex",
+      digestInput: "upstream-raw-bytes",
+      transport: "http-sse",
+    },
+    releaseApproval: {
+      redistribution: {
+        status: "approved",
+        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+      },
+      subscriptionAuth: {
+        status: "not-applicable",
+        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+      },
+    },
+    license: {
+      spdxId: "MIT",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      sha256: DIGEST_F,
+    },
+    archive: {
+      platformTarget: "windows-x64",
+      url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode.zip",
+      sizeBytes: 123456,
+      sha256: DIGEST_B,
+    },
+    executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    executableTreeSha256: DIGEST_C,
+    executableSha256: DIGEST_D,
+    platformTarget: "windows-x64",
+    payloadRootPath: root,
+    executablePath: `${root}/opencode.exe`,
+    payloadSha256: DIGEST_E,
+    sizeBytes: 1234,
+    licenseEvidence: { path: `${root}/LICENSE.txt`, sha256: DIGEST_F },
+    sbomEvidence: { path: `${root}/evidence/sbom.cdx.json`, sha256: DIGEST_1 },
+    signing: {
+      verificationPolicy: "staging",
+      verificationStatus: "unverified-staging",
+      verificationReasonCodes: ["staging-unverified"],
+      signatureKind: "authenticode",
+      signatureVerified: false,
+      notarizationRequired: false,
+      notarizationVerified: false,
+      verificationChecks: { publisherChainVerified: false, timestampVerified: false },
+      shippedExecutableSha256: DIGEST_D,
+      shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+      shippedExecutableTreeSha256: DIGEST_C,
+    },
+  };
+}
+
+function stagingReviewedBinding(security, nativeHelpers, sidecarRuntimes) {
   return {
     releaseId: 0,
     releaseTag: ROOT_RELEASE_TAG,
@@ -166,12 +252,17 @@ function stagingReviewedBinding(security, nativeHelpers) {
     notarizationVerified: security.notarizationVerified,
     verificationChecks: { ...security.verificationChecks },
     nativeHelpers: JSON.parse(JSON.stringify(nativeHelpers)),
+    sidecarRuntimes: JSON.parse(JSON.stringify(sidecarRuntimes)),
   };
 }
 
 function stagingManifest(shippedSha256) {
   const security = stagingSecurity();
-  const nativeHelpers = [stagingNativeHelper(shippedSha256)];
+  const nativeHelpers = [
+    stagingNativeHelper("keiko-secure-workspace-read", shippedSha256),
+    stagingNativeHelper("keiko-runtime-supervisor", DIGEST_E),
+  ];
+  const sidecarRuntimes = [stagingSidecarRuntime()];
   return {
     schemaVersion: 1,
     product: {
@@ -205,6 +296,13 @@ function stagingManifest(shippedSha256) {
       nodeDistribution: "official-nodejs-dist",
       nodeArchiveSha256: DIGEST_B,
     },
+    runtimeActivation: {
+      schemaVersion: 1,
+      path: ".portable/runtime-activation.json",
+      sha256: DIGEST_F,
+      trustAnchor: "unverified-staging",
+    },
+    sidecarRuntimes,
     nativeHelpers,
     packageSurface: {
       source: "root-npm-package-surface",
@@ -241,7 +339,7 @@ function stagingManifest(shippedSha256) {
       entryId: "release-impact-entry-id",
       entryPackageVersion: ROOT_PACKAGE_VERSION,
       entryReleaseTag: ROOT_RELEASE_TAG,
-      reviewedBinding: stagingReviewedBinding(security, nativeHelpers),
+      reviewedBinding: stagingReviewedBinding(security, nativeHelpers, sidecarRuntimes),
     },
     updateEligibility: {
       stableOnly: true,

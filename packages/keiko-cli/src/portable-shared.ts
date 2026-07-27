@@ -75,7 +75,7 @@ export function defaultManagedRoot(target: PortableTarget, env: EnvSource, home:
     const localAppData = env.LOCALAPPDATA ?? join(home, "AppData", "Local");
     return join(localAppData, "Programs", "Keiko");
   }
-  return join(home, "Applications", "Keiko.app");
+  return "/Applications/Keiko.app";
 }
 
 function macAppRoot(root: string): string {

@@ -523,7 +523,7 @@ describe("Windows portable production signing workflow", () => {
     const inventory = portableWorkflow.indexOf("Inventory the bounded PE signing set");
     const signing = portableWorkflow.indexOf("Sign the exact inventoried PE set");
     const nativeVerification = portableWorkflow.indexOf(
-      "Verify Authenticode chain, identity, and RFC3161 timestamp",
+      "Verify the complete Authenticode chain, identity, and RFC3161 timestamp",
     );
     const finalization = portableWorkflow.indexOf(
       "Rebuild, bind, and verify the production archive",
@@ -549,6 +549,18 @@ describe("Windows portable production signing workflow", () => {
     );
     expect(windowsVerifier).toContain("*> $null");
     expect(windowsVerifier).not.toMatch(/thumbprint|subject/iu);
+    expect(windowsVerifier).toContain("peInventorySha256");
+    expect(windowsVerifier).toContain("Get-DirectoryTreeSha256");
+    expect(windowsVerifier).toContain("payloadSha256 = Get-DirectoryTreeSha256");
+    expect(windowsVerifier).toContain("$rootEntry = Get-Item -LiteralPath $canonicalRoot -Force");
+    expect(windowsVerifier).toContain("foreach ($entry in Get-ChildItem");
+    expect(windowsVerifier).toContain("$entry.Attributes -band");
+    expect(portableWorkflow).toContain(
+      '--expected-inventory "$env:RUNNER_TEMP\\windows-pe-core-verified.json"',
+    );
+    expect(portableWorkflow).toContain(
+      '--verification-input "$env:RUNNER_TEMP\\windows-core-verification-input.json"',
+    );
   });
 
   it.skipIf(!hasPowerShell)(
@@ -571,7 +583,7 @@ describe("Windows portable production signing workflow", () => {
 
   it("clears Azure immediately after signing and fails closed before native verification", () => {
     const signing = portableWorkflow.indexOf("Sign the exact inventoried PE set");
-    const cleanup = portableWorkflow.indexOf("Clear the Azure CLI signing session");
+    const cleanup = portableWorkflow.indexOf("Clear Azure before runtime qualification");
     const verification = portableWorkflow.indexOf("Prove signing did not change the PE scope");
     expect(signing).toBeLessThan(cleanup);
     expect(cleanup).toBeLessThan(verification);
@@ -584,14 +596,18 @@ describe("Windows portable production signing workflow", () => {
   it("propagates provider rejection through the actual step conditions", () => {
     const simulation = simulateProviderRejection();
     expect(simulation.filter((step) => step.always).map((step) => step.name)).toEqual([
+      "Clear Azure before runtime qualification",
       "Clear the Azure CLI signing session",
     ]);
+    expect(
+      simulation.find((step) => step.name === "Clear Azure before runtime qualification")?.ran,
+    ).toBe(true);
     expect(
       simulation.find((step) => step.name === "Clear the Azure CLI signing session")?.ran,
     ).toBe(true);
     for (const name of [
       "Prove signing did not change the PE scope",
-      "Verify Authenticode chain, identity, and RFC3161 timestamp",
+      "Verify the complete Authenticode chain, identity, and RFC3161 timestamp",
       "Rebuild, bind, and verify the production archive",
       "Upload verified Windows target artifact",
     ]) {
@@ -680,10 +696,19 @@ describe("Windows Artifact Signing protected configuration", () => {
 });
 
 describe("macOS portable production signing workflow", () => {
-  const macJob = portableWorkflow.slice(
+  const stageMacJob = portableWorkflow.slice(
     portableWorkflow.indexOf("  stage-macos-production:"),
+    portableWorkflow.indexOf("\n  qualify-macos-runtime:"),
+  );
+  const runtimeQualificationJob = portableWorkflow.slice(
+    portableWorkflow.indexOf("  qualify-macos-runtime:"),
+    portableWorkflow.indexOf("\n  seal-macos-production:"),
+  );
+  const sealMacJob = portableWorkflow.slice(
+    portableWorkflow.indexOf("  seal-macos-production:"),
     portableWorkflow.indexOf("\n  qualify-windows-production:"),
   );
+  const macSigningJobs = `${stageMacJob}\n${sealMacJob}`;
   const smokeJob = portableWorkflow.slice(
     portableWorkflow.indexOf("  qualify-macos-production:"),
     portableWorkflow.indexOf("\n  assemble:"),
@@ -705,12 +730,25 @@ describe("macOS portable production signing workflow", () => {
   );
 
   it("uses equal protected native jobs on explicit arm64 and Intel runners", () => {
-    expect(macJob).toContain("environment: portable-release-signing");
-    expect(macJob).toContain("platform_target: macos-arm64");
-    expect(macJob).toContain("runner: macos-15");
-    expect(macJob).toContain("platform_target: macos-x64");
-    expect(macJob).toContain("runner: macos-15-intel");
-    expect(macJob).not.toContain("id-token: write");
+    for (const signingJob of [stageMacJob, sealMacJob]) {
+      expect(signingJob).toContain("environment: portable-release-signing");
+      expect(signingJob).toContain("platform_target: macos-arm64");
+      expect(signingJob).toContain("runner: macos-15");
+      expect(signingJob).toContain("platform_target: macos-x64");
+      expect(signingJob).toContain("runner: macos-15-intel");
+      expect(signingJob).not.toContain("id-token: write");
+    }
+  });
+
+  it("binds the reviewed Apple team during protected macOS staging", () => {
+    const stageStep = stageMacJob.slice(
+      stageMacJob.indexOf("Stage portable runtime from approved inputs"),
+      stageMacJob.indexOf("Functionally smoke the unsigned secure-read helper"),
+    );
+    expect(stageStep).toContain("APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}");
+    expect(stagingJob).not.toContain("APPLE_TEAM_ID:");
+    expect(nativeScript).toContain("MACOS_RELEASE_TEAM_IDENTIFIER");
+    expect(nativeScript).toContain("__KEIKO_APPLE_TEAM_ID__");
   });
 
   it("keeps dispatch staging secret-free and production artifacts out of the staging job", () => {
@@ -726,25 +764,37 @@ describe("macOS portable production signing workflow", () => {
     expect(assemble).toContain("!contains(github.ref_name, '-')");
     expect(assemble).toContain("needs.stage-windows-production.result == 'success'");
     expect(assemble).toContain("needs.stage-macos-production.result == 'success'");
+    expect(assemble).toContain("needs.qualify-macos-runtime.result == 'success'");
+    expect(assemble).toContain("needs.seal-macos-production.result == 'success'");
     expect(assemble).toContain("needs.qualify-windows-production.result == 'success'");
     expect(assemble).toContain("needs.qualify-macos-production.result == 'success'");
     expect(assemble).not.toMatch(/result == 'success' \|\| needs\.[^.]+\.result == 'skipped'/u);
   });
 
   it("runs only static verification, cleanup, finalization, and upload in the protected job", () => {
-    const signing = macJob.indexOf("Sign, notarize, staple, and verify the native artifact");
-    const cleanup = macJob.indexOf("Remove temporary Apple signing material");
-    const verificationInput = macJob.indexOf(
+    const provisionalSigning = stageMacJob.indexOf(
+      "Sign, notarize, staple, and verify the provisional native artifact",
+    );
+    const provisionalCleanup = stageMacJob.indexOf("Remove temporary Apple signing material");
+    const provisionalUpload = stageMacJob.indexOf("Upload provisional macOS target artifact");
+    expect(provisionalSigning).toBeLessThan(provisionalCleanup);
+    expect(provisionalCleanup).toBeLessThan(provisionalUpload);
+
+    const signing = sealMacJob.indexOf(
+      "Seal, notarize, staple, and verify the qualified native artifact",
+    );
+    const cleanup = sealMacJob.indexOf("Remove temporary Apple signing material");
+    const verificationInput = sealMacJob.indexOf(
       "Derive bounded verification input after credential cleanup",
     );
-    const finalize = macJob.indexOf("Bind and verify the production macOS archive");
-    const upload = macJob.indexOf("Upload verified macOS target artifact");
+    const finalize = sealMacJob.indexOf("Bind and verify the production macOS archive");
+    const upload = sealMacJob.indexOf("Upload verified macOS target artifact");
     expect(signing).toBeLessThan(cleanup);
     expect(cleanup).toBeLessThan(verificationInput);
     expect(verificationInput).toBeLessThan(finalize);
     expect(finalize).toBeLessThan(upload);
-    expect(macJob.slice(cleanup, verificationInput)).toContain("if: ${{ always() }}");
-    expect(macJob.slice(cleanup, verificationInput)).not.toContain("continue-on-error");
+    expect(sealMacJob.slice(cleanup, verificationInput)).toContain("if: ${{ always() }}");
+    expect(sealMacJob.slice(cleanup, verificationInput)).not.toContain("continue-on-error");
     expect(nativeScript).not.toMatch(/codesign\s+--force[^\n]*--deep/u);
     expect(nativeScript).toContain("codesign --verify --deep --strict");
     expect(nativeScript).toContain("xcrun notarytool submit");
@@ -752,12 +802,16 @@ describe("macOS portable production signing workflow", () => {
     expect(nativeScript).toContain("spctl -a -t exec");
     expect(nativeScript).toContain("scripts/check-macos-macho-architecture.sh");
     expect(architectureCheck).toContain('lipo -archs "$1" 2>/dev/null');
-    expect(nativeScript).toContain('verify_signed_path "$payload/$relative" default');
-    expect(nativeScript).toContain('verify_signed_path "$app" default');
+    expect(nativeScript).toContain('verify_signed_path "$payload/$relative" "$role"');
+    expect(nativeScript).toContain('verify_signed_path "$app" host-app');
+    expect(nativeScript).toContain('[[ "$phase" == "provisional" ]]');
+    expect(nativeScript).toContain("validate-runtime-qualification");
+    expect(nativeScript).not.toContain("qualify-macos-runtime-release");
     expect(nativeScript).not.toContain("new Function");
     expect(nativeScript).not.toContain("--version");
-    expect(macJob).not.toContain("smoke:portable-launch-setup");
-    expect(macJob).not.toContain("run-isolated-macos-payload-smoke.sh");
+    expect(macSigningJobs).not.toContain("smoke:portable-launch-setup");
+    expect(macSigningJobs).not.toContain("run-isolated-macos-payload-smoke.sh");
+    expect(macSigningJobs).not.toContain("qualify-macos-runtime-release");
   });
 
   it("uses an empty default entitlement set and Node-only allow-jit", () => {
@@ -770,17 +824,40 @@ describe("macOS portable production signing workflow", () => {
   });
 
   it("isolates payload execution in a terminal unprivileged immutable-artifact job", () => {
-    expect(macJob).not.toMatch(/KEIKO_NATIVE_(?:DEVELOPER|NOTARIZATION|STAPLE|ASSESSMENT)/u);
-    expect(smokeJob).toContain("needs: stage-macos-production");
+    expect(macSigningJobs).not.toMatch(
+      /KEIKO_NATIVE_(?:DEVELOPER|NOTARIZATION|STAPLE|ASSESSMENT)/u,
+    );
+    expect(runtimeQualificationJob).toContain(
+      'runs-on: [self-hosted, macOS, "${{ matrix.runner_arch }}", keiko-endpoint-security]',
+    );
+    expect(runtimeQualificationJob).not.toMatch(
+      /environment: portable-release-signing|secrets\.|id-token: write/u,
+    );
+    expect(runtimeQualificationJob).toContain(
+      "Prove the qualification runner has no signing credential authority",
+    );
+    expect(runtimeQualificationJob).toContain("macos-runtime-qualification-transport.mjs snapshot");
+    expect(runtimeQualificationJob).toContain("/Applications/KeikoQualification-");
+    expect(runtimeQualificationJob).toContain(
+      '/usr/bin/find /Applications -maxdepth 1 -type d -name "KeikoQualification-',
+    );
+    expect(runtimeQualificationJob).toContain("qualify-macos-runtime-release.mjs");
+    expect(runtimeQualificationJob).toContain("Prove qualification added only the bounded receipt");
+    expect(runtimeQualificationJob).toContain("Upload qualified macOS target artifact");
+
+    expect(smokeJob).toContain("needs: seal-macos-production");
     expect(smokeJob).toContain("platform_target: macos-arm64");
-    expect(smokeJob).toContain("runner: macos-15");
+    expect(smokeJob).toContain("runner_arch: ARM64");
     expect(smokeJob).toContain("platform_target: macos-x64");
-    expect(smokeJob).toContain("runner: macos-15-intel");
+    expect(smokeJob).toContain("runner_arch: X64");
     expect(smokeJob).toContain("persist-credentials: false");
     expect(smokeJob).toContain("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020");
     expect(smokeJob).toContain("environment: portable-release-signing");
     expect(smokeJob).not.toMatch(/secrets\.|id-token: write|upload-artifact/u);
     expect(smokeJob).toContain("Download immutable verified macOS artifact");
+    expect(smokeJob).toContain(
+      '/usr/bin/find /Applications -maxdepth 1 -type d -name "KeikoQualification-final-',
+    );
     const execute = smokeJob.indexOf("Execute bundled runtimes in isolated disposable copy");
     expect(execute).toBeGreaterThan(0);
     expect(smokeJob.slice(execute)).not.toMatch(/\n\s+- name:|\n\s+- uses:/u);
@@ -798,7 +875,10 @@ describe("macOS portable production signing workflow", () => {
   it("blocks protected upload on native failures and assembly on isolated smoke failure", () => {
     const steps = [
       { always: false, name: "Prepare temporary Developer ID and notary credentials" },
-      { always: false, name: "Sign, notarize, staple, and verify the native artifact" },
+      {
+        always: false,
+        name: "Seal, notarize, staple, and verify the qualified native artifact",
+      },
       { always: true, name: "Remove temporary Apple signing material" },
       { always: false, name: "Derive bounded verification input after credential cleanup" },
       { always: false, name: "Bind and verify the production macOS archive" },
@@ -814,7 +894,7 @@ describe("macOS portable production signing workflow", () => {
     };
     for (const failure of [
       "Prepare temporary Developer ID and notary credentials",
-      "Sign, notarize, staple, and verify the native artifact",
+      "Seal, notarize, staple, and verify the qualified native artifact",
       "Remove temporary Apple signing material",
     ]) {
       const simulation = simulate(failure);
@@ -835,10 +915,11 @@ describe("macOS portable production signing workflow", () => {
     expect(
       finalizerFailure.find((step) => step.name === "Upload verified macOS target artifact")?.ran,
     ).toBe(false);
-    expect(smokeJob).toContain("needs.stage-macos-production.result == 'success'");
-    expect(portableWorkflow.slice(portableWorkflow.indexOf("  assemble:"))).toContain(
-      "needs.qualify-macos-production.result == 'success'",
-    );
+    expect(smokeJob).toContain("needs.seal-macos-production.result == 'success'");
+    const assemble = portableWorkflow.slice(portableWorkflow.indexOf("  assemble:"));
+    expect(assemble).toContain("needs.qualify-macos-runtime.result == 'success'");
+    expect(assemble).toContain("needs.seal-macos-production.result == 'success'");
+    expect(assemble).toContain("needs.qualify-macos-production.result == 'success'");
   });
 
   it("accepts only complete stable states and rejects dispatch, prerelease, or qualification failure", () => {

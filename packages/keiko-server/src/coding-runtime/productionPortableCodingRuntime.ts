@@ -1,49 +1,106 @@
+import { createHash, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
-import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
+import {
+  qualificationFromReceipt,
+  type LongLivedRuntimeQualification,
+  type RuntimeQualificationReceiptBinding,
+} from "@oscharko-dev/keiko-sandbox";
 
 import { productionUpdateFacts } from "../update-install-mode.js";
 import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
+import {
   evaluatePortableSidecarAvailability,
-  verifyPortableManifestSidecars,
+  verifyPortableAttestedSidecars,
   type PortableSidecarRuntimeVerification,
 } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
-import { loadInstalledNativeRuntimeQualification } from "./nativeRuntimeProcessBackend.js";
+import {
+  macosDeveloperIdRequirement,
+  macosReleaseTeamIdentifier,
+  macosTeamIdentifierFromOutput,
+} from "./macosPortableCodeIdentity.js";
+import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
+import {
+  windowsPublisherIdentityMatches,
+  windowsSystemEnvironment,
+} from "./windowsPortableAuthenticode.js";
 
-const SHA256 = /^[a-f0-9]{64}$/u;
-const COMMIT = /^[a-f0-9]{40}$/u;
+const ACTIVATION_PATH = ".portable/runtime-activation.json";
+const MACOS_RECEIPT_PATH = ".portable/runtime-qualification.json";
+const DIGEST = /^[a-f0-9]{64}$/u;
+const MAX_ATTESTATION_BYTES = 65_536;
+const MACOS_SYSTEM_EXTENSION_IDENTIFIER = "com.oscharko.keiko.runtime-monitor.systemextension";
+const TARGETS = new Set<UpdatePortableTarget>(["windows-x64", "macos-arm64", "macos-x64"]);
 
 export interface QualifiedPortableOpenCodeRuntime {
   readonly installRoot: string;
-  readonly target: "windows-x64";
+  readonly target: UpdatePortableTarget;
   readonly manifest: Readonly<Record<string, unknown>>;
   readonly sidecar: PortableSidecarRuntimeVerification;
   readonly qualification: LongLivedRuntimeQualification;
   readonly nativeHelperPath: string;
 }
 
+interface PortableRuntimeAttestationPort {
+  readReceipt(input: {
+    readonly resourceRoot: string;
+    readonly target: UpdatePortableTarget;
+  }): unknown;
+}
+
+export interface PortableRuntimeCommandOptions {
+  readonly env: NodeJS.ProcessEnv;
+  readonly maxBuffer?: number | undefined;
+  readonly timeout: number;
+  readonly windowsHide?: boolean | undefined;
+}
+
+export interface PortableRuntimeCommandResult {
+  readonly status: number | null;
+  readonly stderr: string;
+  readonly stdout: string;
+}
+
+export type PortableRuntimeCommandRunner = (
+  command: string,
+  args: readonly string[],
+  options: PortableRuntimeCommandOptions,
+) => PortableRuntimeCommandResult;
+
 export interface PortableOpenCodeDiscoveryInput {
   readonly env: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform | undefined;
   readonly arch?: string | undefined;
+  /** Resource root injection for deterministic tests; production derives it from the package. */
   readonly installRoot?: string | undefined;
+  readonly attestation?: PortableRuntimeAttestationPort | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 interface PortableRuntimeCandidate {
   readonly root: string;
-  readonly target: "windows-x64";
-  readonly manifest: Record<string, unknown>;
+  readonly target: UpdatePortableTarget;
+  readonly activation: Record<string, unknown>;
+  readonly activationSha256: string;
   readonly sourceCommitSha: string;
-  readonly artifactSha256: string;
+  readonly supervisorSha256: string;
+  readonly secureReadSha256: string;
   readonly sidecar: PortableSidecarRuntimeVerification;
 }
 
-interface PortableManifestProvenance {
+interface BoundActivation {
+  readonly activation: Record<string, unknown>;
+  readonly activationPath: string;
   readonly sourceCommitSha: string;
-  readonly artifactSha256: string;
 }
 
 export function discoverQualifiedPortableOpenCode(
@@ -51,8 +108,18 @@ export function discoverQualifiedPortableOpenCode(
 ): QualifiedPortableOpenCodeRuntime | undefined {
   try {
     const candidate = portableRuntimeCandidate(input);
-    return candidate === undefined ? undefined : qualifiedRuntime(candidate);
-  } catch {
+    return candidate === undefined ? undefined : qualifiedRuntime(candidate, input.attestation);
+  } catch (error) {
+    emitServerDiagnostic(
+      input.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: randomUUID(),
+        operation: "coding.runtime.discover",
+        source: "coding.runtime.discovery",
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
     return undefined;
   }
 }
@@ -62,59 +129,229 @@ function portableRuntimeCandidate(
 ): PortableRuntimeCandidate | undefined {
   const target = runtimeTarget(input.platform ?? process.platform, input.arch ?? process.arch);
   if (target === undefined) return undefined;
-  const root = trustedInstallRoot(input);
+  const root = trustedResourceRoot(input);
   if (root === undefined || !setupMatches(root, target)) return undefined;
-  const manifest = readRecord(join(root, ".portable", "update-portable-manifest.json"));
-  if (manifest === undefined || manifestTarget(manifest) !== target) return undefined;
-  const provenance = manifestProvenance(manifest);
-  if (provenance === undefined) return undefined;
-  const sidecar = qualifiedSidecar(root, manifest, target);
-  if (sidecar === undefined) return undefined;
-  return { root, target, manifest, ...provenance, sidecar };
+  const bound = boundActivation(root, target);
+  if (bound === undefined) return undefined;
+  const helpers = boundHelperDigests(root, bound.activation, target);
+  const sidecar = qualifiedSidecar(root, bound.activation, target);
+  if (helpers === undefined || sidecar === undefined) return undefined;
+  return {
+    root,
+    target,
+    activation: bound.activation,
+    activationSha256: sha256File(bound.activationPath),
+    sourceCommitSha: bound.sourceCommitSha,
+    ...helpers,
+    sidecar,
+  };
 }
 
-function manifestProvenance(
-  manifest: Record<string, unknown>,
-): PortableManifestProvenance | undefined {
-  const sourceCommitSha = sourceCommit(manifest);
-  const artifactSha256 = artifactDigest(manifest);
-  return sourceCommitSha === undefined || artifactSha256 === undefined
+function boundActivation(root: string, target: UpdatePortableTarget): BoundActivation | undefined {
+  const activationPath = safeRealFile(join(root, ...ACTIVATION_PATH.split("/")));
+  const activation = readRecord(activationPath);
+  if (activation === undefined || activationTarget(activation) !== target) return undefined;
+  const sourceCommitSha = stringField(activation, "sourceCommitSha", /^[a-f0-9]{40}$/u);
+  return sourceCommitSha === undefined
     ? undefined
-    : { sourceCommitSha, artifactSha256 };
+    : { activation, activationPath, sourceCommitSha };
 }
 
 function qualifiedRuntime(
   candidate: PortableRuntimeCandidate,
+  port: PortableRuntimeAttestationPort | undefined,
 ): QualifiedPortableOpenCodeRuntime | undefined {
-  const qualification = loadInstalledNativeRuntimeQualification({
-    installRoot: candidate.root,
+  const receipt = (port ?? PLATFORM_ATTESTATION).readReceipt({
+    resourceRoot: candidate.root,
+    target: candidate.target,
+  });
+  const binding: RuntimeQualificationReceiptBinding = {
+    platformTarget: candidate.target,
     sourceCommitSha: candidate.sourceCommitSha,
-    artifactSha256: candidate.artifactSha256,
+    activationManifestSha256: candidate.activationSha256,
+    supervisorSha256: candidate.supervisorSha256,
+    secureReadSha256: candidate.secureReadSha256,
     sidecars: [
       { name: candidate.sidecar.summary.name, sha256: candidate.sidecar.summary.payloadSha256 },
     ],
-  });
-  return qualification === undefined
-    ? undefined
-    : {
-        installRoot: candidate.root,
-        target: candidate.target,
-        manifest: candidate.manifest,
-        sidecar: candidate.sidecar,
-        qualification,
-        nativeHelperPath: join(candidate.root, "runtime", "native", "keiko-runtime-supervisor.exe"),
-      };
+  };
+  const result = qualificationFromReceipt(receipt, binding);
+  if (!result.ok) return undefined;
+  return {
+    installRoot: candidate.root,
+    target: candidate.target,
+    manifest: candidate.activation,
+    sidecar: candidate.sidecar,
+    qualification: result.qualification,
+    nativeHelperPath: helperPath(candidate.root, candidate.target, "keiko-runtime-supervisor"),
+  };
 }
 
-function trustedInstallRoot(input: PortableOpenCodeDiscoveryInput): string | undefined {
-  const candidate = input.installRoot ?? productionUpdateFacts(input.env).packageRoot;
+const PLATFORM_ATTESTATION: PortableRuntimeAttestationPort = Object.freeze({
+  readReceipt: ({
+    resourceRoot,
+    target,
+  }: {
+    readonly resourceRoot: string;
+    readonly target: UpdatePortableTarget;
+  }) =>
+    target === "windows-x64"
+      ? readWindowsAttestation(resourceRoot)
+      : readMacosAttestation(resourceRoot, target),
+});
+
+export function readWindowsAttestation(
+  resourceRoot: string,
+  run: PortableRuntimeCommandRunner = runPortableRuntimeCommand,
+): unknown {
+  const executable = safeRealFile(
+    join(resourceRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
+  );
+  const launcher = safeRealFile(join(resourceRoot, "Keiko.exe"));
+  verifyWindowsSignature(launcher, executable, run);
+  const result = run(executable, ["--emit"], {
+    env: windowsSystemEnvironment(),
+    windowsHide: true,
+    timeout: 10_000,
+    maxBuffer: MAX_ATTESTATION_BYTES,
+  });
+  if (result.status !== 0 || result.stderr !== "" || Buffer.byteLength(result.stdout) === 0) {
+    throw new Error("runtime-attestation-unavailable");
+  }
+  return JSON.parse(result.stdout);
+}
+
+function verifyWindowsSignature(
+  launcher: string,
+  executable: string,
+  run: PortableRuntimeCommandRunner,
+): void {
+  if (!windowsPublisherIdentityMatches(launcher, executable, run)) {
+    throw new Error("runtime-attestation-signature-invalid");
+  }
+}
+
+export function readMacosAttestation(
+  resourceRoot: string,
+  target: Extract<UpdatePortableTarget, "macos-arm64" | "macos-x64">,
+  run: PortableRuntimeCommandRunner = runPortableRuntimeCommand,
+  expectedTeamIdentifier: string | undefined = macosReleaseTeamIdentifier(),
+): unknown {
+  const paths = macosRuntimeCodePaths(resourceRoot);
+  const teamIdentifier = readMacosTeamIdentifier(paths.appRoot, run);
+  if (expectedTeamIdentifier === undefined || teamIdentifier !== expectedTeamIdentifier) {
+    throw new Error("runtime-app-seal-invalid");
+  }
+  const bundleIdentifier = `dev.oscharko.keiko.${target}`;
+  runMacosVerifier(
+    "/usr/bin/codesign",
+    [
+      "--verify",
+      "--deep",
+      "--strict",
+      `-R=${macosDeveloperIdRequirement(expectedTeamIdentifier, bundleIdentifier)}`,
+      paths.appRoot,
+    ],
+    run,
+  );
+  runMacosVerifier("/usr/sbin/spctl", ["--assess", "--type", "execute", paths.appRoot], run);
+  verifyMacosNestedCode(paths.manager, macosDeveloperIdRequirement(expectedTeamIdentifier), run);
+  verifyMacosNestedCode(
+    paths.systemExtension,
+    macosDeveloperIdRequirement(expectedTeamIdentifier, MACOS_SYSTEM_EXTENSION_IDENTIFIER),
+    run,
+  );
+  const status = run(paths.manager, ["--status"], {
+    env: {},
+    timeout: 10_000,
+  });
+  if (status.status !== 0 || status.stdout.trim() !== "active" || status.stderr !== "") {
+    throw new Error("runtime-system-extension-inactive");
+  }
+  return readRecord(safeRealFile(join(resourceRoot, ...MACOS_RECEIPT_PATH.split("/"))));
+}
+
+function macosRuntimeCodePaths(resourceRoot: string): {
+  readonly appRoot: string;
+  readonly manager: string;
+  readonly systemExtension: string;
+} {
+  const appRoot = safeRealDirectory(dirname(dirname(resourceRoot)));
+  return {
+    appRoot,
+    manager: safeRealFile(join(appRoot, "Contents", "MacOS", "KeikoSystemExtensionManager")),
+    systemExtension: safeRealDirectory(
+      join(appRoot, "Contents", "Library", "SystemExtensions", MACOS_SYSTEM_EXTENSION_IDENTIFIER),
+    ),
+  };
+}
+
+function readMacosTeamIdentifier(appRoot: string, run: PortableRuntimeCommandRunner): string {
+  const result = run("/usr/bin/codesign", ["-d", "--verbose=4", appRoot], {
+    env: { PATH: "/usr/bin:/usr/sbin" },
+    timeout: 15_000,
+  });
+  const identifier =
+    result.status === 0
+      ? macosTeamIdentifierFromOutput(`${result.stdout}\n${result.stderr}`)
+      : undefined;
+  if (identifier === undefined) throw new Error("runtime-app-seal-invalid");
+  return identifier;
+}
+
+function verifyMacosNestedCode(
+  path: string,
+  requirement: string,
+  run: PortableRuntimeCommandRunner,
+): void {
+  runMacosVerifier(
+    "/usr/bin/codesign",
+    ["--verify", "--deep", "--strict", `-R=${requirement}`, path],
+    run,
+  );
+}
+
+function runMacosVerifier(
+  command: string,
+  args: readonly string[],
+  run: PortableRuntimeCommandRunner,
+): void {
+  const result = run(command, args, {
+    env: { PATH: "/usr/bin:/usr/sbin" },
+    timeout: 15_000,
+  });
+  if (result.status !== 0) throw new Error("runtime-app-seal-invalid");
+}
+
+function runPortableRuntimeCommand(
+  command: string,
+  args: readonly string[],
+  options: PortableRuntimeCommandOptions,
+): PortableRuntimeCommandResult {
+  return spawnSync(command, [...args], {
+    encoding: "utf8",
+    env: options.env,
+    maxBuffer: options.maxBuffer,
+    shell: false,
+    timeout: options.timeout,
+    windowsHide: options.windowsHide,
+  });
+}
+
+function trustedResourceRoot(input: PortableOpenCodeDiscoveryInput): string | undefined {
+  const packageRoot = productionUpdateFacts(input.env).packageRoot;
+  const candidate =
+    input.installRoot ?? (packageRoot === undefined ? undefined : dirname(packageRoot));
   if (candidate === undefined) return undefined;
   const root = realpathSync(candidate);
   return statSync(root).isDirectory() ? root : undefined;
 }
 
-function runtimeTarget(platform: NodeJS.Platform, arch: string): "windows-x64" | undefined {
-  return platform === "win32" && arch === "x64" ? "windows-x64" : undefined;
+function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableTarget | undefined {
+  if (platform === "win32" && arch === "x64") return "windows-x64";
+  if (platform === "darwin" && arch === "arm64") return "macos-arm64";
+  if (platform === "darwin" && arch === "x64") return "macos-x64";
+  return undefined;
 }
 
 function setupMatches(root: string, target: UpdatePortableTarget): boolean {
@@ -124,41 +361,113 @@ function setupMatches(root: string, target: UpdatePortableTarget): boolean {
 
 function qualifiedSidecar(
   root: string,
-  manifest: Record<string, unknown>,
-  target: "windows-x64",
+  activation: Record<string, unknown>,
+  target: UpdatePortableTarget,
 ): PortableSidecarRuntimeVerification | undefined {
-  const sidecars = verifyPortableManifestSidecars(manifest, target).sidecars;
-  if (sidecars.length !== 1 || sidecars[0]?.summary.name !== "opencode-compatible")
+  const sidecars = verifyPortableAttestedSidecars(activation, target).sidecars;
+  if (sidecars.length !== 1 || sidecars[0]?.summary.name !== "opencode-compatible") {
     return undefined;
+  }
   const sidecar = sidecars[0];
   const disk = inspectStagedSidecarPayload(root, sidecar);
   const availability = evaluatePortableSidecarAvailability(sidecar, { target, ...disk });
   return availability.available ? sidecar : undefined;
 }
 
+function boundHelperDigests(
+  root: string,
+  activation: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): { readonly supervisorSha256: string; readonly secureReadSha256: string } | undefined {
+  const helpers = Array.isArray(activation.nativeHelpers) ? activation.nativeHelpers : [];
+  if (helpers.length !== 2) return undefined;
+  const supervisor = boundHelperDigest(root, helpers, target, "keiko-runtime-supervisor");
+  const secureRead = boundHelperDigest(root, helpers, target, "keiko-secure-workspace-read");
+  return supervisor === undefined || secureRead === undefined
+    ? undefined
+    : { supervisorSha256: supervisor, secureReadSha256: secureRead };
+}
+
+function boundHelperDigest(
+  root: string,
+  helpers: readonly unknown[],
+  target: UpdatePortableTarget,
+  name: "keiko-runtime-supervisor" | "keiko-secure-workspace-read",
+): string | undefined {
+  const matches = helpers.map(record).filter((helper) => helper?.name === name);
+  if (matches.length !== 1) return undefined;
+  const helper = matches[0];
+  const expectedPath = helperRelativePath(target, name);
+  const expectedDigest = stringField(helper, "shippedSha256", DIGEST);
+  const expectedSize = helper?.sizeBytes;
+  if (
+    expectedDigest === undefined ||
+    !helperBindingIsValid(helper, target, expectedPath, expectedSize)
+  )
+    return undefined;
+  const path = safeRealFile(join(root, ...expectedPath.split("/")));
+  const entry = statSync(path);
+  return entry.size === expectedSize && sha256File(path) === expectedDigest
+    ? expectedDigest
+    : undefined;
+}
+
+function helperBindingIsValid(
+  helper: Record<string, unknown> | undefined,
+  target: UpdatePortableTarget,
+  expectedPath: string,
+  expectedSize: unknown,
+): expectedSize is number {
+  return (
+    helper?.platformTarget === target &&
+    helper.executablePath === expectedPath &&
+    Number.isSafeInteger(expectedSize) &&
+    Number(expectedSize) > 0
+  );
+}
+
+function helperPath(
+  root: string,
+  target: UpdatePortableTarget,
+  name: "keiko-runtime-supervisor" | "keiko-secure-workspace-read",
+): string {
+  return safeRealFile(join(root, ...helperRelativePath(target, name).split("/")));
+}
+
+function helperRelativePath(
+  target: UpdatePortableTarget,
+  name: "keiko-runtime-supervisor" | "keiko-secure-workspace-read",
+): string {
+  return `runtime/native/${name}${target === "windows-x64" ? ".exe" : ""}`;
+}
+
 function readRecord(path: string): Record<string, unknown> | undefined {
   const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-  return isRecord(parsed) ? parsed : undefined;
+  return record(parsed);
 }
 
-function manifestTarget(manifest: Record<string, unknown>): unknown {
-  return record(manifest.artifact)?.platformTarget;
+function activationTarget(manifest: Record<string, unknown>): UpdatePortableTarget | undefined {
+  const value = manifest.platformTarget;
+  return typeof value === "string" && TARGETS.has(value as UpdatePortableTarget)
+    ? (value as UpdatePortableTarget)
+    : undefined;
 }
 
-function sourceCommit(manifest: Record<string, unknown>): string | undefined {
-  const value = record(manifest.release)?.commitSha;
-  return typeof value === "string" && COMMIT.test(value) ? value : undefined;
-}
-
-function artifactDigest(manifest: Record<string, unknown>): string | undefined {
-  const value = record(manifest.artifact)?.sha256;
-  return typeof value === "string" && SHA256.test(value) ? value : undefined;
+function stringField(
+  value: Record<string, unknown> | undefined,
+  key: string,
+  pattern: RegExp,
+): string | undefined {
+  const candidate = value?.[key];
+  return typeof candidate === "string" && pattern.test(candidate) ? candidate : undefined;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function sha256File(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }

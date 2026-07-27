@@ -209,16 +209,16 @@ async function runFixtureTarget(target, root, runPortableCli, now) {
     },
   );
   if (code !== 0) fail(`${target.platformTarget} first launch failed: ${first.err()}`);
-  const relaunch = await runFixtureRelaunch(
-    target,
-    portableRoot,
-    rootAfterSetup,
-    stateDir,
+  const relaunch = await runFixtureRelaunch({
     env,
     home,
+    portableRoot,
+    rootAfterSetup,
     runPortableCli,
     spawns,
-  );
+    stateDir,
+    target,
+  });
   return {
     ...relaunch,
     manualDownloadUpgrade: await runFixtureManualUpgrade(target, root, runPortableCli, now),
@@ -289,6 +289,7 @@ async function runFixtureManualUpgradeClick(
     second.io,
     env,
     {
+      activateMacosRuntimeFn: () => Promise.resolve(true),
       arch: () => target.nodeArchitecture,
       homedir: () => home,
       lifecycleFn: (command) => {
@@ -310,16 +311,16 @@ async function runFixtureManualUpgradeClick(
   };
 }
 
-async function runFixtureRelaunch(
-  target,
-  portableRoot,
-  rootAfterSetup,
-  stateDir,
+async function runFixtureRelaunch({
   env,
   home,
+  portableRoot,
+  rootAfterSetup,
   runPortableCli,
   spawns,
-) {
+  stateDir,
+  target,
+}) {
   const second = capture();
   const lifecycleStarts = [];
   const code = await runPortableCli(
@@ -327,6 +328,7 @@ async function runFixtureRelaunch(
     second.io,
     env,
     {
+      activateMacosRuntimeFn: () => Promise.resolve(true),
       arch: () => target.nodeArchitecture,
       homedir: () => home,
       lifecycleFn: (_command, _args, _io, _env, deps) => {
@@ -364,7 +366,7 @@ function verifyNativeLauncherSource() {
     join(repoRoot, "native", "portable-launcher", "keiko-portable-launcher.c"),
     "utf8",
   );
-  if (!source.includes("\\\\runtime\\\\node\\\\node.exe"))
+  if (!source.includes(String.raw`\\runtime\\node\\node.exe`))
     fail("Windows launcher does not use bundled Node");
   if (!source.includes("/Contents/Resources/runtime/node/bin/node"))
     fail("macOS launcher does not use bundled Node");
@@ -482,8 +484,10 @@ function stagedArtifactEvidence(options) {
 }
 
 function writeEvidenceFile(options, evidence) {
-  if (options.evidence !== undefined)
+  if (options.evidence !== undefined) {
+    mkdirSync(dirname(options.evidence), { recursive: true });
     writeFileSync(options.evidence, `${JSON.stringify(evidence, null, 2)}\n`);
+  }
 }
 
 async function smokeEvidence(options, tempRoot, deps, now) {

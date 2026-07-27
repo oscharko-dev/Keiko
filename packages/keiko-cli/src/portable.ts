@@ -4,6 +4,10 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { runLifecycleCli } from "./lifecycle.js";
 import {
+  activateMacosPortableRuntime,
+  type MacosRuntimeActivationFn,
+} from "./portable-macos-activation.js";
+import {
   attestedExistingPortableInstall,
   attestedManagedInstall,
   attestedRecordedManagedInstall,
@@ -55,6 +59,7 @@ export interface PortableSetupDeps {
   readonly now?: (() => Date) | undefined;
   readonly spawnFn?: SpawnFn | undefined;
   readonly lifecycleFn?: LifecycleFn | undefined;
+  readonly activateMacosRuntimeFn?: MacosRuntimeActivationFn | undefined;
 }
 
 interface PortableArgDeps {
@@ -68,6 +73,7 @@ interface PortableRuntimeDeps extends PortableArgDeps {
   readonly now: () => Date;
   readonly spawnFn: SpawnFn;
   readonly lifecycleFn: LifecycleFn;
+  readonly activateMacosRuntimeFn: MacosRuntimeActivationFn;
 }
 
 interface PortableFlag {
@@ -90,7 +96,7 @@ const USAGE = `Usage:
   keiko portable launch [--target TARGET] [--portable-root PATH] [--managed-root PATH] [--state-dir PATH]
   keiko portable status [--target TARGET] [--portable-root PATH] [--managed-root PATH] [--state-dir PATH]
 
-Manages archive-first portable setup into a user-owned Keiko install root.
+Manages archive-first portable setup into Keiko's target-specific install root.
 `;
 
 function parsePortableCommandToken(
@@ -197,13 +203,18 @@ function finalizePortableOptions(
 }
 
 async function launchManaged(
+  target: PortableTarget,
   layout: PortableLayout,
   io: CliIo,
   env: EnvSource,
   stateDir: string,
-  lifecycleFn: LifecycleFn,
+  deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
 ): Promise<number> {
-  return lifecycleFn("start", ["--open", "--state-dir", stateDir], io, env, {
+  if (target !== "windows-x64" && !(await deps.activateMacosRuntimeFn(layout))) {
+    io.err("keiko portable launch: macOS runtime activation is incomplete\n");
+    return 1;
+  }
+  return deps.lifecycleFn("start", ["--open", "--state-dir", stateDir], io, env, {
     cwd: layout.appRoot,
   });
 }
@@ -221,13 +232,14 @@ async function stopManaged(
 }
 
 async function relaunchPreviousManaged(
+  target: PortableTarget,
   layout: PortableLayout,
   io: CliIo,
   env: EnvSource,
   stateDir: string,
-  lifecycleFn: LifecycleFn,
+  deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
 ): Promise<number> {
-  await launchManaged(layout, io, env, stateDir, lifecycleFn);
+  await launchManaged(target, layout, io, env, stateDir, deps);
   return 1;
 }
 
@@ -237,10 +249,10 @@ async function upgradeManagedFromClickedPackage(
   current: ValidatedPortableRoot,
   io: CliIo,
   env: EnvSource,
-  deps: Pick<PortableRuntimeDeps, "now" | "lifecycleFn">,
+  deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "now" | "lifecycleFn">,
 ): Promise<number> {
   if (!portableSourceCanReplaceManaged(source, current)) {
-    return launchManaged(current.layout, io, env, options.stateDir, deps.lifecycleFn);
+    return launchManaged(options.target, current.layout, io, env, options.stateDir, deps);
   }
   const stopped = await stopManaged(current.layout, io, env, options.stateDir, deps.lifecycleFn);
   if (stopped !== 0) return stopped;
@@ -256,12 +268,19 @@ async function upgradeManagedFromClickedPackage(
       now: deps.now(),
     });
     io.out("Keiko portable upgrade installed from downloaded package.\n");
-    return await launchManaged(upgraded, io, env, options.stateDir, deps.lifecycleFn);
+    return await launchManaged(options.target, upgraded, io, env, options.stateDir, deps);
   } catch (error) {
     io.err(
       `keiko portable launch: ${error instanceof Error ? error.message : "portable upgrade failed"}\n`,
     );
-    return relaunchPreviousManaged(current.layout, io, env, options.stateDir, deps.lifecycleFn);
+    return relaunchPreviousManaged(
+      current.manifest.platformTarget,
+      current.layout,
+      io,
+      env,
+      options.stateDir,
+      deps,
+    );
   }
 }
 
@@ -279,11 +298,11 @@ async function setupAndLaunchManaged(
   options: PortableCliOptions,
   io: CliIo,
   env: EnvSource,
-  deps: Pick<PortableRuntimeDeps, "now" | "lifecycleFn">,
+  deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "now" | "lifecycleFn">,
 ): Promise<number> {
   const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
   if (setup.code !== 0 || setup.layout === undefined) return setup.code;
-  return await launchManaged(setup.layout, io, env, options.stateDir, deps.lifecycleFn);
+  return await launchManaged(options.target, setup.layout, io, env, options.stateDir, deps);
 }
 
 function setupDownloadedPortable(
@@ -302,7 +321,7 @@ async function launchPortable(
   options: PortableCliOptions,
   io: CliIo,
   env: EnvSource,
-  deps: Pick<PortableRuntimeDeps, "now" | "spawnFn" | "lifecycleFn">,
+  deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "now" | "spawnFn" | "lifecycleFn">,
 ): Promise<number> {
   try {
     const source = validatePortableRoot(options.target, options.portableRoot);
@@ -336,6 +355,7 @@ function resolvedDeps(deps: PortableSetupDeps): PortableRuntimeDeps {
     now: deps.now ?? ((): Date => new Date()),
     spawnFn: deps.spawnFn ?? spawn,
     lifecycleFn: deps.lifecycleFn ?? runLifecycleCli,
+    activateMacosRuntimeFn: deps.activateMacosRuntimeFn ?? activateMacosPortableRuntime,
   };
 }
 

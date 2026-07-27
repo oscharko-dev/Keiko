@@ -16,7 +16,7 @@ import type { CliIo } from "./runner.js";
 import { defaultManagedRoot, type PortableLayout, type PortableTarget } from "./portable-shared.js";
 
 export type ManagedRootMode = "default" | "custom";
-export type NativeRegistrationKind = "windows-start-menu" | "macos-user-applications";
+export type NativeRegistrationKind = "windows-start-menu" | "macos-system-applications";
 
 interface RegistrationPlan {
   readonly kind: NativeRegistrationKind;
@@ -112,7 +112,7 @@ export function nativeRegistrationKinds(
 ): readonly NativeRegistrationKind[] {
   if (target === "windows-x64") return ["windows-start-menu"];
   return portableManagedRootMode(target, managedRoot, env, home) === "default"
-    ? ["macos-user-applications"]
+    ? ["macos-system-applications"]
     : [];
 }
 
@@ -195,7 +195,7 @@ function writeFileArtifact(plan: RegistrationPlan): void {
   }
 }
 
-export function installUserLocalRegistration(
+export function installNativeRegistration(
   layout: PortableLayout,
   target: PortableTarget,
   managedRoot: string,

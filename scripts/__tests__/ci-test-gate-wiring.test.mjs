@@ -214,10 +214,11 @@ describe("CI test/gate wiring guard", () => {
     const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
-    // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`. The
-    // load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
+    // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
+    // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes.
+    // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
-    expect(nodeSetupCount).toBe(20);
+    expect(nodeSetupCount).toBe(22);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });

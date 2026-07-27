@@ -28,7 +28,9 @@ import {
   validatePortableCandidateManifest,
 } from "../portable-runtime.mjs";
 import { prepareIsolatedMacSmoke } from "../isolated-macos-production-smoke.mjs";
+import { main as macosQualificationTransport } from "../macos-runtime-qualification-transport.mjs";
 import { rebindSignedPayload } from "../portable-signed-archive.mjs";
+import { qualificationReceiptFor as macosQualificationReceiptFor } from "../qualify-macos-runtime-release.mjs";
 
 const roots = [];
 function root() {
@@ -49,8 +51,50 @@ function payload() {
   const path = root();
   write(join(path, "Keiko.app", "Contents", "MacOS", "Keiko"), macho());
   write(
+    join(path, "Keiko.app", "Contents", "MacOS", "KeikoSystemExtensionManager"),
+    macho(0xfeedfacf, 7),
+  );
+  write(
+    join(
+      path,
+      "Keiko.app",
+      "Contents",
+      "Library",
+      "SystemExtensions",
+      "com.oscharko.keiko.runtime-monitor.systemextension",
+      "Contents",
+      "MacOS",
+      "KeikoRuntimeMonitor",
+    ),
+    macho(0xfeedfacf, 8),
+  );
+  write(
     join(path, "Keiko.app", "Contents", "Resources", "runtime", "node", "bin", "node"),
     macho(0xcafebabf, 1),
+  );
+  write(
+    join(
+      path,
+      "Keiko.app",
+      "Contents",
+      "Resources",
+      "runtime",
+      "native",
+      "keiko-secure-workspace-read",
+    ),
+    macho(0xfeedfacf, 5),
+  );
+  write(
+    join(
+      path,
+      "Keiko.app",
+      "Contents",
+      "Resources",
+      "runtime",
+      "native",
+      "keiko-runtime-supervisor",
+    ),
+    macho(0xfeedfacf, 6),
   );
   write(
     join(
@@ -105,6 +149,14 @@ function macManifest(executableBytes, licenseBytes) {
   manifest.runtime.nodePlatform = "darwin";
   manifest.runtime.nodeArchitecture = "arm64";
   manifest.runtime.nodeArchiveSha256 = "a".repeat(64);
+  manifest.runtimeActivation = {
+    schemaVersion: 1,
+    path: ".portable/runtime-activation.json",
+    sha256: "a".repeat(64),
+    trustAnchor: "developer-id-app-resource-seal",
+  };
+  delete manifest.runtimeAttestation;
+  delete binding.runtimeAttestation;
   manifest.nativeHelpers = [
     {
       name: "keiko-secure-workspace-read",
@@ -122,6 +174,30 @@ function macManifest(executableBytes, licenseBytes) {
       shippedSha256: "b".repeat(64),
       sizeBytes: 1,
       sbomBomRef: `pkg:generic/keiko-secure-workspace-read@${manifest.product.packageVersion}?platform=macos-arm64`,
+      signing: {
+        signatureKind: "developer-id-notarized",
+        verificationStatus: "verified-production",
+        signatureVerified: true,
+        notarizationRequired: true,
+        notarizationVerified: true,
+      },
+    },
+    {
+      name: "keiko-runtime-supervisor",
+      kind: "runtime-process-supervisor",
+      platformTarget: "macos-arm64",
+      architecture: "arm64",
+      executablePath: "runtime/native/keiko-runtime-supervisor",
+      protocol: { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
+      source: {
+        commitSha: "a".repeat(40),
+        path: "native/runtime-supervisor/macos",
+        treeSha256: "c".repeat(64),
+      },
+      unsignedSha256: "c".repeat(64),
+      shippedSha256: "c".repeat(64),
+      sizeBytes: 1,
+      sbomBomRef: `pkg:generic/keiko-runtime-supervisor@${manifest.product.packageVersion}?platform=macos-arm64`,
       signing: {
         signatureKind: "developer-id-notarized",
         verificationStatus: "verified-production",
@@ -196,9 +272,29 @@ function macFinalizeStage() {
   const payloadRoot = join(stage, "payload", "Keiko");
   const resources = join(payloadRoot, "Keiko.app", "Contents", "Resources");
   write(join(payloadRoot, "Keiko.app", "Contents", "MacOS", "Keiko"), macho());
+  write(
+    join(payloadRoot, "Keiko.app", "Contents", "MacOS", "KeikoSystemExtensionManager"),
+    macho(0xfeedfacf, 9),
+  );
+  write(
+    join(
+      payloadRoot,
+      "Keiko.app",
+      "Contents",
+      "Library",
+      "SystemExtensions",
+      "com.oscharko.keiko.runtime-monitor.systemextension",
+      "Contents",
+      "MacOS",
+      "KeikoRuntimeMonitor",
+    ),
+    macho(0xfeedfacf, 10),
+  );
   write(join(resources, "runtime", "node", "bin", "node"), macho(0xfeedfacf, 1));
   const helperBytes = macho(0xfeedfacf, 7);
   write(join(resources, "runtime", "native", "keiko-secure-workspace-read"), helperBytes);
+  const supervisorBytes = macho(0xfeedfacf, 8);
+  write(join(resources, "runtime", "native", "keiko-runtime-supervisor"), supervisorBytes);
   const upstreamSidecarExecutable = macho(0xfeedfacf, 2);
   const sidecarExecutable = Buffer.concat([
     upstreamSidecarExecutable,
@@ -259,10 +355,37 @@ function macFinalizeStage() {
   const summaryPath = join(stage, "evidence", "signing-verification.json");
   write(
     join(stage, "evidence", "sbom.cdx.json"),
-    `${JSON.stringify({ bomFormat: "CycloneDX", components: [{ "bom-ref": manifest.nativeHelpers[0].sbomBomRef, hashes: [{ alg: "SHA-256", content: manifest.nativeHelpers[0].shippedSha256 }] }] })}\n`,
+    `${JSON.stringify({
+      bomFormat: "CycloneDX",
+      components: manifest.nativeHelpers.map((helper) => ({
+        "bom-ref": helper.sbomBomRef,
+        hashes: [{ alg: "SHA-256", content: helper.shippedSha256 }],
+      })),
+    })}\n`,
   );
   write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   rebindSignedPayload(stage, manifest, "macos-arm64");
+  const helpers = new Map(manifest.nativeHelpers.map((helper) => [helper.name, helper]));
+  write(
+    join(resources, ".portable", "runtime-qualification.json"),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      suiteVersion: "runtime-tree-qualification-v1",
+      platformTarget: "macos-arm64",
+      sourceCommitSha: manifest.release.commitSha,
+      activationManifestSha256: manifest.runtimeActivation.sha256,
+      supervisorSha256: helpers.get("keiko-runtime-supervisor").shippedSha256,
+      secureReadSha256: helpers.get("keiko-secure-workspace-read").shippedSha256,
+      sidecars: [
+        {
+          name: sidecar.name,
+          sha256: sidecar.payloadSha256,
+        },
+      ],
+      backend: "macos-endpoint-security",
+      result: "passed",
+    })}\n`,
+  );
   write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   write(provenancePath, `${JSON.stringify({ subjectDigest: "0".repeat(64) })}\n`);
   write(checksumPath, "before\n");
@@ -292,20 +415,135 @@ function macFinalizeStage() {
     upstreamSidecarExecutableSha256: sha256(upstreamSidecarExecutable),
   };
 }
+
+function resetSidecarSbomForRebind(fixture) {
+  const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+  const sidecar = manifest.sidecarRuntimes[0];
+  const sbomPath = join(
+    fixture.resources,
+    "runtime",
+    "sidecars",
+    "opencode-compatible",
+    "evidence",
+    "sbom.cdx.json",
+  );
+  const sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
+  sbom.components[0].hashes = [{ alg: "SHA-256", content: sidecar.executableSha256 }];
+  writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
+}
+
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop(), { recursive: true, force: true });
 });
 
 describe("macOS portable signing inventory", () => {
+  it("allows qualification to add only the bounded receipt", () => {
+    const fixtureRoot = root();
+    const stage = join(fixtureRoot, "stage");
+    const snapshot = join(fixtureRoot, "qualification-before.json");
+    const stableFile = join(stage, "payload", "Keiko", "stable.txt");
+    const receipt = join(
+      stage,
+      "payload",
+      "Keiko",
+      "Keiko.app",
+      "Contents",
+      "Resources",
+      ".portable",
+      "runtime-qualification.json",
+    );
+    write(stableFile, "stable");
+    macosQualificationTransport(["snapshot", "--stage-root", stage, "--output", snapshot]);
+    write(receipt, "{}\n");
+    expect(() =>
+      macosQualificationTransport(["verify", "--stage-root", stage, "--snapshot", snapshot]),
+    ).not.toThrow();
+    write(stableFile, "mutated");
+    expect(() =>
+      macosQualificationTransport(["verify", "--stage-root", stage, "--snapshot", snapshot]),
+    ).toThrow(/bytes changed unexpectedly/u);
+  });
+
+  it("binds qualification to the exact sealed helpers and mandatory OpenCode payload", () => {
+    const stagePayload = payload();
+    const resourceRoot = join(stagePayload, "Keiko.app", "Contents", "Resources");
+    const supervisorPath = join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor");
+    const secureReadPath = join(resourceRoot, "runtime", "native", "keiko-secure-workspace-read");
+    const supervisorBytes = readFileSync(supervisorPath);
+    const secureReadBytes = readFileSync(secureReadPath);
+    const activationPath = join(resourceRoot, ".portable", "runtime-activation.json");
+    const sourceCommitSha = "a".repeat(40);
+    write(
+      activationPath,
+      Buffer.from(
+        JSON.stringify({
+          schemaVersion: 1,
+          suiteVersion: "runtime-tree-qualification-v1",
+          product: {},
+          sourceCommitSha,
+          platformTarget: "macos-arm64",
+          artifact: { platformTarget: "macos-arm64" },
+          runtime: { nodePlatform: "darwin", nodeArchitecture: "arm64" },
+          security: { verificationStatus: "verified-production" },
+          nativeHelpers: [
+            {
+              name: "keiko-runtime-supervisor",
+              platformTarget: "macos-arm64",
+              executablePath: "runtime/native/keiko-runtime-supervisor",
+              sizeBytes: supervisorBytes.length,
+              shippedSha256: sha256(supervisorBytes),
+            },
+            {
+              name: "keiko-secure-workspace-read",
+              platformTarget: "macos-arm64",
+              executablePath: "runtime/native/keiko-secure-workspace-read",
+              sizeBytes: secureReadBytes.length,
+              shippedSha256: sha256(secureReadBytes),
+            },
+          ],
+          sidecarRuntimes: [{ name: "opencode-compatible", payloadSha256: "b".repeat(64) }],
+          releaseImpact: {},
+        }),
+      ),
+    );
+
+    expect(
+      macosQualificationReceiptFor({
+        activationPath,
+        resourceRoot,
+        target: "macos-arm64",
+        sourceCommitSha,
+      }),
+    ).toMatchObject({
+      platformTarget: "macos-arm64",
+      supervisorSha256: sha256(supervisorBytes),
+      secureReadSha256: sha256(secureReadBytes),
+      sidecars: [{ name: "opencode-compatible", sha256: "b".repeat(64) }],
+      backend: "macos-endpoint-security",
+      result: "passed",
+    });
+    write(supervisorPath, macho(0xfeedfacf, 9));
+    expect(() =>
+      macosQualificationReceiptFor({
+        activationPath,
+        resourceRoot,
+        target: "macos-arm64",
+        sourceCommitSha,
+      }),
+    ).toThrow(/helper bytes are invalid/u);
+  });
+
   it("rebinds signed sidecar evidence before outer app signing and archive creation", () => {
     const script = readFileSync("scripts/run-macos-portable-signing.sh", "utf8");
-    const rebind = script.indexOf("macos-portable-signing.mjs rebind-payload");
+    const rebind = script.indexOf("macos-portable-signing.mjs prepare-qualified-payload");
     const outerSigning = script.indexOf('sign "$APPLE_DEVELOPER_ID_IDENTITY" "$app"');
     const archive = script.indexOf('ditto -c -k --sequesterRsrc --keepParent "$payload"');
 
     expect(rebind).toBeGreaterThan(0);
     expect(rebind).toBeLessThan(outerSigning);
     expect(rebind).toBeLessThan(archive);
+    expect(script).toContain('const MACOS_RELEASE_TEAM_IDENTIFIER = \\"$APPLE_TEAM_ID\\";');
+    expect(script).toContain("__KEIKO_APPLE_TEAM_ID__");
   });
 
   it("detects thin/fat Mach-O content and assigns only Node the JIT role", () => {
@@ -316,8 +554,15 @@ describe("macOS portable signing inventory", () => {
     );
     const inventory = inventoryMacPortableCode(path, "macos-arm64");
     expect(inventory.codeObjects.map((entry) => [entry.relativePath, entry.role])).toEqual([
+      [
+        "Keiko.app/Contents/Library/SystemExtensions/com.oscharko.keiko.runtime-monitor.systemextension/Contents/MacOS/KeikoRuntimeMonitor",
+        "endpoint-security-extension",
+      ],
       ["Keiko.app/Contents/MacOS/Keiko", "default"],
+      ["Keiko.app/Contents/MacOS/KeikoSystemExtensionManager", "system-extension-manager"],
       ["Keiko.app/Contents/Resources/app/addon.node", "default"],
+      ["Keiko.app/Contents/Resources/runtime/native/keiko-runtime-supervisor", "default"],
+      ["Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read", "default"],
       ["Keiko.app/Contents/Resources/runtime/node/bin/node", "node-runtime"],
       ["Keiko.app/Contents/Resources/runtime/node/lib/helper", "default"],
       ["Keiko.app/Contents/Resources/runtime/sidecars/opencode/bin/opencode", "sidecar-runtime"],
@@ -331,7 +576,10 @@ describe("macOS portable signing inventory", () => {
       Buffer.from([0xfe, 0xed, 0xfa, 0xcf]),
     );
     const inventory = inventoryMacPortableCode(path, "macos-arm64");
-    expect(inventory.nestedBundles).toEqual(["Keiko.app/Contents/PlugIns/Bank.bundle"]);
+    expect(inventory.nestedBundles).toEqual([
+      "Keiko.app/Contents/Library/SystemExtensions/com.oscharko.keiko.runtime-monitor.systemextension",
+      "Keiko.app/Contents/PlugIns/Bank.bundle",
+    ]);
     expect(inventory.codeObjects.map((entry) => entry.relativePath)).toContain(
       "Keiko.app/Contents/PlugIns/Bank.bundle/Contents/MacOS/Bank",
     );
@@ -399,6 +647,102 @@ describe("macOS portable signing inventory", () => {
         main(["compare-paths", "--expected-inventory", expected, "--actual-inventory", actual]),
       ).rejects.toThrow(/inventory|changed unexpectedly|executable is missing/u);
     }
+  });
+
+  it("dispatches every bounded macOS inventory and payload preparation command", async () => {
+    const fixture = macFinalizeStage();
+    const commandInventory = join(fixture.stage, "command-inventory.json");
+    await main([
+      "inventory",
+      "--stage-root",
+      fixture.stage,
+      "--target",
+      "macos-arm64",
+      "--inventory",
+      commandInventory,
+    ]);
+    expect(JSON.parse(readFileSync(commandInventory, "utf8"))).toEqual(
+      JSON.parse(readFileSync(fixture.inventoryPath, "utf8")),
+    );
+
+    const rootInventory = join(fixture.stage, "root-inventory.json");
+    await main([
+      "inventory-root",
+      "--payload-root",
+      join(fixture.stage, "payload", "Keiko"),
+      "--target",
+      "macos-arm64",
+      "--inventory",
+      rootInventory,
+    ]);
+    await expect(
+      main([
+        "compare-bytes",
+        "--expected-inventory",
+        commandInventory,
+        "--actual-inventory",
+        rootInventory,
+      ]),
+    ).resolves.toBeUndefined();
+
+    resetSidecarSbomForRebind(fixture);
+    await expect(
+      main(["rebind-payload", "--stage-root", fixture.stage, "--target", "macos-arm64"]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("promotes and validates only a complete macOS-qualified runtime payload", async () => {
+    const prepared = macFinalizeStage();
+    resetSidecarSbomForRebind(prepared);
+    await expect(
+      main([
+        "prepare-qualified-payload",
+        "--stage-root",
+        prepared.stage,
+        "--target",
+        "macos-arm64",
+      ]),
+    ).resolves.toBeUndefined();
+    const manifest = JSON.parse(readFileSync(prepared.manifestPath, "utf8"));
+    expect(manifest.runtimeActivation.trustAnchor).toBe("developer-id-app-resource-seal");
+    expect(manifest.nativeHelpers).toHaveLength(2);
+    expect(
+      manifest.nativeHelpers.every(
+        (helper) => helper.signing.verificationStatus === "verified-production",
+      ),
+    ).toBe(true);
+
+    const qualified = macFinalizeStage();
+    await expect(
+      main([
+        "validate-runtime-qualification",
+        "--stage-root",
+        qualified.stage,
+        "--target",
+        "macos-arm64",
+      ]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects incomplete macOS inventory authority and unsupported dispatcher input", async () => {
+    const fixture = macFinalizeStage();
+    const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+    manifest.nativeHelpers = [];
+    writeFileSync(fixture.manifestPath, JSON.stringify(manifest));
+    await expect(
+      main([
+        "inventory",
+        "--stage-root",
+        fixture.stage,
+        "--target",
+        "macos-arm64",
+        "--inventory",
+        join(fixture.stage, "rejected-inventory.json"),
+      ]),
+    ).rejects.toThrow(/complete native helper set/u);
+
+    await expect(main(["inventory", "--stage-root"])).rejects.toThrow(/invalid command arguments/u);
+    await expect(main(["unsupported"])).rejects.toThrow(/unsupported command/u);
   });
 
   it("finalizes a real macOS layout against app resources and canonical evidence", async () => {
@@ -678,6 +1022,11 @@ describe("macOS protected configuration and native result", () => {
       expect(result.stderr).not.toContain(path);
       expect(result.stderr).not.toContain("token=secret");
     }
+  });
+
+  it("rejects inherited object properties as command names", async () => {
+    await expect(main(["constructor"])).rejects.toThrow("unsupported command");
+    await expect(main(["toString"])).rejects.toThrow("unsupported command");
   });
 
   it("keeps key material non-extractable, sign-only, and scoped to one identity", () => {

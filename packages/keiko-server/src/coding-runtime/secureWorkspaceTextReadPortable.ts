@@ -144,10 +144,70 @@ function manifestHelper(
   version: string | undefined,
 ): Record<string, unknown> | undefined {
   const helpers = manifest?.nativeHelpers;
-  if (!Array.isArray(helpers) || helpers.length !== 1) return undefined;
-  const helper = record(helpers[0]);
+  if (!closedHelperSet(helpers, target)) return undefined;
+  const helper = helpers
+    .map((candidate) => record(candidate))
+    .find((candidate) => candidate?.name === "keiko-secure-workspace-read");
   if (helper === undefined || !exactKeys(helper, HELPER_KEYS)) return undefined;
   return validHelperIdentity(helper, target, version) ? helper : undefined;
+}
+
+function closedHelperSet(
+  value: unknown,
+  target: TargetContract,
+): value is readonly Record<string, unknown>[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 2) return false;
+  const helpers = value.map((candidate) => record(candidate));
+  if (helpers.includes(undefined)) return false;
+  const names = helpers.map((candidate) => candidate?.name);
+  if (new Set(names).size !== names.length || !names.includes("keiko-secure-workspace-read")) {
+    return false;
+  }
+  const supervisor = helpers.find((candidate) => candidate?.name === "keiko-runtime-supervisor");
+  return value.length === 1 || validSupervisorIdentity(supervisor, target);
+}
+
+function validSupervisorIdentity(
+  helper: Record<string, unknown> | undefined,
+  target: TargetContract,
+): boolean {
+  if (helper === undefined || !exactKeys(helper, HELPER_KEYS)) return false;
+  const protocol = record(helper.protocol);
+  const source = record(helper.source);
+  return (
+    supervisorIdentityMatches(helper, target) &&
+    supervisorProtocolMatches(protocol) &&
+    supervisorSourceMatches(source, target)
+  );
+}
+
+function supervisorIdentityMatches(
+  helper: Record<string, unknown>,
+  target: TargetContract,
+): boolean {
+  const suffix = target.artifactTarget === "win32-x64" ? ".exe" : "";
+  return (
+    helper.kind === "runtime-process-supervisor" &&
+    helper.platformTarget === target.manifestTarget &&
+    helper.architecture === target.architecture &&
+    helper.executablePath === `runtime/native/keiko-runtime-supervisor${suffix}`
+  );
+}
+
+function supervisorProtocolMatches(protocol: Record<string, unknown> | undefined): boolean {
+  return (
+    protocol?.schemaVersion === 1 &&
+    protocol.requestMagic === "KRP1" &&
+    protocol.responseMagic === "KRS1"
+  );
+}
+
+function supervisorSourceMatches(
+  source: Record<string, unknown> | undefined,
+  target: TargetContract,
+): boolean {
+  const platform = target.artifactTarget === "win32-x64" ? "windows" : "macos";
+  return source?.path === `native/runtime-supervisor/${platform}`;
 }
 
 function validHelperIdentity(
@@ -229,7 +289,7 @@ function verifiedManifestBinding(
     matchingManifestTarget(artifact, runtime, target),
     validSecurity(security, target, false),
     validSecurity(reviewed, target, true),
-    reviewedHelperMatches(reviewed, helper),
+    reviewedHelperMatches(reviewed, manifest?.nativeHelpers, helper),
   ].every(Boolean);
 }
 
@@ -247,15 +307,15 @@ function matchingManifestTarget(
 
 function reviewedHelperMatches(
   reviewed: Record<string, unknown> | undefined,
+  manifestHelpers: unknown,
   helper: Record<string, unknown>,
 ): boolean {
   const reviewedHelpers = reviewed?.nativeHelpers;
+  const helpers = Array.isArray(reviewedHelpers) ? reviewedHelpers : [];
   return [
-    isDeepStrictEqual(
-      record(Array.isArray(reviewed?.nativeHelpers) ? reviewed.nativeHelpers[0] : undefined),
-      helper,
-    ),
-    Array.isArray(reviewedHelpers) && reviewedHelpers.length === 1,
+    isDeepStrictEqual(reviewedHelpers, manifestHelpers),
+    helpers.some((candidate) => isDeepStrictEqual(record(candidate), helper)),
+    Array.isArray(reviewedHelpers) && reviewedHelpers.length > 0 && reviewedHelpers.length <= 2,
   ].every(Boolean);
 }
 

@@ -4,6 +4,11 @@ import {
   type PortablePlatformVerificationInput,
   PortableUpdateStagingError,
 } from "./update-portable-staging-shared.js";
+import {
+  WINDOWS_SYSTEM_POWERSHELL,
+  windowsAuthenticodeIdentityScript,
+  windowsSystemEnvironment,
+} from "./coding-runtime/windowsPortableAuthenticode.js";
 
 const VERIFY_TIMEOUT_MS = 30_000;
 const MAX_COMMAND_OUTPUT_BYTES = 16_384;
@@ -101,22 +106,6 @@ function runCommand(
   });
 }
 
-function verifierEnv(path: string): NodeJS.ProcessEnv {
-  return { ...process.env, KEIKO_PORTABLE_VERIFY_PATH: path };
-}
-
-function windowsAuthenticodeScript(): string {
-  return [
-    "$ErrorActionPreference = 'Stop'",
-    "$sig = Get-AuthenticodeSignature -LiteralPath $env:KEIKO_PORTABLE_VERIFY_PATH",
-    "if ($sig.Status -ne 'Valid') { exit 1 }",
-    "if ($null -eq $sig.SignerCertificate) { exit 1 }",
-    "if ($null -eq $sig.TimeStamperCertificate) { exit 1 }",
-    "Write-Output $sig.SignerCertificate.Thumbprint",
-    "exit 0",
-  ].join("; ");
-}
-
 function requireCurrentPath(path: string | undefined): string {
   if (path === undefined) {
     throw verifierUnavailable("active portable signing identity is unavailable");
@@ -153,16 +142,16 @@ async function verifyWindowsPath(
   commandRunner: PlatformCommandRunner,
 ): Promise<string> {
   const output = await commandRunner(
-    "powershell.exe",
+    WINDOWS_SYSTEM_POWERSHELL,
     [
+      "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
       "-Command",
-      windowsAuthenticodeScript(),
+      windowsAuthenticodeIdentityScript(),
+      path,
     ],
-    verifierEnv(path),
+    windowsSystemEnvironment(),
     signal,
   );
   return windowsSignerIdentity(output);

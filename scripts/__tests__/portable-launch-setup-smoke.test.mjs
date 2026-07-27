@@ -29,7 +29,6 @@ describe("portable launch/setup smoke", () => {
   it("proves managed setup and relaunch for every portable target without path node/npm", async () => {
     const dir = root();
     const evidencePath = join(dir, "evidence", "portable-launch-setup-smoke.json");
-    mkdirSync(join(dir, "evidence"), { recursive: true });
 
     const evidence = await runPortableLaunchSetupSmoke(["--evidence", evidencePath], {
       now: new Date("2026-07-06T00:00:00.000Z"),

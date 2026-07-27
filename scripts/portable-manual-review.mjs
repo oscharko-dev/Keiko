@@ -22,6 +22,11 @@ import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { PORTABLE_TARGETS, findPortableMetadataRedactionFailures } from "./portable-runtime.mjs";
 import { writeZipArchiveEntries, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import {
+  RUNTIME_ACTIVATION_RELATIVE_PATH,
+  RUNTIME_QUALIFICATION_SUITE,
+  runtimeActivationManifest,
+} from "./runtime-activation-manifest.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -505,6 +510,62 @@ function writePortablePayload(root, target, version, sidecar = "absent") {
   return payloadRoot;
 }
 
+function runtimeResourceRoot(payloadRoot, target) {
+  return target === "windows-x64"
+    ? payloadRoot
+    : join(payloadRoot, "Keiko.app", "Contents", "Resources");
+}
+
+function runtimeQualificationReceipt(manifest) {
+  const helpers = new Map(manifest.nativeHelpers.map((helper) => [helper.name, helper]));
+  return {
+    schemaVersion: 1,
+    suiteVersion: RUNTIME_QUALIFICATION_SUITE,
+    platformTarget: manifest.artifact.platformTarget,
+    sourceCommitSha: manifest.release.commitSha,
+    activationManifestSha256: manifest.runtimeActivation.sha256,
+    supervisorSha256: helpers.get("keiko-runtime-supervisor").shippedSha256,
+    secureReadSha256: helpers.get("keiko-secure-workspace-read").shippedSha256,
+    sidecars: manifest.sidecarRuntimes.map((sidecar) => ({
+      name: sidecar.name,
+      sha256: sidecar.payloadSha256,
+    })),
+    backend:
+      manifest.artifact.platformTarget === "windows-x64"
+        ? "windows-job-object"
+        : "macos-endpoint-security",
+    result: "passed",
+  };
+}
+
+function writeRuntimeEvidencePayload(payloadRoot, target, manifest) {
+  const resourceRoot = runtimeResourceRoot(payloadRoot, target);
+  const activationPath = join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/"));
+  writeJson(activationPath, runtimeActivationManifest(manifest));
+  manifest.runtimeActivation.sha256 = sha256File(activationPath);
+  const receipt = runtimeQualificationReceipt(manifest);
+  if (target === "windows-x64") {
+    writeManualWindowsAttestation(resourceRoot, manifest, receipt);
+  } else {
+    writeManualMacosQualification(resourceRoot, manifest, receipt);
+  }
+}
+
+function writeManualWindowsAttestation(resourceRoot, manifest, receipt) {
+  const path = join(resourceRoot, "runtime", "native", "keiko-runtime-attestation.exe");
+  writeFileSync(path, Buffer.from(`${JSON.stringify(receipt)}\n`));
+  manifest.runtimeAttestation.shippedSha256 = sha256File(path);
+  manifest.runtimeAttestation.sizeBytes = fileSize(path);
+  manifest.releaseImpact.reviewedBinding.runtimeAttestation = manifest.runtimeAttestation;
+}
+
+function writeManualMacosQualification(resourceRoot, manifest, receipt) {
+  const path = join(resourceRoot, ".portable", "runtime-qualification.json");
+  writeJson(path, receipt);
+  manifest.runtimeQualification.sha256 = sha256File(path);
+  manifest.releaseImpact.reviewedBinding.runtimeQualification = manifest.runtimeQualification;
+}
+
 function writeManagedInstall(root, target, version) {
   const managedRoot = managedRootPath(root, target);
   rmSync(managedRoot, { recursive: true, force: true });
@@ -615,52 +676,75 @@ function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function nativeHelperBytes(target) {
-  return Buffer.from(
-    target === "windows-x64"
-      ? "manual-review-signed-secure-read-pe-fixture\n"
-      : "#!/bin/sh\n# manual-review-signed-secure-read-fixture\n",
-  );
+const NATIVE_HELPER_NAMES = Object.freeze([
+  "keiko-secure-workspace-read",
+  "keiko-runtime-supervisor",
+]);
+
+function nativeHelperBytes(target, name) {
+  const fixture = `manual-review-signed-${name}-fixture`;
+  return Buffer.from(target === "windows-x64" ? `${fixture}-pe\n` : `#!/bin/sh\n# ${fixture}\n`);
 }
 
-function nativeHelperExecutablePath(target) {
-  return `runtime/native/keiko-secure-workspace-read${target === "windows-x64" ? ".exe" : ""}`;
+function nativeHelperExecutablePath(target, name) {
+  return `runtime/native/${name}${target === "windows-x64" ? ".exe" : ""}`;
 }
 
 function writeNativeHelperPayload(resourceRoot, target) {
-  const path = join(resourceRoot, nativeHelperExecutablePath(target));
-  ensureDir(dirname(path));
-  writeFileSync(path, nativeHelperBytes(target));
+  for (const name of NATIVE_HELPER_NAMES) {
+    const path = join(resourceRoot, nativeHelperExecutablePath(target, name));
+    ensureDir(dirname(path));
+    writeFileSync(path, nativeHelperBytes(target, name));
+  }
 }
 
-function nativeHelper(target, version, signingVerified) {
+function nativeHelper(target, version, signingVerified, name) {
   const runtimeTarget = targetByName(target);
-  const bytes = nativeHelperBytes(target);
+  const secureRead = name === "keiko-secure-workspace-read";
+  let sourcePath = "native/secure-workspace-read";
+  if (!secureRead) {
+    const supervisorPlatform = target === "windows-x64" ? "windows" : "macos";
+    sourcePath = `native/runtime-supervisor/${supervisorPlatform}`;
+  }
+  const bytes = nativeHelperBytes(target, name);
   const digest = sha256Bytes(bytes);
-  const signing = signingEvidence(target, signingVerified);
+  const signing = componentSigningEvidence(target, signingVerified);
   return {
-    name: "keiko-secure-workspace-read",
-    kind: "secure-workspace-text-read",
+    name,
+    kind: secureRead ? "secure-workspace-text-read" : "runtime-process-supervisor",
     platformTarget: target,
     architecture: runtimeTarget.nodeArchitecture,
-    executablePath: nativeHelperExecutablePath(target),
-    protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+    executablePath: nativeHelperExecutablePath(target, name),
+    protocol: {
+      schemaVersion: 1,
+      requestMagic: secureRead ? "KSR1" : "KRP1",
+      responseMagic: secureRead ? "KSS1" : "KRS1",
+    },
     source: {
       commitSha: "a".repeat(40),
-      path: "native/secure-workspace-read",
-      treeSha256: sha256Bytes(Buffer.from("native/secure-workspace-read\n")),
+      path: sourcePath,
+      treeSha256: sha256Bytes(
+        Buffer.from(
+          `${secureRead ? "native/secure-workspace-read" : "native/runtime-supervisor"}\n`,
+        ),
+      ),
     },
     unsignedSha256: digest,
     shippedSha256: digest,
     sizeBytes: bytes.length,
-    sbomBomRef: `pkg:generic/keiko-secure-workspace-read@${version}?platform=${target}`,
-    signing: {
-      signatureKind: signing.signatureKind,
-      verificationStatus: signing.verificationStatus,
-      signatureVerified: signing.signatureVerified,
-      notarizationRequired: signing.notarizationRequired,
-      notarizationVerified: signing.notarizationVerified,
-    },
+    sbomBomRef: `pkg:generic/${name}@${version}?platform=${target}`,
+    signing,
+  };
+}
+
+function componentSigningEvidence(target, verified) {
+  const signing = signingEvidence(target, verified);
+  return {
+    signatureKind: signing.signatureKind,
+    verificationStatus: signing.verificationStatus,
+    signatureVerified: signing.signatureVerified,
+    notarizationRequired: signing.notarizationRequired,
+    notarizationVerified: signing.notarizationVerified,
   };
 }
 
@@ -673,7 +757,6 @@ function treeDigest(files) {
 }
 
 function sidecarRuntime(target, scenario) {
-  if (scenario !== "sidecar-present" && scenario !== "sidecar-failure") return undefined;
   const files = sidecarFiles(target);
   const root = "runtime/sidecars/opencode-compatible";
   const approval = OPEN_CODE_APPROVAL;
@@ -849,7 +932,19 @@ function portableManifest(input) {
     verificationSummaryPath: "evidence/signing-verification.json",
   };
   const provenance = portableManifestProvenance(input.targetVersion);
-  const nativeHelpers = [nativeHelper(input.target, input.targetVersion, input.signingVerified)];
+  const nativeHelpers = NATIVE_HELPER_NAMES.map((name) =>
+    nativeHelper(input.target, input.targetVersion, input.signingVerified, name),
+  );
+  const sidecarRuntimes = [input.sidecar];
+  const target = targetByName(input.target);
+  const runtimeActivation = {
+    schemaVersion: 1,
+    path: RUNTIME_ACTIVATION_RELATIVE_PATH,
+    sha256: "e".repeat(64),
+    trustAnchor:
+      target.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal",
+  };
+  const targetEvidence = portableTargetRuntimeEvidence(input.target, input.signingVerified);
   const manifest = {
     schemaVersion: 1,
     product: { name: "Keiko", packageName: PACKAGE_NAME, packageVersion: input.targetVersion },
@@ -857,6 +952,9 @@ function portableManifest(input) {
     artifact: portableManifestArtifact(input),
     provenance,
     runtime: portableManifestRuntime(input.target),
+    runtimeActivation,
+    ...targetEvidence,
+    sidecarRuntimes,
     nativeHelpers,
     ...portableManifestProductSections(input.target),
     security,
@@ -868,15 +966,43 @@ function portableManifest(input) {
       entryReleaseTag: `v${input.targetVersion}`,
       reviewedBinding: {
         ...reviewedBinding(input, security, provenance),
+        ...reviewedTargetRuntimeEvidence(targetEvidence),
+        sidecarRuntimes,
         nativeHelpers,
       },
     },
   };
-  if (input.sidecar !== undefined) {
-    manifest.sidecarRuntimes = [input.sidecar];
-    manifest.releaseImpact.reviewedBinding.sidecarRuntimes = [input.sidecar];
-  }
   return manifest;
+}
+
+function portableTargetRuntimeEvidence(target, signingVerified) {
+  if (target !== "windows-x64") {
+    return {
+      runtimeQualification: {
+        schemaVersion: 1,
+        path: ".portable/runtime-qualification.json",
+        sha256: "f".repeat(64),
+        backend: "macos-endpoint-security",
+      },
+    };
+  }
+  return {
+    runtimeAttestation: {
+      schemaVersion: 1,
+      carrierKind: "authenticode-executable",
+      executablePath: "runtime/native/keiko-runtime-attestation.exe",
+      shippedSha256: "f".repeat(64),
+      sizeBytes: 64,
+      signing: componentSigningEvidence(target, signingVerified),
+    },
+  };
+}
+
+function reviewedTargetRuntimeEvidence(evidence) {
+  if (evidence.runtimeAttestation !== undefined) {
+    return { runtimeAttestation: evidence.runtimeAttestation };
+  }
+  return { runtimeQualification: evidence.runtimeQualification };
 }
 
 function portableManifestProductSections(target) {
@@ -1016,21 +1142,38 @@ function createScenarioAssets(root, target, scenario) {
   ensureDir(payloadRoot);
   const targetVersion = scenario === "current-release" ? CURRENT_VERSION : TARGET_VERSION;
   const archivePath = join(assetsRoot, assetName(target));
+  let payload;
   if (scenario === "hostile-archive") createHostileZip(root, archivePath);
   else {
-    writePortablePayload(payloadRoot, target, targetVersion, sidecarState(scenario));
+    payload = writePortablePayload(payloadRoot, target, targetVersion, sidecarState(scenario));
     zipDirectory(payloadRoot, archivePath);
   }
-  return createScenarioReleaseFiles(root, target, scenario, archivePath, targetVersion);
+  return createScenarioReleaseFiles(
+    root,
+    target,
+    scenario,
+    archivePath,
+    targetVersion,
+    payloadRoot,
+    payload,
+  );
 }
 
 function sidecarState(scenario) {
-  return scenario === "sidecar-present" || scenario === "sidecar-failure" ? "present" : "absent";
+  return scenario === "sidecar-absent" ? "absent" : "present";
 }
 
-function createScenarioReleaseFiles(root, target, scenario, archivePath, targetVersion) {
+function createScenarioReleaseFiles(
+  root,
+  target,
+  scenario,
+  archivePath,
+  targetVersion,
+  payloadSource,
+  payload,
+) {
   const archive = releaseAsset(100 + targetIndex(target), assetName(target), fileSize(archivePath));
-  const archiveSha = sha256File(archivePath);
+  let archiveSha = sha256File(archivePath);
   const manifest = portableManifest({
     target,
     targetVersion,
@@ -1039,6 +1182,14 @@ function createScenarioReleaseFiles(root, target, scenario, archivePath, targetV
     signingVerified: scenario !== "missing-signing",
     sidecar: sidecarRuntime(target, scenario),
   });
+  if (payload !== undefined) {
+    writeRuntimeEvidencePayload(payload, target, manifest);
+    rmSync(archivePath);
+    zipDirectory(payloadSource, archivePath);
+    archive.size = fileSize(archivePath);
+    archiveSha = sha256File(archivePath);
+    syncPortableArchiveIdentity(manifest, archive, archiveSha);
+  }
   const manifestText =
     scenario === "bad-manifest"
       ? "{ malformed portable manifest\n"
@@ -1052,6 +1203,13 @@ function createScenarioReleaseFiles(root, target, scenario, archivePath, targetV
     `${checksumSha}  ${assetName(target)}\n`,
   );
   return releaseFixture(root, target, scenario, archive, manifestName, checksumName, targetVersion);
+}
+
+function syncPortableArchiveIdentity(manifest, archive, archiveSha) {
+  manifest.artifact.sizeBytes = archive.size;
+  manifest.artifact.sha256 = archiveSha;
+  manifest.releaseImpact.reviewedBinding.assetSizeBytes = archive.size;
+  manifest.releaseImpact.reviewedBinding.archiveSha256 = archiveSha;
 }
 
 function releaseFixture(
@@ -1126,12 +1284,7 @@ function jsonResponse(value) {
 function portableMode(target, scenario, packageVersion = CURRENT_VERSION) {
   if (scenario === "legacy-package-manager") return legacyInstallMode();
   const portable = {
-    status:
-      scenario === "unmanaged-bootstrap"
-        ? "bootstrap"
-        : scenario === "system-managed"
-          ? "it-managed"
-          : "managed",
+    status: portableModeStatus(scenario),
     target,
     updateEligible: scenario !== "unmanaged-bootstrap" && scenario !== "system-managed",
     packageVersion,
@@ -1150,6 +1303,12 @@ function portableMode(target, scenario, packageVersion = CURRENT_VERSION) {
     portable,
     recommendedAction: "portable-managed-update",
   };
+}
+
+function portableModeStatus(scenario) {
+  if (scenario === "unmanaged-bootstrap") return "bootstrap";
+  if (scenario === "system-managed") return "it-managed";
+  return "managed";
 }
 
 function unsupportedPortableMode(portable, reason) {
@@ -1459,10 +1618,15 @@ function writeScenarioReceipt(root, input, url) {
 
 function openBrowserIfRequested(url, open) {
   if (!open) return;
-  const command =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const command = browserOpenCommand(process.platform);
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   spawnSync(command, args, { stdio: "ignore", detached: true });
+}
+
+function browserOpenCommand(platform) {
+  if (platform === "darwin") return "/usr/bin/open";
+  if (platform === "win32") return String.raw`C:\Windows\System32\cmd.exe`;
+  return "/usr/bin/xdg-open";
 }
 
 export async function runPortableManualReview(argv = process.argv.slice(2)) {

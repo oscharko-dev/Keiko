@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import type { PortableTarget } from "./portable-shared.js";
 
 const SYSTEM_MANAGED_PREFIXES = [
   "//",
@@ -33,6 +34,13 @@ function pathLooksSystemManaged(normalized: string): boolean {
   return SYSTEM_MANAGED_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
+function isCanonicalMacosManagedRoot(path: string, target: PortableTarget): boolean {
+  return (
+    target !== "windows-x64" &&
+    normalizedPath(resolve(path)) === normalizedPath("/Applications/Keiko.app")
+  );
+}
+
 function pathInsideRepository(root: string, normalized: string): boolean {
   let cursor = resolve(root);
   for (;;) {
@@ -46,7 +54,7 @@ function pathInsideRepository(root: string, normalized: string): boolean {
   }
 }
 
-function assertPathAllowed(path: string): void {
+function assertPathAllowed(path: string, target: PortableTarget): void {
   const normalized = normalizedPath(path);
   if (pathTouchesRuntimeState(normalized)) {
     throw new Error("managed install root must be separate from .keiko runtime state");
@@ -54,8 +62,8 @@ function assertPathAllowed(path: string): void {
   if (pathInsideTemp(normalized)) {
     throw new Error("managed install root must not be inside a temporary directory");
   }
-  if (pathLooksSystemManaged(normalized)) {
-    throw new Error("managed install root must be user-local and Keiko-owned");
+  if (pathLooksSystemManaged(normalized) && !isCanonicalMacosManagedRoot(path, target)) {
+    throw new Error("managed install root must be user-local or the canonical Keiko macOS app");
   }
   if (pathInsideRepository(path, normalized)) {
     throw new Error("managed install root must be outside customer repositories");
@@ -95,11 +103,15 @@ function resolvedCandidatePath(path: string): string {
   return resolve(realpathSync(ancestor), suffix);
 }
 
-export function assertManagedRootAllowed(path: string, stateDir: string): void {
-  assertPathAllowed(path);
+export function assertManagedRootAllowed(
+  path: string,
+  stateDir: string,
+  target: PortableTarget,
+): void {
+  assertPathAllowed(path, target);
   assertNoSymlinkedAncestor(path);
   const resolvedPath = resolvedCandidatePath(path);
-  assertPathAllowed(resolvedPath);
+  assertPathAllowed(resolvedPath, target);
   const resolvedState = resolvedCandidatePath(stateDir);
   if (
     normalizedPath(resolvedPath) === normalizedPath(resolvedState) ||
