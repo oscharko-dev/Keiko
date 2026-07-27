@@ -9,6 +9,7 @@ import { parse } from "acorn";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 import {
   rejectUiStaticRootCliOverride,
   rejectUiStaticSymlink,
@@ -162,6 +163,6 @@ export async function runUiStaticJavaScriptCompatibilityCli(
   await operation();
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   await runUiStaticJavaScriptCompatibilityCli(process.argv.slice(2));
 }

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
 import { parseChangedFiles } from "./check-mutation-scope.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 import {
   isCoverableProductSource,
   optionValue,
@@ -98,4 +99,4 @@ export function runLcovSourceMappingCli(input = {}) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) runLcovSourceMappingCli();
+if (isMainModule(import.meta.url)) runLcovSourceMappingCli();
