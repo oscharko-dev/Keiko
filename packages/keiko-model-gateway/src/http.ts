@@ -579,6 +579,44 @@ function attachAbortGuard(signal: AbortSignal, onAbort: () => void): () => void 
   };
 }
 
+// Shared "settle once" guard for the proxy-socket Promise executors below. `getCleanup` is a
+// lazy accessor (rather than the cleanup function itself) so callers can declare `settle` before
+// their `cleanup` const is initialized — `cleanup` is only read once `settle` actually fires,
+// which happens on a later socket event, never synchronously during setup.
+function createSettle(getCleanup: () => () => void): (fn: () => void) => void {
+  let settled = false;
+  return (fn: () => void): void => {
+    if (settled) return;
+    settled = true;
+    getCleanup()();
+    fn();
+  };
+}
+
+function createProxyErrorHandler(
+  settle: (fn: () => void) => void,
+  reject: (error: Error) => void,
+): (error: Error) => void {
+  return (error: Error): void => {
+    settle(() => {
+      reject(mapProxyError(error));
+    });
+  };
+}
+
+function createProxyUnreachableAbortHandler(
+  getSocket: () => Socket,
+  settle: (fn: () => void) => void,
+  reject: (error: Error) => void,
+): () => void {
+  return (): void => {
+    getSocket().destroy();
+    settle(() => {
+      reject(PROXY_UNREACHABLE_ERROR);
+    });
+  };
+}
+
 function openProxySocket(
   proxy: URL,
   ca: readonly string[],
@@ -587,29 +625,14 @@ function openProxySocket(
   const host = proxy.hostname;
   const port = proxyPort(proxy);
   return new Promise<Socket>((resolve, reject) => {
-    let settled = false;
-    const settle = (fn: () => void): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      fn();
-    };
+    const settle = createSettle(() => cleanup);
     const onConnect = (): void => {
       settle(() => {
         resolve(socket);
       });
     };
-    const onError = (error: Error): void => {
-      settle(() => {
-        reject(mapProxyError(error));
-      });
-    };
-    const onAbort = (): void => {
-      socket.destroy();
-      settle(() => {
-        reject(PROXY_UNREACHABLE_ERROR);
-      });
-    };
+    const onError = createProxyErrorHandler(settle, reject);
+    const onAbort = createProxyUnreachableAbortHandler(() => socket, settle, reject);
     let removeAbort = (): void => undefined;
     const cleanup = (): void => {
       socket.off("error", onError);
@@ -681,17 +704,8 @@ function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Pro
         resolve(buffer.subarray(0, headerEnd).toString("latin1"));
       });
     };
-    const onError = (error: Error): void => {
-      settle(() => {
-        reject(mapProxyError(error));
-      });
-    };
-    const onAbort = (): void => {
-      socket.destroy();
-      settle(() => {
-        reject(PROXY_UNREACHABLE_ERROR);
-      });
-    };
+    const onError = createProxyErrorHandler(settle, reject);
+    const onAbort = createProxyUnreachableAbortHandler(() => socket, settle, reject);
     socket.on("data", onData);
     socket.once("error", onError);
     if (signal !== undefined) {
@@ -712,18 +726,8 @@ function startTargetTls(
   signal: AbortSignal | undefined,
 ): Promise<tls.TLSSocket> {
   return new Promise<tls.TLSSocket>((resolve, reject) => {
-    let settled = false;
-    const settle = (fn: () => void): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      fn();
-    };
-    const onError = (error: Error): void => {
-      settle(() => {
-        reject(mapProxyError(error));
-      });
-    };
+    const settle = createSettle(() => cleanup);
+    const onError = createProxyErrorHandler(settle, reject);
     const onAbort = (): void => {
       tlsSocket.destroy();
       settle(() => {
@@ -861,7 +865,7 @@ async function fetchHttpViaProxy(
     );
   }
   // Ensure Host header omits the default port (fixes SigV4 pre-signed S3 URLs).
-  if (!Object.prototype.hasOwnProperty.call(headers, "host")) {
+  if (!Object.hasOwn(headers, "host")) {
     headers.host = hostHeader(target);
   }
   const request = proxy.protocol === "https:" ? httpsRequest : httpRequest;
@@ -907,12 +911,12 @@ async function fetchHttpsViaProxy(
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
-  if (!Object.prototype.hasOwnProperty.call(headers, "connection")) {
+  if (!Object.hasOwn(headers, "connection")) {
     headers.connection = "keep-alive";
   }
   // Ensure Host header omits :443 so it matches what undici sends directly and
   // satisfies SigV4 pre-signed S3 URLs behind a proxy.
-  if (!Object.prototype.hasOwnProperty.call(headers, "host")) {
+  if (!Object.hasOwn(headers, "host")) {
     headers.host = hostHeader(target);
   }
   const tunnelKey = httpsProxyTunnelKey(target, proxy, ca);
