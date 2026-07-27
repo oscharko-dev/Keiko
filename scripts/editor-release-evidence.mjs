@@ -400,7 +400,7 @@ function assertCommittedEvidenceFresh(repoRoot, record) {
   }
 }
 
-if (process.argv[1] && process.argv[1].endsWith("editor-release-evidence.mjs")) {
+if (process.argv[1]?.endsWith("editor-release-evidence.mjs")) {
   const repoRoot = process.cwd();
   const record = measureReleaseEvidence(repoRoot);
   const writeJson = process.argv.includes("--json");
