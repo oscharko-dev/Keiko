@@ -419,7 +419,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(30);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(32);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
@@ -1334,10 +1334,10 @@ describe("keiko-contracts package surface", () => {
     } as const;
 
     // The identity key is the fail-open guard: vectors from incompatible embedding spaces must not
-    // compare as comparable. Pin the exact string, since it is persisted and compared across
-    // packages — a formatting change is a silent re-partition of every stored vector.
+    // compare as comparable. Pin the versioned collision-free format, since it is persisted and
+    // compared across packages.
     expect(m.embeddingIdentityKey(identity)).toBe(
-      "openai|text-embedding-3-small|4|cosine|legacy|legacy|unverified|",
+      'keiko-embedding-identity:v2:["openai","text-embedding-3-small",4,"cosine",null,null,null,null]',
     );
     // modelRevision is deliberately NOT part of the tuple: re-validating a capsule with a newer
     // revision must not orphan its vectors.
@@ -1361,6 +1361,15 @@ describe("keiko-contracts package surface", () => {
     expect(m.isValidVectorIndexQuery({ ...query, queryVector: new Float32Array([1, 0]) })).toBe(
       false,
     );
+    expect(m.isValidVectorIndexQuery({ ...query, candidateIds: [] })).toBe(true);
+    expect(m.isValidVectorIndexQuery({ ...query, candidateIds: ["chunk-1"] })).toBe(true);
+    expect(m.isValidVectorIndexQuery({ ...query, candidateIds: [""] })).toBe(false);
+    expect(
+      m.isValidVectorIndexQuery({
+        ...query,
+        candidateIds: Array.from({ length: 10_001 }, () => "chunk"),
+      }),
+    ).toBe(false);
 
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<import("./index.js").VectorIndexNamespace>();

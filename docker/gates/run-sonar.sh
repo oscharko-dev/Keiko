@@ -5,18 +5,40 @@
 #   ./docker/gates/run-sonar.sh              # findings on files changed against origin/dev
 #   ./docker/gates/run-sonar.sh --all        # every finding in the project
 #   ./docker/gates/run-sonar.sh --base main  # diff against a different base
+#   ./docker/gates/run-sonar.sh --stop       # stop this repository/port's server
 #
 # Exit status is 1 when a finding lands on a changed file, so this is usable as a pre-push guard.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+sonar_port="${KEIKO_LOCAL_SONAR_PORT:-9234}"
+if [[ ! "${sonar_port}" =~ ^[0-9]+$ ]] ||
+  ((10#${sonar_port} < 1024 || 10#${sonar_port} > 65535)); then
+  printf 'KEIKO_LOCAL_SONAR_PORT must be an integer from 1024 through 65535\n' >&2
+  exit 2
+fi
+host="http://127.0.0.1:${sonar_port}"
+
+# Worktrees of one repository share the server and its administrator credential. A checkout-local
+# credential file cannot represent that server-global password: the second worktree would generate
+# a different password and receive a 401 forever. Different clones and alternate ports receive
+# isolated Compose projects and volumes; setting another port is therefore enough to run beside an
+# already-active local analyzer without stopping it or deleting its state.
+git_common_dir="$(git -C "${repo_root}" rev-parse --path-format=absolute --git-common-dir)"
+repository_id="$(printf '%s' "${git_common_dir}" | node -e 'const { createHash } = require("node:crypto");
+let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(createHash("sha256").update(s).digest("hex").slice(0, 12));
+});')"
+compose_project="${COMPOSE_PROJECT_NAME:-keiko-sonar-${repository_id}-${sonar_port}}"
+export COMPOSE_PROJECT_NAME="${compose_project}"
 compose=(docker compose -f "${repo_root}/docker/gates/sonar-compose.yml")
-host="http://127.0.0.1:9234"
-# The server is shared per machine, but several checkouts (worktrees, parallel agent sessions) run
-# this lane concurrently. A shared project key would let one checkout's upload overwrite the state
-# another checkout is about to query, and a shared token name would let one provisioning revoke a
-# token another scan is still using mid-flight (observed as an unexplained 401 at report upload).
-# Namespacing both by the checkout path keeps concurrent runs fully independent.
+
+# Several checkouts may still scan concurrently against their shared server. A shared project key
+# would let one checkout's upload overwrite the state another checkout is about to query, and a
+# shared token name would let one provisioning revoke a token another scan is still using
+# mid-flight (observed as an unexplained 401 at report upload). Namespacing both by the checkout
+# path keeps concurrent runs fully independent.
 checkout_id="$(printf '%s' "${repo_root}" | node -e 'const { createHash } = require("node:crypto");
 let s = "";
 process.stdin.on("data", (d) => (s += d)).on("end", () => {
@@ -25,11 +47,13 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
 project="keiko-local-${checkout_id}"
 scope="changed"
 base="origin/dev"
+action="scan"
 
 while [[ $# -gt 0 ]]; do
   argument="$1"
   case "${argument}" in
     --all) scope="all" ;;
+    --stop) action="stop" ;;
     --base)
       base="${2:?--base needs a ref}"
       shift
@@ -41,6 +65,11 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ "${action}" == "stop" ]]; then
+  "${compose[@]}" stop
+  exit 0
+fi
 
 say() {
   local heading="$1"
@@ -77,7 +106,12 @@ fi
 # credential regardless of how local the server is, and it would be copied into the next repository
 # that borrows this lane. It lives in the git directory, which is untracked by construction.
 say "Provisioning a local analysis token"
-credentials="$(git -C "${repo_root}" rev-parse --absolute-git-dir)/keiko-local-sonar"
+instance_id="$(printf '%s' "${compose_project}:${sonar_port}" | node -e 'const { createHash } = require("node:crypto");
+let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(createHash("sha256").update(s).digest("hex").slice(0, 12));
+});')"
+credentials="${git_common_dir}/keiko-local-sonar-${instance_id}"
 if [[ ! -f "${credentials}" ]]; then
   umask 077
   # Satisfies SonarQube's policy (upper, lower, digit, special) without ever being predictable.
@@ -126,22 +160,58 @@ fi
 # `--all` analyses everything when a whole-project picture is what you want.
 inclusions=""
 if [[ "${scope}" == "changed" ]]; then
-  # NUL-delimited: a newline in a path would otherwise become two paths. `sonar.inclusions` is a
-  # comma-separated list of GLOBS, so a name carrying a comma or a glob metacharacter cannot be
-  # expressed exactly — and a path that cannot be expressed exactly would be silently dropped from
-  # the scan. That is the one outcome a pre-push gate must never produce, so it widens to a full
-  # scan instead of quietly narrowing.
-  changed="$(git -C "${repo_root}" diff -z --name-only --diff-filter=ACMR "${base}...HEAD" 2>/dev/null | tr '\0' '\n' || true)"
-  if [[ -z "${changed}" ]]; then
+  # The scan sees the working tree, so its scope must include all three sources of change: commits
+  # against the selected base, staged/unstaged tracked changes against HEAD, and untracked files.
+  # Keep Git's NUL framing until Node has decoded and deduplicated the union; a newline in a path
+  # must never turn into two apparently safe inclusions.
+  if ! git -C "${repo_root}" rev-parse --verify "${base}^{commit}" >/dev/null 2>&1; then
+    printf '\033[33m! base %s cannot be resolved — analysing the whole project instead\033[0m\n' "${base}"
+    scope="all"
+  else
+    changed_json="$(
+      {
+        git -C "${repo_root}" diff -z --name-only --diff-filter=ACMR "${base}...HEAD"
+        git -C "${repo_root}" diff -z --name-only --diff-filter=ACMR HEAD
+        git -C "${repo_root}" ls-files -z --others --exclude-standard
+      } | node -e 'const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk)).on("end", () => {
+  const bytes = Buffer.concat(chunks);
+  const input = bytes.toString("utf8");
+  const paths = [...new Set(input.split("\0").filter(Boolean))].sort();
+  if (!Buffer.from(input, "utf8").equals(bytes)) paths.push("\n");
+  process.stdout.write(JSON.stringify(paths));
+});'
+    )"
+    changed_count="$(printf '%s' "${changed_json}" | node -e 'let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(String(JSON.parse(s).length));
+});')"
+    unsafe_path="$(printf '%s' "${changed_json}" | node -e 'let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  const unsafe = JSON.parse(s).some((path) => /[,*?[\]\r\n]/u.test(path));
+  process.stdout.write(unsafe ? "yes" : "no");
+});')"
+  fi
+
+  if [[ "${scope}" == "all" ]]; then
+    :
+  elif [[ "${changed_count}" == "0" ]]; then
     printf '\033[33m! no diff against %s — analysing the whole project instead\033[0m\n' "${base}"
     scope="all"
-  elif printf '%s' "${changed}" | grep -q '[],*?[]'; then
-    printf '\033[33m! a changed path carries a comma or a glob character and cannot be scoped exactly\033[0m\n'
+  elif [[ "${unsafe_path}" == "yes" ]]; then
+    printf '\033[33m! a changed path cannot be represented as an exact Sonar inclusion\033[0m\n'
     printf '  analysing the whole project instead, so nothing is skipped\n'
     scope="all"
   else
-    inclusions="$(printf '%s' "${changed}" | tr '\n' ',' | sed 's/,$//')"
-    printf '  scoped to %s changed file(s)\n' "$(printf '%s\n' "${changed}" | wc -l | tr -d ' ')"
+    inclusions="$(printf '%s' "${changed_json}" | node -e 'let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(JSON.parse(s).join(","));
+});')"
+    changed="$(printf '%s' "${changed_json}" | node -e 'let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(JSON.parse(s).join("\n"));
+});')"
+    printf '  scoped to %s changed file(s)\n' "${changed_count}"
   fi
 fi
 
@@ -163,14 +233,21 @@ say "Analysing"
 # An array, not an unquoted expansion: a changed path containing a space would otherwise split into
 # two arguments and silently scan the wrong scope.
 scanner_args=()
-if [[ -n "${inclusions}" ]]; then scanner_args+=("-Dsonar.inclusions=${inclusions}"); fi
+if [[ -n "${inclusions}" ]]; then
+  # Sonar classifies tests separately and does not apply `sonar.inclusions` to them. Bind both
+  # domains to the same exact union or a 100-file diff silently expands into every test in the
+  # monorepo, defeating the local gate's bounded-runtime contract.
+  scanner_args+=(
+    "-Dsonar.inclusions=${inclusions}"
+    "-Dsonar.test.inclusions=${inclusions}"
+  )
+fi
 KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
   "${scanner_args[@]}" \
   -Dsonar.projectKey="${project}" \
   -Dsonar.projectName="Keiko (local pre-push scan)" \
   -Dsonar.scm.disabled=true \
-  -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**,**/.next/**,**/out/**,**/.portable-runtime/**,**/*.min.*" \
-  -Dsonar.javascript.node.maxspace=4096
+  -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**,**/.next/**,**/out/**,**/.portable-runtime/**,**/*.min.*"
 
 # SonarQube Community carries no shell analyzer — `api/languages/list` has no shell entry, and
 # `shelldre:*` rules do not exist there — while SonarCloud runs them. A clean scan here therefore

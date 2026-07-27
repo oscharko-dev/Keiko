@@ -132,7 +132,7 @@ export interface RetrievalDiagnostics {
 }
 
 export interface RetrievalVectorIndexDiagnostics {
-  readonly provider: "brute-force" | "sqlite-vec";
+  readonly provider: "brute-force" | "usearch";
   readonly status:
     | "disabled"
     | "available"
@@ -147,6 +147,9 @@ export interface RetrievalVectorIndexDiagnostics {
   readonly reason?: string;
   readonly indexName?: string;
   readonly vectorCount?: number;
+  readonly searchMode?: "exact" | "ann";
+  readonly examinedCandidateCount?: number;
+  readonly estimatedIndexBytes?: number;
 }
 
 // ─── Defaults ────────────────────────────────────────────────────────────────

@@ -39,6 +39,10 @@ export interface VectorIndexQuery {
   readonly identity: EmbeddingModelIdentity;
   readonly queryVector: Float32Array;
   readonly candidateLimit: number;
+  // Optional request-owned allow-list. This narrows the partition; it can never widen it. Memory
+  // uses it for its already pre-selected signal candidates, and repository freshness uses it for
+  // live-file chunks. An empty list therefore means no candidates, not the whole partition.
+  readonly candidateIds?: readonly string[];
 }
 
 export interface VectorIndexCandidateRef {
@@ -52,6 +56,11 @@ export interface VectorIndexDiagnostics {
   readonly provider: string;
   readonly status: string;
   readonly reason?: string;
+  readonly indexName?: string;
+  readonly vectorCount?: number;
+  readonly searchMode?: "exact" | "ann";
+  readonly examinedCandidateCount?: number;
+  readonly estimatedIndexBytes?: number;
 }
 
 export type VectorIndexResult =
@@ -77,16 +86,51 @@ export interface VectorIndexPort {
 // fields ARE included, because normalization, instruction shaping, and the embedding-space
 // fingerprint are what decide whether two vectors may be compared at all.
 export function embeddingIdentityKey(identity: EmbeddingModelIdentity): string {
-  return [
+  const tuple = [
     identity.provider,
     identity.modelId,
-    String(identity.vectorDimensions),
+    identity.vectorDimensions,
     identity.vectorMetric,
-    identity.normalization ?? "legacy",
-    identity.instructionVersion ?? "legacy",
-    identity.embeddingSpaceFingerprint ?? "unverified",
-    String(identity.dimensionsParam ?? ""),
-  ].join("|");
+    identity.normalization ?? null,
+    identity.instructionVersion ?? null,
+    identity.embeddingSpaceFingerprint ?? null,
+    identity.dimensionsParam ?? null,
+  ] as const;
+  return `keiko-embedding-identity:v2:${JSON.stringify(tuple)}`;
+}
+
+const MAX_VECTOR_INDEX_CANDIDATES = 10_000;
+const MAX_VECTOR_INDEX_DIMENSIONS = 65_536;
+const MAX_VECTOR_INDEX_OPAQUE_ID_LENGTH = 4_096;
+
+function validQueryVector(query: VectorIndexQuery): boolean {
+  if (
+    !Number.isSafeInteger(query.identity.vectorDimensions) ||
+    query.identity.vectorDimensions <= 0 ||
+    query.identity.vectorDimensions > MAX_VECTOR_INDEX_DIMENSIONS ||
+    query.queryVector.length !== query.identity.vectorDimensions
+  ) {
+    return false;
+  }
+  let nonZero = false;
+  for (const value of query.queryVector) {
+    if (!Number.isFinite(value)) return false;
+    if (value !== 0) nonZero = true;
+  }
+  return nonZero;
+}
+
+function validCandidateIds(candidateIds: readonly string[] | undefined): boolean {
+  if (candidateIds === undefined) return true;
+  if (candidateIds.length > MAX_VECTOR_INDEX_CANDIDATES) return false;
+  const unique = new Set(candidateIds);
+  return (
+    unique.size === candidateIds.length &&
+    candidateIds.every(
+      (candidateId) =>
+        candidateId.length > 0 && candidateId.length <= MAX_VECTOR_INDEX_OPAQUE_ID_LENGTH,
+    )
+  );
 }
 
 // Fail-closed validation for the port's own preconditions, so every implementation rejects the same
@@ -95,8 +139,11 @@ export function isValidVectorIndexQuery(query: VectorIndexQuery): boolean {
   return (
     VECTOR_INDEX_NAMESPACES.includes(query.namespace) &&
     query.partitionKey.length > 0 &&
+    query.partitionKey.length <= MAX_VECTOR_INDEX_OPAQUE_ID_LENGTH &&
     query.candidateLimit > 0 &&
-    Number.isInteger(query.candidateLimit) &&
-    query.queryVector.length === query.identity.vectorDimensions
+    query.candidateLimit <= MAX_VECTOR_INDEX_CANDIDATES &&
+    Number.isSafeInteger(query.candidateLimit) &&
+    validQueryVector(query) &&
+    validCandidateIds(query.candidateIds)
   );
 }

@@ -15,8 +15,22 @@
 // embedding model => semanticById undefined (lexical fallback); empty access history => strengthById
 // empty (the ranker zeroes its weight).
 
+import { createHash } from "node:crypto";
+import { isIP } from "node:net";
+
 import type { MemoryId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
-import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
+import {
+  embeddingIdentityKey,
+  isValidVectorIndexQuery,
+  type EmbeddingModelIdentity,
+  type VectorIndexDiagnostics,
+  type VectorIndexPort,
+  type VectorIndexResult,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  searchUsearchAnnIndex,
+  type UsearchVectorEntry,
+} from "@oscharko-dev/keiko-local-knowledge";
 import { assertCompatibleEmbeddingIdentity } from "@oscharko-dev/keiko-model-gateway";
 import {
   buildStrengthById,
@@ -35,15 +49,10 @@ import {
   type CapturePolicyOptions,
   type RejectionReason,
 } from "@oscharko-dev/keiko-memory-capture";
-import { isIP } from "node:net";
 
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
-import {
-  cosineSimilarity,
-  embedMemoryText,
-  memoryEmbeddingCalibrationFor,
-} from "./memory-embedding.js";
+import { embedMemoryText, memoryEmbeddingCalibrationFor } from "./memory-embedding.js";
 
 export type SemanticRetrievalGateReason =
   | "allowed"
@@ -197,17 +206,15 @@ function gatherCandidateIds(
       candidates.push(record);
     }
   }
-  return candidates
-    .sort((a, b) => {
-      const scoreDelta =
-        cleartextCandidateScore(b, nowMs, strengthById) -
-        cleartextCandidateScore(a, nowMs, strengthById);
-      if (scoreDelta !== 0) return scoreDelta;
-      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
-      return a.id.localeCompare(b.id);
-    })
-    .slice(0, SEMANTIC_SWEEP_MAX_CANDIDATES)
-    .map((record) => record.id);
+  candidates.sort((a, b) => {
+    const scoreDelta =
+      cleartextCandidateScore(b, nowMs, strengthById) -
+      cleartextCandidateScore(a, nowMs, strengthById);
+    if (scoreDelta !== 0) return scoreDelta;
+    if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+    return a.id.localeCompare(b.id);
+  });
+  return candidates.slice(0, SEMANTIC_SWEEP_MAX_CANDIDATES).map((record) => record.id);
 }
 
 // Per-memory semantic score map for the candidate set, or undefined when no embedding model is
@@ -235,14 +242,27 @@ function rowIdentity(row: MemoryEmbeddingRow): EmbeddingModelIdentity {
   };
 }
 
-function semanticScoreForRow(
+function compatibleMemoryEntries(
   queryEmbedding: MemoryEmbeddingInput,
   queryIdentity: EmbeddingModelIdentity,
-  stored: MemoryEmbeddingRow,
-): number | null {
-  const compatibility = assertCompatibleEmbeddingIdentity(rowIdentity(stored), queryIdentity);
-  if (!compatibility.ok || !vectorsComparable(queryEmbedding.vector, stored.vector)) return null;
-  return cosineSimilarity(queryEmbedding.vector, stored.vector);
+  candidateIds: readonly MemoryId[],
+  embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
+): { readonly entries: readonly UsearchVectorEntry[]; readonly skipped: number } {
+  const entries: UsearchVectorEntry[] = [];
+  let skipped = 0;
+  for (const id of candidateIds) {
+    const stored = embeddings.get(id);
+    if (
+      stored === undefined ||
+      !assertCompatibleEmbeddingIdentity(rowIdentity(stored), queryIdentity).ok ||
+      !vectorsComparable(queryEmbedding.vector, stored.vector)
+    ) {
+      if (stored !== undefined) skipped += 1;
+      continue;
+    }
+    entries.push({ id, vector: stored.vector });
+  }
+  return { entries, skipped };
 }
 
 function warnSkippedIncompatible(skipped: number, candidates: number, queryModelId: string): void {
@@ -255,6 +275,88 @@ function warnSkippedIncompatible(skipped: number, candidates: number, queryModel
     candidates,
     queryModelId,
   });
+}
+
+function memoryPartitionRevision(
+  identity: EmbeddingModelIdentity,
+  entries: readonly UsearchVectorEntry[],
+): string {
+  const hash = createHash("sha256").update(embeddingIdentityKey(identity));
+  for (const entry of entries) {
+    hash.update(`${String(Buffer.byteLength(entry.id, "utf8"))}:`);
+    hash.update(entry.id, "utf8");
+    hash.update(
+      new Uint8Array(entry.vector.buffer, entry.vector.byteOffset, entry.vector.byteLength),
+    );
+  }
+  return hash.digest("hex");
+}
+
+function memoryPortDiagnostics(
+  result: ReturnType<typeof searchUsearchAnnIndex>,
+  vectorCount: number,
+): VectorIndexDiagnostics {
+  if (!result.ok) {
+    return { provider: "usearch", status: "fallback-query-error", reason: result.reason };
+  }
+  return {
+    provider: "usearch",
+    status: "available",
+    indexName: "keiko-memory-usearch",
+    vectorCount,
+    searchMode: result.mode,
+    examinedCandidateCount: result.examinedCandidates,
+    estimatedIndexBytes: result.estimatedIndexBytes,
+  };
+}
+
+function memoryPortFailure(reason: string): VectorIndexResult {
+  return {
+    ok: false,
+    diagnostics: { provider: "usearch", status: "fallback-query-error", reason },
+  };
+}
+
+function createMemoryVectorIndexPort(
+  identity: EmbeddingModelIdentity,
+  entries: readonly UsearchVectorEntry[],
+): VectorIndexPort {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  return {
+    search(query): VectorIndexResult {
+      if (!isValidVectorIndexQuery(query)) return memoryPortFailure("invalid-query");
+      if (query.namespace !== "memory") return memoryPortFailure("namespace-mismatch");
+      if (embeddingIdentityKey(query.identity) !== embeddingIdentityKey(identity)) {
+        return memoryPortFailure("identity-mismatch");
+      }
+      const requestedIds = query.candidateIds ?? [...byId.keys()];
+      const requestedEntries = requestedIds.flatMap((id) => {
+        const entry = byId.get(id);
+        return entry === undefined ? [] : [entry];
+      });
+      const result = searchUsearchAnnIndex({
+        partition: {
+          cacheKey: `keiko-memory-vector-partition-v2:${createHash("sha256")
+            .update(JSON.stringify([query.partitionKey]), "utf8")
+            .digest("hex")}`,
+          revision: memoryPartitionRevision(identity, requestedEntries),
+          identity,
+          rowCount: requestedEntries.length,
+          loadEntries: () => requestedEntries,
+        },
+        queryVector: query.queryVector,
+        candidateLimit: query.candidateLimit,
+      });
+      if (!result.ok) {
+        return { ok: false, diagnostics: memoryPortDiagnostics(result, requestedEntries.length) };
+      }
+      return {
+        ok: true,
+        candidates: result.candidates,
+        diagnostics: memoryPortDiagnostics(result, requestedEntries.length),
+      };
+    },
+  };
 }
 
 async function semanticScoresFrom(
@@ -272,21 +374,30 @@ async function semanticScoresFrom(
   }
   throwIfAborted(signal);
   const queryIdentity = inputIdentity(queryEmbedding);
-  const scores = new Map<MemoryId, number>();
-  let skippedIncompatible = 0;
-  for (const id of candidateIds) {
-    throwIfAborted(signal);
-    const stored = embeddings.get(id);
-    if (stored === undefined) continue;
-    const score = semanticScoreForRow(queryEmbedding, queryIdentity, stored);
-    if (score === null) {
-      skippedIncompatible += 1;
-      continue;
-    }
-    scores.set(id, score);
+  const compatible = compatibleMemoryEntries(
+    queryEmbedding,
+    queryIdentity,
+    candidateIds,
+    embeddings,
+  );
+  warnSkippedIncompatible(compatible.skipped, candidateIds.length, queryEmbedding.modelId);
+  if (compatible.entries.length === 0) return new Map<MemoryId, number>();
+  throwIfAborted(signal);
+  const result = createMemoryVectorIndexPort(queryIdentity, compatible.entries).search({
+    namespace: "memory",
+    partitionKey: "conversation-retrieval",
+    identity: queryIdentity,
+    queryVector: queryEmbedding.vector,
+    candidateLimit: compatible.entries.length,
+    candidateIds,
+  });
+  if (!result.ok) {
+    warnSemanticRetrievalDisabled("identity-mismatch", {
+      candidates: compatible.entries.length,
+    });
+    return undefined;
   }
-  warnSkippedIncompatible(skippedIncompatible, candidateIds.length, queryEmbedding.modelId);
-  return scores;
+  return new Map(result.candidates.map((candidate) => [candidate.id as MemoryId, candidate.score]));
 }
 
 function warnSemanticRetrievalDisabled(

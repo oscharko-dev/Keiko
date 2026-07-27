@@ -131,10 +131,14 @@ jobs:
         run: node native/secure-workspace-read/test-protocol.mjs
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
+      - name: Provision the pinned USearch native addon
+        run: npm run provision:usearch
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
       - name: Stage portable runtime from approved inputs
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
+      - name: Functionally smoke the staged USearch addon
+        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }}
       - name: Smoke test the staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target ${{ matrix.platform_target }}
       - name: Functionally smoke the unsigned secure-read helper
@@ -202,10 +206,14 @@ jobs:
         run: node native/secure-workspace-read/test-protocol.mjs
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
+      - name: Provision the pinned USearch native addon
+        run: npm run provision:usearch
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target windows-x64
       - name: Stage portable runtime from approved inputs
         run: node scripts/run-portable-assets-stage.mjs --target windows-x64
+      - name: Functionally smoke the unsigned USearch addon
+        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/windows-x64 windows-x64
       - name: Smoke test the unsigned staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
       - name: Functionally smoke the unsigned secure-read helper
@@ -295,6 +303,8 @@ jobs:
             --verification-input "$env:RUNNER_TEMP\windows-verification-input.json"
       - name: Smoke test the verified production artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
+      - name: Functionally smoke the signed USearch addon
+        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/windows-x64 windows-x64
       - name: Upload verified Windows target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -338,10 +348,14 @@ jobs:
         run: node native/secure-workspace-read/test-protocol.mjs
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
+      - name: Provision the pinned USearch native addon
+        run: npm run provision:usearch
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
       - name: Stage portable runtime from approved inputs
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
+      - name: Functionally smoke the unsigned USearch addon
+        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }}
       - name: Functionally smoke the unsigned secure-read helper
         run: npm run smoke:portable-secure-read -- .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
       - name: Validate protected Apple configuration
@@ -379,6 +393,8 @@ jobs:
         run: node scripts/macos-portable-signing.mjs finalize --stage-root .portable-runtime/staging/${{ matrix.platform_target }} --expected-inventory "$RUNNER_TEMP/macos-code-verified.json" --verification-input "$RUNNER_TEMP/macos-verification-input.json"
       - name: Record canonical macOS finalizer success
         run: node scripts/macos-native-policy.mjs finalizer-success --target ${{ matrix.platform_target }} --input "$RUNNER_TEMP/macos-native-result.json"
+      - name: Functionally smoke the signed USearch addon
+        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }}
       - name: Upload verified macOS target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

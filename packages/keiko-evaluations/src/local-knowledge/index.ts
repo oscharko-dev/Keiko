@@ -52,6 +52,11 @@ export {
 
 export { renderRetrievalEvalQualityGateReport } from "./report.js";
 export { runRetrievalEval, type RunRetrievalEvalDeps } from "./runner.js";
+export {
+  RETRIEVAL_REGRESSION_PROBE_FIXTURE_IDS,
+  hasRetrievalGroundTruth,
+  runBadOutputRetrievalProbe,
+} from "./regression-probes.js";
 
 export {
   RETRIEVAL_COMPARISON_MODE_MAP,

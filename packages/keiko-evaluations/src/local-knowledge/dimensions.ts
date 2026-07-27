@@ -18,10 +18,9 @@
 import type {
   ChunkId,
   KnowledgeCapsuleId,
+  ParsedUnit,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
-
-import type { ParsedUnit } from "@oscharko-dev/keiko-contracts";
 
 import { binaryNdcgAtK } from "../metrics.js";
 
@@ -226,12 +225,13 @@ export function scoreContextBudgetFit(
   budgetTokens: number | undefined,
 ): number {
   if (budgetTokens === undefined) return 1;
+  if (!Number.isFinite(budgetTokens) || budgetTokens <= 0) return 0;
   if (references.length === 0) return 1;
-  if (budgetTokens <= 0) return 0;
   let used = 0;
   for (const reference of references) {
     used += chunkTokenCounts.get(String(reference.chunkId)) ?? 0;
   }
+  if (!Number.isFinite(used)) return 0;
   if (used <= 0) return 1;
   if (used <= budgetTokens) return 1;
   return budgetTokens / used;

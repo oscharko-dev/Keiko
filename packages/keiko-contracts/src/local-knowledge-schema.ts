@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `26`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `32`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 30 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 32 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -652,10 +652,10 @@ CREATE TABLE vectors (
 ) STRICT;
 `.trim();
 
-// vector_index_state records runtime vector-index materialization for optional local
-// sqlite-vec search. The actual sqlite-vec table is TEMP/runtime-local so encrypted stores do not
-// gain a second plaintext vector copy, but this durable state lets reindex/delete flows invalidate
-// an index and lets diagnostics explain whether the active dense path is indexed or fallback.
+// vector_index_state records runtime vector-index materialization. The native ANN index is
+// runtime-local so encrypted stores do not gain a second persistent plaintext vector copy, while
+// this durable state lets reindex/delete flows invalidate the cache and diagnostics explain whether
+// the active dense path is indexed or fallback.
 const CREATE_VECTOR_INDEX_STATE = `
 CREATE TABLE vector_index_state (
   capsule_id TEXT NOT NULL,
@@ -683,6 +683,30 @@ CREATE TABLE vector_index_state (
 
 const CREATE_VECTOR_INDEX_STATE_STATUS_INDEX =
   "CREATE INDEX idx_vector_index_state_capsule_status ON vector_index_state(capsule_id, status);";
+
+const CREATE_VECTORS_INDEX_STATE_INSERT_TRIGGER = `
+CREATE TRIGGER vectors_index_state_ai AFTER INSERT ON vectors BEGIN
+  UPDATE vector_index_state
+  SET status = 'dirty', reason = NULL
+  WHERE capsule_id = new.capsule_id AND status <> 'dirty';
+END;
+`.trim();
+
+const CREATE_VECTORS_INDEX_STATE_UPDATE_TRIGGER = `
+CREATE TRIGGER vectors_index_state_au AFTER UPDATE ON vectors BEGIN
+  UPDATE vector_index_state
+  SET status = 'dirty', reason = NULL
+  WHERE capsule_id IN (old.capsule_id, new.capsule_id) AND status <> 'dirty';
+END;
+`.trim();
+
+const CREATE_VECTORS_INDEX_STATE_DELETE_TRIGGER = `
+CREATE TRIGGER vectors_index_state_ad AFTER DELETE ON vectors BEGIN
+  UPDATE vector_index_state
+  SET status = 'dirty', reason = NULL
+  WHERE capsule_id = old.capsule_id AND status <> 'dirty';
+END;
+`.trim();
 
 const CREATE_PARSER_DIAGNOSTICS = `
 CREATE TABLE parser_diagnostics (
@@ -1025,6 +1049,9 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_CHUNK_LEXICAL_INDEX_AU,
   CREATE_VECTORS,
   CREATE_VECTOR_INDEX_STATE,
+  CREATE_VECTORS_INDEX_STATE_INSERT_TRIGGER,
+  CREATE_VECTORS_INDEX_STATE_UPDATE_TRIGGER,
+  CREATE_VECTORS_INDEX_STATE_DELETE_TRIGGER,
   CREATE_PARSER_DIAGNOSTICS,
   CREATE_INDEXING_JOBS,
   CREATE_SCHEMA_META,
@@ -1433,7 +1460,7 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
   {
     version: 21,
     reason:
-      "Persist optional runtime vector-index state so sqlite-vec dense search can be invalidated by reindex/delete flows and diagnosed independently from the vectors table.",
+      "Persist optional runtime vector-index state so dense search can be invalidated by reindex/delete flows and diagnosed independently from the vectors table.",
     up: [CREATE_VECTOR_INDEX_STATE, CREATE_VECTOR_INDEX_STATE_STATUS_INDEX],
   },
   {
@@ -1520,6 +1547,27 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       CREATE_REPOSITORY_POD_RUNS,
       CREATE_REPOSITORY_FILE_FINGERPRINTS,
       CREATE_REPOSITORY_CHUNK_LINE_RANGES,
+    ],
+  },
+  {
+    version: 31,
+    reason:
+      "Discard runtime-only vector materialization state written with the collision-prone v1 " +
+      "embedding-identity key. Stored encrypted vectors remain intact and the bounded in-memory " +
+      "index is rebuilt on demand with the versioned collision-free v2 key (Epic #2556, ADR-0163).",
+    up: ["DELETE FROM vector_index_state;"],
+  },
+  {
+    version: 32,
+    reason:
+      "Make vector-index cache invalidation fail closed for every SQLite vector mutation, " +
+      "including cascades, retention, encryption migration, and package-internal maintenance. " +
+      "Schema-owned triggers dirty the runtime materialization marker so a ready lookup remains " +
+      "constant-time without trusting callers to remember an invalidation side effect (Epic #2556, ADR-0163).",
+    up: [
+      CREATE_VECTORS_INDEX_STATE_INSERT_TRIGGER,
+      CREATE_VECTORS_INDEX_STATE_UPDATE_TRIGGER,
+      CREATE_VECTORS_INDEX_STATE_DELETE_TRIGGER,
     ],
   },
 ] as const;

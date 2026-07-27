@@ -2,95 +2,49 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type {
-  EmbeddingModelIdentity,
-  KnowledgeCapsule,
-  KnowledgeCapsuleId,
-  KnowledgeSourceId,
-} from "@oscharko-dev/keiko-contracts";
-import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import type { EmbeddingModelIdentity, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
-import { createCapsule } from "../capsule-lifecycle.js";
+import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
+import { getCapsule } from "../capsule-lifecycle.js";
 import { openKnowledgeStore, type KnowledgeStore } from "../store.js";
-import { PLAINTEXT_CONTENT_CIPHER, type StoreContentCipher } from "../store-content-cipher.js";
 
+import { clearUsearchAnnCacheForTests } from "./usearch-ann-index.js";
+import { seedCapsuleWithVectors } from "./_support.js";
 import {
-  DEFAULT_MAX_INDEXED_VECTOR_BYTES,
   resolveVectorIndexOptions,
   searchVectorIndex,
-  type SqliteVecModule,
-  type VectorIndexAdapter,
+  usearchIndexName,
   type VectorIndexSearchRequest,
 } from "./vector-index.js";
 
-interface Fixture {
+function requestFor(
+  store: KnowledgeStore,
+  capsuleId: string,
+  queryVector = new Float32Array(DEFAULT_EMBEDDING.vectorDimensions).fill(1),
+): VectorIndexSearchRequest {
+  const capsule = getCapsule(store, capsuleId as KnowledgeCapsuleId);
+  if (capsule === undefined) throw new Error("expected seeded capsule");
+  return {
+    store,
+    capsule,
+    queryVector,
+    candidateLimit: 10,
+  };
+}
+
+function encryptedStore(): {
   readonly store: KnowledgeStore;
   readonly cleanup: () => void;
-}
-
-interface VectorIndexStateRow {
-  readonly status: string;
-  readonly reason: string | null;
-  readonly index_name: string;
-  readonly updated_at: number;
-}
-
-interface FakeSqliteVecIndexRow {
-  readonly chunk_id: string;
-  readonly capsule_id: string;
-  readonly source_id: string;
-  readonly embedding: Uint8Array;
-  readonly embedding_model_provider: string;
-  readonly embedding_model_id: string;
-  readonly embedding_model_revision: string | null;
-  readonly embedding_normalization: string | null;
-  readonly embedding_instruction_version: string | null;
-  readonly embedding_space_fingerprint: string | null;
-  readonly embedding_dimensions_param: number | null;
-  readonly vector_dimensions: number;
-  readonly vector_metric: string;
-  readonly created_at: number;
-}
-
-interface FakeSqliteVecCandidateRow {
-  readonly chunk_id: string;
-  readonly capsule_id: string;
-  readonly source_id: string;
-  readonly distance: number;
-}
-
-interface FakeVectorIndexState {
-  readonly vectorRows: readonly FakeSqliteVecIndexRow[];
-  readonly queryRows: readonly FakeSqliteVecCandidateRow[];
-  readonly tempRowCount?: number;
-  vectorIndexState?: {
-    readonly status: "ready" | "dirty" | "unavailable";
-    readonly vector_count: number;
-    readonly vector_max_created_at: number | null;
-  };
-  insertedTempRows: Record<string, unknown>[];
-  wroteReadyState: boolean;
-  deletedTempRows: boolean;
-}
-
-interface FakePreparedStatement {
-  readonly get?: (params?: Record<string, unknown>) => unknown;
-  readonly all?: (params?: Record<string, unknown>) => readonly unknown[];
-  readonly run?: (params?: Record<string, unknown>) => { readonly changes: number };
-}
-
-function encryptedFixture(): Fixture {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-lk-vector-index-"));
-  const key = new Uint8Array(32).fill(7);
+} {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-usearch-encrypted-"));
   const store = openKnowledgeStore({
     dbPath: join(dir, "capsules.db"),
     protection: {
       mode: "encrypted-key-provider",
       keyProvider: {
-        providerId: "test-static-key",
-        resolveKey: () => key,
+        providerId: "test-key",
+        resolveKey: () => new Uint8Array(32).fill(17),
       },
     },
   });
@@ -103,777 +57,243 @@ function encryptedFixture(): Fixture {
   };
 }
 
-function detachedCapsule(
-  identity: EmbeddingModelIdentity = DEFAULT_EMBEDDING,
-  id = "cap-vector-index",
-): KnowledgeCapsule {
-  const fixture = freshStore();
-  try {
-    return createTestCapsule(fixture.store, { id, identity });
-  } finally {
-    fixture.cleanup();
-  }
-}
+afterEach(() => {
+  clearUsearchAnnCacheForTests();
+});
 
-function createTestCapsule(
-  store: KnowledgeStore,
-  options: {
-    readonly id?: string;
-    readonly identity?: EmbeddingModelIdentity;
-  } = {},
-): KnowledgeCapsule {
-  return createCapsule(
-    store,
-    sampleCapsuleInput({
-      id: (options.id ?? "cap-vector-index") as KnowledgeCapsuleId,
-      embeddingModelIdentity: options.identity ?? DEFAULT_EMBEDDING,
-    }),
-  );
-}
+describe("vector index service", () => {
+  it("defaults to capability-driven USearch and carries only the approved runtime path", () => {
+    expect(resolveVectorIndexOptions(undefined, {})).toMatchObject({
+      mode: "auto",
+      maxIndexedVectorBytes: 256 * 1024 * 1024,
+    });
+    expect(
+      resolveVectorIndexOptions(undefined, {
+        KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "usearch",
+        KEIKO_USEARCH_BINARY_PATH: "/approved/usearch.node",
+      }),
+    ).toMatchObject({
+      mode: "usearch",
+      usearchBinaryPath: "/approved/usearch.node",
+    });
+    expect(
+      resolveVectorIndexOptions(undefined, {
+        KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "disabled",
+      }),
+    ).toMatchObject({ mode: "disabled" });
+  });
 
-function fakeVectorIndexStore(
-  state: FakeVectorIndexState,
-  contentCipher: StoreContentCipher = PLAINTEXT_CONTENT_CIPHER,
-): KnowledgeStore {
-  const db = {
-    exec: (sql: string): void => {
-      void sql;
-    },
-    prepare: (sql: string): FakePreparedStatement => {
-      // The fake stands in for a store opened WITH the vector runtime, so it reports the ADR-0153 D2
-      // pin as in force. Encrypted-store cases that want the unpinned refusal use a real store
-      // (`encryptedFixture`) rather than teaching this fake to lie in the other direction.
-      if (sql.includes("PRAGMA temp_store")) {
-        return { get: (): { readonly temp_store: number } => ({ temp_store: 2 }) };
-      }
-      if (sql.includes("MAX(created_at)")) {
-        return {
-          get: (): { readonly n: number; readonly max_created_at: number | null } => ({
-            n: state.vectorRows.length,
-            max_created_at:
-              state.vectorRows.length === 0
-                ? null
-                : Math.max(...state.vectorRows.map((row) => row.created_at)),
-          }),
-        };
-      }
-      if (sql.includes("FROM vector_index_state")) {
-        return {
-          get: (): unknown => {
-            if (state.vectorIndexState === undefined) return undefined;
-            return {
-              capsule_id: state.vectorRows[0]?.capsule_id ?? "cap-vector-index",
-              provider: "sqlite-vec",
-              index_name: "keiko_lk_vec_1536_cosine",
-              vector_dimensions: DEFAULT_EMBEDDING.vectorDimensions,
-              vector_metric: DEFAULT_EMBEDDING.vectorMetric,
-              embedding_identity_key: "fake-identity-key",
-              status: state.vectorIndexState.status,
-              reason: null,
-              vector_count: state.vectorIndexState.vector_count,
-              vector_max_created_at: state.vectorIndexState.vector_max_created_at,
-              updated_at: 1,
-            };
-          },
-        };
-      }
-      if (sql.includes("SELECT COUNT(*) AS n FROM temp.")) {
-        return {
-          get: (): { readonly n: number } => ({
-            n: state.tempRowCount ?? state.insertedTempRows.length,
-          }),
-        };
-      }
-      if (sql.includes("FROM vectors")) {
-        return {
-          all: (): readonly FakeSqliteVecIndexRow[] => state.vectorRows,
-        };
-      }
-      if (sql.includes("DELETE FROM temp.")) {
-        return {
-          run: (): { readonly changes: number } => {
-            state.deletedTempRows = true;
-            state.insertedTempRows = [];
-            return { changes: 1 };
-          },
-        };
-      }
-      if (sql.includes("INSERT INTO temp.")) {
-        return {
-          run: (params: Record<string, unknown> = {}): { readonly changes: number } => {
-            state.insertedTempRows.push(params);
-            return { changes: 1 };
-          },
-        };
-      }
-      if (sql.includes("INSERT INTO vector_index_state")) {
-        return {
-          run: (): { readonly changes: number } => {
-            state.wroteReadyState = true;
-            return { changes: 1 };
-          },
-        };
-      }
-      if (sql.includes("WHERE embedding MATCH")) {
-        return {
-          all: (params: Record<string, unknown> = {}): readonly FakeSqliteVecCandidateRow[] => {
-            const sourceId = typeof params.source_id === "string" ? params.source_id : undefined;
-            return state.queryRows.filter(
-              (row) => sourceId === undefined || row.source_id === sourceId,
-            );
-          },
-        };
-      }
-      throw new Error(`unexpected fake sqlite statement: ${sql}`);
-    },
-  };
-  return {
-    close: (): void => {
-      void state;
-    },
-    _internal: {
-      db: db as unknown as DatabaseSync,
-      now: () => 1,
-      contentCipher,
-    },
-  };
-}
-
-function fakeVectorRow(
-  overrides: Partial<FakeSqliteVecIndexRow> = {},
-  identity: EmbeddingModelIdentity = DEFAULT_EMBEDDING,
-): FakeSqliteVecIndexRow {
-  return {
-    chunk_id: "chunk-a",
-    capsule_id: "cap-vector-index",
-    source_id: "src-a",
-    embedding: new Uint8Array(new Float32Array(identity.vectorDimensions).buffer.slice(0)),
-    embedding_model_provider: identity.provider,
-    embedding_model_id: identity.modelId,
-    embedding_model_revision: identity.modelRevision ?? null,
-    embedding_normalization: identity.normalization ?? null,
-    embedding_instruction_version: identity.instructionVersion ?? null,
-    embedding_space_fingerprint: identity.embeddingSpaceFingerprint ?? null,
-    embedding_dimensions_param: identity.dimensionsParam ?? null,
-    vector_dimensions: identity.vectorDimensions,
-    vector_metric: identity.vectorMetric,
-    created_at: 1_700_000_000_000,
-    ...overrides,
-  };
-}
-
-function requestFor(
-  store: KnowledgeStore,
-  capsule: KnowledgeCapsule,
-  queryVector = new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
-): VectorIndexSearchRequest {
-  return {
-    store,
-    capsule,
-    queryVector,
-    candidateLimit: 3,
-  };
-}
-
-function readVectorIndexStateRows(store: KnowledgeStore): readonly VectorIndexStateRow[] {
-  return store._internal.db
-    .prepare(
-      [
-        "SELECT status, reason, index_name, updated_at",
-        "FROM vector_index_state",
-        "ORDER BY index_name ASC",
-      ].join(" "),
-    )
-    .all() as unknown as readonly VectorIndexStateRow[];
-}
-
-describe("searchVectorIndex", () => {
-  it("returns explicit disabled diagnostics without probing sqlite-vec", () => {
+  it("delegates to the one explicit port adapter before built-in mode handling", () => {
     const fixture = freshStore();
     try {
-      const capsule = createTestCapsule(fixture.store);
-      const result = searchVectorIndex(requestFor(fixture.store, capsule), { mode: "disabled" });
-
-      expect(result).toMatchObject({
-        ok: false,
+      const capsule = {
+        id: "cap-adapter",
+        embeddingModelIdentity: DEFAULT_EMBEDDING,
+      } as VectorIndexSearchRequest["capsule"];
+      const expected = {
+        ok: true,
         candidates: [],
-        sawDimensionCompatible: false,
+        sawDimensionCompatible: true,
         sawIdentityIncompatible: false,
         diagnostics: {
-          provider: "brute-force",
-          status: "disabled",
-          reason: "vector-index-disabled",
-        },
-      });
-      expect(readVectorIndexStateRows(fixture.store)).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("delegates to an explicit adapter before sqlite-vec mode handling", () => {
-    const fixture = freshStore();
-    try {
-      const capsule = createTestCapsule(fixture.store);
-      const calls: string[] = [];
-      const adapter: VectorIndexAdapter = {
-        searchCapsule: (request) => {
-          calls.push(String(request.capsule.id));
-          return {
-            ok: true,
-            candidates: [
-              {
-                chunkId: "chunk-from-adapter",
-                capsuleId: request.capsule.id,
-                score: 0.9,
-              },
-            ],
-            sawDimensionCompatible: true,
-            sawIdentityIncompatible: false,
-            diagnostics: {
-              provider: "sqlite-vec",
-              status: "available",
-              indexName: "adapter-index",
-              vectorCount: 1,
-            },
-          };
+          provider: "usearch" as const,
+          status: "available" as const,
         },
       };
-
-      const result = searchVectorIndex(requestFor(fixture.store, capsule), {
-        mode: "disabled",
-        adapter,
-      });
-
-      expect(calls).toEqual(["cap-vector-index"]);
-      expect(result.ok).toBe(true);
-      expect(result.candidates).toEqual([
-        { chunkId: "chunk-from-adapter", capsuleId: capsule.id, score: 0.9 },
-      ]);
-      expect(result.diagnostics).toMatchObject({
-        provider: "sqlite-vec",
-        status: "available",
-        indexName: "adapter-index",
-      });
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("falls back and records unavailable state when sqlite-vec is not configured", () => {
-    const fixture = freshStore();
-    try {
-      const capsule = createTestCapsule(fixture.store);
-      const result = searchVectorIndex(requestFor(fixture.store, capsule), {
-        mode: "auto",
-        now: () => 1_700_000_000_123,
-      });
-
-      expect(result).toMatchObject({
-        ok: false,
-        diagnostics: {
-          provider: "sqlite-vec",
-          status: "fallback-unavailable",
-          reason: "sqlite-vec-runtime-not-configured",
-          indexName: "keiko_lk_vec_1536_cosine",
-        },
-      });
-      expect(readVectorIndexStateRows(fixture.store)).toEqual([
-        {
-          status: "unavailable",
-          reason: "sqlite-vec-runtime-not-configured",
-          index_name: "keiko_lk_vec_1536_cosine",
-          updated_at: 1_700_000_000_123,
-        },
-      ]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("caches sqlite-vec module load failures per store", () => {
-    const fixture = freshStore();
-    try {
-      const capsule = createTestCapsule(fixture.store);
-      let loads = 0;
-      const sqliteVec: SqliteVecModule = {
-        load: () => {
-          loads += 1;
-          throw new Error("missing extension");
-        },
-      };
-
-      const first = searchVectorIndex(requestFor(fixture.store, capsule), {
-        mode: "sqlite-vec",
-        sqliteVec,
-      });
-      const second = searchVectorIndex(requestFor(fixture.store, capsule), {
-        mode: "sqlite-vec",
-        sqliteVec,
-      });
-
-      expect(loads).toBe(1);
-      expect(first.diagnostics).toMatchObject({
-        status: "fallback-unavailable",
-        reason: "sqlite-vec-module-load-failed",
-      });
-      expect(second.diagnostics).toMatchObject({
-        status: "fallback-unavailable",
-        reason: "sqlite-vec-module-load-failed",
-      });
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  // The refusal is no longer "this store is encrypted" but "this encrypted store cannot prove its
-  // TEMP pages stay in memory" (ADR-0153 D1). `encryptedFixture` opens without a vector runtime, so
-  // `openKnowledgeStore` does not pin `temp_store` and the condition is genuinely unmet.
-  it("fails closed on encrypted stores without the temp-store pin, before loading sqlite-vec", () => {
-    const fixture = encryptedFixture();
-    try {
-      const capsule = createTestCapsule(fixture.store);
-      let loads = 0;
-      const sqliteVec: SqliteVecModule = {
-        load: () => {
-          loads += 1;
-        },
-      };
-
-      const result = searchVectorIndex(requestFor(fixture.store, capsule), {
-        mode: "sqlite-vec",
-        sqliteVec,
-        now: () => 1_700_000_000_456,
-      });
-
-      expect(loads).toBe(0);
-      expect(result).toMatchObject({
-        ok: false,
-        diagnostics: {
-          provider: "sqlite-vec",
-          status: "fallback-encrypted-store",
-          reason: "encrypted-store-temp-store-unpinned",
-          indexName: "keiko_lk_vec_1536_cosine",
-        },
-      });
-      expect(readVectorIndexStateRows(fixture.store)).toEqual([
-        {
-          status: "unavailable",
-          reason: "encrypted-store-temp-store-unpinned",
-          index_name: "keiko_lk_vec_1536_cosine",
-          updated_at: 1_700_000_000_456,
-        },
-      ]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("rejects unsupported vector metrics before loading sqlite-vec", () => {
-    const fixture = freshStore();
-    try {
-      const identity: EmbeddingModelIdentity = {
-        ...DEFAULT_EMBEDDING,
-        vectorMetric: "dot",
-      };
-      const capsule = createTestCapsule(fixture.store, { identity });
-      let loads = 0;
-      const sqliteVec: SqliteVecModule = {
-        load: () => {
-          loads += 1;
-        },
-      };
-
-      const result = searchVectorIndex(requestFor(fixture.store, capsule), {
-        mode: "sqlite-vec",
-        sqliteVec,
-        now: () => 1_700_000_000_789,
-      });
-
-      expect(loads).toBe(0);
-      expect(result).toMatchObject({
-        ok: false,
-        diagnostics: {
-          provider: "sqlite-vec",
-          status: "fallback-unsupported-metric",
-          reason: "unsupported-metric",
-          indexName: "keiko_lk_vec_1536_dot",
-        },
-      });
-      expect(readVectorIndexStateRows(fixture.store)).toEqual([
-        {
-          status: "unavailable",
-          reason: "unsupported-metric",
-          index_name: "keiko_lk_vec_1536_dot",
-          updated_at: 1_700_000_000_789,
-        },
-      ]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("rejects query vector dimension mismatches without recording runtime fallback", () => {
-    const fixture = freshStore();
-    try {
-      const capsule = createTestCapsule(fixture.store);
-      let loads = 0;
-      const sqliteVec: SqliteVecModule = {
-        load: () => {
-          loads += 1;
-        },
-      };
-
-      const result = searchVectorIndex(requestFor(fixture.store, capsule, new Float32Array(32)), {
-        mode: "sqlite-vec",
-        sqliteVec,
-      });
-
-      expect(loads).toBe(0);
-      expect(result).toMatchObject({
-        ok: false,
-        sawDimensionCompatible: false,
-        sawIdentityIncompatible: true,
-        diagnostics: {
-          provider: "sqlite-vec",
-          status: "fallback-incompatible-identity",
-          reason: "query-dimension-mismatch",
-          indexName: "keiko_lk_vec_1536_cosine",
-        },
-      });
-      expect(readVectorIndexStateRows(fixture.store)).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("reports query fallback when sqlite-vec loads but the virtual table is unavailable", () => {
-    const fixture = freshStore();
-    try {
-      const capsule = createTestCapsule(fixture.store);
-      let loads = 0;
-      const sqliteVec: SqliteVecModule = {
-        load: (_db: DatabaseSync) => {
-          loads += 1;
-        },
-      };
-
-      const result = searchVectorIndex(requestFor(fixture.store, capsule), {
-        mode: "sqlite-vec",
-        sqliteVec,
-        now: () => 1_700_000_001_000,
-      });
-
-      expect(loads).toBe(1);
-      expect(result).toMatchObject({
-        ok: false,
-        diagnostics: {
-          provider: "sqlite-vec",
-          status: "fallback-query-error",
-          reason: "sqlite-vec-query-error",
-          indexName: "keiko_lk_vec_1536_cosine",
-        },
-      });
-      expect(readVectorIndexStateRows(fixture.store)).toEqual([
-        {
-          status: "unavailable",
-          reason: "sqlite-vec-query-error",
-          index_name: "keiko_lk_vec_1536_cosine",
-          updated_at: 1_700_000_001_000,
-        },
-      ]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("reports a controlled fallback when a configured loadable extension cannot load", () => {
-    const fixture = freshStore();
-    try {
-      const capsule = createTestCapsule(fixture.store);
-      const result = searchVectorIndex(requestFor(fixture.store, capsule), {
-        mode: "sqlite-vec",
-        sqliteVecExtensionPath: "/missing/keiko/sqlite-vec",
-      });
-
-      expect(result.ok).toBe(false);
-      expect(result.diagnostics.provider).toBe("sqlite-vec");
-      expect(result.diagnostics.status).toBe("fallback-unavailable");
-      expect(result.diagnostics.indexName).toBe("keiko_lk_vec_1536_cosine");
-      expect(["sqlite-load-extension-unavailable", "sqlite-vec-extension-load-failed"]).toContain(
-        result.diagnostics.reason,
-      );
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("rebuilds and queries a loaded sqlite-vec index without leaking other source scopes", () => {
-    const identity: EmbeddingModelIdentity = {
-      ...DEFAULT_EMBEDDING,
-      modelRevision: "2026-07-01",
-      normalization: "l2",
-      instructionVersion: "query-v1",
-      embeddingSpaceFingerprint: "space-a",
-      dimensionsParam: DEFAULT_EMBEDDING.vectorDimensions,
-    };
-    const capsule = detachedCapsule(identity);
-    const state: FakeVectorIndexState = {
-      vectorRows: [
-        fakeVectorRow({ chunk_id: "chunk-a", source_id: "src-a" }, identity),
-        fakeVectorRow({ chunk_id: "chunk-b", source_id: "src-b" }, identity),
-      ],
-      queryRows: [
-        { chunk_id: "chunk-b", capsule_id: "cap-vector-index", source_id: "src-b", distance: 0.1 },
-        { chunk_id: "chunk-a", capsule_id: "cap-vector-index", source_id: "src-a", distance: 0.1 },
-        {
-          chunk_id: "chunk-low",
-          capsule_id: "cap-vector-index",
-          source_id: "src-a",
-          distance: 0.9,
-        },
-      ],
-      insertedTempRows: [],
-      wroteReadyState: false,
-      deletedTempRows: false,
-    };
-    const store = fakeVectorIndexStore(state);
-
-    const result = searchVectorIndex(
-      {
-        ...requestFor(store, capsule),
-        sourceFilter: ["src-a" as KnowledgeSourceId, "src-b" as KnowledgeSourceId],
-        minScore: 0.5,
-      },
-      {
-        mode: "sqlite-vec",
-        sqliteVec: {
-          load: (dbHandle) => {
-            void dbHandle;
+      expect(
+        searchVectorIndex(
+          {
+            store: fixture.store,
+            capsule,
+            queryVector: new Float32Array(DEFAULT_EMBEDDING.vectorDimensions).fill(1),
+            candidateLimit: 5,
           },
-        },
-      },
-    );
-
-    expect(state.deletedTempRows).toBe(true);
-    expect(state.insertedTempRows).toHaveLength(2);
-    expect(state.wroteReadyState).toBe(true);
-    expect(result).toMatchObject({
-      ok: true,
-      sawDimensionCompatible: true,
-      sawIdentityIncompatible: false,
-      diagnostics: {
-        provider: "sqlite-vec",
-        status: "available",
-        indexName: "keiko_lk_vec_1536_cosine",
-        vectorCount: 2,
-      },
-    });
-    expect(result.candidates.map((candidate) => candidate.chunkId)).toEqual(["chunk-a", "chunk-b"]);
+          {
+            mode: "disabled",
+            adapter: { searchCapsule: () => expected },
+          },
+        ),
+      ).toBe(expected);
+    } finally {
+      fixture.cleanup();
+    }
   });
 
-  it("reuses ready sqlite-vec state when the temp table still matches the vector stamp", () => {
-    const capsule = detachedCapsule();
-    const state: FakeVectorIndexState = {
-      vectorRows: [fakeVectorRow({ chunk_id: "chunk-ready", created_at: 1_700_000_000_321 })],
-      queryRows: [
+  it("scores encrypted-store vectors in memory without SQLite extension authority", async () => {
+    const fixture = encryptedStore();
+    try {
+      const seeded = await seedCapsuleWithVectors(fixture.store, {
+        capsuleId: "cap-encrypted",
+        text: "alpha beta gamma delta epsilon ".repeat(80),
+        chunkingOptions: { minTokens: 4, maxTokens: 8, overlapTokens: 0 },
+      });
+      expect(fixture.store._internal.contentCipher.isEncrypted).toBe(true);
+      expect(() => {
+        fixture.store._internal.db.loadExtension("/not/allowed");
+      }).toThrow(/extension loading is not allowed/i);
+      const result = searchVectorIndex(
+        requestFor(fixture.store, String(seeded.capsuleId)),
+        undefined,
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        sawDimensionCompatible: true,
+        diagnostics: {
+          provider: "usearch",
+          status: "available",
+          searchMode: "exact",
+        },
+      });
+      expect(result.candidates.length).toBeGreaterThan(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("enforces source and chunk allow-lists as narrowing filters", async () => {
+    const fixture = freshStore();
+    try {
+      const first = await seedCapsuleWithVectors(fixture.store, {
+        capsuleId: "cap-scope",
+        sourceId: "source-a",
+        documentId: "doc-a",
+      });
+      const second = await seedCapsuleWithVectors(fixture.store, {
+        capsuleId: "cap-scope",
+        sourceId: "source-b",
+        documentId: "doc-b",
+        unitId: "unit-cap-scope-b",
+        skipCapsule: true,
+      });
+      const request = requestFor(fixture.store, "cap-scope");
+      const chunkId = second.chunkIds[0];
+      expect(chunkId).toBeDefined();
+      const filtered = searchVectorIndex(
         {
-          chunk_id: "chunk-ready",
-          capsule_id: "cap-vector-index",
-          source_id: "src-a",
-          distance: 0.25,
+          ...request,
+          sourceFilter: [second.sourceId],
+          chunkFilter: chunkId === undefined ? [] : [String(chunkId)],
         },
-      ],
-      tempRowCount: 1,
-      vectorIndexState: {
-        status: "ready",
-        vector_count: 1,
-        vector_max_created_at: 1_700_000_000_321,
-      },
-      insertedTempRows: [],
-      wroteReadyState: false,
-      deletedTempRows: false,
-    };
-    const store = fakeVectorIndexStore(state);
-
-    const result = searchVectorIndex(requestFor(store, capsule), {
-      mode: "sqlite-vec",
-      sqliteVec: {
-        load: (dbHandle) => {
-          void dbHandle;
-        },
-      },
-    });
-
-    expect(state.deletedTempRows).toBe(false);
-    expect(state.insertedTempRows).toEqual([]);
-    expect(state.wroteReadyState).toBe(false);
-    expect(result.ok).toBe(true);
-    expect(result.candidates).toEqual([
-      {
-        chunkId: "chunk-ready",
-        capsuleId: "cap-vector-index",
-        sourceId: "src-a",
-        score: 0.75,
-      },
-    ]);
-  });
-
-  it("fails closed when stored vector rows do not match the capsule identity", () => {
-    const capsule = detachedCapsule();
-    const state: FakeVectorIndexState = {
-      vectorRows: [fakeVectorRow({ vector_metric: "invalid" })],
-      queryRows: [],
-      insertedTempRows: [],
-      wroteReadyState: false,
-      deletedTempRows: false,
-    };
-    const store = fakeVectorIndexStore(state);
-
-    const result = searchVectorIndex(requestFor(store, capsule), {
-      mode: "sqlite-vec",
-      sqliteVec: {
-        load: (dbHandle) => {
-          void dbHandle;
-        },
-      },
-    });
-
-    expect(state.deletedTempRows).toBe(false);
-    expect(state.wroteReadyState).toBe(false);
-    expect(result).toMatchObject({
-      ok: false,
-      sawDimensionCompatible: false,
-      sawIdentityIncompatible: true,
-      diagnostics: {
-        provider: "sqlite-vec",
-        status: "fallback-incompatible-identity",
-        reason: "stored-vector-identity-mismatch",
-        indexName: "keiko_lk_vec_1536_cosine",
-      },
-    });
-  });
-  // ADR-0153 D3. The index lives in memory, so its size is bounded; a capsule over the bound falls
-  // back to brute force instead of allocating without limit, and never touches the runtime to do it.
-  it("falls back to brute force when the capsule exceeds the index size bound", () => {
-    const capsule = detachedCapsule();
-    const state: FakeVectorIndexState = {
-      vectorRows: [fakeVectorRow()],
-      queryRows: [],
-      insertedTempRows: [],
-      wroteReadyState: false,
-      deletedTempRows: false,
-    };
-    const store = fakeVectorIndexStore(state);
-    let loads = 0;
-
-    const result = searchVectorIndex(requestFor(store, capsule), {
-      mode: "sqlite-vec",
-      // One 1536-dimension vector is 6144 bytes, comfortably over this bound.
-      maxIndexedVectorBytes: 1_024,
-      sqliteVec: {
-        load: () => {
-          loads += 1;
-        },
-      },
-    });
-
-    expect(loads).toBe(0);
-    expect(state.insertedTempRows).toEqual([]);
-    expect(result).toMatchObject({
-      ok: false,
-      candidates: [],
-      diagnostics: {
-        provider: "sqlite-vec",
-        status: "fallback-index-too-large",
-        reason: "index-bytes-over-bound",
-        indexName: "keiko_lk_vec_1536_cosine",
-        vectorCount: 1,
-      },
-    });
-  });
-
-  // Issue #2631 unit-level regression. The unit-level assertion of "the shipped default resolves
-  // to auto" — the end-to-end fallback and ANN cases live next to the store-open path in
-  // `vector-index-runtime.test.ts`. Both the empty option object and undefined must resolve the same
-  // way, so the funnel used by every server handler cannot silently opt out.
-  it("defaults the shipped resolution to auto without any input", () => {
-    for (const supplied of [undefined, {}] as const) {
-      const resolved = resolveVectorIndexOptions(supplied, {});
-      expect(resolved.mode).toBe("auto");
-      expect(resolved.sqliteVec).toBeUndefined();
-      expect(resolved.sqliteVecExtensionPath).toBeUndefined();
-    }
-    expect(
-      resolveVectorIndexOptions(undefined, { KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "disabled" }).mode,
-    ).toBe("disabled");
-  });
-
-  // The bound is a floor-lowering knob, never a widening one: an operator or a caller cannot raise
-  // the amount of decrypted vector payload the process will hold.
-  it("clamps the index size bound so it can only be tightened", () => {
-    expect(resolveVectorIndexOptions({ mode: "sqlite-vec" }, {}).maxIndexedVectorBytes).toBe(
-      DEFAULT_MAX_INDEXED_VECTOR_BYTES,
-    );
-    expect(
-      resolveVectorIndexOptions({ mode: "sqlite-vec", maxIndexedVectorBytes: 4_096 }, {})
-        .maxIndexedVectorBytes,
-    ).toBe(4_096);
-    for (const widening of [DEFAULT_MAX_INDEXED_VECTOR_BYTES * 4, Number.POSITIVE_INFINITY]) {
+        undefined,
+      );
+      expect(filtered.ok).toBe(true);
+      expect(filtered.candidates.map((candidate) => candidate.chunkId)).toEqual(
+        chunkId === undefined ? [] : [String(chunkId)],
+      );
       expect(
-        resolveVectorIndexOptions({ mode: "sqlite-vec", maxIndexedVectorBytes: widening }, {})
-          .maxIndexedVectorBytes,
-      ).toBe(DEFAULT_MAX_INDEXED_VECTOR_BYTES);
-    }
-    // Both malformed-input branches of the clamp guard, not just one: NaN is not finite, -1 is.
-    for (const malformed of [Number.NaN, -1]) {
-      expect(
-        resolveVectorIndexOptions({ mode: "sqlite-vec", maxIndexedVectorBytes: malformed }, {})
-          .maxIndexedVectorBytes,
-      ).toBe(DEFAULT_MAX_INDEXED_VECTOR_BYTES);
+        filtered.candidates.every(
+          (candidate) => String(candidate.sourceId) === String(second.sourceId),
+        ),
+      ).toBe(true);
+      expect(first.sourceId).not.toBe(second.sourceId);
+    } finally {
+      fixture.cleanup();
     }
   });
 
-  // A vector that will not open is a store-integrity failure, not an identity mismatch. Indexing the
-  // sealed bytes instead would build an index over ciphertext and answer from it.
-  it("fails closed when a stored vector cannot be decrypted", () => {
-    const capsule = detachedCapsule();
-    const state: FakeVectorIndexState = {
-      vectorRows: [fakeVectorRow()],
-      queryRows: [],
-      insertedTempRows: [],
-      wroteReadyState: false,
-      deletedTempRows: false,
-    };
-    const refusingCipher: StoreContentCipher = {
-      ...PLAINTEXT_CONTENT_CIPHER,
-      isEncrypted: true,
-      openVector: (): Uint8Array => {
-        throw new Error("authentication failed");
-      },
-    };
-    const store = fakeVectorIndexStore(state, refusingCipher);
+  it("keeps delimiter-bearing capsule and source ids in distinct cache partitions", async () => {
+    const fixture = freshStore();
+    try {
+      const first = await seedCapsuleWithVectors(fixture.store, {
+        capsuleId: "a",
+        sourceId: "b||c",
+        documentId: "doc-a",
+      });
+      const second = await seedCapsuleWithVectors(fixture.store, {
+        capsuleId: "a||b",
+        sourceId: "c",
+        documentId: "doc-b",
+      });
+      fixture.store._internal.db.prepare("UPDATE vectors SET created_at = 1000").run();
+      const firstRequest = {
+        ...requestFor(fixture.store, String(first.capsuleId)),
+        sourceFilter: [first.sourceId],
+      };
+      const secondRequest = {
+        ...requestFor(fixture.store, String(second.capsuleId)),
+        sourceFilter: [second.sourceId],
+      };
 
-    const result = searchVectorIndex(requestFor(store, capsule), {
-      mode: "sqlite-vec",
-      sqliteVec: {
-        load: (dbHandle) => {
-          void dbHandle;
+      expect(searchVectorIndex(firstRequest, undefined).candidates).not.toHaveLength(0);
+      expect(searchVectorIndex(secondRequest, undefined).candidates).not.toHaveLength(0);
+      const firstAgain = searchVectorIndex(firstRequest, undefined);
+
+      expect(firstAgain.ok).toBe(true);
+      expect(firstAgain.candidates).not.toHaveLength(0);
+      expect(
+        firstAgain.candidates.every(
+          (candidate) =>
+            String(candidate.capsuleId) === String(first.capsuleId) &&
+            String(candidate.sourceId) === String(first.sourceId),
+        ),
+      ).toBe(true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("fails closed on dimension, identity, decryption, and memory-bound violations", async () => {
+    const fixture = encryptedStore();
+    try {
+      const seeded = await seedCapsuleWithVectors(fixture.store, {
+        capsuleId: "cap-invalid",
+      });
+      const request = requestFor(fixture.store, String(seeded.capsuleId));
+      expect(
+        searchVectorIndex({ ...request, queryVector: new Float32Array(2) }, undefined),
+      ).toMatchObject({
+        ok: false,
+        sawIdentityIncompatible: true,
+        diagnostics: { reason: "query-dimension-mismatch" },
+      });
+
+      fixture.store._internal.db
+        .prepare(
+          "UPDATE vectors SET embedding_space_fingerprint = :fingerprint WHERE capsule_id = :capsule",
+        )
+        .run({ capsule: String(seeded.capsuleId), fingerprint: "wrong-space" });
+      expect(searchVectorIndex(request, undefined)).toMatchObject({
+        ok: false,
+        sawIdentityIncompatible: true,
+        diagnostics: { reason: "stored-vector-identity-mismatch" },
+      });
+
+      fixture.store._internal.db
+        .prepare(
+          "UPDATE vectors SET embedding_space_fingerprint = :fingerprint, embedding = :embedding WHERE capsule_id = :capsule",
+        )
+        .run({
+          capsule: String(seeded.capsuleId),
+          fingerprint: DEFAULT_EMBEDDING.embeddingSpaceFingerprint ?? "",
+          embedding: new Uint8Array([1, 2, 3]),
+        });
+      expect(searchVectorIndex(request, undefined)).toMatchObject({
+        ok: false,
+        diagnostics: {
+          provider: "usearch",
+          status: "fallback-query-error",
+          reason: "stored-vector-decrypt-failed",
         },
-      },
-    });
+      });
 
-    expect(state.insertedTempRows).toEqual([]);
-    expect(state.wroteReadyState).toBe(false);
-    expect(result).toMatchObject({
-      ok: false,
-      candidates: [],
-      diagnostics: {
-        provider: "sqlite-vec",
-        status: "fallback-query-error",
-        reason: "stored-vector-decrypt-failed",
-        indexName: "keiko_lk_vec_1536_cosine",
-      },
-    });
+      expect(searchVectorIndex(request, { maxIndexedVectorBytes: 1 })).toMatchObject({
+        ok: false,
+        diagnostics: {
+          status: "fallback-index-too-large",
+          reason: "index-bytes-over-bound",
+        },
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("uses a content/identity-bound name without exposing content", () => {
+    const alternative: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      embeddingSpaceFingerprint: "other-space",
+    };
+    expect(usearchIndexName(DEFAULT_EMBEDDING)).toContain("keiko-hnsw");
+    expect(usearchIndexName(alternative)).not.toBe(usearchIndexName(DEFAULT_EMBEDDING));
   });
 });

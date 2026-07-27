@@ -11,8 +11,7 @@ describe("localKnowledgeVectorIndexOptions", () => {
     const shipped = localKnowledgeVectorIndexOptions({ env: {} });
 
     expect(shipped.mode).toBe("auto");
-    expect(shipped.sqliteVec).toBeUndefined();
-    expect(shipped.sqliteVecExtensionPath).toBeUndefined();
+    expect(shipped.usearchBinaryPath).toBeUndefined();
   });
 
   // An unrecognised value is treated as unset — the same default-on outcome — rather than a silent
@@ -23,8 +22,7 @@ describe("localKnowledgeVectorIndexOptions", () => {
     });
 
     expect(invalid.mode).toBe("auto");
-    expect(invalid.sqliteVec).toBeUndefined();
-    expect(invalid.sqliteVecExtensionPath).toBeUndefined();
+    expect(invalid.usearchBinaryPath).toBeUndefined();
   });
 
   it("honours an explicit disabled override", () => {
@@ -33,34 +31,30 @@ describe("localKnowledgeVectorIndexOptions", () => {
     });
 
     expect(disabled.mode).toBe("disabled");
-    expect(disabled.sqliteVec).toBeUndefined();
-    expect(disabled.sqliteVecExtensionPath).toBeUndefined();
+    expect(disabled.usearchBinaryPath).toBeUndefined();
   });
 
-  // Explicit sqlite-vec still passes through as before; the default-on switch does not preclude
-  // pinning the mode to sqlite-vec by operator choice.
+  // Explicit auto remains a valid operator choice without granting a runtime path.
   it("maps explicit auto without selecting any runtime, so activation stays explicit", () => {
     const resolved = localKnowledgeVectorIndexOptions({
       env: { KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto" },
     });
 
     expect(resolved.mode).toBe("auto");
-    expect(resolved.sqliteVec).toBeUndefined();
-    expect(resolved.sqliteVecExtensionPath).toBeUndefined();
+    expect(resolved.usearchBinaryPath).toBeUndefined();
   });
 
-  it("carries an explicit operator-provisioned extension path through", () => {
+  it("carries an explicit verified native-runtime path through", () => {
     const resolved = localKnowledgeVectorIndexOptions({
       env: {
-        KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "sqlite-vec",
-        KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH: "/opt/keiko/vec0",
+        KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "usearch",
+        KEIKO_USEARCH_BINARY_PATH: "/opt/keiko/usearch.node",
       },
     });
 
     expect(resolved).toMatchObject({
-      mode: "sqlite-vec",
-      sqliteVecExtensionPath: "/opt/keiko/vec0",
+      mode: "usearch",
+      usearchBinaryPath: "/opt/keiko/usearch.node",
     });
-    expect(resolved.sqliteVec).toBeUndefined();
   });
 });

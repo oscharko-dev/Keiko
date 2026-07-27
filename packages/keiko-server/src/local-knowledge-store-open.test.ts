@@ -5,9 +5,8 @@
 //   1. The returned `vectorIndex` carries an adapter — activation is not silently dropped.
 //   2. A retrieval-time `searchVectorIndex` call routed through the returned options actually
 //      dispatches through the port shim, not through the LK-native default path.
-//   3. The base options (`mode`, extension-path resolution) are preserved when the shim
-//      rebinds the adapter, so the `openKnowledgeStore` extension gate still sees the same
-//      signal.
+//   3. The base options (`mode`, native-runtime path resolution) are preserved when the shim
+//      rebinds the adapter.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,8 +28,8 @@ import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/db.js";
 
 // The default embedding identity used to seed a capsule inside the store. Matches the shipped
-// production identity that `text-embedding-3-small` reports so the derived sqlite-vec table
-// name (`sqliteVecIndexName`) is stable and predictable across runs.
+// production identity that `text-embedding-3-small` reports so the derived vector partition
+// name is stable and predictable across runs.
 const DEFAULT_IDENTITY = {
   provider: "openai",
   modelId: "text-embedding-3-small",
@@ -134,7 +133,7 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): v
     // `reason: "capsule-not-found"`. That status is outside the LK-native
     // `RetrievalVectorIndexDiagnostics.status` enum, so the shim's `toLkStatus` projection
     // rewrites it to the enum's default (`fallback-query-error`) while `reason` survives
-    // verbatim. The LK-native default path (no shim) would instead reach the sqlite-vec
+    // verbatim. The LK-native default path (no shim) would instead reach the built-in index
     // runtime probe on this same request, so the exact `fallback-query-error / capsule-not-found`
     // pairing is only reachable when the shim is in the call chain.
     const opened = openKnowledgeStoreForDeps(fixture.deps);
@@ -153,7 +152,9 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): v
         {
           store: opened.store,
           capsule: rogueCapsule,
-          queryVector: new Float32Array(rogueCapsule.embeddingModelIdentity.vectorDimensions),
+          queryVector: new Float32Array(rogueCapsule.embeddingModelIdentity.vectorDimensions).fill(
+            1,
+          ),
           candidateLimit: 3,
         },
         opened.vectorIndex,
@@ -166,15 +167,11 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): v
     }
   });
 
-  it("keeps the LK-native fallback diagnostics for a real capsule without a configured runtime", (): void => {
+  it("keeps exact search available for a real empty capsule without a native runtime", (): void => {
     // The shim must not silently MASK the underlying LK behaviour when it CAN reach the LK
-    // path. On a real capsule with no vectors indexed and no sqlite-vec runtime configured,
-    // the shim's port call reaches `searchSqliteVecIndex`, which falls closed with
-    // `sqlite-vec-runtime-not-configured` — the exact same status/reason the pre-composition
-    // path emitted. The `indexName` / `vectorCount` fields the shim rebuilds on a SUCCESSFUL
-    // KNN are not exercised here (fail-closed short-circuits before rebuild); those live in
-    // the LK-scoped `searchSqliteVecIndex` regression tests where a real vec runtime is
-    // available.
+    // path. On a real capsule with no vectors indexed and no USearch runtime configured,
+    // the shim's port call reaches the shared service's deterministic exact crossover. That path
+    // does not require the native HNSW runtime and must remain available after composition.
     const opened = openKnowledgeStoreForDeps(fixture.deps);
     try {
       const capsuleId = "cap-store-open-signal";
@@ -186,34 +183,38 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): v
         {
           store: opened.store,
           capsule: seeded,
-          queryVector: new Float32Array(seeded.embeddingModelIdentity.vectorDimensions),
+          queryVector: new Float32Array(seeded.embeddingModelIdentity.vectorDimensions).fill(1),
           candidateLimit: 3,
         },
         opened.vectorIndex,
       );
-      expect(result.ok).toBe(false);
-      expect(result.diagnostics.status).toBe("fallback-unavailable");
-      expect(result.diagnostics.reason).toBe("sqlite-vec-runtime-not-configured");
+      expect(result.ok).toBe(true);
+      expect(result.candidates).toEqual([]);
+      expect(result.diagnostics).toMatchObject({
+        provider: "usearch",
+        status: "available",
+        searchMode: "exact",
+      });
     } finally {
       opened.close();
     }
   });
 
-  it("preserves the base options — mode, now, and any resolved extension path — alongside the adapter", (): void => {
+  it("preserves mode, clock, and any resolved native-runtime path alongside the adapter", (): void => {
     // If the shim replaced the whole options bag instead of extending it, the `mode` decision,
-    // the `now` clock, and any resolved extension path would silently revert to defaults on
+    // the `now` clock, and any resolved native-runtime path would silently revert to defaults on
     // retrieval. All three must survive because the shim rebinds ONLY the adapter slot.
-    const envWithExtensionPath: NodeJS.ProcessEnv = {
-      KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "sqlite-vec",
-      KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH: "/opt/keiko/vec0",
+    const envWithRuntimePath: NodeJS.ProcessEnv = {
+      KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "usearch",
+      KEIKO_USEARCH_BINARY_PATH: "/opt/keiko/usearch.node",
     };
-    const withPath = buildDepsFixture({ env: envWithExtensionPath });
+    const withPath = buildDepsFixture({ env: envWithRuntimePath });
     const opened = openKnowledgeStoreForDeps(withPath.deps);
     try {
       // Values that flowed from `resolveVectorIndexOptions` through the composition: they must
       // appear on the returned options unchanged.
-      expect(opened.vectorIndex.mode).toBe("sqlite-vec");
-      expect(opened.vectorIndex.sqliteVecExtensionPath).toBe("/opt/keiko/vec0");
+      expect(opened.vectorIndex.mode).toBe("usearch");
+      expect(opened.vectorIndex.usearchBinaryPath).toBe("/opt/keiko/usearch.node");
       expect(typeof opened.vectorIndex.now).toBe("function");
     } finally {
       opened.close();

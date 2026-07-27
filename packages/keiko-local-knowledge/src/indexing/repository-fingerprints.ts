@@ -1,11 +1,11 @@
 // Repository refresh fingerprints (Issue #2569, ADR-0152 D8).
 //
 // Tracked files use Git's canonical blob object id, computed in-process from working-tree bytes.
-// Untracked files, non-Git roots, unsupported Git-index formats, and files above the bounded byte
-// cap use a content-free size+mtime identity. No per-file process is launched and no source bytes
-// enter diagnostics, evidence, or persisted run summaries.
+// Every other indexable file uses SHA-256 over those bytes; size and mtime remain body-free
+// observations, never identity. Reads are chunked and bounded. No per-file process is launched and
+// no source bytes enter diagnostics, evidence, or persisted run summaries.
 
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 
 import {
   isSafeStorageReference,
@@ -18,10 +18,12 @@ import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { isContained, walkSource } from "../discovery/walk.js";
 import type { DiscoveryOptions } from "../discovery/types.js";
 import { compareFingerprintKeys } from "../fingerprint-diff.js";
+import { DEFAULT_MAX_BYTES } from "../parsers/types.js";
 import type { KnowledgeStore } from "../store.js";
 
 const MAX_GIT_INDEX_BYTES = 64 * 1024 * 1024;
-const MAX_GIT_BLOB_FINGERPRINT_BYTES = 64 * 1024 * 1024;
+const MAX_SINGLE_READ_BYTES = 64 * 1024 * 1024;
+const FINGERPRINT_CHUNK_BYTES = 1024 * 1024;
 const GIT_INDEX_HEADER_BYTES = 12;
 const GIT_INDEX_ENTRY_FIXED_BYTES = 62;
 const GIT_INDEX_EXTENDED_FLAG = 0x4000;
@@ -39,6 +41,9 @@ export interface RepositoryFileFingerprint {
 export interface RepositoryFingerprintScan {
   readonly fingerprints: readonly RepositoryFileFingerprint[];
   readonly rejectedEntries: number;
+  // False means the fingerprints are only a partial view and must never replace a prior baseline
+  // or drive removal. PATH_ESCAPE is an intentional per-entry rejection and remains complete.
+  readonly complete: boolean;
   readonly usedGitIndex: boolean;
 }
 
@@ -179,16 +184,116 @@ async function trackedPathsFromGitIndex(
  * re-embed while still reporting success.
  */
 export function gitBlobFingerprint(bytes: Uint8Array): string {
+  return repositoryContentFingerprint(bytes, "git-blob-sha1");
+}
+
+export function repositoryContentFingerprint(
+  bytes: Uint8Array,
+  kind: RepositoryFingerprintKind,
+): string {
+  if (kind === "file-state") {
+    return createHash("sha256").update(bytes).digest("hex");
+  }
   return createHash("sha1")
     .update(`blob ${String(bytes.byteLength)}\0`, "utf8")
     .update(bytes)
     .digest("hex");
 }
 
-function fileStateFingerprint(size: number, mtimeMs: number | undefined): string {
-  return createHash("sha256")
-    .update(`file-state-v1\0${String(size)}\0${String(mtimeMs ?? -1)}`, "utf8")
-    .digest("hex");
+async function hashRanges(
+  readRange: (startByte: number, length: number) => Promise<Uint8Array>,
+  size: number,
+  hash: Hash,
+): Promise<boolean> {
+  for (let offset = 0; offset < size; offset += FINGERPRINT_CHUNK_BYTES) {
+    const length = Math.min(FINGERPRINT_CHUNK_BYTES, size - offset);
+    const bytes = await readRange(offset, length);
+    if (bytes.byteLength !== length) return false;
+    hash.update(bytes);
+  }
+  return true;
+}
+
+async function hashWithOpenReader(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  size: number,
+  hash: Hash,
+): Promise<boolean> {
+  if (fs.openFileReader === undefined) return false;
+  let complete = false;
+  const reader = await fs.openFileReader(absolutePath);
+  try {
+    complete = await hashRanges(reader.readRange, size, hash);
+  } finally {
+    try {
+      await reader.close();
+    } catch {
+      complete = false;
+    }
+  }
+  return complete;
+}
+
+async function hashFileContent(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  size: number,
+  hash: Hash,
+): Promise<boolean> {
+  if (!Number.isSafeInteger(size) || size < 0 || size > DEFAULT_MAX_BYTES) return false;
+  try {
+    if (fs.openFileReader !== undefined) {
+      return await hashWithOpenReader(fs, absolutePath, size, hash);
+    }
+    if (fs.readFileRange !== undefined) {
+      return await hashRanges(
+        (start, length) =>
+          fs.readFileRange?.(absolutePath, start, length) ??
+          Promise.reject(new Error("range reader unavailable")),
+        size,
+        hash,
+      );
+    }
+    if (fs.readFileBytes === undefined || size > MAX_SINGLE_READ_BYTES) return false;
+    const bytes = await fs.readFileBytes(absolutePath, size + 1);
+    if (bytes.byteLength !== size) return false;
+    hash.update(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isStableFile(
+  before: ReturnType<WorkspaceFs["stat"]>,
+  after: ReturnType<WorkspaceFs["stat"]>,
+): boolean {
+  if (!after.isFile || before.size !== after.size) return false;
+  if (before.mtimeMs !== undefined && after.mtimeMs !== before.mtimeMs) return false;
+  return before.ctimeMs === undefined || after.ctimeMs === before.ctimeMs;
+}
+
+function createFingerprintHash(tracked: boolean, size: number): Hash {
+  const hash = createHash(tracked ? "sha1" : "sha256");
+  if (tracked) hash.update(`blob ${String(size)}\0`, "utf8");
+  return hash;
+}
+
+function fileFingerprint(
+  relativePath: string,
+  size: number,
+  mtimeMs: number | undefined,
+  tracked: boolean,
+  contentFingerprint: string,
+): RepositoryFileFingerprint {
+  const fingerprint: RepositoryFileFingerprint = {
+    relativePath,
+    contentFingerprint,
+    fingerprintKind: tracked ? "git-blob-sha1" : "file-state",
+    byteLength: size,
+  };
+  return mtimeMs === undefined ? fingerprint : { ...fingerprint, mtimeMs };
 }
 
 async function fingerprintFile(
@@ -201,26 +306,13 @@ async function fingerprintFile(
   try {
     const absolutePath = joinAbsolute(rootPath, relativePath);
     const stat = fs.stat(absolutePath);
-    if (!stat.isFile) return undefined;
-    if (trackedPaths?.has(relativePath) === true) {
-      const bytes = await readBoundedFile(fs, absolutePath, size, MAX_GIT_BLOB_FINGERPRINT_BYTES);
-      if (bytes !== undefined) {
-        return {
-          relativePath,
-          contentFingerprint: gitBlobFingerprint(bytes),
-          fingerprintKind: "git-blob-sha1",
-          byteLength: size,
-          ...(stat.mtimeMs === undefined ? {} : { mtimeMs: stat.mtimeMs }),
-        };
-      }
-    }
-    return {
-      relativePath,
-      contentFingerprint: fileStateFingerprint(size, stat.mtimeMs),
-      fingerprintKind: "file-state",
-      byteLength: size,
-      ...(stat.mtimeMs === undefined ? {} : { mtimeMs: stat.mtimeMs }),
-    };
+    if (!stat.isFile || stat.size !== size) return undefined;
+    const tracked = trackedPaths?.has(relativePath) === true;
+    const hash = createFingerprintHash(tracked, size);
+    if (!(await hashFileContent(fs, absolutePath, size, hash))) return undefined;
+    const after = fs.stat(absolutePath);
+    if (!isStableFile(stat, after)) return undefined;
+    return fileFingerprint(relativePath, size, stat.mtimeMs, tracked, hash.digest("hex"));
   } catch {
     return undefined;
   }
@@ -234,9 +326,11 @@ export async function scanRepositoryFingerprints(
     (await trackedPathsFromGitIndex(options.fs, options.scope.repositoryRoot));
   const fingerprints: RepositoryFileFingerprint[] = [];
   let rejectedEntries = 0;
+  let complete = true;
   for (const result of walkSource(options.fs, options.scope, options.discovery)) {
     if (result.kind === "error") {
       rejectedEntries += 1;
+      if (result.error.code !== "PATH_ESCAPE") complete = false;
       continue;
     }
     const fingerprint = await fingerprintFile(
@@ -246,12 +340,17 @@ export async function scanRepositoryFingerprints(
       result.file.sizeBytes,
       inferred,
     );
-    if (fingerprint === undefined) rejectedEntries += 1;
-    else fingerprints.push(fingerprint);
+    if (fingerprint === undefined) {
+      rejectedEntries += 1;
+      complete = false;
+    } else {
+      fingerprints.push(fingerprint);
+    }
   }
   return {
     fingerprints,
     rejectedEntries,
+    complete,
     usedGitIndex: options.trackedPaths !== undefined || inferred !== undefined,
   };
 }

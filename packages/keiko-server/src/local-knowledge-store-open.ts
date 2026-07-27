@@ -127,7 +127,7 @@ export function openKnowledgeStoreForDeps(
   // ADR-0152 D3: knowledge retrieval is served through the pillar-neutral `VectorIndexPort`.
   // The port implementation is bound to THIS store; the adapter shim wires it into the
   // existing `VectorIndexOptions.adapter` seam so `tryVectorIndexForCapsule` keeps using the
-  // same call, and the `openOptions` (which decided extension loading at open time) are passed
+  // same call, and the `openOptions` (which decide native-runtime resolution) are passed
   // through without their adapter slot so the port dispatch does not re-enter through itself.
   const vectorIndex: VectorIndexOptions = {
     ...openOptions,

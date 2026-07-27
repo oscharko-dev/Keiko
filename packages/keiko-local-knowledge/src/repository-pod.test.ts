@@ -230,6 +230,57 @@ describe("repository pod prune", () => {
 
     expect(documentRows().map((row) => row.document_path)).not.toContain("src/worker.go");
   });
+
+  it("preserves the prior baseline and refuses prune when enumeration hits maxFiles", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    await refreshRepositoryPod(indexingDeps(adapter), { runId: "bounded-initial" });
+    const prior = [...readRepositoryFileFingerprints(store, CAPSULE_ID, SOURCE_ID).entries()];
+
+    unlinkSync(join(repositoryRoot, "src", "worker.go"));
+    const incomplete = await refreshRepositoryPod(
+      indexingDeps(adapter, { discoveryOptions: { maxDepth: 12, maxFiles: 1 } }),
+      { runId: "bounded-incomplete" },
+    );
+
+    expect(incomplete.run).toMatchObject({
+      applied: false,
+      counts: { removedFiles: 0, rejectedEntries: 1 },
+    });
+    expect([...readRepositoryFileFingerprints(store, CAPSULE_ID, SOURCE_ID).entries()]).toEqual(
+      prior,
+    );
+    expect(documentRows().map((row) => row.document_path)).toContain("src/worker.go");
+  });
+
+  it("preserves the prior baseline and refuses prune after a transient readdir failure", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    await refreshRepositoryPod(indexingDeps(adapter), { runId: "readdir-initial" });
+    const prior = [...readRepositoryFileFingerprints(store, CAPSULE_ID, SOURCE_ID).entries()];
+    const failingFs: typeof nodeWorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readDir: (absolutePath: string) => {
+        if (absolutePath === join(repositoryRoot, "src")) throw new Error("transient");
+        return nodeWorkspaceFs.readDir(absolutePath);
+      },
+    };
+
+    const incomplete = await refreshRepositoryPod(
+      indexingDeps(adapter, { workspaceFs: failingFs }),
+      {
+        runId: "readdir-incomplete",
+      },
+    );
+
+    expect(incomplete.run.applied).toBe(false);
+    expect(incomplete.run.counts.removedFiles).toBe(0);
+    expect(incomplete.run.counts.rejectedEntries).toBeGreaterThan(0);
+    expect([...readRepositoryFileFingerprints(store, CAPSULE_ID, SOURCE_ID).entries()]).toEqual(
+      prior,
+    );
+    expect(documentRows().map((row) => row.document_path)).toContain("src/worker.go");
+  });
 });
 
 describe("repository pod executable journey", () => {

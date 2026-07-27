@@ -49,12 +49,18 @@ function createTestCapsule(
   );
 }
 
+function nonZeroQueryVector(dimensions: number): Float32Array {
+  const vector = new Float32Array(dimensions);
+  vector[0] = 1;
+  return vector;
+}
+
 function baseQuery(overrides: Partial<VectorIndexQuery> = {}): VectorIndexQuery {
   return {
     namespace: "knowledge",
     partitionKey: "cap-port-a",
     identity: DEFAULT_EMBEDDING,
-    queryVector: new Float32Array(DEFAULT_EMBEDDING.vectorDimensions),
+    queryVector: nonZeroQueryVector(DEFAULT_EMBEDDING.vectorDimensions),
     candidateLimit: 5,
     ...overrides,
   };
@@ -161,7 +167,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
 
   it("refuses on embedding-identity mismatch even when dimensions and metric agree", () => {
     // Same vectorDimensions + vectorMetric as the capsule's identity, so `isValidVectorIndexQuery`
-    // accepts the query and the LK dimension check inside `searchSqliteVecIndex` would not fire.
+    // accepts the query and the shared service's dimension check would not fire.
     // What must fail closed is the CANONICAL identity tuple: `embeddingIdentityKey` folds in
     // `embeddingSpaceFingerprint` and `instructionVersion`, so two vectors from different
     // embedding spaces are refused before the port dispatches. This is the "identity mismatch
@@ -186,7 +192,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
       expect(result).toStrictEqual({
         ok: false,
         diagnostics: {
-          provider: "sqlite-vec",
+          provider: "usearch",
           status: "fallback-incompatible-identity",
           reason: "identity-mismatch",
         },
@@ -238,6 +244,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
       const port = createLocalKnowledgeStoreVectorIndexPort({
         namespace: "knowledge",
         store: fixture.store,
+        vectorIndexOptions: { mode: "disabled" },
       });
 
       const encoded = encodePartitionKey(rogueId as KnowledgeCapsuleId);
@@ -247,10 +254,12 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
       expect(encoded.includes("cap|rogue")).toBe(false);
       expect(encoded).toBe(encodeURIComponent(rogueId));
 
-      // Round-trips to the capsule and REACHES the identity guard (not the capsule-absent one),
-      // proving the encoded key resolved back to the capsule the caller named.
+      // Round-trips to the capsule and reaches the deliberately disabled index service (not the
+      // capsule-absent or invalid-key branches), proving the encoded key resolved back to the
+      // capsule the caller named independent of host runtime availability.
       const result = port.search(baseQuery({ partitionKey: encoded }));
       expect(result.ok).toBe(false);
+      expect(result.diagnostics.status).toBe("disabled");
       expect(result.diagnostics.status).not.toBe("port-capsule-absent");
       expect(result.diagnostics.status).not.toBe("port-invalid-query");
     } finally {
@@ -272,7 +281,7 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
       });
 
       // Neither call may cross into the other's partition. With no vectors indexed on either
-      // capsule, the sqlite-vec path resolves to `sqlite-vec-runtime-not-configured`
+      // capsule, the vector-index path resolves to `runtime-unavailable`
       // fail-closed — which is fine: what matters is that the port DID NOT return any candidate
       // from the other partition, which is what a cross-partition leak would look like.
       const aResult = port.search(baseQuery({ partitionKey: "cap-A" }));
@@ -310,18 +319,20 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
 });
 
 describe("vectorIndexPortAsKnowledgeAdapter", () => {
-  it("preserves the LK-native diagnostics vocabulary for a store without a configured runtime", () => {
-    // Without a configured sqlite-vec runtime, `searchVectorIndex` falls closed with
-    // `sqlite-vec-runtime-not-configured`. The shim must surface exactly that status — same
-    // provider, same status, same reason — so the LK lane state stays byte-identical to what
-    // it saw before composition.
+  it("preserves the LK-native diagnostics vocabulary for a deliberately disabled service", () => {
+    // The shim must surface exactly the direct service status — same provider, status, and
+    // reason — so the LK lane state stays byte-identical across composition. Disabled mode makes
+    // this proof independent of both the exact crossover and host native-runtime availability.
     const fixture = freshStore();
     try {
       const capsule = createTestCapsule(fixture.store);
       const port = createLocalKnowledgeStoreVectorIndexPort({
         namespace: "knowledge",
         store: fixture.store,
-        vectorIndexOptions: { mode: "auto", now: () => 1_700_000_000_000 },
+        vectorIndexOptions: {
+          mode: "disabled",
+          now: () => 1_700_000_000_000,
+        },
       });
       const adapter = vectorIndexPortAsKnowledgeAdapter(port);
 
@@ -329,15 +340,18 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
         {
           store: fixture.store,
           capsule,
-          queryVector: new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
+          queryVector: nonZeroQueryVector(capsule.embeddingModelIdentity.vectorDimensions),
           candidateLimit: 3,
         },
-        { mode: "auto", now: () => 1_700_000_000_001 },
+        {
+          mode: "disabled",
+          now: () => 1_700_000_000_001,
+        },
       );
       const throughAdapter = adapter.searchCapsule({
         store: fixture.store,
         capsule,
-        queryVector: new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
+        queryVector: nonZeroQueryVector(capsule.embeddingModelIdentity.vectorDimensions),
         candidateLimit: 3,
       });
 
@@ -362,7 +376,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
         search: (_query) => ({
           ok: false,
           diagnostics: {
-            provider: "sqlite-vec",
+            provider: "usearch",
             status: "fallback-incompatible-identity",
             reason: "identity-mismatch",
           },
@@ -372,7 +386,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
       const result = adapter.searchCapsule({
         store: fixture.store,
         capsule,
-        queryVector: new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
+        queryVector: nonZeroQueryVector(capsule.embeddingModelIdentity.vectorDimensions),
         candidateLimit: 3,
       });
       expect(result.ok).toBe(false);
@@ -386,7 +400,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
 
   it("short-circuits per-source dispatch after the first fail-closed port call", () => {
     // Qodo perf fix: the earlier revision re-ran `port.search(...)` per source even when the
-    // first call fell closed with `sqlite-vec-runtime-not-configured`, which meant N
+    // first call fell closed with `runtime-unavailable`, which meant N
     // `writeUnavailable(...)` state writes for the same vec-index-state row per source-filtered
     // request. The shim must stop after the first fail-closed dispatch — the merged result is
     // byte-identical to what N-1 more redundant calls would have produced (same store, same
@@ -401,9 +415,9 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
           return {
             ok: false,
             diagnostics: {
-              provider: "sqlite-vec",
+              provider: "usearch",
               status: "fallback-unavailable",
-              reason: "sqlite-vec-runtime-not-configured",
+              reason: "runtime-unavailable",
             },
           };
         },
@@ -417,14 +431,14 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
           "src-b" as KnowledgeSourceId,
           "src-c" as KnowledgeSourceId,
         ],
-        queryVector: new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
+        queryVector: nonZeroQueryVector(capsule.embeddingModelIdentity.vectorDimensions),
         candidateLimit: 5,
       });
       expect(calls).toHaveLength(1);
       expect(calls[0]).toBe(encodePartitionKey(capsule.id, "src-a" as KnowledgeSourceId));
       expect(result.ok).toBe(false);
       expect(result.diagnostics.status).toBe("fallback-unavailable");
-      expect(result.diagnostics.reason).toBe("sqlite-vec-runtime-not-configured");
+      expect(result.diagnostics.reason).toBe("runtime-unavailable");
     } finally {
       fixture.cleanup();
     }
@@ -441,7 +455,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
           return {
             ok: true,
             candidates: [],
-            diagnostics: { provider: "sqlite-vec", status: "available" },
+            diagnostics: { provider: "usearch", status: "available" },
           };
         },
       };
@@ -451,7 +465,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
         store: fixture.store,
         capsule,
         sourceFilter: ["src-a" as KnowledgeSourceId, "src-b" as KnowledgeSourceId],
-        queryVector: new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
+        queryVector: nonZeroQueryVector(capsule.embeddingModelIdentity.vectorDimensions),
         candidateLimit: 5,
       });
 
@@ -471,7 +485,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
       const stubPort: VectorIndexPort = {
         search: (query) => ({
           ok: true,
-          diagnostics: { provider: "sqlite-vec", status: "available" },
+          diagnostics: { provider: "usearch", status: "available" },
           candidates:
             query.partitionKey === encodePartitionKey(capsule.id, "src-a" as KnowledgeSourceId)
               ? [
@@ -489,7 +503,7 @@ describe("vectorIndexPortAsKnowledgeAdapter", () => {
         store: fixture.store,
         capsule,
         sourceFilter: ["src-a" as KnowledgeSourceId, "src-b" as KnowledgeSourceId],
-        queryVector: new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
+        queryVector: nonZeroQueryVector(capsule.embeddingModelIdentity.vectorDimensions),
         candidateLimit: 3,
         minScore: 0.5,
       });
@@ -517,7 +531,7 @@ describe("vectorIndexPortAsRepoAdapter", () => {
           return {
             ok: true,
             candidates: [],
-            diagnostics: { provider: "sqlite-vec", status: "available" },
+            diagnostics: { provider: "usearch", status: "available" },
           };
         },
       };
@@ -526,7 +540,7 @@ describe("vectorIndexPortAsRepoAdapter", () => {
         store: fixture.store,
         capsule,
         sourceFilter: ["src-a" as KnowledgeSourceId, "src-b" as KnowledgeSourceId],
-        queryVector: new Float32Array(capsule.embeddingModelIdentity.vectorDimensions),
+        queryVector: nonZeroQueryVector(capsule.embeddingModelIdentity.vectorDimensions),
         candidateLimit: 5,
       });
       expect(namespaces).toEqual(["repo", "repo"]);
@@ -548,6 +562,6 @@ describe("VectorIndexPort exports are reachable via the LK public entrypoint", (
     expect(typeof publicSurface.encodePartitionKey).toBe("function");
     expect(typeof publicSurface.vectorIndexPortAsKnowledgeAdapter).toBe("function");
     expect(typeof publicSurface.vectorIndexPortAsRepoAdapter).toBe("function");
-    expect(typeof publicSurface.sqliteVecIndexName).toBe("function");
+    expect(typeof publicSurface.usearchIndexName).toBe("function");
   });
 });

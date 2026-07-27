@@ -124,6 +124,48 @@ describe("configuredContextPackRerankerFor", () => {
     deps.store.close();
   });
 
+  it("pins one gateway-config generation when the workflow seam is created", async () => {
+    const pinned = config(true);
+    const saved = {
+      ...config(true),
+      reranker: {
+        ...config(true).reranker,
+        modelId: "saved-reranker",
+        baseUrl: "https://saved-reranker.example/v1",
+      },
+    } as GatewayConfig;
+    let configReads = 0;
+    let captured: LiteLLMRerankRequest | undefined;
+    const base = depsWith(pinned, (request) => {
+      captured = request;
+      return Promise.resolve({
+        ok: true,
+        value: { modelId: request.modelId, results: [{ index: 0 }] },
+      });
+    });
+    const deps: UiHandlerDeps = {
+      ...base,
+      gatewayConfig: {
+        storagePath: "/runtime/config.json",
+        current: () => {
+          configReads += 1;
+          return configReads === 1 ? pinned : saved;
+        },
+        present: () => true,
+        set: () => undefined,
+      },
+    };
+    const reranker = configuredContextPackRerankerFor(deps, QUERY, undefined);
+    const candidates = [candidate("src/a.ts", 0.4)];
+
+    await reranker?.rerank(candidates, new Map(), 1);
+
+    expect(configReads).toBe(1);
+    expect(captured?.endpoint).toBe("https://reranker.example/v1");
+    expect(captured?.modelId).toBe("qwen3-reranker");
+    deps.store.close();
+  });
+
   it("preserves every candidate when the provider returns an empty result list", async () => {
     const deps = depsWith(config(true), (request) =>
       Promise.resolve({ ok: true, value: { modelId: request.modelId, results: [] } }),

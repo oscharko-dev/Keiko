@@ -139,19 +139,12 @@ function abortYield(): WalkYield {
   };
 }
 
-function safeStatFile(
-  fs: WorkspaceFs,
-  absolutePath: string,
-  realPath: string,
-): WorkspaceStat | DiscoveryError | undefined {
+function safeStatFile(fs: WorkspaceFs, realPath: string): WorkspaceStat | DiscoveryError {
   try {
     const realStats = fs.stat(realPath);
-    if (!realStats.isFile) {
-      return undefined;
-    }
     return realStats;
   } catch {
-    return undefined;
+    return { code: "STAT_FAILED", message: "entry stat failed" };
   }
 }
 
@@ -219,9 +212,13 @@ function* yieldFileIfAllowed(
     return;
   }
   // realpath containment gate (boundary). Skip the entry entirely on failure rather than
-  // yielding a misleading diagnostic — the entry might be a transient broken symlink.
+  // treating a transient broken symlink as a complete enumeration.
   const real = safeRealPath(ctx.fs, absolutePath);
   if (real === undefined) {
+    yield {
+      kind: "error",
+      error: { code: "READ_FAILED", message: "entry realpath failed", relativePath },
+    };
     return;
   }
   if (!isContained(ctx.realRootPath, real)) {
@@ -245,14 +242,12 @@ function* yieldFileIfAllowed(
   if (!isGlobMatched(ctx.bounds, relativePath)) {
     return;
   }
-  const stat = safeStatFile(ctx.fs, absolutePath, real);
-  if (stat === undefined) {
-    return;
-  }
+  const stat = safeStatFile(ctx.fs, real);
   if ("code" in stat) {
-    yield { kind: "error", error: stat };
+    yield { kind: "error", error: { ...stat, relativePath } };
     return;
   }
+  if (!stat.isFile) return;
   ctx.filesYielded += 1;
   yield { kind: "file", file: { relativePath, sizeBytes: stat.size } };
 }
@@ -264,12 +259,23 @@ interface WalkDirEntry {
   readonly isSymbolicLink: boolean;
 }
 
-function safeReadDir(fs: WorkspaceFs, absolutePath: string): readonly WalkDirEntry[] {
+type DirectoryRead =
+  | { readonly ok: true; readonly entries: readonly WalkDirEntry[] }
+  | { readonly ok: false; readonly error: DiscoveryError };
+
+function safeReadDir(fs: WorkspaceFs, absolutePath: string): DirectoryRead {
   try {
-    return fs.readDir(absolutePath);
+    return { ok: true, entries: fs.readDir(absolutePath) };
   } catch {
-    return [];
+    return {
+      ok: false,
+      error: { code: "READ_FAILED", message: "directory read failed" },
+    };
   }
+}
+
+function limitYield(message: string): WalkYield {
+  return { kind: "error", error: { code: "LIMIT_REACHED", message } };
 }
 
 // Read `signal?.aborted` through a function call so TypeScript control-flow analysis
@@ -305,14 +311,22 @@ function* descend(ctx: WalkContext, absoluteDir: string, depth: number): Generat
     return;
   }
   if (ctx.filesYielded >= ctx.options.maxFiles) {
+    yield limitYield("file discovery limit reached");
     return;
   }
   if (depth > ctx.options.maxDepth) {
+    yield limitYield("directory depth limit reached");
     return;
   }
-  const entries = [...safeReadDir(ctx.fs, absoluteDir)].sort((a, b) => (a.name < b.name ? -1 : 1));
+  const read = safeReadDir(ctx.fs, absoluteDir);
+  if (!read.ok) {
+    yield { kind: "error", error: read.error };
+    return;
+  }
+  const entries = [...read.entries].sort((a, b) => (a.name < b.name ? -1 : 1));
   for (const entry of entries) {
     if (ctx.filesYielded >= ctx.options.maxFiles) {
+      yield limitYield("file discovery limit reached");
       return;
     }
     if (isAborted(ctx)) {
@@ -330,20 +344,34 @@ function* walkFilesScope(ctx: WalkContext, files: readonly string[]): Generator<
       return;
     }
     if (ctx.filesYielded >= ctx.options.maxFiles) {
+      yield limitYield("file discovery limit reached");
       return;
     }
     const abs = joinAbs(ctx.bounds.rootPath, rel);
+    const exists = pathExists(ctx.fs, abs, "explicit entry presence check failed");
+    if (typeof exists !== "boolean") {
+      yield { kind: "error", error: { ...exists, relativePath: rel } };
+      continue;
+    }
+    // An explicitly selected path that no longer exists is a complete, authoritative absence.
+    // This lets the indexing owner prune a genuinely deleted document without mistaking a
+    // transient realpath/stat failure for deletion.
+    if (!exists) continue;
     yield* yieldFileIfAllowed(ctx, abs, rel);
   }
 }
 
 const MAX_GITIGNORE_BYTES = 1024 * 1024;
 
-function pathExists(fs: WorkspaceFs, absolutePath: string): boolean {
+function pathExists(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  failureMessage: string,
+): boolean | DiscoveryError {
   try {
     return fs.exists(absolutePath);
   } catch {
-    return false;
+    return { code: "READ_FAILED", message: failureMessage };
   }
 }
 
@@ -367,7 +395,9 @@ function readRootGitIgnore(
 ): IgnoreMatcher | DiscoveryError | undefined {
   if (options.respectGitIgnore !== true) return undefined;
   const absolutePath = joinAbs(rootPath, ".gitignore");
-  if (!pathExists(fs, absolutePath)) return compileIgnore([]);
+  const exists = pathExists(fs, absolutePath, "repository ignore presence check failed");
+  if (typeof exists !== "boolean") return exists;
+  if (!exists) return compileIgnore([]);
   const realPath = safeRealPath(fs, absolutePath);
   if (realPath === undefined || !isContained(realRootPath, realPath)) {
     return { code: "READ_FAILED", message: "repository ignore file failed containment" };

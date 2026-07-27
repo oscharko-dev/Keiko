@@ -48,7 +48,8 @@ export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = {
 // Closed union. PATH_ESCAPE is the realpath-containment gate; UNSUPPORTED_FORMAT mirrors
 // the parser-registry sentinel; OVERSIZED_FILE mirrors the parser limit; CANCELLED is the
 // AbortSignal path; MALFORMED_INPUT / PARSER_TIMEOUT / PARSER_FAILED mirror parser-level
-// failures; READ_FAILED captures any other IO surface error from WorkspaceFs.
+// failures; READ_FAILED captures any other IO surface error from WorkspaceFs. LIMIT_REACHED
+// distinguishes a deliberately bounded but incomplete enumeration from a complete walk.
 export type DiscoveryErrorCode =
   | "PATH_ESCAPE"
   | "READ_FAILED"
@@ -59,6 +60,7 @@ export type DiscoveryErrorCode =
   | "PARSER_TIMEOUT"
   | "PARSER_FAILED"
   | "STAT_FAILED"
+  | "LIMIT_REACHED"
   | "INVALID_SCOPE";
 
 export interface DiscoveryError {

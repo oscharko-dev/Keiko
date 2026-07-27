@@ -18,8 +18,8 @@ rules:
       # Each cached artifact is also re-verified AFTER restore, so a poisoned entry cannot be used
       # even inside the job that restored it: the npm download cache is re-verified per package
       # against the lockfile by `npm ci --ignore-scripts` (node_modules is never cached), and the
-      # sqlite-vec extension and the Sonar Scanner CLI archive are re-verified against their pinned
-      # SHA-256 values by provision-sqlite-vec.mjs and by an explicit `sha256sum --check` that fails
+      # USearch runtime and the Sonar Scanner CLI archive are re-verified against their pinned
+      # SHA-256 values by provision-usearch.mjs and by an explicit `sha256sum --check` that fails
       # the job closed.
       # Only the save-capable `actions/cache` needs an entry; the three `actions/cache/restore`
       # steps in the measuring jobs are not flagged, because a job that cannot write a cache cannot
@@ -32,7 +32,7 @@ rules:
       # The two anchors this block previously carried (ci.yml:63, ci.yml:172) were verified dead
       # before removal: `zizmor` reports zero cache-poisoning findings for the pre-#2704 ci.yml with
       # no ignore list at all.
-      # sqlite-vec extension: coverage-packages, coverage-ui, coverage-scripts
+      # USearch runtime: coverage-packages, coverage-ui, coverage-scripts
       - ci.yml:310
       - ci.yml:400
       - ci.yml:466

@@ -8,7 +8,6 @@ import {
   evaluateQualityBudget,
   recallAtK,
   reciprocalRank,
-  regressFixtureExpectations,
   runLocalKnowledgeQualityCheck,
   runLocalKnowledgeRegressionProbes,
   runRetrievalQualityCheck,
@@ -109,6 +108,30 @@ describe("check-retrieval-quality helpers", () => {
     );
     expect(result.ok).toBe(false);
     expect(result.failures).toEqual(["top1Rate", "mrr", "generatedLeakCount", "caseFailures"]);
+  });
+
+  it("fails closed for non-finite floors, ceilings, and observations", () => {
+    const summary = {
+      top1Rate: Number.POSITIVE_INFINITY,
+      recallAtK: 1,
+      mrr: 1,
+      ndcgAtK: 1,
+      lineHitRate: 1,
+      generatedLeakCount: Number.NaN,
+      failedCases: [],
+    };
+    const budget = {
+      minTop1Rate: 1,
+      minRecallAtK: 1,
+      minMrr: 1,
+      minNdcgAtK: 1,
+      minLineHitRate: 1,
+      maxGeneratedLeakCount: Number.POSITIVE_INFINITY,
+    };
+    expect(evaluateQualityBudget(summary, budget)).toEqual({
+      ok: false,
+      failures: ["top1Rate", "generatedLeakCount"],
+    });
   });
 
   it("reports failing Local Knowledge retrieval scorecards", async () => {
@@ -236,20 +259,17 @@ function probeFixture(id) {
 }
 
 describe("check-retrieval-quality regression probes", () => {
-  it("repoints ground-truth expectations at a decoy chunk in the same corpus", () => {
-    const regressed = regressFixtureExpectations(probeFixture("exact-technical"));
-
-    expect(regressed.id).toBe("exact-technical-regression-probe");
-    expect(regressed.queries).toHaveLength(1);
-    expect(regressed.queries[0].expectedChunkIds).toEqual(["c-decoy"]);
-  });
-
-  it("passes when every regressed probe drops below the pass floors", async () => {
+  it("passes when genuinely bad outputs drop below the pass floors without changing goldens", async () => {
     const logs = [];
+    const fixture = probeFixture("exact-technical");
     const result = await runLocalKnowledgeRegressionProbes(
       (line) => logs.push(line),
-      [probeFixture("exact-technical")],
-      () => Promise.resolve(scorecard("exact-technical-regression-probe", { recall: 0, ndcg: 0 })),
+      [fixture],
+      (received) => {
+        expect(received).toBe(fixture);
+        expect(received.queries[0].expectedChunkIds).toEqual(["c-gold"]);
+        return Promise.resolve(scorecard("exact-technical", { recall: 0, ndcg: 0 }));
+      },
       ["exact-technical"],
     );
 
@@ -261,7 +281,7 @@ describe("check-retrieval-quality regression probes", () => {
     const result = await runLocalKnowledgeRegressionProbes(
       () => undefined,
       [probeFixture("semantic-paraphrase")],
-      () => Promise.resolve(scorecard("semantic-paraphrase-regression-probe", {})),
+      () => Promise.resolve(scorecard("semantic-paraphrase", {})),
       ["semantic-paraphrase"],
     );
 
@@ -290,7 +310,7 @@ describe("check-retrieval-quality regression probes", () => {
     const result = await runLocalKnowledgeRegressionProbes(
       (line) => logs.push(line),
       [probeFixture("exact-technical")],
-      () => Promise.resolve(scorecard("exact-technical-regression-probe", { recall: 0, ndcg: 0 })),
+      () => Promise.resolve(scorecard("exact-technical", { recall: 0, ndcg: 0 })),
       ["exact-technical", "typo-id-that-does-not-exist"],
     );
 

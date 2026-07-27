@@ -13,18 +13,15 @@
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import type { ChunkId } from "@oscharko-dev/keiko-contracts";
-
 import {
   RETRIEVAL_COMPARISON_MODE_MAP,
   computeRetrievalModeComparison,
   renderRetrievalModeComparisonReport,
 } from "./comparison.js";
 import { ALL_FIXTURES, exactTechnicalFixture, semanticParaphraseFixture } from "./fixtures.js";
+import { runBadOutputRetrievalProbe } from "./regression-probes.js";
 import { runRetrievalEval } from "./runner.js";
-import type { RetrievalEvalScorecard, RetrievalEvalFixture } from "./types.js";
-
-const DECOY_CHUNK = "__absent_decoy_chunk__" as ChunkId;
+import type { RetrievalEvalScorecard } from "./types.js";
 
 async function scoreAllFixtures(): Promise<RetrievalEvalScorecard[]> {
   const cards: RetrievalEvalScorecard[] = [];
@@ -74,16 +71,6 @@ function perfectButSingleLegScorecard(fixtureId: string): RetrievalEvalScorecard
   };
 }
 
-// Repoints every ground-truth query at a decoy chunk that retrieval will never return, keeping
-// the fixture id so it still maps to its leg. Recall/MRR/nDCG then collapse for that fixture —
-// the same injected-regression technique the shipping retrieval-quality gate uses.
-function regressExpectations(fixture: RetrievalEvalFixture): RetrievalEvalFixture {
-  return {
-    ...fixture,
-    queries: fixture.queries.map((query) => ({ ...query, expectedChunkIds: [DECOY_CHUNK] })),
-  };
-}
-
 describe("retrieval mode comparison (#2010)", () => {
   beforeAll(async () => {
     shippedScorecards = await scoreAllFixtures();
@@ -109,7 +96,7 @@ describe("retrieval mode comparison (#2010)", () => {
   }, 60_000);
 
   it("surfaces a lexical-leg regression as a below-floor mode row", async () => {
-    const regressed = await runRetrievalEval(regressExpectations(exactTechnicalFixture));
+    const regressed = await runBadOutputRetrievalProbe(exactTechnicalFixture);
     const comparison = computeRetrievalModeComparison([regressed]);
     const lexical = comparison.rows.find((row) => row.mode === "lexical");
     expect(lexical?.passed).toBe(false);
@@ -117,7 +104,7 @@ describe("retrieval mode comparison (#2010)", () => {
   });
 
   it("surfaces a vector-leg regression as a below-floor mode row", async () => {
-    const regressed = await runRetrievalEval(regressExpectations(semanticParaphraseFixture));
+    const regressed = await runBadOutputRetrievalProbe(semanticParaphraseFixture);
     const comparison = computeRetrievalModeComparison([regressed]);
     const vector = comparison.rows.find((row) => row.mode === "vector");
     expect(vector?.passed).toBe(false);
@@ -169,6 +156,17 @@ describe("retrieval mode comparison (#2010)", () => {
     expect(lexical?.floorHeadroom).toBeGreaterThanOrEqual(0);
     expect(lexical?.passed).toBe(true);
   }, 60_000);
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "fails closed when an aggregate ranking metric is non-finite (%s)",
+    (value) => {
+      const card = perfectButSingleLegScorecard("exact-technical");
+      const comparison = computeRetrievalModeComparison([
+        { ...card, dimensions: { ...card.dimensions, recall: value } },
+      ]);
+      expect(comparison.rows[0]?.passed).toBe(false);
+    },
+  );
 
   it("renders one row per mode, not a single aggregate", () => {
     const report = renderRetrievalModeComparisonReport(

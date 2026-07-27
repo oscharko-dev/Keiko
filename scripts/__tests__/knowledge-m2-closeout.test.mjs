@@ -3,9 +3,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { resolveProvisionedSqliteVecPath } from "../lib/clean-checkout-demo.mjs";
+import { resolveProvisionedUsearchPath } from "../lib/clean-checkout-demo.mjs";
 import {
   HS6_SINGLE_WRITER_FILE_COUNT,
+  EXPECTED_EVALUATION_SCORECARD_HASH,
   PROOF_IDS,
   REQUIRED_RERANKER_DIAGNOSTIC_FIELDS,
   breakEvenNarrative,
@@ -37,11 +38,11 @@ const CLOSEOUT_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), ".."
 
 // The real-proof gate routes its per-proof diagnostics into the injected `log`, which this suite
 // discards — so an unprovisioned checkout used to fail as a bare "expected false to be true" with no
-// hint that the ann-active proof wants a native extension. The sibling clean-checkout demo names its
-// remedy explicitly (knowledge-m2-clean-checkout-demo.test.mjs), and CI provisions the extension as
+// hint that the ann-active proof wants a native runtime. The sibling clean-checkout demo names its
+// remedy explicitly (knowledge-m2-clean-checkout-demo.test.mjs), and CI provisions the runtime as
 // a setup step (ci.yml). This renders the same information into the assertion message.
 //
-// Deliberately a MESSAGE, not a skip: a missing extension must still fail loudly, exactly as the
+// Deliberately a MESSAGE, not a skip: a missing runtime must still fail loudly, exactly as the
 // sibling suite argues, so it can never mask a real ANN regression on a host that should have one.
 function proofFailureDetail(outcome) {
   const failed = outcome.results.filter((result) => !result.ok);
@@ -49,10 +50,10 @@ function proofFailureDetail(outcome) {
     return "gate reported not-ok while every proof passed";
   }
   const detail = failed.map((result) => `${result.id}: ${result.failures.join("; ")}`).join(" | ");
-  if (resolveProvisionedSqliteVecPath(CLOSEOUT_REPO_ROOT) !== undefined) {
+  if (resolveProvisionedUsearchPath({ repoRoot: CLOSEOUT_REPO_ROOT }) !== undefined) {
     return detail;
   }
-  return `${detail} — the sqlite-vec extension is not provisioned; run \`npm run provision:sqlite-vec\` first`;
+  return `${detail} — the USearch runtime is not provisioned; run \`npm run provision:usearch\` first`;
 }
 
 function annInput(overrides = {}) {
@@ -60,15 +61,19 @@ function annInput(overrides = {}) {
     vectorRows: 20_001,
     exactScanCap: 20_000,
     activeStatus: "available",
+    provider: "usearch",
+    searchMode: "ann",
+    examinedCandidateCount: 138,
+    estimatedIndexBytes: 48 * 1024 * 1024,
     recalls: [1, 1, 1],
     annMedianLatency: "<=100ms",
     annP95Latency: "<=250ms",
     exactMedianLatency: "<=25ms",
     exactP95Latency: "<=50ms",
     encryptedAnnStatus: "available",
-    encryptedTempStore: "memory",
-    encryptedUnpinnedStatus: "fallback-encrypted-store",
-    loadFailureReason: "sqlite-vec-extension-load-failed",
+    sqliteExtensionDenied: true,
+    persistenceApiReferences: 0,
+    loadFailureReason: "runtime-unavailable",
     disabledStatus: "disabled",
     partitionViolations: 0,
     // Issue #2631 additions. These must be present for `evaluateAnnProof` to accept the input:
@@ -77,12 +82,18 @@ function annInput(overrides = {}) {
     // evidence table). Millisecond values are informational — used by the characterization document.
     latencyVectorDimensions: 384,
     latencyLargeRows: 50_000,
-    latencyLargeAnnMedianMs: 180,
+    latencyLargeAnnMedianMs: 3,
     latencyLargeExactMedianMs: 65,
     latencyLargeMinRecall: 1,
+    latencyLargeBuildMs: 1_250,
+    latencyLargeRssDeltaBytes: 128 * 1024 * 1024,
+    latencyLargeSearchMode: "ann",
+    latencyLargeExaminedCandidateCount: 138,
+    latencyLargeEstimatedIndexBytes: 160 * 1024 * 1024,
     latencySmallRows: 500,
-    latencySmallAnnMedianMs: 2.5,
+    latencySmallServiceMedianMs: 2.5,
     latencySmallExactMedianMs: 0.4,
+    latencySmallSearchMode: "exact",
     productionExactScanCap: 20_000,
     degenerateInjectionRecalls: [0, 0, 0],
     degenerateInjectionDecoyCount: 10,
@@ -101,8 +112,8 @@ function facadeInput(overrides = {}) {
 
 function evalInput(overrides = {}) {
   return {
-    firstHash: "b".repeat(64),
-    secondHash: "b".repeat(64),
+    actualScorecardHash: EXPECTED_EVALUATION_SCORECARD_HASH,
+    expectedScorecardHash: EXPECTED_EVALUATION_SCORECARD_HASH,
     fixtureCount: 29,
     regressionProbeCount: 16,
     regressionProbesLive: true,
@@ -195,13 +206,15 @@ describe("Knowledge M2 closeout proof evaluators", () => {
     const failures = [
       { vectorRows: 20_000 },
       { activeStatus: "disabled" },
+      { provider: "brute-force" },
+      { searchMode: "exact" },
+      { examinedCandidateCount: 20_001 },
+      { estimatedIndexBytes: 256 * 1024 * 1024 + 1 },
       { recalls: [1, 0.9] },
-      // ADR-0153 D1 negative controls, one per direction of the boundary: ANN refused on a pinned
-      // encrypted store (Outcome 3 silently unmet), the pin not actually in force, and ANN reaching
-      // an encrypted store that never got the pin.
+      { recalls: [1, Number.NaN] },
       { encryptedAnnStatus: "fallback-encrypted-store" },
-      { encryptedTempStore: "file" },
-      { encryptedUnpinnedStatus: "available" },
+      { sqliteExtensionDenied: false },
+      { persistenceApiReferences: 1 },
       { loadFailureReason: "unexpected" },
       { disabledStatus: "available" },
       { partitionViolations: 1 },
@@ -214,7 +227,16 @@ describe("Knowledge M2 closeout proof evaluators", () => {
       { latencyLargeRows: 25_000 },
       { latencySmallRows: 250 },
       { latencyLargeMinRecall: 0.94 },
+      { latencyLargeMinRecall: Number.NaN },
+      { latencyLargeAnnMedianMs: 66 },
+      { latencyLargeBuildMs: 0 },
+      { latencyLargeRssDeltaBytes: 512 * 1024 * 1024 + 1 },
+      { latencyLargeSearchMode: "exact" },
+      { latencySmallSearchMode: "ann" },
+      { latencyLargeExaminedCandidateCount: 50_000 },
+      { latencyLargeEstimatedIndexBytes: 256 * 1024 * 1024 + 1 },
       { degenerateInjectionRecalls: [0, 1, 0] },
+      { degenerateInjectionRecalls: [0, Number.NaN, 0] },
       { degenerateInjectionRecalls: [] },
       { degenerateInjectionRecalls: undefined },
     ];
@@ -286,7 +308,7 @@ describe("Knowledge M2 closeout proof evaluators", () => {
 
   it("fails every evaluation-harness negative control closed", () => {
     const failures = [
-      { secondHash: "changed" },
+      { actualScorecardHash: "changed" },
       { regressionProbesLive: false },
       { tautologyDetected: false },
       { groundedGateOk: false },
@@ -447,13 +469,14 @@ describe("Knowledge M2 latency characterization helpers", () => {
     expect(categorizeLatencyWinner(10, 0)).toBe("brute-force");
   });
 
-  it("narrates the operational break-even at the exact-scan cap", () => {
-    const narrative = breakEvenNarrative("brute-force", "brute-force", 500, 50_000, 20_000);
+  it("narrates the measured crossover at the exact-scan cap", () => {
+    const narrative = breakEvenNarrative("brute-force", "ann", 500, 50_000, 20_000);
     expect(narrative).toContain("500");
     expect(narrative).toContain("50000");
     expect(narrative).toContain("DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS = 20000");
     expect(narrative).toContain("scoped-vector-search.ts");
-    expect(narrative).toContain("operational");
+    expect(narrative).toContain("genuine within-run measurement");
+    expect(narrative).not.toContain("operational sense");
   });
 
   it("renders the characterization document with row counts, ms, recall, and winners", () => {
@@ -463,11 +486,13 @@ describe("Knowledge M2 latency characterization helpers", () => {
     // Row counts land in the table verbatim; milliseconds are rounded to three decimals.
     expect(rendered).toContain("| 500");
     expect(rendered).toContain("| 50000");
-    expect(rendered).toContain("180.000"); // large ANN median (from annInput default)
+    expect(rendered).toContain("3.000"); // large ANN median (from annInput default)
     expect(rendered).toContain("65.000"); // large exact median
     expect(rendered).toContain("2.500"); // small ANN median
     expect(rendered).toContain("0.400"); // small exact median
     expect(rendered).toMatch(/384-dim/u);
+    expect(rendered).toMatch(/Small\s+\|\s+500\s+\|\s+exact/u);
+    expect(rendered).toMatch(/Large\s+\|\s+50000\s+\|\s+ann/u);
     // The break-even narrative is spliced in.
     expect(rendered).toContain("DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS = 20000");
   });

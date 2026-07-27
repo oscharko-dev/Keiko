@@ -1,0 +1,692 @@
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { Worker } from "node:worker_threads";
+
+import {
+  embeddingIdentityKey,
+  type EmbeddingModelIdentity,
+  type EmbeddingVectorMetric,
+} from "@oscharko-dev/keiko-contracts";
+
+import { USEARCH_RUNTIME_MANIFEST, usearchRuntimeTargetKey } from "./usearch-runtime-manifest.js";
+import {
+  USEARCH_COMMAND,
+  USEARCH_CONTROL,
+  USEARCH_ERROR,
+  USEARCH_STATE,
+  type UsearchWorkerData,
+} from "./usearch-worker-protocol.js";
+
+export interface UsearchVectorEntry {
+  readonly id: string;
+  readonly vector: Float32Array;
+}
+
+export interface UsearchAnnPartition {
+  readonly cacheKey: string;
+  readonly cacheGroupKey?: string;
+  readonly revision: string;
+  readonly identity: EmbeddingModelIdentity;
+  readonly rowCount: number;
+  readonly loadEntries: () => readonly UsearchVectorEntry[];
+}
+
+export interface UsearchAnnSearchRequest {
+  readonly partition: UsearchAnnPartition;
+  readonly queryVector: Float32Array;
+  readonly candidateLimit: number;
+  readonly binaryPath?: string;
+  readonly exactScanThreshold?: number;
+  readonly maxIndexBytes?: number;
+}
+
+export interface UsearchAnnCandidate {
+  readonly id: string;
+  readonly score: number;
+}
+
+export type UsearchAnnSearchResult =
+  | {
+      readonly ok: true;
+      readonly mode: "exact" | "ann";
+      readonly candidates: readonly UsearchAnnCandidate[];
+      readonly examinedCandidates: number;
+      readonly estimatedIndexBytes: number;
+    }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | "invalid-query"
+        | "query-dimension-mismatch"
+        | "invalid-partition"
+        | "invalid-partition-entry"
+        | "unsupported-metric"
+        | "index-bytes-over-bound"
+        | "partition-load-failed"
+        | "runtime-unavailable"
+        | "runtime-integrity-failed"
+        | "index-build-failed"
+        | "index-query-failed";
+    };
+
+interface IndexedEntry {
+  readonly id: string;
+  readonly norm: number;
+}
+
+interface SharedVectors {
+  readonly entries: readonly IndexedEntry[];
+  readonly buffer: SharedArrayBuffer;
+  readonly byteSize: number;
+}
+
+interface ExactIndex {
+  readonly mode: "exact";
+  readonly vectors: SharedVectors;
+  readonly byteSize: number;
+}
+
+interface AnnWorkerBuffers {
+  readonly control: Int32Array;
+  readonly query: Float32Array;
+  readonly resultKeys: BigUint64Array;
+  readonly resultDistances: Float32Array;
+}
+
+interface AnnWorkerAllocation {
+  readonly buffers: AnnWorkerBuffers;
+  readonly controlBuffer: SharedArrayBuffer;
+  readonly keysBuffer: SharedArrayBuffer;
+  readonly queryBuffer: SharedArrayBuffer;
+  readonly resultKeysBuffer: SharedArrayBuffer;
+  readonly resultDistancesBuffer: SharedArrayBuffer;
+}
+
+interface AnnIndex {
+  readonly mode: "ann";
+  readonly vectors: SharedVectors;
+  readonly worker: Worker;
+  readonly buffers: AnnWorkerBuffers;
+  readonly byteSize: number;
+}
+
+type SearchIndex = ExactIndex | AnnIndex;
+
+interface CachedIndex {
+  readonly baseKey: string;
+  readonly groupKey: string;
+  readonly index: SearchIndex;
+}
+
+const HNSW_CONNECTIVITY = 32;
+const HNSW_EXPANSION_ADD = 256;
+const HNSW_EXPANSION_SEARCH = 768;
+const HNSW_OVERFETCH_MULTIPLIER = 8;
+const HNSW_OVERFETCH_EXTRA = 128;
+const HNSW_MAX_RESULTS = 10_000;
+const DEFAULT_EXACT_SCAN_THRESHOLD = 20_000;
+const DEFAULT_MAX_INDEX_BYTES = 256 * 1024 * 1024;
+// The qualified 50k×384 HNSW index consumes roughly twice its structural estimate in RSS once
+// native allocator/worker overhead is included. Capping the cache's aggregate estimate at the
+// per-index 256 MiB ceiling prevents two individually valid large graphs from coexisting and
+// exceeding the separately qualified 512 MiB RSS envelope.
+const MAX_CACHED_ESTIMATED_INDEX_BYTES = 256 * 1024 * 1024;
+const HNSW_NODE_OVERHEAD_BYTES = 256;
+const HNSW_EDGE_BYTES = 8;
+const WORKER_FIXED_BYTES = 8 * 1024 * 1024;
+const BUILD_TIMEOUT_MS = 120_000;
+const QUERY_TIMEOUT_MS = 30_000;
+
+const INDEX_CACHE = new Map<string, CachedIndex>();
+let cachedIndexBytes = 0;
+
+function compareIds(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function finiteVector(vector: Float32Array): boolean {
+  for (const value of vector) {
+    if (!Number.isFinite(value)) return false;
+  }
+  return true;
+}
+
+function vectorNorm(vector: Float32Array): number {
+  let squared = 0;
+  for (const value of vector) squared += value * value;
+  return Math.sqrt(squared);
+}
+
+function dotProduct(left: Float32Array, right: Float32Array): number {
+  let score = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    score += (left[index] ?? 0) * (right[index] ?? 0);
+  }
+  return score;
+}
+
+function cosineScore(
+  query: Float32Array,
+  queryNorm: number,
+  vector: Float32Array,
+  vectorNormValue: number,
+): number {
+  return dotProduct(query, vector) / (queryNorm * vectorNormValue);
+}
+
+function euclideanScore(query: Float32Array, vector: Float32Array): number {
+  let squared = 0;
+  for (let index = 0; index < query.length; index += 1) {
+    const delta = (query[index] ?? 0) - (vector[index] ?? 0);
+    squared += delta * delta;
+  }
+  return -Math.sqrt(squared);
+}
+
+function scoreVector(
+  metric: EmbeddingVectorMetric,
+  query: Float32Array,
+  queryNorm: number,
+  vector: Float32Array,
+  vectorNormValue: number,
+): number {
+  if (metric === "cosine") return cosineScore(query, queryNorm, vector, vectorNormValue);
+  if (metric === "dot") return dotProduct(query, vector);
+  return euclideanScore(query, vector);
+}
+
+function vectorAt(vectors: SharedVectors, dimensions: number, index: number): Float32Array {
+  return new Float32Array(
+    vectors.buffer,
+    index * dimensions * Float32Array.BYTES_PER_ELEMENT,
+    dimensions,
+  );
+}
+
+function scoreIndexes(
+  index: SearchIndex,
+  identity: EmbeddingModelIdentity,
+  query: Float32Array,
+  rowIndexes: readonly number[],
+  limit: number,
+): readonly UsearchAnnCandidate[] {
+  const queryNorm = vectorNorm(query);
+  const candidates: UsearchAnnCandidate[] = [];
+  for (const rowIndex of rowIndexes) {
+    const entry = index.vectors.entries[rowIndex];
+    if (entry === undefined) continue;
+    const vector = vectorAt(index.vectors, identity.vectorDimensions, rowIndex);
+    const score = scoreVector(identity.vectorMetric, query, queryNorm, vector, entry.norm);
+    if (Number.isFinite(score)) candidates.push({ id: entry.id, score });
+  }
+  candidates.sort((left, right) => right.score - left.score || compareIds(left.id, right.id));
+  return candidates.slice(0, limit);
+}
+
+function estimatedIndexBytes(rowCount: number, dimensions: number, ann: boolean): number {
+  const vectors = rowCount * dimensions * Float32Array.BYTES_PER_ELEMENT;
+  const idsAndNorms = rowCount * 64;
+  if (!ann) return vectors + idsAndNorms;
+  const nativeVectors = vectors;
+  const graph = rowCount * (HNSW_NODE_OVERHEAD_BYTES + HNSW_CONNECTIVITY * 2 * HNSW_EDGE_BYTES);
+  return vectors + idsAndNorms + nativeVectors + graph + WORKER_FIXED_BYTES;
+}
+
+function invalidLoadedEntry(
+  entry: UsearchVectorEntry | undefined,
+  ids: ReadonlySet<string>,
+  dimensions: number,
+): boolean {
+  return (
+    entry === undefined ||
+    entry.id.length === 0 ||
+    ids.has(entry.id) ||
+    entry.vector.length !== dimensions ||
+    !finiteVector(entry.vector)
+  );
+}
+
+function loadSharedVectors(
+  partition: UsearchAnnPartition,
+): SharedVectors | "load-failed" | "invalid" {
+  let loaded: readonly UsearchVectorEntry[];
+  try {
+    loaded = partition.loadEntries();
+  } catch {
+    return "load-failed";
+  }
+  if (loaded.length !== partition.rowCount) return "invalid";
+  const sorted = [...loaded].sort((left, right) => compareIds(left.id, right.id));
+  const dimensions = partition.identity.vectorDimensions;
+  const buffer = new SharedArrayBuffer(sorted.length * dimensions * Float32Array.BYTES_PER_ELEMENT);
+  const target = new Float32Array(buffer);
+  const entries: IndexedEntry[] = [];
+  const ids = new Set<string>();
+  for (let row = 0; row < sorted.length; row += 1) {
+    const entry = sorted[row];
+    if (invalidLoadedEntry(entry, ids, dimensions)) return "invalid";
+    if (entry === undefined) return "invalid";
+    const norm = vectorNorm(entry.vector);
+    if (!Number.isFinite(norm) || norm === 0) return "invalid";
+    ids.add(entry.id);
+    target.set(entry.vector, row * dimensions);
+    entries.push({ id: entry.id, norm });
+  }
+  return { entries, buffer, byteSize: buffer.byteLength + entries.length * 64 };
+}
+
+function targetRuntime(
+  binaryPath: string | undefined,
+): { readonly path: string; readonly sha256: string } | "unavailable" | "invalid" {
+  const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
+  if (targetKey === undefined) return "unavailable";
+  const target = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  const portablePath =
+    process.platform === "darwin"
+      ? resolve(dirname(process.execPath), "..", "..", "native", "usearch.node")
+      : resolve(dirname(process.execPath), "..", "native", "usearch.node");
+  const defaultPath = existsSync(portablePath)
+    ? portablePath
+    : resolve(
+        process.cwd(),
+        ".usearch",
+        USEARCH_RUNTIME_MANIFEST.version,
+        targetKey,
+        "usearch.node",
+      );
+  const path = binaryPath ?? process.env.KEIKO_USEARCH_BINARY_PATH ?? defaultPath;
+  if (!existsSync(path)) return "unavailable";
+  try {
+    const stat = statSync(path);
+    if (!stat.isFile()) return "invalid";
+    const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+    return digest === target.binarySha256 ? { path, sha256: digest } : "invalid";
+  } catch {
+    return "invalid";
+  }
+}
+
+function waitForState(control: Int32Array, expected: number, timeout: number): boolean {
+  const result = Atomics.wait(control, USEARCH_CONTROL.state, expected, timeout);
+  return result !== "timed-out";
+}
+
+function allocateAnnWorkerBuffers(
+  partition: UsearchAnnPartition,
+  resultCapacity: number,
+): AnnWorkerAllocation {
+  const controlBuffer = new SharedArrayBuffer(
+    USEARCH_CONTROL.length * Int32Array.BYTES_PER_ELEMENT,
+  );
+  const keysBuffer = new SharedArrayBuffer(partition.rowCount * BigUint64Array.BYTES_PER_ELEMENT);
+  const keys = new BigUint64Array(keysBuffer);
+  for (let index = 0; index < keys.length; index += 1) keys[index] = BigInt(index);
+  const queryBuffer = new SharedArrayBuffer(
+    partition.identity.vectorDimensions * Float32Array.BYTES_PER_ELEMENT,
+  );
+  const resultKeysBuffer = new SharedArrayBuffer(resultCapacity * BigUint64Array.BYTES_PER_ELEMENT);
+  const resultDistancesBuffer = new SharedArrayBuffer(
+    resultCapacity * Float32Array.BYTES_PER_ELEMENT,
+  );
+  return {
+    controlBuffer,
+    keysBuffer,
+    queryBuffer,
+    resultKeysBuffer,
+    resultDistancesBuffer,
+    buffers: {
+      control: new Int32Array(controlBuffer),
+      query: new Float32Array(queryBuffer),
+      resultKeys: new BigUint64Array(resultKeysBuffer),
+      resultDistances: new Float32Array(resultDistancesBuffer),
+    },
+  };
+}
+
+function workerDataFor(
+  partition: UsearchAnnPartition,
+  vectors: SharedVectors,
+  runtime: { readonly path: string; readonly sha256: string },
+  allocation: AnnWorkerAllocation,
+): UsearchWorkerData {
+  return {
+    binaryPath: runtime.path,
+    binarySha256: runtime.sha256,
+    expectedVersion: USEARCH_RUNTIME_MANIFEST.version,
+    dimensions: partition.identity.vectorDimensions,
+    rowCount: partition.rowCount,
+    connectivity: HNSW_CONNECTIVITY,
+    expansionAdd: HNSW_EXPANSION_ADD,
+    expansionSearch: HNSW_EXPANSION_SEARCH,
+    controlBuffer: allocation.controlBuffer,
+    keysBuffer: allocation.keysBuffer,
+    vectorsBuffer: vectors.buffer,
+    queryBuffer: allocation.queryBuffer,
+    resultKeysBuffer: allocation.resultKeysBuffer,
+    resultDistancesBuffer: allocation.resultDistancesBuffer,
+  };
+}
+
+function startWorker(
+  partition: UsearchAnnPartition,
+  vectors: SharedVectors,
+  runtime: { readonly path: string; readonly sha256: string },
+  resultCapacity: number,
+): AnnIndex | undefined {
+  const allocation = allocateAnnWorkerBuffers(partition, resultCapacity);
+  const data = workerDataFor(partition, vectors, runtime, allocation);
+  const workerUrl = import.meta.url.endsWith(".ts")
+    ? new URL("../../dist/retrieval/usearch-index-worker.js", import.meta.url)
+    : new URL("./usearch-index-worker.js", import.meta.url);
+  const worker = new Worker(workerUrl, {
+    execArgv: process.execArgv.filter((argument) => !argument.startsWith("--input-type")),
+    workerData: data,
+  });
+  worker.unref();
+  const { buffers } = allocation;
+  if (!waitForState(buffers.control, USEARCH_STATE.building, BUILD_TIMEOUT_MS)) {
+    void worker.terminate();
+    return undefined;
+  }
+  if (Atomics.load(buffers.control, USEARCH_CONTROL.state) !== USEARCH_STATE.ready) {
+    void worker.terminate();
+    return undefined;
+  }
+  return {
+    mode: "ann",
+    vectors,
+    worker,
+    buffers,
+    byteSize: estimatedIndexBytes(partition.rowCount, partition.identity.vectorDimensions, true),
+  };
+}
+
+function stopIndex(index: SearchIndex): void {
+  if (index.mode !== "ann") return;
+  Atomics.store(index.buffers.control, USEARCH_CONTROL.command, USEARCH_COMMAND.close);
+  Atomics.notify(index.buffers.control, USEARCH_CONTROL.command);
+  waitForState(index.buffers.control, USEARCH_STATE.ready, QUERY_TIMEOUT_MS);
+  void index.worker.terminate();
+}
+
+function baseCacheKey(partition: UsearchAnnPartition): string {
+  return `keiko-usearch-base-v2:${createHash("sha256")
+    .update(JSON.stringify([partition.cacheKey, embeddingIdentityKey(partition.identity)]), "utf8")
+    .digest("hex")}`;
+}
+
+function revisionCacheKey(partition: UsearchAnnPartition): string {
+  return `keiko-usearch-revision-v2:${createHash("sha256")
+    .update(
+      JSON.stringify([baseCacheKey(partition), partition.revision, partition.rowCount]),
+      "utf8",
+    )
+    .digest("hex")}`;
+}
+
+function removeCached(key: string): void {
+  const cached = INDEX_CACHE.get(key);
+  if (cached === undefined) return;
+  INDEX_CACHE.delete(key);
+  cachedIndexBytes -= cached.index.byteSize;
+  stopIndex(cached.index);
+}
+
+function evictBaseAndCapacity(baseKey: string, requiredBytes: number): void {
+  for (const [key, cached] of INDEX_CACHE) {
+    if (cached.baseKey === baseKey) removeCached(key);
+  }
+  while (
+    cachedIndexBytes + requiredBytes > MAX_CACHED_ESTIMATED_INDEX_BYTES &&
+    INDEX_CACHE.size > 0
+  ) {
+    const oldestKey = INDEX_CACHE.keys().next().value;
+    if (oldestKey === undefined) break;
+    removeCached(oldestKey);
+  }
+}
+
+function cacheIndex(partition: UsearchAnnPartition, index: SearchIndex): SearchIndex {
+  const key = revisionCacheKey(partition);
+  INDEX_CACHE.set(key, {
+    baseKey: baseCacheKey(partition),
+    groupKey: partition.cacheGroupKey ?? partition.cacheKey,
+    index,
+  });
+  cachedIndexBytes += index.byteSize;
+  return index;
+}
+
+function buildSearchIndex(
+  request: UsearchAnnSearchRequest,
+  exact: boolean,
+  maxBytes: number,
+): SearchIndex | UsearchAnnSearchResult {
+  const estimate = estimatedIndexBytes(
+    request.partition.rowCount,
+    request.partition.identity.vectorDimensions,
+    !exact,
+  );
+  if (estimate > maxBytes || estimate > MAX_CACHED_ESTIMATED_INDEX_BYTES) {
+    return { ok: false, reason: "index-bytes-over-bound" };
+  }
+  evictBaseAndCapacity(baseCacheKey(request.partition), estimate);
+  const vectors = loadSharedVectors(request.partition);
+  if (vectors === "load-failed") return { ok: false, reason: "partition-load-failed" };
+  if (vectors === "invalid") return { ok: false, reason: "invalid-partition-entry" };
+  if (exact) {
+    return cacheIndex(request.partition, {
+      mode: "exact",
+      vectors,
+      byteSize: estimate,
+    });
+  }
+  const runtime = targetRuntime(request.binaryPath);
+  if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
+  if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
+  const worker = startWorker(request.partition, vectors, runtime, HNSW_MAX_RESULTS);
+  return worker === undefined
+    ? { ok: false, reason: "index-build-failed" }
+    : cacheIndex(request.partition, worker);
+}
+
+function resolvedIndex(request: UsearchAnnSearchRequest): SearchIndex | UsearchAnnSearchResult {
+  const threshold = request.exactScanThreshold ?? DEFAULT_EXACT_SCAN_THRESHOLD;
+  if (request.partition.rowCount > threshold) {
+    const runtime = targetRuntime(request.binaryPath);
+    if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
+    if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
+  }
+  const key = revisionCacheKey(request.partition);
+  const cached = INDEX_CACHE.get(key);
+  const maxBytes = Math.min(
+    request.maxIndexBytes ?? DEFAULT_MAX_INDEX_BYTES,
+    DEFAULT_MAX_INDEX_BYTES,
+  );
+  if (cached !== undefined) {
+    if (cached.index.byteSize > maxBytes) return { ok: false, reason: "index-bytes-over-bound" };
+    INDEX_CACHE.delete(key);
+    INDEX_CACHE.set(key, cached);
+    return cached.index;
+  }
+  return buildSearchIndex(request, request.partition.rowCount <= threshold, maxBytes);
+}
+
+function allIndexes(rowCount: number): readonly number[] {
+  return Array.from({ length: rowCount }, (_, index) => index);
+}
+
+function exactSearch(request: UsearchAnnSearchRequest, index: ExactIndex): UsearchAnnSearchResult {
+  return {
+    ok: true,
+    mode: "exact",
+    candidates: scoreIndexes(
+      index,
+      request.partition.identity,
+      request.queryVector,
+      allIndexes(request.partition.rowCount),
+      request.candidateLimit,
+    ),
+    examinedCandidates: request.partition.rowCount,
+    estimatedIndexBytes: index.byteSize,
+  };
+}
+
+function annCandidateCount(request: UsearchAnnSearchRequest): number {
+  return Math.min(
+    request.partition.rowCount,
+    HNSW_MAX_RESULTS,
+    Math.max(
+      request.candidateLimit * HNSW_OVERFETCH_MULTIPLIER,
+      request.candidateLimit + HNSW_OVERFETCH_EXTRA,
+    ),
+  );
+}
+
+function discardAnnIndex(index: AnnIndex): UsearchAnnSearchResult {
+  for (const [key, cached] of INDEX_CACHE) {
+    if (cached.index !== index) continue;
+    INDEX_CACHE.delete(key);
+    cachedIndexBytes -= cached.index.byteSize;
+    break;
+  }
+  void index.worker.terminate();
+  return { ok: false, reason: "index-query-failed" };
+}
+
+function validAnnRowIndexes(rowIndexes: readonly number[], rowCount: number): boolean {
+  const seen = new Set<number>();
+  for (const rowIndex of rowIndexes) {
+    if (!Number.isSafeInteger(rowIndex) || rowIndex < 0 || rowIndex >= rowCount) return false;
+    if (seen.has(rowIndex)) return false;
+    seen.add(rowIndex);
+  }
+  return true;
+}
+
+function annSearch(request: UsearchAnnSearchRequest, index: AnnIndex): UsearchAnnSearchResult {
+  const { control, query, resultKeys } = index.buffers;
+  const candidateCount = annCandidateCount(request);
+  query.set(request.queryVector);
+  Atomics.add(control, USEARCH_CONTROL.requestSequence, 1);
+  const sequence = Atomics.load(control, USEARCH_CONTROL.requestSequence);
+  Atomics.store(control, USEARCH_CONTROL.candidateLimit, candidateCount);
+  Atomics.store(control, USEARCH_CONTROL.error, USEARCH_ERROR.none);
+  Atomics.store(control, USEARCH_CONTROL.command, USEARCH_COMMAND.search);
+  Atomics.notify(control, USEARCH_CONTROL.command);
+  while (Atomics.load(control, USEARCH_CONTROL.responseSequence) !== sequence) {
+    const observed = Atomics.load(control, USEARCH_CONTROL.responseSequence);
+    if (
+      Atomics.wait(control, USEARCH_CONTROL.responseSequence, observed, QUERY_TIMEOUT_MS) ===
+      "timed-out"
+    ) {
+      return discardAnnIndex(index);
+    }
+  }
+  if (Atomics.load(control, USEARCH_CONTROL.error) !== USEARCH_ERROR.none) {
+    return discardAnnIndex(index);
+  }
+  const count = Atomics.load(control, USEARCH_CONTROL.resultCount);
+  if (count < 0 || count > candidateCount) return discardAnnIndex(index);
+  const rowIndexes = Array.from(resultKeys.subarray(0, count), Number);
+  if (!validAnnRowIndexes(rowIndexes, request.partition.rowCount)) return discardAnnIndex(index);
+  return {
+    ok: true,
+    mode: "ann",
+    candidates: scoreIndexes(
+      index,
+      request.partition.identity,
+      request.queryVector,
+      rowIndexes,
+      request.candidateLimit,
+    ),
+    examinedCandidates: count,
+    estimatedIndexBytes: index.byteSize,
+  };
+}
+
+function validPartitionKey(value: string): boolean {
+  return value.length > 0 && value.length <= 4_096;
+}
+
+function validOptionalPartitionKey(value: string | undefined): boolean {
+  return value === undefined || validPartitionKey(value);
+}
+
+function validPartitionDimensions(dimensions: number): boolean {
+  return Number.isSafeInteger(dimensions) && dimensions > 0 && dimensions <= 65_536;
+}
+
+function validPartition(partition: UsearchAnnPartition): boolean {
+  return (
+    validPartitionKey(partition.cacheKey) &&
+    validOptionalPartitionKey(partition.cacheGroupKey) &&
+    validPartitionKey(partition.revision) &&
+    Number.isSafeInteger(partition.rowCount) &&
+    partition.rowCount >= 0 &&
+    validPartitionDimensions(partition.identity.vectorDimensions)
+  );
+}
+
+function validOptionalBound(value: number | undefined): boolean {
+  return value === undefined || (Number.isSafeInteger(value) && value >= 0);
+}
+
+function invalidRequestReason(
+  request: UsearchAnnSearchRequest,
+): UsearchAnnSearchResult | undefined {
+  if (
+    !Number.isSafeInteger(request.candidateLimit) ||
+    request.candidateLimit <= 0 ||
+    request.candidateLimit > HNSW_MAX_RESULTS ||
+    !validOptionalBound(request.exactScanThreshold) ||
+    !validOptionalBound(request.maxIndexBytes) ||
+    !finiteVector(request.queryVector) ||
+    vectorNorm(request.queryVector) === 0
+  ) {
+    return { ok: false, reason: "invalid-query" };
+  }
+  if (!validPartition(request.partition)) return { ok: false, reason: "invalid-partition" };
+  if (request.queryVector.length !== request.partition.identity.vectorDimensions) {
+    return { ok: false, reason: "query-dimension-mismatch" };
+  }
+  return undefined;
+}
+
+export function searchUsearchAnnIndex(request: UsearchAnnSearchRequest): UsearchAnnSearchResult {
+  const invalid = invalidRequestReason(request);
+  if (invalid !== undefined) return invalid;
+  const threshold = request.exactScanThreshold ?? DEFAULT_EXACT_SCAN_THRESHOLD;
+  if (
+    request.partition.rowCount > threshold &&
+    request.partition.identity.vectorMetric !== "cosine"
+  ) {
+    return { ok: false, reason: "unsupported-metric" };
+  }
+  const index = resolvedIndex(request);
+  if ("ok" in index) return index;
+  return index.mode === "exact" ? exactSearch(request, index) : annSearch(request, index);
+}
+
+export function clearUsearchAnnCacheForTests(): void {
+  for (const key of Array.from(INDEX_CACHE.keys())) removeCached(key);
+  cachedIndexBytes = 0;
+}
+
+export function clearUsearchAnnCacheForGroup(groupKey: string): void {
+  for (const [key, cached] of INDEX_CACHE) {
+    if (cached.groupKey === groupKey) removeCached(key);
+  }
+}
+
+export const USEARCH_ANN_PROFILE = Object.freeze({
+  provider: "usearch",
+  version: USEARCH_RUNTIME_MANIFEST.version,
+  algorithm: "hnsw",
+  connectivity: HNSW_CONNECTIVITY,
+  expansionAdd: HNSW_EXPANSION_ADD,
+  expansionSearch: HNSW_EXPANSION_SEARCH,
+  exactScanThreshold: DEFAULT_EXACT_SCAN_THRESHOLD,
+});

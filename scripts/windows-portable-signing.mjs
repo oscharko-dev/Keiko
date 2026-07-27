@@ -81,9 +81,7 @@ export function validateAzureArtifactSigningConfig(env) {
     fail("service endpoint is invalid");
   }
   if (
-    !/^1\.3\.6\.1\.4\.1\.311\.97\.[0-9]+(?:\.[0-9]+)*$/u.test(
-      env.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU,
-    )
+    !/^1\.3\.6\.1\.4\.1\.311\.97\.\d+(?:\.\d+)*$/u.test(env.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU)
   ) {
     fail("subscriber identity EKU is invalid");
   }
@@ -217,8 +215,12 @@ export function inventoryPathsMatch(expected, actual) {
   );
 }
 
+function catalogPathForFile(file) {
+  return `payload/Keiko/${file.relativePath}`;
+}
+
 export function catalogForInventory(inventory) {
-  return `${inventory.files.map((file) => `payload/Keiko/${file.relativePath}`).join("\n")}\n`;
+  return `${inventory.files.map(catalogPathForFile).join("\n")}\n`;
 }
 
 function parseArgs(argv) {
@@ -311,6 +313,19 @@ function markNativeHelperVerified(manifest) {
   };
   manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
     manifest.nativeHelpers,
+  );
+  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
+    fail("manifest must contain exactly one native addon");
+  }
+  manifest.nativeAddons[0].signing = {
+    signatureKind: "authenticode",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: false,
+    notarizationVerified: false,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeAddons = globalThis.structuredClone(
+    manifest.nativeAddons,
   );
 }
 

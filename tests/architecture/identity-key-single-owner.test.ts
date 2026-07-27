@@ -29,16 +29,14 @@ const SKIPPED_DIRECTORIES = new Set([
 ]);
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".mjs", ".js"]);
 
-// The identity tuple's fingerprint: the "unverified" fingerprint sentinel, then the dimensionsParam
-// element, then the pipe join with nothing between. Matching on shape rather than on a function
-// name is what makes the guard resistant to a copy that simply renames itself.
+// The identity tuple's versioned namespace. Matching the literal rather than a function name makes
+// the guard resistant to a copy that simply renames itself.
 //
 // The tail anchor is what separates this from `embeddingProfileKey` in
-// local-knowledge-embedding-profiles.ts, which shares the sentinel style but keys a deliberately
-// DIFFERENT and richer decision — it continues past dimensionsParam with tokenizer and locality.
+// local-knowledge-embedding-profiles.ts, which keys a deliberately DIFFERENT and richer decision.
 // "Are these the same embedding profile" and "may these two vectors be compared" are distinct
 // questions, and collapsing them would widen what counts as an identity mismatch.
-const SENTINEL_PATTERN = /"unverified",\s*String\([^)]*dimensionsParam[^)]*\),\s*\]\.join\("\|"\)/u;
+const IDENTITY_KEY_FORMAT_MARKER = "keiko-embedding-identity:v2:";
 
 function* sourceFiles(directory: string): Generator<string> {
   for (const entry of readdirSync(directory)) {
@@ -58,7 +56,7 @@ describe("embedding-identity key has exactly one owner", () => {
     for (const root of SCANNED_ROOTS) {
       const absoluteRoot = join(REPO_ROOT, root);
       for (const file of sourceFiles(absoluteRoot)) {
-        if (SENTINEL_PATTERN.test(readFileSync(file, "utf8"))) {
+        if (readFileSync(file, "utf8").includes(IDENTITY_KEY_FORMAT_MARKER)) {
           owners.push(relative(REPO_ROOT, file).split("\\").join("/"));
         }
       }
@@ -68,11 +66,9 @@ describe("embedding-identity key has exactly one owner", () => {
     ]);
   });
 
-  it("still produces the key the pre-M2 copies produced, so persisted index state stays readable", () => {
-    // `vector_index_state.embedding_identity_key` is PERSISTED. If promoting the function to
-    // contracts had changed a single byte of its output, every stored index row would have been
-    // silently invalidated on the next read and quietly re-embedded. This pins the exact string the
-    // two former copies emitted.
+  it("produces a versioned collision-free persisted key", () => {
+    // Migration v31 discards old runtime materialization state, not stored vectors. This exact
+    // format pin makes future changes deliberate and prevents an unversioned cache repartition.
     expect(
       embeddingIdentityKey({
         provider: "openai",
@@ -80,6 +76,8 @@ describe("embedding-identity key has exactly one owner", () => {
         vectorDimensions: 1536,
         vectorMetric: "cosine",
       }),
-    ).toBe("openai|text-embedding-3-small|1536|cosine|legacy|legacy|unverified|");
+    ).toBe(
+      'keiko-embedding-identity:v2:["openai","text-embedding-3-small",1536,"cosine",null,null,null,null]',
+    );
   });
 });

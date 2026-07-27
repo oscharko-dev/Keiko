@@ -89,6 +89,34 @@ function rebindNativeHelper(stageRoot, manifest, resourceRoot) {
   writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
 }
 
+function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
+  if (manifest.nativeAddons === undefined) return;
+  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
+    fail("signed payload must contain exactly one native addon");
+  }
+  const addon = manifest.nativeAddons[0];
+  const executable = containedResourcePath(resourceRoot, addon.executablePath);
+  const entry = lstatSync(executable);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("native addon is not a regular single-link file");
+  }
+  addon.shippedSha256 = sha256Bytes(readFileSync(executable));
+  addon.sizeBytes = entry.size;
+  const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
+  let sbom;
+  try {
+    sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
+  } catch {
+    fail("portable SBOM is invalid");
+  }
+  const matches = (sbom.components ?? []).filter(
+    (component) => component?.["bom-ref"] === addon.sbomBomRef,
+  );
+  if (matches.length !== 1) fail("native addon CycloneDX component is missing or ambiguous");
+  matches[0].hashes = [{ alg: "SHA-256", content: addon.shippedSha256 }];
+  writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
+}
+
 function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -184,6 +212,7 @@ export function rebindSignedPayload(stageRoot, manifest, platformTarget) {
   const resourceRoot = portableResourceRoot(stageRoot, platformTarget);
   rebindSidecars(manifest, resourceRoot, true);
   rebindNativeHelper(stageRoot, manifest, resourceRoot);
+  rebindNativeAddon(stageRoot, manifest, resourceRoot);
   manifest.provenance.packagedAppTreeSha256 = hashDirectoryTree(
     containedResourcePath(resourceRoot, "app"),
   );
@@ -200,6 +229,61 @@ function rebindReviewedBinding(manifest, archiveSha256) {
   if (manifest.nativeHelpers !== undefined) {
     binding.nativeHelpers = globalThis.structuredClone(manifest.nativeHelpers);
   }
+  if (manifest.nativeAddons !== undefined) {
+    binding.nativeAddons = globalThis.structuredClone(manifest.nativeAddons);
+  }
+}
+
+function rebindExistingPayload(stageRoot, manifest, platformTarget, options) {
+  if (options.payloadAlreadyRebound === true) return;
+  if (platformTarget === "windows-x64") {
+    rebindSignedPayload(stageRoot, manifest, platformTarget);
+    return;
+  }
+  const resourceRoot = portableResourceRoot(stageRoot, platformTarget);
+  rebindSidecars(manifest, resourceRoot, false);
+  manifest.provenance.packagedAppTreeSha256 = hashDirectoryTree(
+    containedResourcePath(resourceRoot, "app"),
+  );
+}
+
+function nativeHelperProvenance(helper) {
+  return {
+    architecture: helper.architecture,
+    executablePath: helper.executablePath,
+    name: helper.name,
+    shippedSha256: helper.shippedSha256,
+    signatureKind: helper.signing.signatureKind,
+    signatureVerified: helper.signing.signatureVerified,
+    notarizationVerified: helper.signing.notarizationVerified,
+    sourceTreeSha256: helper.source.treeSha256,
+    unsignedSha256: helper.unsignedSha256,
+  };
+}
+
+function nativeAddonProvenance(addon) {
+  return {
+    architecture: addon.architecture,
+    executablePath: addon.executablePath,
+    name: addon.name,
+    shippedSha256: addon.shippedSha256,
+    signatureKind: addon.signing.signatureKind,
+    signatureVerified: addon.signing.signatureVerified,
+    notarizationVerified: addon.signing.notarizationVerified,
+    sourceCommitSha: addon.source.commitSha,
+    tarballSha256: addon.source.tarballSha256,
+    unsignedSha256: addon.unsignedSha256,
+    version: addon.version,
+  };
+}
+
+function rebindProvenanceNativeCode(provenance, manifest) {
+  if (manifest.nativeHelpers !== undefined) {
+    provenance.nativeHelpers = manifest.nativeHelpers.map(nativeHelperProvenance);
+  }
+  if (manifest.nativeAddons !== undefined) {
+    provenance.nativeAddons = manifest.nativeAddons.map(nativeAddonProvenance);
+  }
 }
 
 export async function rebindExistingSignedArchive(
@@ -209,34 +293,12 @@ export async function rebindExistingSignedArchive(
   platformTarget = manifest.artifact?.platformTarget,
   options = {},
 ) {
-  if (options.payloadAlreadyRebound !== true) {
-    if (platformTarget === "windows-x64") {
-      rebindSignedPayload(stageRoot, manifest, platformTarget);
-    } else {
-      const resourceRoot = portableResourceRoot(stageRoot, platformTarget);
-      rebindSidecars(manifest, resourceRoot, false);
-      manifest.provenance.packagedAppTreeSha256 = hashDirectoryTree(
-        containedResourcePath(resourceRoot, "app"),
-      );
-    }
-  }
+  rebindExistingPayload(stageRoot, manifest, platformTarget, options);
   const archiveSha256 = await sha256File(archivePath);
   const provenancePath = join(stageRoot, "evidence", "provenance.intoto.jsonl");
   const provenance = JSON.parse(readFileSync(provenancePath, "utf8"));
   provenance.subjectDigest = archiveSha256;
-  if (manifest.nativeHelpers !== undefined) {
-    provenance.nativeHelpers = manifest.nativeHelpers.map((helper) => ({
-      architecture: helper.architecture,
-      executablePath: helper.executablePath,
-      name: helper.name,
-      shippedSha256: helper.shippedSha256,
-      signatureKind: helper.signing.signatureKind,
-      signatureVerified: helper.signing.signatureVerified,
-      notarizationVerified: helper.signing.notarizationVerified,
-      sourceTreeSha256: helper.source.treeSha256,
-      unsignedSha256: helper.unsignedSha256,
-    }));
-  }
+  rebindProvenanceNativeCode(provenance, manifest);
   const provenanceText = `${JSON.stringify(provenance)}\n`;
   manifest.artifact.sha256 = archiveSha256;
   manifest.artifact.sizeBytes = statSync(archivePath).size;

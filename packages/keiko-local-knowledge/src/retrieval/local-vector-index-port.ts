@@ -2,9 +2,9 @@
 //
 // The port is the pillar-neutral contract in `keiko-contracts`; this module is the Local
 // Knowledge backing that composes it onto the two namespaces whose vectors live in the LK
-// capsule store. Memory is intentionally excluded — its vectors live in keiko-memory-vault
-// under a different bounded seam, and its retrieval is a score-map producer over pre-selected
-// candidates rather than a candidate generator (see ADR-0152 D3 activation record).
+// capsule store. Memory is intentionally excluded from this store adapter because its vectors live
+// in keiko-memory-vault; the server composes those already authorized/decrypted candidates onto the
+// same USearch service through the port's tighten-only candidate allow-list (ADR-0163 D1).
 //
 // Both a port implementation and a matching `VectorIndexAdapter` shim are exported here. The
 // port is what pillar-neutral consumers call; the shim is what the LK retrieval path consumes
@@ -30,7 +30,7 @@ import type { KnowledgeStore } from "../store.js";
 import type { RetrievalVectorIndexDiagnostics } from "./types.js";
 import {
   searchVectorIndex,
-  sqliteVecIndexName,
+  usearchIndexName,
   type VectorIndexAdapter,
   type VectorIndexCandidate,
   type VectorIndexOptions,
@@ -48,8 +48,8 @@ export type LocalKnowledgeStoreNamespace = "knowledge" | "repo";
 //   * `capsuleId + "|" + encoded(sourceId)`        – that capsule narrowed to the named source.
 //
 // The composite form is what the LK adapter shim uses to preserve the current per-source KNN
-// semantic in `querySqliteVecIndex`: one port call per source, with the port narrowing the
-// underlying sqlite-vec query with `sourceFilter` accordingly. The port itself never widens
+// semantic in the store-backed vector query: one port call per source, with the port narrowing the
+// shared index query with `sourceFilter` accordingly. The port itself never widens
 // beyond what its partition key names — the partition invariant lives in the SQL.
 //
 // Both components are percent-encoded with `encodeURIComponent` and the SEPARATOR itself is a
@@ -134,12 +134,23 @@ function portInvalidPartitionKey(): VectorIndexResult {
 function portIdentityMismatch(): VectorIndexResult {
   return {
     ok: false,
-    diagnostics: diagnostic("sqlite-vec", "fallback-incompatible-identity", "identity-mismatch"),
+    diagnostics: diagnostic("usearch", "fallback-incompatible-identity", "identity-mismatch"),
   };
 }
 
 function toPortDiagnostics(source: RetrievalVectorIndexDiagnostics): VectorIndexDiagnostics {
-  return diagnostic(source.provider, source.status, source.reason);
+  return {
+    ...diagnostic(source.provider, source.status, source.reason),
+    ...(source.indexName !== undefined ? { indexName: source.indexName } : {}),
+    ...(source.vectorCount !== undefined ? { vectorCount: source.vectorCount } : {}),
+    ...(source.searchMode !== undefined ? { searchMode: source.searchMode } : {}),
+    ...(source.examinedCandidateCount !== undefined
+      ? { examinedCandidateCount: source.examinedCandidateCount }
+      : {}),
+    ...(source.estimatedIndexBytes !== undefined
+      ? { estimatedIndexBytes: source.estimatedIndexBytes }
+      : {}),
+  };
 }
 
 function toPortCandidate(candidate: VectorIndexCandidate): VectorIndexCandidateRef {
@@ -206,6 +217,7 @@ export function createLocalKnowledgeStoreVectorIndexPort(
         ...(parsed.sourceId !== undefined
           ? { sourceFilter: [parsed.sourceId as KnowledgeSourceId] }
           : {}),
+        ...(query.candidateIds !== undefined ? { chunkFilter: query.candidateIds } : {}),
         queryVector: query.queryVector,
         candidateLimit: query.candidateLimit,
       };
@@ -221,7 +233,7 @@ export function createLocalKnowledgeStoreVectorIndexPort(
 
 // Reconstruct the LK-native `sawDimensionCompatible` / `sawIdentityIncompatible` flags from the
 // port's status vocabulary. These flags are what `tryVectorIndexForCapsule` uses to mark lane
-// state, so the shim must produce them the same way `searchSqliteVecIndex` did.
+// state, so the shim must produce them the same way the LK-native service does.
 const IDENTITY_INCOMPATIBLE_STATUSES = new Set<string>(["fallback-incompatible-identity"]);
 
 function reconstructLkFlags(result: VectorIndexResult): {
@@ -263,13 +275,13 @@ function toLkStatus(status: string): RetrievalVectorIndexDiagnostics["status"] {
 
 const LK_PROVIDER_VALUES: ReadonlySet<RetrievalVectorIndexDiagnostics["provider"]> = new Set([
   "brute-force",
-  "sqlite-vec",
+  "usearch",
 ]);
 
 function toLkProvider(provider: string): RetrievalVectorIndexDiagnostics["provider"] {
   return LK_PROVIDER_VALUES.has(provider as RetrievalVectorIndexDiagnostics["provider"])
     ? (provider as RetrievalVectorIndexDiagnostics["provider"])
-    : "sqlite-vec";
+    : "usearch";
 }
 
 function toLkDiagnostics(source: VectorIndexDiagnostics): RetrievalVectorIndexDiagnostics {
@@ -277,6 +289,15 @@ function toLkDiagnostics(source: VectorIndexDiagnostics): RetrievalVectorIndexDi
     provider: toLkProvider(source.provider),
     status: toLkStatus(source.status),
     ...(source.reason !== undefined ? { reason: source.reason } : {}),
+    ...(source.indexName !== undefined ? { indexName: source.indexName } : {}),
+    ...(source.vectorCount !== undefined ? { vectorCount: source.vectorCount } : {}),
+    ...(source.searchMode !== undefined ? { searchMode: source.searchMode } : {}),
+    ...(source.examinedCandidateCount !== undefined
+      ? { examinedCandidateCount: source.examinedCandidateCount }
+      : {}),
+    ...(source.estimatedIndexBytes !== undefined
+      ? { estimatedIndexBytes: source.estimatedIndexBytes }
+      : {}),
   };
 }
 
@@ -291,7 +312,7 @@ function toLkCandidate(
   };
 }
 
-// The outer merge sort matches `querySqliteVecIndex`'s tiebreak exactly (`localeCompare`, not
+// The outer merge sort matches the store-backed query's tiebreak exactly (`localeCompare`, not
 // code-unit `<`). The two produce different orderings for non-ASCII chunk ids on hosts with
 // different ICU collations; matching what shipped before preserves observable candidate order.
 function candidateScoreDesc(a: VectorIndexCandidate, b: VectorIndexCandidate): number {
@@ -307,7 +328,7 @@ interface PortDispatch {
 // Preserve the current per-source KNN cadence: without a source filter we make ONE port call
 // against `capsuleId`; with a source filter we make ONE call per source against the encoded
 // composite key. Merging + slicing to `candidateLimit` happens on the union, matching the
-// current `sourceFilter.flatMap` + sort + slice pattern in `querySqliteVecIndex`.
+// current `sourceFilter.flatMap` + sort + slice pattern in the store-backed query.
 //
 // The two adapter shims (knowledge/repo) share this function; the only difference is the
 // namespace label the port sees on its query. Parameterising here removes a duplicate branch
@@ -333,6 +354,7 @@ function dispatchPortCalls(
       identity: request.capsule.embeddingModelIdentity,
       queryVector: request.queryVector,
       candidateLimit: request.candidateLimit,
+      ...(request.chunkFilter !== undefined ? { candidateIds: request.chunkFilter } : {}),
     }),
   });
   if (request.sourceFilter === undefined || request.sourceFilter.length === 0) {
@@ -350,7 +372,7 @@ function dispatchPortCalls(
 // Adapt a `VectorIndexPort` to the `VectorIndexAdapter` shape the LK retrieval path consumes
 // via `VectorIndexOptions.adapter` (ADR-0152 D3). The shim converts each LK request into one
 // or more port queries, merges the candidate sets, applies `minScore`, sorts, and slices to
-// `candidateLimit` — the same steps `querySqliteVecIndex` performs internally today.
+// `candidateLimit` — the same steps the store-backed query performs internally today.
 export function vectorIndexPortAsKnowledgeAdapter(port: VectorIndexPort): VectorIndexAdapter {
   return {
     searchCapsule(request: VectorIndexSearchRequest): VectorIndexSearchResult {
@@ -377,6 +399,53 @@ function firstNotOk(dispatches: readonly PortDispatch[]): VectorIndexResult | un
   return undefined;
 }
 
+function preferredSearchMode(
+  diagnostics: readonly VectorIndexDiagnostics[],
+): "ann" | "exact" | undefined {
+  if (diagnostics.some((entry) => entry.searchMode === "ann")) return "ann";
+  if (diagnostics.some((entry) => entry.searchMode === "exact")) return "exact";
+  return undefined;
+}
+
+function successfulDiagnostics(
+  dispatches: readonly PortDispatch[],
+): Pick<
+  RetrievalVectorIndexDiagnostics,
+  "searchMode" | "examinedCandidateCount" | "estimatedIndexBytes"
+> {
+  const diagnostics = dispatches
+    .filter((dispatch) => dispatch.result.ok)
+    .map((dispatch) => dispatch.result.diagnostics);
+  const searchMode = preferredSearchMode(diagnostics);
+  const examinedCandidateCount = diagnostics.reduce(
+    (sum, entry) => sum + (entry.examinedCandidateCount ?? 0),
+    0,
+  );
+  const estimatedIndexBytes = diagnostics.reduce(
+    (sum, entry) => sum + (entry.estimatedIndexBytes ?? 0),
+    0,
+  );
+  return {
+    ...(searchMode !== undefined ? { searchMode } : {}),
+    ...(examinedCandidateCount > 0 ? { examinedCandidateCount } : {}),
+    ...(estimatedIndexBytes > 0 ? { estimatedIndexBytes } : {}),
+  };
+}
+
+function combinedPortCandidates(
+  dispatches: readonly PortDispatch[],
+  capsuleId: KnowledgeCapsuleId,
+): VectorIndexCandidate[] {
+  const combined: VectorIndexCandidate[] = [];
+  for (const dispatch of dispatches) {
+    if (!dispatch.result.ok) continue;
+    for (const ref of dispatch.result.candidates) {
+      combined.push(toLkCandidate(ref, capsuleId));
+    }
+  }
+  return combined;
+}
+
 function mergePortDispatches(
   dispatches: readonly PortDispatch[],
   request: VectorIndexSearchRequest,
@@ -392,27 +461,16 @@ function mergePortDispatches(
       diagnostics: toLkDiagnostics(failing.diagnostics),
     };
   }
-  const combined: VectorIndexCandidate[] = [];
-  for (const dispatch of dispatches) {
-    if (!dispatch.result.ok) continue;
-    for (const ref of dispatch.result.candidates) {
-      combined.push(toLkCandidate(ref, request.capsule.id));
-    }
-  }
-  const filtered = combined
+  const filtered = combinedPortCandidates(dispatches, request.capsule.id)
     .filter((candidate) => request.minScore === undefined || candidate.score >= request.minScore)
     .sort(candidateScoreDesc)
     .slice(0, request.candidateLimit);
-  // Rebuild the LK-native diagnostics fields the port shape does not carry (`vectorCount`,
-  // `indexName`). `vectorCount` is what `querySqliteVecIndex` reports today: the size of the
-  // final candidate set. `indexName` is derived from the capsule's embedding identity the same
-  // way `sqliteVecIndexName` derives it inside `vector-index.ts` — kept in lockstep here so
-  // the observable diagnostic stays the same string.
   const combinedDiagnostics: RetrievalVectorIndexDiagnostics = {
-    provider: "sqlite-vec",
+    provider: "usearch",
     status: "available",
-    indexName: sqliteVecIndexName(request.capsule.embeddingModelIdentity),
+    indexName: usearchIndexName(request.capsule.embeddingModelIdentity),
     vectorCount: filtered.length,
+    ...successfulDiagnostics(dispatches),
     ...(dispatches[0]?.result.ok === true && dispatches[0].result.diagnostics.reason !== undefined
       ? { reason: dispatches[0].result.diagnostics.reason }
       : {}),

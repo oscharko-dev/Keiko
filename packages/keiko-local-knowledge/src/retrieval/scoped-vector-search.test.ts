@@ -624,7 +624,7 @@ describe("searchVectorsForScope — composed capsule set", () => {
         sawDimensionCompatible: true,
         sawIdentityIncompatible: false,
         diagnostics: {
-          provider: "sqlite-vec",
+          provider: "usearch",
           status: "available",
           indexName: "lane-local-test-index",
           vectorCount: 1,
@@ -663,11 +663,11 @@ describe("searchVectorsForScope — composed capsule set", () => {
     const { store } = getFixture();
     const identityA: EmbeddingModelIdentity = {
       ...DEFAULT_EMBEDDING,
-      modelId: "collision-model-01wl8",
+      modelId: "collision-v2-0ggkth5-1gkr",
     };
     const identityB: EmbeddingModelIdentity = {
       ...DEFAULT_EMBEDDING,
-      modelId: "collision-model-0yqd6",
+      modelId: "collision-v2-0tnnkid-2ruv",
     };
     const seededA = await seedCapsuleWithVectors(store, {
       capsuleId: "cap-collision-a",
@@ -724,7 +724,7 @@ describe("searchVectorsForScope — composed capsule set", () => {
         sawDimensionCompatible: true,
         sawIdentityIncompatible: false,
         diagnostics: {
-          provider: "sqlite-vec",
+          provider: "usearch",
           status: "available",
           indexName: "hash-collision-test-index",
           vectorCount: 1,
@@ -746,7 +746,7 @@ describe("searchVectorsForScope — composed capsule set", () => {
 
     expect(outcome.diagnostics.embeddingLaneCount).toBe(2);
     expect(new Set(outcome.diagnostics.embeddingLanes?.map((lane) => lane.laneId))).toEqual(
-      new Set(["embedding-lane-1245e5ed"]),
+      new Set(["embedding-lane-2d25d069"]),
     );
     expect(new Set(outcome.references.map((ref) => String(ref.capsuleId)))).toEqual(
       new Set(["cap-collision-a", "cap-collision-b"]),
@@ -810,7 +810,7 @@ describe("searchVectorsForScope — composed capsule set", () => {
         sawDimensionCompatible: true,
         sawIdentityIncompatible: false,
         diagnostics: {
-          provider: "sqlite-vec",
+          provider: "usearch",
           status: "available",
           indexName: "tie-break-test-index",
           vectorCount: 1,
@@ -918,7 +918,7 @@ describe("searchVectorsForScope — vector index adapter", () => {
           sawDimensionCompatible: true,
           sawIdentityIncompatible: false,
           diagnostics: {
-            provider: "sqlite-vec",
+            provider: "usearch",
             status: "available",
             indexName: "fake-test-index",
             vectorCount: 1,
@@ -938,7 +938,7 @@ describe("searchVectorsForScope — vector index adapter", () => {
     expect(calls).toEqual(["cap-indexed"]);
     expect(String(outcome.references[0]?.chunkId)).toBe(String(secondChunk));
     expect(outcome.diagnostics.vectorIndex).toMatchObject({
-      provider: "sqlite-vec",
+      provider: "usearch",
       status: "available",
       indexName: "fake-test-index",
     });
@@ -969,9 +969,9 @@ describe("searchVectorsForScope — vector index adapter", () => {
         sawDimensionCompatible: false,
         sawIdentityIncompatible: false,
         diagnostics: {
-          provider: "sqlite-vec",
+          provider: "usearch",
           status: "fallback-unavailable",
-          reason: "sqlite-vec-runtime-not-configured",
+          reason: "runtime-unavailable",
           indexName: "fake-test-index",
         },
       }),
@@ -987,9 +987,9 @@ describe("searchVectorsForScope — vector index adapter", () => {
 
     expect(String(outcome.references[0]?.chunkId)).toBe(String(firstChunk));
     expect(outcome.diagnostics.vectorIndex).toMatchObject({
-      provider: "sqlite-vec",
+      provider: "usearch",
       status: "fallback-unavailable",
-      reason: "sqlite-vec-runtime-not-configured",
+      reason: "runtime-unavailable",
     });
   });
 
@@ -1038,7 +1038,7 @@ describe("searchVectorsForScope — vector index adapter", () => {
         sawDimensionCompatible: true,
         sawIdentityIncompatible: false,
         diagnostics: {
-          provider: "sqlite-vec",
+          provider: "usearch",
           status: "available",
           indexName: "fake-test-index",
           vectorCount: 2,
@@ -2707,7 +2707,7 @@ describe("searchVectorsForScope — citation fields", () => {
 });
 
 describe("searchVectorsForScope — embeddingDegraded", () => {
-  it("reranks lexical candidates when an exact vector scan is oversized", async () => {
+  it("reranks lexical candidates through the bounded vector service exact path", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, {
       capsuleId: "cap-large-lexical",
@@ -2735,12 +2735,13 @@ describe("searchVectorsForScope — embeddingDegraded", () => {
     expect(outcome.references).toHaveLength(1);
     expect(outcome.noEvidenceReason).toBeUndefined();
     expect(outcome.diagnostics.mode).toBe("hybrid");
-    expect(outcome.diagnostics.denseIndex).toBe("guided");
+    expect(outcome.diagnostics.denseIndex).toBe("available");
+    expect(outcome.diagnostics.vectorIndex.searchMode).toBe("exact");
     expect(outcome.diagnostics.denseCandidateCount).toBeGreaterThan(0);
     expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
   });
 
-  it("uses ANN when an oversized dense scan has no lexical fallback", async () => {
+  it("uses the bounded vector service when a caller exact-scan cap is lower", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, {
       capsuleId: "cap-large-no-lexical",
@@ -2771,7 +2772,8 @@ describe("searchVectorsForScope — embeddingDegraded", () => {
     expect(outcome.references).toHaveLength(1);
     expect(outcome.noEvidenceReason).toBeUndefined();
     expect(outcome.diagnostics.mode).toBe("dense-only");
-    expect(outcome.diagnostics.denseIndex).toBe("ann");
+    expect(outcome.diagnostics.denseIndex).toBe("available");
+    expect(outcome.diagnostics.vectorIndex.searchMode).toBe("exact");
     expect(outcome.diagnostics.denseCandidateCount).toBeGreaterThan(0);
     expect(outcome.diagnostics.lexicalIndex).toBe("missing");
   });

@@ -2,10 +2,11 @@
 
 ## Status
 
-Accepted (Issue #2630, Epic #2556, Knowledge M2). Supersedes the encrypted-store carve-out in
-[ADR-0152](ADR-0152-substrate-ownership-and-unified-retrieval-spine.md) D2. Operates inside the
-no-second-plaintext-copy invariant of
-[ADR-0047](ADR-0047-local-knowledge-content-encryption.md); it does not amend it.
+Superseded by [ADR-0163](ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md) (2026-07-27).
+This record remains the historical proof that encrypted ANN requires bounded memory and no second
+plaintext copy. Its sqlite-vec TEMP mechanism is retired: the current USearch service exposes no
+persistence API and SQLite extension authority remains denied. Originally accepted for Issue #2630,
+Epic #2556, Knowledge M2.
 
 ## Date
 

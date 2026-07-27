@@ -141,3 +141,45 @@ Examined and deliberately left unchanged: `parseVectorIndexMode` resolves unreco
 explicit pin (`local-knowledge-store-open.vector-index.test.ts`, "falls through unrecognised values
 to the auto default"); the operator opt-out is the single explicit value `disabled`. Changing it
 would mean rewriting a pin to bless the opposite behaviour, so it is reported rather than edited.
+
+## Wave-4 final epic audit — 2026-07-27
+
+The complete epic and all fifteen child issues were re-audited after the user rejected the prior
+closeout's use of “ANN” for sqlite-vec exhaustive KNN. Historical verdicts above remain intact; this
+section is the current verdict.
+
+| Target outcome                                  | Current verdict | Re-derived evidence                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repository questions are chunk-precise and warm | **MET**         | Incremental repository fingerprints are computed from bounded raw bytes; incomplete discovery cannot baseline or prune; fresh-pod search is chunk-filtered and ask-time whole-file embedding is deleted.                                                                                                                                            |
+| Repository is visibly a pod                     | **MET**         | Repository pod creation, refresh, state, projection and clean-checkout acceptance use the existing Local Knowledge substrate.                                                                                                                                                                                                                       |
+| ANN is on — once                                | **MET**         | [ADR-0163](../adr/ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md) replaces the false sqlite-vec claim with genuine USearch HNSW above 20,000 rows. The encrypted 20,001-row journey and 50,000×384 comparison run in `check:knowledge-m2-closeout`; the same run recorded recall@10 1.000 and HNSW median 15.054 ms versus exact 54.218 ms. |
+| One reranker switch                             | **MET**         | One server facade snapshots gateway config once and serves connected context, workflows and editor coding context; absent/invalid output fails back to the original ordering.                                                                                                                                                                       |
+| One verdict                                     | **MET**         | One physical evaluation fold, one contracts-owned metric primitive set, sixteen live regression probes, finite-value enforcement and pinned scorecard comparison.                                                                                                                                                                                   |
+| Fusion spine reaches editor coding context      | **MET**         | Neutral retrieval contracts remain additive and their compatibility snapshots stay pinned.                                                                                                                                                                                                                                                          |
+| Nothing regresses                               | **MET**         | Targeted package, architecture, retrieval, grounding, portable-runtime and clean-checkout suites are executable; required CI remains the final complete arbiter.                                                                                                                                                                                    |
+
+### Corrective findings and dispositions
+
+| Finding                                                                                                               | Disposition                                                                                                                                                             |
+| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| sqlite-vec `vec0` performed exhaustive KNN, not ANN.                                                                  | Retired. One bounded USearch HNSW service now owns candidate generation; exact search is reported truthfully below the crossover.                                       |
+| The portable product did not carry a qualified ANN runtime.                                                           | Fixed. Five target assets are digest-pinned; staging, SBOM/notices/provenance, signing inventories and real native smoke are wired.                                     |
+| Encrypted-store no-spill depended on SQLite TEMP behavior.                                                            | Strengthened. SQLite extensions remain denied; the search-only native interface has no persistence capability and architecture tests reject one.                        |
+| Memory was deferred from the common port.                                                                             | Fixed with the tighten-only `candidateIds` allow-list. The vault still owns authorization, decryption and candidate selection.                                          |
+| Repository semantic search retained a request-local whole-file embedding/cache fallback.                              | Deleted. Missing, stale, escaped or failed pods produce body-free degradation and leave availability to the existing lexical lane.                                      |
+| Pod freshness trusted incomplete scans and text-derived state.                                                        | Fixed at discovery/fingerprint ownership: limit exhaustion is explicit, incomplete runs never baseline/prune, and raw-byte SHA-256/Git-blob identities drive freshness. |
+| Evaluation floors admitted non-finite values and some “negative controls” mutated goldsets rather than system output. | Fixed in shared evaluators and live injected-output probes.                                                                                                             |
+| Empty-evidence faithfulness scored only the pack and could accept a confident answer.                                 | Fixed: empty evidence is faithful only with the exact deterministic abstention.                                                                                         |
+| The native addon needed a worker import forbidden by ADR-0019.                                                        | Resolved by ADR-0019 v1.1 and ADR-0163's exact two-file exception; every other worker/network/process import remains denied.                                            |
+| Warm cache correctness depended on every vector writer remembering an invalidation side effect.                       | Fixed in DB schema v32: vector insert/update/delete triggers dirty materialization state for direct writes, cascades, retention and encryption maintenance.             |
+
+Current evidence:
+
+- [USearch runtime and supply chain](usearch-hnsw-evidence.md)
+- [Deterministic substrate evidence](knowledge-m2-substrate-evidence.md)
+- [ANN latency characterization](knowledge-m2-ann-latency-characterization.md)
+- [Clean-checkout acceptance](knowledge-m2-clean-checkout-demo.md)
+
+The former sqlite-vec provisioner and evidence note are deleted. ADR-0152's old activation and
+memory-deferral passages and ADR-0153's TEMP mechanism are explicitly historical/superseded by
+ADR-0163; their invariants are not relaxed.

@@ -29,6 +29,10 @@ import {
 } from "../portable-runtime.mjs";
 import { prepareIsolatedMacSmoke } from "../isolated-macos-production-smoke.mjs";
 import { rebindSignedPayload } from "../portable-signed-archive.mjs";
+import {
+  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeTargetKey,
+} from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 
 const roots = [];
 function root() {
@@ -131,6 +135,39 @@ function macManifest(executableBytes, licenseBytes) {
       },
     },
   ];
+  const targetKey = usearchRuntimeTargetKey("darwin", "arm64");
+  if (targetKey === undefined) throw new Error("missing macOS USearch fixture target");
+  const approved = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  const addonBytes = macho(0xfeedfacf, 8);
+  manifest.nativeAddons = [
+    {
+      name: "usearch",
+      kind: "node-native-addon",
+      version: USEARCH_RUNTIME_MANIFEST.version,
+      platformTarget: "macos-arm64",
+      architecture: "arm64",
+      executablePath: "runtime/native/usearch.node",
+      licensePath: "runtime/licenses/usearch/LICENSE",
+      source: {
+        commitSha: USEARCH_RUNTIME_MANIFEST.sourceCommit,
+        tarballUrl: USEARCH_RUNTIME_MANIFEST.tarballUrl,
+        tarballSha256: USEARCH_RUNTIME_MANIFEST.tarballSha256,
+        binarySha256: approved.binarySha256,
+        licenseSha256: USEARCH_RUNTIME_MANIFEST.licenseSha256,
+      },
+      unsignedSha256: approved.binarySha256,
+      shippedSha256: sha256(addonBytes),
+      sizeBytes: addonBytes.byteLength,
+      sbomBomRef: `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=macos-arm64`,
+      signing: {
+        signatureKind: "developer-id-notarized",
+        verificationStatus: "verified-production",
+        signatureVerified: true,
+        notarizationRequired: true,
+        notarizationVerified: true,
+      },
+    },
+  ];
   manifest.provenance.rootPackageTarballSha256 = "b".repeat(64);
   sidecar.platformTarget = "macos-arm64";
   sidecar.archive = {
@@ -176,6 +213,7 @@ function macManifest(executableBytes, licenseBytes) {
   });
   binding.sidecarRuntimes = JSON.parse(JSON.stringify(manifest.sidecarRuntimes));
   binding.nativeHelpers = JSON.parse(JSON.stringify(manifest.nativeHelpers));
+  binding.nativeAddons = JSON.parse(JSON.stringify(manifest.nativeAddons));
   return manifest;
 }
 
@@ -199,6 +237,9 @@ function macFinalizeStage() {
   write(join(resources, "runtime", "node", "bin", "node"), macho(0xfeedfacf, 1));
   const helperBytes = macho(0xfeedfacf, 7);
   write(join(resources, "runtime", "native", "keiko-secure-workspace-read"), helperBytes);
+  const addonBytes = macho(0xfeedfacf, 8);
+  write(join(resources, "runtime", "native", "usearch.node"), addonBytes);
+  write(join(resources, "runtime", "licenses", "usearch", "LICENSE"), "fixture license");
   const upstreamSidecarExecutable = macho(0xfeedfacf, 2);
   const sidecarExecutable = Buffer.concat([
     upstreamSidecarExecutable,
@@ -259,7 +300,19 @@ function macFinalizeStage() {
   const summaryPath = join(stage, "evidence", "signing-verification.json");
   write(
     join(stage, "evidence", "sbom.cdx.json"),
-    `${JSON.stringify({ bomFormat: "CycloneDX", components: [{ "bom-ref": manifest.nativeHelpers[0].sbomBomRef, hashes: [{ alg: "SHA-256", content: manifest.nativeHelpers[0].shippedSha256 }] }] })}\n`,
+    `${JSON.stringify({
+      bomFormat: "CycloneDX",
+      components: [
+        {
+          "bom-ref": manifest.nativeHelpers[0].sbomBomRef,
+          hashes: [{ alg: "SHA-256", content: manifest.nativeHelpers[0].shippedSha256 }],
+        },
+        {
+          "bom-ref": manifest.nativeAddons[0].sbomBomRef,
+          hashes: [{ alg: "SHA-256", content: manifest.nativeAddons[0].shippedSha256 }],
+        },
+      ],
+    })}\n`,
   );
   write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   rebindSignedPayload(stage, manifest, "macos-arm64");

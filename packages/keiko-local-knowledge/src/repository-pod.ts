@@ -195,6 +195,25 @@ function resolvedDiscoveryOptions(deps: RepositoryPodIndexingDeps): DiscoveryOpt
 interface DrainedIndexing {
   readonly result: IndexingResult;
   readonly failedRelativePaths: ReadonlySet<string>;
+  readonly enumerationComplete: boolean;
+}
+
+const INCOMPLETE_DISCOVERY_CODES: ReadonlySet<string> = new Set([
+  "DISCOVERY_FAILED:INVALID_SCOPE",
+  "DISCOVERY_FAILED:LIMIT_REACHED",
+  "DISCOVERY_FAILED:READ_FAILED",
+  "DISCOVERY_FAILED:STAT_FAILED",
+]);
+
+function terminalIndexingResult(event: IndexingEvent): IndexingResult | undefined {
+  if (
+    event.kind === "job-completed" ||
+    event.kind === "job-failed" ||
+    event.kind === "job-cancelled"
+  ) {
+    return event.result;
+  }
+  return undefined;
 }
 
 async function drainIndexing(
@@ -203,22 +222,20 @@ async function drainIndexing(
 ): Promise<DrainedIndexing> {
   let result: IndexingResult | undefined;
   const failedRelativePaths = new Set<string>();
+  let enumerationComplete = true;
   for await (const event of events) {
     onEvent?.(event);
     if (event.kind === "document-failed" && event.relativePath !== undefined) {
       failedRelativePaths.add(event.relativePath);
     }
-    if (
-      event.kind === "job-completed" ||
-      event.kind === "job-failed" ||
-      event.kind === "job-cancelled"
-    ) {
-      result = event.result;
+    if (event.kind === "document-failed" && INCOMPLETE_DISCOVERY_CODES.has(event.error.code)) {
+      enumerationComplete = false;
     }
+    result = terminalIndexingResult(event) ?? result;
   }
   if (result === undefined)
     throw new KnowledgeStoreError("repository indexing ended without result");
-  return { result, failedRelativePaths };
+  return { result, failedRelativePaths, enumerationComplete };
 }
 
 function runRepositoryIndexing(
@@ -297,6 +314,7 @@ function runCounts(
   next: readonly RepositoryFileFingerprint[],
   result: IndexingResult,
   rejectedEntries: number,
+  enumerationComplete: boolean,
 ): RepositoryPodChangeCounts {
   const delta = diffFingerprintSets(fingerprintMap([...prior.values()]), fingerprintMap(next), {
     detectMoves: false,
@@ -304,7 +322,7 @@ function runCounts(
   return {
     addedFiles: delta.added,
     changedFiles: delta.changed,
-    removedFiles: delta.removed,
+    removedFiles: enumerationComplete ? delta.removed : 0,
     unchangedFiles: delta.unchanged,
     failedDocuments: result.failedDocuments,
     rejectedEntries,
@@ -360,7 +378,12 @@ function buildRunRecord(
   };
 }
 
-function indexingResultCanApply(result: IndexingResult, rejectedEntries: number): boolean {
+function indexingResultCanApply(
+  result: IndexingResult,
+  rejectedEntries: number,
+  enumerationComplete: boolean,
+): boolean {
+  if (!enumerationComplete) return false;
   if (result.status === "succeeded") return true;
   return (
     result.status === "failed" &&
@@ -387,7 +410,8 @@ export async function refreshRepositoryPod(
   const runId = input.runId ?? deps.idSource?.() ?? randomUUID();
   const drained = await runRepositoryIndexing(deps, discovery);
   const next = failedWithheldBaseline(scan.fingerprints, drained.failedRelativePaths);
-  const applied = indexingResultCanApply(drained.result, scan.rejectedEntries);
+  const enumerationComplete = scan.complete && drained.enumerationComplete;
+  const applied = indexingResultCanApply(drained.result, scan.rejectedEntries, enumerationComplete);
   if (applied) {
     replaceRepositoryFileFingerprints(
       deps.store,
@@ -401,7 +425,13 @@ export async function refreshRepositoryPod(
     );
   }
   const persisted = applied ? next : [...prior.values()];
-  const counts = runCounts(prior, scan.fingerprints, drained.result, scan.rejectedEntries);
+  const counts = runCounts(
+    prior,
+    scan.fingerprints,
+    drained.result,
+    scan.rejectedEntries,
+    enumerationComplete,
+  );
   const run = buildRunRecord(deps, runId, drained.result, counts, persisted, applied);
   persistRun(deps, run);
   return { run, indexing: drained.result, summary: buildSummary(deps.store, deps.capsuleId) };

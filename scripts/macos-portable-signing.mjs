@@ -156,6 +156,13 @@ function inventoryCommand(options) {
   if (!paths.has(helperExecutable)) {
     fail("manifest native helper is missing from the Mach-O inventory");
   }
+  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
+    fail("manifest must contain exactly one native addon");
+  }
+  const addonExecutable = `Keiko.app/Contents/Resources/${manifest.nativeAddons[0].executablePath}`;
+  if (!paths.has(addonExecutable)) {
+    fail("manifest native addon is missing from the Mach-O inventory");
+  }
   writeFileSync(
     resolve(required(options, "inventory")),
     `${JSON.stringify(inventory, null, 2)}\n`,
@@ -211,6 +218,19 @@ function markNativeHelperVerified(manifest) {
   };
   manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
     manifest.nativeHelpers,
+  );
+  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
+    fail("manifest must contain exactly one native addon");
+  }
+  manifest.nativeAddons[0].signing = {
+    signatureKind: "developer-id-notarized",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: true,
+    notarizationVerified: true,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeAddons = globalThis.structuredClone(
+    manifest.nativeAddons,
   );
 }
 

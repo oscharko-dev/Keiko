@@ -1,7 +1,7 @@
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
 
-export type VectorIndexProvider = "sqlite-vec";
+export type VectorIndexProvider = "usearch";
 export type VectorIndexStateStatus = "dirty" | "ready" | "unavailable";
 
 export interface VectorIndexStateKey {
@@ -71,6 +71,16 @@ const UPSERT_VECTOR_INDEX_STATE_SQL = [
   "  updated_at = excluded.updated_at",
 ].join(" ");
 
+const DELETE_OBSOLETE_VECTOR_INDEX_STATE_SQL = [
+  "DELETE FROM vector_index_state",
+  "WHERE capsule_id = :capsule_id",
+  "  AND provider = :provider",
+  "  AND index_name = :index_name",
+  "  AND vector_dimensions = :vector_dimensions",
+  "  AND vector_metric = :vector_metric",
+  "  AND embedding_identity_key <> :embedding_identity_key",
+].join(" ");
+
 export function invalidateVectorIndexStateForCapsule(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,
@@ -109,7 +119,7 @@ export function readVectorIndexState(
 }
 
 export function writeVectorIndexState(db: DatabaseSync, record: VectorIndexStateRecord): void {
-  db.prepare(UPSERT_VECTOR_INDEX_STATE_SQL).run({
+  const parameters = {
     capsule_id: String(record.capsuleId),
     provider: record.provider,
     index_name: record.indexName,
@@ -121,5 +131,16 @@ export function writeVectorIndexState(db: DatabaseSync, record: VectorIndexState
     status: record.status,
     reason: record.reason ?? null,
     updated_at: record.updatedAt,
+  };
+  // A missing state row only causes a fail-closed runtime index rebuild, so deletion-before-upsert
+  // is crash-safe. Keeping one row per logical index also bounds metadata after identity changes.
+  db.prepare(DELETE_OBSOLETE_VECTOR_INDEX_STATE_SQL).run({
+    capsule_id: parameters.capsule_id,
+    provider: parameters.provider,
+    index_name: parameters.index_name,
+    vector_dimensions: parameters.vector_dimensions,
+    vector_metric: parameters.vector_metric,
+    embedding_identity_key: parameters.embedding_identity_key,
   });
+  db.prepare(UPSERT_VECTOR_INDEX_STATE_SQL).run(parameters);
 }

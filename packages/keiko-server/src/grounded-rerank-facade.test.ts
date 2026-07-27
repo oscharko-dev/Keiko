@@ -136,6 +136,89 @@ describe("rerankSelection", () => {
     deps.store.close();
   });
 
+  it("uses one gateway-config generation for reranker and shared egress", async () => {
+    const pinnedEgress: EgressConfig = { noProxy: ["pinned.internal"] };
+    const savedEgress: EgressConfig = { noProxy: ["saved.internal"] };
+    const pinned: GatewayConfig = {
+      ...gatewayConfig(pinnedEgress),
+      reranker: { ...rerankerConfig(), baseUrl: "https://pinned.internal/v1" },
+    };
+    const saved: GatewayConfig = {
+      ...gatewayConfig(savedEgress),
+      reranker: { ...rerankerConfig(), baseUrl: "https://saved.internal/v1" },
+    };
+    let configReads = 0;
+    let captured: LiteLLMRerankRequest | undefined;
+    const base = depsWith(pinned, (request) => {
+      captured = request;
+      return Promise.resolve(successfulOutcome([{ index: 0 }]));
+    });
+    const deps: UiHandlerDeps = {
+      ...base,
+      gatewayConfig: {
+        storagePath: "/runtime/config.json",
+        current: () => {
+          configReads += 1;
+          return configReads === 1 ? pinned : saved;
+        },
+        present: () => true,
+        set: () => undefined,
+      },
+    };
+
+    await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates: ["alpha document"],
+      documentFor: (candidate) => candidate,
+      topN: 1,
+      fallbackMode: "slice-topN",
+    });
+
+    expect(configReads).toBe(1);
+    expect(captured?.endpoint).toBe("https://pinned.internal/v1");
+    expect(captured?.egress).toEqual(pinnedEgress);
+    deps.store.close();
+  });
+
+  it("pins an explicitly observed absent gateway config", async () => {
+    let configReads = 0;
+    let transportCalls = 0;
+    const deps = depsWith(gatewayConfig(), () => {
+      transportCalls += 1;
+      return Promise.resolve(successfulOutcome([{ index: 0 }]));
+    });
+    const runtimeDeps: UiHandlerDeps = {
+      ...deps,
+      gatewayConfig: {
+        storagePath: "/runtime/config.json",
+        current: () => {
+          configReads += 1;
+          return gatewayConfig();
+        },
+        present: () => true,
+        set: () => undefined,
+      },
+    };
+
+    const result = await rerankSelection({
+      deps: runtimeDeps,
+      gatewayConfig: null,
+      query: "alpha",
+      candidates: ["alpha document"],
+      documentFor: (candidate) => candidate,
+      topN: 1,
+      fallbackMode: "slice-topN",
+    });
+
+    expect(result.diagnostics).toMatchObject({
+      status: "disabled",
+      failureKind: "not-configured",
+    });
+    expect({ configReads, transportCalls }).toEqual({ configReads: 0, transportCalls: 0 });
+    deps.store.close();
+  });
+
   it("denies external reranking before document materialization or transport", async () => {
     let documentCalls = 0;
     let transportCalls = 0;

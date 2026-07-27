@@ -1,19 +1,17 @@
 import { isAbsolute, relative, resolve } from "node:path";
 
 import {
-  maxUtf8BytesForTokenBudget,
-  stripUnsafeFormatChars,
   type KnowledgeCapsule,
   type KnowledgeSource,
   type RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createLocalKnowledgeStoreVectorIndexPort,
-  gitBlobFingerprint,
   listCapsuleSources,
   listCapsules,
   listRepositoryChunkLineRanges,
   readRepositoryFileFingerprints,
+  repositoryContentFingerprint,
   searchVectorsForScope,
   vectorIndexPortAsRepoAdapter,
   type KnowledgeStore,
@@ -21,17 +19,6 @@ import {
   type RepositoryFileFingerprint,
   type VectorIndexOptions,
 } from "@oscharko-dev/keiko-local-knowledge";
-import { sha256Hex } from "@oscharko-dev/keiko-security";
-import {
-  requestOpenAIEmbedding,
-  requestOpenAIEmbeddingBatch,
-  type ModelProviderConfig,
-  type OpenAIEmbeddingAdapter,
-  type OpenAIEmbeddingBatchOutcome,
-  type OpenAIEmbeddingBatchRequest,
-  type OpenAIEmbeddingOutcome,
-  type OpenAIEmbeddingRequest,
-} from "@oscharko-dev/keiko-model-gateway";
 import {
   type SemanticSearchInput,
   type SemanticSearchMatch,
@@ -39,7 +26,7 @@ import {
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
+import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import {
   configuredEmbeddingProviders,
   localKnowledgeEmbeddingAdapterForProvider,
@@ -48,37 +35,15 @@ import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 
 const MAX_SEMANTIC_CANDIDATES = 32;
 const SEMANTIC_CANDIDATE_RESULT_MULTIPLIER = 4;
-const SEMANTIC_EXCERPT_BYTES = 16_384;
-export const SEMANTIC_VECTOR_CACHE_SCHEMA_VERSION = 2;
-const EMBEDDING_INPUT_SAFETY_TOKENS = 16;
-const POD_EMBEDDING_CACHE_MAX = 64;
-
-interface ProviderCredentials {
-  readonly endpoint: string;
-  readonly apiKey: string;
-  readonly apiKeyHeaderName?: string;
-  readonly egress?: NonNullable<ModelProviderConfig["egress"]>;
-  readonly timeoutMs: number;
-  // GEN-AI-GATEWAY-002 (RB-4): forward Azure deployment routing to the embedding adapter so an
-  // Azure-configured embedding provider is dispatched to its deployment URL, not silently misrouted.
-  readonly endpointStyle?: ModelProviderConfig["endpointStyle"];
-  readonly apiVersion?: string;
-}
+const POD_FRESHNESS_MAX_BYTES = 64 * 1024 * 1024;
 
 interface EmbeddingContext {
-  readonly deps: UiHandlerDeps;
-  readonly provider: ModelProviderConfig;
-  readonly credentials: ProviderCredentials;
-  readonly request: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>;
-  readonly batchRequest?:
-    ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>) | undefined;
   readonly fs: WorkspaceFs;
   readonly signal?: AbortSignal | undefined;
   readonly maxCandidates: number;
-  readonly maxEmbeddingInputBytes: number;
-  readonly documentVectorCache: Map<string, Float32Array>;
-  readonly localKnowledgeEmbeddingAdapter: OpenAIEmbeddingAdapter;
-  readonly podEmbeddingVectorCache: Map<string, Float32Array>;
+  readonly localKnowledgeEmbeddingAdapter: ReturnType<
+    typeof localKnowledgeEmbeddingAdapterForProvider
+  >;
   readonly repositoryPod: RepositoryPodResolution;
   readonly observePodRetrieval?:
     ((observation: RepositoryPodRetrievalObservation) => void) | undefined;
@@ -86,10 +51,6 @@ interface EmbeddingContext {
 
 interface CandidateDocument {
   readonly scopePath: string;
-  readonly text: string;
-  // GEN-AI-GROUNDING-006 (RB-4): the ORIGINAL (pre-embedding-normalization, un-prefixed) source text
-  // is kept so a whole-file semantic hit can be localized to the matched passage's line rather than
-  // emitting a fixed line:1 the citation layer would trust.
   readonly sourceText: string;
   readonly order: number;
 }
@@ -101,6 +62,11 @@ interface ResolvedRepositoryPod {
   readonly fingerprints: ReadonlyMap<string, RepositoryFileFingerprint>;
   readonly lineRangeByChunk: ReadonlyMap<string, RepositoryChunkLineRange>;
   readonly indexedPaths: ReadonlySet<string>;
+}
+
+interface RepositorySourceMatch {
+  readonly capsule: KnowledgeCapsule;
+  readonly source: KnowledgeSource;
 }
 
 type RepositoryPodResolution =
@@ -153,9 +119,9 @@ function matchingRepositorySources(
   fs: WorkspaceFs,
   repositoryRoot: string,
   modelId: string,
-): readonly { readonly capsule: KnowledgeCapsule; readonly source: KnowledgeSource }[] {
+): readonly RepositorySourceMatch[] {
   const expectedRoot = canonicalRoot(fs, repositoryRoot);
-  const matches: { capsule: KnowledgeCapsule; source: KnowledgeSource }[] = [];
+  const matches: RepositorySourceMatch[] = [];
   // Sorted below with a code-unit comparison, not localeCompare: the caller takes the FIRST match
   // as the pod to search, so this ordering picks which repository pod answers a question. Locale
   // collation is host- and ICU-dependent, which would let two machines with identical stores
@@ -178,91 +144,52 @@ function matchingRepositorySources(
   );
 }
 
+function resolvedPodForMatch(
+  context: RepositoryPodSemanticSearchContext,
+  match: RepositorySourceMatch,
+): ResolvedRepositoryPod | undefined {
+  if (match.capsule.lifecycleState !== "ready") return undefined;
+  const fingerprints = readRepositoryFileFingerprints(
+    context.store,
+    match.capsule.id,
+    match.source.id,
+  );
+  if (fingerprints.size === 0) return undefined;
+  const lineRanges = listRepositoryChunkLineRanges(context.store, match.capsule.id).filter(
+    (range) => fingerprints.has(range.relativePath),
+  );
+  if (lineRanges.length === 0) return undefined;
+  return {
+    context,
+    capsule: match.capsule,
+    source: match.source,
+    fingerprints,
+    lineRangeByChunk: new Map(lineRanges.map((range) => [String(range.chunkId), range])),
+    indexedPaths: new Set(lineRanges.map((range) => range.relativePath)),
+  };
+}
+
 function resolveRepositoryPod(
   context: RepositoryPodSemanticSearchContext | undefined,
   fs: WorkspaceFs,
   modelId: string,
 ): RepositoryPodResolution {
   if (context === undefined) return { kind: "absent" };
+  let readFailed = false;
   try {
-    const match = matchingRepositorySources(context.store, fs, context.repositoryRoot, modelId)[0];
-    if (match === undefined) return { kind: "absent" };
-    const fingerprints = readRepositoryFileFingerprints(
-      context.store,
-      match.capsule.id,
-      match.source.id,
-    );
-    const lineRanges = listRepositoryChunkLineRanges(context.store, match.capsule.id);
-    return {
-      kind: "ready",
-      pod: {
-        context,
-        capsule: match.capsule,
-        source: match.source,
-        fingerprints,
-        lineRangeByChunk: new Map(lineRanges.map((range) => [String(range.chunkId), range])),
-        indexedPaths: new Set(lineRanges.map((range) => range.relativePath)),
-      },
-    };
+    const matches = matchingRepositorySources(context.store, fs, context.repositoryRoot, modelId);
+    for (const match of matches) {
+      try {
+        const pod = resolvedPodForMatch(context, match);
+        if (pod !== undefined) return { kind: "ready", pod };
+      } catch {
+        readFailed = true;
+      }
+    }
   } catch {
     return { kind: "failed" };
   }
-}
-
-function requestEmbeddingImpl(
-  deps: UiHandlerDeps,
-): (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
-  return deps.localKnowledgeEmbeddingRequest ?? requestOpenAIEmbedding;
-}
-
-function requestEmbeddingBatchImpl(
-  deps: UiHandlerDeps,
-): ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>) | undefined {
-  if (deps.localKnowledgeEmbeddingRequest !== undefined) {
-    return deps.localKnowledgeEmbeddingBatchRequest;
-  }
-  return requestOpenAIEmbeddingBatch;
-}
-
-function podEmbeddingCacheKey(modelId: string, input: string): string {
-  return `${modelId}\0${input}`;
-}
-
-function trackedLocalKnowledgeEmbeddingAdapter(
-  deps: UiHandlerDeps,
-  provider: ModelProviderConfig,
-  cache: Map<string, Float32Array>,
-): OpenAIEmbeddingAdapter {
-  const adapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
-  return {
-    ...adapter,
-    request: async (request): Promise<OpenAIEmbeddingOutcome> => {
-      const outcome = await adapter.request(request);
-      if (outcome.ok) {
-        if (cache.size >= POD_EMBEDDING_CACHE_MAX) cache.clear();
-        cache.set(podEmbeddingCacheKey(request.modelId, request.input), outcome.value.vector);
-      }
-      return outcome;
-    },
-  };
-}
-
-function providerCredentials(
-  provider: ModelProviderConfig,
-  fallbackEgress: ModelProviderConfig["egress"],
-): ProviderCredentials {
-  const egress = provider.egress ?? fallbackEgress;
-  return {
-    endpoint: provider.baseUrl,
-    apiKey: provider.apiKey,
-    timeoutMs: provider.timeoutMs,
-    ...(provider.apiKeyHeaderName !== undefined
-      ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-      : {}),
-    ...(egress !== undefined ? { egress } : {}),
-    ...(provider.endpointStyle !== undefined ? { endpointStyle: provider.endpointStyle } : {}),
-    ...(provider.apiVersion !== undefined ? { apiVersion: provider.apiVersion } : {}),
-  };
+  return readFailed ? { kind: "failed" } : { kind: "absent" };
 }
 
 function candidateLimit(request: SemanticSearchInput, configuredLimit: number): number {
@@ -283,202 +210,6 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
-function clampUtf8(value: string, maxBytes: number): string {
-  if (maxBytes <= 0) {
-    return "";
-  }
-  const encoded = new TextEncoder().encode(value);
-  if (encoded.length <= maxBytes) {
-    return value;
-  }
-  return new TextDecoder("utf-8", { fatal: false })
-    .decode(encoded.subarray(0, maxBytes))
-    .replace(/\uFFFD$/u, "");
-}
-
-function embeddingText(ctx: EmbeddingContext, value: string): string {
-  const safe = stripUnsafeFormatChars(value);
-  const redacted = ctx.deps.redactor(safe);
-  return clampUtf8(typeof redacted === "string" ? redacted : safe, ctx.maxEmbeddingInputBytes);
-}
-
-function embeddingInputByteLimit(
-  config: ReturnType<typeof currentGatewayConfig>,
-  provider: ModelProviderConfig,
-): number {
-  const capability = config?.capabilities?.find(
-    (candidate) => candidate.id === provider.modelId && candidate.kind === "embedding",
-  );
-  if (capability === undefined || capability.contextWindow <= 0) {
-    return SEMANTIC_EXCERPT_BYTES;
-  }
-  return maxUtf8BytesForTokenBudget(
-    Math.max(0, capability.contextWindow - EMBEDDING_INPUT_SAFETY_TOKENS),
-  );
-}
-
-export function semanticVectorCacheKeyFor(
-  schemaVersion: number,
-  providerEndpoint: string,
-  modelId: string,
-  scopePath: string,
-  text: string,
-): string {
-  return sha256Hex(
-    JSON.stringify({
-      schemaVersion,
-      providerEndpoint,
-      modelId,
-      scopePath,
-      textHash: sha256Hex(text),
-    }),
-  );
-}
-
-function semanticCacheKey(ctx: EmbeddingContext, document: CandidateDocument): string {
-  return semanticVectorCacheKeyFor(
-    SEMANTIC_VECTOR_CACHE_SCHEMA_VERSION,
-    ctx.provider.baseUrl,
-    ctx.provider.modelId,
-    document.scopePath,
-    document.text,
-  );
-}
-
-function cachedDocumentVector(
-  ctx: EmbeddingContext,
-  document: CandidateDocument,
-): { readonly key: string; readonly vector?: Float32Array | undefined } {
-  const key = semanticCacheKey(ctx, document);
-  const memory = ctx.documentVectorCache.get(key);
-  if (memory !== undefined) {
-    return { key, vector: memory };
-  }
-  return { key };
-}
-
-async function embedOne(
-  ctx: EmbeddingContext,
-  input: string,
-  signal: AbortSignal | undefined,
-): Promise<Float32Array | undefined> {
-  try {
-    const outcome = await ctx.request({
-      ...ctx.credentials,
-      modelId: ctx.provider.modelId,
-      input,
-      ...(signal !== undefined ? { signal } : {}),
-    });
-    return outcome.ok ? outcome.value.vector : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function embedBatch(
-  ctx: EmbeddingContext,
-  inputs: readonly string[],
-  signal: AbortSignal | undefined,
-): Promise<readonly (Float32Array | undefined)[] | undefined> {
-  if (ctx.batchRequest === undefined || inputs.length === 0) {
-    return undefined;
-  }
-  try {
-    const outcome = await ctx.batchRequest({
-      ...ctx.credentials,
-      modelId: ctx.provider.modelId,
-      inputs,
-      ...(signal !== undefined ? { signal } : {}),
-    });
-    if (!outcome.ok || outcome.value.length !== inputs.length) {
-      return undefined;
-    }
-    return outcome.value.map((value) => value.vector);
-  } catch {
-    return undefined;
-  }
-}
-
-async function embedDocuments(
-  ctx: EmbeddingContext,
-  documents: readonly CandidateDocument[],
-  signal: AbortSignal | undefined,
-): Promise<readonly (Float32Array | undefined)[]> {
-  const vectors = new Array<Float32Array | undefined>(documents.length).fill(undefined);
-  const missingDocuments: CandidateDocument[] = [];
-  const missingKeys: string[] = [];
-  const missingIndexes: number[] = [];
-  for (let index = 0; index < documents.length; index += 1) {
-    const document = documents[index];
-    if (document === undefined) {
-      continue;
-    }
-    const cached = cachedDocumentVector(ctx, document);
-    if (cached.vector !== undefined) {
-      vectors[index] = cached.vector;
-      continue;
-    }
-    missingDocuments.push(document);
-    missingKeys.push(cached.key);
-    missingIndexes.push(index);
-  }
-  const embedded = await embedDocumentMisses(ctx, missingDocuments, signal);
-  for (let index = 0; index < embedded.length; index += 1) {
-    const vector = embedded[index];
-    const originalIndex = missingIndexes[index];
-    const key = missingKeys[index];
-    if (vector === undefined || originalIndex === undefined || key === undefined) {
-      continue;
-    }
-    ctx.documentVectorCache.set(key, vector);
-    vectors[originalIndex] = vector;
-  }
-  return vectors;
-}
-
-async function embedDocumentMisses(
-  ctx: EmbeddingContext,
-  documents: readonly CandidateDocument[],
-  signal: AbortSignal | undefined,
-): Promise<readonly (Float32Array | undefined)[]> {
-  const batch = await embedBatch(
-    ctx,
-    documents.map((document) => document.text),
-    signal,
-  );
-  if (batch !== undefined) {
-    return batch;
-  }
-  const vectors: (Float32Array | undefined)[] = [];
-  for (const document of documents) {
-    if (isAborted(signal)) {
-      break;
-    }
-    vectors.push(await embedOne(ctx, document.text, signal));
-  }
-  return vectors;
-}
-
-function cosineScore(a: Float32Array, b: Float32Array): number | undefined {
-  if (a.length === 0 || a.length !== b.length) {
-    return undefined;
-  }
-  let dot = 0;
-  let aNorm = 0;
-  let bNorm = 0;
-  for (let index = 0; index < a.length; index += 1) {
-    const av = a[index] ?? 0;
-    const bv = b[index] ?? 0;
-    dot += av * bv;
-    aNorm += av * av;
-    bNorm += bv * bv;
-  }
-  if (aNorm <= 0 || bNorm <= 0) {
-    return undefined;
-  }
-  return Math.max(0, dot / (Math.sqrt(aNorm) * Math.sqrt(bNorm)));
-}
-
 function hitOrderMap(documents: readonly CandidateDocument[]): ReadonlyMap<string, number> {
   return new Map(documents.map((document) => [document.scopePath, document.order]));
 }
@@ -492,7 +223,7 @@ function compareHits(
   if (scoreDelta !== 0) return scoreDelta;
   return (
     (orderByPath.get(a.scopePath) ?? 0) - (orderByPath.get(b.scopePath) ?? 0) ||
-    a.scopePath.localeCompare(b.scopePath)
+    compareOpaqueIds(a.scopePath, b.scopePath)
   );
 }
 
@@ -505,10 +236,7 @@ function rankHits(
   return [...hits].sort((a, b) => compareHits(orderByPath, a, b)).slice(0, maxResults);
 }
 
-// GEN-AI-GROUNDING-006 (RB-4): a whole-file embedding hit carries no line span. Rather than emit a
-// fixed line:1 the citation layer trusts, run a cheap deterministic second-pass localization: pick
-// the source line that shares the most distinct query terms. Falls back to line 1 only when no line
-// overlaps any query term (or the query has no usable terms).
+// Refine a stored chunk's bounded line range without trusting an unanchored model-produced span.
 const LOCALIZE_STOPWORDS = new Set([
   "the",
   "and",
@@ -565,46 +293,6 @@ export function localizeMatchLine(sourceText: string, queryTerms: readonly strin
   return bestLine;
 }
 
-function hitForDocument(
-  document: CandidateDocument,
-  vector: Float32Array | undefined,
-  queryVector: Float32Array,
-  queryTerms: readonly string[],
-): SemanticSearchMatch | undefined {
-  if (vector === undefined) {
-    return undefined;
-  }
-  const score = cosineScore(queryVector, vector);
-  if (score === undefined || score <= 0) {
-    return undefined;
-  }
-  return {
-    scopePath: document.scopePath,
-    line: localizeMatchLine(document.sourceText, queryTerms),
-    score,
-  };
-}
-
-function hitsFromVectors(
-  documents: readonly CandidateDocument[],
-  vectors: readonly (Float32Array | undefined)[],
-  queryVector: Float32Array,
-  queryTerms: readonly string[],
-): readonly SemanticSearchMatch[] {
-  const hits: SemanticSearchMatch[] = [];
-  for (let index = 0; index < documents.length; index += 1) {
-    const document = documents[index];
-    if (document === undefined) {
-      continue;
-    }
-    const hit = hitForDocument(document, vectors[index], queryVector, queryTerms);
-    if (hit !== undefined) {
-      hits.push(hit);
-    }
-  }
-  return hits;
-}
-
 function candidateDocuments(
   ctx: EmbeddingContext,
   request: SemanticSearchInput,
@@ -617,9 +305,8 @@ function candidateDocuments(
     if (source === undefined || isAborted(signal)) {
       break;
     }
-    const text = embeddingText(ctx, `Path: ${source.scopePath}\n${source.text}`).trim();
-    if (text.length > 0) {
-      documents.push({ scopePath: source.scopePath, text, sourceText: source.text, order: index });
+    if (source.text.trim().length > 0) {
+      documents.push({ scopePath: source.scopePath, sourceText: source.text, order: index });
     }
   }
   return documents;
@@ -633,99 +320,98 @@ function containedDocumentPath(repositoryRoot: string, scopePath: string): strin
   return candidate;
 }
 
-function gitFingerprintIsFresh(
-  document: CandidateDocument,
-  fingerprint: RepositoryFileFingerprint,
-): boolean {
-  // Encode once: the byte length and the blob id are both properties of the same encoded bytes,
-  // and `gitBlobFingerprint` is the indexing layer's own writer, so reader and writer cannot drift.
-  const bytes = new TextEncoder().encode(document.sourceText);
-  return (
-    bytes.byteLength === fingerprint.byteLength &&
-    gitBlobFingerprint(bytes) === fingerprint.contentFingerprint
-  );
+function isContainedPath(root: string, candidate: string): boolean {
+  const fromRoot = relative(root, candidate);
+  return fromRoot.length > 0 && !fromRoot.startsWith("..") && !isAbsolute(fromRoot);
 }
 
-function fileStateFingerprintIsFresh(
+function stableFileStat(
+  before: ReturnType<WorkspaceFs["stat"]>,
+  after: ReturnType<WorkspaceFs["stat"]>,
+): boolean {
+  if (!after.isFile || after.isSymbolicLink || before.size !== after.size) return false;
+  if (before.mtimeMs !== undefined && before.mtimeMs !== after.mtimeMs) return false;
+  return before.ctimeMs === undefined || before.ctimeMs === after.ctimeMs;
+}
+
+function fingerprintByteLength(fingerprint: RepositoryFileFingerprint): number | undefined {
+  const byteLength = fingerprint.byteLength;
+  return Number.isSafeInteger(byteLength) &&
+    byteLength >= 0 &&
+    byteLength <= POD_FRESHNESS_MAX_BYTES
+    ? byteLength
+    : undefined;
+}
+
+interface LiveFingerprintFile {
+  readonly absolutePath: string;
+  readonly realPath: string;
+  readonly before: ReturnType<WorkspaceFs["stat"]>;
+}
+
+function liveFingerprintFile(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
-  document: CandidateDocument,
+  scopePath: string,
+  byteLength: number,
+): LiveFingerprintFile | undefined {
+  const absolutePath = containedDocumentPath(pod.context.repositoryRoot, scopePath);
+  if (absolutePath === undefined) return undefined;
+  const rootRealPath = ctx.fs.realPath(resolve(pod.context.repositoryRoot));
+  const realPath = ctx.fs.realPath(absolutePath);
+  if (!isContainedPath(rootRealPath, realPath)) return undefined;
+  const before = ctx.fs.stat(absolutePath);
+  if (!before.isFile || before.isSymbolicLink || before.size !== byteLength) return undefined;
+  return { absolutePath, realPath, before };
+}
+
+async function readLiveFingerprintBytes(
+  ctx: EmbeddingContext,
+  pod: ResolvedRepositoryPod,
+  scopePath: string,
   fingerprint: RepositoryFileFingerprint,
-): boolean {
-  const absolutePath = containedDocumentPath(pod.context.repositoryRoot, document.scopePath);
-  if (absolutePath === undefined) return false;
+): Promise<Uint8Array | undefined> {
+  const byteLength = fingerprintByteLength(fingerprint);
+  if (byteLength === undefined || ctx.fs.readFileBytes === undefined) return undefined;
   try {
-    const stat = ctx.fs.stat(absolutePath);
-    return (
-      stat.isFile &&
-      !stat.isSymbolicLink &&
-      stat.size === fingerprint.byteLength &&
-      stat.mtimeMs === fingerprint.mtimeMs
-    );
+    const file = liveFingerprintFile(ctx, pod, scopePath, byteLength);
+    if (file === undefined) return undefined;
+    const bytes = await ctx.fs.readFileBytes(file.realPath, byteLength + 1);
+    const after = ctx.fs.stat(file.absolutePath);
+    return bytes.byteLength === byteLength && stableFileStat(file.before, after)
+      ? bytes
+      : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-function podDocumentIsFresh(
+async function podDocumentIsFresh(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
   document: CandidateDocument,
-): boolean {
+): Promise<boolean> {
   if (!pod.indexedPaths.has(document.scopePath)) return false;
   const fingerprint = pod.fingerprints.get(document.scopePath);
   if (fingerprint === undefined) return false;
-  return fingerprint.fingerprintKind === "git-blob-sha1"
-    ? gitFingerprintIsFresh(document, fingerprint)
-    : fileStateFingerprintIsFresh(ctx, pod, document, fingerprint);
+  const bytes = await readLiveFingerprintBytes(ctx, pod, document.scopePath, fingerprint);
+  return (
+    bytes !== undefined &&
+    repositoryContentFingerprint(bytes, fingerprint.fingerprintKind) ===
+      fingerprint.contentFingerprint
+  );
 }
 
-interface PodDocumentPartition {
-  readonly indexed: readonly CandidateDocument[];
-  readonly fallback: readonly CandidateDocument[];
-}
-
-function partitionPodDocuments(
+async function freshPodDocuments(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
   documents: readonly CandidateDocument[],
-): PodDocumentPartition {
+): Promise<readonly CandidateDocument[]> {
   const indexed: CandidateDocument[] = [];
-  const fallback: CandidateDocument[] = [];
   for (const document of documents) {
-    (podDocumentIsFresh(ctx, pod, document) ? indexed : fallback).push(document);
+    if (await podDocumentIsFresh(ctx, pod, document)) indexed.push(document);
   }
-  return { indexed, fallback };
-}
-
-async function legacyHits(
-  ctx: EmbeddingContext,
-  documents: readonly CandidateDocument[],
-  queryText: string,
-  queryTerms: readonly string[],
-  signal: AbortSignal | undefined,
-  sharedQueryVector?: Float32Array,
-): Promise<readonly SemanticSearchMatch[]> {
-  if (documents.length === 0) return [];
-  const queryVector = sharedQueryVector ?? (await embedOne(ctx, queryText, signal));
-  if (queryVector === undefined || isAborted(signal)) return [];
-  const vectors = await embedDocuments(ctx, documents, signal);
-  return hitsFromVectors(documents, vectors, queryVector, queryTerms);
-}
-
-async function legacyRankedHits(
-  ctx: EmbeddingContext,
-  documents: readonly CandidateDocument[],
-  queryText: string,
-  queryTerms: readonly string[],
-  signal: AbortSignal | undefined,
-  maxResults: number,
-): Promise<readonly SemanticSearchMatch[]> {
-  return rankHits(
-    await legacyHits(ctx, documents, queryText, queryTerms, signal),
-    documents,
-    maxResults,
-  );
+  return indexed;
 }
 
 function chunkAnchoredLine(
@@ -760,14 +446,6 @@ function repositoryPodMatch(
 
 interface RepositoryPodHitOutcome {
   readonly matches: readonly SemanticSearchMatch[];
-  // Every candidate path the pod query returned at least one reference for. A candidate that is
-  // absent here received NO pod signal at all — it lost the pod-wide topK race rather than being
-  // judged dissimilar — and must be handed to the legacy leg, or it is scored by neither leg and
-  // vanishes from the result (ADR-0152 D3: no adapter may turn a partition mismatch into an empty
-  // successful result). A candidate that IS referenced but scores zero was genuinely evaluated and
-  // found dissimilar; that is a real "no match", identical to the legacy path's score<=0 filter,
-  // and is deliberately not re-embedded.
-  readonly referencedPaths: ReadonlySet<string>;
 }
 
 function repositoryPodMatches(
@@ -777,11 +455,9 @@ function repositoryPodMatches(
   queryTerms: readonly string[],
 ): RepositoryPodHitOutcome {
   const documentsByPath = new Map(documents.map((document) => [document.scopePath, document]));
-  const referencedPaths = new Set<string>();
   const intersected = references.filter((reference) => {
     const range = pod.lineRangeByChunk.get(String(reference.chunkId));
     if (range === undefined || !documentsByPath.has(range.relativePath)) return false;
-    referencedPaths.add(range.relativePath);
     return true;
   });
   const maxScore = intersected.reduce(
@@ -789,7 +465,7 @@ function repositoryPodMatches(
       Math.max(current, Number.isFinite(reference.score) ? reference.score : 0),
     0,
   );
-  if (maxScore <= 0) return { matches: [], referencedPaths };
+  if (maxScore <= 0) return { matches: [] };
   const bestByPath = new Map<string, SemanticSearchMatch>();
   for (const reference of intersected) {
     const match = repositoryPodMatch(reference, pod, documentsByPath, queryTerms, maxScore);
@@ -798,25 +474,25 @@ function repositoryPodMatches(
       bestByPath.set(match.scopePath, match);
     }
   }
-  return { matches: [...bestByPath.values()], referencedPaths };
+  return { matches: [...bestByPath.values()] };
 }
 
-// `searchVectorsForScope` has no path filter, so the requested topK is a race across EVERY chunk in
-// the pod — not just the candidates'. Sizing that budget from the candidate count (as this once did)
-// therefore let a handful of large or lexically dominant files monopolise it and return zero
-// references for a candidate the caller explicitly asked about. The budget is instead sized against
-// the pod's own indexed reference population, so every indexed chunk can in principle surface, and
-// clamped only by a ceiling that keeps a very large pod from turning one search into an unbounded
-// reference set. The ceiling is a cost bound, NOT a correctness bound: a pod larger than it can
-// still starve a candidate, and that residue is covered by routing unreferenced candidates back
-// into the legacy leg — never by silence. Its value is the widest set the intersection can ever
-// use: at most `MAX_SEMANTIC_CANDIDATES` documents survive, each keeping its single best chunk, so
-// asking for more than the same result multiplier applied to that cap buys no additional coverage
-// while making the pod query measurably more expensive.
 const POD_RETRIEVAL_TOPK_CEILING = MAX_SEMANTIC_CANDIDATES * SEMANTIC_CANDIDATE_RESULT_MULTIPLIER;
 
-function podRetrievalTopK(pod: ResolvedRepositoryPod, maxResults: number): number {
-  return Math.max(maxResults, Math.min(pod.lineRangeByChunk.size, POD_RETRIEVAL_TOPK_CEILING));
+function podRetrievalTopK(candidateChunkCount: number, maxResults: number): number {
+  return Math.max(maxResults, Math.min(candidateChunkCount, POD_RETRIEVAL_TOPK_CEILING));
+}
+
+function candidateChunkIds(
+  pod: ResolvedRepositoryPod,
+  documents: readonly CandidateDocument[],
+): readonly string[] {
+  const candidatePaths = new Set(documents.map((document) => document.scopePath));
+  const chunkIds: string[] = [];
+  for (const [chunkId, range] of pod.lineRangeByChunk) {
+    if (candidatePaths.has(range.relativePath)) chunkIds.push(chunkId);
+  }
+  return chunkIds.sort(compareOpaqueIds);
 }
 
 async function repositoryPodHits(
@@ -828,7 +504,9 @@ async function repositoryPodHits(
   signal: AbortSignal | undefined,
   maxResults: number,
 ): Promise<RepositoryPodHitOutcome> {
-  const topK = podRetrievalTopK(pod, maxResults);
+  const chunkFilter = candidateChunkIds(pod, documents);
+  if (chunkFilter.length === 0) return { matches: [] };
+  const topK = podRetrievalTopK(chunkFilter.length, maxResults);
   const outcome = await searchVectorsForScope(
     pod.context.store,
     ctx.localKnowledgeEmbeddingAdapter,
@@ -840,6 +518,7 @@ async function repositoryPodHits(
     queryText,
     {
       topK,
+      chunkFilter,
       ...(signal === undefined ? {} : { signal }),
       ...(pod.context.vectorIndex === undefined ? {} : { vectorIndex: pod.context.vectorIndex }),
     },
@@ -872,7 +551,7 @@ function prepareSemanticSearch(
     return undefined;
   const documents = candidateDocuments(ctx, request, signal);
   if (documents.length === 0 || isAborted(signal)) return undefined;
-  const queryText = embeddingText(ctx, request.query.text).trim();
+  const queryText = request.query.text.trim();
   if (queryText.length === 0) return undefined;
   return {
     signal,
@@ -883,13 +562,9 @@ function prepareSemanticSearch(
   };
 }
 
-// A pod that is unreadable or fails mid-query stays fail-closed on results: it must NOT drop back
-// to the whole-file path, because that path embeds every candidate document's content and would
-// turn an index fault into an unplanned model-gateway egress and cost burst (pinned by the
-// "soft-fails a pod query error without escaping or embedding documents" regression test). What the
-// fault must not be is *silent*: an empty result would otherwise be indistinguishable from a
-// genuinely unmatched query. The degradation is therefore recorded content-free through the
-// existing pod retrieval observation seam — a mode label and counts, never paths or bodies.
+// Repository semantic search is index-only. Missing, stale, or unreadable pod state degrades to the
+// orchestrator's lexical lane and is recorded content-free; it never embeds whole candidate files
+// at ask time.
 function observePodDegradation(ctx: EmbeddingContext, mode: string): void {
   ctx.observePodRetrieval?.({
     mode,
@@ -900,48 +575,23 @@ function observePodDegradation(ctx: EmbeddingContext, mode: string): void {
   });
 }
 
-// Candidates the pod query never referenced join the legacy leg. Scope this to genuinely
-// unreferenced documents only: `legacyHits` embeds document bodies through the model gateway, so
-// widening it to the whole indexed partition would re-introduce exactly the egress burst the pod
-// path exists to avoid.
-function legacyLegDocuments(
-  partition: PodDocumentPartition,
-  referencedPaths: ReadonlySet<string>,
-): readonly CandidateDocument[] {
-  const unreferenced = partition.indexed.filter(
-    (document) => !referencedPaths.has(document.scopePath),
-  );
-  return unreferenced.length === 0 ? partition.fallback : [...partition.fallback, ...unreferenced];
-}
-
 async function podRankedHits(
   ctx: EmbeddingContext,
   pod: ResolvedRepositoryPod,
   prepared: PreparedSemanticSearch,
-  partition: PodDocumentPartition,
+  freshDocuments: readonly CandidateDocument[],
 ): Promise<readonly SemanticSearchMatch[]> {
   const { documents, maxResults, queryTerms, queryText, signal } = prepared;
   const podOutcome = await repositoryPodHits(
     ctx,
     pod,
-    partition.indexed,
+    freshDocuments,
     queryText,
     queryTerms,
     signal,
     maxResults,
   );
-  const sharedQueryVector = ctx.podEmbeddingVectorCache.get(
-    podEmbeddingCacheKey(ctx.provider.modelId, queryText),
-  );
-  const fallbackHits = await legacyHits(
-    ctx,
-    legacyLegDocuments(partition, podOutcome.referencedPaths),
-    queryText,
-    queryTerms,
-    signal,
-    sharedQueryVector,
-  );
-  return rankHits([...podOutcome.matches, ...fallbackHits], documents, maxResults);
+  return rankHits(podOutcome.matches, documents, maxResults);
 }
 
 async function semanticSearch(
@@ -950,20 +600,22 @@ async function semanticSearch(
 ): Promise<readonly SemanticSearchMatch[]> {
   const prepared = prepareSemanticSearch(ctx, request);
   if (prepared === undefined) return [];
-  const { documents, maxResults, queryTerms, queryText, signal } = prepared;
+  const { documents, signal } = prepared;
   if (ctx.repositoryPod.kind === "failed") {
     observePodDegradation(ctx, "pod-unavailable");
     return [];
   }
   if (ctx.repositoryPod.kind === "absent") {
-    return legacyRankedHits(ctx, documents, queryText, queryTerms, signal, maxResults);
+    observePodDegradation(ctx, "pod-absent");
+    return [];
   }
-  const partition = partitionPodDocuments(ctx, ctx.repositoryPod.pod, documents);
-  if (partition.indexed.length === 0) {
-    return legacyRankedHits(ctx, documents, queryText, queryTerms, signal, maxResults);
+  const freshDocuments = await freshPodDocuments(ctx, ctx.repositoryPod.pod, documents);
+  if (freshDocuments.length === 0) {
+    observePodDegradation(ctx, "pod-no-fresh-candidates");
+    return [];
   }
   try {
-    return await podRankedHits(ctx, ctx.repositoryPod.pod, prepared, partition);
+    return await podRankedHits(ctx, ctx.repositoryPod.pod, prepared, freshDocuments);
   } catch {
     if (!isAborted(signal)) observePodDegradation(ctx, "pod-query-failed");
     return [];
@@ -980,29 +632,15 @@ export function configuredRepoSemanticSearchProviderFor(
   if (provider === undefined) {
     return undefined;
   }
-  const maxEmbeddingInputBytes = embeddingInputByteLimit(config, provider);
   const fs = options.fs ?? nodeWorkspaceFs;
-  const podEmbeddingVectorCache = new Map<string, Float32Array>();
   const ctx: EmbeddingContext = {
-    deps,
-    provider,
-    credentials: providerCredentials(provider, currentGatewayEgressConfig(deps)),
-    request: requestEmbeddingImpl(deps),
-    batchRequest: requestEmbeddingBatchImpl(deps),
     fs,
     signal,
     maxCandidates: Math.max(
       0,
       Math.min(MAX_SEMANTIC_CANDIDATES, options.maxCandidates ?? MAX_SEMANTIC_CANDIDATES),
     ),
-    maxEmbeddingInputBytes,
-    documentVectorCache: new Map(),
-    localKnowledgeEmbeddingAdapter: trackedLocalKnowledgeEmbeddingAdapter(
-      deps,
-      provider,
-      podEmbeddingVectorCache,
-    ),
-    podEmbeddingVectorCache,
+    localKnowledgeEmbeddingAdapter: localKnowledgeEmbeddingAdapterForProvider(deps, provider),
     repositoryPod: resolveRepositoryPod(options.repositoryPod, fs, provider.modelId),
     ...(options.observePodRetrieval === undefined
       ? {}
@@ -1019,8 +657,6 @@ export function configuredRepoSemanticSearchProviderLeaseFor(
   signal: AbortSignal | undefined,
   repositoryRoot: string,
 ): ConfiguredRepoSemanticSearchProviderLease {
-  const fallback = configuredRepoSemanticSearchProviderFor(deps, signal);
-  if (fallback === undefined) return { provider: undefined, close: () => undefined };
   try {
     const opened = openKnowledgeStoreForDeps(deps);
     // ADR-0152 D3: repository-pod retrieval is served through the pillar-neutral
@@ -1052,6 +688,6 @@ export function configuredRepoSemanticSearchProviderLeaseFor(
       },
     };
   } catch {
-    return { provider: fallback, close: () => undefined };
+    return { provider: undefined, close: () => undefined };
   }
 }

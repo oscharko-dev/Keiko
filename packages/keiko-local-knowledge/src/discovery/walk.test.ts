@@ -337,6 +337,49 @@ describe("walkSource — files scope", () => {
     expect(files).toStrictEqual(["README.md", "src/index.ts"]);
   });
 
+  it("treats an explicitly selected missing file as an authoritative deletion", () => {
+    const fs = simpleFs();
+    const scope: KnowledgeSourceScope = {
+      kind: "files",
+      rootPath: ROOT,
+      files: ["README.md", "deleted.md"],
+    };
+
+    expect([...walkSource(fs, scope)]).toStrictEqual([
+      {
+        kind: "file",
+        file: { relativePath: "README.md", sizeBytes: 5 },
+      },
+    ]);
+  });
+
+  it("reports a failed explicit-file presence check instead of inferring deletion", () => {
+    const base = simpleFs();
+    const fs: typeof base = {
+      ...base,
+      exists: (absolutePath: string): boolean => {
+        if (absolutePath.endsWith("/README.md")) throw new Error("transient");
+        return base.exists(absolutePath);
+      },
+    };
+    const scope: KnowledgeSourceScope = {
+      kind: "files",
+      rootPath: ROOT,
+      files: ["README.md"],
+    };
+
+    expect([...walkSource(fs, scope)]).toStrictEqual([
+      {
+        kind: "error",
+        error: {
+          code: "READ_FAILED",
+          message: "explicit entry presence check failed",
+          relativePath: "README.md",
+        },
+      },
+    ]);
+  });
+
   it("allows explicit hidden files that are not security-denied", () => {
     const fs = simpleFs();
     const scope: KnowledgeSourceScope = {
@@ -410,23 +453,86 @@ describe("walkSource — files scope", () => {
 });
 
 describe("walkSource — bounds", () => {
-  it("stops at maxFiles", () => {
+  it("stops at maxFiles and explicitly marks the enumeration incomplete", () => {
     const fs = simpleFs();
-    const out: string[] = [];
-    for (const yld of walkSource(fs, folderScope(ROOT), { maxDepth: 12, maxFiles: 2 })) {
-      if (yld.kind === "file") out.push(yld.file.relativePath);
-    }
-    expect(out).toHaveLength(2);
+    const out = [...walkSource(fs, folderScope(ROOT), { maxDepth: 12, maxFiles: 2 })];
+    expect(out.filter((result) => result.kind === "file")).toHaveLength(2);
+    expect(out.filter((result) => result.kind === "error")).toContainEqual({
+      kind: "error",
+      error: { code: "LIMIT_REACHED", message: "file discovery limit reached" },
+    });
   });
 
-  it("respects maxDepth (root=0, immediate children=1)", () => {
+  it("respects maxDepth and explicitly marks skipped descendants incomplete", () => {
     const fs = simpleFs();
-    const out: string[] = [];
-    for (const yld of walkSource(fs, folderScope(ROOT), { maxDepth: 0, maxFiles: 100 })) {
-      if (yld.kind === "file") out.push(yld.file.relativePath);
-    }
+    const results = [...walkSource(fs, folderScope(ROOT), { maxDepth: 0, maxFiles: 100 })];
+    const out = results.flatMap((result) =>
+      result.kind === "file" ? [result.file.relativePath] : [],
+    );
     // maxDepth=0 forbids descent into src/ or vendor/. The walker enters root (depth=0)
     // and yields top-level files (still depth=0 because we test BEFORE incrementing).
     expect([...out].sort()).toStrictEqual(["README.md", "image.png"].sort());
+    expect(results.filter((result) => result.kind === "error")).toContainEqual({
+      kind: "error",
+      error: { code: "LIMIT_REACHED", message: "directory depth limit reached" },
+    });
+  });
+});
+
+describe("walkSource — transient filesystem failures", () => {
+  it("reports a realpath failure instead of silently dropping an entry", () => {
+    const base = simpleFs();
+    const fs: typeof base = {
+      ...base,
+      realPath: (absolutePath: string): string => {
+        if (absolutePath.endsWith("/README.md")) throw new Error("transient");
+        return base.realPath(absolutePath);
+      },
+    };
+
+    expect([...walkSource(fs, folderScope(ROOT))]).toContainEqual({
+      kind: "error",
+      error: {
+        code: "READ_FAILED",
+        message: "entry realpath failed",
+        relativePath: "README.md",
+      },
+    });
+  });
+
+  it("reports a stat failure instead of silently dropping an entry", () => {
+    const base = simpleFs();
+    const fs: typeof base = {
+      ...base,
+      stat: (absolutePath: string) => {
+        if (absolutePath.endsWith("/README.md")) throw new Error("transient");
+        return base.stat(absolutePath);
+      },
+    };
+
+    expect([...walkSource(fs, folderScope(ROOT))]).toContainEqual({
+      kind: "error",
+      error: {
+        code: "STAT_FAILED",
+        message: "entry stat failed",
+        relativePath: "README.md",
+      },
+    });
+  });
+
+  it("reports a readdir failure instead of treating the directory as empty", () => {
+    const base = simpleFs();
+    const fs: typeof base = {
+      ...base,
+      readDir: (absolutePath: string) => {
+        if (absolutePath.endsWith("/src")) throw new Error("transient");
+        return base.readDir(absolutePath);
+      },
+    };
+
+    expect([...walkSource(fs, folderScope(ROOT))]).toContainEqual({
+      kind: "error",
+      error: { code: "READ_FAILED", message: "directory read failed" },
+    });
   });
 });

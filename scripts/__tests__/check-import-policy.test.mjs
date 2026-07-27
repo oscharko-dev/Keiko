@@ -46,6 +46,57 @@ describe("checkArchitectureImportPolicy", () => {
     await expect(checkArchitectureImportPolicy(root)).resolves.toEqual([]);
   });
 
+  it("allows only the reviewed Local Knowledge ANN worker boundary", async () => {
+    root = makeRoot("import-policy-");
+    writeText(
+      root,
+      "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts",
+      'import { Worker } from "node:worker_threads";\nexport const worker = Worker;\n',
+    );
+    writeText(
+      root,
+      "packages/keiko-local-knowledge/src/retrieval/usearch-index-worker.ts",
+      'import { workerData } from "node:worker_threads";\nexport const data = workerData;\n',
+    );
+    await expect(checkArchitectureImportPolicy(root)).resolves.toEqual([]);
+
+    writeText(
+      root,
+      "packages/keiko-local-knowledge/src/retrieval/second-worker.ts",
+      'import { Worker } from "node:worker_threads";\nexport const worker = Worker;\n',
+    );
+    const violations = await checkArchitectureImportPolicy(root);
+    expect(violations).toMatchObject([{ rule: "adr-0019-trust-9-local-knowledge-no-egress" }]);
+  });
+
+  it("keeps Local Knowledge egress matching exact at module and package boundaries", async () => {
+    root = makeRoot("import-policy-");
+    const cases = [
+      ["node:https", true],
+      ["node:https/subpath", false],
+      ["fetch", true],
+      ["fetch/subpath", false],
+      ["axios", true],
+      ["axios/request", true],
+      ["axios-extra", false],
+      ["sharp", true],
+      ["sharp/codec", true],
+      ["sharpness", false],
+    ];
+    for (const [index, [specifier]] of cases.entries()) {
+      const path = `packages/keiko-local-knowledge/src/case-${String(index)}.ts`;
+      writeText(root, path, `import value from "${specifier}";\nexport default value;\n`);
+    }
+
+    const violations = await checkArchitectureImportPolicy(root);
+    expect(violations.map((violation) => violation.specifier).sort()).toEqual(
+      cases
+        .filter(([, forbidden]) => forbidden)
+        .map(([specifier]) => specifier)
+        .sort(),
+    );
+  });
+
   it("rejects production import-specifier policy violations", async () => {
     root = makeRoot("import-policy-");
     writeText(root, "packages/keiko-tools/src/fs.ts", 'import { readFileSync } from "node:fs";\n');

@@ -10,6 +10,9 @@
   topology of the `coverage-sonar` job; every other ADR-0131 decision stands)
 - Extends: [ADR-0156](ADR-0156-measurement-and-verdict-separation.md) (D1, the producer/judge
   separation, from performance evidence to coverage evidence)
+- D4 runtime-cache mechanism amended by
+  [ADR-0163](ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md): the retired sqlite-vec cache
+  is replaced by the digest-pinned USearch cache; re-verification after every restore is unchanged.
 
 ## Context
 
@@ -21,7 +24,8 @@ finished within 22 minutes. Nothing else on the critical path was close.
 
 The remaining terms were small and are worth recording, because the obvious suspects were not the
 problem. `npm ci --ignore-scripts` cost 24–27 s, the full-history checkout 8–9 s, the bubblewrap
-install 9–14 s, the Sonar Scanner download 1–2 s, sqlite-vec provisioning under 1 s. The
+install 9–14 s, the Sonar Scanner download 1–2 s, and native vector-runtime provisioning under
+1 s. The
 pull-request Sonar analysis itself cost 221–230 s. Cold installation was never the bottleneck; three
 serial test suites were.
 
@@ -100,12 +104,13 @@ on another required check, and pending shard evidence stays pending rather than 
 terminal failure.
 
 **D4 — Caches may save a download; they may never substitute an artifact.** The coverage jobs
-restore three GitHub-native caches: the npm download cache (`~/.npm`), the provisioned sqlite-vec
-extension, and the pinned Sonar Scanner CLI archive. `node_modules` is never cached or restored.
+restore three GitHub-native caches: the npm download cache (`~/.npm`), the provisioned USearch
+runtime, and the pinned Sonar Scanner CLI archive. `node_modules` is never cached or restored.
 Every cached artifact is re-verified after restore, inside the job that restored it:
 `npm ci --ignore-scripts` always executes and re-verifies every package against the lockfile's
-integrity hashes; `provision-sqlite-vec.mjs` recomputes the extension's SHA-256 against its pinned
-value; the scanner archive is re-checked with `sha256sum --check`, which fails the job closed on a
+integrity hashes; `provision-usearch.mjs` recomputes the native addon's SHA-256 against its
+platform-pinned value; the scanner archive is re-checked with `sha256sum --check`, which fails the
+job closed on a
 mismatch, because a digest mismatch on a content-addressed artifact is tampering, not staleness. The
 remediation for a corrupted cache is to evict the entry, never to skip the verification.
 

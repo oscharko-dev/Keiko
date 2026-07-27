@@ -120,6 +120,27 @@ describe("patch-size", () => {
     ).toBe("fail");
   });
 
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "fails closed when an observed patch-size value is non-finite (%s)",
+    (value) => {
+      expect(outcomeFor(fixture, makeInput({ changedFileCount: value }), "patch-size")).toBe(
+        "fail",
+      );
+      expect(outcomeFor(fixture, makeInput({ patchBytes: value }), "patch-size")).toBe("fail");
+    },
+  );
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "fails closed when a patch-size ceiling is non-finite (%s)",
+    (value) => {
+      const invalid = makeFixture(["patch-size"], {
+        maxExpectedChangedFiles: value,
+        maxExpectedPatchBytes: value,
+      });
+      expect(outcomeFor(invalid, makeInput(), "patch-size")).toBe("fail");
+    },
+  );
+
   it("fail result includes the actual count and limit in the reason", () => {
     const results = scoreFixture(fixture, makeInput({ changedFileCount: 10, patchBytes: 100 }));
     const entry = results.find((r) => r.dimension === "patch-size");

@@ -77,6 +77,13 @@ export interface RunRetrievalEvalDeps {
   // does not enable this by default; callers must opt in explicitly.
   readonly modelJudge?: ModelJudgedRetrievalEvalJudge;
   readonly vectorIndex?: VectorIndexOptions;
+  // Evaluation-only mutation seam for non-tautology probes. The production retriever still runs
+  // unchanged; the returned references are replaced immediately before the owning scorer consumes
+  // them, so a gate can prove that genuinely bad retrieval output falls below the same floors.
+  readonly transformReferences?: (
+    references: readonly RetrievalReference[],
+    query: RetrievalEvalQuery,
+  ) => readonly RetrievalReference[];
 }
 
 // ─── Vector embedding (post-seed) ────────────────────────────────────────────
@@ -216,6 +223,7 @@ async function runOneQuery(
   seeded: SeededFixture,
   now: () => number,
   vectorIndex: VectorIndexOptions,
+  transformReferences: RunRetrievalEvalDeps["transformReferences"],
 ): Promise<QueryEvaluation> {
   // Route the query embedding toward the declared topic WITHOUT putting the marker into the
   // searchable query text: production queries never contain harness markers, so the lexical
@@ -234,34 +242,33 @@ async function runOneQuery(
     { store, embeddingAdapter: adapter, vectorIndex },
     retrievalQuery,
   );
-  const end = now();
+  const references = transformReferences?.(result.references, query) ?? result.references;
   const expected = query.expectedChunkIds ?? [];
-  const expectedNoEvidence = query.expectedNoEvidence === true;
   return {
     query,
-    references: result.references,
+    references,
     noEvidence: result.noEvidence,
     ...(result.reason !== undefined ? { reason: result.reason } : {}),
     ...(result.diagnostics !== undefined ? { retrievalMode: result.diagnostics.mode } : {}),
     scores: {
-      recall: scoreRecall(result.references, expected),
-      precision: scorePrecision(result.references, expected),
-      meanReciprocalRank: scoreMeanReciprocalRank(result.references, expected),
-      ndcg: scoreNdcg(result.references, expected),
-      sourceIsolation: scoreSourceIsolation(result.references, scopeCapsuleIds(query)),
-      citationQuality: scoreCitationQuality(result.references, seeded.chunkUnitKinds),
+      recall: scoreRecall(references, expected),
+      precision: scorePrecision(references, expected),
+      meanReciprocalRank: scoreMeanReciprocalRank(references, expected),
+      ndcg: scoreNdcg(references, expected),
+      sourceIsolation: scoreSourceIsolation(references, scopeCapsuleIds(query)),
+      citationQuality: scoreCitationQuality(references, seeded.chunkUnitKinds),
       noEvidenceAccuracy: scoreNoEvidenceAccuracy(
         result.noEvidence,
-        expectedNoEvidence,
+        query.expectedNoEvidence === true,
         result.reason,
         query.expectedNoEvidenceReason,
       ),
       contextBudgetFit: scoreContextBudgetFit(
-        result.references,
+        references,
         seeded.chunkTokenCounts,
         query.contextBudgetTokens,
       ),
-      latencyTicks: end - start,
+      latencyTicks: now() - start,
     },
   };
 }
@@ -387,7 +394,9 @@ async function runFixture(
     await embedAllChunks(store, fixture, seeded, now);
     const perQuery: QueryEvaluation[] = [];
     for (const query of fixture.queries) {
-      perQuery.push(await runOneQuery(store, query, seeded, now, vectorIndex));
+      perQuery.push(
+        await runOneQuery(store, query, seeded, now, vectorIndex, deps.transformReferences),
+      );
     }
     const modelJudged = await runModelJudge(deps.modelJudge, fixture, perQuery);
     return { scorecard: buildScorecard(fixture, runId, perQuery, modelJudged), perQuery };

@@ -6,6 +6,7 @@ import { DEFAULT_DISCOVERY_OPTIONS } from "../discovery/types.js";
 import {
   gitBlobFingerprint,
   parseGitIndexTrackedPaths,
+  repositoryContentFingerprint,
   repositoryFingerprintSetDigest,
   scanRepositoryFingerprints,
   type RepositoryFileFingerprint,
@@ -70,18 +71,30 @@ describe("repository fingerprints", () => {
     }
   });
 
+  it("computes the shared tracked and untracked byte identities without metadata input", () => {
+    const bytes = new TextEncoder().encode("def untracked():\n    return True\n");
+
+    expect(repositoryContentFingerprint(bytes, "git-blob-sha1")).toBe(
+      "abc3fe868e16fcdefb3b18493e5d68e0f72dc90d",
+    );
+    expect(repositoryContentFingerprint(bytes, "file-state")).toBe(
+      "9c2966f17808c1749e9ccdd84720f25abeab6480a256940492a56f597b2da007",
+    );
+  });
+
   it("parses bounded Git index v2 entries without launching Git", () => {
     const parsed = parseGitIndexTrackedPaths(gitIndexV2(["src/a.ts", "src/b.py"]));
     expect([...(parsed ?? [])]).toEqual(["src/a.ts", "src/b.py"]);
     expect(parseGitIndexTrackedPaths(new TextEncoder().encode("not an index"))).toBeUndefined();
   });
 
-  it("uses Git blob hashes for tracked files and state identities for untracked files", async () => {
+  it("uses Git blob hashes for tracked files and SHA-256 byte identities for untracked files", async () => {
     const tracked = "export function tracked(): void {}\n";
+    const untracked = "def untracked():\n    return True\n";
     const fs = memoryFs(ROOT, [
       { relativePath: ".git/index", content: gitIndexV2(["src/tracked.ts"]) },
       { relativePath: "src/tracked.ts", content: tracked },
-      { relativePath: "src/untracked.py", content: "def untracked():\n    return True\n" },
+      { relativePath: "src/untracked.py", content: untracked },
     ]);
     const result = await scanRepositoryFingerprints({
       fs,
@@ -94,7 +107,113 @@ describe("repository fingerprints", () => {
       fingerprintKind: "git-blob-sha1",
       contentFingerprint: GIT_BLOB_IDS[tracked],
     });
-    expect(byPath.get("src/untracked.py")?.fingerprintKind).toBe("file-state");
+    expect(byPath.get("src/untracked.py")).toMatchObject({
+      fingerprintKind: "file-state",
+      contentFingerprint: "9c2966f17808c1749e9ccdd84720f25abeab6480a256940492a56f597b2da007",
+    });
+    expect(result.complete).toBe(true);
+  });
+
+  it("changes an untracked fingerprint when same-size bytes change under a stable mtime", async () => {
+    function fixedMtimeFs(content: string): ReturnType<typeof memoryFs> {
+      const base = memoryFs(ROOT, [{ relativePath: "same.txt", content }]);
+      return {
+        ...base,
+        stat: (absolutePath: string) => ({ ...base.stat(absolutePath), mtimeMs: 42 }),
+      };
+    }
+    const scan = (content: string): ReturnType<typeof scanRepositoryFingerprints> =>
+      scanRepositoryFingerprints({
+        fs: fixedMtimeFs(content),
+        scope: { kind: "repository", repositoryRoot: ROOT },
+        discovery: DEFAULT_DISCOVERY_OPTIONS,
+        trackedPaths: new Set(),
+      });
+
+    const before = await scan("alpha");
+    const after = await scan("bravo");
+
+    expect(before.fingerprints[0]?.byteLength).toBe(after.fingerprints[0]?.byteLength);
+    expect(before.fingerprints[0]?.mtimeMs).toBe(after.fingerprints[0]?.mtimeMs);
+    expect(before.fingerprints[0]?.contentFingerprint).not.toBe(
+      after.fingerprints[0]?.contentFingerprint,
+    );
+  });
+
+  it("marks source-byte read failures as an incomplete scan", async () => {
+    const base = memoryFs(ROOT, [{ relativePath: "unreadable.txt", content: "private bytes" }]);
+    const fs: typeof base = {
+      ...base,
+      readFileBytes: () => Promise.reject(new Error("transient")),
+      readFileRange: () => Promise.reject(new Error("transient")),
+    };
+
+    const result = await scanRepositoryFingerprints({
+      fs,
+      scope: { kind: "repository", repositoryRoot: ROOT },
+      discovery: DEFAULT_DISCOVERY_OPTIONS,
+      trackedPaths: new Set(),
+    });
+
+    expect(result).toMatchObject({
+      complete: false,
+      fingerprints: [],
+      rejectedEntries: 1,
+    });
+  });
+
+  it("hashes indexable files above the single-read cap through bounded ranges", async () => {
+    const size = 64 * 1024 * 1024 + 1;
+    const absolutePath = `${ROOT}/large.txt`;
+    const base = memoryFs(ROOT, [{ relativePath: "large.txt", content: "" }]);
+    let largestRead = 0;
+    let totalRead = 0;
+    let singleReads = 0;
+    const fs: typeof base = {
+      ...base,
+      stat: (path: string) =>
+        path === absolutePath ? { ...base.stat(path), size } : base.stat(path),
+      readFileBytes: () => {
+        singleReads += 1;
+        return Promise.reject(new Error("single read must not be used"));
+      },
+      readFileRange: (_path: string, _start: number, length: number) => {
+        largestRead = Math.max(largestRead, length);
+        totalRead += length;
+        return Promise.resolve(new Uint8Array(length));
+      },
+    };
+
+    const result = await scanRepositoryFingerprints({
+      fs,
+      scope: { kind: "repository", repositoryRoot: ROOT },
+      discovery: DEFAULT_DISCOVERY_OPTIONS,
+      trackedPaths: new Set(),
+    });
+
+    expect(result.complete).toBe(true);
+    expect(result.fingerprints[0]?.contentFingerprint).toMatch(/^[0-9a-f]{64}$/u);
+    expect(singleReads).toBe(0);
+    expect(totalRead).toBe(size);
+    expect(largestRead).toBeLessThanOrEqual(1024 * 1024);
+  });
+
+  it("marks a discovery bound as incomplete without exposing source bytes", async () => {
+    const fs = memoryFs(ROOT, [
+      { relativePath: "a.txt", content: "first-private-value" },
+      { relativePath: "b.txt", content: "second-private-value" },
+    ]);
+
+    const result = await scanRepositoryFingerprints({
+      fs,
+      scope: { kind: "repository", repositoryRoot: ROOT },
+      discovery: { maxDepth: 12, maxFiles: 1 },
+      trackedPaths: new Set(),
+    });
+
+    expect(result.complete).toBe(false);
+    expect(result.rejectedEntries).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("second-private-value");
   });
 
   it("never fingerprints gitignored, denied, or escaping entries", async () => {
@@ -120,6 +239,7 @@ describe("repository fingerprints", () => {
       "src/kept.ts",
     ]);
     expect(result.rejectedEntries).toBe(1);
+    expect(result.complete).toBe(true);
   });
 });
 

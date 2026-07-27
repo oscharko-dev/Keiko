@@ -24,6 +24,7 @@ import {
   wrongScopeFixture,
 } from "./fixtures.js";
 import { runRetrievalEval } from "./runner.js";
+import { runBadOutputRetrievalProbe } from "./regression-probes.js";
 import { PASS_THRESHOLDS, type RetrievalEvalFixture } from "./types.js";
 import type { VectorIndexAdapter } from "@oscharko-dev/keiko-local-knowledge";
 
@@ -56,7 +57,7 @@ describe("runRetrievalEval — vector-index threading", () => {
           sawDimensionCompatible: false,
           sawIdentityIncompatible: false,
           diagnostics: {
-            provider: "sqlite-vec",
+            provider: "usearch",
             status: "fallback-unavailable",
             reason: "test-runtime-unavailable",
           },
@@ -247,6 +248,18 @@ describe("runRetrievalEval — mutation witness (topK sensitivity)", () => {
     // Precision at topK=3 is < 1.0 because the noise chunk also comes back.
     expect(bigCard.dimensions.precision).toBeLessThan(1);
     expect(smallCard.dimensions.precision).not.toBe(bigCard.dimensions.precision);
+  });
+});
+
+describe("runRetrievalEval — bad-output non-tautology probe", () => {
+  it("keeps the golden expectations intact and fails on genuinely empty retrieval output", async () => {
+    const expected = singleTopicFixture.queries[0]?.expectedChunkIds;
+    const scorecard = await runBadOutputRetrievalProbe(singleTopicFixture);
+
+    expect(singleTopicFixture.queries[0]?.expectedChunkIds).toEqual(expected);
+    expect(scorecard.dimensions.recall).toBe(0);
+    expect(scorecard.dimensions.meanReciprocalRank).toBe(0);
+    expect(scorecard.passed).toBe(false);
   });
 });
 

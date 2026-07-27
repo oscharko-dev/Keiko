@@ -1,6 +1,7 @@
 import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   requestLiteLLMRerank,
+  resolveOutboundHttpEgressConfig,
   type GatewayConfig,
   type LiteLLMRerankRequest,
   type OutboundHttpEgressConfig,
@@ -11,7 +12,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
+import { currentGatewayConfig } from "./deps.js";
 
 export type RerankFallbackMode = "slice-topN" | "identity";
 
@@ -44,7 +45,8 @@ export interface RerankSelectionInput<T> {
    * against one selection) must pass it here. Omitted by request-scoped callers, which correctly
    * want the current generation.
    */
-  readonly gatewayConfig?: GatewayConfig | undefined;
+  // `null` pins an observed absence; `undefined` asks the facade to capture the live generation.
+  readonly gatewayConfig?: GatewayConfig | null | undefined;
 }
 
 export interface RerankSelection<T> {
@@ -210,7 +212,13 @@ function rerankEgress(
   input: MaterializedRerankInput,
   reranker: RerankerConfig,
 ): OutboundHttpEgressConfig | undefined {
-  return reranker.egress ?? input.gatewayConfig?.egress ?? currentGatewayEgressConfig(input.deps);
+  return (
+    reranker.egress ??
+    input.gatewayConfig?.egress ??
+    input.deps.egress ??
+    input.deps.config?.egress ??
+    resolveOutboundHttpEgressConfig(undefined, input.deps.env)
+  );
 }
 
 async function requestRerankTransport(
@@ -252,11 +260,20 @@ function invalidMappingDiagnostics(
   };
 }
 
+function captureGatewayConfig<T>(input: RerankSelectionInput<T>): GatewayConfig | undefined {
+  const current =
+    input.gatewayConfig === undefined
+      ? currentGatewayConfig(input.deps)
+      : (input.gatewayConfig ?? undefined);
+  return current === undefined ? undefined : structuredClone(current);
+}
+
 async function configuredSelection<T>(
   input: RerankSelectionInput<T>,
   providerCandidates: readonly T[],
   fallback: readonly T[],
   reranker: RerankerConfig,
+  gatewayConfig: GatewayConfig,
 ): Promise<RerankSelection<T>> {
   const requestInput: MaterializedRerankInput = {
     deps: input.deps,
@@ -265,7 +282,7 @@ async function configuredSelection<T>(
     topN: input.topN,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
-    ...(input.gatewayConfig === undefined ? {} : { gatewayConfig: input.gatewayConfig }),
+    gatewayConfig,
   };
   const transport = await requestRerankTransport(requestInput, reranker);
   if (transport.outcome?.ok !== true) {
@@ -306,8 +323,11 @@ export async function rerankSelection<T>(
   // stable, true reason, whereas an empty pool is incidental to it. This also keeps the default
   // install suppressible by `rerankerForRetrievalActivity`, which recognises the default state only
   // by the "disabled" + "not-configured" pair — a bare "disabled" would leak into the activity row.
-  const reranker = (input.gatewayConfig ?? currentGatewayConfig(input.deps))?.reranker;
-  if (reranker === undefined) {
+  // Capture the live accessor exactly once. Runtime setup replaces its backing reference, so this
+  // immutable request-local reference keeps reranker credentials, endpoint, and shared egress on
+  // one generation even if a save lands while documents are materialized or transport is awaited.
+  const gatewayConfigSnapshot = captureGatewayConfig(input);
+  if (gatewayConfigSnapshot?.reranker === undefined) {
     return {
       selected: fallback,
       diagnostics: disabledDiagnostics(input.candidates.length, fallback.length, "not-configured"),
@@ -320,5 +340,11 @@ export async function rerankSelection<T>(
       diagnostics: disabledDiagnostics(providerCandidates.length, fallback.length),
     };
   }
-  return configuredSelection(input, providerCandidates, fallback, reranker);
+  return configuredSelection(
+    input,
+    providerCandidates,
+    fallback,
+    gatewayConfigSnapshot.reranker,
+    gatewayConfigSnapshot,
+  );
 }
