@@ -330,16 +330,19 @@ function resolveCwd(deps: RunCommandDeps, cwd: string | undefined): string {
   return info.path;
 }
 
-function buildResult(
-  input: RunCommandInput,
-  buffers: Buffers,
-  state: RunState,
-  exitCode: number | null,
-  termSignal: NodeJS.Signals | null,
-  deps: RunCommandDeps,
-  startedAt: number,
-  attestation: SandboxAttestation | undefined,
-): CommandResult {
+interface BuildResultOptions {
+  readonly input: RunCommandInput;
+  readonly buffers: Buffers;
+  readonly state: RunState;
+  readonly exitCode: number | null;
+  readonly termSignal: NodeJS.Signals | null;
+  readonly deps: RunCommandDeps;
+  readonly startedAt: number;
+  readonly attestation: SandboxAttestation | undefined;
+}
+
+function buildResult(options: BuildResultOptions): CommandResult {
+  const { input, buffers, state, exitCode, termSignal, deps, startedAt, attestation } = options;
   const secrets = collectSensitiveEnvValues(deps.processEnv, deps.policy.envAllowlist);
   const attest = attestation === undefined ? {} : { attestation };
   if (buffers.truncated) {
@@ -449,16 +452,16 @@ function settleOnClose(
       return;
     }
     resolve(
-      buildResult(
-        ctx.input,
-        ctx.buffers,
-        ctx.state,
-        code,
-        signalName,
-        ctx.deps,
-        ctx.startedAt,
-        ctx.attestation,
-      ),
+      buildResult({
+        input: ctx.input,
+        buffers: ctx.buffers,
+        state: ctx.state,
+        exitCode: code,
+        termSignal: signalName,
+        deps: ctx.deps,
+        startedAt: ctx.startedAt,
+        attestation: ctx.attestation,
+      }),
     );
   });
   ctx.child.on("error", (error) => {
