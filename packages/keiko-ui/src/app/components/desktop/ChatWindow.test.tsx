@@ -2366,8 +2366,8 @@ describe("ChatWindow memory controls", () => {
 // explicit `busy: true` prop is the smallest way to exercise the guard clauses honestly.
 describe("MemoryActionForgetButtons (extracted three-state action buttons, #2723)", () => {
   // MemoryActionForgetButtons now takes `t` as a prop (its caller already has one in scope)
-  // instead of calling useTranslate() itself — same default English resolution the hook's own
-  // fallback context would have produced, so the rendered text these tests assert on is unchanged.
+  // instead of resolving its own translate function — same default English resolution the
+  // context's own fallback would have produced, so the rendered text asserted below is unchanged.
   const t: I18nTranslate = (key, values) => translate("en", key, values);
 
   function forgetAction(
