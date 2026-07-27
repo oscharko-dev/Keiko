@@ -139,6 +139,20 @@ function symbolResults(
   }));
 }
 
+// The attributes every option row in the listbox shares, so the two row shapes below cannot drift
+// apart on the a11y-load-bearing ones (`role`, `aria-selected`, the roving `tabIndex`).
+interface CommonRowProps {
+  readonly type: "button";
+  readonly id: string;
+  readonly role: "option";
+  readonly "aria-selected": boolean;
+  readonly className: string;
+  readonly "data-sel": boolean;
+  readonly tabIndex: number;
+  readonly onPointerEnter: () => void;
+  readonly onClick: () => void;
+}
+
 interface QuickAccessRootResponse {
   readonly files: readonly FileResult[];
   readonly symbols: readonly SymbolResult[];
@@ -394,6 +408,49 @@ export function UnifiedQuickAccessPalette({
 
   const optionId = (index: number): string => `${listId}-option-${String(index)}`;
   const emptyText = quickAccessEmptyText(t, mode, root, query);
+  const rowProps = (index: number): CommonRowProps => ({
+    type: "button",
+    id: optionId(index),
+    role: "option",
+    "aria-selected": index === selected,
+    className: "cmdk-row",
+    "data-sel": index === selected,
+    tabIndex: -1,
+    onPointerEnter: () => setSelected(index),
+    onClick: () => activate(index),
+  });
+  // Chosen with an independent statement rather than a nested ternary in the JSX (S3358): three
+  // outcomes chained as `a ? x : b ? y : z` read as one expression while being two decisions.
+  let listBody: ReactNode;
+  if (itemCount === 0) {
+    listBody = <div className="cmdk-empty">{emptyText}</div>;
+  } else if (mode === "commands") {
+    listBody = commandResults.map((command, index) => (
+      <button key={command.id} {...rowProps(index)}>
+        <span className="cmdk-label">{command.label}</span>
+        <span className="spacer" />
+        {command.shortcut === undefined ? null : <span className="kbd">{command.shortcut}</span>}
+        <span className="cmdk-group mono">{command.group}</span>
+      </button>
+    ));
+  } else {
+    listBody = searchResults.map((result, index) => (
+      <button
+        key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
+        {...rowProps(index)}
+      >
+        <span className="cmdk-ico">
+          <FileIcon name={result.path} />
+        </span>
+        <span className="cmdk-label">{result.kind === "symbol" ? result.symbol : result.path}</span>
+        <span className="spacer" />
+        <span className="cmdk-group mono">
+          {multiRoot ? `${result.rootLabel} · ` : ""}
+          {result.path}:{String(result.line)}
+        </span>
+      </button>
+    ));
+  }
   const resultsStatus = quickAccessResultsStatus(
     t,
     itemCount,
@@ -451,58 +508,7 @@ export function UnifiedQuickAccessPalette({
           </div>
         ) : null}
         <div id={listId} role="listbox" className="cmdk-list">
-          {itemCount === 0 ? (
-            <div className="cmdk-empty">{emptyText}</div>
-          ) : mode === "commands" ? (
-            commandResults.map((command, index) => (
-              <button
-                key={command.id}
-                type="button"
-                id={optionId(index)}
-                role="option"
-                aria-selected={index === selected}
-                className="cmdk-row"
-                data-sel={index === selected}
-                tabIndex={-1}
-                onPointerEnter={() => setSelected(index)}
-                onClick={() => activate(index)}
-              >
-                <span className="cmdk-label">{command.label}</span>
-                <span className="spacer" />
-                {command.shortcut !== undefined ? (
-                  <span className="kbd">{command.shortcut}</span>
-                ) : null}
-                <span className="cmdk-group mono">{command.group}</span>
-              </button>
-            ))
-          ) : (
-            searchResults.map((result, index) => (
-              <button
-                key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
-                type="button"
-                id={optionId(index)}
-                role="option"
-                aria-selected={index === selected}
-                className="cmdk-row"
-                data-sel={index === selected}
-                tabIndex={-1}
-                onPointerEnter={() => setSelected(index)}
-                onClick={() => activate(index)}
-              >
-                <span className="cmdk-ico">
-                  <FileIcon name={result.path} />
-                </span>
-                <span className="cmdk-label">
-                  {result.kind === "symbol" ? result.symbol : result.path}
-                </span>
-                <span className="spacer" />
-                <span className="cmdk-group mono">
-                  {multiRoot ? `${result.rootLabel} · ` : ""}
-                  {result.path}:{String(result.line)}
-                </span>
-              </button>
-            ))
-          )}
+          {listBody}
         </div>
       </div>
     </div>

@@ -2900,7 +2900,9 @@ function EditorRuntimeWidget({
           // the cached content is exactly what this restore adopted. A background document cannot
           // be edited, so this cannot overwrite a newer legitimate state.
           const cached = sessionCacheRef.current.get(restoreSessionKey);
-          if (cached !== undefined && cached.content === adopted) {
+          // `adopted` is non-null inside this branch, so an absent cache entry compares unequal —
+          // the optional chain keeps the explicit-undefined check's exact semantics (S6582).
+          if (cached?.content === adopted) {
             sessionCacheRef.current.set(restoreSessionKey, {
               ...cached,
               content: bufferBeforeRestore,
@@ -3959,10 +3961,13 @@ function EditorRuntimeWidget({
       return;
     }
     const controller = new AbortController();
+    // Bumped as its own statement rather than inside the object literal: an assignment nested in an
+    // expression reads as a comparison at a glance (S1121).
+    symbolSeqRef.current += 1;
     const request: EditorRequestIdentity = {
       requestId: createEditorRequestId(),
       streamId: "editor-outline",
-      sequence: (symbolSeqRef.current += 1),
+      sequence: symbolSeqRef.current,
     };
     setOutlineLoading(true);
     void resolveEditorSymbols(
