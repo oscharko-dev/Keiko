@@ -138,7 +138,7 @@ function identityMatches(root: WorkspaceRootDescriptor, row: WorkspaceManifestRe
       inspected.identityDigest === root.identityDigest &&
       inspected.objectIdentityDigest !== undefined &&
       inspected.objectIdentityDigest ===
-        row.rootProjects.find((candidate) => candidate.rootRef === root.rootRef)
+        row.rootProjects.find((candidate): boolean => candidate.rootRef === root.rootRef)
           ?.objectIdentityDigest
     );
   } catch {

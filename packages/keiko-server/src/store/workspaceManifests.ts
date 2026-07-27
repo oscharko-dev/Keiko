@@ -114,27 +114,19 @@ function rootIdentities(
  */
 function invalidatedRootRefs(
   previous: ReadonlyMap<string, StoredRootIdentity>,
-  next: readonly {
-    readonly canonicalRoot: string;
-    readonly rootRef: string;
-    readonly identityDigest: string;
-  }[],
+  next: ReadonlyMap<string, StoredRootIdentity>,
 ): ReadonlySet<string> {
   const invalidated = new Set<string>();
-  const nextRefs = new Set(next.map((root) => root.rootRef));
   for (const rootRef of previous.keys()) {
-    if (!nextRefs.has(rootRef)) invalidated.add(rootRef);
+    if (!next.has(rootRef)) invalidated.add(rootRef);
   }
-  for (const root of next) {
-    const previousIdentity = previous.get(root.rootRef);
-    const liveObjectIdentity = inspectWorkspaceRootIdentity(
-      root.canonicalRoot,
-    ).objectIdentityDigest;
+  for (const [rootRef, nextIdentity] of next) {
+    const previousIdentity = previous.get(rootRef);
     if (
-      previousIdentity?.identityDigest !== root.identityDigest ||
-      previousIdentity.objectIdentityDigest !== liveObjectIdentity
+      previousIdentity?.identityDigest !== nextIdentity.identityDigest ||
+      previousIdentity.objectIdentityDigest !== nextIdentity.objectIdentityDigest
     ) {
-      invalidated.add(root.rootRef);
+      invalidated.add(rootRef);
     }
   }
   return invalidated;
@@ -448,8 +440,11 @@ export function replaceWorkspaceManifest(
       db.prepare("DELETE FROM workspace_manifests WHERE workspace_id = ?").run(workspaceId);
     }
     updateTargetManifest(db, input, now);
+    // `insertRootRows` already performed the fail-closed live inspection. Compare the identities
+    // that transaction actually persisted instead of probing the filesystem a second time.
+    const nextIdentities = rootIdentities(db, input.manifest.workspaceId);
     const removeTrust = db.prepare("DELETE FROM workspace_trust_records WHERE root_ref = ?");
-    for (const rootRef of invalidatedRootRefs(previousIdentities, input.manifest.roots)) {
+    for (const rootRef of invalidatedRootRefs(previousIdentities, nextIdentities)) {
       removeTrust.run(rootRef);
     }
     // After the trust rows are gone, so a restored workspace can never carry a grant forward.

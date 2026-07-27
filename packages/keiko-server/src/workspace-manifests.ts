@@ -131,7 +131,7 @@ function requireDispatchRoot(
   dispatch: WorkspaceRootDispatch,
   manifest: WorkspaceManifest,
 ): WorkspaceRootDescriptor {
-  const root = manifest.roots.find((candidate) => candidate.rootRef === dispatch.rootRef);
+  const root = manifest.roots.find((candidate): boolean => candidate.rootRef === dispatch.rootRef);
   if (root === undefined) {
     throw new WorkspaceManifestError(
       "WORKSPACE_ROOT_NOT_MEMBER",
@@ -161,7 +161,8 @@ function revalidateRoot(
     dispatch.rootIdentityDigest !== root.identityDigest ||
     inspected.objectIdentityDigest === undefined ||
     inspected.objectIdentityDigest !==
-      row.rootProjects.find((candidate) => candidate.rootRef === root.rootRef)?.objectIdentityDigest
+      row.rootProjects.find((candidate): boolean => candidate.rootRef === root.rootRef)
+        ?.objectIdentityDigest
   ) {
     throw new WorkspaceManifestError(
       "WORKSPACE_ROOT_IDENTITY_CHANGED",

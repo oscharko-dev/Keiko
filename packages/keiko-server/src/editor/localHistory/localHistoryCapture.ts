@@ -34,7 +34,9 @@ function storedObjectIdentity(
 ): string | undefined {
   const value = deps.store
     .findWorkspaceManifestRecordByRoot(rootRef)
-    ?.rootProjects.find((candidate) => candidate.rootRef === rootRef)?.objectIdentityDigest;
+    ?.rootProjects.find(
+      (candidate): boolean => candidate.rootRef === rootRef,
+    )?.objectIdentityDigest;
   return typeof value === "string" ? value : undefined;
 }
 

@@ -30,10 +30,10 @@ function unpairedWorkspaceList(): RouteResult {
   return { status: 200, body: { session: "unpaired", manifests: [] } };
 }
 
-function unpairedWorkspaceRequest(): RouteResult {
+function unpairedWorkspaceRequest(correlationId: string | undefined): RouteResult {
   return {
     status: 403,
-    body: errorBody("APP_SESSION_REQUIRED", "The local app session is not paired."),
+    body: errorBody("APP_SESSION_REQUIRED", "The local app session is not paired.", correlationId),
   };
 }
 
@@ -45,14 +45,17 @@ function errorStatus(error: WorkspaceManifestError): number {
   return 409;
 }
 
-function failure(error: unknown): RouteResult {
+function failure(error: unknown, correlationId: string | undefined): RouteResult {
   if (error instanceof WorkspaceManifestError) {
-    return { status: errorStatus(error), body: errorBody(error.code, error.message) };
+    return {
+      status: errorStatus(error),
+      body: errorBody(error.code, error.message, correlationId),
+    };
   }
   if (error instanceof InvalidWorkspaceRequest) {
     return {
       status: 400,
-      body: errorBody("WORKSPACE_REQUEST_INVALID", "Workspace request is invalid."),
+      body: errorBody("WORKSPACE_REQUEST_INVALID", "Workspace request is invalid.", correlationId),
     };
   }
   throw error;
@@ -239,18 +242,20 @@ export function handleListWorkspaceManifests(ctx: RouteContext, deps: UiHandlerD
   try {
     return { status: 200, body: { manifests: new WorkspaceManifestService(deps.store).list() } };
   } catch (error) {
-    return failure(error);
+    return failure(error, ctx.correlationId);
   }
 }
 
 export function handleGetWorkspaceManifest(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) {
+    return unpairedWorkspaceRequest(ctx.correlationId);
+  }
   try {
     const service = new WorkspaceManifestService(deps.store);
     const manifest = service.get(ctx.params.workspaceId ?? "");
     return { status: 200, body: { manifest, binding: service.binding(manifest.workspaceId) } };
   } catch (error) {
-    return failure(error);
+    return failure(error, ctx.correlationId);
   }
 }
 
@@ -258,7 +263,9 @@ export async function handleAddWorkspaceRoot(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) {
+    return unpairedWorkspaceRequest(ctx.correlationId);
+  }
   try {
     const body = await readBody(ctx.req, ["dispatch", "projectPath"]);
     const workspaceId = ctx.params.workspaceId ?? "";
@@ -269,7 +276,7 @@ export async function handleAddWorkspaceRoot(
     await applyRootBindingChanges(deps, result);
     return { status: 200, body: { manifest: result.manifest } };
   } catch (error) {
-    return failure(error);
+    return failure(error, ctx.correlationId);
   }
 }
 
@@ -277,7 +284,9 @@ export async function handleRemoveWorkspaceRoot(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) {
+    return unpairedWorkspaceRequest(ctx.correlationId);
+  }
   try {
     const body = await readBody(ctx.req, ["dispatch"]);
     const workspaceId = ctx.params.workspaceId ?? "";
@@ -288,7 +297,7 @@ export async function handleRemoveWorkspaceRoot(
     await applyRootBindingChanges(deps, result);
     return { status: 200, body: { manifest: result.manifest } };
   } catch (error) {
-    return failure(error);
+    return failure(error, ctx.correlationId);
   }
 }
 
@@ -296,7 +305,9 @@ export async function handleReorderWorkspaceRoots(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) {
+    return unpairedWorkspaceRequest(ctx.correlationId);
+  }
   try {
     const body = await readBody(ctx.req, ["dispatch", "orderedRootRefs"]);
     const workspaceId = ctx.params.workspaceId ?? "";
@@ -307,7 +318,7 @@ export async function handleReorderWorkspaceRoots(
     await applyRootBindingChanges(deps, result);
     return { status: 200, body: { manifest: result.manifest } };
   } catch (error) {
-    return failure(error);
+    return failure(error, ctx.correlationId);
   }
 }
 
@@ -315,7 +326,9 @@ export async function handleFocusWorkspaceRoot(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) {
+    return unpairedWorkspaceRequest(ctx.correlationId);
+  }
   try {
     const body = await readBody(ctx.req, ["dispatch", "focusedRootRef"]);
     const workspaceId = ctx.params.workspaceId ?? "";
@@ -326,7 +339,7 @@ export async function handleFocusWorkspaceRoot(
     await applyRootBindingChanges(deps, result);
     return { status: 200, body: { manifest: result.manifest } };
   } catch (error) {
-    return failure(error);
+    return failure(error, ctx.correlationId);
   }
 }
 

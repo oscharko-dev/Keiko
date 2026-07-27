@@ -26,9 +26,11 @@ import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 
+const TEST_CORRELATION_ID = "workspace-routes-test";
 const JSON_HEADERS = {
   "Content-Type": "application/json",
   "X-Keiko-CSRF": "1",
+  "X-Keiko-Correlation-Id": TEST_CORRELATION_ID,
   get Cookie(): string {
     return sessionCookie;
   },
@@ -36,6 +38,7 @@ const JSON_HEADERS = {
 const UNPAIRED_JSON_HEADERS = {
   "Content-Type": "application/json",
   "X-Keiko-CSRF": "1",
+  "X-Keiko-Correlation-Id": TEST_CORRELATION_ID,
 } as const;
 
 let server: Server;
@@ -181,8 +184,13 @@ describe("workspace manifest routes", () => {
     const body = JSON.parse(pairedText) as { readonly manifests: readonly WorkspaceManifest[] };
     const knownWorkspaceId = body.manifests[0]?.workspaceId;
     if (knownWorkspaceId === undefined) throw new Error("missing paired workspace");
-    const known = await fetch(requestUrl(`/api/workspaces/${knownWorkspaceId}`));
-    const unknown = await fetch(requestUrl("/api/workspaces/ws-does-not-exist"));
+    const unpairedHeaders = { "X-Keiko-Correlation-Id": TEST_CORRELATION_ID };
+    const known = await fetch(requestUrl(`/api/workspaces/${knownWorkspaceId}`), {
+      headers: unpairedHeaders,
+    });
+    const unknown = await fetch(requestUrl("/api/workspaces/ws-does-not-exist"), {
+      headers: unpairedHeaders,
+    });
     const knownText = await known.text();
     const unknownText = await unknown.text();
     expect(known.status).toBe(403);
@@ -206,6 +214,7 @@ describe("workspace manifest routes", () => {
       error: {
         code: "APP_SESSION_REQUIRED",
         message: "The local app session is not paired.",
+        correlationId: TEST_CORRELATION_ID,
       },
     });
     expect(responseText).not.toContain(rootA);
@@ -246,6 +255,7 @@ describe("workspace manifest routes", () => {
       error: {
         code: "WORKSPACE_ROOT_NOT_MEMBER",
         message: "The selected root is not a workspace member.",
+        correlationId: TEST_CORRELATION_ID,
       },
     });
 

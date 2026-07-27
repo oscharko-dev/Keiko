@@ -300,7 +300,7 @@ function unavailableIndex(detail?: string): never {
 }
 
 function isMissingFile(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 function checkedIndexFile(path: string): Stats | undefined {

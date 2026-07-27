@@ -129,6 +129,9 @@ V2 bindings, and manifest mutation results only when the request presents a live
 ADR-0141 app session. The browser client waits for its existing boot pairing attempt before its
 first manifest read. An unpaired manifest-list request receives a bounded path-free projection;
 other unpaired manifest requests return a path-free refusal before lookup, body parsing, or effect.
+That refusal includes only the ordinary opaque request correlation ID in addition to its fixed
+code and message; it contains no target-derived field, so known and unknown targets remain
+byte-identical when requests use the same correlation ID.
 This reuses the existing app-session cookie and verifier and introduces no token or authentication
 system. Pairing authorizes only this disclosure: a path remains routing intent and never mints
 membership, identity, trust, containment, policy, or effect authority.
