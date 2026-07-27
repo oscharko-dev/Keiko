@@ -126,7 +126,11 @@ describe("WorkspaceScriptTrustService", () => {
     const symlinkRoot = `${root}-link`;
     symlinkSync(root, symlinkRoot, "dir");
     try {
-      store.createProject(symlinkRoot, "symlink-fixture");
+      // `root` is already registered (beforeEach); resolveCanonicalRoot/registeredProjectPathForRoot
+      // resolve `symlinkRoot` to that same project by canonical identity, so no second registration
+      // is needed here. Registering `symlinkRoot` as its own project would collide on the same
+      // canonical root the store's UNIQUE constraints key workspace manifests by and is now rejected
+      // with PROJECT_EXISTS (#2768) rather than silently committing a project with no manifest.
       const trust = createWorkspaceScriptTrustService({ store });
 
       expect(trust.grant(symlinkRoot)).toEqual({ trusted: true });

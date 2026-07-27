@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import { createSingleRootWorkspaceManifest } from "../workspace-manifest-identity.js";
+import { projectExists } from "./errors.js";
 import type {
   WorkspaceManifestMutationInput,
   WorkspaceManifestRecordRow,
@@ -230,9 +231,15 @@ export function ensureProjectWorkspaceManifest(
   // invariant every downstream lookup assumes. AGENTS.md §7: do not swallow
   // errors on trust-boundary paths.
   const manifest = freeWorkspaceManifest(db, projectPath, projectName);
-  if (findWorkspaceManifestRecordByRoot(db, manifest.roots[0]?.rootRef ?? "") !== undefined) return;
   const root = manifest.roots[0];
-  if (root === undefined) return;
+  if (root === undefined) throw new Error("WORKSPACE_MANIFEST_ROOT_MISSING");
+  // `root.rootRef` is a pure function of the OS-canonicalized path (#2615): on a case-insensitive
+  // filesystem, two spellings of the same directory resolve to the same rootRef even though
+  // `freeWorkspaceManifest` just minted a fresh, unused workspaceId for this project path.
+  // Returning here without inserting would finish successfully while leaving this project paired
+  // with no manifest at all — exactly the invariant violation the comment above exists to prevent.
+  // Throwing instead rolls the transaction back and gives the caller a typed 409 to act on.
+  if (findWorkspaceManifestRecordByRoot(db, root.rootRef) !== undefined) throw projectExists();
   insertManifest(db, manifest, [{ rootRef: root.rootRef, projectPath }], now);
 }
 
