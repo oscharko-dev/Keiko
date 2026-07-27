@@ -131,8 +131,7 @@ function invalidatedRootRefs(
       root.canonicalRoot,
     ).objectIdentityDigest;
     if (
-      previousIdentity === undefined ||
-      previousIdentity.identityDigest !== root.identityDigest ||
+      previousIdentity?.identityDigest !== root.identityDigest ||
       previousIdentity.objectIdentityDigest !== liveObjectIdentity
     ) {
       invalidated.add(root.rootRef);

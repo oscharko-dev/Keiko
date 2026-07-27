@@ -236,6 +236,15 @@ export function shouldFailBudget(disposition, controlled) {
   return deterministicFailed || (controlled && Object.values(disposition).some((value) => !value));
 }
 
+async function loadMeasurementDependencies(samples) {
+  const [historyStore, rootIdentity, multiRoot] = await Promise.all([
+    import("../packages/keiko-server/dist/editor/localHistory/localHistoryStore.js"),
+    import("../packages/keiko-server/dist/workspace-root-identity.js"),
+    measureMultiRootUi(samples),
+  ]);
+  return { historyStore, rootIdentity, multiRoot };
+}
+
 export async function runEditorM11CloseoutMeasurement(options = {}) {
   const controlled = options.controlled ?? process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1";
   const gcSettled = gcSettlingAvailable();
@@ -252,21 +261,17 @@ export async function runEditorM11CloseoutMeasurement(options = {}) {
   );
   const stateDir = join(root, "state");
   try {
-    const [
-      { createEditorLocalHistoryStore, editorLocalHistoryWorkspaceId },
-      { inspectWorkspaceRootIdentity },
-      multiRoot,
-    ] = await Promise.all([
-      import("../packages/keiko-server/dist/editor/localHistory/localHistoryStore.js"),
-      import("../packages/keiko-server/dist/workspace-root-identity.js"),
-      measureMultiRootUi(samples),
-    ]);
+    const { historyStore, rootIdentity, multiRoot } = await loadMeasurementDependencies(samples);
     const roots = await prepareHistoryRoots(
       root,
-      inspectWorkspaceRootIdentity,
-      editorLocalHistoryWorkspaceId,
+      rootIdentity.inspectWorkspaceRootIdentity,
+      historyStore.editorLocalHistoryWorkspaceId,
     );
-    const history = await measureHistory(stateDir, roots, createEditorLocalHistoryStore);
+    const history = await measureHistory(
+      stateDir,
+      roots,
+      historyStore.createEditorLocalHistoryStore,
+    );
     const measurement = { ...multiRoot, ...history };
     const disposition = budgetDisposition(measurement);
     return {

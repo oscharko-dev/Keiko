@@ -214,9 +214,12 @@ describe("editor settings store — direct coverage", () => {
       state: "ready",
       record: { revision: 2, values: { fontSize: 18 } },
     });
-    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
-      rootObjectIdentityDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
-    });
+    const persisted: unknown = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (typeof persisted !== "object" || persisted === null || Array.isArray(persisted)) {
+      throw new Error("persisted settings record is not an object");
+    }
+    const persistedRecord = persisted as Readonly<Record<string, unknown>>;
+    expect(persistedRecord.rootObjectIdentityDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("treats a mismatched private object identity as an absent root binding", () => {

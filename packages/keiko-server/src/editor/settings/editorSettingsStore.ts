@@ -501,6 +501,34 @@ function loadUserRecord(
   }
 }
 
+type RootBoundSettingsRecord = EditorSettingsWorkspaceRecord | EditorSettingsRootRecord;
+
+function reconcileRootBinding<T extends RootBoundSettingsRecord>(
+  record: T,
+  empty: T,
+  realRoot: string,
+  path: string,
+  options: EditorSettingsStoreOptions,
+): EditorSettingsLoadResult<T> {
+  // Readiness requires both public and private live identity. A mismatch is absent rather than
+  // unavailable so the next valid write can replace stale or legacy state instead of permanently
+  // locking every settings scope that shares this root.
+  const live = editorSettingsRootIdentity(realRoot);
+  if (
+    live?.objectIdentityDigest === undefined ||
+    record.rootIdentityDigest !== live.identityDigest
+  ) {
+    return { state: "absent", record: empty };
+  }
+  if (record.rootObjectIdentityDigest === live.objectIdentityDigest) {
+    return { state: "ready", record };
+  }
+  if (record.rootObjectIdentityDigest !== "") return { state: "absent", record: empty };
+  const adopted: T = { ...record, rootObjectIdentityDigest: live.objectIdentityDigest };
+  (options.save ?? savePrivateJson)(path, recordForWrite(adopted));
+  return { state: "ready", record: adopted };
+}
+
 function loadWorkspaceRecord(
   realRoot: string,
   options: EditorSettingsStoreOptions,
@@ -516,23 +544,7 @@ function loadWorkspaceRecord(
     if (raw.kind === "oversized") return { state: "unavailable", record: empty };
     const record = parseWorkspaceRecord(raw.value, empty.workspaceFingerprint);
     if (record === undefined) return { state: "unavailable", record: empty };
-    // Same two-fact rule as the root record below, and the same reason for `absent` rather than
-    // `unavailable`: a record written before this binding existed claims no identity, and must be
-    // supersedable by the next write instead of locking the scope out of every mutation.
-    const live = editorSettingsRootIdentity(realRoot);
-    if (
-      live?.objectIdentityDigest === undefined ||
-      record.rootIdentityDigest !== live.identityDigest
-    ) {
-      return { state: "absent", record: empty };
-    }
-    if (record.rootObjectIdentityDigest === live.objectIdentityDigest) {
-      return { state: "ready", record };
-    }
-    if (record.rootObjectIdentityDigest !== "") return { state: "absent", record: empty };
-    const adopted = { ...record, rootObjectIdentityDigest: live.objectIdentityDigest };
-    (options.save ?? savePrivateJson)(path, recordForWrite(adopted));
-    return { state: "ready", record: adopted };
+    return reconcileRootBinding(record, empty, realRoot, path, options);
   } catch {
     return { state: "unavailable", record: empty };
   }
@@ -553,29 +565,7 @@ function loadRootRecord(
     if (raw.kind === "oversized") return { state: "unavailable", record: empty };
     const record = parseRootRecord(raw.value, empty.rootFingerprint);
     if (record === undefined) return { state: "unavailable", record: empty };
-    // Ready demands BOTH a readable live identity and an exact match. Comparing against the empty
-    // record's digest alone would let a record claiming no identity read as ready whenever the live
-    // root is unreadable, because both collapse to the same sentinel — "claims no identity" and
-    // "identity cannot be read" are different facts and must not alias.
-    //
-    // Anything else is ABSENT, not unavailable, and the distinction is load-bearing: `unavailable`
-    // rejects every settings mutation carrying this root, user and workspace scope included, with
-    // no way back through the API. `absent` contributes nothing and lets the next write supersede
-    // the stale record with a correctly bound one (#2620, ADR-0147 D9 keeps the two tags distinct).
-    const live = editorSettingsRootIdentity(realRoot);
-    if (
-      live?.objectIdentityDigest === undefined ||
-      record.rootIdentityDigest !== live.identityDigest
-    ) {
-      return { state: "absent", record: empty };
-    }
-    if (record.rootObjectIdentityDigest === live.objectIdentityDigest) {
-      return { state: "ready", record };
-    }
-    if (record.rootObjectIdentityDigest !== "") return { state: "absent", record: empty };
-    const adopted = { ...record, rootObjectIdentityDigest: live.objectIdentityDigest };
-    (options.save ?? savePrivateJson)(path, recordForWrite(adopted));
-    return { state: "ready", record: adopted };
+    return reconcileRootBinding(record, empty, realRoot, path, options);
   } catch {
     return { state: "unavailable", record: empty };
   }
