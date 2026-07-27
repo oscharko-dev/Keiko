@@ -1,8 +1,7 @@
 {
   "purpose": "Suites that exist as npm scripts but run in no workflow lane. A debt register, not an exemption list: scripts/check-e2e-suite-wiring.mjs fails on any suite missing from here, and fails again on any entry that has since been wired or deleted, so this list can only shrink.",
   "recordedBy": "#2629 (epic #2285 Wave 2)",
-  "recordedOn": "2026-07-27",
-  "note": "Every entry predates the gate; none was added to silence a failure. Wiring one is a CI-minute decision owned by the suite area, not by this file. test:e2e:editor-perf is deliberate: it is driven by the D12 evidence regeneration flow (docs/qa/perf-evidence.md), not by a lane.",
+  "note": "Every entry predates the gate; none was added to silence a failure. Wiring one is a CI-minute decision owned by the suite area, not by this file. The creation date is in git history rather than duplicated here, where it could only drift. test:e2e:editor-perf is deliberate: it is driven by the D12 evidence regeneration flow (docs/qa/perf-evidence.md), not by a lane.",
   "suites": [
     "test:e2e:coding-workbench-1990",
     "test:e2e:coding-workbench-1991",

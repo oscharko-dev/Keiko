@@ -105,17 +105,27 @@ Run them where they run, in about two seconds once the image is warm:
 
 ```bash
 git clone --no-local --no-hardlinks . /tmp/keiko-dap
-docker run --rm --privileged -v /tmp/keiko-dap:/repo -w /repo node:24.18.0-bookworm bash -lc '
+docker run --rm -v /tmp/keiko-dap:/repo -w /repo node:24.18.0-bookworm bash -lc '
   git config --global --add safe.directory "*"
   apt-get update -qq && apt-get install -y -qq bubblewrap
-  sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
   npm ci --no-audit --no-fund && npm run build:packages
   npx vitest run packages/keiko-server/src/editor/dap/dapProductionService.test.ts'
 ```
 
-Clone fully rather than shallowly — a shallow clone loses the baseline the suite reads. The `sysctl`
-is a no-op on Docker Desktop (its LinuxKit VM exposes no AppArmor) and matters on a host that
-restricts unprivileged user namespaces.
+Clone fully rather than shallowly — a shallow clone loses the baseline the suite reads.
+
+**No `--privileged`.** The recipe #2643 was diagnosed with carried it; the suite does not need it —
+all 20 tests pass on Docker Desktop with no added capabilities at all, measured before this line was
+written. It matters because this command runs `npm ci`, the package build and the suite **as root
+over a working tree**: with `--privileged` a hostile checkout is one container escape from the
+developer's host, and reviewing someone else's branch is exactly when you would reach for this. Run
+it on a checkout you trust, or in a disposable VM.
+
+On a host that restricts unprivileged user namespaces (`kernel.apparmor_restrict_unprivileged_userns
+= 1` on recent Ubuntu), bubblewrap cannot create its namespace and the two tests fail on setup
+rather than on the behaviour under test. Grant the narrowest thing that fixes it —
+`--cap-add SYS_ADMIN --security-opt seccomp=unconfined`, or relax the sysctl on the host — rather
+than reaching for `--privileged`. Docker Desktop needs neither: its LinuxKit VM exposes no AppArmor.
 
 **A platform-gated test is not the only proof available.** Where the underlying defect is ordinary
 logic that merely _surfaced_ on one platform, pin it with a test that runs everywhere as well.

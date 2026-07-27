@@ -2,21 +2,29 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   checkE2eSuiteWiring,
+  executableWorkflowSegments,
   formatGateReport,
   isWiredInWorkflows,
   main,
   runE2eSuiteWiringGate,
+  validateBaselineSuites,
 } from "../check-e2e-suite-wiring.mjs";
 
-const roots = [];
-
-afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
+// Each caller owns its directory for the length of one test, so nothing is shared and no ordering
+// between tests can matter.
+function withFixtureRoot(build, assert) {
+  const root = mkdtempSync(join(tmpdir(), "keiko-e2e-wiring-"));
+  try {
+    build(root);
+    assert(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 const RUN_LANE = `
 jobs:
@@ -68,11 +76,34 @@ describe("e2e suite wiring gate (#2629)", () => {
     expect(problems[0]).toContain("test:e2e:wired");
   });
 
-  // Comments are where an unwired suite gets explained, not where it gets executed.
-  it("does not treat a suite mentioned only in a comment as wired", () => {
-    const lane = "        # test:e2e:orphan is not wired yet\n        - run: npm run build\n";
+  // Only a `run:` command or a bare matrix entry executes anything. Everything else is prose, and
+  // a gate that reads prose as execution can be silenced by an unrelated mention — which is the
+  // failure this gate exists to prevent, arriving through the gate itself.
+  it.each([
+    [
+      "a full-line comment",
+      "        # test:e2e:orphan is not wired yet\n        - run: npm run x\n",
+    ],
+    ["a trailing comment on another command", "      - run: npm run build # test:e2e:orphan\n"],
+    ["a step name", "      - name: test:e2e:orphan\n        run: npm run build\n"],
+    ["an unrelated key", "      env:\n        SUITE_DOC: test:e2e:orphan\n"],
+  ])("does not treat %s as wiring", (_label, lane) => {
     expect(isWiredInWorkflows("test:e2e:orphan", lane)).toBe(false);
     expect(problemsFor(["test:e2e:orphan"], lane)).toHaveLength(1);
+  });
+
+  it("reads a suite invoked inside a run block scalar", () => {
+    const lane = [
+      "      - name: Run it",
+      "        run: |",
+      "          npm ci",
+      "          npm run test:e2e:blocked",
+      "      - name: Next step",
+      "        run: npm run build",
+    ].join("\n");
+    expect(isWiredInWorkflows("test:e2e:blocked", lane)).toBe(true);
+    // The block ends at the next step: a suite named there must not inherit the block's status.
+    expect(executableWorkflowSegments(lane).some((s) => s.includes("Next step"))).toBe(false);
   });
 
   it("accepts a recorded suite and names the baseline in the failure it prints", () => {
@@ -126,16 +157,33 @@ describe("e2e suite wiring gate (#2629)", () => {
   it("rejects a baseline document that is not a suites array", () => {
     // Fail loudly on a malformed register rather than treating it as "nothing recorded", which
     // would silently re-admit every suite it was holding.
-    const root = mkdtempSync(join(tmpdir(), "keiko-e2e-wiring-"));
-    roots.push(root);
-    mkdirSync(join(root, "docs", "qa"), { recursive: true });
-    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: {} }), "utf8");
-    writeFileSync(
-      join(root, "docs", "qa", "unwired-e2e-suites.json"),
-      JSON.stringify({ suites: "not-an-array" }),
-      "utf8",
+    withFixtureRoot(
+      (root) => {
+        mkdirSync(join(root, "docs", "qa"), { recursive: true });
+        writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: {} }), "utf8");
+        writeFileSync(
+          join(root, "docs", "qa", "unwired-e2e-suites.json"),
+          JSON.stringify({ suites: "not-an-array" }),
+          "utf8",
+        );
+      },
+      (root) => {
+        expect(() => runE2eSuiteWiringGate(root)).toThrow(/must carry a "suites" array/u);
+      },
     );
-    expect(() => runE2eSuiteWiringGate(root)).toThrow(/must carry a "suites" array/u);
+  });
+
+  // A duplicate passes a naive read and then inflates `recorded`, so the PASS line under-reports
+  // wired suites — and with enough duplicates goes negative. An entry that is not a suite name
+  // records debt against nothing.
+  it("rejects duplicate and non-suite baseline entries", () => {
+    expect(() => validateBaselineSuites(["test:e2e:a", "test:e2e:a"])).toThrow(/more than once/u);
+    expect(() => validateBaselineSuites(["lint"])).toThrow(/script names/u);
+    expect(() => validateBaselineSuites([42])).toThrow(/script names/u);
+    expect(validateBaselineSuites(["test:e2e:a", "test:e2e:b"])).toEqual([
+      "test:e2e:a",
+      "test:e2e:b",
+    ]);
   });
 
   it("runs end to end and reports success without writing to the real stdout", () => {

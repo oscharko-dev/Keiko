@@ -35,31 +35,91 @@ const E2E_SCRIPT_PREFIX = "test:e2e:";
 // `test:e2e:foo` be "satisfied" by a lane that only runs `test:e2e:foo-extended`.
 const NAME_CHARACTER = /[A-Za-z0-9:_-]/u;
 
-// Matching the bare script name rather than `npm run <script>`: `e2e-extended.yml` runs a whole
-// group of suites from a `strategy.matrix.suite` list, where each entry is the script name alone
-// and the invocation is `npm run ${{ matrix.suite }}`. A gate that insisted on the literal
-// invocation would have called eleven genuinely-wired suites orphaned — including the seven M11
-// journeys that lane was created to rescue.
+// Only two positions in a workflow actually execute a suite, and the gate reads only those:
 //
-// Full-line comments are dropped first, so a suite that is only *mentioned* in a comment (often
-// while explaining why it is NOT wired) does not read as wired.
-export function isWiredInWorkflows(script, workflowText) {
-  const executable = workflowText
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("#"))
-    .join("\n");
-  let from = 0;
-  for (;;) {
-    const at = executable.indexOf(script, from);
-    if (at === -1) return false;
-    const before = at === 0 ? "" : executable.charAt(at - 1);
-    const after = executable.charAt(at + script.length);
-    const bounded =
-      (before === "" || !NAME_CHARACTER.test(before)) &&
-      (after === "" || !NAME_CHARACTER.test(after));
-    if (bounded) return true;
-    from = at + script.length;
+//   1. a `run:` command — inline (`- run: npm run x`) or inside a `run: |` block scalar;
+//   2. a bare sequence item whose whole value is the script name, which is how
+//      `e2e-extended.yml` lists a group under `strategy.matrix.suite` and invokes it as
+//      `npm run ${{ matrix.suite }}`.
+//
+// Everything else is prose. A step called `name: test:e2e:orphan`, or a trailing comment on an
+// unrelated command, would otherwise mark a suite wired and silence the gate — the precise failure
+// this gate exists to prevent, arriving through the gate itself.
+//
+// Line-oriented rather than YAML-parsed, matching the repository's other workflow gates
+// (check-zizmor-anchors, check-release-required-workflow-names) and adding no dependency.
+function stripInlineComment(value) {
+  const at = value.search(/\s#/u);
+  return at === -1 ? value : value.slice(0, at);
+}
+
+// A `run:` value, or undefined when the line is not a run step. Empty string is a real value (the
+// block-scalar forms `|` and `>` are detected by the caller), so `undefined` is the only "no".
+// `\s*` never sits directly against the `(.*)` remainder, and the leading classes are disjoint, so
+// the engine has one path through this and cannot backtrack super-linearly (sonarjs S8786).
+function runValue(body) {
+  const run = /^-?[ \t]*run:(.*)$/u.exec(body);
+  return run === null ? undefined : (run[1] ?? "").trimStart();
+}
+
+// A sequence item that is nothing but a value: `- test:e2e:x`, optionally quoted. Suite names
+// contain colons, so the value class must keep them; `- name: x` and `- uses: y` are excluded by
+// the whitespace after their key, which the single-token anchor rejects. Quote stripping is a
+// separate alternation rather than a backreference — same reason as above.
+const QUOTED_VALUE = /^"([^"]*)"$|^'([^']*)'$/u;
+
+function sequenceItemValue(body) {
+  const item = /^-[ \t]+(\S+)[ \t]*$/u.exec(stripInlineComment(body))?.[1];
+  if (item === undefined) return undefined;
+  const quoted = QUOTED_VALUE.exec(item);
+  return quoted?.[1] ?? quoted?.[2] ?? item;
+}
+
+function blockScalarContinues(body, indent, blockIndent) {
+  return blockIndent !== undefined && (body === "" || indent > blockIndent);
+}
+
+export function executableWorkflowSegments(workflowText) {
+  const segments = [];
+  let blockIndent;
+  for (const raw of workflowText.split(/\r?\n/u)) {
+    const body = raw.trimStart();
+    const indent = raw.length - body.length;
+    if (blockScalarContinues(body, indent, blockIndent)) {
+      segments.push(stripInlineComment(raw));
+      continue;
+    }
+    blockIndent = undefined;
+    if (body.startsWith("#")) continue;
+    const run = runValue(body);
+    if (run === undefined) {
+      const item = sequenceItemValue(body);
+      if (item !== undefined) segments.push(item);
+      continue;
+    }
+    if (run.startsWith("|") || run.startsWith(">")) blockIndent = indent;
+    else segments.push(stripInlineComment(run));
   }
+  return segments;
+}
+
+export function isWiredInWorkflows(script, workflowText) {
+  return executableWorkflowSegments(workflowText).some((segment) => {
+    let from = 0;
+    for (;;) {
+      const at = segment.indexOf(script, from);
+      if (at === -1) return false;
+      const before = at === 0 ? "" : segment.charAt(at - 1);
+      const after = segment.charAt(at + script.length);
+      if (
+        (before === "" || !NAME_CHARACTER.test(before)) &&
+        (after === "" || !NAME_CHARACTER.test(after))
+      ) {
+        return true;
+      }
+      from = at + script.length;
+    }
+  });
 }
 
 /**
@@ -101,12 +161,29 @@ function readWorkflowText(repoRoot) {
     .join("\n");
 }
 
+// The register is only trustworthy if it is well formed. A duplicate entry passes a naive read and
+// then inflates `recorded`, so the PASS line reports fewer wired suites than there are — and with
+// enough duplicates, a negative count. An entry that is not a suite name records debt against
+// nothing. Both fail closed here rather than becoming a quietly wrong report.
+export function validateBaselineSuites(suites) {
+  if (!Array.isArray(suites)) throw new TypeError(`${BASELINE_PATH} must carry a "suites" array.`);
+  const seen = new Set();
+  for (const suite of suites) {
+    if (typeof suite !== "string" || !suite.startsWith(E2E_SCRIPT_PREFIX)) {
+      throw new TypeError(
+        `${BASELINE_PATH} entries must be "${E2E_SCRIPT_PREFIX}*" script names; found ` +
+          `${JSON.stringify(suite)}.`,
+      );
+    }
+    if (seen.has(suite)) throw new TypeError(`${BASELINE_PATH} records ${suite} more than once.`);
+    seen.add(suite);
+  }
+  return suites;
+}
+
 function readBaseline(repoRoot) {
   const parsed = JSON.parse(readFileSync(join(repoRoot, BASELINE_PATH), "utf8"));
-  if (!Array.isArray(parsed.suites)) {
-    throw new TypeError(`${BASELINE_PATH} must carry a "suites" array.`);
-  }
-  return parsed.suites;
+  return validateBaselineSuites(parsed.suites);
 }
 
 /**
