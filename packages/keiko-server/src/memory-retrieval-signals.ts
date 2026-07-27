@@ -60,7 +60,8 @@ export type SemanticRetrievalGateReason =
   | "no-query"
   | "no-embeddings"
   | "no-embedder"
-  | "identity-mismatch";
+  | "identity-mismatch"
+  | "vector-index-failed";
 
 export interface SemanticRetrievalGate {
   readonly allowed: boolean;
@@ -400,7 +401,8 @@ async function semanticScoresFrom(
     candidateIds,
   });
   if (!result.ok) {
-    warnSemanticRetrievalDisabled("identity-mismatch", {
+    warnSemanticRetrievalDisabled("vector-index-failed", {
+      vectorIndexReason: result.diagnostics.reason ?? "unknown",
       candidates: compatible.entries.length,
     });
     return undefined;

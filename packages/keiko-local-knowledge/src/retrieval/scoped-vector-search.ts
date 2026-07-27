@@ -1051,39 +1051,25 @@ function sourceFilterClause(
 ): string {
   if (sourceFilter === undefined) return "";
   if (sourceFilter.length === 0) return " AND 0";
-  return ` AND ${qualifier}source_id IN (${sourceFilter
-    .map((_, i) => `:source${String(i)}`)
-    .join(", ")})`;
+  return ` AND ${qualifier}source_id IN (SELECT CAST(value AS TEXT) FROM json_each(:source_filter_json))`;
 }
 
 function sourceParams(
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
 ): Record<string, string> {
-  const params: Record<string, string> = {};
-  if (sourceFilter !== undefined) {
-    for (let i = 0; i < sourceFilter.length; i += 1) {
-      params[`source${String(i)}`] = String(sourceFilter[i]);
-    }
-  }
-  return params;
+  if (sourceFilter === undefined || sourceFilter.length === 0) return {};
+  return { source_filter_json: JSON.stringify(sourceFilter.map(String)) };
 }
 
 function chunkFilterClause(chunkFilter: readonly string[] | undefined, qualifier: string): string {
   if (chunkFilter === undefined) return "";
   if (chunkFilter.length === 0) return " AND 0";
-  return ` AND ${qualifier}chunk_id IN (${chunkFilter
-    .map((_, i) => `:chunk${String(i)}`)
-    .join(", ")})`;
+  return ` AND ${qualifier}chunk_id IN (SELECT CAST(value AS TEXT) FROM json_each(:chunk_filter_json))`;
 }
 
 function chunkParams(chunkFilter: readonly string[] | undefined): Record<string, string> {
-  const params: Record<string, string> = {};
-  if (chunkFilter !== undefined) {
-    for (let i = 0; i < chunkFilter.length; i += 1) {
-      params[`chunk${String(i)}`] = chunkFilter[i] ?? "";
-    }
-  }
-  return params;
+  if (chunkFilter === undefined || chunkFilter.length === 0) return {};
+  return { chunk_filter_json: JSON.stringify(chunkFilter) };
 }
 
 function countLexicalRowsForCapsuleScope(

@@ -117,38 +117,25 @@ function codeUnitCompare(left: string, right: string): number {
 function sourceFilterClause(sourceFilter: readonly KnowledgeSourceId[] | undefined): string {
   if (sourceFilter === undefined) return "";
   if (sourceFilter.length === 0) return " AND 0";
-  return ` AND source_id IN (${sourceFilter
-    .map((_, index) => `:source${String(index)}`)
-    .join(", ")})`;
+  return " AND source_id IN (SELECT CAST(value AS TEXT) FROM json_each(:source_filter_json))";
 }
 
 function sourceFilterParams(
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
 ): Record<string, string> {
-  const params: Record<string, string> = {};
-  for (let index = 0; index < (sourceFilter?.length ?? 0); index += 1) {
-    params[`source${String(index)}`] = String(sourceFilter?.[index] ?? "");
-  }
-  return params;
-}
-
-function namedPlaceholders(prefix: string, count: number): string {
-  return Array.from({ length: count }, (_, index) => `${prefix}${String(index)}`).join(", ");
+  if (sourceFilter === undefined || sourceFilter.length === 0) return {};
+  return { source_filter_json: JSON.stringify(sourceFilter.map(String)) };
 }
 
 function chunkFilterClause(chunkFilter: readonly string[] | undefined): string {
   if (chunkFilter === undefined) return "";
   if (chunkFilter.length === 0) return " AND 0";
-  const placeholders = namedPlaceholders(":chunk", chunkFilter.length);
-  return ` AND chunk_id IN (${placeholders})`;
+  return " AND chunk_id IN (SELECT CAST(value AS TEXT) FROM json_each(:chunk_filter_json))";
 }
 
 function chunkFilterParams(chunkFilter: readonly string[] | undefined): Record<string, string> {
-  const params: Record<string, string> = {};
-  for (let index = 0; index < (chunkFilter?.length ?? 0); index += 1) {
-    params[`chunk${String(index)}`] = chunkFilter?.[index] ?? "";
-  }
-  return params;
+  if (chunkFilter === undefined || chunkFilter.length === 0) return {};
+  return { chunk_filter_json: JSON.stringify(chunkFilter) };
 }
 
 function requestParams(request: VectorIndexSearchRequest): Record<string, string> {
@@ -416,21 +403,17 @@ function candidateMetadata(
   chunkIds: readonly string[],
 ): ReadonlyMap<string, KnowledgeSourceId> {
   if (chunkIds.length === 0) return new Map();
-  const placeholders = chunkIds.map((_, index) => `:candidate${String(index)}`).join(", ");
-  const params = Object.fromEntries(
-    chunkIds.map((chunkId, index) => [`candidate${String(index)}`, chunkId]),
-  );
   const rows = request.store._internal.db
     .prepare(
       [
         "SELECT chunk_id, source_id FROM vectors",
         "WHERE capsule_id = :capsule_id",
-        `  AND chunk_id IN (${placeholders})`,
+        "  AND chunk_id IN (SELECT CAST(value AS TEXT) FROM json_each(:candidate_ids_json))",
       ].join(" "),
     )
     .all({
       capsule_id: String(request.capsule.id),
-      ...params,
+      candidate_ids_json: JSON.stringify(chunkIds),
     }) as unknown as readonly CandidateMetadataRow[];
   return new Map(rows.map((row) => [row.chunk_id, row.source_id as KnowledgeSourceId]));
 }

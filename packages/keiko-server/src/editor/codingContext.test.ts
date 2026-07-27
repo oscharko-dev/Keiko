@@ -34,10 +34,10 @@ function rerankerConfig(): GatewayConfig {
     providers: [],
     capabilities: [],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-    egress: { noProxy: ["pinned.internal"] },
+    egress: { noProxy: ["pinned.example.com"] },
     reranker: {
       modelId: "coding-context-reranker",
-      baseUrl: "https://pinned.internal/v1",
+      baseUrl: "https://pinned.example.com/v1",
       apiKey: "reranker-test-key",
       timeoutMs: 30_000,
     },
@@ -181,11 +181,11 @@ describe("assembleCodingContext", () => {
     const pinned = rerankerConfig();
     const saved: GatewayConfig = {
       ...rerankerConfig(),
-      egress: { noProxy: ["saved.internal"] },
+      egress: { noProxy: ["saved.example.com"] },
       reranker: {
         ...rerankerConfig().reranker,
         modelId: "saved-reranker",
-        baseUrl: "https://saved.internal/v1",
+        baseUrl: "https://saved.example.com/v1",
         apiKey: "saved-reranker-test-key",
         timeoutMs: 30_000,
       },
@@ -224,8 +224,8 @@ describe("assembleCodingContext", () => {
       pack.excerpts.map((_entry, index) => index),
     );
     expect(configReads).toBe(1);
-    expect(captured?.endpoint).toBe("https://pinned.internal/v1");
-    expect(captured?.egress).toEqual({ noProxy: ["pinned.internal"] });
+    expect(captured?.endpoint).toBe("https://pinned.example.com/v1");
+    expect(captured?.egress).toEqual({ noProxy: ["pinned.example.com"] });
     expect(JSON.stringify(pack)).not.toContain("reranker-test-key");
   });
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { EmbeddingModelIdentity, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
 import { getCapsule } from "../capsule-lifecycle.js";
@@ -187,6 +187,45 @@ describe("vector index service", () => {
       ).toBe(true);
       expect(first.sourceId).not.toBe(second.sourceId);
     } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps oversized chunk allow-lists below SQLite's host-parameter limit", async () => {
+    const fixture = freshStore();
+    const originalPrepare = fixture.store._internal.db.prepare.bind(fixture.store._internal.db);
+    const prepare = vi.spyOn(fixture.store._internal.db, "prepare").mockImplementation((sql) => {
+      const chunkParameterCount = sql.match(/:chunk\d+/gu)?.length ?? 0;
+      if (chunkParameterCount > 900) throw new RangeError("too many SQL variables");
+      return originalPrepare(sql);
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(fixture.store, {
+        capsuleId: "cap-large-filter",
+      });
+      const selectedChunkId = seeded.chunkIds[0];
+      expect(selectedChunkId).toBeDefined();
+      const chunkFilter = Array.from(
+        { length: 1_000 },
+        (_unused, index) => `missing-chunk-${String(index)}`,
+      );
+      if (selectedChunkId !== undefined) chunkFilter.push(String(selectedChunkId));
+
+      const result = await searchVectorIndex(
+        {
+          ...requestFor(fixture.store, String(seeded.capsuleId)),
+          chunkFilter,
+        },
+        undefined,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.diagnostics.status).not.toBe("fallback-query-error");
+      expect(result.candidates.map((candidate) => candidate.chunkId)).toEqual(
+        selectedChunkId === undefined ? [] : [String(selectedChunkId)],
+      );
+    } finally {
+      prepare.mockRestore();
       fixture.cleanup();
     }
   });

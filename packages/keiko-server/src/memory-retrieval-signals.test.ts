@@ -204,4 +204,27 @@ describe("buildConversationRetrievalSignals", () => {
       warning.mockRestore();
     }
   });
+
+  it("reports the vector-index failure reason without misclassifying it as an identity mismatch", async () => {
+    const alpha = memoryId("alpha");
+    const embeddings = new Map<MemoryId, MemoryEmbeddingRow>([
+      [alpha, embedding(alpha, new Float32Array([1, 0]))],
+    ]);
+    const vault = vaultFor(() => [metadata(alpha, 100)], embeddings);
+    searchMock.mockResolvedValueOnce({ ok: false, reason: "runtime-integrity-failed" });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      const signals = await collectSignals(vault);
+
+      expect(signals.semanticById).toBeUndefined();
+      expect(warning).toHaveBeenCalledWith("memory semantic scores disabled", {
+        reason: "vector-index-failed",
+        vectorIndexReason: "runtime-integrity-failed",
+        candidates: 1,
+      });
+    } finally {
+      warning.mockRestore();
+    }
+  });
 });
