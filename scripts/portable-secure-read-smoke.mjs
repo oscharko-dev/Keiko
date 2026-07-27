@@ -85,7 +85,7 @@ export async function smokePortableSecureRead(stageRoot, platformTarget, load = 
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const failures = manifestFailures(manifest);
   if (failures.length > 0) fail("manifest is invalid");
-  const helper = manifest.nativeHelpers[0];
+  const helper = secureReadHelper(manifest);
   const resourceRoot =
     target.nodePlatform === "darwin"
       ? join(stageRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
@@ -93,6 +93,18 @@ export async function smokePortableSecureRead(stageRoot, platformTarget, load = 
   const executable = join(resourceRoot, ...helper.executablePath.split("/"));
   if ((await sha256File(executable)) !== helper.shippedSha256)
     fail("helper digest does not match manifest");
+  await smokeReadFixture(executable, target.nodePlatform, load);
+}
+
+function secureReadHelper(manifest) {
+  const helper = manifest.nativeHelpers.find(
+    (candidate) => candidate?.name === "keiko-secure-workspace-read",
+  );
+  if (helper === undefined) fail("secure-read helper manifest entry is missing");
+  return helper;
+}
+
+async function smokeReadFixture(executable, nodePlatform, load) {
   const fixture = await mkdtemp(join(tmpdir(), "keiko-portable-secure-read-"));
   try {
     await mkdir(join(fixture, "src"));
@@ -100,8 +112,8 @@ export async function smokePortableSecureRead(stageRoot, platformTarget, load = 
     const normal = await runDecoded(executable, request(fixture, "src/safe.txt"));
     if (normal.status !== 0 || normal.content.toString("utf8") !== "portable secure read\n")
       fail("normal read failed");
-    if (target.nodePlatform === "win32") await smokeWindowsDeniedNames(executable, fixture);
-    if (load) await smokeLoad(executable, fixture, target.nodePlatform);
+    if (nodePlatform === "win32") await smokeWindowsDeniedNames(executable, fixture);
+    if (load) await smokeLoad(executable, fixture, nodePlatform);
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }

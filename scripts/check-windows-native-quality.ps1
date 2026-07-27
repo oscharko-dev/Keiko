@@ -53,6 +53,25 @@ try {
   & cl.exe @c11Flags "/Fo:$fixtureObject" "/Fe:$fixtureOut" $fixture
   if ($LASTEXITCODE -ne 0) { throw "MSVC qualification-fixture quality analysis failed" }
 
+  $attestation = Join-Path $root "native/runtime-attestation/windows/keiko_runtime_attestation.c"
+  $attestationHeader = Join-Path $scratch "runtime_attestation_payload.h"
+  $attestationOut = Join-Path $scratch "keiko-runtime-attestation.exe"
+  $attestationObject = Join-Path $scratch "keiko-runtime-attestation.obj"
+  $attestationPayload = '{"schemaVersion":1}' + [Environment]::NewLine
+  @"
+#ifndef KEIKO_RUNTIME_ATTESTATION_PAYLOAD_H
+#define KEIKO_RUNTIME_ATTESTATION_PAYLOAD_H
+static const unsigned char KEIKO_RUNTIME_ATTESTATION[] = {0x7b,0x22,0x73,0x63,0x68,0x65,0x6d,0x61,0x56,0x65,0x72,0x73,0x69,0x6f,0x6e,0x22,0x3a,0x31,0x7d,0x0a};
+static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
+#endif
+"@ | Set-Content -LiteralPath $attestationHeader -Encoding utf8NoBOM
+  & cl.exe @c11Flags "/I$scratch" "/Fo:$attestationObject" "/Fe:$attestationOut" $attestation
+  if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-attestation quality analysis failed" }
+  $actualAttestationPayload = & $attestationOut --emit
+  if ($LASTEXITCODE -ne 0 -or ($actualAttestationPayload + [Environment]::NewLine) -ne $attestationPayload) {
+    throw "Runtime-attestation carrier boundary verification failed"
+  }
+
   node (Join-Path $root "native/secure-workspace-read/test-protocol.mjs")
   if ($LASTEXITCODE -ne 0) { throw "secure-workspace-read boundary qualification failed" }
 

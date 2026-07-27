@@ -379,6 +379,7 @@ function runtimeSupervisor(
       helperPath: input.portable.nativeHelperPath,
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
+      identity: input.portable.qualification,
     }),
     qualifications: [input.portable.qualification],
   });

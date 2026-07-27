@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPortablePlatformVerifier } from "./update-portable-platform-verification.js";
 
 interface CommandCall {
@@ -38,8 +38,13 @@ type CommandCallRecorder = (
 const WINDOWS_SIGNER = "A".repeat(40);
 const MACOS_TEAM_OUTPUT = "TeamIdentifier=ABCDE12345\n";
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("portable platform verification", () => {
   it("runs local Authenticode verification for Windows launchers", async () => {
+    vi.stubEnv("SystemRoot", String.raw`D:\Attacker`);
     const recorder = commandRecorder(() => WINDOWS_SIGNER);
     const verifier = createPortablePlatformVerifier({
       hostPlatform: "win32",
@@ -54,12 +59,16 @@ describe("portable platform verification", () => {
     });
 
     expect(recorder.calls).toHaveLength(2);
-    expect(recorder.calls[0]?.command).toBe("powershell.exe");
-    expect(recorder.calls[0]?.args.join(" ")).toContain("Get-AuthenticodeSignature");
-    expect(recorder.calls[0]?.env.KEIKO_PORTABLE_VERIFY_PATH).toBe("C:\\Users\\keiko\\Keiko.exe");
-    expect(recorder.calls[1]?.env.KEIKO_PORTABLE_VERIFY_PATH).toBe(
-      "C:\\Users\\keiko\\current\\Keiko.exe",
+    expect(recorder.calls[0]?.command).toBe(
+      String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
     );
+    expect(recorder.calls[0]?.args.join(" ")).toContain("Get-AuthenticodeSignature");
+    expect(recorder.calls[0]?.args.at(-1)).toBe("C:\\Users\\keiko\\Keiko.exe");
+    expect(recorder.calls[1]?.args.at(-1)).toBe("C:\\Users\\keiko\\current\\Keiko.exe");
+    expect(recorder.calls[0]?.env).toMatchObject({
+      SystemRoot: String.raw`C:\Windows`,
+      WINDIR: String.raw`C:\Windows`,
+    });
   });
 
   it("runs local codesign, stapler, and Gatekeeper assessment for macOS app bundles", async () => {
@@ -112,9 +121,7 @@ describe("portable platform verification", () => {
 
   it("fails closed when staged and active signer identities differ", async () => {
     const recorder = commandRecorder((call) =>
-      call.env.KEIKO_PORTABLE_VERIFY_PATH?.includes("current") === true
-        ? "B".repeat(40)
-        : WINDOWS_SIGNER,
+      call.args.at(-1)?.includes("current") === true ? "B".repeat(40) : WINDOWS_SIGNER,
     );
     const verifier = createPortablePlatformVerifier({
       hostPlatform: "win32",

@@ -25,8 +25,8 @@ In scope:
 
 - public archive-style portable release assets,
 - thin launchers that start and relaunch the existing Keiko Node/BFF/browser product,
-- first-run setup into a user-owned managed install folder,
-- user-local app registration for normal OS launch/search surfaces,
+- first-run setup into a target-specific managed install folder,
+- app registration for normal OS launch/search surfaces,
 - `portable-managed` install attestation,
 - GitHub Release Asset installability and release-impact compatibility binding,
 - explicit one-click portable updates with automatic relaunch and version verification,
@@ -37,7 +37,7 @@ Out of scope:
 - Electron, Tauri, browser embedding, tray, background service, privileged helper, or native desktop
   wrapper runtime,
 - MSI, MSIX, PKG, DMG, MDM, Jamf, Intune, SCCM, Munki, or organization-managed rollout,
-- machine-wide self-update, admin-required happy paths, or mutation of IT-managed installs,
+- machine-wide self-update outside the canonical macOS app, or mutation of IT-managed installs,
 - rollback, downgrade, beta, canary, prerelease, private-channel, or silent background updates,
 - Linux or Windows arm64 portable assets.
 
@@ -85,25 +85,31 @@ is manual-only.
 
 ### D3 — First-run install state is separate from `.keiko`
 
-First run expands the portable archive into a user-owned managed install folder.
+First run expands the portable archive into a dedicated managed install folder. Windows remains
+user-local under `%LOCALAPPDATA%\Programs\Keiko`. The two release-qualified macOS targets install
+at exactly `/Applications/Keiko.app`, because Apple's Endpoint Security activation contract
+requires the containing app to run from `/Applications`.
 
 That folder is distinct from `.keiko`, which remains the runtime-state root for governed local state
 such as update recovery, redacted evidence, and other Keiko-owned runtime data. Portable install
 payloads must not be treated as generic runtime state or a shared cache.
 
 The bootstrap archive location is not self-update eligible by itself. First-run setup must attest a
-single managed install root before the normal app/update lifecycle starts. User-local app
-registration, such as a Windows Start Menu shortcut or a macOS user application entry, is allowed
-only as a consequence of explicit setup and must point back to the managed install. Setup must not
-write machine-wide OS state or require administrator rights by default.
+single managed install root before the normal app/update lifecycle starts. App registration, such
+as a Windows Start Menu shortcut or the canonical macOS application bundle, is allowed only as a
+consequence of explicit setup and must point back to the managed install. A writable
+`/Applications` directory permits direct promotion for a local administrator. An administrator
+dialog may be shown when macOS requires it, and MDM may install the app or preapprove the required
+permissions. No terminal command or separate package-manager setup is part of the customer flow.
 
 The managed install root must be a dedicated Keiko-owned realpath separate from `.keiko`, customer
-repositories, temporary directories, shared/network roots, and system-managed locations. Every write
-must be contained after realpath resolution, and launcher/runtime identity must attest the same root
-before every portable update. If ownership, ACLs, a write probe, or root classification shows an
-admin-required or organization-managed installation, Keiko emits manual instructions only. V1 must
-not prompt for elevation, install a helper service, schedule a task, or register a background
-updater.
+repositories, temporary directories, shared/network roots, and system-managed locations, with one
+closed exception: a release-qualified macOS target may use exactly `/Applications/Keiko.app`.
+Other children of `/Applications` and all other system-managed locations remain denied. Every
+write must be contained after realpath resolution, and launcher/runtime identity must attest the
+same root before every portable update. Organization-managed installations remain immutable to
+Keiko's self-updater unless the same managed-root authority is attested. V1 does not install an
+always-on privileged helper, schedule a task, or register a background updater.
 
 ### D4 — Source-of-truth split
 
@@ -158,7 +164,6 @@ Supported v1 behavior excludes:
 - downgrade,
 - prerelease or beta channels,
 - silent background auto-update,
-- admin-required install,
 - IT-managed self-update.
 
 If the updater cannot attest a single managed target, it must refuse one-click execution and show
@@ -263,9 +268,10 @@ Security review for implementation under this ADR must cover:
 - **Archive extraction.** Portable archives are hostile input. Extraction must reject path
   traversal, absolute paths, symlink or hardlink escapes, device/special files, and unexpected
   executable placement before writing into the managed install.
-- **Managed-root authority.** Only an attested user-owned managed install root is self-update
+- **Managed-root authority.** Only an attested target-specific managed install root is self-update
   eligible. Unmanaged bootstrap folders, local checkouts, linked packages, transient launchers,
-  machine-wide locations, and IT-managed installs are blocked from one-click portable mutation.
+  noncanonical machine-wide locations, and IT-managed installs are blocked from one-click portable
+  mutation. `/Applications/Keiko.app` is the sole macOS system-location exception.
 - **Running-process replacement.** Platform-specific swap and relaunch mechanics must account for
   locked files on Windows and quarantine/signing behavior on macOS without broadening update
   authority or requiring an always-on helper in v1.
@@ -325,7 +331,7 @@ Security review for implementation under this ADR must cover:
 1. Electron, Tauri, or another desktop wrapper first. Rejected because it adds a new runtime owner
    and shifts the wave away from archive-first portable delivery.
 2. MSI, MSIX, PKG, or DMG as the primary portable format. Rejected because this issue asks for
-   archive-first delivery and a user-owned managed install folder.
+   archive-first delivery and a managed install folder.
 3. A separate portable compatibility catalog. Rejected because the release-impact catalog already
    owns compatibility and remediation, and a second catalog would drift.
 4. GitHub Release notes as the installability authority. Rejected because prose is not a source of
@@ -365,3 +371,7 @@ Security review for implementation under this ADR must cover:
   consequences to settle the production Windows and macOS signing trust boundary for Epic #2198.
 - **2026-07-11 — Issue #2308:** Added D8 to record GitHub Artifact Attestations (build provenance
   and SBOM) for the three portable release archives and the `ci` workflow's SBOMs.
+- **2026-07-27 — ADR-0163:** Accepted `/Applications/Keiko.app` as the sole system-managed root
+  exception for release-qualified macOS bundles. Administrator, System Extension, and Full Disk
+  Access approval dialogs are part of the one-time first start; MDM may preinstall or preapprove
+  them. Windows and every other system-managed path remain unchanged and fail closed.

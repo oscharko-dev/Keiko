@@ -8,6 +8,8 @@ import {
 
 export class PortableVerificationInputError extends Error {}
 
+const SHA256 = /^[a-f0-9]{64}$/u;
+
 function fail(message) {
   throw new PortableVerificationInputError(message);
 }
@@ -64,6 +66,13 @@ function missingSidecarInput(sidecar, policy) {
   };
 }
 
+function readSha256(value, label) {
+  if (typeof value !== "string" || !SHA256.test(value)) {
+    fail(`${label} must be a lowercase SHA-256 digest`);
+  }
+  return value;
+}
+
 function missingSidecarInputs(sidecars, policy) {
   return sidecars.map((sidecar) => missingSidecarInput(sidecar, policy));
 }
@@ -79,18 +88,29 @@ function readSidecarInputEntry(entry, sidecarsByName) {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
     fail("verification input sidecar runtime must be an object");
   }
-  for (const key of exactInputKeys(entry)) {
-    if (!["name", "reasonCodes", "verificationChecks"].includes(key)) {
-      fail("sidecar verification input contains unsupported keys");
-    }
-  }
   const name = readSidecarName(entry.name);
   const sidecar = sidecarsByName.get(name);
   if (sidecar === undefined) fail("sidecar verification input is unknown");
+  const target = sidecarTarget(sidecar);
+  const allowedKeys = ["name", "reasonCodes", "verificationChecks"];
+  if (target.nodePlatform === "win32") allowedKeys.push("payloadSha256");
+  for (const key of exactInputKeys(entry)) {
+    if (!allowedKeys.includes(key)) {
+      fail("sidecar verification input contains unsupported keys");
+    }
+  }
   return {
     name,
     reasonCodes: readReasonCodes(entry.reasonCodes),
-    verificationChecks: readVerificationChecks(entry.verificationChecks, sidecarTarget(sidecar)),
+    verificationChecks: readVerificationChecks(entry.verificationChecks, target),
+    ...(target.nodePlatform === "win32"
+      ? {
+          payloadSha256: readSha256(
+            entry.payloadSha256,
+            "sidecar verification input payloadSha256",
+          ),
+        }
+      : {}),
   };
 }
 
@@ -115,8 +135,10 @@ export function parsePortableVerificationInput(input, target, policy, sidecars) 
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     fail("verification input must be a JSON object");
   }
+  const allowedKeys = ["reasonCodes", "sidecarRuntimes", "verificationChecks"];
+  if (target.nodePlatform === "win32") allowedKeys.push("peInventorySha256");
   for (const key of exactInputKeys(input)) {
-    if (!["reasonCodes", "sidecarRuntimes", "verificationChecks"].includes(key)) {
+    if (!allowedKeys.includes(key)) {
       fail("verification input contains unsupported keys");
     }
   }
@@ -124,6 +146,14 @@ export function parsePortableVerificationInput(input, target, policy, sidecars) 
     reasonCodes: readReasonCodes(input.reasonCodes),
     sidecarRuntimes: readSidecarInputs(input.sidecarRuntimes, sidecars, policy),
     verificationChecks: readVerificationChecks(input.verificationChecks, target),
+    ...(target.nodePlatform === "win32"
+      ? {
+          peInventorySha256: readSha256(
+            input.peInventorySha256,
+            "verification input peInventorySha256",
+          ),
+        }
+      : {}),
   };
   const redactionFailures = findPortableMetadataRedactionFailures(input, "verificationInput");
   if (redactionFailures.length > 0) fail("verification input failed redaction policy");

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   boundedMacSigningFail as fail,
@@ -133,6 +135,30 @@ function required(options, name) {
   return options[name];
 }
 
+function assertNativeHelperInventory(manifest, paths) {
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 2) {
+    fail("manifest must contain the complete native helper set");
+  }
+  for (const helper of manifest.nativeHelpers) {
+    const executable = `Keiko.app/Contents/Resources/${helper.executablePath}`;
+    if (!paths.has(executable)) fail("manifest native helper is missing from the Mach-O inventory");
+  }
+}
+
+function assertManifestCodeObjects(manifest, paths) {
+  for (const sidecar of manifest.sidecarRuntimes ?? []) {
+    const executable = `Keiko.app/Contents/Resources/${sidecar.executablePath}`;
+    if (!paths.has(executable))
+      fail("manifest sidecar executable is missing from the Mach-O inventory");
+  }
+  assertNativeHelperInventory(manifest, paths);
+  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
+    fail("manifest must contain exactly one native addon");
+  }
+  const addon = `Keiko.app/Contents/Resources/${manifest.nativeAddons[0].executablePath}`;
+  if (!paths.has(addon)) fail("manifest native addon is missing from the Mach-O inventory");
+}
+
 function inventoryCommand(options) {
   const stage = resolve(required(options, "stage-root"));
   const inventory = inventoryMacPortableCode(
@@ -143,26 +169,7 @@ function inventoryCommand(options) {
     readFileSync(join(stage, "manifest", "portable-manifest.json"), "utf8"),
   );
   const paths = new Set(inventory.codeObjects.map((entry) => entry.relativePath));
-  for (const sidecar of manifest.sidecarRuntimes ?? []) {
-    const executable = `Keiko.app/Contents/Resources/${sidecar.executablePath}`;
-    if (!paths.has(executable))
-      fail("manifest sidecar executable is missing from the Mach-O inventory");
-  }
-  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 1) {
-    fail("manifest must contain exactly one native helper");
-  }
-  const helper = manifest.nativeHelpers[0];
-  const helperExecutable = `Keiko.app/Contents/Resources/${helper.executablePath}`;
-  if (!paths.has(helperExecutable)) {
-    fail("manifest native helper is missing from the Mach-O inventory");
-  }
-  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
-    fail("manifest must contain exactly one native addon");
-  }
-  const addonExecutable = `Keiko.app/Contents/Resources/${manifest.nativeAddons[0].executablePath}`;
-  if (!paths.has(addonExecutable)) {
-    fail("manifest native addon is missing from the Mach-O inventory");
-  }
+  assertManifestCodeObjects(manifest, paths);
   writeFileSync(
     resolve(required(options, "inventory")),
     `${JSON.stringify(inventory, null, 2)}\n`,
@@ -206,19 +213,56 @@ function rebindPayloadCommand(options) {
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-function markNativeHelperVerified(manifest) {
-  const helper = manifest.nativeHelpers?.[0];
-  if (manifest.nativeHelpers?.length !== 1) fail("manifest must contain exactly one native helper");
-  helper.signing = {
-    signatureKind: "developer-id-notarized",
+function markMacosProductionState(manifest) {
+  const state = {
+    verificationPolicy: "production",
     verificationStatus: "verified-production",
+    verificationReasonCodes: [],
+    signatureKind: "developer-id-notarized",
     signatureVerified: true,
     notarizationRequired: true,
     notarizationVerified: true,
+    verificationChecks: {
+      developerIdVerified: true,
+      notarizationVerified: true,
+      stapleVerified: true,
+      assessmentVerified: true,
+    },
   };
+  manifest.security = { ...manifest.security, ...state };
+  manifest.sidecarRuntimes = (manifest.sidecarRuntimes ?? []).map((sidecar) => ({
+    ...sidecar,
+    signing: { ...sidecar.signing, ...state },
+  }));
+  manifest.releaseImpact.reviewedBinding = {
+    ...manifest.releaseImpact.reviewedBinding,
+    ...state,
+    platformSignatureLocallyVerified: true,
+    sidecarRuntimes: globalThis.structuredClone(manifest.sidecarRuntimes),
+  };
+  manifest.updateEligibility.requiredPredicates.platformSignatureLocallyVerified = true;
+}
+
+function prepareQualifiedPayloadCommand(options) {
+  const stage = resolve(required(options, "stage-root"));
+  const target = required(options, "target");
+  const manifestPath = join(stage, "manifest", "portable-manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (manifest.artifact?.platformTarget !== target || !target.startsWith("macos-")) {
+    fail("manifest target does not match the macOS payload");
+  }
+  markMacosProductionState(manifest);
+  markNativeHelpersVerified(manifest);
+  rebindSignedPayload(stage, manifest, target);
+  manifest.runtimeActivation.trustAnchor = "developer-id-app-resource-seal";
   manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
     manifest.nativeHelpers,
   );
+  markNativeAddonVerified(manifest);
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function markNativeAddonVerified(manifest) {
   if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
     fail("manifest must contain exactly one native addon");
   }
@@ -234,6 +278,72 @@ function markNativeHelperVerified(manifest) {
   );
 }
 
+function markNativeHelpersVerified(manifest) {
+  if (manifest.nativeHelpers?.length !== 2)
+    fail("manifest must contain the complete native helper set");
+  for (const helper of manifest.nativeHelpers) {
+    helper.signing = {
+      signatureKind: "developer-id-notarized",
+      verificationStatus: "verified-production",
+      signatureVerified: true,
+      notarizationRequired: true,
+      notarizationVerified: true,
+    };
+  }
+  manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
+    manifest.nativeHelpers,
+  );
+}
+
+function sha256(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function bindRuntimeQualification(stage, manifest) {
+  const resourceRoot = join(stage, "payload", "Keiko", "Keiko.app", "Contents", "Resources");
+  const path = join(resourceRoot, ".portable", "runtime-qualification.json");
+  const receipt = JSON.parse(readFileSync(path, "utf8"));
+  const activationPath = join(resourceRoot, ".portable", "runtime-activation.json");
+  const helpers = new Map(manifest.nativeHelpers.map((helper) => [helper.name, helper]));
+  const sidecar = manifest.sidecarRuntimes?.[0];
+  const expected = {
+    schemaVersion: 1,
+    suiteVersion: "runtime-tree-qualification-v1",
+    platformTarget: manifest.artifact.platformTarget,
+    sourceCommitSha: manifest.release.commitSha,
+    activationManifestSha256: sha256(activationPath),
+    supervisorSha256: helpers.get("keiko-runtime-supervisor")?.shippedSha256,
+    secureReadSha256: helpers.get("keiko-secure-workspace-read")?.shippedSha256,
+    sidecars: [{ name: "opencode-compatible", sha256: sidecar?.payloadSha256 }],
+    backend: "macos-endpoint-security",
+    result: "passed",
+  };
+  if (!isDeepStrictEqual(receipt, expected)) {
+    fail("macOS runtime qualification receipt is stale or invalid");
+  }
+  manifest.runtimeQualification = {
+    schemaVersion: 1,
+    path: ".portable/runtime-qualification.json",
+    sha256: sha256(path),
+    backend: "macos-endpoint-security",
+  };
+  manifest.releaseImpact.reviewedBinding.runtimeQualification = globalThis.structuredClone(
+    manifest.runtimeQualification,
+  );
+}
+
+function validateRuntimeQualificationCommand(options) {
+  const stage = resolve(required(options, "stage-root"));
+  const target = required(options, "target");
+  const manifest = JSON.parse(
+    readFileSync(join(stage, "manifest", "portable-manifest.json"), "utf8"),
+  );
+  if (manifest.artifact?.platformTarget !== target || !target.startsWith("macos-")) {
+    fail("manifest target does not match the macOS qualification");
+  }
+  bindRuntimeQualification(stage, globalThis.structuredClone(manifest));
+}
+
 async function finalize(options) {
   const stage = resolve(required(options, "stage-root"));
   const expected = readInventory(required(options, "expected-inventory"));
@@ -246,7 +356,11 @@ async function finalize(options) {
     fail("manifest target does not match the verified inventory");
   const inputPath = resolve(required(options, "verification-input"));
   assertProductionInput(inputPath, manifest);
-  markNativeHelperVerified(manifest);
+  markMacosProductionState(manifest);
+  markNativeHelpersVerified(manifest);
+  markNativeAddonVerified(manifest);
+  bindRuntimeQualification(stage, manifest);
+  manifest.runtimeActivation.trustAnchor = "developer-id-app-resource-seal";
   const archivePath = join(stage, manifest.artifact.assetName);
   if (!existsSync(archivePath)) fail("final ditto archive is missing");
   await rebindExistingSignedArchive(stage, manifest, archivePath, expected.target, {
@@ -282,16 +396,27 @@ async function finalize(options) {
 
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parse(argv);
-  if (command === "validate-config") validateAppleSigningConfig(process.env);
-  else if (command === "inventory") inventoryCommand(options);
-  else if (command === "inventory-root") inventoryRootCommand(options);
-  else if (command === "compare-paths") compareCommand(options, false);
-  else if (command === "compare-bytes") compareCommand(options, true);
-  else if (command === "rebind-payload") rebindPayloadCommand(options);
-  else if (command === "notary-result")
-    assertAcceptedNotaryResult(resolve(required(options, "result")));
-  else if (command === "finalize") await finalize(options);
-  else fail("unsupported command");
+  if (command === "finalize") {
+    await finalize(options);
+    return;
+  }
+  const handlers = synchronousCommandHandlers(options);
+  if (!Object.hasOwn(handlers, command)) fail("unsupported command");
+  handlers[command]();
+}
+
+function synchronousCommandHandlers(options) {
+  return {
+    "compare-bytes": () => compareCommand(options, true),
+    "compare-paths": () => compareCommand(options, false),
+    inventory: () => inventoryCommand(options),
+    "inventory-root": () => inventoryRootCommand(options),
+    "notary-result": () => assertAcceptedNotaryResult(resolve(required(options, "result"))),
+    "prepare-qualified-payload": () => prepareQualifiedPayloadCommand(options),
+    "rebind-payload": () => rebindPayloadCommand(options),
+    "validate-config": () => validateAppleSigningConfig(process.env),
+    "validate-runtime-qualification": () => validateRuntimeQualificationCommand(options),
+  };
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {

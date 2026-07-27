@@ -12,10 +12,12 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPortableCli } from "./portable.js";
+import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import {
   readPortableInstallRegistration,
   writeFailedRegistration,
 } from "./portable-registration.js";
+import { defaultManagedRoot } from "./portable-shared.js";
 
 type PortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
 
@@ -301,6 +303,25 @@ const INVALID_SETUP_MANIFEST_CASES: readonly InvalidSetupManifestCase[] = [
 ];
 
 describe("runPortableCli", () => {
+  it("uses the canonical macOS Applications location as the managed default", () => {
+    expect(defaultManagedRoot("macos-arm64", {}, "/Users/alice")).toBe("/Applications/Keiko.app");
+    expect(defaultManagedRoot("macos-x64", {}, "/Users/alice")).toBe("/Applications/Keiko.app");
+  });
+
+  it("allows only Keiko's canonical macOS app inside the system Applications directory", () => {
+    const stateDir = join(tempRoot(), "state");
+
+    expect(() => {
+      assertManagedRootAllowed("/Applications/Keiko.app", stateDir, "macos-arm64");
+    }).not.toThrow();
+    expect(() => {
+      assertManagedRootAllowed("/Applications/Other.app", stateDir, "macos-arm64");
+    }).toThrow("managed install root must be user-local or the canonical Keiko macOS app");
+    expect(() => {
+      assertManagedRootAllowed("/Applications/Keiko.app", stateDir, "windows-x64");
+    }).toThrow("managed install root must be user-local or the canonical Keiko macOS app");
+  });
+
   it.each([[[]], [["--help"]], [["-h"]]] as const)(
     "prints help for portable args %j",
     async (args) => {
@@ -498,7 +519,7 @@ describe("runPortableCli", () => {
     }
   });
 
-  it("creates the macOS user-local app only during explicit setup", async () => {
+  it("creates the macOS managed app only during explicit setup", async () => {
     const root = tempRoot();
     const home = join(root, "home");
     const source = join(root, "bootstrap");
@@ -971,6 +992,85 @@ describe("runPortableCli", () => {
     expect(secondCapture.err()).not.toContain("already exists");
   });
 
+  it("activates the macOS runtime before starting the managed application", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-arm64");
+    const managedRoot = managedRootForTarget(home, "macos-arm64");
+    const stateDir = join(root, "state");
+    const events: string[] = [];
+
+    await runPortableCli(
+      portableLaunchArgs("macos-arm64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-arm64", managedRoot, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        activateMacosRuntimeFn: () => {
+          events.push("activate");
+          return Promise.resolve(true);
+        },
+        lifecycleFn: () => {
+          events.push("start");
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events).toEqual(["activate", "start"]);
+  });
+
+  it("keeps the managed macOS application stopped when runtime activation is incomplete", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-x64");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const stateDir = join(root, "state");
+    const c = capture();
+    let started = false;
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-x64", managedRoot, managedRoot, stateDir),
+      c.io,
+      {},
+      {
+        homedir: () => home,
+        activateMacosRuntimeFn: () => Promise.resolve(false),
+        lifecycleFn: () => {
+          started = true;
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(started).toBe(false);
+    expect(c.err()).toContain("macOS runtime activation is incomplete");
+  });
+
   it.each(["windows-x64", "macos-arm64", "macos-x64"] as const)(
     "upgrades the managed install when a newer %s package is clicked",
     async (target) => {
@@ -1003,6 +1103,7 @@ describe("runPortableCli", () => {
         {
           homedir: () => home,
           now: () => new Date("2026-07-07T00:00:00.000Z"),
+          activateMacosRuntimeFn: () => Promise.resolve(true),
           lifecycleFn: (command) => {
             events.push(command);
             return Promise.resolve(0);
@@ -1088,6 +1189,7 @@ describe("runPortableCli", () => {
       {
         homedir: () => home,
         now: () => new Date("2026-07-07T00:00:00.000Z"),
+        activateMacosRuntimeFn: () => Promise.resolve(true),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -1132,6 +1234,7 @@ describe("runPortableCli", () => {
       {
         homedir: () => home,
         now: () => new Date("2026-07-07T00:00:00.000Z"),
+        activateMacosRuntimeFn: () => Promise.resolve(true),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -1175,6 +1278,7 @@ describe("runPortableCli", () => {
       {},
       {
         homedir: () => home,
+        activateMacosRuntimeFn: () => Promise.resolve(true),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);

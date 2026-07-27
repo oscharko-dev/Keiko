@@ -10,6 +10,7 @@ import {
 import { createHash } from "node:crypto";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   findPortableMetadataRedactionFailures,
@@ -19,6 +20,10 @@ import {
   sha256File,
   validatePortableCandidateManifest,
 } from "./portable-runtime.mjs";
+import {
+  RUNTIME_ACTIVATION_RELATIVE_PATH,
+  runtimeActivationManifest,
+} from "./runtime-activation-manifest.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -271,6 +276,7 @@ function assertEvidence(stageRoot, manifest, target) {
   const sbom = readJson(sbomPath, "SBOM evidence");
   if (sbom.bomFormat !== "CycloneDX") fail(`${target.platformTarget} SBOM evidence is invalid`);
   assertNativeHelperEvidence(stageRoot, manifest, target, sbom);
+  assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom);
   assertEvidenceText(
     regularContainedFile(stageRoot, manifest.evidence.licenseNoticePath, "license evidence"),
     "license evidence",
@@ -278,13 +284,101 @@ function assertEvidence(stageRoot, manifest, target) {
   assertSidecarEvidence(stageRoot, manifest, target);
 }
 
+function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
+  const resourceRoot = sidecarPayloadRoot(stageRoot, target);
+  const path = regularContainedFile(
+    resourceRoot,
+    RUNTIME_ACTIVATION_RELATIVE_PATH,
+    "runtime activation manifest",
+  );
+  const bytes = readFileSync(path);
+  if (
+    createHash("sha256").update(bytes).digest("hex") !== manifest.runtimeActivation.sha256 ||
+    JSON.stringify(JSON.parse(bytes.toString("utf8"))) !==
+      JSON.stringify(runtimeActivationManifest(manifest))
+  ) {
+    fail(`${target.platformTarget} runtime activation binding is invalid`);
+  }
+  if (target.nodePlatform === "win32") {
+    assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
+  } else {
+    assertMacosRuntimeQualificationEvidence(resourceRoot, manifest);
+  }
+}
+
+function assertMacosRuntimeQualificationEvidence(resourceRoot, manifest) {
+  const qualification = manifest.runtimeQualification;
+  const path = regularContainedFile(
+    resourceRoot,
+    qualification.path,
+    "macOS runtime qualification",
+  );
+  const bytes = readFileSync(path);
+  const receipt = JSON.parse(bytes.toString("utf8"));
+  const helpers = new Map(manifest.nativeHelpers.map((helper) => [helper.name, helper]));
+  const expected = {
+    schemaVersion: 1,
+    suiteVersion: "runtime-tree-qualification-v1",
+    platformTarget: manifest.artifact.platformTarget,
+    sourceCommitSha: manifest.release.commitSha,
+    activationManifestSha256: manifest.runtimeActivation.sha256,
+    supervisorSha256: helpers.get("keiko-runtime-supervisor")?.shippedSha256,
+    secureReadSha256: helpers.get("keiko-secure-workspace-read")?.shippedSha256,
+    sidecars: (manifest.sidecarRuntimes ?? []).map((sidecar) => ({
+      name: sidecar.name,
+      sha256: sidecar.payloadSha256,
+    })),
+    backend: "macos-endpoint-security",
+    result: "passed",
+  };
+  if (
+    createHash("sha256").update(bytes).digest("hex") !== qualification.sha256 ||
+    !isDeepStrictEqual(receipt, expected)
+  ) {
+    fail(`${manifest.artifact.platformTarget} runtime qualification binding is invalid`);
+  }
+}
+
+function assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom) {
+  const attestation = manifest.runtimeAttestation;
+  const executable = regularContainedFile(
+    resourceRoot,
+    attestation.executablePath,
+    "runtime attestation carrier",
+  );
+  const bytes = readFileSync(executable);
+  if (
+    bytes.length !== attestation.sizeBytes ||
+    createHash("sha256").update(bytes).digest("hex") !== attestation.shippedSha256
+  ) {
+    fail("windows-x64 runtime attestation carrier is invalid");
+  }
+  const bomRef = `pkg:generic/keiko-runtime-attestation@${manifest.product.packageVersion}?platform=windows-x64`;
+  const components = (sbom.components ?? []).filter(
+    (component) => component?.["bom-ref"] === bomRef,
+  );
+  const hashes = components[0]?.hashes?.filter((hash) => hash?.alg === "SHA-256") ?? [];
+  if (
+    components.length !== 1 ||
+    hashes.length !== 1 ||
+    hashes[0].content !== attestation.shippedSha256
+  ) {
+    fail("windows-x64 runtime attestation SBOM binding is invalid");
+  }
+}
+
+function assertNativeHelperEvidence(stageRoot, manifest, target, sbom) {
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 2) {
+    fail(`${target.platformTarget} must contain the complete native helper set`);
+  }
+  for (const helper of manifest.nativeHelpers) {
+    assertOneNativeHelperEvidence(stageRoot, helper, target, sbom);
+  }
+}
+
 // This release gate deliberately evaluates the complete helper proof in one atomic assertion.
 // eslint-disable-next-line complexity
-function assertNativeHelperEvidence(stageRoot, manifest, target, sbom) {
-  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 1) {
-    fail(`${target.platformTarget} must contain exactly one native helper`);
-  }
-  const helper = manifest.nativeHelpers[0];
+function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom) {
   if (
     helper.signing?.verificationStatus !== "verified-production" ||
     helper.signing?.signatureVerified !== true ||
@@ -361,20 +455,25 @@ function assertSigningAndProvenanceEvidence(stageRoot, manifest, target) {
     fail(`${target.platformTarget} provenance semantics do not match`);
 }
 
-// Exact provenance equality is clearer as one conjunction than as partial mutable checks.
-// eslint-disable-next-line complexity
 function nativeHelperProvenanceMatches(statement, manifest) {
-  const actual = statement.nativeHelpers?.[0];
-  const expected = manifest.nativeHelpers?.[0];
-  return (
-    statement.nativeHelpers?.length === 1 &&
-    actual?.unsignedSha256 === expected?.unsignedSha256 &&
-    actual?.sourceTreeSha256 === expected?.source?.treeSha256 &&
-    actual?.shippedSha256 === expected?.shippedSha256 &&
-    actual?.signatureKind === expected?.signing?.signatureKind &&
-    actual?.signatureVerified === true &&
-    actual?.notarizationVerified === expected?.signing?.notarizationVerified
-  );
+  const actual = statement.nativeHelpers;
+  const expected = manifest.nativeHelpers;
+  if (!Array.isArray(actual) || !Array.isArray(expected) || expected.length !== 2) return false;
+  return isDeepStrictEqual(actual, expected.map(nativeHelperProvenance));
+}
+
+function nativeHelperProvenance(helper) {
+  return {
+    name: helper.name,
+    executablePath: helper.executablePath,
+    architecture: helper.architecture,
+    unsignedSha256: helper.unsignedSha256,
+    sourceTreeSha256: helper.source?.treeSha256,
+    shippedSha256: helper.shippedSha256,
+    signatureKind: helper.signing?.signatureKind,
+    signatureVerified: true,
+    notarizationVerified: helper.signing?.notarizationVerified,
+  };
 }
 
 function sidecarPayloadRoot(stageRoot, target) {
@@ -494,14 +593,13 @@ export async function assemblePortableReleaseAssets(argv) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  assemblePortableReleaseAssets(process.argv.slice(2)).then(
-    (manifest) =>
-      console.log(
-        `portable release asset bundle assembled: ${manifest.artifacts.map((artifact) => artifact.platformTarget).join(", ")} (${BUNDLE_MANIFEST_NAME})`,
-      ),
-    (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    },
-  );
+  try {
+    const manifest = await assemblePortableReleaseAssets(process.argv.slice(2));
+    console.log(
+      `portable release asset bundle assembled: ${manifest.artifacts.map((artifact) => artifact.platformTarget).join(", ")} (${BUNDLE_MANIFEST_NAME})`,
+    );
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }

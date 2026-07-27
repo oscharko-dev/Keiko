@@ -11,6 +11,7 @@ import { PORTABLE_TARGET_NAMES } from "./portable-runtime.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 
 function fail(message) {
@@ -70,6 +71,7 @@ export function stageArgumentsForTarget(
   commitSha,
   packageVersion,
   workflow = DEFAULT_WORKFLOW_RUN,
+  appleTeamId = undefined,
 ) {
   const node = approvedNodeStageArguments(approvals, options.target);
   const args = [
@@ -95,6 +97,10 @@ export function stageArgumentsForTarget(
     "--workflow-run-attempt",
     String(workflow.runAttempt),
   ];
+  if (options.target !== "windows-x64" && appleTeamId !== undefined) {
+    if (!APPLE_TEAM_ID_PATTERN.test(appleTeamId)) fail("APPLE_TEAM_ID is invalid");
+    args.push("--apple-team-id", appleTeamId);
+  }
   for (const specPath of collectSidecarSpecPaths(options.payloadRoot, options.target)) {
     args.push("--sidecar-runtime-spec", specPath);
   }
@@ -119,6 +125,7 @@ export function runPortableAssetsStage(argv, env = process.env) {
     resolveCommitSha(env),
     packageVersion,
     workflowIdentity(env),
+    env.APPLE_TEAM_ID,
   );
   const specCount = args.filter((arg) => arg === "--sidecar-runtime-spec").length;
   console.log(

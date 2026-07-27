@@ -95,17 +95,14 @@ const SECRET_PATTERNS = Object.freeze([
   /sk-[\w-]{8,}/iu,
   /ghp_\w{8,}/iu,
   /github_pat_\w{82}/iu,
-  /npm_[A-Z\d]{36}/iu,
+  /npm_[^\W_]{36}/iu,
   /BEGIN [A-Z ]*PRIVATE KEY/iu,
   /password=/iu,
   /token=/iu,
 ]);
 const CREDENTIAL_VALUE_PATTERNS = Object.freeze([
-  /(?<!\w)authorization\s*:\s*(?:bearer|basic)\s+\S+/iu,
-  /(?<!\w)proxy[-_ ]authorization\s*:\s*(?:bearer|basic)\s+\S+/iu,
-  /(?<!\w)authorization\s*=\s*(?:bearer|basic)\s+\S+/iu,
-  /(?<!\w)proxy[-_ ]authorization\s*=\s*(?:bearer|basic)\s+\S+/iu,
-  /(?<!\w)auth\s*=\s*(?:bearer|basic)\s+\S+/iu,
+  /(?<!\w)(?:proxy[-_ ]authorization|authorization)\s*:\s*(?:bearer|basic)\s+\S+/iu,
+  /(?<!\w)(?:proxy[-_ ]authorization|authorization|auth)\s*=\s*(?:bearer|basic)\s+\S+/iu,
 ]);
 // Structural (non-regex) equivalent of /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u.
 // The original was an unanchored regex whose scheme-continuation class ([A-Za-z0-9+.-]*)
@@ -195,6 +192,10 @@ const NATIVE_ADDON_KEYS = Object.freeze([
   "sizeBytes",
   "sbomBomRef",
   "signing",
+]);
+const REQUIRED_NATIVE_HELPER_NAMES = Object.freeze([
+  "keiko-secure-workspace-read",
+  "keiko-runtime-supervisor",
 ]);
 const EXECUTABLE_TREE_ALGORITHM = "keiko-directory-tree-sha256-v1";
 const GITHUB_REVIEW_REFERENCE_PATTERN =
@@ -506,9 +507,114 @@ function validateRuntime(manifest, failures, options) {
   }
 }
 
+function validateRuntimeActivation(manifest, failures, options) {
+  const activation = manifest.runtimeActivation;
+  if (activation === undefined) {
+    if (options.requireNativeHelpers === true) {
+      push(failures, "runtimeActivation", "is required for newly produced artifacts");
+    }
+    return;
+  }
+  const value = recordAt(manifest, "runtimeActivation", "manifest", failures);
+  exactKeysAt(
+    value,
+    ["schemaVersion", "path", "sha256", "trustAnchor"],
+    "runtimeActivation",
+    failures,
+  );
+  literalAt(value, "schemaVersion", 1, "runtimeActivation", failures);
+  literalAt(value, "path", ".portable/runtime-activation.json", "runtimeActivation", failures);
+  digestAt(value, "sha256", "runtimeActivation", failures, options);
+  const trustAnchor = stringAt(value, "trustAnchor", "runtimeActivation", failures);
+  const target = portableTargetByName(manifest.artifact?.platformTarget);
+  const expected =
+    target?.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal";
+  if (options.context === "staging" && trustAnchor !== "unverified-staging") {
+    push(failures, "runtimeActivation.trustAnchor", "must remain unverified during staging");
+  }
+  if (requiresProductionVerification(options) && trustAnchor !== expected) {
+    push(failures, "runtimeActivation.trustAnchor", `must be ${expected}`);
+  }
+}
+
+function validateRuntimeAttestation(manifest, failures, options) {
+  const target = portableTargetByName(manifest.artifact?.platformTarget);
+  const attestation = manifest.runtimeAttestation;
+  if (attestation === undefined) {
+    if (requiresProductionVerification(options) && target?.nodePlatform === "win32") {
+      push(failures, "runtimeAttestation", "is required for Windows production artifacts");
+    }
+    return;
+  }
+  if (target?.nodePlatform !== "win32") {
+    push(failures, "runtimeAttestation", "is supported only for Windows x64");
+    return;
+  }
+  const value = recordAt(manifest, "runtimeAttestation", "manifest", failures);
+  exactKeysAt(
+    value,
+    ["schemaVersion", "carrierKind", "executablePath", "shippedSha256", "sizeBytes", "signing"],
+    "runtimeAttestation",
+    failures,
+  );
+  literalAt(value, "schemaVersion", 1, "runtimeAttestation", failures);
+  literalAt(value, "carrierKind", "authenticode-executable", "runtimeAttestation", failures);
+  literalAt(
+    value,
+    "executablePath",
+    "runtime/native/keiko-runtime-attestation.exe",
+    "runtimeAttestation",
+    failures,
+  );
+  digestAt(value, "shippedSha256", "runtimeAttestation", failures, options);
+  positiveNumberAt(value, "sizeBytes", "runtimeAttestation", failures);
+  validateNativeHelperSigning(value, target, "runtimeAttestation", failures, options);
+}
+
+function validateRuntimeQualification(manifest, failures, options) {
+  const target = portableTargetByName(manifest.artifact?.platformTarget);
+  const qualification = manifest.runtimeQualification;
+  if (qualification === undefined) {
+    if (requiresProductionVerification(options) && target?.nodePlatform === "darwin") {
+      push(failures, "runtimeQualification", "is required for macOS production artifacts");
+    }
+    return;
+  }
+  if (target?.nodePlatform !== "darwin") {
+    push(failures, "runtimeQualification", "is supported only for macOS");
+    return;
+  }
+  const value = recordAt(manifest, "runtimeQualification", "manifest", failures);
+  exactKeysAt(
+    value,
+    ["schemaVersion", "path", "sha256", "backend"],
+    "runtimeQualification",
+    failures,
+  );
+  literalAt(value, "schemaVersion", 1, "runtimeQualification", failures);
+  literalAt(
+    value,
+    "path",
+    ".portable/runtime-qualification.json",
+    "runtimeQualification",
+    failures,
+  );
+  digestAt(value, "sha256", "runtimeQualification", failures, options);
+  literalAt(value, "backend", "macos-endpoint-security", "runtimeQualification", failures);
+}
+
 function validateSidecarRuntimes(manifest, failures, options) {
   const sidecars = manifest.sidecarRuntimes;
-  if (sidecars === undefined) return;
+  if (sidecars === undefined) {
+    if (options.requireNativeHelpers === true) {
+      push(
+        failures,
+        "sidecarRuntimes",
+        "must contain exactly one approved OpenCode runtime for newly produced artifacts",
+      );
+    }
+    return;
+  }
   if (!Array.isArray(sidecars)) {
     push(failures, "sidecarRuntimes", "must be an array when present");
     return;
@@ -517,6 +623,18 @@ function validateSidecarRuntimes(manifest, failures, options) {
   sidecars.forEach((runtime, index) =>
     validateSidecarRuntime(manifest, runtime, index, names, failures, options),
   );
+  if (
+    options.requireNativeHelpers === true &&
+    (sidecars.length !== 1 ||
+      sidecars[0]?.name !== "opencode-compatible" ||
+      sidecars[0]?.kind !== "coding-runtime")
+  ) {
+    push(
+      failures,
+      "sidecarRuntimes",
+      "must contain exactly one approved OpenCode runtime for newly produced artifacts",
+    );
+  }
 }
 
 // One closed schema validator intentionally enumerates every field and lifecycle invariant,
@@ -530,25 +648,49 @@ function validateNativeHelpers(manifest, failures, options) {
       push(
         failures,
         "nativeHelpers",
-        "must contain exactly one helper for newly produced artifacts",
+        "must contain secure-read and runtime-supervisor helpers for newly produced artifacts",
       );
     }
     return;
   }
-  if (!Array.isArray(helpers) || helpers.length !== 1) {
-    push(failures, "nativeHelpers", "must contain exactly one helper when present");
+  if (!Array.isArray(helpers) || helpers.length === 0 || helpers.length > 2) {
+    push(failures, "nativeHelpers", "must contain one or two supported helpers when present");
     return;
   }
-  const helper = helpers[0];
-  const path = "nativeHelpers[0]";
+  const names = new Set();
+  helpers.forEach((helper, index) =>
+    validateNativeHelper(manifest, helper, index, names, failures, options),
+  );
+  if (
+    options.requireNativeHelpers === true &&
+    !REQUIRED_NATIVE_HELPER_NAMES.every((name) => names.has(name))
+  ) {
+    push(
+      failures,
+      "nativeHelpers",
+      "must contain secure-read and runtime-supervisor helpers for newly produced artifacts",
+    );
+  }
+}
+
+function validateNativeHelper(manifest, helper, index, names, failures, options) {
+  const path = `nativeHelpers[${String(index)}]`;
   if (!isRecord(helper)) {
     push(failures, path, "must be an object");
     return;
   }
-  const { target, targetName } = validateNativeHelperIdentity(manifest, helper, path, failures);
-  validateNativeHelperProtocol(helper, path, failures);
-  validateNativeHelperSource(helper, path, failures, options);
-  validateNativeHelperBinding(helper, targetName, path, failures, options);
+  const identity = validateNativeHelperIdentity(manifest, helper, path, names, failures);
+  validateNativeHelperProtocol(helper, identity.contract, path, failures);
+  validateNativeHelperSource(helper, identity.contract, path, failures, options);
+  validateNativeHelperBinding(
+    helper,
+    identity.contract,
+    identity.targetName,
+    path,
+    failures,
+    options,
+  );
+  const { target } = identity;
   validateNativeHelperSigning(helper, target, path, failures, options);
 }
 
@@ -622,12 +764,19 @@ function validateNativeAddonSource(addon, target, path, failures, options) {
   digestAt(source, "binarySha256", `${path}.source`, failures, options);
 }
 
-function validateNativeHelperIdentity(manifest, helper, path, failures) {
+function validateNativeHelperIdentity(manifest, helper, path, names, failures) {
   exactKeysAt(helper, NATIVE_HELPER_KEYS, path, failures);
-  literalAt(helper, "name", "keiko-secure-workspace-read", path, failures);
-  literalAt(helper, "kind", "secure-workspace-text-read", path, failures);
+  const name = stringAt(helper, "name", path, failures);
+  if (names.has(name)) push(failures, `${path}.name`, "must be unique");
+  names.add(name);
   const targetName = stringAt(helper, "platformTarget", path, failures);
   const target = portableTargetByName(targetName);
+  const contract = nativeHelperContract(name, target);
+  if (contract === undefined) {
+    push(failures, `${path}.name`, "is unsupported");
+  } else {
+    literalAt(helper, "kind", contract.kind, path, failures);
+  }
   if (targetName !== manifest.artifact?.platformTarget) {
     push(failures, `${path}.platformTarget`, "must match artifact");
   }
@@ -637,14 +786,40 @@ function validateNativeHelperIdentity(manifest, helper, path, failures) {
   ) {
     push(failures, `${path}.architecture`, `must be ${target.nodeArchitecture}`);
   }
-  const expectedExecutable = `runtime/native/keiko-secure-workspace-read${target?.nodePlatform === "win32" ? ".exe" : ""}`;
-  if (stringAt(helper, "executablePath", path, failures) !== expectedExecutable) {
-    push(failures, `${path}.executablePath`, `must be ${expectedExecutable}`);
+  if (
+    contract !== undefined &&
+    stringAt(helper, "executablePath", path, failures) !== contract.executablePath
+  ) {
+    push(failures, `${path}.executablePath`, `must be ${contract.executablePath}`);
   }
-  return { target, targetName };
+  return { contract, target, targetName };
 }
 
-function validateNativeHelperProtocol(helper, path, failures) {
+function nativeHelperContract(name, target) {
+  if (target === undefined) return undefined;
+  const suffix = target.nodePlatform === "win32" ? ".exe" : "";
+  if (name === "keiko-secure-workspace-read") {
+    return {
+      bomName: name,
+      executablePath: `runtime/native/${name}${suffix}`,
+      kind: "secure-workspace-text-read",
+      protocol: { requestMagic: "KSR1", responseMagic: "KSS1" },
+      sourcePath: "native/secure-workspace-read",
+    };
+  }
+  if (name === "keiko-runtime-supervisor") {
+    return {
+      bomName: name,
+      executablePath: `runtime/native/${name}${suffix}`,
+      kind: "runtime-process-supervisor",
+      protocol: { requestMagic: "KRP1", responseMagic: "KRS1" },
+      sourcePath: `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`,
+    };
+  }
+  return undefined;
+}
+
+function validateNativeHelperProtocol(helper, contract, path, failures) {
   const protocol = recordAt(helper, "protocol", path, failures);
   exactKeysAt(
     protocol,
@@ -653,29 +828,46 @@ function validateNativeHelperProtocol(helper, path, failures) {
     failures,
   );
   literalAt(protocol, "schemaVersion", 1, `${path}.protocol`, failures);
-  literalAt(protocol, "requestMagic", "KSR1", `${path}.protocol`, failures);
-  literalAt(protocol, "responseMagic", "KSS1", `${path}.protocol`, failures);
+  if (contract !== undefined) {
+    literalAt(
+      protocol,
+      "requestMagic",
+      contract.protocol.requestMagic,
+      `${path}.protocol`,
+      failures,
+    );
+    literalAt(
+      protocol,
+      "responseMagic",
+      contract.protocol.responseMagic,
+      `${path}.protocol`,
+      failures,
+    );
+  }
 }
 
-function validateNativeHelperSource(helper, path, failures, options) {
+function validateNativeHelperSource(helper, contract, path, failures, options) {
   const source = recordAt(helper, "source", path, failures);
   exactKeysAt(source, ["commitSha", "path", "treeSha256"], `${path}.source`, failures);
   const commitSha = stringAt(source, "commitSha", `${path}.source`, failures);
   const acceptedCommitPattern = options.allowPlaceholders ? COMMIT_PATTERN : STRICT_COMMIT_PATTERN;
   if (!acceptedCommitPattern.test(commitSha))
     push(failures, `${path}.source.commitSha`, "must be a commit SHA");
-  literalAt(source, "path", "native/secure-workspace-read", `${path}.source`, failures);
+  if (contract !== undefined) {
+    literalAt(source, "path", contract.sourcePath, `${path}.source`, failures);
+  }
   digestAt(source, "treeSha256", `${path}.source`, failures, options);
 }
 
-function validateNativeHelperBinding(helper, targetName, path, failures, options) {
+function validateNativeHelperBinding(helper, contract, targetName, path, failures, options) {
   digestAt(helper, "unsignedSha256", path, failures, options);
   digestAt(helper, "shippedSha256", path, failures, options);
   positiveNumberAt(helper, "sizeBytes", path, failures);
   const bomRef = stringAt(helper, "sbomBomRef", path, failures);
   if (
-    !bomRef.startsWith("pkg:generic/keiko-secure-workspace-read@") ||
-    !bomRef.endsWith(`?platform=${targetName}`)
+    contract !== undefined &&
+    (!bomRef.startsWith(`pkg:generic/${contract.bomName}@`) ||
+      !bomRef.endsWith(`?platform=${targetName}`))
   ) {
     push(failures, `${path}.sbomBomRef`, "must bind the helper and platform target");
   }
@@ -1431,6 +1623,8 @@ function reviewedBindingChecks(manifest) {
     ...sidecarBindingChecks(manifest),
     ...nativeHelperBindingChecks(manifest),
     ...nativeAddonBindingChecks(manifest),
+    ...runtimeAttestationBindingChecks(manifest),
+    ...runtimeQualificationBindingChecks(manifest),
   ];
 }
 
@@ -1484,6 +1678,18 @@ function nativeHelperBindingChecks(manifest) {
 
 function nativeAddonBindingChecks(manifest) {
   return Array.isArray(manifest.nativeAddons) ? [["nativeAddons", manifest.nativeAddons]] : [];
+}
+
+function runtimeAttestationBindingChecks(manifest) {
+  return manifest.runtimeAttestation === undefined
+    ? []
+    : [["runtimeAttestation", manifest.runtimeAttestation]];
+}
+
+function runtimeQualificationBindingChecks(manifest) {
+  return manifest.runtimeQualification === undefined
+    ? []
+    : [["runtimeQualification", manifest.runtimeQualification]];
 }
 
 function nodeRuntimeIdentity(manifest, target) {
@@ -1707,6 +1913,9 @@ export function validatePortableManifest(manifest, options = {}) {
   validateArtifact(manifest, failures, normalized);
   validateProvenance(manifest, failures, normalized);
   validateRuntime(manifest, failures, normalized);
+  validateRuntimeActivation(manifest, failures, normalized);
+  validateRuntimeAttestation(manifest, failures, normalized);
+  validateRuntimeQualification(manifest, failures, normalized);
   validateSidecarRuntimes(manifest, failures, normalized);
   validateNativeHelpers(manifest, failures, normalized);
   validateNativeAddons(manifest, failures, normalized);

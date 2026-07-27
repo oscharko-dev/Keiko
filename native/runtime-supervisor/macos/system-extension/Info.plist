@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>Keiko Runtime Monitor</string>
+  <key>CFBundleExecutable</key>
+  <string>KeikoRuntimeMonitor</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.oscharko.keiko.runtime-monitor.systemextension</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>KeikoRuntimeMonitor</string>
+  <key>CFBundlePackageType</key>
+  <string>SYSX</string>
+  <key>CFBundleShortVersionString</key>
+  <string>__KEIKO_VERSION__</string>
+  <key>CFBundleVersion</key>
+  <string>__KEIKO_VERSION__</string>
+  <key>NSExtension</key>
+  <dict>
+    <key>NSExtensionPointIdentifier</key>
+    <string>com.apple.system-extension.endpoint-security</string>
+  </dict>
+</dict>
+</plist>

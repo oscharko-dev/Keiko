@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 
 export type LongLivedRuntimePlatform = "darwin" | "win32";
 export type LongLivedRuntimeArchitecture = "arm64" | "x64";
-export type LongLivedRuntimeBackend = "macos-app-sandbox" | "windows-job-object";
+export type LongLivedRuntimeBackend =
+  "macos-app-sandbox" | "macos-endpoint-security" | "windows-job-object";
 
 export interface LongLivedRuntimeQualification {
   readonly platform: LongLivedRuntimePlatform;
@@ -23,8 +24,9 @@ export interface RuntimeQualificationReceipt {
   readonly suiteVersion: "runtime-tree-qualification-v1";
   readonly platformTarget: RuntimeQualificationTarget;
   readonly sourceCommitSha: string;
-  readonly artifactSha256: string;
-  readonly helperSha256: string;
+  readonly activationManifestSha256: string;
+  readonly supervisorSha256: string;
+  readonly secureReadSha256: string;
   readonly sidecars: readonly RuntimeQualificationSidecarDigest[];
   readonly backend: LongLivedRuntimeBackend;
   readonly result: "passed" | "failed";
@@ -87,20 +89,15 @@ export function qualificationFromReceipt(
   if (!receiptIsClosed(candidate) || !bindingIsCurrent(candidate, binding)) {
     return { ok: false, reason: "runtime-unqualified" };
   }
-  // ADR-0131 D5 remains fail-closed: the portable architecture has no entitled Endpoint Security
-  // System Extension that can independently observe every fork/exec/exit on macOS.
-  if (candidate.platformTarget !== "windows-x64") {
-    return { ok: false, reason: "runtime-unqualified" };
-  }
   const releaseReceipt = `sha256:${createHash("sha256")
     .update(canonicalReceipt(candidate), "utf8")
     .digest("hex")}`;
   return {
     ok: true,
     qualification: {
-      platform: "win32",
-      arch: "x64",
-      backend: "windows-job-object",
+      platform: candidate.platformTarget === "windows-x64" ? "win32" : "darwin",
+      arch: candidate.platformTarget === "macos-arm64" ? "arm64" : "x64",
+      backend: candidate.backend,
       releaseReceipt,
     },
   };
@@ -129,8 +126,9 @@ const RECEIPT_KEYS = [
   "suiteVersion",
   "platformTarget",
   "sourceCommitSha",
-  "artifactSha256",
-  "helperSha256",
+  "activationManifestSha256",
+  "supervisorSha256",
+  "secureReadSha256",
   "sidecars",
   "backend",
   "result",
@@ -150,29 +148,48 @@ function receiptIdentityIsClosed(
     | "suiteVersion"
     | "platformTarget"
     | "sourceCommitSha"
-    | "artifactSha256"
-    | "helperSha256"
+    | "activationManifestSha256"
+    | "supervisorSha256"
+    | "secureReadSha256"
     | "sidecars"
   > {
   return (
     value.schemaVersion === 1 &&
     value.suiteVersion === "runtime-tree-qualification-v1" &&
     isQualificationTarget(value.platformTarget) &&
-    typeof value.sourceCommitSha === "string" &&
-    COMMIT_PATTERN.test(value.sourceCommitSha) &&
-    typeof value.artifactSha256 === "string" &&
-    DIGEST_PATTERN.test(value.artifactSha256) &&
-    typeof value.helperSha256 === "string" &&
-    DIGEST_PATTERN.test(value.helperSha256) &&
+    receiptCommitIsClosed(value.sourceCommitSha) &&
+    receiptDigestsAreClosed(value) &&
     sidecarsAreClosed(value.sidecars)
   );
+}
+
+function receiptCommitIsClosed(value: unknown): value is string {
+  return typeof value === "string" && COMMIT_PATTERN.test(value);
+}
+
+function receiptDigestsAreClosed(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> &
+  Pick<
+    RuntimeQualificationReceipt,
+    "activationManifestSha256" | "supervisorSha256" | "secureReadSha256"
+  > {
+  return (
+    digestIsClosed(value.activationManifestSha256) &&
+    digestIsClosed(value.supervisorSha256) &&
+    digestIsClosed(value.secureReadSha256)
+  );
+}
+
+function digestIsClosed(value: unknown): value is string {
+  return typeof value === "string" && DIGEST_PATTERN.test(value);
 }
 
 function receiptResultIsClosed(
   value: ReturnTypeNarrowedReceipt,
 ): value is RuntimeQualificationReceipt {
   const backend = value.backend;
-  if (backend !== "windows-job-object" && backend !== "macos-app-sandbox") return false;
+  if (backend !== "windows-job-object" && backend !== "macos-endpoint-security") return false;
   if (value.result !== "passed" && value.result !== "failed") return false;
   return backendMatchesTarget({ backend, platformTarget: value.platformTarget });
 }
@@ -188,8 +205,9 @@ function bindingIsCurrent(
     receipt.result === "passed" &&
     receipt.platformTarget === binding.platformTarget &&
     receipt.sourceCommitSha === binding.sourceCommitSha &&
-    receipt.artifactSha256 === binding.artifactSha256 &&
-    receipt.helperSha256 === binding.helperSha256 &&
+    receipt.activationManifestSha256 === binding.activationManifestSha256 &&
+    receipt.supervisorSha256 === binding.supervisorSha256 &&
+    receipt.secureReadSha256 === binding.secureReadSha256 &&
     canonicalSidecars(receipt.sidecars) === canonicalSidecars(binding.sidecars)
   );
 }
@@ -212,8 +230,9 @@ function canonicalReceipt(receipt: RuntimeQualificationReceipt): string {
     suiteVersion: receipt.suiteVersion,
     platformTarget: receipt.platformTarget,
     sourceCommitSha: receipt.sourceCommitSha,
-    artifactSha256: receipt.artifactSha256,
-    helperSha256: receipt.helperSha256,
+    activationManifestSha256: receipt.activationManifestSha256,
+    supervisorSha256: receipt.supervisorSha256,
+    secureReadSha256: receipt.secureReadSha256,
     sidecars: canonicalSidecarRecords(receipt.sidecars),
     backend: receipt.backend,
     result: receipt.result,
@@ -235,7 +254,7 @@ function backendMatchesTarget(
 ): boolean {
   return receipt.platformTarget === "windows-x64"
     ? receipt.backend === "windows-job-object"
-    : receipt.backend === "macos-app-sandbox";
+    : receipt.backend === "macos-endpoint-security";
 }
 
 function isQualificationTarget(value: unknown): value is RuntimeQualificationTarget {
@@ -262,7 +281,8 @@ function qualificationIsSupported(
   if (qualification.platform === "darwin") {
     return (
       (qualification.arch === "arm64" || qualification.arch === "x64") &&
-      qualification.backend === "macos-app-sandbox"
+      (qualification.backend === "macos-app-sandbox" ||
+        qualification.backend === "macos-endpoint-security")
     );
   }
   return false;

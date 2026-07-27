@@ -384,6 +384,20 @@ Microsoft SmartScreen reputation or warning-free first launch for every new file
 requires the approved verified publisher, SHA-256 signature, RFC 3161 timestamp, and local verification;
 SmartScreen reputation is observed but is not asserted as a Keiko-controlled outcome.
 
+Runtime point-of-use checks invoke the fixed Windows system PowerShell path with a closed environment
+and compare each attestation carrier or privileged helper's verified leaf signer identity with the
+independently verified `Keiko.exe` signer identity from the same qualified release. This is an
+ephemeral same-release comparison, not a committed thumbprint, public-key, or subject pin, so it
+preserves the approved Azure leaf-rotation contract while rejecting a valid binary from another
+publisher.
+
+The protected macOS production stage binds its reviewed `APPLE_TEAM_ID` into the packaged server
+module before signing. An unbound development or dispatch package cannot qualify the native runtime.
+At startup and point of use, the outer `Keiko.app` seal, system-extension manager, Endpoint Security
+extension, and secure workspace-read helper must verify under that exact release-pinned team
+requirement. The raw team id is neither committed nor exposed as runtime evidence, and a separately
+signed object from another Apple developer fails closed.
+
 ## Child implementation interfaces
 
 - **#2200 (Windows):** implements the protected native Windows signing job, exact Azure trust/RBAC

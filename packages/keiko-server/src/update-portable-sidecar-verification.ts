@@ -578,3 +578,20 @@ export function verifyPortableManifestSidecars(
   const sidecars = verifiedSidecars(rawSidecars, target);
   return { sidecars, summaries: sidecars.map((sidecar) => sidecar.summary) };
 }
+
+/**
+ * Parses sidecars from the smaller platform-sealed runtime activation document. The activation
+ * signature/receipt binds the complete document at the caller's trust boundary, so it deliberately
+ * has no second mutable release-impact copy.
+ */
+export function verifyPortableAttestedSidecars(
+  activation: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): PortableSidecarManifestVerification {
+  const rawSidecars = activation.sidecarRuntimes;
+  if (!Array.isArray(rawSidecars)) {
+    fail("sidecar-metadata-malformed", "attested sidecar metadata is malformed");
+  }
+  const sidecars = verifiedSidecars(rawSidecars, target);
+  return { sidecars, summaries: sidecars.map((sidecar) => sidecar.summary) };
+}

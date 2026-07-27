@@ -1,19 +1,12 @@
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Readable, Writable } from "node:stream";
-import {
-  qualificationFromReceipt,
-  type LongLivedRuntimeQualification,
-  type RuntimeQualificationSidecarDigest,
-} from "@oscharko-dev/keiko-sandbox";
+import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
 
 import { encodeLaunchPacket, validateLaunchPacketRequest } from "./nativeRuntimeProcessProtocol.js";
 import {
   invalidRequest,
   pathIsContained,
-  resolveContained,
   safeRealDirectory,
   safeRealFile,
 } from "./nativeRuntimeProcessPaths.js";
@@ -44,6 +37,7 @@ export interface NativeRuntimeProcessBackendOptions {
   readonly helperPath: string;
   readonly runtimeRoots: readonly string[];
   readonly workspaceRoot: string;
+  readonly identity?: Pick<LongLivedRuntimeQualification, "platform" | "arch" | "backend">;
   readonly spawnHelper?: NativeRuntimeHelperSpawn | undefined;
 }
 
@@ -51,17 +45,11 @@ export interface NativeRuntimeRecoveryPort {
   reconcile(recoveryHandle: string, timeoutMs: number): Promise<boolean>;
 }
 
-export interface InstalledNativeRuntimeQualificationOptions {
-  readonly installRoot: string;
-  readonly sourceCommitSha: string;
-  readonly artifactSha256: string;
-  readonly sidecars: readonly RuntimeQualificationSidecarDigest[];
-}
-
 interface ValidatedBackendOptions {
   readonly helperPath: string;
   readonly runtimeRoots: readonly string[];
   readonly workspaceRoot: string;
+  readonly identity: Pick<LongLivedRuntimeQualification, "platform" | "arch" | "backend">;
   readonly spawnHelper: NativeRuntimeHelperSpawn;
 }
 
@@ -82,39 +70,12 @@ export function createNativeRuntimeRecoveryPort(
   };
 }
 
-export function loadInstalledNativeRuntimeQualification(
-  options: InstalledNativeRuntimeQualificationOptions,
-): LongLivedRuntimeQualification | undefined {
-  try {
-    const installRoot = safeRealDirectory(options.installRoot);
-    const helper = safeRealFile(
-      resolveContained(installRoot, "runtime/native/keiko-runtime-supervisor.exe"),
-    );
-    const receiptPath = safeRealFile(
-      resolveContained(installRoot, ".portable/runtime-supervisor-qualification.json"),
-    );
-    const candidate: unknown = JSON.parse(readFileSync(receiptPath, "utf8"));
-    const result = qualificationFromReceipt(candidate, {
-      platformTarget: "windows-x64",
-      sourceCommitSha: options.sourceCommitSha,
-      artifactSha256: options.artifactSha256,
-      helperSha256: sha256File(helper),
-      sidecars: options.sidecars,
-    });
-    return result.ok ? result.qualification : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
-  public readonly identity = Object.freeze({
-    platform: "win32" as const,
-    arch: "x64" as const,
-    backend: "windows-job-object" as const,
-  });
+  public readonly identity;
 
-  public constructor(private readonly options: ValidatedBackendOptions) {}
+  public constructor(private readonly options: ValidatedBackendOptions) {
+    this.identity = Object.freeze({ ...options.identity });
+  }
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
     validateLaunchPacketRequest(request, {
@@ -166,6 +127,13 @@ function validateBackendOptions(
     helperPath,
     workspaceRoot,
     runtimeRoots,
+    identity:
+      options.identity ??
+      Object.freeze({
+        platform: "win32" as const,
+        arch: "x64" as const,
+        backend: "windows-job-object" as const,
+      }),
     spawnHelper: options.spawnHelper ?? spawnNativeHelper,
   };
 }
@@ -225,8 +193,4 @@ async function reconcileRecoveryHandle(
 function nativeTree(tree: RuntimeProcessTree): NativeRuntimeTree {
   if (!(tree instanceof NativeRuntimeTree)) throw new Error("native-runtime-tree-not-owned");
   return tree;
-}
-
-function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }

@@ -247,7 +247,7 @@ KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
   -Dsonar.projectKey="${project}" \
   -Dsonar.projectName="Keiko (local pre-push scan)" \
   -Dsonar.scm.disabled=true \
-  -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**,**/.next/**,**/out/**,**/.portable-runtime/**,**/*.min.*"
+  -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**,**/.next/**,**/out/**,**/.keiko/**,**/.codex/**,**/.claude/**,**/.portable-runtime/**,**/*.min.*"
 
 # SonarQube Community carries no shell analyzer — `api/languages/list` has no shell entry, and
 # `shelldre:*` rules do not exist there — while SonarCloud runs them. A clean scan here therefore

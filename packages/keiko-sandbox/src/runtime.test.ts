@@ -20,8 +20,9 @@ const receipt: RuntimeQualificationReceipt = {
   suiteVersion: "runtime-tree-qualification-v1",
   platformTarget: "windows-x64",
   sourceCommitSha: "1".repeat(40),
-  artifactSha256: "2".repeat(64),
-  helperSha256: "3".repeat(64),
+  activationManifestSha256: "2".repeat(64),
+  supervisorSha256: "3".repeat(64),
+  secureReadSha256: "5".repeat(64),
   sidecars: [{ name: "opencode", sha256: "4".repeat(64) }],
   backend: "windows-job-object",
   result: "passed",
@@ -90,8 +91,9 @@ describe("long-lived runtime qualification", () => {
     const result = qualificationFromReceipt(receipt, {
       platformTarget: "windows-x64",
       sourceCommitSha: "1".repeat(40),
-      artifactSha256: "2".repeat(64),
-      helperSha256: "3".repeat(64),
+      activationManifestSha256: "2".repeat(64),
+      supervisorSha256: "3".repeat(64),
+      secureReadSha256: "5".repeat(64),
       sidecars: [{ name: "opencode", sha256: "4".repeat(64) }],
     });
 
@@ -107,16 +109,18 @@ describe("long-lived runtime qualification", () => {
   });
 
   it.each([
-    ["artifactSha256", "5".repeat(64)],
-    ["helperSha256", "5".repeat(64)],
+    ["activationManifestSha256", "6".repeat(64)],
+    ["supervisorSha256", "6".repeat(64)],
+    ["secureReadSha256", "6".repeat(64)],
     ["sourceCommitSha", "5".repeat(40)],
   ] as const)("rejects stale receipt binding %s", (key, value) => {
     expect(
       qualificationFromReceipt(receipt, {
         platformTarget: "windows-x64",
         sourceCommitSha: "1".repeat(40),
-        artifactSha256: "2".repeat(64),
-        helperSha256: "3".repeat(64),
+        activationManifestSha256: "2".repeat(64),
+        supervisorSha256: "3".repeat(64),
+        secureReadSha256: "5".repeat(64),
         sidecars: [{ name: "opencode", sha256: "4".repeat(64) }],
         [key]: value,
       }),
@@ -127,8 +131,9 @@ describe("long-lived runtime qualification", () => {
     const binding = {
       platformTarget: "windows-x64" as const,
       sourceCommitSha: "1".repeat(40),
-      artifactSha256: "2".repeat(64),
-      helperSha256: "3".repeat(64),
+      activationManifestSha256: "2".repeat(64),
+      supervisorSha256: "3".repeat(64),
+      secureReadSha256: "5".repeat(64),
       sidecars: [{ name: "opencode", sha256: "4".repeat(64) }],
     };
     const candidates = [
@@ -148,22 +153,29 @@ describe("long-lived runtime qualification", () => {
   });
 
   it.each(["macos-arm64", "macos-x64"] as const)(
-    "keeps %s unavailable even when a receipt claims success",
+    "accepts %s only for an Endpoint Security qualification receipt",
     (platformTarget) => {
       const candidate = {
         ...receipt,
         platformTarget,
-        backend: "macos-app-sandbox",
+        backend: "macos-endpoint-security",
       };
-      expect(
-        qualificationFromReceipt(candidate, {
-          platformTarget,
-          sourceCommitSha: receipt.sourceCommitSha,
-          artifactSha256: receipt.artifactSha256,
-          helperSha256: receipt.helperSha256,
-          sidecars: receipt.sidecars,
-        }),
-      ).toEqual({ ok: false, reason: "runtime-unqualified" });
+      const result = qualificationFromReceipt(candidate, {
+        platformTarget,
+        sourceCommitSha: receipt.sourceCommitSha,
+        activationManifestSha256: receipt.activationManifestSha256,
+        supervisorSha256: receipt.supervisorSha256,
+        secureReadSha256: receipt.secureReadSha256,
+        sidecars: receipt.sidecars,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        qualification: {
+          platform: "darwin",
+          arch: platformTarget === "macos-arm64" ? "arm64" : "x64",
+          backend: "macos-endpoint-security",
+        },
+      });
     },
   );
 });

@@ -70,7 +70,9 @@ const codeExtensions = new Set([
   "jsx",
   "json",
   "md",
+  "m",
   "mjs",
+  "mm",
   "mts",
   "plist",
   "prettierignore",
@@ -89,9 +91,9 @@ const codeExtensions = new Set([
   "yml",
 ]);
 const coverableExtensions = new Set(["cjs", "cts", "js", "jsx", "mjs", "mts", "ts", "tsx"]);
-const nativeExtensions = new Set(["c", "cc", "cs", "cxx", "h", "hh"]);
+const nativeExtensions = new Set(["c", "cc", "cs", "cxx", "h", "hh", "m", "mm"]);
 const generatedPath =
-  /(^|\/)(?:\.claude|\.codex|\.next|\.portable-runtime|coverage|dist|node_modules|out)(\/|$)/u;
+  /(^|\/)(?:\.claude|\.codex|\.keiko|\.next|\.portable-runtime|coverage|dist|node_modules|out)(\/|$)/u;
 const nativeSupportPath = /^scripts\/native-quality(?:\/|$)/u;
 const nativeSonarExclusions = Object.freeze([
   "**/*.c",
@@ -99,6 +101,8 @@ const nativeSonarExclusions = Object.freeze([
   "**/*.cxx",
   "**/*.h",
   "**/*.hh",
+  "**/*.m",
+  "**/*.mm",
   "**/*.cs",
 ]);
 
@@ -257,6 +261,7 @@ function csharpEntryFailures(gates, path) {
 
 function languageGateFailures(language, gates, path) {
   if (language === "c") return cEntryFailures(gates, path);
+  if (language === "objective-c") return cEntryFailures(gates, path);
   if (language === "csharp") return csharpEntryFailures(gates, path);
   return [`native quality entry has unsupported language: ${path}`];
 }
@@ -280,6 +285,7 @@ function requiredPropertyFailures(properties) {
     "sonar.sources=.",
     "sonar.tests=.",
     "sonar.sourceEncoding=UTF-8",
+    "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
     "sonar.plsql.file.suffixes=-",
     "sonar.test.inclusions=",
     "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts",

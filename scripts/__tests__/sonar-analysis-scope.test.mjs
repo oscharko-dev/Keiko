@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,6 +19,14 @@ import {
 } from "../sonar-analysis-scope.mjs";
 
 const scriptPath = resolve(import.meta.dirname, "..", "sonar-analysis-scope.mjs");
+const localSonarGate = readFileSync(
+  resolve(import.meta.dirname, "..", "..", "docker", "gates", "run-sonar.sh"),
+  "utf8",
+);
+const repositorySonarProperties = readFileSync(
+  resolve(import.meta.dirname, "..", "..", "sonar-project.properties"),
+  "utf8",
+);
 
 const nativeEntries = [
   {
@@ -38,10 +47,11 @@ const validProperties = [
   "sonar.sources=.",
   "sonar.tests=.",
   "sonar.sourceEncoding=UTF-8",
+  "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
   "sonar.plsql.file.suffixes=-",
   "sonar.test.inclusions=tests/**",
-  "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
-  "sonar.exclusions=tests/**,native/portable-launcher/**,scripts/native-quality/**,scripts/windows-portable-rfc3161.cs,native/launcher.c,scripts/helper.cs,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
+  "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.m,**/*.mm,**/*.cs",
+  "sonar.exclusions=tests/**,native/portable-launcher/**,scripts/native-quality/**,scripts/windows-portable-rfc3161.cs,native/launcher.c,scripts/helper.cs,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.m,**/*.mm,**/*.cs",
   "sonar.cpd.exclusions=packages/keiko-ui/src/lib/i18n-messages.*.ts,packages/keiko-ui/src/**/*-i18n.ts,packages/keiko-ui/src/**/*-i18n.de.ts,packages/keiko-ui/src/**/*-i18n.en.ts,scripts/__tests__/windows-rfc3161-fixtures.ps1,scripts/__tests__/windows-native-policy-fixtures.ps1",
 ].join("\n");
 
@@ -56,19 +66,32 @@ function removePropertyPattern(properties, key, pattern) {
     .join("\n");
 }
 
+function propertyPatterns(properties, key) {
+  const line = properties.split("\n").find((candidate) => candidate.startsWith(`${key}=`));
+  return new Set(line?.slice(key.length + 1).split(",") ?? []);
+}
+
 describe("Sonar analysis scope", () => {
   it("classifies tests, generated artifacts, native sources, and product sources disjointly", () => {
     expect(isTestPath("tests/support/tool.ts")).toBe(true);
     expect(isTestPath("packages/a/src/a.test.ts")).toBe(true);
     expect(isTestPath("packages/a/src/testing/fake.ts")).toBe(true);
     expect(isTestPath("packages/a/src/test-support.ts")).toBe(true);
+    expect(isTestPath("native/runtime-supervisor/macos/test-protocol.mjs")).toBe(true);
     expect(isGeneratedOrBinaryPath("docs/design-system/evidence/run/capture.mjs")).toBe(true);
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.png")).toBe(true);
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.svg")).toBe(true);
     expect(isGeneratedOrBinaryPath("scripts/native-quality/Keiko.NativeQuality.csproj")).toBe(true);
+    expect(isGeneratedOrBinaryPath(".keiko/dev/ui/task-workspaces/repo/ws/tsconfig.json")).toBe(
+      true,
+    );
     expect(classifyAnalysisPath("native/launcher.c", nativeSources)).toBe("native-compensated");
     expect(classifyAnalysisPath("native/new.c", nativeSources)).toBe("unclassified-native");
+    expect(classifyAnalysisPath("native/new.m", nativeSources)).toBe("unclassified-native");
     expect(classifyAnalysisPath("scripts/__tests__/fixture.cs", nativeSources)).toBe("test");
+    expect(
+      classifyAnalysisPath("native/runtime-supervisor/macos/test-protocol.mjs", nativeSources),
+    ).toBe("test");
     expect(
       classifyAnalysisPath("scripts/native-quality/Keiko.NativeQuality.csproj", nativeSources),
     ).toBe("excluded");
@@ -78,6 +101,26 @@ describe("Sonar analysis scope", () => {
     expect(classifyAnalysisPath("scripts/check.ps1", nativeSources)).toBe("source");
     expect(classifyAnalysisPath("infrastructure/worker.toml", nativeSources)).toBe("source");
     expect(classifyAnalysisPath("LICENSE", nativeSources)).toBe("ignored");
+  });
+
+  it("keeps the macOS runtime protocol harness in the Sonar test lane", () => {
+    const protocolHarness = "native/runtime-supervisor/macos/test-protocol.mjs";
+
+    expect(propertyPatterns(repositorySonarProperties, "sonar.test.inclusions")).toContain(
+      protocolHarness,
+    );
+    expect(propertyPatterns(repositorySonarProperties, "sonar.exclusions")).toContain(
+      protocolHarness,
+    );
+  });
+
+  it("keeps local Keiko task workspaces outside the local Sonar TypeScript graph", () => {
+    expect(localSonarGate).toContain("**/.keiko/**");
+    expect(localSonarGate).toContain("rev-parse --path-format=absolute --git-common-dir");
+    expect(localSonarGate).not.toContain("rev-parse --absolute-git-dir");
+    expect(validProperties).toContain(
+      "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
+    );
   });
 
   it("maps coverable and compensated productive paths to explicit evidence lanes", () => {
@@ -221,6 +264,19 @@ describe("Sonar analysis scope", () => {
         properties: withoutTestCSharp,
       }),
     ).toContain("sonar.test.exclusions is missing native exclusion **/*.cs");
+
+    const withoutSourceObjectiveC = removePropertyPattern(
+      validProperties,
+      "sonar.exclusions",
+      "**/*.m",
+    );
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: withoutSourceObjectiveC,
+      }),
+    ).toContain("sonar.exclusions is missing native exclusion **/*.m");
   });
 
   it("fails on unsupported native manifest languages and malformed entry fields", () => {
