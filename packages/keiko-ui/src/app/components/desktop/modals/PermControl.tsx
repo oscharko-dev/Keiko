@@ -17,11 +17,16 @@ const LEGACY_OPTIONS: readonly (readonly [AccessMode, string])[] = [
 ];
 
 function resolveAccessNote(keiko: boolean, access: AccessMode): string {
+  let note: string;
   if (keiko) {
-    return "No rights by default. You approve while manual; Keiko governs per policy when autonomous.";
+    note =
+      "No rights by default. You approve while manual; Keiko governs per policy when autonomous.";
+  } else if (access === "full") {
+    note = "Legacy: agent acts without prompts.";
+  } else {
+    note = "Legacy: you approve each privileged action.";
   }
-  if (access === "full") return "Legacy: agent acts without prompts.";
-  return "Legacy: you approve each privileged action.";
+  return note;
 }
 
 export function PermControl({ cfg, set }: PermControlProps): ReactNode {

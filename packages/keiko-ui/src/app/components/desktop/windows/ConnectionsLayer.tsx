@@ -408,11 +408,15 @@ export function connectionBadgeAriaLabel(
   armed: boolean,
   intensity: FlowIntensity,
 ): string {
-  if (armed) return `Confirm removal of connection: ${item.label}. Activate again to remove.`;
-  if (active) {
-    return `${item.label} — ${intensity} data exchange in progress. Activate to remove connection.`;
+  let label: string;
+  if (armed) {
+    label = `Confirm removal of connection: ${item.label}. Activate again to remove.`;
+  } else if (active) {
+    label = `${item.label} — ${intensity} data exchange in progress. Activate to remove connection.`;
+  } else {
+    label = `Remove connection: ${item.label}`;
   }
-  return `Remove connection: ${item.label}`;
+  return label;
 }
 
 // GEN-PERF-WORKSPACE-006 — memoized badge; same identity contract as ConnectionEdge

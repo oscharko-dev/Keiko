@@ -33,9 +33,15 @@ function branchMatches(branch: GitBranchListEntry, query: string): boolean {
 }
 
 function branchTriggerLabel(currentBranch: string, loading: boolean): string {
-  if (currentBranch.length > 0) return currentBranch;
-  if (loading) return "Loading branches";
-  return "No branch";
+  let label: string;
+  if (currentBranch.length > 0) {
+    label = currentBranch;
+  } else if (loading) {
+    label = "Loading branches";
+  } else {
+    label = "No branch";
+  }
+  return label;
 }
 
 export function BranchSelector({

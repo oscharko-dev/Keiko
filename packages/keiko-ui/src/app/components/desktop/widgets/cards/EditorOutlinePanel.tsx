@@ -86,9 +86,15 @@ function kindLabel(kind: EditorDocumentSymbol["kind"]): string {
 }
 
 function outlineEmptyText(snapshot: EditorOutlineSnapshot | undefined): string {
-  if (snapshot?.loading === true) return "Loading symbols.";
-  if (snapshot?.enabled === false) return "Outline is unavailable for this file.";
-  return "No symbols found in this file.";
+  let text: string;
+  if (snapshot?.loading === true) {
+    text = "Loading symbols.";
+  } else if (snapshot?.enabled === false) {
+    text = "Outline is unavailable for this file.";
+  } else {
+    text = "No symbols found in this file.";
+  }
+  return text;
 }
 
 export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {

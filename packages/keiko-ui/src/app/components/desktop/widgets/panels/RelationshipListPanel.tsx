@@ -172,21 +172,27 @@ function resolveRelationshipActivity(
 // switch does not earn its keep here, so this reads as a plain if/else.
 function formatActivityLabel(activity: RelationshipActivityState, count: number): string {
   const relationshipNoun = count === 1 ? "relationship" : "relationships";
+  let label: string;
   if (activity === "high-throughput") {
-    return `${count} high-throughput ${relationshipNoun}`;
+    label = `${count} high-throughput ${relationshipNoun}`;
+  } else {
+    label = `${count} ${activity} ${relationshipNoun}`;
   }
-  return `${count} ${activity} ${relationshipNoun}`;
+  return label;
 }
 
 // #2723 (S3358): the truncated/count message combined an outer ternary with a second,
 // unrelated pluralization ternary embedded in the non-truncated branch's template literal;
 // extracted to a named if/else so only one (non-nested) ternary remains.
 function formatFilterAnnouncement(truncated: boolean, count: number): string {
+  let announcement: string;
   if (truncated) {
-    return `Showing first ${String(count)} relationships — more available.`;
+    announcement = `Showing first ${String(count)} relationships — more available.`;
+  } else {
+    const relationshipNoun = count === 1 ? "relationship" : "relationships";
+    announcement = `Showing ${String(count)} ${relationshipNoun}.`;
   }
-  const relationshipNoun = count === 1 ? "relationship" : "relationships";
-  return `Showing ${String(count)} ${relationshipNoun}.`;
+  return announcement;
 }
 
 function summarizeOverflowActivities(

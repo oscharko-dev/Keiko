@@ -73,9 +73,15 @@ function focusableInside(root: HTMLElement): readonly HTMLElement[] {
 }
 
 function submitButtonLabel(busy: boolean, mode: AddMode): string {
-  if (busy) return "Adding…";
-  if (mode === "clone") return "Clone repository";
-  return "Open repository";
+  let label: string;
+  if (busy) {
+    label = "Adding…";
+  } else if (mode === "clone") {
+    label = "Clone repository";
+  } else {
+    label = "Open repository";
+  }
+  return label;
 }
 
 export function AddRepositoryDialog({

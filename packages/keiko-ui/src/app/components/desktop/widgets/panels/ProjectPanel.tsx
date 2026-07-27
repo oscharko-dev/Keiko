@@ -117,33 +117,6 @@ function ProjectRow({
     if (isActiveProject) setExpanded(true);
   }, [isActiveProject]);
 
-  // #2723 (S3358): the project-chats body was a nested ternary (isActiveProject ? … :
-  // chats.length === 0 ? … : …); extracted to a named render function with early returns.
-  const renderProjectChats = (): ReactNode => {
-    if (!isActiveProject) return <div className="proj-empty">Select project to load chats</div>;
-    if (chats.length === 0) return <div className="proj-empty">No chats</div>;
-    return chats.map((chat) => (
-      <button
-        key={chat.id}
-        type="button"
-        role="treeitem"
-        aria-level={2}
-        aria-selected={activeChatId === chat.id}
-        className="chat-row"
-        data-active={activeChatId === chat.id}
-        tabIndex={-1}
-        onClick={() => {
-          onChat(chat);
-        }}
-      >
-        <span className="chat-title">{chat.title}</span>
-        {chat.branchLabel !== undefined ? (
-          <span className="chat-meta mono">{chat.branchLabel}</span>
-        ) : null}
-      </button>
-    ));
-  };
-
   return (
     <div className="proj">
       <button
@@ -181,7 +154,30 @@ function ProjectRow({
       {expanded && (
         // role="group" groups child treeitems under their parent (APG tree pattern).
         <div className="proj-chats" role="group" aria-label={project.name}>
-          {renderProjectChats()}
+          {isActiveProject && chats.length === 0 && <div className="proj-empty">No chats</div>}
+          {isActiveProject &&
+            chats.length > 0 &&
+            chats.map((chat) => (
+              <button
+                key={chat.id}
+                type="button"
+                role="treeitem"
+                aria-level={2}
+                aria-selected={activeChatId === chat.id}
+                className="chat-row"
+                data-active={activeChatId === chat.id}
+                tabIndex={-1}
+                onClick={() => {
+                  onChat(chat);
+                }}
+              >
+                <span className="chat-title">{chat.title}</span>
+                {chat.branchLabel !== undefined ? (
+                  <span className="chat-meta mono">{chat.branchLabel}</span>
+                ) : null}
+              </button>
+            ))}
+          {!isActiveProject && <div className="proj-empty">Select project to load chats</div>}
         </div>
       )}
     </div>

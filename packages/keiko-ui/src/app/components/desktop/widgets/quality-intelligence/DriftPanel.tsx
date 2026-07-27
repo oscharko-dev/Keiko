@@ -39,10 +39,8 @@ function driftMessage(staleCount: number, t: I18nTranslate): string {
   if (staleCount === 0) {
     return t("qi.drift.fresh");
   }
-  if (staleCount === 1) {
-    return t("qi.drift.staleSingle", { count: staleCount });
-  }
-  return t("qi.drift.staleMany", { count: staleCount });
+  const key = staleCount === 1 ? "qi.drift.staleSingle" : "qi.drift.staleMany";
+  return t(key, { count: staleCount });
 }
 
 function regeneratedMessage(
@@ -84,10 +82,8 @@ function regenerateButtonLabel(
   if (busyOp === "regenerate") {
     return t("qi.drift.regenerating");
   }
-  if (staleCount === 1) {
-    return t("qi.drift.regenerateSingle", { count: staleCount });
-  }
-  return t("qi.drift.regenerateMany", { count: staleCount });
+  const key = staleCount === 1 ? "qi.drift.regenerateSingle" : "qi.drift.regenerateMany";
+  return t(key, { count: staleCount });
 }
 
 function DriftIndicator({

@@ -261,8 +261,8 @@ describe("ProjectPanel", () => {
     expect(projectItem).toHaveFocus();
   });
 
-  // #2723 (S3358): renderProjectChats' "not the active project" early return — expanding a
-  // project that is not the active one must not show its (unfetched) chats.
+  // #2723 (S3358): the "not the active project" branch — expanding a project that is not the
+  // active one must not show its (unfetched) chats.
   it("tells you to select the project before its chats load (S3358)", async () => {
     const user = userEvent.setup();
     const otherProject: ProjectWithAvailability = {
@@ -286,7 +286,7 @@ describe("ProjectPanel", () => {
     expect(within(group).getByText("Select project to load chats")).toBeInTheDocument();
   });
 
-  // #2723 (S3358): renderProjectChats' "no chats" branch, distinct from the "not active" branch.
+  // #2723 (S3358): the "no chats" branch, distinct from the "not active" branch.
   it("shows a no-chats message for the active project once it has none (S3358)", () => {
     render(
       <ChatSessionProvider value={{ ...session(), chats: [] }}>

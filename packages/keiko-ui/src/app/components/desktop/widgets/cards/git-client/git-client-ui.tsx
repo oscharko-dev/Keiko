@@ -111,16 +111,21 @@ function outcomeTone(status: GitMutationOutcome["status"]): PillTone {
 }
 
 export function outcomeRingColor(tone: PillTone): string {
+  let color: string;
   switch (tone) {
     case "success":
-      return "color-mix(in oklch, var(--ok) 42%, var(--line))";
+      color = "color-mix(in oklch, var(--ok) 42%, var(--line))";
+      break;
     case "warning":
-      return "color-mix(in oklch, var(--warn) 42%, var(--line))";
+      color = "color-mix(in oklch, var(--warn) 42%, var(--line))";
+      break;
     case "danger":
-      return "color-mix(in oklch, var(--danger) 42%, var(--line))";
+      color = "color-mix(in oklch, var(--danger) 42%, var(--line))";
+      break;
     default:
-      return "var(--line)";
+      color = "var(--line)";
   }
+  return color;
 }
 
 // Renders the result of a stage / unstage / commit mutation (or a transport error). Shows the

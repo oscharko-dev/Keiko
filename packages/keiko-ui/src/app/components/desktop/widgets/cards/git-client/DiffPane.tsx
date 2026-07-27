@@ -145,12 +145,29 @@ export function DiffPane({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, flex: 1 }}>
-      <DiffPaneHeader
-        selectedCommit={selectedCommit}
-        selectedChangePath={selectedChangePath}
-        scope={scope}
-        onScopeChange={onScopeChange}
-      />
+      {selectedCommit !== null && <CommitDetailHeader entry={selectedCommit} />}
+      {selectedCommit === null && selectedChangePath !== null && (
+        <div style={DIFF_HEADER_STYLE}>
+          <DiffPathLabel path={selectedChangePath} />
+          <span style={{ flex: 1 }} />
+          <div role="group" aria-label="Diff scope" style={SCOPE_TOGGLE_STYLE}>
+            {SCOPES.map((entry) => {
+              const active = entry.id === scope;
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  style={scopeButtonStyle(active)}
+                  aria-pressed={active}
+                  onClick={() => onScopeChange(entry.id)}
+                >
+                  {entry.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <section
         style={{ flex: 1, minHeight: 0, overflow: "auto" }}
         className="review"
@@ -207,43 +224,6 @@ function CommitDetailHeader({ entry }: { readonly entry: GitHistoryEntry }): Rea
         <span style={{ color: "var(--fg-faint)" }}>
           {entry.changedFileCount} {entry.changedFileCount === 1 ? "file changed" : "files changed"}
         </span>
-      </div>
-    </div>
-  );
-}
-
-function DiffPaneHeader({
-  selectedCommit,
-  selectedChangePath,
-  scope,
-  onScopeChange,
-}: {
-  readonly selectedCommit: GitHistoryEntry | null;
-  readonly selectedChangePath: string | null;
-  readonly scope: GitDiffScope;
-  readonly onScopeChange: (scope: GitDiffScope) => void;
-}): ReactNode {
-  if (selectedCommit !== null) return <CommitDetailHeader entry={selectedCommit} />;
-  if (selectedChangePath === null) return null;
-  return (
-    <div style={DIFF_HEADER_STYLE}>
-      <DiffPathLabel path={selectedChangePath} />
-      <span style={{ flex: 1 }} />
-      <div role="group" aria-label="Diff scope" style={SCOPE_TOGGLE_STYLE}>
-        {SCOPES.map((entry) => {
-          const active = entry.id === scope;
-          return (
-            <button
-              key={entry.id}
-              type="button"
-              style={scopeButtonStyle(active)}
-              aria-pressed={active}
-              onClick={() => onScopeChange(entry.id)}
-            >
-              {entry.label}
-            </button>
-          );
-        })}
       </div>
     </div>
   );

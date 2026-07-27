@@ -12,6 +12,8 @@ import {
   compareStrings,
   QualityIntelligence,
   type QualityIntelligence as QI,
+  type QualityIntelligenceInlineSource,
+  type QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
@@ -36,10 +38,6 @@ import {
   WorkspaceReadError,
 } from "@oscharko-dev/keiko-workspace";
 import type { QualityIntelligenceIngestedAtom } from "@oscharko-dev/keiko-workflows";
-import type {
-  QualityIntelligenceInlineSource,
-  QualityIntelligenceStartRunRequest,
-} from "@oscharko-dev/keiko-contracts";
 import type { CapsuleResolver } from "./capsuleAdapter.js";
 import type { FigmaSnapshotLoader, FigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import type { FigmaSnapshotRecord } from "@oscharko-dev/keiko-evidence";

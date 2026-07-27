@@ -171,9 +171,14 @@ function RankingRationale({
 // kind has a meaningful count to display (Copilot PR #264 — "1 file in directory" reads
 // as "this directory contains exactly one file" which it doesn't).
 function contextPackHeadline(contextPack: GroundedAnswerContextPackSummary, scope: string): string {
-  if (contextPack.scopeKind !== "files") return `Scope: ${scope}`;
-  const suffix = contextPack.fileCount === 1 ? "" : "s";
-  return `Scope: ${String(contextPack.fileCount)} file${suffix} in ${scope}`;
+  let headline: string;
+  if (contextPack.scopeKind !== "files") {
+    headline = `Scope: ${scope}`;
+  } else {
+    const suffix = contextPack.fileCount === 1 ? "" : "s";
+    headline = `Scope: ${String(contextPack.fileCount)} file${suffix} in ${scope}`;
+  }
+  return headline;
 }
 
 function ContextPackSummary({
@@ -691,9 +696,15 @@ function manualCitationChipActionLabel(
   state: "idle" | "opened" | "failed",
   manual: HtmlManualCitationMetadata,
 ): string {
-  if (state === "opened") return "Opened";
-  if (state === "failed") return "Open failed";
-  return manualCitationActionLabel(manual);
+  let label: string;
+  if (state === "opened") {
+    label = "Opened";
+  } else if (state === "failed") {
+    label = "Open failed";
+  } else {
+    label = manualCitationActionLabel(manual);
+  }
+  return label;
 }
 
 function ManualCitationChip({
