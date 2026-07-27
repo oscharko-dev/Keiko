@@ -16,15 +16,21 @@
  */
 export interface CopyTextToClipboardOptions {
   /**
-   * When true (the default), the element focused before the copy attempt is
-   * explicitly refocused afterward, and the hidden textarea is explicitly focused
-   * before `.select()`. Some call sites intentionally have no visible focus change
-   * to restore; pass `false` to preserve that behavior exactly.
+   * When true (the default), the element focused before the copy attempt is saved and
+   * explicitly refocused afterward. The hidden textarea is always focused before
+   * `.select()` regardless of this option — `execCommand("copy")` needs the textarea to
+   * actually hold focus, not merely a `Selection` range, to copy reliably across
+   * browsers. Some call sites intentionally have no visible focus change to restore;
+   * pass `false` to skip only the save/restore step.
    */
   readonly restoreFocus?: boolean;
 }
 
-async function copyViaHiddenTextarea(text: string, restoreFocus: boolean): Promise<void> {
+async function copyViaHiddenTextarea(
+  text: string,
+  restoreFocus: boolean,
+  writeTextFailure: unknown,
+): Promise<void> {
   const previousFocus =
     restoreFocus && document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const textarea = document.createElement("textarea");
@@ -38,10 +44,12 @@ async function copyViaHiddenTextarea(text: string, restoreFocus: boolean): Promi
   textarea.style.pointerEvents = "none";
   document.body.appendChild(textarea);
   try {
-    if (restoreFocus) textarea.focus();
+    textarea.focus();
     textarea.select();
     const copied = typeof document.execCommand === "function" && document.execCommand("copy");
-    if (!copied) throw new Error("clipboard-fallback-failed");
+    if (!copied) {
+      throw new Error("clipboard-fallback-failed", { cause: writeTextFailure });
+    }
   } finally {
     textarea.remove();
     if (restoreFocus) previousFocus?.focus();
@@ -54,18 +62,22 @@ export async function copyTextToClipboard(
 ): Promise<void> {
   const restoreFocus = options?.restoreFocus ?? true;
   const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
+  let writeTextFailure: unknown;
   if (writeText !== undefined && navigator.clipboard !== undefined) {
     try {
       await writeText.call(navigator.clipboard, text);
       return;
-    } catch {
-      // Fall through to the selection-backed copy path below (restricted clipboard contexts).
+    } catch (caught) {
+      // Restricted/insecure clipboard contexts routinely reject the async API; fall
+      // through to the selection-backed copy below, but keep the reason in case that
+      // fallback fails too (`copyViaHiddenTextarea` attaches it as `cause`).
+      writeTextFailure = caught;
     }
   }
 
   if (typeof document === "undefined" || document.body === null) {
-    throw new Error("clipboard-unavailable");
+    throw new Error("clipboard-unavailable", { cause: writeTextFailure });
   }
 
-  await copyViaHiddenTextarea(text, restoreFocus);
+  await copyViaHiddenTextarea(text, restoreFocus, writeTextFailure);
 }

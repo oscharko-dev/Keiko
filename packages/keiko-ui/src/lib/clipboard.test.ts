@@ -154,5 +154,20 @@ describe("copyTextToClipboard", () => {
       // The helper must not re-focus the previously active element on this path.
       expect(focusSpy).not.toHaveBeenCalled();
     });
+
+    it("still focuses the hidden textarea itself when restoreFocus is false", async () => {
+      setClipboard(undefined);
+      let wasFocused = false;
+      setExecCommand(() => {
+        wasFocused = document.activeElement instanceof HTMLTextAreaElement;
+        return true;
+      });
+
+      await copyTextToClipboard("focus me anyway", { restoreFocus: false });
+
+      // execCommand("copy") needs the textarea itself focused (not merely selected) to
+      // copy reliably across browsers, independent of whether prior focus is restored.
+      expect(wasFocused).toBe(true);
+    });
   });
 });
