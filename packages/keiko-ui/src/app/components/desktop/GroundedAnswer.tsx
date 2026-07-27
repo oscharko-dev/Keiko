@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
   RepositoryReferenceInline,
@@ -831,9 +832,7 @@ function compareOmittedReasonEntries(
 ): number {
   const [reasonA] = a;
   const [reasonB] = b;
-  if (reasonA < reasonB) return -1;
-  if (reasonA > reasonB) return 1;
-  return 0;
+  return compareStrings(reasonA, reasonB);
 }
 
 function OmittedLine({

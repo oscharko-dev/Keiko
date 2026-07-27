@@ -3959,8 +3959,12 @@ function MemoryActionUpdateCard({
 
 // Extracted from MemoryActionForgetCard (SonarCloud S3358) — the three action-button states
 // (plain forget / review-then-confirm / confirm-or-cancel), previously a nested ternary chain
-// picking between three JSX blocks in the card body.
-function MemoryActionForgetButtons({
+// picking between three JSX blocks in the card body. Exported so ChatWindow.test.tsx can drive
+// the busy-guard branches directly — the guarded (busy) states this button ships are for a
+// review/cancel click that arrives while ANOTHER action on the same card is in flight, a
+// combination the full ChatWindow render can't reach because busy only ever turns true once
+// `executeForget` itself has been invoked (see ChatWindow.test.tsx for detail).
+export function MemoryActionForgetButtons({
   action,
   busy,
   confirmForget,

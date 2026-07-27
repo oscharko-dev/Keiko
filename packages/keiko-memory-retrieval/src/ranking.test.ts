@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { rankMemories, sourceImportance } from "./ranking.js";
-import { DEFAULT_RANKING_WEIGHTS } from "./types.js";
+import { buildRankBySignal, rankMemories, sourceImportance } from "./ranking.js";
+import { DEFAULT_RANKING_WEIGHTS, type IncludedSubscores } from "./types.js";
 import { buildEdge, buildRecord, memoryId } from "./_support.js";
 
 const now = 7 * 86_400_000; // 7 days into epoch — recency math anchors here.
@@ -401,5 +401,53 @@ describe("rankMemories — RRF fusion (#204, O-F2)", () => {
       expect(e.score).toBeGreaterThanOrEqual(0);
       expect(e.score).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe("buildRankBySignal — per-signal tie-break comparator", () => {
+  // All roles fixed except the one signal under test, so `av !== bv` is false for every pair and
+  // the comparator falls all the way through to the id tiebreak.
+  function tiedSubscores(relevance: number): IncludedSubscores {
+    return {
+      relevance,
+      recency: 0,
+      confidence: 0,
+      pinned: 0,
+      correction: 0,
+      graph: 0,
+      semantic: 0,
+      strength: 0,
+      importance: 0,
+    };
+  }
+
+  it("breaks a tie between distinct ids by ascending id, in both directions", () => {
+    // Deliberately scrambled input order so the underlying sort must compare pairs where the
+    // left id is both smaller and larger than the right id before it settles on id-ascending.
+    const c = buildRecord({ id: "c", updatedAt: now });
+    const a = buildRecord({ id: "a", updatedAt: now });
+    const b = buildRecord({ id: "b", updatedAt: now });
+    const subscoresById = new Map([
+      [memoryId("a"), tiedSubscores(5)],
+      [memoryId("b"), tiedSubscores(5)],
+      [memoryId("c"), tiedSubscores(5)],
+    ]);
+    const rankBySignal = buildRankBySignal([c, a, b], subscoresById, ["relevance"]);
+    const ranks = rankBySignal.get("relevance");
+    expect(ranks?.get(memoryId("a"))).toBe(1);
+    expect(ranks?.get(memoryId("b"))).toBe(2);
+    expect(ranks?.get(memoryId("c"))).toBe(3);
+  });
+
+  it("returns a stable 0 when two entries share both the same id and the same subscore", () => {
+    // A data-integrity edge case (duplicate id), not a normal caller shape: exercises the final
+    // `return 0` fallthrough that ascending/descending id comparisons never reach.
+    const first = buildRecord({ id: "dup", updatedAt: now });
+    const second = buildRecord({ id: "dup", updatedAt: now });
+    const subscoresById = new Map([[memoryId("dup"), tiedSubscores(5)]]);
+    const rankBySignal = buildRankBySignal([first, second], subscoresById, ["relevance"]);
+    // Comparator never reorders the pair (always ties at 0), so the later occurrence's rank (2)
+    // is the last write to the shared "dup" key.
+    expect(rankBySignal.get("relevance")?.get(memoryId("dup"))).toBe(2);
   });
 });

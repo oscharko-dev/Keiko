@@ -230,7 +230,7 @@ function manualInstructions(reason: UpdateInstallMode["reason"]): string {
   return "Portable update eligibility could not be attested. Download the latest Keiko package.";
 }
 
-function resolvePortableUnsupportedInstallKind(
+export function resolvePortableUnsupportedInstallKind(
   reason: UpdateInstallMode["reason"],
   portable: UpdatePortableInstallSummary,
 ): UpdateInstallModeKind {

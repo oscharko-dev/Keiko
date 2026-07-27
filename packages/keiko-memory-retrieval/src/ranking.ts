@@ -276,7 +276,7 @@ function computeFinalSubscores(
 // score scales (Jaccard ~[0,0.3] vs cosine [0,1]) need no normalization, and agreement across signals
 // compounds. The fused value is normalized to [0,1] (best possible = rank 1 in every signal) to
 // honour the documented score range; ordering uses the shared (score desc, updatedAt desc, id asc) sort.
-function buildRankBySignal(
+export function buildRankBySignal(
   memories: readonly MemoryRecord[],
   subscoresById: ReadonlyMap<MemoryId, IncludedSubscores>,
   signals: readonly (keyof IncludedSubscores)[],

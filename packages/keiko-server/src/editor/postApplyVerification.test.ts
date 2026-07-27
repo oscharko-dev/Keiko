@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SANDBOX_POLICY, runCommand, type CommandRule } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { VerificationReport, VerificationResult } from "@oscharko-dev/keiko-verification";
 import {
   defaultPostApplyVerification,
   defaultPostApplyVerificationPreflight,
@@ -20,7 +21,9 @@ import {
   probeNetworkIsolation,
   requiresPostApplyVerificationPreflight,
   skippedVerificationSummary,
+  toSummary,
 } from "./postApplyVerification.js";
+import type { NetworkIsolationProbe } from "./verificationExecution.js";
 
 const CONNECT_SNIPPET = [
   "const net = require('net');",
@@ -78,6 +81,85 @@ describe("post-apply verification summaries (content-free)", () => {
     expect(s.sandboxBackend).toBe("none");
     expect(s.secretsRedacted).toBe(true);
     expect(s.stepCount).toBe(0);
+  });
+});
+
+function verificationResult(
+  status: VerificationResult["status"],
+  overrides: Partial<VerificationResult> = {},
+): VerificationResult {
+  return {
+    kind: "targeted-test",
+    scriptName: undefined,
+    command: "npx vitest run",
+    args: [],
+    status,
+    exitCode: status === "passed" ? 0 : 1,
+    signal: null,
+    durationMs: 12,
+    truncated: false,
+    redacted: true,
+    outputSummary: "",
+    appliedLimits: [],
+    ...overrides,
+  };
+}
+
+function verificationReport(
+  results: readonly VerificationResult[],
+  overallStatus: VerificationReport["overallStatus"],
+): VerificationReport {
+  return {
+    workspaceRoot: "/workspace",
+    results,
+    overallStatus,
+    startedAtMs: 0,
+    durationMs: 12,
+    counts: {
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      denied: 0,
+      "timed-out": 0,
+      cancelled: 0,
+      "resource-exceeded": 0,
+    },
+  };
+}
+
+const AVAILABLE_PROBE: NetworkIsolationProbe = { available: true, backend: "bwrap" };
+
+describe("toSummary", () => {
+  it("surfaces a denied outcome distinctly from a failed test, with no enforced sandbox", () => {
+    const report = verificationReport([verificationResult("denied")], "failed");
+
+    const summary = toSummary(report, AVAILABLE_PROBE);
+
+    expect(summary.outcome).toBe("denied");
+    expect(summary.sandboxBackend).toBe("none");
+    expect(summary.networkEnforced).toBe(false);
+  });
+
+  it("reports a passed outcome and the probed sandbox backend when the report passed", () => {
+    const report = verificationReport([verificationResult("passed")], "passed");
+
+    const summary = toSummary(report, AVAILABLE_PROBE);
+
+    expect(summary.outcome).toBe("passed");
+    expect(summary.sandboxBackend).toBe("bwrap");
+    expect(summary.passed).toBe(1);
+    expect(summary.failed).toBe(0);
+  });
+
+  it("reports a failed outcome when the report did not pass and was not denied", () => {
+    const report = verificationReport([verificationResult("failed")], "failed");
+
+    const summary = toSummary(report, AVAILABLE_PROBE);
+
+    expect(summary.outcome).toBe("failed");
+    expect(summary.sandboxBackend).toBe("bwrap");
+    expect(summary.passed).toBe(0);
+    expect(summary.failed).toBe(1);
   });
 });
 

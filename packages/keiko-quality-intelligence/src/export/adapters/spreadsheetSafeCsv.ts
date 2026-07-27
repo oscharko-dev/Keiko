@@ -17,7 +17,7 @@
 // Pure-domain leaf. NO IO, NO new runtime dependency, NO regex.
 
 import type { QualityIntelligenceExportBundle } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligenceTestCaseCandidate } from "@oscharko-dev/keiko-contracts";
 
 /**
@@ -234,12 +234,6 @@ export const SPREADSHEET_SAFE_CSV_HEADERS: readonly string[] = Object.freeze([
 
 const joinSemicolon = (values: readonly string[]): string => values.join(" ; ");
 
-const byIdAsc = (a: string, b: string): number => {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-};
-
 /**
  * Builds the spreadsheet-safe-CSV body for a bundle. The TMS invariant from
  * the contracts package is asserted up front so a non-attested TMS-targeted
@@ -256,7 +250,7 @@ export function adaptToSpreadsheetSafeCsv(
     byId.set(candidate.id, candidate);
   }
   const entryIds = bundle.contents.map((entry) => entry.candidateId);
-  const sortedIds = [...entryIds].sort(byIdAsc);
+  const sortedIds = [...entryIds].sort(compareStrings);
   let body = encodeSpreadsheetSafeRow(SPREADSHEET_SAFE_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

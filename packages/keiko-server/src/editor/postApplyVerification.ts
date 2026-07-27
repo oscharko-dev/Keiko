@@ -162,7 +162,9 @@ function outcomeFor(
 
 // Maps the orchestrator report onto the content-free verification summary. A `denied` step (egress could
 // not be enforced) is surfaced distinctly from a `failed` step (the applied test did not pass).
-function toSummary(
+// Exported for direct regression coverage (Issue #2723): pure, no closures, otherwise only reachable
+// through a real sandboxed verification run.
+export function toSummary(
   report: VerificationReport,
   probe: NetworkIsolationProbe,
 ): EditorPatchVerificationSummary {

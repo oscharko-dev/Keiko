@@ -1748,7 +1748,7 @@ function openApiSchemaFields(schema: unknown): readonly string[] {
   return Object.keys(schema.properties);
 }
 
-function openApiComponentSchemas(parsed: unknown): unknown {
+export function openApiComponentSchemas(parsed: unknown): unknown {
   if (!isRecord(parsed)) {
     return undefined;
   }

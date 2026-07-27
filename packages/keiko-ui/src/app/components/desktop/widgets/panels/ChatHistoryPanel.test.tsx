@@ -5,7 +5,7 @@ import type { Chat } from "@/lib/types";
 import { updateChat } from "@/lib/api";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
-import { ChatHistoryPanel } from "./ChatHistoryPanel";
+import { ChatHistoryPanel, initialTabIndex } from "./ChatHistoryPanel";
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -303,5 +303,109 @@ describe("ChatHistoryPanel", () => {
     expect(within(scoped).getByRole("button", { name: "Rename" })).toBeInTheDocument();
     expect(within(scoped).getByRole("button", { name: "Delete" })).toBeInTheDocument();
     expect(updateChat).not.toHaveBeenCalled();
+  });
+
+  // #2723 (S3358): clicking Cancel while editing a title (distinct from the "empty submit"
+  // and "typing clears the error" paths already covered above).
+  it("cancels an in-progress rename without saving (PA-05)", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const renameInput = screen.getByDisplayValue("Sprint triage");
+    await user.clear(renameInput);
+    await user.type(renameInput, "Changed title");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByDisplayValue("Changed title")).toBeNull();
+    expect(screen.getByText("Sprint triage")).toBeInTheDocument();
+    expect(updateChat).not.toHaveBeenCalled();
+  });
+
+  // #2723 (S3358): clicking (not keying Escape on) the confirm-mode Cancel button.
+  it("clicking Cancel during delete-confirm closes it without deleting", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
+    expect(row).not.toBeNull();
+    const scoped = row as HTMLElement;
+
+    await user.click(within(scoped).getByRole("button", { name: "Delete" }));
+    await user.click(within(scoped).getByRole("button", { name: "Cancel" }));
+
+    expect(within(scoped).queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(within(scoped).getByRole("button", { name: "Rename" })).toBeInTheDocument();
+    expect(updateChat).not.toHaveBeenCalled();
+  });
+
+  // #2723 (S3358): Escape while focus is on the confirm-mode Delete button itself (the
+  // existing GEN-UI-FOCUS-016 test above focuses it via Enter-to-activate; this pins the
+  // handler directly regardless of that focus path).
+  it("Escape on the confirm Delete button cancels the delete confirmation", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
+    expect(row).not.toBeNull();
+    const scoped = row as HTMLElement;
+
+    await user.click(within(scoped).getByRole("button", { name: "Delete" }));
+    const confirmDelete = within(scoped).getByRole("button", { name: "Delete" });
+    confirmDelete.focus();
+    await user.keyboard("{Escape}");
+
+    expect(within(scoped).queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(within(scoped).getByRole("button", { name: "Rename" })).toBeInTheDocument();
+    expect(updateChat).not.toHaveBeenCalled();
+  });
+
+  // #2723 (S3358): Escape while focus is on the confirm-mode Cancel button (its own
+  // onKeyDown, distinct from the Delete button's handler pinned above).
+  it("Escape on the confirm Cancel button also cancels the delete confirmation", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
+    expect(row).not.toBeNull();
+    const scoped = row as HTMLElement;
+
+    await user.click(within(scoped).getByRole("button", { name: "Delete" }));
+    const cancelButton = within(scoped).getByRole("button", { name: "Cancel" });
+    cancelButton.focus();
+    await user.keyboard("{Escape}");
+
+    expect(within(scoped).queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(within(scoped).getByRole("button", { name: "Rename" })).toBeInTheDocument();
+    expect(updateChat).not.toHaveBeenCalled();
+  });
+
+  // #2723 (S3358): the "deleted" row-actions branch has its own Rename button (distinct
+  // JSX from the default branch's Rename button already exercised above).
+  it("renames a deleted chat from its history row", async () => {
+    const chat = makeChat({ status: "closed" });
+    const user = userEvent.setup();
+    renderPanel(makeSession({ chats: [chat] }));
+
+    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+
+    expect(screen.getByDisplayValue("Sprint triage")).toBeInTheDocument();
+  });
+});
+
+describe("initialTabIndex", () => {
+  // #2723 (S3358): the roving-tablist "from" index if/else chain, extracted from a nested
+  // ternary — all three branches.
+  it("returns the current index unchanged when it is already a valid tab index", () => {
+    expect(initialTabIndex("active", 1)).toBe(1);
+  });
+
+  it("defaults to the Active tab (index 0) when nothing is focused in the active view", () => {
+    expect(initialTabIndex("active", -1)).toBe(0);
+  });
+
+  it("defaults to the Deleted tab (index 1) when nothing is focused in the deleted view", () => {
+    expect(initialTabIndex("deleted", -1)).toBe(1);
   });
 });

@@ -2094,6 +2094,17 @@ describe("linkedAllFilesRoots (Epic #729 #731)", () => {
     expect(linkedAllFilesRoots("quality")).toEqual([]);
   });
 
+  // Issue #2723 — connectedWindow returns null when the connection's other endpoint window no
+  // longer exists (e.g. it closed while a stale connection entry lingered); the reader must skip
+  // that connection rather than throw.
+  it("skips a connection whose other endpoint window no longer exists", () => {
+    const { linkedAllFilesRoots } = makeConnectHarness(
+      [win("quality", {}, "quality")],
+      [conn("quality", "files-removed")],
+    );
+    expect(linkedAllFilesRoots("quality")).toEqual([]);
+  });
+
   it("returns BOTH roots for two connected Files windows (not just the first)", () => {
     const { linkedAllFilesRoots } = makeConnectHarness(
       [

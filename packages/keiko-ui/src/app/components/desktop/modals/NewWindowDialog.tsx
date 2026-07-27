@@ -289,7 +289,7 @@ interface DirectoryBrowseControl {
   readonly open: (key: string, value: string) => void;
 }
 
-function resolveFieldValue(raw: CfgValue): string {
+export function resolveFieldValue(raw: CfgValue): string {
   if (typeof raw === "string") return raw;
   if (raw === undefined) return "";
   return String(raw);

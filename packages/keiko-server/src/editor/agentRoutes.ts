@@ -1836,7 +1836,9 @@ function projectChangeset(
   }
 }
 
-function applyChangesetErrorMessage(error: unknown): string {
+// Exported for direct regression coverage (Issue #2723): pure, no closures, otherwise only reachable
+// by forcing applyPatch to fail deep inside a queued changeset commit.
+export function applyChangesetErrorMessage(error: unknown): string {
   if (error instanceof PatchApplyError) return "The changeset write failed and was rolled back.";
   if (error instanceof PatchValidationError) {
     return "The selected changeset no longer passes patch validation.";

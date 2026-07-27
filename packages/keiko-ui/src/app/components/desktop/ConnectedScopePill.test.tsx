@@ -347,6 +347,47 @@ describe("ConnectedScopePill", () => {
     expect(screen.getByText(/Last grounded run:/)).toHaveTextContent("1.4k tokens, 5 files");
   });
 
+  // Issue #2723 — pressureFromRatio's other three thresholds (low/high/exceeded), reached through
+  // the same exported entry point the "Moderate" case above already uses.
+  it("labels the budget badge Low when every budget ratio stays under 0.6", () => {
+    const chat = makeChat({
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+    });
+    const status = buildLastGroundedBudgetStatus(
+      contextPack({ usage: { ...contextPack().usage, filesRead: 2 } }),
+    );
+    render(
+      <ConnectedScopePill chat={chat} updateScopes={vi.fn()} lastGroundedBudgetStatus={status} />,
+    );
+    expect(screen.getByText("Low")).toBeInTheDocument();
+  });
+
+  it("labels the budget badge High when the highest ratio is at least 0.85 but not over budget", () => {
+    const chat = makeChat({
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+    });
+    const status = buildLastGroundedBudgetStatus(
+      contextPack({ usage: { ...contextPack().usage, filesRead: 6 } }),
+    );
+    render(
+      <ConnectedScopePill chat={chat} updateScopes={vi.fn()} lastGroundedBudgetStatus={status} />,
+    );
+    expect(screen.getByText("High")).toBeInTheDocument();
+  });
+
+  it("labels the budget badge Exceeded when a ratio runs over its budget", () => {
+    const chat = makeChat({
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+    });
+    const status = buildLastGroundedBudgetStatus(
+      contextPack({ usage: { ...contextPack().usage, filesRead: 7 } }),
+    );
+    render(
+      <ConnectedScopePill chat={chat} updateScopes={vi.fn()} lastGroundedBudgetStatus={status} />,
+    );
+    expect(screen.getByText("Exceeded")).toBeInTheDocument();
+  });
+
   // GEN-UI-STATE-001 (WCAG 4.1.3): the visible pill label must NOT be a live region — that re-announced
   // the unchanged label on every routine re-render / chat switch. A single always-mounted sr-only
   // polite announcer must stay silent across a routine re-render (e.g. switching to a different chat

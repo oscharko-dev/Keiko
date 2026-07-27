@@ -78,7 +78,7 @@ export function buildWorkspaceReplacePatchModel(
 // Resolves the effective load state: an unsupported runtime always reports its error, a
 // supported runtime waits for diff languages to finish loading, and otherwise defers to the
 // host-provided load state.
-function resolveLoadState(
+export function resolveLoadState(
   runtime: EditorRuntimeStatus,
   languagesReady: boolean,
   hostLoadState: KeikoEditorLoadState,

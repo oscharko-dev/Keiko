@@ -33,6 +33,11 @@ import {
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import {
+  AuthenticationError,
+  ConfigInvalidError,
+  TransportError,
+} from "@oscharko-dev/keiko-model-gateway";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -42,9 +47,11 @@ import {
   createEmbeddingAdapter,
   enforcedNoEvidenceReason,
   fallbackReferenceSelection,
+  gatewayErrorStatus,
   handleLocalKnowledgeGroundedAsk,
   LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
   localKnowledgeNoEvidenceAnswer,
+  mapGroundedAskError,
   renderCitationLabel,
   retrievalActivityResultFromScoped,
   tryBuildKnowledgePodRetrievalActivity,
@@ -54,6 +61,7 @@ import {
 } from "./local-knowledge-grounded-qa.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import type { ApiError } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 
@@ -3200,5 +3208,51 @@ describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
     expect(answer.noEvidence).toBe(true);
     expect(answer.uncertainty).toHaveLength(1);
     expect(answer.uncertainty[0]?.kind).toBe("no-evidence");
+  });
+});
+
+// ─── gatewayErrorStatus / mapGroundedAskError ─────────────────────────────────
+// Issue #154 (GAP-B): a GatewayError raised while answering a local-knowledge ask must map to
+// the right HTTP status (401 for a bad credential, 503 for a transient/retryable failure, 502 as
+// the terminal-failure fallback) and have its dynamic message redacted before it reaches the wire.
+describe("gatewayErrorStatus", () => {
+  it("maps GATEWAY_AUTHENTICATION errors to 401", () => {
+    expect(gatewayErrorStatus(new AuthenticationError("bad credential"))).toBe(401);
+  });
+
+  it("maps a retryable gateway error to 503", () => {
+    expect(gatewayErrorStatus(new TransportError("connection reset"))).toBe(503);
+  });
+
+  it("maps a non-retryable, non-authentication gateway error to 502", () => {
+    expect(gatewayErrorStatus(new ConfigInvalidError("bad config"))).toBe(502);
+  });
+});
+
+describe("mapGroundedAskError", () => {
+  function minimalDeps(): UiHandlerDeps {
+    return {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store: rescueStore,
+    };
+  }
+
+  it("maps a retryable GatewayError to a 503 with the gateway code and message", () => {
+    const result = mapGroundedAskError(new TransportError("connection reset"), minimalDeps());
+    expect(result.status).toBe(503);
+    const envelope = (result.body as ApiError).error;
+    expect(envelope.code).toBe("GATEWAY_TRANSPORT");
+    expect(envelope.message).toBe("connection reset");
   });
 });

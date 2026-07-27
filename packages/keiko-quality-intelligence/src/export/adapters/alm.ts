@@ -10,7 +10,7 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
 import { encodeSpreadsheetSafeRow } from "./spreadsheetSafeCsv.js";
 
 export const ALM_CSV_HEADERS: readonly string[] = Object.freeze([
@@ -42,12 +42,6 @@ const buildSubject = (candidate: QualityIntelligenceTestCaseCandidate): string =
 
 const buildLabels = (candidate: QualityIntelligenceTestCaseCandidate): string =>
   [candidate.riskClass, ...candidate.tags].join(" ");
-
-const byIdAsc = (a: string, b: string): number => {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-};
 
 // Build the ALM rows for a single candidate. One row per (step, expected) pair — the row count is
 // the longer of `steps`/`expectedResults` so a trailing expected result is never dropped (Issue
@@ -92,7 +86,7 @@ export function adaptToAlm(
   const sortedIds = bundle.contents
     .map((entry) => entry.candidateId)
     .slice()
-    .sort(byIdAsc);
+    .sort(compareStrings);
   let body = encodeSpreadsheetSafeRow(ALM_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

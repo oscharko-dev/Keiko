@@ -320,7 +320,7 @@ function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
 
 // S3358 — prefer the bind-time snapshot on the Connection; fall back to whichever
 // endpoint is the chat window. Mirrors connectionChatWindowId in useWorkspace.ts.
-function chatWindowIdOf(conn: Connection, a: AppWindow, b: AppWindow): string | null {
+export function chatWindowIdOf(conn: Connection, a: AppWindow, b: AppWindow): string | null {
   if (conn.boundChatWindowId !== undefined) return conn.boundChatWindowId;
   if (a.type === "chat") return a.id;
   if (b.type === "chat") return b.id;
@@ -524,7 +524,7 @@ export function buildAppShellCommands(
 }
 
 // S3358 — the two deep-linked tool routes each map to a fixed singleton window type.
-function deepLinkToolFor(path: string): "relationships" | "localKnowledge" | null {
+export function deepLinkToolFor(path: string): "relationships" | "localKnowledge" | null {
   if (path === "/relationships") return "relationships";
   if (path === "/local-knowledge") return "localKnowledge";
   return null;

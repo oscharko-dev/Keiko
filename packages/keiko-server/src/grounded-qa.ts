@@ -182,7 +182,7 @@ export function internalError(message: string): RouteResult {
 // enum and the fixed cancellation string carry no caller data and stay verbatim. Reading the LIVE
 // secrets via currentRedactionSecrets(deps) (not the startup snapshot) scrubs apiKey/baseUrl values
 // added through PATCH /api/gateway/config after process start (Epic #177).
-function gatewayErrorStatus(error: GatewayError): number {
+export function gatewayErrorStatus(error: GatewayError): number {
   if (error.code === "GATEWAY_AUTHENTICATION") return 401;
   if (error.retryable) return 503;
   return 502;

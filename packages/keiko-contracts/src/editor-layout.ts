@@ -186,7 +186,7 @@ function createPane(
   };
 }
 
-function normalizedActiveFile(value: Record<string, unknown>): string {
+export function normalizedActiveFile(value: Record<string, unknown>): string {
   if (typeof value.activeFile === "string") return value.activeFile;
   if (typeof value.file === "string") return value.file;
   return "";

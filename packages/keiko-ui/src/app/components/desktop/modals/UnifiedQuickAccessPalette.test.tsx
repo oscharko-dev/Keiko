@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -312,5 +312,20 @@ describe("UnifiedQuickAccessPalette", () => {
 
     await screen.findByRole("option", { name: /Toggle light \/ dark theme/ });
     expect(await axe(commandMode.container)).toHaveNoViolations();
+  });
+
+  it("renders a command's keyboard shortcut chip when the command defines one", async () => {
+    render(
+      <UnifiedQuickAccessPalette
+        initialMode="commands"
+        root="/repo"
+        commands={[{ ...command("theme", "Toggle light / dark theme"), shortcut: "⌘K" }]}
+        openEditorFile={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const option = await screen.findByRole("option", { name: /Toggle light \/ dark theme/ });
+    expect(within(option).getByText("⌘K")).toBeInTheDocument();
   });
 });

@@ -94,6 +94,24 @@ describe("formatUserError", () => {
     expect(formatUserError(raw, "Retry")).toBe("Gateway failed with [REDACTED]");
   });
 
+  it("captures a plain Error's message when it is not wrapped in ApiError", () => {
+    expect(toUserErrorNotice(new Error("boom"), "Retry")).toEqual({
+      title: "Something went wrong",
+      message: "boom",
+      code: undefined,
+      remediation: undefined,
+    });
+  });
+
+  it("falls back to the caller's default when the thrown value is neither a string nor an Error", () => {
+    expect(toUserErrorNotice({ unexpected: true }, "Could not send message.")).toEqual({
+      title: "Something went wrong",
+      message: "Could not send message.",
+      code: undefined,
+      remediation: undefined,
+    });
+  });
+
   it("stays fast against an adversarial message with no trailing support code (S8786)", () => {
     // The former `/\s+\(([A-Z][A-Z0-9_/-]{2,})\)\s*$/` has an unanchored leading `\s+`, so a long
     // internal whitespace run that never reaches a "(CODE)" suffix drove O(n²) backtracking

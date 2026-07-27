@@ -8,7 +8,7 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
 import { encodeSpreadsheetSafeRow } from "./spreadsheetSafeCsv.js";
 
 /** Schema headers for the Keiko-native CSV format. */
@@ -30,11 +30,8 @@ export const CSV_HEADERS: readonly string[] = Object.freeze([
 
 const joinSemicolon = (values: readonly string[]): string => values.join(" ; ");
 
-const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number => {
-  if (a.candidateId < b.candidateId) return -1;
-  if (a.candidateId > b.candidateId) return 1;
-  return 0;
-};
+const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number =>
+  compareStrings(a.candidateId, b.candidateId);
 
 export function adaptToCsv(
   bundle: QualityIntelligenceExportBundle,

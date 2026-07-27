@@ -110,7 +110,7 @@ function outcomeTone(status: GitMutationOutcome["status"]): PillTone {
   return "neutral";
 }
 
-function outcomeRingColor(tone: PillTone): string {
+export function outcomeRingColor(tone: PillTone): string {
   switch (tone) {
     case "success":
       return "color-mix(in oklch, var(--ok) 42%, var(--line))";

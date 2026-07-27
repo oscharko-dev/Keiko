@@ -24,6 +24,7 @@ import {
   type CdpClientOptions,
   type CdpEventListener,
 } from "../index.js";
+import { assertWsUrlTrusted } from "./session.js";
 
 // Local in-memory EvidenceStore: the test only needs to read back what was put. Mirrors the
 // shape of src/audit/store.ts createInMemoryEvidenceStore — kept local because the tools
@@ -796,6 +797,41 @@ describe("webSocketDebuggerUrl host validation (H1)", () => {
       await closeHttp(redirect);
       await closeHttp(target);
     }
+  });
+});
+
+describe("assertWsUrlTrusted — implicit default port resolution (H1)", () => {
+  // Only reachable when the WS URL omits an explicit port. The production caller
+  // (browserWsUrlFromVersion) only ever passes `ws://` URLs, so these two implicit-default-port
+  // branches are exercised here directly against the exported comparator.
+  it("resolves the implicit wss:// default port (443) when the URL has no explicit port", () => {
+    // A correct port resolution makes the matching-port call pass silently; a wrong resolution
+    // (e.g. 0/NaN) would make it throw instead, so "does not throw" here is a real assertion.
+    expect(() => {
+      assertWsUrlTrusted("wss://127.0.0.1/devtools/browser/x", 443);
+    }).not.toThrow();
+
+    let caught: unknown;
+    try {
+      assertWsUrlTrusted("wss://127.0.0.1/devtools/browser/x", 9222);
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { code?: string } | undefined)?.code).toBe("CDP_TRANSPORT_REFUSED");
+  });
+
+  it("resolves the implicit ws:// default port (80) when the URL has no explicit port", () => {
+    expect(() => {
+      assertWsUrlTrusted("ws://127.0.0.1/devtools/browser/x", 80);
+    }).not.toThrow();
+
+    let caught: unknown;
+    try {
+      assertWsUrlTrusted("ws://127.0.0.1/devtools/browser/x", 9222);
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { code?: string } | undefined)?.code).toBe("CDP_TRANSPORT_REFUSED");
   });
 });
 

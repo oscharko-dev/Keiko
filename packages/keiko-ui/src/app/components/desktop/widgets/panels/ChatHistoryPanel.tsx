@@ -42,7 +42,8 @@ function sourceCount(chat: Chat): number {
 
 // #2723 (S3358): the roving-tablist "from" index used a nested ternary
 // (current < 0 ? (view === "active" ? 0 : 1) : current); extracted to a plain if/else chain.
-function initialTabIndex(view: HistoryView, current: number): number {
+// Exported (pure visibility change, no behavior change) for a focused unit test.
+export function initialTabIndex(view: HistoryView, current: number): number {
   if (current >= 0) return current;
   if (view === "active") return 0;
   return 1;

@@ -2,9 +2,9 @@ import { createRef } from "react";
 import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
+import { otherConnectionEndpoint, Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
-import type { AppWindow } from "./windows/types";
+import type { AppWindow, Connection } from "./windows/types";
 import {
   FIGMA_VIEW_DRAG_TYPE,
   FIGMA_VIEW_DROP_EVENT,
@@ -106,6 +106,26 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
     ...partial,
   };
 }
+
+// Issue #2723 — otherConnectionEndpoint's three outcomes: windowId on the `a` side, on the `b`
+// side, and a connection that doesn't touch windowId at all.
+describe("otherConnectionEndpoint (S3358)", () => {
+  function connection(overrides: Partial<Connection> = {}): Connection {
+    return { id: "conn-1", a: "win-a", b: "win-b", ...overrides };
+  }
+
+  it("returns the b endpoint when windowId is the a endpoint", () => {
+    expect(otherConnectionEndpoint(connection(), "win-a")).toBe("win-b");
+  });
+
+  it("returns the a endpoint when windowId is the b endpoint", () => {
+    expect(otherConnectionEndpoint(connection(), "win-b")).toBe("win-a");
+  });
+
+  it("returns null when the connection doesn't touch windowId", () => {
+    expect(otherConnectionEndpoint(connection(), "win-c")).toBeNull();
+  });
+});
 
 describe("M1 — empty startup layout", () => {
   it("renders the empty-state affordance when wins is an empty array", () => {

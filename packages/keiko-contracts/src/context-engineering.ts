@@ -423,7 +423,7 @@ interface TokenShapeStats {
 // Per-code-point UTF-8 byte width for the manual encoder fallback: 1 byte through U+007F, 2
 // through U+07FF, 3 through U+FFFF (the BMP ceiling), else 4 (astral code points, which
 // `codePointAt` already combines from a surrogate pair).
-function utf8ByteWidth(codePoint: number): number {
+export function utf8ByteWidth(codePoint: number): number {
   if (codePoint <= 0x7f) return 1;
   if (codePoint <= 0x7ff) return 2;
   if (codePoint <= 0xffff) return 3;

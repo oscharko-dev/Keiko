@@ -154,7 +154,7 @@ function recordWorkflowUsedAudit(
   );
 }
 
-function describeWorkflowWriteCandidateSummary(
+export function describeWorkflowWriteCandidateSummary(
   proposedMemoryIdsCount: number,
   source: string,
 ): string {

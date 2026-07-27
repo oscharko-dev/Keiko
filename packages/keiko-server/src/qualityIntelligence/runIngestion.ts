@@ -8,7 +8,11 @@
 
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import {
+  compareStrings,
+  QualityIntelligence,
+  type QualityIntelligence as QI,
+} from "@oscharko-dev/keiko-contracts";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   QualityIntelligenceGeneration,
@@ -991,9 +995,7 @@ interface NormalisedCorpusDoc {
 const compareCorpusDocs = (a: CorpusDoc, b: CorpusDoc): number => {
   const ka = `${a.documentId}\u0000${a.fingerprintText ?? a.text}`;
   const kb = `${b.documentId}\u0000${b.fingerprintText ?? b.text}`;
-  if (ka < kb) return -1;
-  if (ka > kb) return 1;
-  return 0;
+  return compareStrings(ka, kb);
 };
 
 // Redact every member document and cap it. The LK corpus text is NOT redacted at index time — the

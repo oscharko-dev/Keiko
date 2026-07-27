@@ -309,6 +309,21 @@ describe("POST /api/editor/repo-search", () => {
     expect(JSON.stringify(body.atoms)).not.toContain("value.trim");
   });
 
+  it("routes a symbol-qualified search through exact-symbol matching, rejecting an embedded space", async () => {
+    // repoSearchQueryKind resolves "exact-symbol" only when `symbol` is provided (regardless of
+    // `queryText`); exact-symbol matching alone enforces "must not contain whitespace" downstream, so
+    // this 400 is only reachable when the symbol branch (not natural-language) actually ran.
+    const result = await handleEditorRepoSearch(
+      postContext(
+        { root, queryText: "parseConfig", symbol: "parse Config", paths: ["src/a.ts"] },
+        "/api/editor/repo-search",
+      ),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
   it("activates the workspace index provider for lexical repo-search requests", async () => {
     const calls: string[] = [];
     const result = await handleEditorRepoSearch(

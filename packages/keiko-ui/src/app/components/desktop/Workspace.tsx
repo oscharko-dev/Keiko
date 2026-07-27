@@ -420,7 +420,7 @@ function connStateFor(win: AppWindow, connFrom: AppWindow): ConnState {
 }
 
 // S3358 — the endpoint of `conn` that is NOT `windowId`, or null when `conn` doesn't touch it.
-function otherConnectionEndpoint(conn: Connection, windowId: string): string | null {
+export function otherConnectionEndpoint(conn: Connection, windowId: string): string | null {
   if (conn.a === windowId) return conn.b;
   if (conn.b === windowId) return conn.a;
   return null;

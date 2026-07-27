@@ -10,7 +10,7 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
 import { encodeSpreadsheetSafeRow } from "./spreadsheetSafeCsv.js";
 
 export const POLARION_CSV_HEADERS: readonly string[] = Object.freeze([
@@ -52,12 +52,6 @@ const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): stri
 const buildTags = (candidate: QualityIntelligenceTestCaseCandidate): string =>
   [candidate.riskClass, ...candidate.tags].join(" ");
 
-const byIdAsc = (a: string, b: string): number => {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-};
-
 export function adaptToPolarion(
   bundle: QualityIntelligenceExportBundle,
   candidates: readonly QualityIntelligenceTestCaseCandidate[],
@@ -70,7 +64,7 @@ export function adaptToPolarion(
   const sortedIds = bundle.contents
     .map((entry) => entry.candidateId)
     .slice()
-    .sort(byIdAsc);
+    .sort(compareStrings);
   let body = encodeSpreadsheetSafeRow(POLARION_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

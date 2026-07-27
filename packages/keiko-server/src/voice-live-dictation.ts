@@ -99,7 +99,7 @@ function isTranscriptionLanguage(value: unknown): value is string {
 
 // Resolves the requested transcription language: `undefined` when none was requested, the
 // validated hint when present and well-formed, or `null` when present but invalid.
-function resolveRequestedTranscriptionLanguage(value: unknown): string | undefined | null {
+export function resolveRequestedTranscriptionLanguage(value: unknown): string | undefined | null {
   if (value === undefined) {
     return undefined;
   }

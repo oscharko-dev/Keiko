@@ -246,6 +246,8 @@ export const filesWidgetTestInternals = {
   parentDir,
   parentRelativePath,
   displayPath,
+  contextMenuParentPath,
+  gitDirectoryLabelKey,
 } as const;
 
 // Parent directory (root-relative) of a tree entry, for scoping a new sibling or a rename target.

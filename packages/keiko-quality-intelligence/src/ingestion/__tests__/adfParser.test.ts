@@ -174,6 +174,30 @@ describe("parseAdfDocument — typed errors", () => {
     }
   });
 
+  it("rejects an inline child of a recognised BLOCK type (neither text nor status) with UNKNOWN_NODE_TYPE", () => {
+    // "heading" is a known top-level node type, so it clears getNodeType's whitelist check, but it
+    // is not a valid INLINE child — this reaches parseInlineChild's fallthrough (neither "text" nor
+    // "status"), which is otherwise never exercised by the block-level "unknown type" test above.
+    try {
+      parseAdfDocument({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "heading", attrs: { level: 1 }, content: [] }],
+          },
+        ],
+      });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AdfParserError);
+      if (err instanceof AdfParserError) {
+        expect(err.code).toBe("UNKNOWN_NODE_TYPE");
+        expect(err.message).toContain('Expected inline text, got "heading"');
+      }
+    }
+  });
+
   it("rejects invalid heading level", () => {
     try {
       parseAdfDocument({

@@ -179,7 +179,7 @@ function contextualStatusLabel(
   return t("localKnowledge.detail.context.status.disabled");
 }
 
-function staleChunksTone(health: ContextualRetrievalHealth): "ok" | "warn" {
+export function staleChunksTone(health: ContextualRetrievalHealth): "ok" | "warn" {
   if (health.rebuildRequired) return "warn";
   if (health.degradedChunkCount > 0) return "warn";
   return "ok";
@@ -1371,7 +1371,7 @@ interface LargeDocumentSectionProps {
   readonly resumeImpl?: typeof resumeCapsuleLargeDocuments;
 }
 
-function resumeButtonLabel(busy: boolean, resumableCount: number, t: I18nTranslate): string {
+export function resumeButtonLabel(busy: boolean, resumableCount: number, t: I18nTranslate): string {
   if (busy) return t("localKnowledge.detail.large.resuming");
   if (resumableCount === 1) {
     return t("localKnowledge.detail.large.resume.one", { count: resumableCount });

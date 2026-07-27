@@ -13,7 +13,7 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
 import { encodeSpreadsheetSafeRow } from "./spreadsheetSafeCsv.js";
 
 export const QTEST_CSV_HEADERS: readonly string[] = Object.freeze([
@@ -37,12 +37,6 @@ const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): stri
 const mapPriority = (priority: QualityIntelligenceTestCaseCandidate["priority"]): string => {
   // qTest default priorities are P-prefixed; pass through verbatim.
   return priority;
-};
-
-const byIdAsc = (a: string, b: string): number => {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
 };
 
 // Build the qTest rows for a single candidate. One row per (step, expected) pair — the row count is
@@ -85,7 +79,7 @@ export function adaptToQtest(
   const sortedIds = bundle.contents
     .map((entry) => entry.candidateId)
     .slice()
-    .sort(byIdAsc);
+    .sort(compareStrings);
   let body = encodeSpreadsheetSafeRow(QTEST_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

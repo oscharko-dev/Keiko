@@ -1118,7 +1118,7 @@ function readSnapshotFetchedAt(qiDir: string, fileName: string): string | undefi
   }
 }
 
-function compareByFetchedAtDescending(
+export function compareByFetchedAtDescending(
   a: { readonly fetchedAt: string },
   b: { readonly fetchedAt: string },
 ): number {

@@ -2279,13 +2279,13 @@ function stateFailureRoute(
   return { status: 200, body: answer };
 }
 
-function gatewayErrorStatus(error: GatewayError): number {
+export function gatewayErrorStatus(error: GatewayError): number {
   if (error.code === "GATEWAY_AUTHENTICATION") return 401;
   if (error.retryable) return 503;
   return 502;
 }
 
-function mapGroundedAskError(error: unknown, deps: UiHandlerDeps): RouteResult {
+export function mapGroundedAskError(error: unknown, deps: UiHandlerDeps): RouteResult {
   if (error instanceof CancelledError) {
     return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
   }

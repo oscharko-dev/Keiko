@@ -10,7 +10,7 @@
 // Structurally inspired by Test Intelligence reference (TI) source-mix planning, but the
 // envelope-ref shape and the priority table are anchored on the Keiko contracts surface.
 
-import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { compareStrings, type QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 type Envelope = QualityIntelligence.QualityIntelligenceSourceEnvelope;
 type EnvelopeId = QualityIntelligence.QualityIntelligenceSourceEnvelopeId;
@@ -62,13 +62,7 @@ const compareEntries = (a: SourceMixPlanEntry, b: SourceMixPlanEntry): number =>
   if (a.priority !== b.priority) return a.priority - b.priority;
   const ka = `${a.kind}\u0000${a.envelopeId}`;
   const kb = `${b.kind}\u0000${b.envelopeId}`;
-  if (ka < kb) {
-    return -1;
-  }
-  if (ka > kb) {
-    return 1;
-  }
-  return 0;
+  return compareStrings(ka, kb);
 };
 
 /**

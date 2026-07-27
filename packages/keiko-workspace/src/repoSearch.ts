@@ -12,6 +12,7 @@ import type {
   EvidenceAtom,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import { createHash } from "node:crypto";
 import {
   isValidScopePath,
@@ -499,11 +500,6 @@ function candidateSetDiscoverySnapshot(
     depthPrunedByDiscovery: candidateSet.diagnostics.depthPrunedByDiscovery,
     truncated: candidateSet.truncated,
   };
-}
-
-function compareStrings(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
 }
 
 function directoryFingerprint(

@@ -10,6 +10,7 @@
 // (ADR-0019 direction rule). Deterministic: rows are sorted by id, confidence is fixed-precision,
 // and there are no timestamps — so the export is byte-stable for identical inputs.
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { CoverageStatus } from "../../domain/coverageRelevance.js";
 import { escapeMarkdownActiveSyntax, inlineField } from "../textSafety.js";
 import { encodeSpreadsheetSafeRow, startsWithFormulaLead } from "./spreadsheetSafeCsv.js";
@@ -67,17 +68,7 @@ const ABSENT = "—";
 const byAtomIdAsc = (
   a: QualityIntelligenceTraceabilityRow,
   b: QualityIntelligenceTraceabilityRow,
-): number => {
-  if (a.atomId < b.atomId) return -1;
-  if (a.atomId > b.atomId) return 1;
-  return 0;
-};
-
-const ascending = (a: string, b: string): number => {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-};
+): number => compareStrings(a.atomId, b.atomId);
 
 const fixed2 = (value: number): string => value.toFixed(2);
 
@@ -110,9 +101,9 @@ function invertToReverseRows(
   return [...byCandidate.entries()]
     .map(([candidateId, set]) => ({
       candidateId,
-      requirementIds: [...set].sort(ascending),
+      requirementIds: [...set].sort(compareStrings),
     }))
-    .sort((a, b) => ascending(a.candidateId, b.candidateId));
+    .sort((a, b) => compareStrings(a.candidateId, b.candidateId));
 }
 
 // Escape Markdown table delimiters so an id containing a pipe cannot break the row structure, and
@@ -147,7 +138,7 @@ export function adaptToTraceabilityCsv(
   const sorted = [...rows].sort(byAtomIdAsc);
   let body = encodeSpreadsheetSafeRow(TRACEABILITY_CSV_HEADERS);
   for (const row of sorted) {
-    const covering = [...row.coveringCandidateIds].sort(ascending);
+    const covering = [...row.coveringCandidateIds].sort(compareStrings);
     const testIds = covering.length > 0 ? covering : [ABSENT];
     for (const candidateId of testIds) {
       body += encodeSpreadsheetSafeRow([

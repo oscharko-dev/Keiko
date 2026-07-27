@@ -4,6 +4,7 @@ import type {
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import {
   canonicalMetadataEcosystem,
   isCanonicalMetadataFile,
@@ -337,11 +338,6 @@ function normalizedScopePath(scopePath: string): string | undefined {
     return undefined;
   }
   return isDenied(normalized) ? undefined : normalized;
-}
-
-function compareStrings(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
 }
 
 function normalizedHintPaths(paths: readonly string[] | undefined): readonly string[] {

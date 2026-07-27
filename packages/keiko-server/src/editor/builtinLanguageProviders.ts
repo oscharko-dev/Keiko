@@ -181,7 +181,9 @@ function jsonFormatting(
   };
 }
 
-function formatByLanguage(
+// Exported for direct regression coverage (Issue #2723): pure, no closures, otherwise only reachable
+// indirectly through the builtin-text language provider's formatting operation.
+export function formatByLanguage(
   ctx: LanguageProviderContext,
   options: LanguageFormattingOptions | undefined,
 ): string {
@@ -192,7 +194,7 @@ function formatByLanguage(
   return normalizeTrailingWhitespace(ctx.overlayText);
 }
 
-function genericFormatting(
+export function genericFormatting(
   ctx: LanguageProviderContext,
   options: LanguageFormattingOptions | undefined,
 ): LanguageFormattingRaw {

@@ -7,6 +7,7 @@ import type { IntentSummary } from "../domain/intentDerivation.js";
 import { STRUCTURAL_BASELINE_MARKER } from "../domain/figma/screenIrTestBaseline.js";
 import { bankingDefault, regressionDefault } from "../domain/policyProfile.js";
 import {
+  compareString,
   designTestCaseCandidates,
   DETERMINISTIC_BASELINE_PROVENANCE_TAG,
   parseFigmaScreenHeaderName,
@@ -506,5 +507,15 @@ describe("designTestCaseCandidates — export-safe candidate text", () => {
       atoms: fixture.atoms,
     }).map((candidate) => candidate.id);
     expect(spoofedIds).toEqual(cleanIds);
+  });
+});
+
+describe("compareString", () => {
+  it("returns 1 when the left value sorts after the right value", () => {
+    expect(compareString("b", "a")).toBe(1);
+  });
+
+  it("returns 0 for equal values", () => {
+    expect(compareString("a", "a")).toBe(0);
   });
 });

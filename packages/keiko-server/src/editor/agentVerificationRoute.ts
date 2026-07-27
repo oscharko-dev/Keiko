@@ -126,7 +126,10 @@ function denyByAuthority(
   };
 }
 
-function verificationAuthorityDenyReason(
+// Exported for direct regression coverage (Issue #2723): pure, no closures, otherwise only reachable
+// by forcing a real authority resolution failure (expiry, revocation, or budget exhaustion) through
+// the full governed verification route.
+export function verificationAuthorityDenyReason(
   reason: EditorAgentAuthorityFailureReason,
 ): EditorAgentActionDenyReason {
   if (reason === "expired") return "authority-expired";

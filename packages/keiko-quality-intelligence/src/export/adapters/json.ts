@@ -46,7 +46,7 @@ interface JsonExportEnvelope {
   readonly candidates: readonly JsonExportCandidatePayload[];
 }
 
-const byCandidateIdAsc = (
+export const byCandidateIdAsc = (
   a: QualityIntelligenceExportBundleEntry,
   b: QualityIntelligenceExportBundleEntry,
 ): number => {

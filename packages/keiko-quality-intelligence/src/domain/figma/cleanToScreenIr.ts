@@ -6,6 +6,7 @@
 // is sorted by a stable structural key, and the result carries no timestamp, so the same input
 // yields a byte-identical IR. A malformed input (non-object) degrades to an empty result.
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import { asNode } from "./sourceNode.js";
 import { countSourceNodes, pruneNode } from "./prune.js";
 import { detectScreens } from "./screenDetect.js";
@@ -34,15 +35,8 @@ const buildReduction = (inputNodeCount: number, keptNodeCount: number): Reductio
   };
 };
 
-const compareById = (a: { readonly id: string }, b: { readonly id: string }): number => {
-  if (a.id < b.id) {
-    return -1;
-  }
-  if (a.id > b.id) {
-    return 1;
-  }
-  return 0;
-};
+const compareById = (a: { readonly id: string }, b: { readonly id: string }): number =>
+  compareStrings(a.id, b.id);
 
 const emptyResult = (inputNodeCount: number): ScreenIrResult => ({
   screens: [],

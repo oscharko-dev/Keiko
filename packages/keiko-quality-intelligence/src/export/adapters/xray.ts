@@ -10,7 +10,7 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
 import { encodeSpreadsheetSafeRow } from "./spreadsheetSafeCsv.js";
 
 export const XRAY_CSV_HEADERS: readonly string[] = Object.freeze([
@@ -36,12 +36,6 @@ const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): stri
 const buildLabels = (candidate: QualityIntelligenceTestCaseCandidate): string =>
   [candidate.riskClass, ...candidate.tags].join(" ");
 
-const byIdAsc = (a: string, b: string): number => {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-};
-
 // eslint-disable-next-line max-lines-per-function
 export function adaptToXray(
   bundle: QualityIntelligenceExportBundle,
@@ -55,7 +49,7 @@ export function adaptToXray(
   const sortedIds = bundle.contents
     .map((entry) => entry.candidateId)
     .slice()
-    .sort(byIdAsc);
+    .sort(compareStrings);
   let body = encodeSpreadsheetSafeRow(XRAY_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

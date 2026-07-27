@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceDirEntry, WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -29,11 +30,6 @@ const EXPLICIT_SCOPE_MAX_DEPTH = DEFAULT_DISCOVERY_OPTIONS.maxDepth;
 
 function normalizeScopePath(scopePath: string): string {
   return scopePath.replaceAll("\\", "/");
-}
-
-function compareStrings(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
 }
 
 function readDirSorted(fs: WorkspaceFs, absoluteDir: string): readonly WorkspaceDirEntry[] {

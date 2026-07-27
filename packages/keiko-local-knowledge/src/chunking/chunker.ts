@@ -245,7 +245,7 @@ function boundaryAfterMatch(start: number, matchIndex: number, matchText: string
   return start + matchIndex + matchText.length;
 }
 
-function boundaryBeforeMatch(start: number, matchIndex: number, matchText: string): number {
+export function boundaryBeforeMatch(start: number, matchIndex: number, matchText: string): number {
   return start + matchIndex + (matchText.startsWith("\n") ? 1 : 0);
 }
 

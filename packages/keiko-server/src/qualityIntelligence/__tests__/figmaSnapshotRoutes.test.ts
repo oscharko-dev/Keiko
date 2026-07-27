@@ -47,6 +47,7 @@ import {
 } from "../figma/index.js";
 import type { RouteContext } from "../../routes.js";
 import {
+  compareByFetchedAtDescending,
   handleFigmaInspectSnapshotScreenJson,
   handleFigmaDeleteSnapshot,
   handleFigmaListSnapshots,
@@ -1207,6 +1208,35 @@ describe("GET /api/figma/snapshots/:runId/screens/:screenId/json", () => {
   });
 });
 
+describe("compareByFetchedAtDescending — snapshot listing ordering comparator", () => {
+  it("returns -1 when the first fetchedAt is newer than the second", () => {
+    expect(
+      compareByFetchedAtDescending(
+        { fetchedAt: "2026-06-03T10:00:00.000Z" },
+        { fetchedAt: "2026-06-01T10:00:00.000Z" },
+      ),
+    ).toBe(-1);
+  });
+
+  it("returns 1 when the first fetchedAt is older than the second", () => {
+    expect(
+      compareByFetchedAtDescending(
+        { fetchedAt: "2026-06-01T10:00:00.000Z" },
+        { fetchedAt: "2026-06-03T10:00:00.000Z" },
+      ),
+    ).toBe(1);
+  });
+
+  it("returns 0 when both fetchedAt values are equal", () => {
+    expect(
+      compareByFetchedAtDescending(
+        { fetchedAt: "2026-06-01T10:00:00.000Z" },
+        { fetchedAt: "2026-06-01T10:00:00.000Z" },
+      ),
+    ).toBe(0);
+  });
+});
+
 describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
   it("503 FIGMA_NO_EVIDENCE_DIR when evidenceDir is undefined", () => {
     const deps: UiHandlerDeps = { ...makeDeps(""), evidenceDir: undefined };
@@ -1650,6 +1680,41 @@ describe("Figma snapshot summary projection (recordToSummary helpers)", () => {
     expect(summary.reductionHint).toContain("(1 render skipped)");
     // Ensure the entire hint is correct (not just a substring).
     expect(summary.reductionHint).toBe("2 rendered screens from 3 detected (1 render skipped)");
+  });
+
+  // ── reductionHint — 2 skipped renders, no structural IR (plural "renders") ──
+  it('reductionHint pluralises to "renders skipped" when more than one render is skipped', async () => {
+    const irJson = { name: "S", root: { interactionHint: null, children: [] } };
+
+    const evidenceModule = await import("@oscharko-dev/keiko-evidence");
+    const store = evidenceModule.createNodeFigmaSnapshotStore(evidenceDir);
+    const runId = "fs-00000000-0000-0000-0000-000000000024";
+    store.record({
+      runId,
+      provenance: PROVENANCE,
+      integrityHash: "placeholder",
+      screens: [
+        {
+          screenId: "hint-screen-c",
+          irJson,
+          integrityHash: "placeholder",
+          image: { mimeType: "image/png", bytes: PNG_BYTES },
+        },
+      ],
+      skippedScreens: [
+        { screenId: "skipped-2", reason: "render-empty" },
+        { screenId: "skipped-3", reason: "render-empty" },
+      ],
+    });
+
+    // Act
+    const deps = makeDeps(evidenceDir, {});
+    const result = handleFigmaLoadSnapshot(makeGetCtx(runId), deps);
+
+    // Assert: plural "renders skipped" (not "render skipped") when skippedCount > 1.
+    expect(result.status).toBe(200);
+    const summary = result.body as FigmaSnapshotSummary;
+    expect(summary.reductionHint).toBe("1 rendered screen from 3 detected (2 renders skipped)");
   });
 
   it("reductionHint surfaces structural-only IR coverage for skipped screens with JSON evidence", async () => {

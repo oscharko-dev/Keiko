@@ -224,6 +224,34 @@ describe("typescript navigation provider", () => {
     expect(callSites.map((site) => site.start.line)).toEqual([1, 1, 2]);
   });
 
+  it("returns no call hierarchy roots when preparation finds no callable symbol", () => {
+    const handle = fakeProject({ prepareCallHierarchy: () => undefined });
+
+    const result = resolveTypescriptCallHierarchy(handle, { line: 0, character: 0 });
+
+    expect(result).toEqual({ roots: [], truncated: false });
+  });
+
+  it("preserves every item when call hierarchy preparation returns an ambiguous array", () => {
+    const overlayPath = join(root, "src", "main.ts");
+    const itemNamed = (name: string): ts.CallHierarchyItem => ({
+      name,
+      kind: ts.ScriptElementKind.functionElement,
+      file: overlayPath,
+      span: { start: 0, length: 6 },
+      selectionSpan: { start: 0, length: 6 },
+    });
+    const handle = fakeProject({
+      prepareCallHierarchy: () => [itemNamed("first"), itemNamed("second")],
+      provideCallHierarchyIncomingCalls: () => [],
+      provideCallHierarchyOutgoingCalls: () => [],
+    });
+
+    const result = resolveTypescriptCallHierarchy(handle, { line: 0, character: 0 });
+
+    expect(result.roots.map((rootItem) => rootItem.item.name)).toEqual(["first", "second"]);
+  });
+
   it("resolves a cross-file definition", () => {
     writeFileSync(join(root, "src", "decl.ts"), "export const sharedValue = 1;\n", "utf8");
     const main = "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n";

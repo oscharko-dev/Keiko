@@ -189,7 +189,7 @@ interface VersionInfo {
 
 // H1: validate webSocketDebuggerUrl host+port so a malicious /json/version responder
 // cannot redirect the WebSocket to a non-loopback host (ADR-0017 D2 layer-1).
-function assertWsUrlTrusted(ws: string, expectedPort: number): void {
+export function assertWsUrlTrusted(ws: string, expectedPort: number): void {
   let parsed: URL;
   try {
     parsed = new URL(ws);

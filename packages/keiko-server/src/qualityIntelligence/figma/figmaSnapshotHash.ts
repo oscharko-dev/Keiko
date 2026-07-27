@@ -80,7 +80,7 @@ export const hashStructuralScreen = (screenId: string, ir: ScreenIr): string =>
  * per-screen hashes sorted by screenId. EXCLUDES `fetchedAt` so the hash is drift-stable across
  * re-fetches of the same unchanged design.
  */
-const compareByScreenId = (
+export const compareByScreenId = (
   a: { readonly screenId: string },
   b: { readonly screenId: string },
 ): number => {

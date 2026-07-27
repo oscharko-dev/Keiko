@@ -19,7 +19,9 @@ import type { IncomingMessage } from "node:http";
 
 import {
   AuthenticationError,
+  ConfigInvalidError,
   ProviderError,
+  TransportError,
   type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
@@ -31,6 +33,7 @@ import {
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import {
+  gatewayErrorStatus,
   handleGroundedAsk,
   type GroundedRunner,
   type HybridSeam,
@@ -317,3 +320,17 @@ describe("grounded hybrid path redacts gateway error messages (#154)", () => {
 // HTTP requires aligning a seeded capsule's embedding model with a configured embedding provider
 // (the #532 matching constraint); the redaction pattern itself is the identical one the hybrid
 // "non-gateway Error fallback" test above pins as mutation-robust, so it is not re-fixtured here.
+
+// ─── gatewayErrorStatus branch coverage ───────────────────────────────────────
+// The AuthenticationError case (401) is already exercised end-to-end above via the folder path.
+// These two cover the remaining branches directly: a retryable GatewayError (transient, worth a
+// client retry) versus a terminal, non-authentication one (the 502 fallback).
+describe("gatewayErrorStatus", () => {
+  it("maps a retryable gateway error to 503", () => {
+    expect(gatewayErrorStatus(new TransportError("connection reset"))).toBe(503);
+  });
+
+  it("maps a non-retryable, non-authentication gateway error to 502", () => {
+    expect(gatewayErrorStatus(new ConfigInvalidError("bad config"))).toBe(502);
+  });
+});

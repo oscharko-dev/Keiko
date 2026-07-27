@@ -177,7 +177,7 @@ function findTagEnd(text: string, from: number): number {
   return text.indexOf(">", from);
 }
 
-function resolveTagKind(isClose: boolean, selfClosing: boolean): TagKind {
+export function resolveTagKind(isClose: boolean, selfClosing: boolean): TagKind {
   if (isClose) return "close";
   if (selfClosing) return "self-closing";
   return "open";

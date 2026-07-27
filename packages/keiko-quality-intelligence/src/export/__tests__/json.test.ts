@@ -7,9 +7,10 @@ import { describe, expect, it } from "vitest";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import type {
   QualityIntelligenceExportBundle,
+  QualityIntelligenceExportBundleEntry,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { adaptToJson } from "../adapters/json.js";
+import { adaptToJson, byCandidateIdAsc } from "../adapters/json.js";
 
 const Q = QualityIntelligence;
 const RUN = Q.asQualityIntelligenceRunId("qi-run-json");
@@ -201,5 +202,27 @@ describe("adaptToJson", () => {
       integrityHashSha256Hex: "not-64-hex",
     };
     expect(() => adaptToJson(b, [c])).toThrow();
+  });
+});
+
+describe("byCandidateIdAsc", () => {
+  function entry(candidateId: string): QualityIntelligenceExportBundleEntry {
+    return {
+      candidateId: Q.asQualityIntelligenceTestCaseId(candidateId),
+      coverageMapRefs: [],
+      findingRefs: [],
+    };
+  }
+
+  it("orders the lexicographically smaller candidateId first", () => {
+    expect(byCandidateIdAsc(entry("tc-a"), entry("tc-z"))).toBe(-1);
+  });
+
+  it("orders the lexicographically larger candidateId after", () => {
+    expect(byCandidateIdAsc(entry("tc-z"), entry("tc-a"))).toBe(1);
+  });
+
+  it("treats equal candidateIds as already in order", () => {
+    expect(byCandidateIdAsc(entry("tc-a"), entry("tc-a"))).toBe(0);
   });
 });

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@/lib/types";
-import { isAgentWorkflowModel, NewWindowDialog } from "./NewWindowDialog";
+import { isAgentWorkflowModel, NewWindowDialog, resolveFieldValue } from "./NewWindowDialog";
 import {
   ApiError,
   createProject,
@@ -132,6 +132,21 @@ describe("isAgentWorkflowModel", () => {
     expect(isAgentWorkflowModel(model({ id: "example-vision-model", kind: "ocr-vision" }))).toBe(
       false,
     );
+  });
+});
+
+describe("resolveFieldValue", () => {
+  it("passes a string field value through unchanged", () => {
+    expect(resolveFieldValue("/repo/src")).toBe("/repo/src");
+  });
+
+  it("renders an undefined field value as an empty string", () => {
+    expect(resolveFieldValue(undefined)).toBe("");
+  });
+
+  it("stringifies a non-string, non-undefined field value", () => {
+    expect(resolveFieldValue(true)).toBe("true");
+    expect(resolveFieldValue(42)).toBe("42");
   });
 });
 

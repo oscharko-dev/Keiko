@@ -663,6 +663,19 @@ describe("SafeMarkdown — PDF citation markers", () => {
     expect(citationPreview.openCitation).not.toHaveBeenCalled();
   });
 
+  it("renders recoverable inline markers with a recovery affordance", () => {
+    const citationPreview = citationPreviewController("recoverable");
+    render(<SafeMarkdown source="See [1]." citationPreview={citationPreview} />);
+
+    const marker = screen.getByRole("button", { name: "Open PDF recovery for citation [1]" });
+    expect(marker).toHaveAttribute("data-tip", "Open PDF recovery");
+    expect(marker).not.toHaveAttribute("aria-disabled");
+
+    fireEvent.click(marker);
+
+    expect(citationPreview.openCitation).toHaveBeenCalledWith(PDF_CITATION, "inline-marker");
+  });
+
   it("renders blocked inline markers as non-activatable explained affordances", () => {
     const citationPreview = citationPreviewController("blocked");
     render(<SafeMarkdown source="See [1]." citationPreview={citationPreview} />);

@@ -99,6 +99,17 @@ const collectFlowEntries = (root: FigmaSourceNode, out: InterScreenLink[]): void
 const linkKey = (link: InterScreenLink): string =>
   JSON.stringify([link.sourceNodeId, link.trigger, link.targetNodeId]);
 
+/** Lexicographic string comparator used to make link-key ordering deterministic. */
+export const compareLinkKey = (x: string, y: string): number => {
+  if (x < y) {
+    return -1;
+  }
+  if (x > y) {
+    return 1;
+  }
+  return 0;
+};
+
 /** Extract stable-ordered, deduped raw inter-screen links from the pruned tree + raw flow entries. */
 export const extractInterScreenLinks = (
   rawRoot: FigmaSourceNode,
@@ -110,14 +121,5 @@ export const extractInterScreenLinks = (
 
   const byKey = new Map<string, InterScreenLink>();
   for (const link of collected) byKey.set(linkKey(link), link);
-  const byCode = (x: string, y: string): number => {
-    if (x < y) {
-      return -1;
-    }
-    if (x > y) {
-      return 1;
-    }
-    return 0;
-  };
-  return [...byKey.values()].sort((a, b) => byCode(linkKey(a), linkKey(b)));
+  return [...byKey.values()].sort((a, b) => compareLinkKey(linkKey(a), linkKey(b)));
 };

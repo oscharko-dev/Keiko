@@ -147,7 +147,7 @@ const canonicalThemeToken = (token: string): string | null => {
   return normalised.toLowerCase();
 };
 
-const compareLowercase = (left: string, right: string): number => {
+export const compareLowercase = (left: string, right: string): number => {
   if (left < right) {
     return -1;
   }

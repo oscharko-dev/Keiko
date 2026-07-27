@@ -250,7 +250,7 @@ function activityEventType(value: string | undefined): boolean {
   );
 }
 
-function millisFromValue(value: unknown): number {
+export function millisFromValue(value: unknown): number {
   if (typeof value === "number") return value;
   if (typeof value === "string") return Date.parse(value);
   return Number.NaN;

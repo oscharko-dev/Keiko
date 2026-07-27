@@ -402,7 +402,7 @@ interface ConnectionBadgeProps {
   readonly onConfirmRemove: (id: string) => void;
 }
 
-function connectionBadgeAriaLabel(
+export function connectionBadgeAriaLabel(
   item: ResolvedConn,
   active: boolean,
   armed: boolean,

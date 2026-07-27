@@ -32,6 +32,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type Dirent, linkSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
@@ -235,17 +236,9 @@ export const DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS = 500;
 // ordering never shifts with locale/collation. Shared by every stable-sort call site below
 // (screenId, fetchedAt ascending, fetchedAt descending) instead of re-inlining a nested ternary.
 
-const compareAscending = (a: string, b: string): number => {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-};
+const compareAscending = (a: string, b: string): number => compareStrings(a, b);
 
-const compareDescending = (a: string, b: string): number => {
-  if (a > b) return -1;
-  if (a < b) return 1;
-  return 0;
-};
+const compareDescending = (a: string, b: string): number => compareStrings(b, a);
 
 // ─── Integrity hash (mirrors figmaSnapshotHash.ts — inlined so keiko-evidence does not depend
 //     on the private keiko-server package). MUST stay bit-identical with the server builder. ────

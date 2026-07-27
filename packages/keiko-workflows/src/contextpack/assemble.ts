@@ -6,6 +6,7 @@
 
 import { createHash } from "node:crypto";
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateFile,
@@ -545,15 +546,9 @@ function cacheExcerptWindow(window: ExcerptWindow): object {
   };
 }
 
-function compareEntryKeys(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-}
-
 function cacheExcerpts(excerpts: ReadonlyMap<string, ExcerptSource>): readonly object[] {
   return [...excerpts.entries()]
-    .sort(([a], [b]) => compareEntryKeys(a, b))
+    .sort(([a], [b]) => compareStrings(a, b))
     .map(([scopePath, source]) => ({
       scopePath,
       windows: normalizeExcerptWindows(source).map(cacheExcerptWindow),

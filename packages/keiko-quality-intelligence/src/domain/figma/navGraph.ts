@@ -21,6 +21,7 @@
 // cycle or self-loop never produces an unbounded path set. Total flow count is also bounded by
 // MAX_NAV_FLOWS so a dense fully-connected graph cannot exhaust memory during QI ingestion.
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { InterScreenLink, IrNode, ScreenIr, ScreenIrResult } from "./irTypes.js";
 import type { StructuralTestItem } from "./screenIrTestBaseline.js";
 
@@ -77,15 +78,7 @@ export interface RoutingHint {
   readonly transitions: readonly { readonly trigger: string; readonly toScreenId: string }[];
 }
 
-const byString = (a: string, b: string): number => {
-  if (a < b) {
-    return -1;
-  }
-  if (a > b) {
-    return 1;
-  }
-  return 0;
-};
+const byString = (a: string, b: string): number => compareStrings(a, b);
 
 // Build a nodeId → screenId index by walking every screen's IR tree once. A node id that appears in
 // more than one screen (malformed input) keeps its first (stable-order) owner.

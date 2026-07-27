@@ -21,6 +21,7 @@
 // (validateWorkspaceActivation / WORKSPACE_ACTIVATION_ALLOWED_KEYS) — so a downstream persistence
 // layer that trusts `.ok` cannot store smuggled content through any shape.
 
+import { compareStrings } from "./comparators.js";
 import {
   hasOnlyWorkspaceKeys,
   isCanonicalWorkspaceRoot,
@@ -1603,12 +1604,6 @@ export interface WorkspaceActiveRestoration {
   readonly kind: WorkspaceActiveRestorationKind;
   readonly workspaceId?: string;
   readonly ambiguousWorkspaceIds?: readonly string[];
-}
-
-function compareStrings(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
 }
 
 // Pure: decide how (and whether) to restore the active workspace after restart, given the persisted

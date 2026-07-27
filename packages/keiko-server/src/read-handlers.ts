@@ -197,7 +197,7 @@ function parsePositiveBudget(value: string | null): number | undefined {
   return parsed;
 }
 
-function workspaceErrorStatus(code: WorkspaceCode): number {
+export function workspaceErrorStatus(code: WorkspaceCode): number {
   if (code === WORKSPACE_CODES.NOT_FOUND) {
     return 404;
   }

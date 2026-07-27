@@ -16,6 +16,7 @@ import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
 import { FileTooLargeError, PathDeniedError, WorkspaceReadError } from "./errors.js";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_READ_OPTIONS,
@@ -209,11 +210,6 @@ export function discoverWithStats(
       maxFilesPruned: walk.maxFilesPruned,
     },
   };
-}
-
-function compareStrings(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
 }
 
 function describe(error: unknown): string {

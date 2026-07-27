@@ -353,6 +353,29 @@ describe("PromptEnhancerPanel", () => {
     );
   });
 
+  // #2723 (S3358): groundingReadinessText's "ready" branch — the other two branches
+  // ("unavailable" above, "not-required" via makeResponse()'s default) already have coverage.
+  it("shows connected-context readiness text when grounding is ready", async () => {
+    const response = makeResponse({
+      groundingReadiness: {
+        status: "ready",
+        reason: "connected-context-present",
+      },
+    });
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(response)}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("x");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    expect(screen.getByTestId("pe-grounding-readiness")).toHaveTextContent(
+      "Grounding readiness: connected context available",
+    );
+  });
+
   it("warns when human review is required (AC2 safety warnings)", async () => {
     const response = makeResponse({
       safety: {

@@ -431,6 +431,24 @@ describe("ReviewQueue — load error", () => {
       expect(screen.getByText(/queue load failed/i)).toBeInTheDocument();
     });
   });
+
+  it("retries fetch when Retry is clicked", async () => {
+    const failThenSucceed = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("first failure"))
+      .mockResolvedValue({ memories: [makeProposed(makeId(20), "Recovered proposal")], total: 1 });
+
+    const user = userEvent.setup();
+    render(<ReviewQueue fetchQueueImpl={failThenSucceed} />);
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+    await waitFor(() => {
+      expect(screen.getByText("Recovered proposal")).toBeInTheDocument();
+    });
+    expect(failThenSucceed).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("ReviewQueue — a11y", () => {

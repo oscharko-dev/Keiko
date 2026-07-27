@@ -194,4 +194,11 @@ describe("wheel delta normalization", () => {
 
     expect(normalizeWheelDelta(event)).toEqual({ x: 32, y: 48 });
   });
+
+  // Issue #2723 — DOM_DELTA_PAGE (deltaMode 2), the third of wheelDeltaMultiplier's three cases.
+  it("normalizes page-based wheel events to stable pixel deltas", () => {
+    const event = new WheelEvent("wheel", { deltaX: 1, deltaY: 2, deltaMode: 2 });
+
+    expect(normalizeWheelDelta(event)).toEqual({ x: 800, y: 1600 });
+  });
 });

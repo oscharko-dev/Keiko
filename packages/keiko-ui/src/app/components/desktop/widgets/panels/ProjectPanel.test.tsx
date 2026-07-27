@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { ProjectWithAvailability } from "@/lib/types";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { ProjectPanel } from "./ProjectPanel";
@@ -258,5 +259,75 @@ describe("ProjectPanel", () => {
     projectItem.focus();
     await user.keyboard("a");
     expect(projectItem).toHaveFocus();
+  });
+
+  // #2723 (S3358): renderProjectChats' "not the active project" early return — expanding a
+  // project that is not the active one must not show its (unfetched) chats.
+  it("tells you to select the project before its chats load (S3358)", async () => {
+    const user = userEvent.setup();
+    const otherProject: ProjectWithAvailability = {
+      path: "/workspace/other",
+      name: "OtherProject",
+      favorite: false,
+      createdAt: 3,
+      lastOpenedAt: 4,
+      available: true,
+    };
+    render(
+      <ChatSessionProvider
+        value={{ ...session(), projects: [session().projects[0]!, otherProject] }}
+      >
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    // OtherProject starts collapsed (it is not the active project); expand it.
+    await user.click(screen.getByRole("treeitem", { name: /OtherProject/ }));
+    const group = screen.getByRole("group", { name: "OtherProject" });
+    expect(within(group).getByText("Select project to load chats")).toBeInTheDocument();
+  });
+
+  // #2723 (S3358): renderProjectChats' "no chats" branch, distinct from the "not active" branch.
+  it("shows a no-chats message for the active project once it has none (S3358)", () => {
+    render(
+      <ChatSessionProvider value={{ ...session(), chats: [] }}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const group = screen.getByRole("group", { name: "Keiko" });
+    expect(within(group).getByText("No chats")).toBeInTheDocument();
+  });
+
+  // #2723: the chat row's onClick — confirms the click wiring the extracted render
+  // function still attaches to each rendered chat button.
+  it("opens a chat when its treeitem is clicked", async () => {
+    const user = userEvent.setup();
+    const openChat = vi.fn();
+    render(
+      <ChatSessionProvider value={{ ...session(), openChat }}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    await user.click(screen.getByRole("treeitem", { name: /Investigate shell audit/ }));
+    expect(openChat).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "chat-1", title: "Investigate shell audit" }),
+    );
+  });
+
+  // #2723 (S3358): the chat-meta branchLabel span's "undefined" (null) branch — the default
+  // fixture chat always has a branchLabel, so this covers the omitted case.
+  it("omits the branch-label meta span when a chat has no branch label", () => {
+    const withoutBranch = { ...session() };
+    render(
+      <ChatSessionProvider
+        value={{
+          ...withoutBranch,
+          chats: withoutBranch.chats.map((chat) => ({ ...chat, branchLabel: undefined })),
+        }}
+      >
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const chatItem = screen.getByRole("treeitem", { name: /Investigate shell audit/ });
+    expect(within(chatItem).queryByText("codex/issue-526-audit")).toBeNull();
   });
 });

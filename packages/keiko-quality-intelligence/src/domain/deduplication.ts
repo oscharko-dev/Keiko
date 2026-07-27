@@ -45,7 +45,7 @@ const canonicaliseSequence = (values: readonly string[]): readonly string[] => {
   return out;
 };
 
-const compareString = (left: string, right: string): number => {
+export const compareString = (left: string, right: string): number => {
   if (left < right) {
     return -1;
   }
