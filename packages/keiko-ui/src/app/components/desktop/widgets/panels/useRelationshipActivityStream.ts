@@ -115,7 +115,7 @@ function parseActivityEvent(raw: unknown): ActivityEvent | null {
   // Strip to allowlist.
   const stripped: Record<string, unknown> = {};
   for (const key of ALLOWED_PAYLOAD_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+    if (Object.hasOwn(obj, key)) {
       stripped[key] = obj[key];
     }
   }

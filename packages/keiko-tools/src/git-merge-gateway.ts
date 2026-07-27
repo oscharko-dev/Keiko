@@ -21,6 +21,7 @@
 // addition to the provider's own server-side enforcement (AC1).
 
 import type {
+  CommandRule,
   GitDeliveryActionEnvelope,
   GitDeliveryActionPreview,
   GitDeliveryApprovalRequirement,
@@ -53,7 +54,6 @@ import {
   gitMergeReadinessFor,
   gitMergeRejectionFor,
 } from "@oscharko-dev/keiko-contracts";
-import type { CommandRule } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
 import type {
@@ -159,10 +159,10 @@ export class GitMergeArgvError extends Error {
   }
 }
 
-// NUL + the C0 control range + DEL, enumerated via a string-built RegExp (no literal control chars in
+// NUL + the C0 control range + DEL, enumerated via \u escapes (no literal control chars in
 // source). A ref / repo slug never legitimately contains one.
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const REF_CONTROL_CHAR = new RegExp("[\u0000-\u001f\u007f]");
+const REF_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const PR_NUMBER_RE = /^[1-9][0-9]{0,9}$/;
 const SHA_RE = /^[0-9a-fA-F]{7,64}$/;
