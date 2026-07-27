@@ -7,9 +7,12 @@
 // network or live-model call is made in offline mode; no Date.now / Math.random touches a scored path.
 
 import { createHash, randomUUID } from "node:crypto";
-import { ConfigInvalidError } from "@oscharko-dev/keiko-model-gateway";
-import { generateUnitTests } from "@oscharko-dev/keiko-workflows";
-import { investigateBug } from "@oscharko-dev/keiko-workflows";
+import {
+  ConfigInvalidError,
+  resolveCostClass,
+  type EnvSource,
+} from "@oscharko-dev/keiko-model-gateway";
+import { generateUnitTests, investigateBug } from "@oscharko-dev/keiko-workflows";
 import {
   createNodeEvidenceStore,
   persistWorkflowEvidence,
@@ -17,10 +20,12 @@ import {
   type EvidenceStore,
   type WorkflowEventLike,
 } from "@oscharko-dev/keiko-evidence";
-import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { canonicalise, HARNESS_VERSION, type TaskType } from "@oscharko-dev/keiko-harness";
-import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
+import {
+  canonicalise,
+  HARNESS_VERSION,
+  type ModelPort,
+  type TaskType,
+} from "@oscharko-dev/keiko-harness";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { createEvaluationModelProvider, type EvaluationConfigLoader } from "./model-provider.js";
 import { aggregateScorecard, scoreFixture, summarizeScorecard } from "./scorer.js";
@@ -149,18 +154,35 @@ async function runWorkflow(
   return report as unknown as Record<string, unknown>;
 }
 
-function persistAndCheck(
-  fixture: EvaluationFixture,
-  report: Record<string, unknown>,
-  store: EvidenceStore,
-  env: EnvSource,
-  runId: string,
-  workspaceRoot: string,
-  modelId: string,
-  events: readonly WorkflowEventLike[],
-  startedAt: number,
-  finishedAt: number,
-): { readonly manifestValid: boolean; readonly evidenceRef: string } {
+interface PersistAndCheckOptions {
+  readonly fixture: EvaluationFixture;
+  readonly report: Record<string, unknown>;
+  readonly store: EvidenceStore;
+  readonly env: EnvSource;
+  readonly runId: string;
+  readonly workspaceRoot: string;
+  readonly modelId: string;
+  readonly events: readonly WorkflowEventLike[];
+  readonly startedAt: number;
+  readonly finishedAt: number;
+}
+
+function persistAndCheck(options: PersistAndCheckOptions): {
+  readonly manifestValid: boolean;
+  readonly evidenceRef: string;
+} {
+  const {
+    fixture,
+    report,
+    store,
+    env,
+    runId,
+    workspaceRoot,
+    modelId,
+    events,
+    startedAt,
+    finishedAt,
+  } = options;
   const status = typeof report.status === "string" ? report.status : "failed";
   const evidence = persistWorkflowEvidence(
     {
@@ -252,18 +274,18 @@ async function runFixture(
       idSource,
     });
     const finishedAt = now();
-    const { manifestValid, evidenceRef } = persistAndCheck(
+    const { manifestValid, evidenceRef } = persistAndCheck({
       fixture,
       report,
       store,
-      deps.env ?? {},
+      env: deps.env ?? {},
       runId,
-      workspace.root,
+      workspaceRoot: workspace.root,
       modelId,
-      sink.events(),
+      events: sink.events(),
       startedAt,
       finishedAt,
-    );
+    });
     return {
       result: buildFixtureRunResult(fixture, report, writer, manifestValid, options.mode),
       evidenceRef,
