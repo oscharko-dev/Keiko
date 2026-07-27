@@ -93,7 +93,7 @@ const codeExtensions = new Set([
 const coverableExtensions = new Set(["cjs", "cts", "js", "jsx", "mjs", "mts", "ts", "tsx"]);
 const nativeExtensions = new Set(["c", "cc", "cs", "cxx", "h", "hh", "m", "mm"]);
 const generatedPath =
-  /(^|\/)(?:\.claude|\.codex|\.next|\.portable-runtime|coverage|dist|node_modules|out)(\/|$)/u;
+  /(^|\/)(?:\.claude|\.codex|\.keiko|\.next|\.portable-runtime|coverage|dist|node_modules|out)(\/|$)/u;
 const nativeSupportPath = /^scripts\/native-quality(?:\/|$)/u;
 const nativeSonarExclusions = Object.freeze([
   "**/*.c",
@@ -285,6 +285,7 @@ function requiredPropertyFailures(properties) {
     "sonar.sources=.",
     "sonar.tests=.",
     "sonar.sourceEncoding=UTF-8",
+    "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
     "sonar.plsql.file.suffixes=-",
     "sonar.test.inclusions=",
     "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts",

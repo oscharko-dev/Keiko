@@ -169,7 +169,7 @@ KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
   -Dsonar.projectKey="${project}" \
   -Dsonar.projectName="Keiko (local pre-push scan)" \
   -Dsonar.scm.disabled=true \
-  -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**,**/.next/**,**/out/**,**/.portable-runtime/**,**/*.min.*" \
+  -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**,**/.next/**,**/out/**,**/.keiko/**,**/.codex/**,**/.claude/**,**/.portable-runtime/**,**/*.min.*" \
   -Dsonar.javascript.node.maxspace=4096
 
 # SonarQube Community carries no shell analyzer — `api/languages/list` has no shell entry, and

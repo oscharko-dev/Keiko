@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,6 +19,10 @@ import {
 } from "../sonar-analysis-scope.mjs";
 
 const scriptPath = resolve(import.meta.dirname, "..", "sonar-analysis-scope.mjs");
+const localSonarGate = readFileSync(
+  resolve(import.meta.dirname, "..", "..", "docker", "gates", "run-sonar.sh"),
+  "utf8",
+);
 
 const nativeEntries = [
   {
@@ -38,6 +43,7 @@ const validProperties = [
   "sonar.sources=.",
   "sonar.tests=.",
   "sonar.sourceEncoding=UTF-8",
+  "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
   "sonar.plsql.file.suffixes=-",
   "sonar.test.inclusions=tests/**",
   "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.m,**/*.mm,**/*.cs",
@@ -66,6 +72,9 @@ describe("Sonar analysis scope", () => {
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.png")).toBe(true);
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.svg")).toBe(true);
     expect(isGeneratedOrBinaryPath("scripts/native-quality/Keiko.NativeQuality.csproj")).toBe(true);
+    expect(isGeneratedOrBinaryPath(".keiko/dev/ui/task-workspaces/repo/ws/tsconfig.json")).toBe(
+      true,
+    );
     expect(classifyAnalysisPath("native/launcher.c", nativeSources)).toBe("native-compensated");
     expect(classifyAnalysisPath("native/new.c", nativeSources)).toBe("unclassified-native");
     expect(classifyAnalysisPath("native/new.m", nativeSources)).toBe("unclassified-native");
@@ -79,6 +88,13 @@ describe("Sonar analysis scope", () => {
     expect(classifyAnalysisPath("scripts/check.ps1", nativeSources)).toBe("source");
     expect(classifyAnalysisPath("infrastructure/worker.toml", nativeSources)).toBe("source");
     expect(classifyAnalysisPath("LICENSE", nativeSources)).toBe("ignored");
+  });
+
+  it("keeps local Keiko task workspaces outside the local Sonar TypeScript graph", () => {
+    expect(localSonarGate).toContain("**/.keiko/**");
+    expect(validProperties).toContain(
+      "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
+    );
   });
 
   it("maps coverable and compensated productive paths to explicit evidence lanes", () => {
