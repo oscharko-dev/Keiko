@@ -67,6 +67,15 @@ Summarize expected release-impact metadata for the epic. Child issues and PRs ow
 
 ## Definition of Done
 
+- [ ] The integration branch is green on the required checks **before** any closeout evidence
+      document is written. Evidence composed over a red branch is void — it describes a state the
+      repository never reached. Fix the branch, then write the evidence; do not write it now and
+      annotate it later.
+- [ ] Every child was closed only after each of its acceptance criteria had a test that failed
+      before the change and passed after. A criterion carried by a test that passes with and
+      without the change is not closed, whatever the child issue says.
+- [ ] Children were composed by merges, not accumulated as direct commits. An epic whose children
+      never met in a merge has never been integrated, and its green children say nothing about it.
 - [ ] All child issues are closed with acceptance criteria and expected verification updated.
 - [ ] Required GitHub checks are green on implementation PRs.
 - [ ] Reuse, extension, or generalization decisions are recorded for every implemented child issue.

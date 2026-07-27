@@ -14,27 +14,34 @@ is filed as #2605 and retained as an exact executable assertion rather than supp
 
 ## Adversarial matrix
 
-| Row                             | Adversarial input                                                                    | Required result                                                                                  | Executable evidence                     |
-| ------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | --------------------------------------- |
-| `TRUST-CORRUPT-RECORD`          | Corrupt persisted trust JSON.                                                        | Project restricted; no throw leaks content and no trust is minted.                               | `workspace-script-trust.test.ts`        |
-| `TRUST-STALE-DIGEST`            | Manifest/source digest changes after grant.                                          | Grant invalidated at a newer revision and remains restricted.                                    | `workspace-script-trust.test.ts`        |
-| `TRUST-SCHEMA-DOWNGRADE`        | Unknown/future trust record shape.                                                   | Contract validator rejects the record; consumer projects restricted.                             | `workspace-script-trust.test.ts`        |
-| `TRUST-PROMPT-BYPASS`           | Browser receives a malformed successful trust response.                              | UI does not unlock optimistically.                                                               | `WorkspaceTrustPanel.test.tsx`          |
-| `RESTRICTED-LSP-RACE`           | Trust is revoked between route admission and LSP pool acquisition.                   | Live trust is rechecked and no provider process is acquired.                                     | `languageRoutes.test.ts`                |
-| `RESTRICTED-AGENT-EXECUTION`    | Agent action/producer targets restricted root Beta.                                  | Request is denied before execution/model creation with content-free root attribution.            | `agentRootBoundary.test.ts`             |
-| `CROSS-ROOT-PATH-ALIAS`         | Lexical traversal, absolute path, or symlink reaches another root.                   | Boundary returns a typed per-root decomposition denial before file preflight.                    | `agentRootBoundary.test.ts`             |
-| `CROSS-ROOT-BINDING-REPLAY`     | Stale, forged-identity, or cross-root action binding.                                | Current manifest/root binding validation rejects the action.                                     | `agentRootBoundary.test.ts`             |
-| `CROSS-ROOT-OVERLAP`            | Duplicate/ancestor/descendant canonical roots or alias-equivalent identity.          | Manifest validation rejects the root set; focus cannot resolve authority.                        | `workspace-manifest.test.ts`            |
-| `PROFILE-PATH-SECRET-SMUGGLING` | Absolute/home/drive paths and credential-like strings in profile values.             | Export removes rejected values deterministically without echoing them.                           | `editorProfilePortability.test.ts`      |
-| `PROFILE-FUTURE-DEPTH`          | Future schema or excessive JSON depth.                                               | Whole import is rejected with no partial values.                                                 | `editorProfilePortability.test.ts`      |
-| `HISTORY-PATH-ESCAPE`           | Checkpoint path resolves outside the root through a symlink.                         | Capture fails with `PATH_OUTSIDE_WORKSPACE`; external bytes remain untouched.                    | `localHistoryStore.test.ts`             |
-| `HISTORY-PAYLOAD-TAMPER`        | Encrypted body is swapped or no longer matches metadata self-binding.                | Read fails with `CONTENT_UNAVAILABLE`; no bytes are returned.                                    | `localHistoryStore.test.ts`             |
-| `HISTORY-PLAINTEXT-LEAK`        | Search every private store file, the index, and browser state for checkpoint bodies. | All on-disk bytes are ciphertext or metadata and browser storage contains no checkpoint content. | `localHistoryStore.test.ts`, Playwright |
-| `HISTORY-APP-SESSION-BYPASS`    | Unauthenticated content-bearing history request.                                     | Only content-free projections are returned before lookup.                                        | `localHistoryRoutes.test.ts`            |
-| `EVIDENCE-TRUST-REDACTION`      | Inspect trust persistence/evidence columns for paths, manifests, or credentials.     | Closed schema contains only opaque refs, enums, revisions, timestamps, and validated JSON.       | `forbidden-fields.test.ts`              |
+| Row                             | Adversarial input                                                                                                                        | Required result                                                                                                                       | Executable evidence                                             |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `TRUST-CORRUPT-RECORD`          | Corrupt persisted trust JSON.                                                                                                            | Project restricted; no throw leaks content and no trust is minted.                                                                    | `workspace-script-trust.test.ts`                                |
+| `TRUST-STALE-DIGEST`            | Manifest/source digest changes after grant.                                                                                              | Grant invalidated at a newer revision and remains restricted.                                                                         | `workspace-script-trust.test.ts`                                |
+| `TRUST-SCHEMA-DOWNGRADE`        | Unknown/future trust record shape.                                                                                                       | Contract validator rejects the record; consumer projects restricted.                                                                  | `workspace-script-trust.test.ts`                                |
+| `TRUST-PROMPT-BYPASS`           | Browser receives a malformed successful trust response.                                                                                  | UI does not unlock optimistically.                                                                                                    | `WorkspaceTrustPanel.test.tsx`                                  |
+| `RESTRICTED-LSP-RACE`           | Trust is revoked between route admission and LSP pool acquisition.                                                                       | Live trust is rechecked and no provider process is acquired.                                                                          | `languageRoutes.test.ts`                                        |
+| `RESTRICTED-AGENT-EXECUTION`    | Agent action/producer targets restricted root Beta.                                                                                      | Request is denied before execution/model creation with content-free root attribution.                                                 | `agentRootBoundary.test.ts`                                     |
+| `CROSS-ROOT-PATH-ALIAS`         | Lexical traversal, absolute path, or symlink reaches another root.                                                                       | Boundary returns a typed per-root decomposition denial before file preflight.                                                         | `agentRootBoundary.test.ts`                                     |
+| `CROSS-ROOT-BINDING-REPLAY`     | Stale, forged-identity, or cross-root action binding.                                                                                    | Current manifest/root binding validation rejects the action.                                                                          | `agentRootBoundary.test.ts`                                     |
+| `CROSS-ROOT-OVERLAP`            | Duplicate/ancestor/descendant canonical roots, or two case spellings of one directory.                                                   | Manifest validation rejects the root set; focus cannot resolve authority.                                                             | `workspace-manifest.test.ts`                                    |
+| `PROFILE-PATH-SECRET-SMUGGLING` | Absolute/home/drive paths and credential-like strings in profile values.                                                                 | Export removes rejected values deterministically without echoing them.                                                                | `editorProfilePortability.test.ts`                              |
+| `PROFILE-FUTURE-DEPTH`          | Future schema or excessive JSON depth.                                                                                                   | Whole import is rejected with no partial values.                                                                                      | `editorProfilePortability.test.ts`                              |
+| `HISTORY-PATH-ESCAPE`           | Checkpoint path resolves outside the root through a symlink.                                                                             | Capture fails with `PATH_OUTSIDE_WORKSPACE`; external bytes remain untouched.                                                         | `localHistoryStore.test.ts`                                     |
+| `HISTORY-PAYLOAD-TAMPER`        | Encrypted body is swapped or no longer matches metadata self-binding.                                                                    | Read fails with `CONTENT_UNAVAILABLE`; no bytes are returned.                                                                         | `localHistoryStore.test.ts`                                     |
+| `HISTORY-PLAINTEXT-LEAK`        | Search every file the private store writes — the metadata index by name included — and every browser storage sink for checkpoint bodies. | All on-disk bytes are ciphertext or metadata; cookies, `localStorage`, `sessionStorage`, and IndexedDB contain no checkpoint content. | `localHistoryStore.test.ts`, `editor-m11-closeout-2533.spec.ts` |
+| `HISTORY-APP-SESSION-BYPASS`    | Unauthenticated content-bearing history request.                                                                                         | Only content-free projections are returned before lookup.                                                                             | `localHistoryRoutes.test.ts`                                    |
+| `EVIDENCE-TRUST-REDACTION`      | Inspect trust persistence/evidence columns for paths, manifests, or credentials.                                                         | Closed schema contains only opaque refs, enums, revisions, timestamps, and validated JSON.                                            | `forbidden-fields.test.ts`                                      |
 
-The matrix guard reads each named test source, proves its marker remains present, and proves the
-focused closeout command executes its owning file. This ledger supplements rather than replaces the
+The matrix guard is [`tests/qa/editor-m11-closeout-evidence.test.ts`](../../tests/qa/editor-m11-closeout-evidence.test.ts).
+It reads each named test source, proves the marker of **every distinct claim in the row** remains
+present, and proves the focused closeout command executes the owning file. A row that names two
+adversarial inputs therefore carries two markers, so it cannot go green on one claim while the other
+is prose: `CROSS-ROOT-OVERLAP` pins nesting rejection and the case-alias rejection that #2615 added
+when it folded case in canonical-root overlap comparison, and `HISTORY-PLAINTEXT-LEAK` pins the walk
+over every stored file and the index read by name. The browser half of `HISTORY-PLAINTEXT-LEAK` is
+pinned by [`tests/e2e/editor-m11-closeout-2533.static.test.ts`](../../tests/e2e/editor-m11-closeout-2533.static.test.ts),
+which owns the source contract of the journey spec. This ledger supplements rather than replaces the
 behavioral assertions.
 
 ## Platform containment disposition
@@ -56,24 +63,34 @@ case-alias of a granted root cannot mint a second trust state over the same dire
 ## Supplemental performance measurement
 
 `npm run check:editor-m11-performance` completed on `darwin-arm64`, Node.js 24.18.0, in
-`informational-local` mode. It used 50 samples for each 32-root UI helper, eight additional history
-roots, and a 64-checkpoint chain.
+`informational-local` mode with `gcSettled: true`. It used 50 samples for each 32-root UI helper,
+eight additional history roots, and a 64-checkpoint chain. The receipt below is the re-run recorded
+under #2626 after the RSS row was renamed to the quantity it measures.
 
 | Surface                                        | Samples | Observed p50 | Observed p95 | Local limit | Disposition |
 | ---------------------------------------------- | ------: | -----------: | -----------: | ----------: | ----------- |
-| 32-root Explorer target projection             |      50 |     0.004 ms |     0.017 ms |   15 ms p95 | Pass        |
-| 32-root search fan-out                         |      50 |     0.005 ms |     0.009 ms |   30 ms p95 | Pass        |
-| 32-root editor session serialize/parse         |      50 |     0.086 ms |     0.109 ms |   15 ms p95 | Pass        |
-| History capture/prune under a 64-version chain |      64 |    20.558 ms |    36.675 ms |  100 ms p95 | Pass        |
+| 32-root Explorer target projection             |      50 |     0.004 ms |     0.011 ms |   15 ms p95 | Pass        |
+| 32-root search fan-out                         |      50 |     0.007 ms |     0.018 ms |   30 ms p95 | Pass        |
+| 32-root editor session serialize/parse         |      50 |     0.083 ms |     0.117 ms |   15 ms p95 | Pass        |
+| History capture/prune under a 64-version chain |      64 |    23.498 ms |    26.049 ms |  100 ms p95 | Pass        |
 
 Resource dispositions:
 
-| Resource                                 |  Observed | Local limit | Disposition                  |
-| ---------------------------------------- | --------: | ----------: | ---------------------------- |
-| Memory per additional root               | 393,216 B | 2,097,152 B | Pass, informational locally  |
-| Encrypted history directory              | 142,337 B | 1,048,576 B | Pass, enforced in every mode |
-| Retained versions for the pressured file |        50 |  exactly 50 | Pass, enforced in every mode |
-| Maximum manifest roots projected         |        32 |  exactly 32 | Pass, enforced in every mode |
+| Resource                                       |  Observed | Local limit | Disposition                  |
+| ---------------------------------------------- | --------: | ----------: | ---------------------------- |
+| Process RSS per root admitted to local history | 434,176 B | 2,097,152 B | Pass, informational locally  |
+| Encrypted history directory                    | 138,537 B | 1,048,576 B | Pass, enforced in every mode |
+| Retained versions for the pressured file       |        50 |  exactly 50 | Pass, enforced in every mode |
+| Maximum manifest roots projected               |        32 |  exactly 32 | Pass, enforced in every mode |
+
+The RSS row is named for exactly what the harness does: capture one checkpoint per history root in
+the server store, then divide the process RSS delta by the root count. It is **not** the memory cost
+of an additional root in the workspace manifest or its UI projection, which is what the row claimed
+until #2626 and what no part of this harness measures. The harness runs under `--expose-gc` and
+reports `gcSettled`, so the delta is taken across two real heap settles; without that flag the two
+settle points are no-ops and the number would be allocator noise. It remains a single-run process
+measurement and moves between runs — a second run of this receipt observed 389,120 B — which is why
+it is informational locally and enforced only on a controlled runner.
 
 These numbers measure Keiko's root-projection/session helpers and encrypted local-history store over
 deterministic fixtures. They do not claim provider indexing cost, real customer repository search,
@@ -118,10 +135,13 @@ The focused UI tests and composed browser proof cover:
 - virtualized long history chains; and
 - axe checks over each populated M11 surface plus a composed visual attachment.
 
-Settings/profile and history are green for serious/critical axe findings. The populated nested
-file trees report exactly two `aria-required-children` nodes under one critical finding. #2605 owns
-the product-source remediation; the closeout E2E asserts the exact id, impact, and node count so a
-new violation or accidental suppression fails the lane.
+The settings scan is taken with the Editor tab open and its profile controls proven visible — the
+settings window mounts on its Models tab, and until #2626 the journey scanned that default instead
+of the profile surface this row is about. Settings/profile and history are green for
+serious/critical axe findings. The populated nested file trees report exactly two
+`aria-required-children` nodes under one critical finding. #2605 owns the product-source
+remediation; the closeout E2E asserts the exact id, impact, and node count so a new violation or
+accidental suppression fails the lane.
 
 All M11 component styling is module-scoped. The SHA-pinned global stylesheet is not part of the
 #2533 diff.

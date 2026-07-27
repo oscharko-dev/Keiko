@@ -195,6 +195,7 @@ evidence.
 | Context lanes / compaction                     | `check:context-quality`                                                                                                                                                                 |
 | Server error handling / diagnostics            | `check:error-observability`                                                                                                                                                             |
 | An ADR (added/renumbered)                      | `npm run check:adr-index`                                                                                                                                                               |
+| Added or renamed a `test:e2e:*` script         | `npm run check:e2e-suite-wiring` — a suite no lane runs is not coverage (#2629)                                                                                                         |
 | Package versions / release metadata            | `check:version-consistency`, `check:release-impact`                                                                                                                                     |
 | Coverage-sensitive code                        | `npm run test:coverage:quality`                                                                                                                                                         |
 | **Any code at all, before every pull request** | **`npm run gates:sonar`** — the only local run that sees the SonarJS rules `eslint-plugin-sonarjs` does not ship ([`docs/qa/local-sonar.md`](docs/qa/local-sonar.md))                   |
@@ -283,6 +284,14 @@ sent back.
 
 - **Prove the failure first.** A regression test must fail before your fix and pass after. A test
   that passes with and without the fix proves nothing.
+- **A fixture never restates a formula the code under test owns — it derives it from the production
+  entry point.** A fixture that recomputes the expectation cannot detect the case where the
+  production formula moves and the fixture's copy does not: both sides change together and the test
+  stays green over a broken product. Import the producer and call it. Epic #2285: the debug-launch
+  validator re-derived the workspace identity digest as `sha256(JSON.stringify([...]))` while the
+  producer had migrated to the shared framed digest, so every Linux debug launch failed
+  `INVALID_CAPSULE_PLAN` with the suite green (#2643). The same rule applies to a mock: simplify it
+  past the point where the violation it guards can occur and it will never fail again.
 - **Fix the whole class, at the owning layer.** Don't patch one call site if the same bug exists
   behind three others — fix it where the invariant lives (usually a contract or the layer that
   owns the state). One implementation, not a special case bolted on.

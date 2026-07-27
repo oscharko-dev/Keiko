@@ -1004,8 +1004,14 @@ describe("DAP production composition", () => {
     await service.dispose();
   });
 
+  // LINUX-ONLY. The two tests below drive the real namespace sandbox backend, so on macOS they do
+  // not run at all — a green local `dapProductionService` suite says nothing about either. #2643
+  // was a production launch failure that both of these caught on Linux CI while every local run
+  // stayed green; the requirement is in the title so the skip line names its own reason instead of
+  // adding one to an anonymous "2 skipped" count. To run them, see the container recipe in
+  // docs/qa/local-gates.md — about two seconds once the image is warm.
   it.skipIf(process.platform !== "linux")(
-    "runs one canonical production graph from opaque target through UDS teardown",
+    "[linux-only: namespace sandbox] runs one canonical production graph from opaque target through UDS teardown",
     async () => {
       const current = fixture();
       const service = createDapProductionService(current.deps);
@@ -1063,7 +1069,7 @@ describe("DAP production composition", () => {
   );
 
   it.skipIf(process.platform !== "linux")(
-    "rejects workspace replacement after initialize before sending DAP launch",
+    "[linux-only: namespace sandbox] rejects workspace replacement after initialize before sending DAP launch",
     async () => {
       const current = fixture(true);
       const service = createDapProductionService(current.deps);

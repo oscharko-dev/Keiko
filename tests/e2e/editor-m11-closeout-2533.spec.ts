@@ -217,6 +217,10 @@ async function replacePage(page: Page, windows: readonly SeedWindow[]): Promise<
     window.localStorage.setItem("keiko.theme", "dark");
     window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
     window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(value));
+    // Positive control for the leak probe's sessionStorage arm. The journey writes nothing to
+    // sessionStorage of its own, so without a value planted here a broken reader and an empty sink
+    // are indistinguishable and the probe's negative would mean nothing.
+    window.sessionStorage.setItem("keiko.e2e.storage-probe", "session-sink-reachable");
   }, windows);
   await replacement.goto(`${origin}/${pairingFragment()}`);
   return replacement;
@@ -297,6 +301,39 @@ async function restoreOldest(page: Page, pane: Locator): Promise<number> {
   return Date.now() - startedAt;
 }
 
+// The settings window opens on its Models tab. Scanning it in that state answers a question the
+// closeout never asked — the M11 claim is about the profile surface — so the Editor tab is opened
+// and its profile controls are proven present before any axe scan of this window (#2626).
+async function openProfileSettingsSurface(page: Page): Promise<void> {
+  const settings = page.locator(SETTINGS_WINDOW);
+  await settings.getByRole("button", { name: "Editor" }).click();
+  await expect(settings.getByText("Current profile: Focused M11")).toBeVisible();
+  await expect(settings.getByRole("combobox", { name: "Profile" })).toBeVisible();
+}
+
+// Every durable browser sink, not localStorage alone: the editor's hot-exit index lives in
+// IndexedDB and is content-free by contract, so a probe that cannot see IndexedDB cannot observe
+// the regression that would matter most. `storageState` covers cookies, localStorage, and
+// IndexedDB for every origin in the context; sessionStorage is read separately because storage
+// state does not carry it.
+//
+// sessionStorage is read through the documented `length`/`key(i)` API rather than by serializing
+// the `Storage` object. Chromium does expose stored entries as own-enumerable named properties, so
+// `JSON.stringify(sessionStorage)` happens to work there — but that is an engine detail, and a
+// leak probe that depends on it reports "clean" without looking on any engine that differs.
+async function browserStorageDump(page: Page): Promise<string> {
+  const state = await page.context().storageState({ indexedDB: true });
+  const session = await page.evaluate(() => {
+    const entries: Record<string, string> = {};
+    for (let index = 0; index < window.sessionStorage.length; index += 1) {
+      const key = window.sessionStorage.key(index);
+      if (key !== null) entries[key] = window.sessionStorage.getItem(key) ?? "";
+    }
+    return JSON.stringify(entries);
+  });
+  return `${JSON.stringify(state)}\n${session}`;
+}
+
 async function expectAxeGreen(page: Page, selector: string): Promise<void> {
   const violations = seriousOrCritical(await runAxe(page, selector));
   expect(violations, formatViolations(violations)).toEqual([]);
@@ -346,10 +383,22 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   await saveVersion(journeyPage, pane, VERSION_TWO);
   const historyRestoreMs = await restoreOldest(journeyPage, pane);
   expect(readFileSync(join(harness.alpha.root, FILE), "utf8")).toBe(oldestContent);
-  expect(JSON.stringify(await journeyPage.evaluate(() => window.localStorage))).not.toContain(
-    "historyValue",
-  );
+  const storage = await browserStorageDump(journeyPage);
+  // Assert on booleans and carry the diagnosis in the message, never in the subject: a failing
+  // `toContain` prints what it searched, and here that is every browser sink including cookies —
+  // the failure report would publish into CI logs the very content this assertion exists to prove
+  // absent, plus session material besides.
+  //
+  // Self-check both readers before trusting their negative, or a dump that captured nothing
+  // satisfies the leak assertion vacuously. The window descriptor proves the storage-state arm
+  // (cookies/localStorage/IndexedDB) read real state; the seeded control proves the sessionStorage
+  // arm did too.
+  expect(storage.includes("keiko.workspace.v4"), "storage-state arm read no state").toBe(true);
+  expect(storage.includes("session-sink-reachable"), "sessionStorage arm read no state").toBe(true);
+  // `historyValue` is the one identifier every saved version shares, so any leaked body carries it.
+  expect(storage.includes("historyValue"), "a checkpoint body reached browser storage").toBe(false);
   await expectKnownMultiRootAxeFinding(journeyPage);
+  await openProfileSettingsSurface(journeyPage);
   await expectAxeGreen(journeyPage, SETTINGS_WINDOW);
   await expectAxeGreen(journeyPage, "aside[aria-label='File history']");
   const metrics = {
