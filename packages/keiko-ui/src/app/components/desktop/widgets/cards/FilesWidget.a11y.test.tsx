@@ -111,15 +111,10 @@ describe("FilesWidget Git decoration accessibility", () => {
       screen.getByText("Git decorations incomplete: showing only the first 500 changes."),
     ).toBeInTheDocument();
 
-    // This scan is the ONE place aria-required-children stays disabled, and only for what this
-    // fixture adds: a git-decorated row renders `button.tr-git-diff` as a SIBLING of its treeitem,
-    // and role="tree" may own only treeitem and group. #2605 covered the caret and the root-level
-    // chrome, both fixed and now asserted with the rule enabled in FilesWidget.test.tsx and
-    // MultiRootFilesWidget.a11y.test.tsx. Moving a per-row control inside its treeitem means
-    // relocating role="treeitem" from `button.tr-row` onto the row wrapper, which changes the
-    // accessible name and focus target of ~107 locators across 17 unit and e2e files; that is a
-    // separate structural change, not this fixture's. Narrow the disable to the rule, never widen.
-    const options = { rules: { "aria-required-children": { enabled: false } } } as const;
-    expect(await axe(container, options)).toHaveNoViolations();
+    const diffButton = screen.getByRole("button", {
+      name: "View Git diff for conflicted.ts",
+    });
+    expect(diffButton.closest('[role="treeitem"]')).not.toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

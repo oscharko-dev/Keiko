@@ -22,7 +22,7 @@ export const EDITOR_SELECTORS = {
   workspace: ".editor-workspace",
   sidebar: "aside.ed-sidebar[aria-label='Editor files']",
   sidebarRestore: ".ed-sidebar-restore[aria-label='Show project tree']",
-  treeRow: "button.tr-row",
+  treeRow: "[role='treeitem'].tr-row",
   tablist: ".ed-tablist[role='tablist'][aria-label='Open documents']",
   // The outer tab element carries the `active`/`data-dirty` state; `role='tab'` and the
   // `data-tip`/`aria-selected` affordances live on the inner `.ed-tab-hit` button it wraps.

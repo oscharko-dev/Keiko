@@ -177,7 +177,7 @@ async function openTreePath(
   filesWindow: ReturnType<Page["getByRole"]>,
   path: string,
 ): Promise<void> {
-  const row = filesWindow.locator(`button.tr-row[data-path="${path}"]`);
+  const row = filesWindow.locator(`[role="treeitem"].tr-row[data-path="${path}"]`);
   await expect(row).toBeVisible();
   await row.click();
 }
@@ -406,12 +406,12 @@ test("arbitrary folder opening keeps root-relative ids with clear error and empt
   await openTreePath(filesWindow, "packages");
   await openTreePath(filesWindow, "packages/keiko-cli");
   await expect(
-    filesWindow.locator('button.tr-row[data-path="packages/keiko-cli/src"]'),
+    filesWindow.locator('[role="treeitem"].tr-row[data-path="packages/keiko-cli/src"]'),
   ).toBeVisible();
 
   // AC2: every visible tree identifier is root-relative — none is an absolute machine path.
   const identifiers = await filesWindow
-    .locator("button.tr-row")
+    .locator('[role="treeitem"].tr-row')
     .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-path") ?? ""));
   expect(identifiers.length).toBeGreaterThan(0);
   expect(
@@ -423,7 +423,9 @@ test("arbitrary folder opening keeps root-relative ids with clear error and empt
 
   // Parent navigation: stepping up from a nested folder lists the folder we came from.
   await filesWindow.getByRole("button", { name: "Open parent folder" }).click();
-  await expect(filesWindow.locator('button.tr-row[data-path="packages/keiko-cli"]')).toBeVisible();
+  await expect(
+    filesWindow.locator('[role="treeitem"].tr-row[data-path="packages/keiko-cli"]'),
+  ).toBeVisible();
 
   // D3/AC4: an unavailable root renders a clear, non-blocking error and the app stays alive.
   const rootInput = filesWindow.getByRole("textbox", { name: /Folder path/u });

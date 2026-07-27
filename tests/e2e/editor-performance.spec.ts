@@ -478,7 +478,7 @@ async function openTreePath(
   filesWindow: ReturnType<Page["getByRole"]>,
   path: string,
 ): Promise<void> {
-  const row = filesWindow.locator(`button.tr-row[data-path="${path}"]`);
+  const row = filesWindow.locator(`[role="treeitem"].tr-row[data-path="${path}"]`);
   await expect(row).toBeVisible();
   await row.click();
 }
