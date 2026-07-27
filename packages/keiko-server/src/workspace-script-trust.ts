@@ -386,18 +386,35 @@ function invalidationReason(
   return "trust-basis-changed";
 }
 
-// A previously trusted record is durably demoted only when it is contradicted by KNOWN live facts —
-// a genuine digest or root change. A transient or unreadable manifest keeps the current call
-// fail-closed (untrusted) but must never permanently revoke a valid grant (ADR-0147 D3 speaks of a
-// "digest/root mismatch", not an unreadable basis). Returns the trusted record to invalidate, if any.
+// A previously trusted record is durably demoted only when it is contradicted by live facts that
+// are themselves determinate. A transient or unreadable manifest keeps the current call fail-closed
+// (untrusted) but must never permanently revoke a valid grant (ADR-0147 D3 speaks of a "digest/root
+// mismatch", not an unreadable basis). Returns the trusted record to invalidate, if any.
+//
+// Root identity and manifest reference are determinate on their own: neither depends on being able
+// to read the trust basis, so a mismatch in either is a genuine contradiction and must demote even
+// when the basis is `absent`. Gating the whole function on the basis being `known` meant a root with
+// no package.json — permanently `absent`, i.e. exactly the non-npm roots #2613 exists to enable —
+// could have its directory swapped underneath a grant without the stored record ever being demoted,
+// without an `identity-changed` revision being written, and without notifyRestricted reaching the
+// managed LSP pool, leaving a language server running against a directory the grant never covered.
+//
+// The basis-only path keeps requiring `known`. A `package.json` that disappears leaves an `absent`
+// basis, and the regression pin "keeps a grant durable across a transient unreadable manifest"
+// holds that a vanished manifest is transient and must not permanently revoke the grant.
 function invalidatedTrustedRecord(
   assessment: WorkspaceTrustAssessment,
   expected: WorkspaceTrustBinding,
   projectedTrusted: boolean,
 ): WorkspaceTrustRecord | undefined {
-  if (projectedTrusted || expected.trustBasisDigest.outcome !== "known") return undefined;
+  if (projectedTrusted) return undefined;
   if (assessment.outcome !== "known" || assessment.value.trust !== "trusted") return undefined;
-  return assessment.value;
+  const stored = assessment.value.binding;
+  const determinateMismatch =
+    stored.rootIdentityDigest !== expected.rootIdentityDigest ||
+    stored.manifestRef !== expected.manifestRef;
+  if (determinateMismatch) return assessment.value;
+  return expected.trustBasisDigest.outcome === "known" ? assessment.value : undefined;
 }
 
 class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {

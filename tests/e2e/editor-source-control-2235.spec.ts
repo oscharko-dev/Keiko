@@ -250,6 +250,8 @@ test("Files reflects conflict, folder, ignored, and post-save status", async ({ 
   await expect(files).toBeVisible();
   const src = files.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src"]`);
   await expect(src.getByLabel(/conflict/u)).toBeVisible();
+  // The caret is aria-hidden since #2605 (role="tree" may own only treeitem/group), so it is
+  // addressed by selector rather than by role. Expansion is also reachable via Arrow Right.
   await files.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   const merge = files.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src/merge"]`);
   await expect(merge.getByLabel(/conflict/u)).toBeVisible();

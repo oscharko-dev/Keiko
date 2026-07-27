@@ -456,6 +456,44 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     expect(readReasonFrom(row?.recordJson)).toBe("identity-changed");
   });
 
+  it("invalidates an absent-basis grant when the root directory is replaced (#2613/#2615)", () => {
+    // The pin above swaps a root that HAS a package.json, so its basis is `known`. #2613 made a
+    // root with no manifest grantable, and such a root's basis is permanently `absent`. The
+    // durable-invalidation guard tested `outcome !== "known"`, which treats `absent` as an
+    // undetermined basis — the conflation ADR-0147 D9 forbids — so for exactly the non-npm roots
+    // #2613 enables, a directory swap demoted nothing: the row stayed `trusted` at its original
+    // revision, no `identity-changed` reason was recorded, and no restriction reached the LSP pool,
+    // leaving a language server running against a directory the grant never covered.
+    const bare = mkdtempSync(join(tmpdir(), "keiko-script-trust-bare-swap-"));
+    try {
+      store.createProject(bare, "bare");
+      const notified: string[] = [];
+      const trust = createWorkspaceScriptTrustService({
+        store,
+        onRestricted: (canonicalRoot) => notified.push(canonicalRoot),
+      });
+      const bareRef = deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(bare));
+
+      expect(trust.grant(bare)).toEqual({ trusted: true });
+      expect(trust.trustLevelForRoot(bare)).toBe("trusted");
+
+      const originalIdentityDigest = identityDigestFor(bare);
+      rmSync(bare, { recursive: true, force: true });
+      mkdirSync(bare, { recursive: true });
+      // Still no package.json: the basis stays `absent` across the swap, which is the whole point.
+      expect(identityDigestFor(bare)).not.toBe(originalIdentityDigest);
+
+      expect(trust.trustLevelForRoot(bare)).toBe("restricted");
+      const row = store.readWorkspaceTrustRecord(bareRef);
+      expect(row?.trust).toBe("restricted");
+      expect(row?.revision).toBe(1);
+      expect(readReasonFrom(row?.recordJson)).toBe("identity-changed");
+      expect(notified).toEqual([nodeWorkspaceFs.realPath(bare)]);
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
   it("persists a content-free restricted invalidation when the manifest digest changes", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     trust.grant(root);
