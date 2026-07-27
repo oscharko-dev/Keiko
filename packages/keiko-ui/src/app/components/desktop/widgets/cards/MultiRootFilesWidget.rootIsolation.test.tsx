@@ -197,8 +197,15 @@ describe("MultiRootFilesWidget root isolation over the real file tree", () => {
     const toggle = group.querySelector("button");
     if (toggle === null) throw new Error("root group toggle missing");
     await userEvent.click(toggle);
+    vi.mocked(fetchFilesTree).mockClear();
     await userEvent.click(toggle);
     await settledTrees(2);
+    // `.files-tree` mounts synchronously on re-render, so waiting for the element alone would let
+    // this assertion run BEFORE the remounted root's loadDirectory("") resolves and fires its
+    // report — the test would then pass for the wrong reason. Wait for the reload itself.
+    await waitFor(() => {
+      expect(vi.mocked(fetchFilesTree).mock.calls.some(([r]) => r === EMPTY_ROOT)).toBe(true);
+    });
 
     expect(onActiveFileChange).not.toHaveBeenCalled();
   });
