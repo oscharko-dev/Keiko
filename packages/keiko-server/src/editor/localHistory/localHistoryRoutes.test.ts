@@ -316,13 +316,19 @@ describe("editor local-history routes", () => {
     async (operation) => {
       const entryRef = capture();
       const originalStore = store;
-      let projectReads = 0;
+      let manifestReads = 0;
       const swappingStore: UiStore = {
         ...originalStore,
-        listProjects: () => {
-          projectReads += 1;
-          if (projectReads === 2) queueMicrotask(replaceRootObject);
-          return originalStore.listProjects();
+        findWorkspaceManifestRecordByRoot: (
+          rootRef: string,
+        ): ReturnType<UiStore["findWorkspaceManifestRecordByRoot"]> => {
+          const record = originalStore.findWorkspaceManifestRecordByRoot(rootRef);
+          manifestReads += 1;
+          // The second lookup is authorizedEntry's final identity comparison. Queueing the swap
+          // after that synchronous lookup lets authorizedEntry settle first; the handler's await
+          // then yields to this microtask before revalidateEffectRoot and the store effect.
+          if (manifestReads === 2) queueMicrotask(replaceRootObject);
+          return record;
         },
       };
       const readEffect = vi.fn(history.read);
@@ -365,6 +371,7 @@ describe("editor local-history routes", () => {
       expect(
         { read: readEffect, pin: pinEffect, delete: deleteEffect }[operation],
       ).not.toHaveBeenCalled();
+      expect(manifestReads).toBe(3);
       expect(JSON.stringify(result.body)).not.toContain("checkpoint marker");
       expect(JSON.stringify(result.body)).not.toContain("replacement marker");
     },

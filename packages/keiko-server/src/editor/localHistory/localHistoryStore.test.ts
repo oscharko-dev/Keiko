@@ -548,33 +548,58 @@ describe("editor local-history store", () => {
   });
 
   it.each(["read", "pin", "delete"] as const)(
-    "fails closed before %s when an adopted index sees a different root object",
+    "quarantines the prior object's history before %s and admits fresh replacement history",
     (operation) => {
       const fx = fixture();
       const store = createEditorLocalHistoryStore(storeOptions(fx));
       const entry = store.capture(captureInput(fx, "legacy payload\n", "user-save", 1_000)).entry;
-      removePrivateIndexBinding(fx.stateDir);
-      const reopened = createEditorLocalHistoryStore(storeOptions(fx));
-      reopened.list(fx.scope, undefined, 1_001);
-      const changedScope = {
-        ...fx.scope,
-        objectIdentityDigest: changedDigest(fx.scope.objectIdentityDigest),
+      rmSync(fx.root, { recursive: true });
+      mkdirSync(join(fx.root, "src"), { recursive: true });
+      const replacementIdentity = inspectWorkspaceRootIdentity(fx.root);
+      if (replacementIdentity.objectIdentityDigest === undefined) {
+        throw new Error("replacement filesystem has no durable object identity");
+      }
+      const changedScope: EditorLocalHistoryRootScope = {
+        workspaceId: fx.scope.workspaceId,
+        rootRef: replacementIdentity.rootRef,
+        rootIdentityDigest: replacementIdentity.identityDigest,
+        objectIdentityDigest: replacementIdentity.objectIdentityDigest,
       };
+      const replacementFx = { ...fx, scope: changedScope };
 
       const effect = (): void => {
         if (operation === "read") {
-          reopened.read(changedScope, entry.entryRef, 1_002);
+          store.read(changedScope, entry.entryRef, 1_002);
         } else if (operation === "pin") {
-          reopened.setPinned(changedScope, entry.entryRef, true, 1_002);
+          store.setPinned(changedScope, entry.entryRef, true, 1_002);
         } else {
-          reopened.delete(changedScope, entry.entryRef);
+          store.delete(changedScope, entry.entryRef);
         }
       };
       expect(effect).toThrow(
         expect.objectContaining({
-          code: "INDEX_UNAVAILABLE",
-          detail: "ROOT_OBJECT_IDENTITY_DRIFT",
+          code: "ENTRY_NOT_FOUND",
         }),
+      );
+      expect(store.list(changedScope, undefined, 1_002)).toEqual([]);
+
+      const replacement = store.capture(
+        captureInput(replacementFx, "replacement payload\n", "user-save", 1_003),
+      ).entry;
+      expect(store.list(changedScope, undefined, 1_004)).toEqual([
+        expect.objectContaining({ entryRef: replacement.entryRef }),
+      ]);
+      expect(replacement.entryRef).not.toBe(entry.entryRef);
+      const historyRoot = join(fx.stateDir, "editor-local-history");
+      expect(readdirSync(historyRoot)).toHaveLength(2);
+      expect(readAllFiles(historyRoot).join("")).not.toContain("legacy payload\n");
+
+      const reopened = createEditorLocalHistoryStore(storeOptions(replacementFx));
+      expect(reopened.list(changedScope, undefined, 1_005)).toEqual([
+        expect.objectContaining({ entryRef: replacement.entryRef }),
+      ]);
+      expect(() => reopened.entry(changedScope, entry.entryRef, 1_005)).toThrow(
+        expect.objectContaining({ code: "ENTRY_NOT_FOUND" }),
       );
     },
   );

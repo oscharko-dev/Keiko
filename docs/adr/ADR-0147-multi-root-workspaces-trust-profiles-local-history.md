@@ -316,6 +316,9 @@ the existing governed save/apply/conflict flow and checkpoints the pre-restore s
 A legacy local-history index is adopted and sealed to the private object identity only when every
 entry's public V1 root identity matches the live root. A mismatch, unavailable private identity, or
 subsequent object replacement makes the index unavailable before read, pin, delete, or restore.
+Once the replacement object is independently authorized, it receives a fresh object-bound history
+namespace. The superseded encrypted namespace remains quarantined rather than being exposed to the
+replacement or deleted as a side effect of an ordinary history request.
 
 ### D8 — Each state class has exactly one storage substrate
 

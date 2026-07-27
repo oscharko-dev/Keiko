@@ -494,8 +494,11 @@ function output(result: ToolCallResult): EditorAgentToolOutput {
 }
 
 async function postSnapshot(fixture: Fixture, root: string): Promise<Response> {
-  const port = (fixture.server.address() as AddressInfo).port;
-  return fetch(`http://${UI_HOST}:${String(port)}/api/editor/agent/snapshot`, {
+  const address = fixture.server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("fixture server did not bind a TCP address");
+  }
+  return fetch(`http://${UI_HOST}:${String(address.port)}/api/editor/agent/snapshot`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
     body: JSON.stringify({

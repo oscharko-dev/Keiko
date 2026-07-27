@@ -237,11 +237,11 @@ export function shouldFailBudget(disposition, controlled) {
 }
 
 async function loadMeasurementDependencies(samples) {
-  const [historyStore, rootIdentity, multiRoot] = await Promise.all([
+  const [historyStore, rootIdentity] = await Promise.all([
     import("../packages/keiko-server/dist/editor/localHistory/localHistoryStore.js"),
     import("../packages/keiko-server/dist/workspace-root-identity.js"),
-    measureMultiRootUi(samples),
   ]);
+  const multiRoot = await measureMultiRootUi(samples);
   return { historyStore, rootIdentity, multiRoot };
 }
 

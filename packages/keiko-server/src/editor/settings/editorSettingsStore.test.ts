@@ -204,6 +204,7 @@ describe("editor settings store — direct coverage", () => {
       path,
       JSON.stringify({
         ...emptyEditorSettingsRootRecord(root),
+        rootObjectIdentityDigest: "",
         revision: 2,
         values: { fontSize: 18 },
       }),

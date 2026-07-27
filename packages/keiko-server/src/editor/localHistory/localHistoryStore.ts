@@ -191,10 +191,17 @@ interface PrivateHistoryIndexDocument {
   readonly index: unknown;
 }
 
-interface LoadedHistoryIndex {
+interface AvailableHistoryIndex {
+  readonly kind: "available";
   readonly index: EditorLocalHistoryIndex;
   readonly legacy: boolean;
 }
+
+interface ObjectIdentityDrift {
+  readonly kind: "object-identity-drift";
+}
+
+type LoadedHistoryIndex = AvailableHistoryIndex | ObjectIdentityDrift;
 
 export interface CreateEditorLocalHistoryStoreOptions {
   readonly stateDir: string;
@@ -227,6 +234,18 @@ function instant(nowMs: number): WorkspaceIsoInstant {
 function workspaceDirectory(rootDir: string, workspaceId: string): string {
   const ref = digest("keiko.editor-local-history.workspace.v1", [workspaceId]).slice(0, 40);
   return join(rootDir, `workspace-${ref}`);
+}
+
+function replacementWorkspaceDirectory(
+  rootDir: string,
+  workspaceId: string,
+  objectIdentityDigest: string,
+): string {
+  const ref = digest("keiko.editor-local-history.replacement.v1", [
+    workspaceId,
+    objectIdentityDigest,
+  ]).slice(0, 40);
+  return join(rootDir, `replacement-${ref}`);
 }
 
 /**
@@ -424,16 +443,16 @@ function indexMatchesScope(
 function readIndex(path: string, scope: EditorLocalHistoryRootScope): LoadedHistoryIndex {
   const indexFile = checkedIndexFile(path);
   if (indexFile === undefined) {
-    return { index: emptyIndex(scope.workspaceId), legacy: false };
+    return { kind: "available", index: emptyIndex(scope.workspaceId), legacy: false };
   }
   const parsed = parseIndexJson(readCheckedIndexText(path, indexFile));
   if (privateIndexDocument(parsed)) {
     if (parsed.objectIdentityDigest !== scope.objectIdentityDigest) {
-      return unavailableIndex("ROOT_OBJECT_IDENTITY_DRIFT");
+      return { kind: "object-identity-drift" };
     }
     const index = validatedIndex(parsed.index, scope.workspaceId);
     if (!indexMatchesScope(index, scope)) return unavailableIndex("ROOT_IDENTITY_MISMATCH");
-    return { index, legacy: false };
+    return { kind: "available", index, legacy: false };
   }
   // A raw contract index predates the private envelope. Its entries are the only persisted public
   // root binding available, so adoption is allowed only while every retained entry still agrees
@@ -442,7 +461,30 @@ function readIndex(path: string, scope: EditorLocalHistoryRootScope): LoadedHist
   if (!indexMatchesScope(legacy, scope)) {
     return unavailableIndex("LEGACY_ROOT_IDENTITY_MISMATCH");
   }
-  return { index: legacy, legacy: true };
+  return { kind: "available", index: legacy, legacy: true };
+}
+
+function stateLocation(
+  rootDir: string,
+  scope: EditorLocalHistoryRootScope,
+): { readonly dir: string; readonly loaded: AvailableHistoryIndex } {
+  const primaryDir = workspaceDirectory(rootDir, scope.workspaceId);
+  const primary = readIndex(join(primaryDir, HISTORY_INDEX_FILE), scope);
+  if (primary.kind === "available") return { dir: primaryDir, loaded: primary };
+
+  // A new filesystem object at the same canonical path must see an empty namespace, never the old
+  // object's checkpoints. Keep the superseded encrypted directory quarantined and select a
+  // private object-bound directory for the replacement; no historical bytes are deleted.
+  const replacementDir = replacementWorkspaceDirectory(
+    rootDir,
+    scope.workspaceId,
+    scope.objectIdentityDigest,
+  );
+  const replacement = readIndex(join(replacementDir, HISTORY_INDEX_FILE), scope);
+  if (replacement.kind === "object-identity-drift") {
+    return unavailableIndex("ROOT_OBJECT_IDENTITY_DRIFT");
+  }
+  return { dir: replacementDir, loaded: replacement };
 }
 
 function privateIndexValue(
@@ -863,14 +905,11 @@ export function createEditorLocalHistoryStore(
     }
     const cached = states.get(scope.workspaceId);
     if (cached !== undefined) {
-      if (cached.objectIdentityDigest !== scope.objectIdentityDigest) {
-        return unavailableIndex("ROOT_OBJECT_IDENTITY_DRIFT");
-      }
-      return cached;
+      if (cached.objectIdentityDigest === scope.objectIdentityDigest) return cached;
+      states.delete(scope.workspaceId);
     }
-    const dir = workspaceDirectory(rootDir, scope.workspaceId);
+    const { dir, loaded } = stateLocation(rootDir, scope);
     const indexPath = join(dir, HISTORY_INDEX_FILE);
-    const loaded = readIndex(indexPath, scope);
     const state: WorkspaceState = {
       indexPath,
       vault: createVault(options, dir),
