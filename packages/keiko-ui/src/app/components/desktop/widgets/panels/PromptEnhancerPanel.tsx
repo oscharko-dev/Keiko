@@ -315,15 +315,6 @@ function SafetyPanel({
 // #2723 (S3358): the readiness-text lookup was a nested ternary
 // (status === "ready" ? … : status === "unavailable" ? … : …); extracted to a named
 // if/else-if chain.
-function groundingReadinessText(
-  status: PromptEnhancementWireResponse["groundingReadiness"]["status"],
-  t: OptionalWidgetTranslate,
-): string {
-  if (status === "ready") return t("promptEnhancer.grounding.ready");
-  if (status === "unavailable") return t("promptEnhancer.grounding.unavailable");
-  return t("promptEnhancer.grounding.notRequired");
-}
-
 function GroundingPanel({
   plan,
   readiness,
@@ -333,7 +324,14 @@ function GroundingPanel({
   readonly readiness: PromptEnhancementWireResponse["groundingReadiness"];
   readonly t: OptionalWidgetTranslate;
 }): ReactNode {
-  const readinessText = groundingReadinessText(readiness.status, t);
+  let readinessText: string;
+  if (readiness.status === "ready") {
+    readinessText = t("promptEnhancer.grounding.ready");
+  } else if (readiness.status === "unavailable") {
+    readinessText = t("promptEnhancer.grounding.unavailable");
+  } else {
+    readinessText = t("promptEnhancer.grounding.notRequired");
+  }
   return (
     <Section title={t("promptEnhancer.grounding.title")}>
       <div
@@ -530,17 +528,6 @@ function EnhancedPromptSections({
   );
 }
 
-function promptEnhancerStatus(
-  loading: boolean,
-  draftLength: number,
-  t: OptionalWidgetTranslate,
-): string {
-  if (loading) return t("promptEnhancer.status.enhancing");
-  return draftLength === 0
-    ? t("promptEnhancer.status.waitingForDraft")
-    : t("promptEnhancer.status.ready");
-}
-
 export function PromptEnhancerPanel({
   connectedRoot = null,
   connectedFilePath = null,
@@ -695,6 +682,14 @@ export function PromptEnhancerPanel({
     },
   ];
   const draftLength = draft.trim().length;
+  let statusText: string;
+  if (loading) {
+    statusText = t("promptEnhancer.status.enhancing");
+  } else if (draftLength === 0) {
+    statusText = t("promptEnhancer.status.waitingForDraft");
+  } else {
+    statusText = t("promptEnhancer.status.ready");
+  }
   const hasWorkspaceContent =
     draftLength > 0 ||
     result !== null ||
@@ -851,7 +846,7 @@ export function PromptEnhancerPanel({
             </button>
           </div>
           <p className="pe-status" role="status" aria-live="polite">
-            {promptEnhancerStatus(loading, draftLength, t)}
+            {statusText}
           </p>
         </aside>
       </form>

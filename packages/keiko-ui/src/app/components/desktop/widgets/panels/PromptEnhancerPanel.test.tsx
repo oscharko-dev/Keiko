@@ -353,7 +353,7 @@ describe("PromptEnhancerPanel", () => {
     );
   });
 
-  // #2723 (S3358): groundingReadinessText's "ready" branch — the other two branches
+  // #2723 (S3358): the grounding-readiness text's "ready" branch — the other two branches
   // ("unavailable" above, "not-required" via makeResponse()'s default) already have coverage.
   it("shows connected-context readiness text when grounding is ready", async () => {
     const response = makeResponse({

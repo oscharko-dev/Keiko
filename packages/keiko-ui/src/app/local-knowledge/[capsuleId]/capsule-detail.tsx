@@ -1373,10 +1373,11 @@ interface LargeDocumentSectionProps {
 
 export function resumeButtonLabel(busy: boolean, resumableCount: number, t: I18nTranslate): string {
   if (busy) return t("localKnowledge.detail.large.resuming");
-  if (resumableCount === 1) {
-    return t("localKnowledge.detail.large.resume.one", { count: resumableCount });
-  }
-  return t("localKnowledge.detail.large.resume.many", { count: resumableCount });
+  const key =
+    resumableCount === 1
+      ? "localKnowledge.detail.large.resume.one"
+      : "localKnowledge.detail.large.resume.many";
+  return t(key, { count: resumableCount });
 }
 
 function LargeDocumentSection({

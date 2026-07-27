@@ -3973,6 +3973,7 @@ export function MemoryActionForgetButtons({
   clearError,
   setConfirmForget,
   setForgetConfirmText,
+  t,
 }: {
   readonly action: Extract<ConversationMemoryActionWire, { readonly kind: "forget" }>;
   readonly busy: boolean;
@@ -3982,8 +3983,8 @@ export function MemoryActionForgetButtons({
   readonly clearError: () => void;
   readonly setConfirmForget: Dispatch<SetStateAction<boolean>>;
   readonly setForgetConfirmText: Dispatch<SetStateAction<string>>;
+  readonly t: I18nTranslate;
 }): ReactNode {
-  const t = useTranslate();
   if (!action.requiresConfirmation) {
     return (
       <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
@@ -4103,6 +4104,7 @@ function MemoryActionForgetCard({
           clearError={clearError}
           setConfirmForget={setConfirmForget}
           setForgetConfirmText={setForgetConfirmText}
+          t={t}
         />
       </div>
       {error !== undefined ? (

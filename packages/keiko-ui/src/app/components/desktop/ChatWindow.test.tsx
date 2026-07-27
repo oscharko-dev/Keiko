@@ -22,6 +22,7 @@ import {
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
+import { translate, type I18nTranslate } from "@/lib/i18n";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
 import type {
@@ -2364,6 +2365,11 @@ describe("ChatWindow memory controls", () => {
 // true (the plain "review forget" button never calls it). Driving the component directly with an
 // explicit `busy: true` prop is the smallest way to exercise the guard clauses honestly.
 describe("MemoryActionForgetButtons (extracted three-state action buttons, #2723)", () => {
+  // MemoryActionForgetButtons now takes `t` as a prop (its caller already has one in scope)
+  // instead of calling useTranslate() itself — same default English resolution the hook's own
+  // fallback context would have produced, so the rendered text these tests assert on is unchanged.
+  const t: I18nTranslate = (key, values) => translate("en", key, values);
+
   function forgetAction(
     overrides: Partial<Extract<ConversationMemoryActionWire, { readonly kind: "forget" }>> = {},
   ): Extract<ConversationMemoryActionWire, { readonly kind: "forget" }> {
@@ -2388,6 +2394,7 @@ describe("MemoryActionForgetButtons (extracted three-state action buttons, #2723
         clearError={vi.fn()}
         setConfirmForget={vi.fn<Dispatch<SetStateAction<boolean>>>()}
         setForgetConfirmText={vi.fn<Dispatch<SetStateAction<string>>>()}
+        t={t}
       />,
     );
     expect(screen.queryByRole("button", { name: /review forget/i })).toBeNull();
@@ -2410,6 +2417,7 @@ describe("MemoryActionForgetButtons (extracted three-state action buttons, #2723
         clearError={clearError}
         setConfirmForget={setConfirmForget}
         setForgetConfirmText={setForgetConfirmText}
+        t={t}
       />,
     );
     await user.click(screen.getByRole("button", { name: /review forget/i }));
@@ -2433,6 +2441,7 @@ describe("MemoryActionForgetButtons (extracted three-state action buttons, #2723
         clearError={clearError}
         setConfirmForget={setConfirmForget}
         setForgetConfirmText={setForgetConfirmText}
+        t={t}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -2456,6 +2465,7 @@ describe("MemoryActionForgetButtons (extracted three-state action buttons, #2723
         clearError={clearError}
         setConfirmForget={setConfirmForget}
         setForgetConfirmText={setForgetConfirmText}
+        t={t}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Cancel" }));
