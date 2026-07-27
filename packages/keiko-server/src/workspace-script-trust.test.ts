@@ -456,6 +456,27 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     expect(readReasonFrom(row?.recordJson)).toBe("identity-changed");
   });
 
+  it("resolves a canonical root to its registered project alias (#2615)", () => {
+    // The multi-root trust badges and the editor host ask for trust by `canonicalRoot`, which is
+    // `realpath.native`. A registered project path is only normalized, so an exact string match
+    // answered PROJECT_NOT_FOUND for the very same directory whenever it was registered through a
+    // symlink — and the badge then reported an unreadable trust state for a root that is trusted.
+    const target = mkdtempSync(join(tmpdir(), "keiko-trust-alias-target-"));
+    const link = join(mkdtempSync(join(tmpdir(), "keiko-trust-alias-link-")), "linked-root");
+    try {
+      symlinkSync(target, link, "dir");
+      store.createProject(link, "linked");
+      const trust = createWorkspaceScriptTrustService({ store });
+
+      expect(trust.grant(link)).toEqual({ trusted: true });
+      // The canonical spelling names the same root, so it must read the same grant.
+      expect(trust.status(nodeWorkspaceFs.realPath(link))).toMatchObject({ trust: "trusted" });
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+      rmSync(link, { force: true });
+    }
+  });
+
   it("invalidates an absent-basis grant when the root directory is replaced (#2613/#2615)", () => {
     // The pin above swaps a root that HAS a package.json, so its basis is `known`. #2613 made a
     // root with no manifest grantable, and such a root's basis is permanently `absent`. The

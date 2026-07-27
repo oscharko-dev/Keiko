@@ -231,7 +231,19 @@ function resolveCanonicalRoot(
   projectId: string,
   suppliedWorkspace?: WorkspaceInfo,
 ): string {
-  const project = store.listProjects().find((entry) => entry.path === projectId);
+  // A registered project path is normalized but never realpath'd, while a manifest's canonicalRoot
+  // is `realpath.native`. Matching on the string alone therefore answered PROJECT_NOT_FOUND for the
+  // same directory named canonically — every root registered through a symlinked path (anything
+  // under /tmp on macOS, a symlinked home or code directory) or with different casing. The reverse
+  // lookup that resolves the alias already exists and is what trustLevelForRoot uses; this resolves
+  // the id through it so one identity rule serves every entry point into this service.
+  const registeredPath =
+    store.listProjects().find((entry) => entry.path === projectId)?.path ??
+    registeredProjectPathForRoot(store, fs, projectId);
+  const project =
+    registeredPath === undefined
+      ? undefined
+      : store.listProjects().find((entry) => entry.path === registeredPath);
   if (project === undefined) {
     throw new WorkspaceScriptTrustError("PROJECT_NOT_FOUND", "Project not found.");
   }

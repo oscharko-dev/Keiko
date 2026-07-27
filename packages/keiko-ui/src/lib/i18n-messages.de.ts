@@ -123,6 +123,8 @@ export const DE_MESSAGES = {
     "Das Arbeitsbereichsvertrauen konnte nicht sicher gelesen werden. Ausführungsfunktionen bleiben nicht verfügbar.",
   "workspaceTrust.updateFailed":
     "Der Server hat die Vertrauensänderung nicht bestätigt. Dieser Arbeitsbereich bleibt eingeschränkt.",
+  "workspaceTrust.updateFailedTrusted":
+    "Der Server hat die Vertrauensänderung nicht bestätigt. Dieser Arbeitsbereich bleibt vertrauenswürdig.",
   "workspaceTrust.errorCode": "Fehlercode: {code}",
   "workspaceTrust.supportId": "Support-ID: {correlationId}",
   "workspaceTrust.banner.editor":

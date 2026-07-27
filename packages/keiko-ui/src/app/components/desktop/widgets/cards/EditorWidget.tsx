@@ -1447,14 +1447,19 @@ export function EditorWidget({
     activeFile: activeFile.length > 0 ? activeFile : null,
   });
 
+  // The initial prompt answers one question — "this binding is opening on an untrusted root" — and
+  // it is answered once per binding. The latch used to be taken only when the FIRST resolved state
+  // was `restricted`, so opening on a trusted root left it unconsumed: a later explicit revocation
+  // by the human moved trust to `restricted` and re-raised the first-open prompt, asking them to
+  // grant what they had just deliberately revoked, and labelling it `initialPrompt`. Consuming the
+  // latch on the first resolved state whatever it says keeps the prompt for a genuine untrusted
+  // open and keeps a revoke a revoke.
   useEffect(() => {
     const status = verification.catalog?.workspaceTrust;
-    if (
-      workspaceRoot.length > 0 &&
-      status?.trust === "restricted" &&
-      promptedTrustRoot !== workspaceRoot
-    ) {
-      setPromptedTrustRoot(workspaceRoot);
+    if (workspaceRoot.length === 0 || status === undefined) return;
+    if (promptedTrustRoot === workspaceRoot) return;
+    setPromptedTrustRoot(workspaceRoot);
+    if (status.trust === "restricted") {
       setTrustDecision({ action: "grant", initialPrompt: true, root: workspaceRoot });
     }
   }, [promptedTrustRoot, verification.catalog?.workspaceTrust, workspaceRoot]);
