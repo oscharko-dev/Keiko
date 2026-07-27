@@ -217,8 +217,8 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
       ? " Nenne eine konkrete Datei, einen Identifier, eine Fehlermeldung oder eine exakte Phrase."
       : "";
   const examples = suggestedQuestions.slice(0, 2);
-  const exampleText =
-    examples.length > 0 ? ` Zum Beispiel: ${examples.map((q) => `"${q}"`).join(" oder ")}` : "";
+  const quotedExamples = examples.map((q) => `"${q}"`).join(" oder ");
+  const exampleText = examples.length > 0 ? ` Zum Beispiel: ${quotedExamples}` : "";
   return `${intro}${anchorHint}${exampleText}`;
 }
 

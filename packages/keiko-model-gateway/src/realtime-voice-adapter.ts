@@ -26,8 +26,7 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
-import type { OutboundHttpEgressConfig } from "./types.js";
-import type { RealtimeAuthMode } from "./types.js";
+import type { OutboundHttpEgressConfig, RealtimeAuthMode } from "./types.js";
 
 // SDP offers/answers are small (a single audio m-line plus ICE/DTLS metadata is typically a few KB);
 // cap the negotiated answer well below the 10 MB gateway default so a hostile or misconfigured
