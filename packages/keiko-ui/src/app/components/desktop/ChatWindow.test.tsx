@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ComponentProps } from "react";
+import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
@@ -18,14 +18,17 @@ import {
   ChatWindow,
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
+  MemoryActionForgetButtons,
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
+import { translate, type I18nTranslate } from "@/lib/i18n";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
 import type {
   Chat,
   ChatMessage,
+  ConversationMemoryActionWire,
   GroundedAnswer,
   LocalKnowledgeEvidenceCitation,
   ModelCapability,
@@ -2133,6 +2136,22 @@ describe("ChatWindow memory controls", () => {
     );
   });
 
+  it("shows the pending summary before any memory result has arrived", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: undefined,
+      }),
+    );
+
+    const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
+    await user.click(disclosureButton);
+    expect(
+      screen.getByText("MemoriaViva disclosure appears after the next response."),
+    ).toBeInTheDocument();
+  });
+
   it("discloses disabled no-memory responses without deleting stored memories", async () => {
     const user = userEvent.setup();
     renderWindow(
@@ -2335,6 +2354,183 @@ describe("ChatWindow memory controls", () => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
       expect(screen.getByText(/forget failed/i)).toBeInTheDocument();
     });
+  });
+
+  // Issue #2723 (CodeRabbit 3655533390) — aria-disabled alone does not stop a real click, so a
+  // second click landing while forgetMemoryAction is still in flight used to be able to submit a
+  // duplicate forget. The confirm button now carries the native `disabled` attribute while busy
+  // (which real browsers and user-event both honor), and `executeForget` also short-circuits on
+  // `busy` directly, so a duplicate invocation from any path is a no-op.
+  it("disables the confirm button and ignores a duplicate click while a forget action is in flight", async () => {
+    const user = userEvent.setup();
+    let resolveForget: (() => void) | undefined;
+    const forgetMemoryAction = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveForget = resolve;
+        }),
+    );
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "- pref: strict TypeScript",
+            memories: [],
+            budget: { tokens: 1200, used: 180 },
+          },
+          actions: [
+            {
+              kind: "forget",
+              memoryId: "mem-forget-busy",
+              requiresConfirmation: true,
+            },
+          ],
+        },
+        forgetMemoryAction,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    await user.click(screen.getByRole("button", { name: /review forget/i }));
+    await user.type(screen.getByLabelText(/type forget/i), "FORGET");
+    const confirmButton = screen.getByRole("button", { name: /forget permanently/i });
+    await user.click(confirmButton);
+    expect(forgetMemoryAction).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(confirmButton).toBeDisabled());
+
+    await user.click(confirmButton);
+    expect(forgetMemoryAction).toHaveBeenCalledTimes(1);
+
+    resolveForget?.();
+    // A successful forget resets confirmForget, which swaps the confirm/cancel pair back out
+    // for the plain "review forget" button — confirming the guarded action actually completed
+    // rather than merely remaining disabled. Queried fresh by role/name (not the captured
+    // `confirmButton` reference) because React reuses the unkeyed button DOM node in place when
+    // this branch swap happens.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /forget permanently/i })).toBeNull(),
+    );
+    expect(forgetMemoryAction).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Issue #2723 — MemoryActionForgetButtons is driven directly (rather than through the full
+// ChatWindow) because two of its three button states guard against a `busy` action that is only
+// ever true while ANOTHER action on the *same* memory-forget card is in flight. Reaching that
+// combination through the real UI is impossible for these two buttons: `busy` only turns true
+// inside `executeForget`, and `executeForget` is only reachable once `confirmForget` is already
+// true (the plain "review forget" button never calls it). Driving the component directly with an
+// explicit `busy: true` prop is the smallest way to exercise the guard clauses honestly.
+describe("MemoryActionForgetButtons (extracted three-state action buttons, #2723)", () => {
+  // MemoryActionForgetButtons now takes `t` as a prop (its caller already has one in scope)
+  // instead of resolving its own translate function — same default English resolution the
+  // context's own fallback would have produced, so the rendered text asserted below is unchanged.
+  const t: I18nTranslate = (key, values) => translate("en", key, values);
+
+  function forgetAction(
+    overrides: Partial<Extract<ConversationMemoryActionWire, { readonly kind: "forget" }>> = {},
+  ): Extract<ConversationMemoryActionWire, { readonly kind: "forget" }> {
+    return {
+      kind: "forget",
+      memoryId: "mem-iso-1",
+      requiresConfirmation: true,
+      ...overrides,
+    };
+  }
+
+  it("renders a single Forget button and executes immediately when confirmation is not required", async () => {
+    const user = userEvent.setup();
+    const executeForget = vi.fn();
+    render(
+      <MemoryActionForgetButtons
+        action={forgetAction({ requiresConfirmation: false })}
+        busy={false}
+        confirmForget={false}
+        forgetConfirmText=""
+        executeForget={executeForget}
+        clearError={vi.fn()}
+        setConfirmForget={vi.fn<Dispatch<SetStateAction<boolean>>>()}
+        setForgetConfirmText={vi.fn<Dispatch<SetStateAction<string>>>()}
+        t={t}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /review forget/i })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Forget" }));
+    expect(executeForget).toHaveBeenCalledOnce();
+  });
+
+  it("ignores a review-forget click while another action on the card is busy", async () => {
+    const user = userEvent.setup();
+    const clearError = vi.fn();
+    const setConfirmForget = vi.fn<Dispatch<SetStateAction<boolean>>>();
+    const setForgetConfirmText = vi.fn<Dispatch<SetStateAction<string>>>();
+    render(
+      <MemoryActionForgetButtons
+        action={forgetAction()}
+        busy={true}
+        confirmForget={false}
+        forgetConfirmText=""
+        executeForget={vi.fn()}
+        clearError={clearError}
+        setConfirmForget={setConfirmForget}
+        setForgetConfirmText={setForgetConfirmText}
+        t={t}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /review forget/i }));
+    expect(clearError).not.toHaveBeenCalled();
+    expect(setConfirmForget).not.toHaveBeenCalled();
+    expect(setForgetConfirmText).not.toHaveBeenCalled();
+  });
+
+  it("ignores a cancel click while another action on the card is busy", async () => {
+    const user = userEvent.setup();
+    const clearError = vi.fn();
+    const setConfirmForget = vi.fn<Dispatch<SetStateAction<boolean>>>();
+    const setForgetConfirmText = vi.fn<Dispatch<SetStateAction<string>>>();
+    render(
+      <MemoryActionForgetButtons
+        action={forgetAction()}
+        busy={true}
+        confirmForget={true}
+        forgetConfirmText="FOR"
+        executeForget={vi.fn()}
+        clearError={clearError}
+        setConfirmForget={setConfirmForget}
+        setForgetConfirmText={setForgetConfirmText}
+        t={t}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(clearError).not.toHaveBeenCalled();
+    expect(setConfirmForget).not.toHaveBeenCalled();
+    expect(setForgetConfirmText).not.toHaveBeenCalled();
+  });
+
+  it("resets confirmForget and the typed confirmation text when Cancel is clicked", async () => {
+    const user = userEvent.setup();
+    const clearError = vi.fn();
+    const setConfirmForget = vi.fn<Dispatch<SetStateAction<boolean>>>();
+    const setForgetConfirmText = vi.fn<Dispatch<SetStateAction<string>>>();
+    render(
+      <MemoryActionForgetButtons
+        action={forgetAction()}
+        busy={false}
+        confirmForget={true}
+        forgetConfirmText="FOR"
+        executeForget={vi.fn()}
+        clearError={clearError}
+        setConfirmForget={setConfirmForget}
+        setForgetConfirmText={setForgetConfirmText}
+        t={t}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(clearError).toHaveBeenCalledOnce();
+    expect(setConfirmForget).toHaveBeenCalledWith(false);
+    expect(setForgetConfirmText).toHaveBeenCalledWith("");
   });
 });
 

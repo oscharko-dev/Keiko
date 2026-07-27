@@ -661,6 +661,13 @@ interface ConfirmModalProps {
   readonly onCancel: () => void;
 }
 
+function progressActionLabel(kind: ProgressActionKind, t: I18nTranslate): string {
+  if (kind === "index") return t("localKnowledge.detail.progress.indexing");
+  if (kind === "reembed") return t("localKnowledge.detail.progress.reembedding");
+  if (kind === "refresh") return t("localKnowledge.detail.progress.refreshing");
+  return t("localKnowledge.detail.progress.repairing");
+}
+
 function ActionProgress({
   kind,
   progress,
@@ -682,14 +689,7 @@ function ActionProgress({
   const docsPerMs = completed > 0 ? completed / Math.max(elapsedMs, 1) : 0;
   const etaMs = docsPerMs > 0 ? Math.max(0, totalDocuments - completed) / docsPerMs : 0;
   const statusLabel = latestJob?.status ?? detail?.capsule.lifecycleState ?? "starting";
-  const actionLabel =
-    kind === "index"
-      ? t("localKnowledge.detail.progress.indexing")
-      : kind === "reembed"
-        ? t("localKnowledge.detail.progress.reembedding")
-        : kind === "refresh"
-          ? t("localKnowledge.detail.progress.refreshing")
-          : t("localKnowledge.detail.progress.repairing");
+  const actionLabel = progressActionLabel(kind, t);
   const etaLabel =
     docsPerMs > 0 && totalDocuments > completed
       ? t("localKnowledge.detail.progress.remaining", { duration: formatDuration(etaMs) })

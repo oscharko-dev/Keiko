@@ -151,6 +151,14 @@ describe("analyzePrompt task classification (AC2)", () => {
     expect(analyze("Write a function to reverse a string.").taskClassConfidence).toBe("strong");
   });
 
+  it("reports moderate confidence for two weak cues without a strong phrase", () => {
+    const analysis = analyze(
+      "Please recommend the best option, considering the trade-offs carefully.",
+    );
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(analysis.taskClassConfidence).toBe("moderate");
+  });
+
   it("recognizes common German task and domain cues", () => {
     const prompt = analyze("Schreibe einen robusten Prompt fuer Code-Review und Optimierung.");
     expect(prompt.taskClass).toBe("prompt-optimization");

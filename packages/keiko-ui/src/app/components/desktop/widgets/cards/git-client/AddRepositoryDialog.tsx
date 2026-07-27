@@ -72,6 +72,18 @@ function focusableInside(root: HTMLElement): readonly HTMLElement[] {
   return Array.from(nodes).filter((node) => !node.hasAttribute("disabled"));
 }
 
+function submitButtonLabel(busy: boolean, mode: AddMode): string {
+  let label: string;
+  if (busy) {
+    label = "Adding…";
+  } else if (mode === "clone") {
+    label = "Clone repository";
+  } else {
+    label = "Open repository";
+  }
+  return label;
+}
+
 export function AddRepositoryDialog({
   client,
   onAdded,
@@ -271,7 +283,7 @@ export function AddRepositoryDialog({
             disabled={busy || !canSubmit}
             onClick={submit}
           >
-            {busy ? "Adding…" : mode === "clone" ? "Clone repository" : "Open repository"}
+            {submitButtonLabel(busy, mode)}
           </button>
         </div>
       </div>

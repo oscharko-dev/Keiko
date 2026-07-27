@@ -147,13 +147,26 @@ const canonicalThemeToken = (token: string): string | null => {
   return normalised.toLowerCase();
 };
 
-const compareLowercase = (left: string, right: string): number =>
-  left < right ? -1 : left > right ? 1 : 0;
+export const compareLowercase = (left: string, right: string): number => {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+};
 
 const compareLexical = (left: string, right: string): number => {
   const leftKey = normaliseGermanKeywordText(left);
   const rightKey = normaliseGermanKeywordText(right);
-  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : compareLowercase(left, right);
+  if (leftKey < rightKey) {
+    return -1;
+  }
+  if (leftKey > rightKey) {
+    return 1;
+  }
+  return compareLowercase(left, right);
 };
 
 const extractThemes = (label: string): readonly string[] => {

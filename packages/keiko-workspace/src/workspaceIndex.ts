@@ -419,9 +419,7 @@ function normalizeRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | u
 function sortByScopePath<T extends { readonly scopePath: string }>(
   values: readonly T[],
 ): readonly T[] {
-  return [...values].sort((a, b) =>
-    a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0,
-  );
+  return [...values].sort((a, b) => compareStrings(a.scopePath, b.scopePath));
 }
 
 function dedupeDiscoveredFiles(
@@ -2142,7 +2140,7 @@ function dirFingerprint(
           isDirectory: entry.isDirectory,
           isFile: entry.isFile,
         }))
-        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+        .sort((a, b) => compareStrings(a.name, b.name)),
     ),
   );
 }
@@ -2600,7 +2598,7 @@ export function prepareWorkspaceIndexSnapshot(
       usedRecordPaths.add(outcome.matchedRecordPath);
     }
   }
-  entries.sort((a, b) => (a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0));
+  entries.sort((a, b) => compareStrings(a.scopePath, b.scopePath));
   return {
     valid: true,
     dirty: report.deletedEntries > 0 || report.skippedEntries > 0 || report.staleRecords > 0,

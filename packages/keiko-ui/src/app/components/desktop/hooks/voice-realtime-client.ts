@@ -250,7 +250,6 @@ export function createBrowserVoiceControlClient(
           if (msg.kind === "signal.sdp.answer" && sessionCreated) {
             const answerMsg = msg as Extract<VoiceControlMessage, { kind: "signal.sdp.answer" }>;
             resolveOnce(answerMsg.sdp);
-            return;
           }
 
           // "capability.offer" and "media.track.state" (negotiating) are expected and ignored.

@@ -14,8 +14,11 @@ import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
 import { escapeMarkdownActiveSyntax, inlineField } from "../textSafety.js";
 import { startsWithFormulaLead } from "./spreadsheetSafeCsv.js";
 
-const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number =>
-  a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0;
+const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number => {
+  if (a.candidateId < b.candidateId) return -1;
+  if (a.candidateId > b.candidateId) return 1;
+  return 0;
+};
 
 // Untrusted candidate free-text rendered into the EXPORTED Markdown artifact must not inject active
 // Markdown structure into an external viewer, nor evaluate as a formula if the .md is pasted into a

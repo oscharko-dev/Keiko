@@ -32,6 +32,18 @@ function branchMatches(branch: GitBranchListEntry, query: string): boolean {
   return branch.name.toLowerCase().includes(needle);
 }
 
+function branchTriggerLabel(currentBranch: string, loading: boolean): string {
+  let label: string;
+  if (currentBranch.length > 0) {
+    label = currentBranch;
+  } else if (loading) {
+    label = "Loading branches";
+  } else {
+    label = "No branch";
+  }
+  return label;
+}
+
 export function BranchSelector({
   branches,
   currentBranch,
@@ -97,8 +109,7 @@ export function BranchSelector({
     }
   };
 
-  const triggerLabel =
-    currentBranch.length > 0 ? currentBranch : loading ? "Loading branches" : "No branch";
+  const triggerLabel = branchTriggerLabel(currentBranch, loading);
 
   useEffect(() => {
     if (open) searchRef.current?.focus();

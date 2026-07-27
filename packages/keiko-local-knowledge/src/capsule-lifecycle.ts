@@ -364,16 +364,10 @@ export function createCapsule(
     retrieval_effort: input.retrievalEffort,
     output_mode: input.outputMode,
     answer_grounding_policy: input.answerGroundingPolicy,
-    contextual_retrieval_enabled:
-      input.contextualRetrieval === undefined ? null : input.contextualRetrieval.enabled ? 1 : 0,
+    contextual_retrieval_enabled: strictFlag(input.contextualRetrieval?.enabled),
     contextual_retrieval_model_id: input.contextualRetrieval?.modelId ?? null,
     contextual_retrieval_prompt_version: input.contextualRetrieval?.promptVersion ?? null,
-    contextual_retrieval_strict:
-      input.contextualRetrieval?.strict === undefined
-        ? null
-        : input.contextualRetrieval.strict
-          ? 1
-          : 0,
+    contextual_retrieval_strict: strictFlag(input.contextualRetrieval?.strict),
     contextual_retrieval_max_context_chars: input.contextualRetrieval?.maxContextChars ?? null,
     contextual_retrieval_document_context_max_chars:
       input.contextualRetrieval?.documentContextMaxChars ?? null,

@@ -91,12 +91,10 @@ export function sanitizeAuditEvent(
         reason: safeSummary(event.reason, redactString),
         scopes: event.scopes.map((scope) => sanitizeMemoryScope(scope, redactString)),
       };
+    // "memory:workflow-write-candidate" carries the same `scope: MemoryScope` shape as every
+    // other remaining kind, so it intentionally falls through to the shared default handling
+    // instead of repeating an identical case block.
     case "memory:workflow-write-candidate":
-      return {
-        ...event,
-        summary: redactedSummary,
-        scope: sanitizeMemoryScope(event.scope, redactString),
-      };
     default:
       return {
         ...event,

@@ -6,6 +6,7 @@
 // is sorted by a stable structural key, and the result carries no timestamp, so the same input
 // yields a byte-identical IR. A malformed input (non-object) degrades to an empty result.
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import { asNode } from "./sourceNode.js";
 import { countSourceNodes, pruneNode } from "./prune.js";
 import { detectScreens } from "./screenDetect.js";
@@ -34,6 +35,9 @@ const buildReduction = (inputNodeCount: number, keptNodeCount: number): Reductio
   };
 };
 
+const compareById = (a: { readonly id: string }, b: { readonly id: string }): number =>
+  compareStrings(a.id, b.id);
+
 const emptyResult = (inputNodeCount: number): ScreenIrResult => ({
   screens: [],
   tokens: EMPTY_TOKENS,
@@ -56,7 +60,7 @@ export const cleanScopedNodesToScreenIr = (rawRoot: unknown): ScreenIrResult => 
       const ir = normalizeScreenRoot(screenRoot);
       return { id: ir.id, name: ir.name, root: ir };
     })
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    .sort(compareById);
 
   // keptNodeCount counts only IR nodes under detected screens, so surviving scope containers
   // (CANVAS/SECTION) that are not themselves screens count toward removal. removedRatio is therefore

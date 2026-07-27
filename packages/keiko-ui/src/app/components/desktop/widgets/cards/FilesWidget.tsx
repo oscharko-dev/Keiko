@@ -246,6 +246,8 @@ export const filesWidgetTestInternals = {
   parentDir,
   parentRelativePath,
   displayPath,
+  contextMenuParentPath,
+  gitDirectoryLabelKey,
 } as const;
 
 // Parent directory (root-relative) of a tree entry, for scoping a new sibling or a rename target.
@@ -256,6 +258,18 @@ function entryParent(path: string): string | null {
 
 function joinRelative(parent: string | null, name: string): string {
   return parent === null || parent.length === 0 ? name : `${parent}/${name}`;
+}
+
+// The directory a new-entry action targets when launched from the context menu: the current
+// directory for the empty-background menu, the entry itself for a directory row, or the entry's
+// parent for a file row.
+function contextMenuParentPath(
+  entry: FilesTreeEntry | null,
+  currentDirectoryPath: string | null,
+): string | null {
+  if (entry === null) return currentDirectoryPath;
+  if (entry.kind === "directory") return entry.path;
+  return entryParent(entry.path);
 }
 
 function parentDirectoryForWatchPath(relativePath: string | undefined): string {
@@ -471,13 +485,14 @@ function aggregateGitDirectories(
   return aggregates;
 }
 
+function gitDirectoryLabelKey(aggregate: GitDirectoryAggregate): FilesWidgetMessageKey {
+  if (aggregate.conflicted) return "git.folder.conflicted";
+  if (aggregate.deleted) return "git.folder.deleted";
+  return "git.folder.changed";
+}
+
 function gitDirectoryLabel(aggregate: GitDirectoryAggregate, t: FilesWidgetTranslate): string {
-  const key = aggregate.conflicted
-    ? "git.folder.conflicted"
-    : aggregate.deleted
-      ? "git.folder.deleted"
-      : "git.folder.changed";
-  return t(key, { count: aggregate.count });
+  return t(gitDirectoryLabelKey(aggregate), { count: aggregate.count });
 }
 
 const filesTreeRequests = new Map<string, Promise<FilesTreeResponse>>();
@@ -1975,12 +1990,7 @@ export function FilesWidget({
         >
           {(() => {
             const target = menu.entry?.readable === true ? menu.entry : null;
-            const parent =
-              menu.entry === null
-                ? currentDirectoryPath
-                : menu.entry.kind === "directory"
-                  ? menu.entry.path
-                  : entryParent(menu.entry.path);
+            const parent = contextMenuParentPath(menu.entry, currentDirectoryPath);
             return (
               <>
                 {target !== null ? (

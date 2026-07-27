@@ -12,6 +12,7 @@ import {
   buildPatchPreview,
   KeikoDiffEditor,
   type EditorPatchFileChange,
+  type EditorRuntimeStatus,
   type KeikoDiffEditorProps,
   type KeikoEditorLoadState,
   type EditorPreviewedPatch,
@@ -74,6 +75,23 @@ export function buildWorkspaceReplacePatchModel(
   };
 }
 
+// Resolves the effective load state: an unsupported runtime always reports its error, a
+// supported runtime waits for diff languages to finish loading, and otherwise defers to the
+// host-provided load state.
+export function resolveLoadState(
+  runtime: EditorRuntimeStatus,
+  languagesReady: boolean,
+  hostLoadState: KeikoEditorLoadState,
+): KeikoEditorLoadState {
+  if (!runtime.supported) {
+    return { status: "error", message: runtime.message };
+  }
+  if (!languagesReady) {
+    return { status: "loading" };
+  }
+  return hostLoadState;
+}
+
 export default function EditorDiffSurface(props: EditorDiffSurfaceProps): ReactElement {
   const runtime = ensureMonacoRuntime();
   const onRuntimeError = props.onRuntimeError;
@@ -113,11 +131,7 @@ export default function EditorDiffSurface(props: EditorDiffSurfaceProps): ReactE
     };
   }, [languageKey, languages, onRuntimeError, runtime.supported]);
 
-  const loadState: KeikoEditorLoadState = runtime.supported
-    ? languagesReady
-      ? props.loadState
-      : { status: "loading" }
-    : { status: "error", message: runtime.message };
+  const loadState = resolveLoadState(runtime, languagesReady, props.loadState);
 
   return <KeikoDiffEditor {...props} loadState={loadState} />;
 }

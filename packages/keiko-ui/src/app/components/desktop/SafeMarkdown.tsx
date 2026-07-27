@@ -522,6 +522,18 @@ function markerButtonLabel(marker: string, state: "available" | "recoverable" | 
   return `Open PDF preview for citation ${marker}`;
 }
 
+function markerTipText(state: "available" | "recoverable" | "blocked"): string {
+  let tip: string;
+  if (state === "blocked") {
+    tip = BLOCKED_CITATION_MESSAGE;
+  } else if (state === "recoverable") {
+    tip = "Open PDF recovery";
+  } else {
+    tip = "Open PDF preview";
+  }
+  return tip;
+}
+
 function InlineCitationMarker({
   marker,
   preview,
@@ -541,13 +553,7 @@ function InlineCitationMarker({
       className={`citation-inline-marker ui-tip citation-inline-marker--${affordance.state}`}
       aria-disabled={blocked || opening ? "true" : undefined}
       aria-label={markerButtonLabel(marker, affordance.state)}
-      data-tip={
-        blocked
-          ? BLOCKED_CITATION_MESSAGE
-          : affordance.state === "recoverable"
-            ? "Open PDF recovery"
-            : "Open PDF preview"
-      }
+      data-tip={markerTipText(affordance.state)}
       onClick={() => {
         if (blocked || opening) return;
         void preview.openCitation(affordance.citation, "inline-marker");

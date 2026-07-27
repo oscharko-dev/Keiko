@@ -151,6 +151,44 @@ describe("DiffPane — states", () => {
     expect(await screen.findByText("Binary file — no text diff to display.")).toBeInTheDocument();
   });
 
+  it("renders a metadata line (e.g. a no-newline marker) with no gutter sign and the default label", async () => {
+    // gutterSign only special-cases "add"/"del"/"ctx"; a "meta" line (the diff-metadata kind used
+    // for "\ No newline at end of file") falls through to its default "" gutter sign.
+    renderPane({
+      client: makeSeam({
+        getStructuredDiff: vi.fn(async () =>
+          makeDiffResponse([
+            makeDiffFile({
+              hunks: [
+                {
+                  header: "@@ -7,1 +7,1 @@",
+                  oldStart: 7,
+                  oldCount: 1,
+                  newStart: 7,
+                  newCount: 1,
+                  lines: [
+                    { kind: "add", oldLine: null, newLine: 7, text: "const a = 2;" },
+                    {
+                      kind: "meta",
+                      oldLine: null,
+                      newLine: null,
+                      text: "\\ No newline at end of file",
+                    },
+                  ],
+                  truncated: false,
+                },
+              ],
+            }),
+          ]),
+        ),
+      }),
+    });
+
+    const metaText = await screen.findByText("\\ No newline at end of file");
+    expect(screen.getByText("Diff metadata")).toBeInTheDocument();
+    expect(metaText.closest(".rv-line")?.querySelector(".rv-gutter")).toHaveTextContent("");
+  });
+
   it("surfaces a truncated diff with a clear notice", async () => {
     renderPane({
       client: makeSeam({

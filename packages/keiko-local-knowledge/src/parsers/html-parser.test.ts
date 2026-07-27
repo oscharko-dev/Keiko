@@ -1,7 +1,7 @@
 import type { ParsedUnit } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it } from "vitest";
 
-import { htmlParser } from "./html-parser.js";
+import { htmlParser, resolveTagKind } from "./html-parser.js";
 import type { InternalParserResult } from "./types.js";
 import {
   HTML_DANGEROUS,
@@ -689,5 +689,19 @@ describe("htmlParser — table span hardening (audit 2026-07-07)", () => {
       "<tr><td>Alpha</td><td>first\n        wrapped\n        value</td></tr></table>";
     const row = blockTexts(html).find((text) => text.startsWith("Table:"));
     expect(row).toBe("Table: Name=Alpha | Description=first wrapped value");
+  });
+});
+
+describe("resolveTagKind", () => {
+  it("reports a self-closing tag that is neither a close tag nor plain open", () => {
+    expect(resolveTagKind(false, true)).toBe("self-closing");
+  });
+
+  it("reports a close tag regardless of the self-closing flag", () => {
+    expect(resolveTagKind(true, false)).toBe("close");
+  });
+
+  it("reports a plain open tag when neither closing nor self-closing", () => {
+    expect(resolveTagKind(false, false)).toBe("open");
   });
 });

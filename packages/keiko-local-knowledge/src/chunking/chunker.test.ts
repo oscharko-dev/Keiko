@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DocumentId, ParsedUnit } from "@oscharko-dev/keiko-contracts";
 
-import { chunkParsedUnit, chunkingStrategyKey } from "./chunker.js";
+import { boundaryBeforeMatch, chunkParsedUnit, chunkingStrategyKey } from "./chunker.js";
 import { CODE_PARSER_ID } from "../parsers/code-parser.js";
 import {
   CONSERVATIVE_TOKENIZER_ID,
@@ -444,5 +444,17 @@ describe("chunkParsedUnit — pure", () => {
       if (chunk.characterEnd >= sourceText.length) continue;
       expect(sourceText.charAt(chunk.characterEnd - 1)).toBe("\n");
     }
+  });
+});
+
+describe("boundaryBeforeMatch", () => {
+  it("steps past a leading newline so the boundary lands on the heading itself", () => {
+    expect(boundaryBeforeMatch(10, 5, "\n<h2>")).toBe(16);
+  });
+
+  it("does not add an offset when the match has no leading newline", () => {
+    // HTML_HEADING_PATTERN's leading `\n?` is optional: a heading tag at the very start of a
+    // slice (no preceding newline) matches with matchText not starting with "\n".
+    expect(boundaryBeforeMatch(10, 0, "<h2>")).toBe(10);
   });
 });

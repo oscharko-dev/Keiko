@@ -66,7 +66,7 @@ export function recordAccessRows(db: DatabaseSync, ids: readonly MemoryId[], now
 }
 
 function clampUtility(utility: number): number {
-  if (!(utility > 0)) return 0;
+  if (utility <= 0) return 0;
   if (utility > 1) return 1;
   return utility;
 }

@@ -666,6 +666,19 @@ function isEmptyLinkedContext(c: LinkedContext): boolean {
   );
 }
 
+// Resolve linkedRoots per window type: the multi-root types read the full linked-roots
+// list, everything else falls back to its single linkedRoot (or none).
+function resolveLinkedRoots(
+  type: WindowType,
+  linkedRoot: string | null,
+  api: WorkspaceApi,
+  id: string,
+): readonly string[] {
+  if (type === "quality" || type === "promptEnhancer") return api.linkedAllFilesRoots(id);
+  if (linkedRoot !== null) return [linkedRoot];
+  return EMPTY_STRINGS;
+}
+
 // Resolve every cross-window linked* context a window of `type` reads. Pulled out
 // of the render body so it can be wrapped in a single useMemo keyed on the link
 // revision — the resolvers each scan conns+wins, so re-running them on every
@@ -678,12 +691,7 @@ function computeLinkedContext(api: WorkspaceApi, type: WindowType, id: string): 
   const linkedFilePath = readsFocusedFileContext
     ? api.linkedFilesContext(id)?.activeFilePath
     : undefined;
-  const linkedRoots =
-    type === "quality" || type === "promptEnhancer"
-      ? api.linkedAllFilesRoots(id)
-      : linkedRoot !== null
-        ? [linkedRoot]
-        : EMPTY_STRINGS;
+  const linkedRoots = resolveLinkedRoots(type, linkedRoot, api, id);
   const linkedCapsuleIds = receivesConnectorContext
     ? api.linkedConnectorCapsuleIds(id)
     : EMPTY_STRINGS;

@@ -132,6 +132,15 @@ describe("deriveEditorStatusBar diagnostics field", () => {
     );
     expect(field(view, "problems")?.tone).toBe("warn");
   });
+
+  it("uses a default tone when only infos exist (no errors or warnings)", () => {
+    const view = deriveEditorStatusBar(
+      input({ diagnostics: { errors: 0, warnings: 0, infos: 2 } }),
+    );
+    const problems = field(view, "problems");
+    expect(problems?.tone).toBe("default");
+    expect(problems?.ariaLabel).toBe("Problems: 2 infos");
+  });
 });
 
 describe("deriveEditorStatusBar run + language + completions + selection", () => {

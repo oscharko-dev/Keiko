@@ -91,6 +91,18 @@ export function assertConfiguredModel(config: ConfiguredCapabilitySource, modelI
   }
 }
 
+function defaultCapabilityForConfiguredModel(
+  config: ConfiguredCapabilitySource,
+  modelId: string,
+): ModelCapability | undefined {
+  if (!config.providers.some((provider) => provider.modelId === modelId)) {
+    return undefined;
+  }
+  return isLikelyEmbeddingModelId(modelId)
+    ? createDefaultEmbeddingCapability(modelId)
+    : createDefaultChatCapability(modelId);
+}
+
 export function findConfiguredCapability(
   config: ConfiguredCapabilitySource,
   modelId: string,
@@ -98,11 +110,7 @@ export function findConfiguredCapability(
   return (
     config.capabilities?.find((capability) => capability.id === modelId) ??
     listCapabilities().find((capability) => capability.id === modelId) ??
-    (config.providers.some((provider) => provider.modelId === modelId)
-      ? isLikelyEmbeddingModelId(modelId)
-        ? createDefaultEmbeddingCapability(modelId)
-        : createDefaultChatCapability(modelId)
-      : undefined)
+    defaultCapabilityForConfiguredModel(config, modelId)
   );
 }
 

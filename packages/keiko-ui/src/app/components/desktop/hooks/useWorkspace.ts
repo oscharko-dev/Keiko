@@ -330,8 +330,14 @@ interface PanZoomResult {
   readonly rect: () => DOMRect | null;
 }
 
+function wheelDeltaMultiplier(deltaMode: number): number {
+  if (deltaMode === WheelEvent.DOM_DELTA_LINE) return 16;
+  if (deltaMode === 2) return 800;
+  return 1;
+}
+
 export function normalizeWheelDelta(e: WheelEvent): { readonly x: number; readonly y: number } {
-  const multiplier = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === 2 ? 800 : 1;
+  const multiplier = wheelDeltaMultiplier(e.deltaMode);
   return { x: e.deltaX * multiplier, y: e.deltaY * multiplier };
 }
 

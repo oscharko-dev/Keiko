@@ -33,9 +33,13 @@ import { _resetEditorAgentAuditForTests, listEditorAgentActionAudit } from "./ag
 import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
+  type EditorAgentAuthorityFailureReason,
 } from "./agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
-import { handleEditorAgentVerificationRun } from "./agentVerificationRoute.js";
+import {
+  handleEditorAgentVerificationRun,
+  verificationAuthorityDenyReason,
+} from "./agentVerificationRoute.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
 
 const ROOT = "/repo";
@@ -959,4 +963,21 @@ describe("handleEditorAgentVerificationRun disconnect cancellation", () => {
     await handleEditorAgentVerificationRun(context, deps(manager));
     expect(manager.lastSignal?.aborted).toBe(false);
   });
+});
+
+describe("verificationAuthorityDenyReason", () => {
+  it("maps an expired authority to authority-expired", () => {
+    expect(verificationAuthorityDenyReason("expired")).toBe("authority-expired");
+  });
+
+  it("maps an exhausted budget to authority-budget-exceeded", () => {
+    expect(verificationAuthorityDenyReason("budget-exceeded")).toBe("authority-budget-exceeded");
+  });
+
+  it.each(["invalid", "revoked"] satisfies EditorAgentAuthorityFailureReason[])(
+    "falls back to authority-invalid for %s",
+    (reason) => {
+      expect(verificationAuthorityDenyReason(reason)).toBe("authority-invalid");
+    },
+  );
 });

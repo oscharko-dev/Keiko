@@ -271,14 +271,18 @@ function resolveFileAndFolderRoots(props: ConnectedSourceProps): ResolvedFileAnd
   // folder root carried a trailing slash would not be superseded.
   const connectedRoot = connectedRootRaw !== null ? trimTrailingSeparators(connectedRootRaw) : null;
 
-  const rawRoots =
+  let rawRoots: readonly string[];
+  if (
     props.connectedRoots !== undefined &&
     props.connectedRoots !== null &&
     props.connectedRoots.length > 0
-      ? props.connectedRoots
-      : connectedRootRaw !== null
-        ? [connectedRootRaw]
-        : [];
+  ) {
+    rawRoots = props.connectedRoots;
+  } else if (connectedRootRaw !== null) {
+    rawRoots = [connectedRootRaw];
+  } else {
+    rawRoots = [];
+  }
   const allRoots = rawRoots.map(trimTrailingSeparators);
   // The focused file supersedes its own (canonicalised) folder root; other connected folders remain.
   const folderRoots =

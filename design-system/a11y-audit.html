@@ -11,6 +11,9 @@
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
       } catch (e) {
+        // localStorage can throw when storage is disabled or restricted (private browsing,
+        // blocked cookies); the hardcoded fallback below is the complete, correct handling —
+        // there is no logging sink on a static doc page to report to.
         document.documentElement.dataset.theme = "dark";
       }
     </script>
@@ -400,11 +403,13 @@
             worstOverall = res.min;
             worstRole = c.role;
           }
-          v = !res.pass
-            ? '<span class="m-verdict fail">FAIL</span>'
-            : res.aaa
-              ? '<span class="m-verdict aaa">AAA</span>'
-              : '<span class="m-verdict aa">AA</span>';
+          if (!res.pass) {
+            v = '<span class="m-verdict fail">FAIL</span>';
+          } else if (res.aaa) {
+            v = '<span class="m-verdict aaa">AAA</span>';
+          } else {
+            v = '<span class="m-verdict aa">AA</span>';
+          }
         }
         html +=
           "<tr>" +

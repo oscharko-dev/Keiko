@@ -64,6 +64,13 @@ function finiteRatio(used: number, budget: number): number | undefined {
   return used / budget;
 }
 
+function pressureFromRatio(maxRatio: number): GroundedBudgetPressure {
+  if (maxRatio > 1) return "exceeded";
+  if (maxRatio >= 0.85) return "high";
+  if (maxRatio >= 0.6) return "moderate";
+  return "low";
+}
+
 export function buildLastGroundedBudgetStatus(
   contextPack: GroundedAnswerContextPackSummary | undefined,
 ): LastGroundedBudgetStatus | undefined {
@@ -81,8 +88,7 @@ export function buildLastGroundedBudgetStatus(
     finiteRatio(usage.rerankCalls, budget.rerankCallsMax),
   ].filter((ratio): ratio is number => ratio !== undefined);
   const maxRatio = ratios.length === 0 ? 0 : Math.max(...ratios);
-  const pressure: GroundedBudgetPressure =
-    maxRatio > 1 ? "exceeded" : maxRatio >= 0.85 ? "high" : maxRatio >= 0.6 ? "moderate" : "low";
+  const pressure: GroundedBudgetPressure = pressureFromRatio(maxRatio);
   const totalTokens = usage.modelInputTokens + usage.modelOutputTokens;
   return {
     pressure,
@@ -136,13 +142,14 @@ function pillLabel(scope: ChatConnectedScope, t: I18nTranslate): string {
   return t("scope.pill.filesConnected", { count: scope.relativePaths.length });
 }
 
+function scopeBoundaryNoun(kind: ChatConnectedScope["kind"], t: I18nTranslate): string {
+  if (kind === "workspace-root") return t("scope.boundary.noun.repository");
+  if (kind === "directory") return t("scope.boundary.noun.folder");
+  return t("scope.boundary.noun.fileScope");
+}
+
 function scopeBoundaryText(scope: ChatConnectedScope, t: I18nTranslate): string {
-  const noun =
-    scope.kind === "workspace-root"
-      ? t("scope.boundary.noun.repository")
-      : scope.kind === "directory"
-        ? t("scope.boundary.noun.folder")
-        : t("scope.boundary.noun.fileScope");
+  const noun = scopeBoundaryNoun(scope.kind, t);
   return t("scope.boundary.description", { noun });
 }
 

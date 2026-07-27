@@ -168,14 +168,31 @@ function resolveRelationshipActivity(
   return activityMap.get(id) ?? lifecycleToActivity(lifecycle);
 }
 
+// #2723 (S1301): only one case is meaningfully distinct from the default fallback — a
+// switch does not earn its keep here, so this reads as a plain if/else.
 function formatActivityLabel(activity: RelationshipActivityState, count: number): string {
   const relationshipNoun = count === 1 ? "relationship" : "relationships";
-  switch (activity) {
-    case "high-throughput":
-      return `${count} high-throughput ${relationshipNoun}`;
-    default:
-      return `${count} ${activity} ${relationshipNoun}`;
+  let label: string;
+  if (activity === "high-throughput") {
+    label = `${count} high-throughput ${relationshipNoun}`;
+  } else {
+    label = `${count} ${activity} ${relationshipNoun}`;
   }
+  return label;
+}
+
+// #2723 (S3358): the truncated/count message combined an outer ternary with a second,
+// unrelated pluralization ternary embedded in the non-truncated branch's template literal;
+// extracted to a named if/else so only one (non-nested) ternary remains.
+function formatFilterAnnouncement(truncated: boolean, count: number): string {
+  let announcement: string;
+  if (truncated) {
+    announcement = `Showing first ${String(count)} relationships — more available.`;
+  } else {
+    const relationshipNoun = count === 1 ? "relationship" : "relationships";
+    announcement = `Showing ${String(count)} ${relationshipNoun}.`;
+  }
+  return announcement;
 }
 
 function summarizeOverflowActivities(
@@ -419,9 +436,7 @@ export function RelationshipListPanel({
   // aria-live="polite" on a visually-hidden region (ui-blueprint.md §"Filtering").
   // No fabricated total: the API reports truncation but not how many entries exist
   // beyond the cap, so the copy must not invent one (was "of N" with N = visible + 1).
-  const filterAnnouncement = truncated
-    ? `Showing first ${String(visibleItems.length)} relationships — more available.`
-    : `Showing ${String(visibleItems.length)} relationship${visibleItems.length !== 1 ? "s" : ""}.`;
+  const filterAnnouncement = formatFilterAnnouncement(truncated, visibleItems.length);
 
   // User-visible filters (beyond the implicit lifecycle=active scope) — drives the
   // empty-state copy: a virgin graph must not blame a "current filter" the user never set.

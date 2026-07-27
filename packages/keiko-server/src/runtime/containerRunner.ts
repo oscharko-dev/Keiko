@@ -212,14 +212,20 @@ function classifyNonZeroFailure(stderr: string): ContainerFailureReason {
   return "non-zero-exit";
 }
 
+// runCommand resolves only on a real process exit (timeout/cancel reject). A truncation that
+// killed the child is terminal → output-capped; otherwise classify by exit code + stderr.
+function resolveFailureReason(result: CommandResult): ContainerFailureReason {
+  if (result.truncated) {
+    return "output-capped";
+  }
+  if (result.exitCode === 0) {
+    return "none";
+  }
+  return classifyNonZeroFailure(result.stderr);
+}
+
 function outcomeFromResult(result: CommandResult): SettledOutcome {
-  // runCommand resolves only on a real process exit (timeout/cancel reject). A truncation that
-  // killed the child is terminal → output-capped; otherwise classify by exit code + stderr.
-  const failureReason: ContainerFailureReason = result.truncated
-    ? "output-capped"
-    : result.exitCode === 0
-      ? "none"
-      : classifyNonZeroFailure(result.stderr);
+  const failureReason = resolveFailureReason(result);
   return {
     exitCode: result.exitCode,
     durationMs: result.durationMs,

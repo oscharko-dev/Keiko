@@ -36,11 +36,11 @@ export interface DriftPanelProps {
 // (uiux-fix F047 C155: a role="status" element inserted together with its content is often not
 // announced — the live region must exist BEFORE the text changes).
 function driftMessage(staleCount: number, t: I18nTranslate): string {
-  return staleCount === 0
-    ? t("qi.drift.fresh")
-    : t(staleCount === 1 ? "qi.drift.staleSingle" : "qi.drift.staleMany", {
-        count: staleCount,
-      });
+  if (staleCount === 0) {
+    return t("qi.drift.fresh");
+  }
+  const key = staleCount === 1 ? "qi.drift.staleSingle" : "qi.drift.staleMany";
+  return t(key, { count: staleCount });
 }
 
 function regeneratedMessage(
@@ -54,6 +54,36 @@ function regeneratedMessage(
     count: regenerated,
     preserved,
   });
+}
+
+// Text for the persistent sr-only live region (uiux-fix F047 C155): regeneration confirmation
+// takes priority over a re-check report, and neither takes priority while both are absent.
+function liveRegionMessage(
+  regenerated: QualityIntelligenceUiRegenerateResult | null,
+  report: QualityIntelligenceUiStalenessReport | null,
+  t: I18nTranslate,
+): string {
+  if (regenerated !== null) {
+    return regeneratedMessage(regenerated, t);
+  }
+  if (report !== null) {
+    return driftMessage(report.staleCount, t);
+  }
+  return "";
+}
+
+// Label for the Regenerate button: the in-flight busy label wins over the singular/plural count
+// label.
+function regenerateButtonLabel(
+  busyOp: "check" | "regenerate" | null,
+  staleCount: number,
+  t: I18nTranslate,
+): string {
+  if (busyOp === "regenerate") {
+    return t("qi.drift.regenerating");
+  }
+  const key = staleCount === 1 ? "qi.drift.regenerateSingle" : "qi.drift.regenerateMany";
+  return t(key, { count: staleCount });
 }
 
 function DriftIndicator({
@@ -152,11 +182,7 @@ export function DriftPanel({
           inserted together with their content are often skipped. The visible indicator below stays
           conditional and is no longer a live region itself. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {regenerated !== null
-          ? regeneratedMessage(regenerated, t)
-          : report !== null
-            ? driftMessage(report.staleCount, t)
-            : ""}
+        {liveRegionMessage(regenerated, report, t)}
       </p>
       <div className="qi-drift-head">
         <h3 className="qi-col-subtitle">{t("qi.drift.livingTests")}</h3>
@@ -189,11 +215,7 @@ export function DriftPanel({
           aria-disabled={busy || undefined}
           data-testid="qi-drift-regenerate"
         >
-          {busyOp === "regenerate"
-            ? t("qi.drift.regenerating")
-            : t(report.staleCount === 1 ? "qi.drift.regenerateSingle" : "qi.drift.regenerateMany", {
-                count: report.staleCount,
-              })}
+          {regenerateButtonLabel(busyOp, report.staleCount, t)}
         </button>
       ) : null}
       {regenerated !== null ? (

@@ -73,6 +73,23 @@ describe("DriftPanel", () => {
     expect(await screen.findByTestId("qi-drift-fresh")).toHaveTextContent(/no drift/i);
   });
 
+  it("uses plural wording for the stale indicator and Regenerate label when more than one test is stale", async () => {
+    const user = userEvent.setup();
+    render(
+      <DriftPanel
+        runId="run-1"
+        connectedSources={[SOURCE]}
+        reCheckImpl={reCheckOk(staleReport(2))}
+      />,
+    );
+    await user.click(screen.getByTestId("qi-drift-recheck"));
+    const stale = await screen.findByTestId("qi-drift-stale");
+    expect(stale).toHaveTextContent(/2 tests are stale/i);
+    expect(screen.getByTestId("qi-drift-regenerate")).toHaveTextContent(
+      /regenerate 2 stale tests/i,
+    );
+  });
+
   it("offers a Regenerate action only when there are stale tests", async () => {
     const user = userEvent.setup();
     render(

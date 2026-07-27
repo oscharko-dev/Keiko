@@ -7,6 +7,7 @@ import {
   editorLayoutPaneIds,
   editorLayoutPanes,
   editorLayoutReducer,
+  normalizedActiveFile,
   serializeEditorLayoutStateV2,
   type CreateEditorLayoutStateV2Input,
   type EditorLayoutStateV2,
@@ -463,5 +464,15 @@ describe("EditorLayoutStateV2 contracts", () => {
     const removed = editorLayoutReducer(split, { type: "remove-file", file: "src/a.ts" });
     expect(editorLayoutPaneIds(removed)).toHaveLength(1);
     expect(editorLayoutOpenFiles(removed)).toEqual(["src/b.ts"]);
+  });
+});
+
+describe("normalizedActiveFile", () => {
+  it("falls back to the legacy file field when activeFile is absent", () => {
+    expect(normalizedActiveFile({ file: "src/legacy.ts" })).toBe("src/legacy.ts");
+  });
+
+  it("returns an empty string when neither activeFile nor the legacy file field is a string", () => {
+    expect(normalizedActiveFile({ openFiles: ["src/a.ts"] })).toBe("");
   });
 });

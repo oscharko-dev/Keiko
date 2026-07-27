@@ -21,6 +21,7 @@
 // cycle or self-loop never produces an unbounded path set. Total flow count is also bounded by
 // MAX_NAV_FLOWS so a dense fully-connected graph cannot exhaust memory during QI ingestion.
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { InterScreenLink, IrNode, ScreenIr, ScreenIrResult } from "./irTypes.js";
 import type { StructuralTestItem } from "./screenIrTestBaseline.js";
 
@@ -77,7 +78,7 @@ export interface RoutingHint {
   readonly transitions: readonly { readonly trigger: string; readonly toScreenId: string }[];
 }
 
-const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const byString = (a: string, b: string): number => compareStrings(a, b);
 
 // Build a nodeId → screenId index by walking every screen's IR tree once. A node id that appears in
 // more than one screen (malformed input) keeps its first (stable-order) owner.
@@ -189,6 +190,20 @@ function reachableFrom(
  * flow-entry link, the first screen in stable id order is used as the synthetic entry so reachability
  * is still well-defined. The result is byte-identical for a given input.
  */
+function resolveEffectiveEntries(
+  entryScreenIds: readonly string[],
+  nodes: readonly NavNode[],
+): readonly string[] {
+  if (entryScreenIds.length > 0) {
+    return entryScreenIds;
+  }
+  const firstNode = nodes[0];
+  if (nodes.length > 0 && firstNode !== undefined) {
+    return [firstNode.screenId];
+  }
+  return [];
+}
+
 export function deriveNavGraph(ir: ScreenIrResult): NavGraph {
   const nodes: NavNode[] = [...ir.screens]
     .map((s) => ({ screenId: s.id, screenName: s.name }))
@@ -196,12 +211,7 @@ export function deriveNavGraph(ir: ScreenIrResult): NavGraph {
   const owner = buildNodeOwnership(ir.screens);
   const { edges, unresolved, entryScreenIds } = classifyLinks(ir.links, owner);
 
-  const effectiveEntries =
-    entryScreenIds.length > 0
-      ? entryScreenIds
-      : nodes.length > 0 && nodes[0] !== undefined
-        ? [nodes[0].screenId]
-        : [];
+  const effectiveEntries = resolveEffectiveEntries(entryScreenIds, nodes);
   const reached = reachableFrom(effectiveEntries, edges);
   const withOutgoing = new Set(edges.map((e) => e.fromScreenId));
 
