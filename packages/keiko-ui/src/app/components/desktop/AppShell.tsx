@@ -173,8 +173,7 @@ function clearAppBootRecoveryReloadMarker(): void {
 function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
   if (wins === null || wins.length === 0) return null;
   let best: AppWindow | null = null;
-  for (let i = 0; i < wins.length; i++) {
-    const next = wins[i] as AppWindow;
+  for (const next of wins) {
     if (next.minimized === true) continue;
     if (best === null) {
       best = next;

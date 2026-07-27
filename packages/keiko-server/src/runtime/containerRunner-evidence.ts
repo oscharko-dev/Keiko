@@ -5,9 +5,8 @@
 // workspace path, never any container output (ADR-0048 content-free invariant). Mirrors
 // command-runner-evidence.ts.
 
-import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
+import { deepRedactStrings, EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceManifest, EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
 import { HARNESS_VERSION } from "@oscharko-dev/keiko-harness";
 import type { RunOutcome } from "@oscharko-dev/keiko-harness";
 import type {

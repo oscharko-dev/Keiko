@@ -90,6 +90,7 @@ export function PluginsPanel(): ReactNode {
               <span className="plg-desc">{m.desc}</span>
             </span>
             <button
+              type="button"
               className={`plg-dot${on ? " on" : ""}`}
               // GEN-UI-A11Y-009: this dot switches the MCP server on/off — expose
               // the on/off switch semantics + state, not just a bare button.

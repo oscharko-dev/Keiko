@@ -18,6 +18,8 @@
 const MAX_MARKDOWN_DEPTH = 16;
 const MAX_ITALIC_LOOKAHEAD = 4096;
 
+type SafeMarkdownAlignment = "left" | "right" | "center";
+
 export interface SafeMarkdownNode {
   readonly kind:
     | "paragraph"
@@ -44,7 +46,7 @@ export interface SafeMarkdownNode {
   readonly level?: 1 | 2 | 3 | 4 | 5 | 6;
   readonly language?: string;
   readonly href?: string;
-  readonly align?: "left" | "right" | "center";
+  readonly align?: SafeMarkdownAlignment;
 }
 
 // ---------------------------------------------------------------------------
@@ -391,7 +393,7 @@ function parseInline(raw: string, depth = 0): readonly SafeMarkdownNode[] {
 // Table parsing helpers
 // ---------------------------------------------------------------------------
 
-function parseAlignment(cell: string): "left" | "right" | "center" | undefined {
+function parseAlignment(cell: string): SafeMarkdownAlignment | undefined {
   const t = cell.trim();
   const startsColon = t.startsWith(":");
   const endsColon = t.endsWith(":");
@@ -417,18 +419,12 @@ function isSeparatorRow(cells: string[]): boolean {
   return true;
 }
 
-function makeThNode(
-  cell: string,
-  align: "left" | "right" | "center" | undefined,
-): SafeMarkdownNode {
+function makeThNode(cell: string, align: SafeMarkdownAlignment | undefined): SafeMarkdownNode {
   const base: SafeMarkdownNode = { kind: "th", children: parseInline(cell.trim()) };
   return align !== undefined ? { ...base, align } : base;
 }
 
-function makeTdNode(
-  cell: string,
-  align: "left" | "right" | "center" | undefined,
-): SafeMarkdownNode {
+function makeTdNode(cell: string, align: SafeMarkdownAlignment | undefined): SafeMarkdownNode {
   const base: SafeMarkdownNode = { kind: "td", children: parseInline(cell.trim()) };
   return align !== undefined ? { ...base, align } : base;
 }
