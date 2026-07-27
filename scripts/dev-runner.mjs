@@ -40,7 +40,7 @@ export function resolveNextBundler(preference) {
   );
 }
 
-function resolveConfiguredNextBundler(preference) {
+export function resolveConfiguredNextBundler(preference) {
   try {
     return resolveNextBundler(preference);
   } catch (error) {

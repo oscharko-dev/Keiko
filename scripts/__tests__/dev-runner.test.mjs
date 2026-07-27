@@ -27,6 +27,7 @@ import {
   proxyHttp,
   publicBrowserUrl,
   readNextLockInfo,
+  resolveConfiguredNextBundler,
   resolveNextBundler,
 } from "../dev-runner.mjs";
 
@@ -156,6 +157,10 @@ describe("bffProcessArgs", () => {
 });
 
 describe("resolveNextBundler", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("starts auto mode with Turbopack and keeps explicit overrides", () => {
     expect(resolveNextBundler("auto")).toBe("turbopack");
     expect(resolveNextBundler("turbopack")).toBe("turbopack");
@@ -165,6 +170,19 @@ describe("resolveNextBundler", () => {
   it("rejects unsupported preferences", () => {
     expect(() => resolveNextBundler("wepback")).toThrow(TypeError);
     expect(() => resolveNextBundler("")).toThrow(TypeError);
+  });
+
+  it("reports invalid configured preferences and exits with status 2", () => {
+    const reportError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("exit");
+    });
+
+    expect(() => resolveConfiguredNextBundler("wepback")).toThrow("exit");
+    expect(reportError).toHaveBeenCalledWith(
+      "Invalid KEIKO_DEV_NEXT_BUNDLER: wepback. Use auto, turbopack, or webpack.",
+    );
+    expect(exit).toHaveBeenCalledWith(2);
   });
 });
 
