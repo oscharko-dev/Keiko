@@ -27,12 +27,16 @@ const nextBin = requireFromUi.resolve("next/dist/bin/next");
 const children = new Map();
 const restartCounts = new Map();
 const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
-const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "webpack";
+const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "auto";
 const skipPackageWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH === "1";
 const skipBffWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_BFF_WATCH === "1";
-let nextBundler = nextBundlerPreference === "turbopack" ? "turbopack" : "webpack";
+export function resolveNextBundler(preference) {
+  return preference === "webpack" ? "webpack" : "turbopack";
+}
+
+let nextBundler = resolveNextBundler(nextBundlerPreference);
 let server;
 let shuttingDown = false;
 let publicReady = false;

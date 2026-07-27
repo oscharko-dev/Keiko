@@ -27,6 +27,7 @@ import {
   proxyHttp,
   publicBrowserUrl,
   readNextLockInfo,
+  resolveNextBundler,
 } from "../dev-runner.mjs";
 
 describe("proxyHttp request target validation", () => {
@@ -151,6 +152,14 @@ describe("bffProcessArgs", () => {
     expect(bffProcessArgs("/repo/scripts/dev-bff.mjs", false)).toEqual([
       "/repo/scripts/dev-bff.mjs",
     ]);
+  });
+});
+
+describe("resolveNextBundler", () => {
+  it("starts auto mode with Turbopack and keeps explicit overrides", () => {
+    expect(resolveNextBundler("auto")).toBe("turbopack");
+    expect(resolveNextBundler("turbopack")).toBe("turbopack");
+    expect(resolveNextBundler("webpack")).toBe("webpack");
   });
 });
 
