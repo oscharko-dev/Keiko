@@ -124,11 +124,13 @@ export interface CodingSidecarGatewayCancellationRegistry {
   readonly signalFor: (runId: string) => AbortSignal | undefined;
 }
 
+type CodingSidecarGatewayRunOutcome = "accepted" | "cancelled" | "failed" | "output-limit";
+
 /** Content-free, run-scoped accounting only; it must never be a durable request log. */
 export interface CodingSidecarGatewayEvidenceAggregator {
   readonly record: (event: {
     readonly runId: string;
-    readonly outcome: "accepted" | "cancelled" | "failed" | "output-limit";
+    readonly outcome: CodingSidecarGatewayRunOutcome;
     readonly completionTokens: number;
     readonly outputBytes: number;
   }) => void | Promise<void>;
@@ -473,7 +475,7 @@ function emitGatewayEvidenceAggregationDiagnostic(deps: UiHandlerDeps, runId: st
 function recordGatewayOutcome(
   deps: UiHandlerDeps,
   runId: string,
-  outcome: "accepted" | "cancelled" | "failed" | "output-limit",
+  outcome: CodingSidecarGatewayRunOutcome,
   completionTokens: number,
   outputBytes: number,
 ): void {
@@ -1016,7 +1018,7 @@ function beginGatewayStream(session: GatewayStreamSession): boolean {
 
 function recordSessionOutcome(
   session: GatewayStreamSession,
-  outcome: "accepted" | "cancelled" | "failed" | "output-limit",
+  outcome: CodingSidecarGatewayRunOutcome,
 ): void {
   const { deps, runId, metrics } = session;
   recordGatewayOutcome(deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);

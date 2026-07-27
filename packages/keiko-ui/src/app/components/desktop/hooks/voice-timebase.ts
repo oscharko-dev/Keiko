@@ -153,7 +153,7 @@ export interface VoiceTimebaseEngine {
 export function resolutionToVoiceProfile(
   resolution: VoiceCapabilityResolution | undefined,
 ): VoiceProfile {
-  return resolution && resolution.available ? resolution.profile : "none";
+  return resolution?.available ? resolution.profile : "none";
 }
 
 // ─── Phase transition tables ───────────────────────────────────────────────────
