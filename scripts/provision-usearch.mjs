@@ -30,6 +30,9 @@ import {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LICENSE_ARCHIVE_PATH = "package/LICENSE";
+const DOWNLOAD_CONNECT_TIMEOUT_SECONDS = 10;
+const DOWNLOAD_MAX_SECONDS = 300;
+const DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024;
 
 export function systemBinariesFor(hostPlatform, systemRoot) {
   return hostPlatform === "win32"
@@ -108,7 +111,20 @@ export function download(
 ) {
   execute(
     systemBinary("curl", binaries, { exists }),
-    ["--proto", "=https", "-sSfL", "-o", destination, runtimeManifest.tarballUrl],
+    [
+      "--proto",
+      "=https",
+      "--connect-timeout",
+      String(DOWNLOAD_CONNECT_TIMEOUT_SECONDS),
+      "--max-time",
+      String(DOWNLOAD_MAX_SECONDS),
+      "--max-filesize",
+      String(DOWNLOAD_MAX_BYTES),
+      "-sSfL",
+      "-o",
+      destination,
+      runtimeManifest.tarballUrl,
+    ],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
 }

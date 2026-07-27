@@ -172,6 +172,20 @@ describe("provisioned USearch runtime trust", () => {
     );
 
     expect(calls.map(([binary]) => binary)).toEqual(["/approved/curl", "/approved/tar"]);
+    expect(calls[0]?.[1]).toEqual([
+      "--proto",
+      "=https",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "300",
+      "--max-filesize",
+      "67108864",
+      "-sSfL",
+      "-o",
+      "/tmp/runtime.tgz",
+      "https://example.test/runtime.tgz",
+    ]);
   });
 
   it("keeps platform-neutral trust and failure adapters deterministic", () => {
