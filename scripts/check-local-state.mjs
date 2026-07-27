@@ -37,7 +37,7 @@ function parseArgs(argv) {
     if (arg === "--self-test") args.selfTest = true;
     else if (arg === "--state-dir") {
       const value = argv[i + 1];
-      if (value === undefined || value.startsWith("--")) return { kind: "usage" };
+      if (value === undefined || value.startsWith("-")) return { kind: "usage" };
       args.stateDir = value;
       i += 1;
     } else if (arg === "--help" || arg === "-h") return { kind: "help" };
@@ -106,9 +106,19 @@ async function main() {
   return runAudit(parsed.stateDir ?? join(process.cwd(), ".keiko"));
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((error) => {
-    console.error(`local-state: FAIL — ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  });
+// Exported solely for a direct regression test of the CLI argument parser (a value that
+// looks like a flag, e.g. "-h", must not be swallowed as --state-dir's path) — not part of
+// the module's operational surface.
+export const _testables = Object.freeze({ parseArgs });
+
+// Run as a CLI unless imported by a test.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((error) => {
+      console.error(
+        `local-state: FAIL — ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    });
+}

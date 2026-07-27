@@ -26,8 +26,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runRepairCli } from "@oscharko-dev/keiko-cli";
 import { sealString } from "@oscharko-dev/keiko-security";
 
-import { _testables, auditLocalState } from "../lib/local-state-audit.mjs";
+import {
+  _testables as _localStateAuditTestables,
+  auditLocalState,
+} from "../lib/local-state-audit.mjs";
 import { createDriftedFixture, createHealthyFixture } from "../lib/local-state-fixture.mjs";
+import { _testables as _cliTestables } from "../check-local-state.mjs";
+
+const _testables = _localStateAuditTestables;
 
 // Builds a minimal SQLite file at `path` from raw DDL/DML. Used to craft store-shaped databases that
 // exercise the auditor's failure branches directly (a plaintext content column, a missing encryption
@@ -943,5 +949,29 @@ describe("isPlaceholderSafe — trailing punctuation trim (S8786 rewrite)", () =
     const start = Date.now();
     _testables.isPlaceholderSafe(adversarial);
     expect(Date.now() - start).toBeLessThan(300);
+  });
+});
+
+describe("parseArgs — --state-dir value must not look like a flag", () => {
+  it("treats a bare value as the state directory", () => {
+    const parsed = _cliTestables.parseArgs(["--state-dir", "/tmp/keiko-state"]);
+    expect(parsed).toEqual({ kind: "args", stateDir: "/tmp/keiko-state", selfTest: false });
+  });
+
+  it("rejects a short flag standing in for the value (--state-dir -h)", () => {
+    // Before the fix, only a "--"-prefixed value was rejected, so "-h" was accepted as a
+    // literal directory named "-h" instead of being treated as the missing-value usage error.
+    const parsed = _cliTestables.parseArgs(["--state-dir", "-h"]);
+    expect(parsed).toEqual({ kind: "usage" });
+  });
+
+  it("still rejects a long-flag-shaped value the same way", () => {
+    const parsed = _cliTestables.parseArgs(["--state-dir", "--self-test"]);
+    expect(parsed).toEqual({ kind: "usage" });
+  });
+
+  it("rejects a missing --state-dir value at the end of argv", () => {
+    const parsed = _cliTestables.parseArgs(["--state-dir"]);
+    expect(parsed).toEqual({ kind: "usage" });
   });
 });
