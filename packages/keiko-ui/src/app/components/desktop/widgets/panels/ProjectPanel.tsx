@@ -154,7 +154,7 @@ function ProjectRow({
       {expanded && (
         // role="group" groups child treeitems under their parent (APG tree pattern).
         <div className="proj-chats" role="group" aria-label={project.name}>
-          {isActiveProject && chats.length === 0 && <div className="proj-empty">No chats</div>}
+          {isActiveProject && chats.length === 0 && <div className="proj-empty">{"No chats"}</div>}
           {isActiveProject &&
             chats.length > 0 &&
             chats.map((chat) => (
@@ -177,7 +177,7 @@ function ProjectRow({
                 ) : null}
               </button>
             ))}
-          {!isActiveProject && <div className="proj-empty">Select project to load chats</div>}
+          {!isActiveProject && <div className="proj-empty">{"Select project to load chats"}</div>}
         </div>
       )}
     </div>
