@@ -96,6 +96,40 @@ describe("useAutonomyModePolicy", (): void => {
     expect(view.result.current.effectiveMode).toBe("autonomous-delivery");
   });
 
+  it("lets the latest persistence intent win across mounted settings surfaces", async (): Promise<void> => {
+    const supervised = deferred<MemoryAutonomyPolicyWire>();
+    const autonomous = deferred<MemoryAutonomyPolicyWire>();
+    const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
+      Promise.resolve(policy("governed-assist")),
+    );
+    const persist = vi.fn((mode: CodingWorkbenchMode): Promise<MemoryAutonomyPolicyWire> =>
+      mode === "supervised-coding" ? supervised.promise : autonomous.promise,
+    );
+    const first = renderHook((): AutonomyModePolicy => useAutonomyModePolicy({ load, persist }));
+    const second = renderHook((): AutonomyModePolicy => useAutonomyModePolicy({ load, persist }));
+    await waitFor((): void => expect(first.result.current.pending).toBe(false));
+    await waitFor((): void => expect(second.result.current.pending).toBe(false));
+
+    act((): void => first.result.current.change("supervised-coding"));
+    act((): void => second.result.current.change("autonomous-delivery"));
+    await waitFor((): void => expect(persist).toHaveBeenCalledTimes(1));
+    expect(persist).toHaveBeenNthCalledWith(1, "supervised-coding");
+    await act(async (): Promise<void> => {
+      supervised.resolve(policy("supervised-coding"));
+      await supervised.promise;
+    });
+    await waitFor((): void => expect(persist).toHaveBeenCalledTimes(2));
+    expect(persist).toHaveBeenNthCalledWith(2, "autonomous-delivery");
+    await act(async (): Promise<void> => {
+      autonomous.resolve(policy("autonomous-delivery"));
+      await autonomous.promise;
+    });
+
+    expect(currentConversationMemoryMode()).toBe("autonomous-delivery");
+    expect(first.result.current.requestedMode).toBe("autonomous-delivery");
+    expect(second.result.current.requestedMode).toBe("autonomous-delivery");
+  });
+
   it("does not publish a persistence result after unmount", async (): Promise<void> => {
     const persistence = deferred<MemoryAutonomyPolicyWire>();
     const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>

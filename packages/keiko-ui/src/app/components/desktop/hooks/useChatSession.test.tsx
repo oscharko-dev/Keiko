@@ -2862,6 +2862,35 @@ describe("useChatSession memory autonomy hydration", () => {
     expect(settings.result.current.memoryMode).toBe("autonomous-delivery");
   });
 
+  it("does not let an ABA mode change disguise a stale hydration response", async () => {
+    mockMinimalBootstrap();
+    const hydration = deferred<{
+      requestedMode: "supervised-coding";
+      effectiveMode: "supervised-coding";
+      deploymentCeiling: "supervised-coding";
+    }>();
+    vi.mocked(loadMemoryAutonomyMode).mockReturnValue(hydration.promise);
+
+    renderHook(() => useChatSession({ autoCreate: false }));
+    const settings = renderHook(() => useConversationMemorySettings());
+
+    act(() => {
+      settings.result.current.setMemoryMode("autonomous-delivery");
+      settings.result.current.setMemoryMode("governed-assist");
+    });
+
+    await act(async () => {
+      hydration.resolve({
+        requestedMode: "supervised-coding",
+        effectiveMode: "supervised-coding",
+        deploymentCeiling: "supervised-coding",
+      });
+      await hydration.promise;
+    });
+
+    expect(settings.result.current.memoryMode).toBe("governed-assist");
+  });
+
   it("fails closed to the default mode without console output when hydration fails", async () => {
     mockMinimalBootstrap();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

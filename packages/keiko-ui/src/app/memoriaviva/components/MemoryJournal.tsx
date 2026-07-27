@@ -80,6 +80,12 @@ function modeLabel(capture: JournalCapture, t: I18nTranslate): string {
   }
 }
 
+function surfaceLabel(capture: JournalCapture, t: I18nTranslate): string {
+  return capture.provenance.initiatorSurface === "voice"
+    ? t("memoria.journal.surface.voice")
+    : t("memoria.journal.surface.conversationCenter");
+}
+
 function statusForCapture(capture: PersistedJournalCapture): MemoryRecord["status"] {
   return capture.outcome === "proposed" ? "proposed" : "accepted";
 }
@@ -99,6 +105,7 @@ function JournalMetadata({
   return (
     <>
       <span className={styles.mvJournalMetaBadge}>{modeLabel(capture, t)}</span>
+      <span>{t("memoria.journal.surface", { surface: surfaceLabel(capture, t) })}</span>
       <span>{t("memoria.journal.source", { source: capture.provenance.sourceKind })}</span>
       <span>{t("memoria.journal.reason", { reason: capture.reason })}</span>
       <time dateTime={captureTime(capture.occurredAt)}>

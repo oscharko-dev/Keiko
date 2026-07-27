@@ -132,6 +132,20 @@ describe("MemoryJournal loading and ordering", () => {
     expect(within(row).getByText("Mode unavailable")).toBeInTheDocument();
     expect(within(row).getByText("Memory content is unavailable")).toBeInTheDocument();
   });
+
+  it("identifies voice-originated captures in the Journal", async () => {
+    renderJournal([
+      makeCapture("voice", 100, {
+        provenance: {
+          initiatorSurface: "voice",
+          sourceKind: "system-default",
+        },
+      }),
+    ]);
+
+    const row = await screen.findByTestId("memory-journal-row");
+    expect(within(row).getByText("Surface Voice")).toBeInTheDocument();
+  });
 });
 
 describe("MemoryJournal Keep and Forget", () => {

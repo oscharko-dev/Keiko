@@ -1,9 +1,12 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode, MemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
-import { resetConversationMemorySettingsForTests } from "@/app/components/desktop/hooks/memorySettings";
+import {
+  resetConversationMemorySettingsForTests,
+  useConversationMemorySettings,
+} from "@/app/components/desktop/hooks/memorySettings";
 import type { MemoryListResponse } from "@/lib/memory-api";
 import { MemoriaVivaWindow } from "./MemoriaVivaWindow";
 
@@ -13,6 +16,17 @@ function policy(mode: CodingWorkbenchMode): MemoryAutonomyPolicyWire {
 
 function fetchEmptyMemories(): Promise<MemoryListResponse> {
   return Promise.resolve({ memories: [], total: 0, limit: 50, offset: 0 });
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -93,6 +107,32 @@ describe("MemoriaViva memory autonomy mode", () => {
       "The memory autonomy mode could not be saved. The previous mode remains active.",
     );
     expect(screen.getByRole("radio", { name: /Supervised workspace/ })).toBeChecked();
+  });
+
+  it("does not let an ABA mode change disguise a stale window hydration response", async () => {
+    const hydration = deferred<MemoryAutonomyPolicyWire>();
+    render(
+      <MemoriaVivaWindow
+        fetchMemoriesImpl={fetchEmptyMemories}
+        loadMemoryAutonomyModeImpl={vi.fn().mockReturnValue(hydration.promise)}
+        persistMemoryAutonomyModeImpl={vi.fn()}
+      />,
+    );
+    const settings = renderHook(() => useConversationMemorySettings());
+
+    act(() => {
+      settings.result.current.setMemoryMode("autonomous-delivery");
+      settings.result.current.setMemoryMode("governed-assist");
+    });
+    await act(async () => {
+      hydration.resolve(policy("supervised-coding"));
+      await hydration.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: /Ask for approval/ })).toBeChecked();
+      expect(screen.getByRole("radio", { name: /Ask for approval/ })).toBeEnabled();
+    });
   });
 
   it("selects every mode with keyboard-only radio operation", async () => {

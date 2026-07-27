@@ -1,10 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useId, useState } from "react";
-import type { ChangeEvent, WheelEvent } from "react";
-import type { ReactNode } from "react";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import {
+  useCallback,
+  useId,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+  type WheelEvent,
+} from "react";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
+import { useAutonomyModePolicy } from "@/app/components/desktop/hooks/useAutonomyModePolicy";
 import { useConversationMemorySettings } from "@/app/components/desktop/hooks/memorySettings";
 import { Toggle } from "@/app/components/desktop/widgets/shared/Toggle";
 import {
@@ -44,69 +49,6 @@ const EMPTY_FILTERS: MemoryFilterState = {
 interface MemoriaVivaRequestSettingsProps {
   readonly loadMemoryAutonomyModeImpl: typeof loadMemoryAutonomyMode;
   readonly persistMemoryAutonomyModeImpl: typeof persistMemoryAutonomyMode;
-}
-
-interface MemoryModePolicyState {
-  readonly pending: boolean;
-  readonly error: "hydrate" | "persist" | null;
-  // The server-enforced mode for this deployment, which may be lower than the requested mode
-  // (settings.memoryMode) when the deployment ceiling clamps it (resolveEffectiveCodingWorkbenchMode
-  // server-side). null until the first successful hydrate/persist response.
-  readonly effectiveMode: CodingWorkbenchMode | null;
-  readonly change: (mode: CodingWorkbenchMode) => void;
-}
-
-function useMemoryModePolicy({
-  loadMemoryAutonomyModeImpl,
-  persistMemoryAutonomyModeImpl,
-  setMemoryMode,
-}: MemoriaVivaRequestSettingsProps & {
-  readonly setMemoryMode: (mode: CodingWorkbenchMode) => void;
-}): MemoryModePolicyState {
-  const [modePending, setModePending] = useState(true);
-  const [modeError, setModeError] = useState<"hydrate" | "persist" | null>(null);
-  const [effectiveMode, setEffectiveMode] = useState<CodingWorkbenchMode | null>(null);
-  useEffect(() => {
-    let active = true;
-    void loadMemoryAutonomyModeImpl()
-      .then((policy) => {
-        if (!active) return;
-        setMemoryMode(policy.requestedMode);
-        setEffectiveMode(policy.effectiveMode);
-        setModeError(null);
-      })
-      .catch(() => {
-        if (!active) return;
-        setMemoryMode("governed-assist");
-        setModeError("hydrate");
-      })
-      .finally(() => {
-        if (active) setModePending(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [loadMemoryAutonomyModeImpl, setMemoryMode]);
-
-  const handleModeChange = useCallback(
-    (next: CodingWorkbenchMode): void => {
-      setModePending(true);
-      setModeError(null);
-      void persistMemoryAutonomyModeImpl(next)
-        .then((policy) => {
-          setMemoryMode(policy.requestedMode);
-          setEffectiveMode(policy.effectiveMode);
-        })
-        .catch(() => {
-          setModeError("persist");
-        })
-        .finally(() => {
-          setModePending(false);
-        });
-    },
-    [persistMemoryAutonomyModeImpl, setMemoryMode],
-  );
-  return { pending: modePending, error: modeError, effectiveMode, change: handleModeChange };
 }
 
 function MemoryEnabledSetting({
@@ -196,10 +138,9 @@ function MemoriaVivaRequestSettings({
 }: MemoriaVivaRequestSettingsProps): ReactNode {
   const t = useTranslate();
   const settings = useConversationMemorySettings();
-  const policy = useMemoryModePolicy({
-    loadMemoryAutonomyModeImpl,
-    persistMemoryAutonomyModeImpl,
-    setMemoryMode: settings.setMemoryMode,
+  const policy = useAutonomyModePolicy({
+    load: loadMemoryAutonomyModeImpl,
+    persist: persistMemoryAutonomyModeImpl,
   });
   return (
     <section className="mv-settings" aria-label={t("memoria.settings.region")}>
@@ -226,7 +167,7 @@ function MemoriaVivaRequestSettings({
           setBudgetTokens={settings.setMemoryBudgetTokens}
         />
         <MemoryAutonomyControl
-          mode={settings.memoryMode}
+          mode={policy.requestedMode}
           effectiveMode={policy.effectiveMode}
           disabled={policy.pending}
           error={policy.error}
