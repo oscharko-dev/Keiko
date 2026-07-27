@@ -241,11 +241,15 @@ describe("MultiRootFilesWidget root isolation over the real file tree", () => {
     // The human selects a file in the NON-focused group. Its report is suppressed by the writer
     // gate — that suppression is what makes the replay load-bearing.
     await userEvent.click(await screen.findByRole("treeitem", { name: /app\.ts/u }));
-    expect(onActiveFileChange).not.toHaveBeenCalledWith(
-      expect.stringContaining("app.ts"),
-      POPULATED_ROOT,
-      expect.anything(),
-    );
+    // Match on the first two arguments only. `expect.anything()` does not match `undefined`, so a
+    // third-argument matcher would let a genuine two-argument report slip past this control and the
+    // "was suppressed" premise would hold vacuously.
+    expect(
+      onActiveFileChange.mock.calls.some(
+        ([path, reportedRoot]) =>
+          typeof path === "string" && path.includes("app.ts") && reportedRoot === POPULATED_ROOT,
+      ),
+    ).toBe(false);
     onActiveFileChange.mockClear();
 
     // Focus flips to the populated root, exactly as focusRoot() would land it.
