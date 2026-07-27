@@ -87,10 +87,6 @@ export interface TaskWorkspaceValidationFail {
 
 export type TaskWorkspaceValidation = TaskWorkspaceValidationOk | TaskWorkspaceValidationFail;
 
-// `validateTaskWorkspaceTransition` returns the same shape but is aliased so callers reading the
-// transition result type read intent at the call site.
-export type TaskWorkspaceTransitionValidation = TaskWorkspaceValidation;
-
 // ─── Lifecycle states (10) ──────────────────────────────────────────────────────
 
 export type TaskWorkspaceLifecycleState =
@@ -289,7 +285,7 @@ export interface TaskWorkspaceTransitionInput {
 
 export function validateTaskWorkspaceTransition(
   input: TaskWorkspaceTransitionInput,
-): TaskWorkspaceTransitionValidation {
+): TaskWorkspaceValidation {
   const { from, to, context } = input;
   if (!isLegalTaskWorkspaceTransition(from, to)) {
     return { ok: false, reasons: [`illegal transition from ${from} to ${to}`] };
