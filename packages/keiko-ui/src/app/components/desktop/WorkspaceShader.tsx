@@ -406,8 +406,8 @@ export function WorkspaceShader(): ReactNode {
       if (mq.matches) {
         dispose?.();
         dispose = undefined;
-      } else if (dispose === undefined) {
-        dispose = setupShader(host, canvas);
+      } else {
+        dispose ??= setupShader(host, canvas);
       }
     };
     apply();

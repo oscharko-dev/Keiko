@@ -25,6 +25,10 @@ import type {
   DictationPhase,
 } from "./hooks/useDictation";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CloseIcon = Icons.close;
+const MicIcon = Icons.mic;
+
 // Stable id for the local-only privacy disclosure so the mic button can reference it via
 // aria-describedby — the disclosure is discoverable to screen-reader users without opening anything.
 const VOICE_PRIVACY_HINT_ID = "cmp-voice-privacy-hint";
@@ -102,10 +106,10 @@ export function VoiceDictationButton({
         <span className="cmp-voice-recording" aria-hidden="true">
           <span className="cmp-voice-dot" />
           <VoiceLevelMeter level={audioLevel} compact />
-          <Icons.close size={14} />
+          <CloseIcon size={14} />
         </span>
       ) : (
-        <Icons.mic size={16} />
+        <MicIcon size={16} />
       )}
       <span id={VOICE_PRIVACY_HINT_ID} className="sr-only">
         {t("voice.dictation.privacy")}

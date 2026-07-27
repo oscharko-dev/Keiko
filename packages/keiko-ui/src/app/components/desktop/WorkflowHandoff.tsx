@@ -9,6 +9,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icons } from "./Icons";
 import type { ChatMessage } from "@/lib/types";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const SparkIcon = Icons.spark;
+
 export interface RunSummaryCardProps {
   readonly message: ChatMessage;
   readonly onOpenResult?: ((message: ChatMessage) => void) | undefined;
@@ -49,7 +52,7 @@ export function RunSummaryCard({ message, onOpenResult }: RunSummaryCardProps): 
       aria-label={`Workflow run ${workflowLabel} - ${status}`}
     >
       <header className="run-summary-card-head">
-        <Icons.spark size={14} style={{ color: "var(--accent)" }} />
+        <SparkIcon size={14} style={{ color: "var(--accent)" }} />
         <span className="run-summary-card-workflow mono">{workflowLabel}</span>
         <span className="run-summary-card-status" data-status={status}>
           {status}

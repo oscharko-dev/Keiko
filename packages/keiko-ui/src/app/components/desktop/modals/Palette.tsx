@@ -11,6 +11,11 @@ import {
 import { Icons } from "../Icons";
 import { type WIN_TYPES as WinTypes, type WindowType } from "../windows/WindowsRegistry";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const AddIcon = Icons.add;
+const CloseIcon = Icons.close;
+const PlusIcon = Icons.plus;
+
 interface PaletteProps {
   readonly types: typeof WinTypes;
   readonly order: readonly WindowType[];
@@ -129,7 +134,7 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
     >
       <div className="palette-head">
         <span className="palette-badge">
-          <Icons.add size={17} />
+          <AddIcon size={17} />
         </span>
         <div className="palette-htext">
           <span id="palette-title" className="palette-title">
@@ -147,7 +152,7 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
           aria-label="Close"
           title="Close"
         >
-          <Icons.close size={16} />
+          <CloseIcon size={16} />
         </button>
       </div>
       <div className="palette-grid">
@@ -169,7 +174,7 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
               <span className="pal-name">{t.title}</span>
               <span className="pal-desc">{t.desc}</span>
               <span className="pal-add" aria-hidden="true">
-                <Icons.plus size={15} />
+                <PlusIcon size={15} />
               </span>
             </button>
           );

@@ -45,6 +45,10 @@ import {
   type EditorAgentTranslate,
 } from "./widgets/cards/editor-agent-i18n";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CopyIcon = Icons.copy;
+const EditorIcon = Icons.editor;
+
 interface AssistantCodeBlockApplyRequest {
   readonly codeBlockText: string;
   readonly language?: string | undefined;
@@ -130,7 +134,7 @@ function CopyButton({ text }: { readonly text: string }): ReactNode {
         data-failed={failed ? "true" : "false"}
         onClick={handleCopy}
       >
-        <Icons.copy size={13} aria-hidden="true" />
+        <CopyIcon size={13} aria-hidden="true" />
         <span>{copied ? "Copied" : "Copy"}</span>
       </button>
       {/* WCAG 4.1.3 — the visible label swap alone is silent for screen readers
@@ -247,7 +251,7 @@ function ApplyCodeBlockButton({
         data-failed={failed ? "true" : "false"}
         onClick={handleApply}
       >
-        <Icons.editor size={13} aria-hidden="true" />
+        <EditorIcon size={13} aria-hidden="true" />
         <span>{label}</span>
       </button>
       <output className="sm-code-copy-status">{status}</output>

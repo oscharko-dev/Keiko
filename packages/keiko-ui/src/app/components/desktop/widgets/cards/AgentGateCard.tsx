@@ -4,6 +4,9 @@ import type { KeyboardEvent, ReactNode } from "react";
 import { useEffect, useId, useRef } from "react";
 import { Icons } from "../../Icons";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const BellIcon = Icons.bell;
+
 type GateKind = "write" | "command" | "git" | "mail" | "network";
 type Risk = "low" | "high";
 
@@ -15,10 +18,10 @@ interface GateInfo {
 }
 
 interface AgentGateCardProps {
-  gate: GateInfo;
-  escalated: boolean;
-  onApprove: () => void;
-  onReject: () => void;
+  readonly gate: GateInfo;
+  readonly escalated: boolean;
+  readonly onApprove: () => void;
+  readonly onReject: () => void;
 }
 
 export function AgentGateCard({
@@ -54,7 +57,7 @@ export function AgentGateCard({
     >
       <div className="arun-gate-h ai-permit-h">
         <span className="ic">
-          <Icons.bell size={13} />
+          <BellIcon size={13} />
         </span>
         <div>
           <div className="tt">{escalated ? "Keiko escalated to you" : "Approval required"}</div>

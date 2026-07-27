@@ -125,9 +125,7 @@ export function createVoiceLatencyObserver(
 
   function mark(m: VoiceLatencyMark): void {
     const t = now();
-    if (origin === undefined) {
-      origin = t;
-    }
+    origin ??= t;
     const atMs = Math.max(0, Math.round(t - origin));
     lastAt.set(m, atMs);
     samples.push({ mark: m, atMs });

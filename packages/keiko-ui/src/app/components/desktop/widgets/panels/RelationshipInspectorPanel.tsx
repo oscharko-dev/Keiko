@@ -85,7 +85,7 @@ const LIFECYCLE_DESCRIPTIONS: Readonly<Record<RelationshipLifecycleState, string
 
 // ─── Skeleton placeholder (inspector-spec.md §"Loading state") ────────────────
 
-function SkeletonBlock({ lines = 3 }: { lines?: number }): ReactNode {
+function SkeletonBlock({ lines = 3 }: { readonly lines?: number }): ReactNode {
   return (
     <div className="rb-rows" aria-hidden="true">
       {Array.from({ length: lines }, (_, i) => (
@@ -120,8 +120,8 @@ function SectionLabel({
   children,
   style,
 }: {
-  children: ReactNode;
-  style?: CSSProperties;
+  readonly children: ReactNode;
+  readonly style?: CSSProperties;
 }): ReactNode {
   return (
     <h3 className="rb-section-label" style={style}>
@@ -132,7 +132,7 @@ function SectionLabel({
 
 // ─── Section 1: Type + display name ───────────────────────────────────────────
 
-function TypeSection({ rel }: { rel: ApiRelationship }): ReactNode {
+function TypeSection({ rel }: { readonly rel: ApiRelationship }): ReactNode {
   const def = RELATIONSHIP_TYPE_DEFINITIONS[rel.type];
   const displayName = `${rel.source.kind} ${rel.type} ${rel.target.kind}`;
   return (
@@ -168,9 +168,9 @@ function EndpointSection({
   kind,
   id,
 }: {
-  label: "Source" | "Target";
-  kind: string;
-  id: string;
+  readonly label: "Source" | "Target";
+  readonly kind: string;
+  readonly id: string;
 }): ReactNode {
   return (
     <>
@@ -194,7 +194,11 @@ function EndpointSection({
 
 // ─── Section 4: Lifecycle chip ─────────────────────────────────────────────────
 
-function LifecycleSection({ lifecycle }: { lifecycle: RelationshipLifecycleState }): ReactNode {
+function LifecycleSection({
+  lifecycle,
+}: {
+  readonly lifecycle: RelationshipLifecycleState;
+}): ReactNode {
   const descId = `lifecycle-desc-${lifecycle}`;
   const style = LIFECYCLE_CHIP_STYLES[lifecycle] ?? LIFECYCLE_CHIP_STYLES.draft;
   return (
@@ -242,14 +246,14 @@ function ActivitySection({
   transitions,
   densityMode,
 }: {
-  type: RelationshipType;
-  lifecycle: RelationshipLifecycleState;
-  activity: RelationshipActivityState;
-  throughputCount?: number | undefined;
-  animateBadges: boolean;
-  highContrast: boolean;
-  transitions: readonly TransitionRow[];
-  densityMode: DensityMode;
+  readonly type: RelationshipType;
+  readonly lifecycle: RelationshipLifecycleState;
+  readonly activity: RelationshipActivityState;
+  readonly throughputCount?: number | undefined;
+  readonly animateBadges: boolean;
+  readonly highContrast: boolean;
+  readonly transitions: readonly TransitionRow[];
+  readonly densityMode: DensityMode;
 }): ReactNode {
   // Per-density cap for inline transition rows (visual-density-rules.md table)
   const transitionCap = densityMode === "minimal" ? 3 : 5;
@@ -281,9 +285,9 @@ function ActivitySection({
             <span className="rb-row-k" style={{ marginBottom: 4 }}>
               Recent transitions
             </span>
-            {visibleTransitions.map((t, i) => (
+            {visibleTransitions.map((t) => (
               <div
-                key={i}
+                key={`${t.from}-${t.to}-${String(t.occurredAt)}`}
                 style={{
                   fontSize: 12,
                   color: "var(--fg-muted)",
@@ -343,12 +347,12 @@ function AuditSection({
   onLoadMore,
   hasMore,
 }: {
-  auditRows: readonly AuditRow[];
-  loading: boolean;
-  error: string | null;
-  onRetry: () => void;
-  onLoadMore: () => void;
-  hasMore: boolean;
+  readonly auditRows: readonly AuditRow[];
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly onRetry: () => void;
+  readonly onLoadMore: () => void;
+  readonly hasMore: boolean;
 }): ReactNode {
   return (
     <>
@@ -374,10 +378,10 @@ function AuditSection({
       )}
       {!loading && auditRows.length > 0 && (
         <div className="rb-rows">
-          {auditRows.map((row, i) => (
+          {auditRows.map((row) => (
             <div
               className="rb-row"
-              key={i}
+              key={`${row.from}-${row.to}-${String(row.occurredAt)}`}
               style={{ flexDirection: "column", alignItems: "flex-start", gap: "var(--space-1)" }}
             >
               <span className="rb-row-k mono" style={{ fontSize: 11 }}>
@@ -433,7 +437,7 @@ function evidenceReferenceIds(rel: ApiRelationship): readonly string[] {
   return ids;
 }
 
-function EvidenceSection({ rel }: { rel: ApiRelationship }): ReactNode {
+function EvidenceSection({ rel }: { readonly rel: ApiRelationship }): ReactNode {
   const refs = evidenceReferenceIds(rel);
   return (
     <>
@@ -477,14 +481,14 @@ function ImpactSection({
   onToggle,
   onSelectRelationship,
 }: {
-  relationshipId: string;
-  forwardCount: number | null;
-  reverseCount: number | null;
-  outgoing: DependencyReport | null;
-  incoming: DependencyReport | null;
-  expanded: boolean;
-  onToggle: () => void;
-  onSelectRelationship: (id: string) => void;
+  readonly relationshipId: string;
+  readonly forwardCount: number | null;
+  readonly reverseCount: number | null;
+  readonly outgoing: DependencyReport | null;
+  readonly incoming: DependencyReport | null;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+  readonly onSelectRelationship: (id: string) => void;
 }): ReactNode {
   return (
     <>
@@ -541,9 +545,9 @@ function DenialSection({
   messages,
   deniedAt,
 }: {
-  codes: readonly string[];
-  messages: readonly string[];
-  deniedAt?: string;
+  readonly codes: readonly string[];
+  readonly messages: readonly string[];
+  readonly deniedAt?: string;
 }): ReactNode {
   if (codes.length === 0) return null;
   // role="status" aria-live="polite" per inspector-spec.md §10 (steady-state denial)

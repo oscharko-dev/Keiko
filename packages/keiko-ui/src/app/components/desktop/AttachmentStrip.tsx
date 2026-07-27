@@ -31,6 +31,11 @@ import type {
 } from "./hooks/useChatSession";
 import type { ModelCapability } from "@/lib/types";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const FileIcon = Icons.file;
+const CloseIcon = Icons.close;
+const PlusIcon = Icons.plus;
+
 // ─── Human-readable rejection messages (AC #2) ────────────────────────────────
 
 export function rejectionMessage(reason: AttachmentRejectionReason, mimeType?: string): string {
@@ -127,7 +132,7 @@ function AttachmentChip({ attachment, onRemove }: AttachmentChipProps): ReactNod
         />
       ) : (
         <span className="attach-chip-icon" aria-hidden="true">
-          <Icons.file size={16} />
+          <FileIcon size={16} />
         </span>
       )}
       <span className="attach-chip-name" title={attachment.name}>
@@ -140,7 +145,7 @@ function AttachmentChip({ attachment, onRemove }: AttachmentChipProps): ReactNod
         aria-label={label}
         onClick={() => onRemove(attachment.id)}
       >
-        <Icons.close size={12} />
+        <CloseIcon size={12} />
       </button>
     </li>
   );
@@ -340,7 +345,7 @@ export function AttachButton({
         data-tip={supportsAny ? t("attachment.attachFile") : t("attachment.notSupported")}
         onClick={handleClick}
       >
-        <Icons.plus size={16} />
+        <PlusIcon size={16} />
       </button>
     </>
   );

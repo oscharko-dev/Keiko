@@ -12,6 +12,10 @@ import {
   isPortableReleaseMetadataUnavailable,
 } from "./update-copy";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const InfoIcon = Icons.info;
+const ActivityIcon = Icons.activity;
+
 interface UpdateStartupNoticeProps {
   readonly ready: boolean;
   readonly openUpdates: () => void;
@@ -132,7 +136,7 @@ export function UpdateStartupNotice({
       aria-label={t("updates.notice.aria")}
     >
       <span className="update-notice-icon" aria-hidden="true">
-        {critical ? <Icons.info size={17} /> : <Icons.activity size={17} />}
+        {critical ? <InfoIcon size={17} /> : <ActivityIcon size={17} />}
       </span>
       <div className="update-notice-body">
         <strong>{noticeTitle(state.report, critical, t)}</strong>

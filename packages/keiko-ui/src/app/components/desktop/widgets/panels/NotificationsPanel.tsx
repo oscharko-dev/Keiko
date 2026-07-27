@@ -27,8 +27,8 @@ export function NotificationsPanel(): ReactNode {
       aria-atomic="false"
       aria-label="Notifications"
     >
-      {ITEMS.map((n, i) => (
-        <li className="nt-row" key={i}>
+      {ITEMS.map((n) => (
+        <li className="nt-row" key={n.t}>
           <span className="dot" style={{ background: n.c, marginTop: 6 }} aria-hidden="true" />
           <span className="nt-text">
             <span className="nt-title">{n.t}</span>

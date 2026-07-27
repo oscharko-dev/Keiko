@@ -7,6 +7,10 @@ import { Icons } from "../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import styles from "./EditorEmptyState.module.css";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const EditorIcon = Icons.editor;
+const FolderIcon = Icons.folder;
+
 // Shown when the editor window is open without a bound project root (e.g. toggled from the left
 // rail). Lets the user pick a project folder through the native OS picker (ADR-0118) — or type a
 // path where the native picker is unavailable — and binds it via the parent's `onOpenRoot`.
@@ -52,7 +56,7 @@ export function EditorEmptyState({
   return (
     <div className={styles.empty} role="note" data-testid="editor-empty-state">
       <span className={styles.icon} aria-hidden="true">
-        <Icons.editor size={40} />
+        <EditorIcon size={40} />
       </span>
       <h2 className={styles.title}>Open a project</h2>
       <p className={styles.desc}>
@@ -66,7 +70,7 @@ export function EditorEmptyState({
         disabled={!nativeSupported}
         data-testid="editor-empty-browse"
       >
-        <Icons.folder size={16} />
+        <FolderIcon size={16} />
         Select folder…
       </button>
       <div className={styles.manual}>

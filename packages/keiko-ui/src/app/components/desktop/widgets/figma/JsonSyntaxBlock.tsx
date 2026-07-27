@@ -10,7 +10,7 @@ interface JsonToken {
 }
 
 const JSON_TOKEN_RE =
-  /"(?:\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|[^"\\])*"\s*:?|[-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b|[{}\[\],:]/gu;
+  /"(?:\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|[^"\\])*"\s*:?|[-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b|[{}[\],:]/gu;
 
 function tokenKind(token: string): JsonTokenKind {
   if (token.startsWith('"')) return token.endsWith(":") ? "key" : "string";

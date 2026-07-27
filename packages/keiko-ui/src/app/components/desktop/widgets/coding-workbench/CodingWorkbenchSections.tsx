@@ -12,6 +12,12 @@ export { Timeline } from "./CodingWorkbenchTimeline";
 import { Icons } from "../../Icons";
 import styles from "./CodingWorkbenchWindow.module.css";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CodeIcon = Icons.code;
+const MinimizeIcon = Icons.minimize;
+const FwdIcon = Icons.fwd;
+const ArrowUpIcon = Icons.arrowUp;
+
 export function WorkbenchHeader({
   state,
   focusRef,
@@ -115,7 +121,7 @@ export function TaskStartSection({
           <div className="cmp-bar cmp-bar-compact">
             <div className="cmp-bar-model">
               <span className="cmp-model mono">
-                <Icons.code size={15} />
+                <CodeIcon size={15} />
                 {t("codingWorkbench.header.eyebrow")}
               </span>
             </div>
@@ -170,7 +176,7 @@ function ComposerControls({
           aria-label={t("codingWorkbench.composer.pause")}
           aria-disabled={submitBlocked}
         >
-          <Icons.minimize size={16} />
+          <MinimizeIcon size={16} />
         </button>
       </div>
     );
@@ -186,7 +192,7 @@ function ComposerControls({
           disabled={busy}
           onClick={actions.onResume}
         >
-          <Icons.fwd size={16} />
+          <FwdIcon size={16} />
         </button>
         <button
           className="cmp-send cmp-tip-end"
@@ -196,7 +202,7 @@ function ComposerControls({
           aria-label={t("codingWorkbench.composer.send")}
           aria-disabled={submitBlocked}
         >
-          <Icons.arrowUp size={16} />
+          <ArrowUpIcon size={16} />
         </button>
       </div>
     );
@@ -210,7 +216,7 @@ function ComposerControls({
       aria-label={startBusy ? t("codingWorkbench.task.starting") : t("codingWorkbench.task.start")}
       aria-disabled={submitBlocked}
     >
-      <Icons.arrowUp size={16} />
+      <ArrowUpIcon size={16} />
     </button>
   );
 }

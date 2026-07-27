@@ -35,6 +35,9 @@ import type { ApiRelationship } from "../../../relationships/api";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CloseIcon = Icons.close;
+
 // ─── Per-denial-code UI messages (verbatim from denial-reasons.md) ─────────────
 // These are displayed only when the server returns a denial — never invented by the UI.
 // Stored here for display completeness; server message is always canonical.
@@ -76,8 +79,6 @@ function isSecurityDenial(denial: { codes: readonly string[] } | null): boolean 
 export interface RelationshipCreateDialogProps {
   /** Called when dialog closes (with created relationship on success, null on cancel). */
   readonly onClose: (created: ApiRelationship | null) => void;
-  /** Workspace id for scoping. */
-  readonly workspaceId?: string;
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────────
@@ -368,7 +369,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
             title="Close"
             style={{ marginLeft: "auto" }}
           >
-            <Icons.close size={16} />
+            <CloseIcon size={16} />
           </button>
         </div>
 
@@ -596,8 +597,8 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               aria-live="polite"
               data-testid="client-validation-hints"
             >
-              {clientHints.map((hint, i) => (
-                <div key={i} style={{ fontSize: 12 }}>
+              {clientHints.map((hint) => (
+                <div key={hint} style={{ fontSize: 12 }}>
                   {hint}
                 </div>
               ))}

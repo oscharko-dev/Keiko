@@ -72,6 +72,14 @@ import {
 } from "../../workspace-appearance";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CopyIcon = Icons.copy;
+const ActivityIcon = Icons.activity;
+const BrowserIcon = Icons.browser;
+const MicIcon = Icons.mic;
+const PlusIcon = Icons.plus;
+const CubeIcon = Icons.cube;
+
 const SettingsIcon = Icons.settings;
 
 function kindLabel(kind: ModelCapability["kind"]): string {
@@ -341,7 +349,7 @@ function ReadinessReportCopyButton({
           void handleCopy();
         }}
       >
-        <Icons.copy size={12} aria-hidden="true" />
+        <CopyIcon size={12} aria-hidden="true" />
         {copyState === "copied" ? t("settings.models.copied") : t("settings.models.copyReport")}
       </button>
       {/* <output> already carries role=status; only the failure branch overrides it. role=alert
@@ -494,7 +502,7 @@ function ModelCapabilityRow({
             disabled={readiness?.status === "running"}
             onClick={() => onRunReadiness(model.id, false)}
           >
-            <Icons.activity size={13} />
+            <ActivityIcon size={13} />
             {t("settings.models.runReadiness")}
           </button>
           <button
@@ -691,7 +699,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
             ariaLabel={t("settings.language.label")}
             ariaDescribedBy={languageHelpId}
             attached={false}
-            leadingVisual={<Icons.browser size={15} />}
+            leadingVisual={<BrowserIcon size={15} />}
             menuMinWidth={172}
             onValueChange={(next) => {
               if (next === "en" || next === "de") setLocale(next);
@@ -720,7 +728,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
           disabled={openUpdatesWindow === undefined}
           onClick={openUpdatesWindow}
         >
-          <Icons.activity size={14} />
+          <ActivityIcon size={14} />
           {t("settings.updates.open")}
         </button>
       </div>
@@ -737,7 +745,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
             ariaLabel={t("settings.voice.label")}
             ariaDescribedBy="settings-voice-help"
             attached={false}
-            leadingVisual={<Icons.mic size={15} />}
+            leadingVisual={<MicIcon size={15} />}
             menuMinWidth={172}
             onValueChange={(next) => {
               if ((voicePersonaOptions as readonly string[]).includes(next)) {
@@ -1133,7 +1141,7 @@ function ModelsTabContent({
         </div>
         <div className="set-sec-actions">
           <button type="button" className="set-add" onClick={onOpenSetup}>
-            <Icons.plus size={14} />
+            <PlusIcon size={14} />
             {gatewayConfigured
               ? t("settings.models.updateCredentials")
               : t("settings.models.connectGateway")}
@@ -1147,7 +1155,7 @@ function ModelsTabContent({
 
       <div className="ml-row">
         <span className="ml-ico">
-          <Icons.cube size={16} />
+          <CubeIcon size={16} />
         </span>
         <div className="ml-info">
           <div className="ml-top">

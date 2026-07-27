@@ -13,15 +13,15 @@
 import type { CSSProperties, ReactNode } from "react";
 
 interface IcoProps {
-  size?: number;
-  sw?: number;
-  vb?: number;
-  fill?: string;
-  className?: string;
-  style?: CSSProperties;
-  children?: ReactNode;
-  d?: string;
-  "aria-hidden"?: boolean | "true" | "false";
+  readonly size?: number;
+  readonly sw?: number;
+  readonly vb?: number;
+  readonly fill?: string;
+  readonly className?: string;
+  readonly style?: CSSProperties;
+  readonly children?: ReactNode;
+  readonly d?: string;
+  readonly "aria-hidden"?: boolean | "true" | "false";
 }
 
 function Ico({
@@ -33,6 +33,7 @@ function Ico({
   style,
   children,
   d,
+  "aria-hidden": ariaHidden = "true",
 }: IcoProps): ReactNode {
   const useFill = fill !== undefined;
   return (
@@ -47,7 +48,7 @@ function Ico({
       strokeLinecap="round"
       strokeLinejoin="round"
       style={style}
-      aria-hidden="true"
+      aria-hidden={ariaHidden}
     >
       {d !== undefined ? <path d={d} /> : children}
     </svg>

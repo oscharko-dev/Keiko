@@ -17,13 +17,18 @@ import {
   disabledStyle,
 } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const FolderIcon = Icons.folder;
+const BranchIcon = Icons.branch;
+const CodeIcon = Icons.code;
+const FilesIcon = Icons.files;
+
 interface RepositoryToolbarProps {
   readonly repositories: readonly ProjectWithAvailability[];
   readonly selectedPath: string | null;
   readonly branches: readonly GitBranchListEntry[];
   readonly branchesLoading: boolean;
   readonly status: GitRepositoryStatusResponse | null;
-  readonly statusLoading: boolean;
   readonly branchBusy: boolean;
   readonly syncView: GitSyncView;
   readonly syncBusy: boolean;
@@ -102,19 +107,19 @@ export function RepositoryToolbar({
     return (
       <header style={TOOLBAR_EMPTY_STYLE} aria-label="Repository toolbar">
         <span style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--fg-faint)" }}>
-          <Icons.folder size={16} />
+          <FolderIcon size={16} />
           <span style={{ fontSize: 14, color: "var(--fg-muted)" }}>Select a repository</span>
         </span>
         <span style={{ width: 1, height: 26, background: "var(--line-soft)" }} />
         <span style={{ display: "flex", alignItems: "center", gap: 9, color: "var(--fg-faint)" }}>
-          <Icons.branch size={16} />
+          <BranchIcon size={16} />
           <span style={{ fontSize: 13, color: "var(--fg-faint)" }}>No branch</span>
         </span>
         <span style={{ flex: 1 }} />
         {onOpenEditor !== undefined ? (
           <button type="button" style={{ ...SECONDARY_BTN, ...disabledStyle(true) }} disabled>
             <span style={{ color: "var(--fg-dim)" }}>
-              <Icons.code size={15} />
+              <CodeIcon size={15} />
             </span>{" "}
             Open in Editor
           </button>
@@ -128,7 +133,7 @@ export function RepositoryToolbar({
       <ToolbarCell label="Repository" minWidth={188}>
         <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <span style={{ color: "var(--fg-dim)" }}>
-            <Icons.folder size={16} />
+            <FolderIcon size={16} />
           </span>
           <KeikoSelect
             value={selectedPath ?? ""}
@@ -193,7 +198,7 @@ export function RepositoryToolbar({
               }}
             >
               <span style={{ color: "var(--fg-dim)" }}>
-                <Icons.code size={15} />
+                <CodeIcon size={15} />
               </span>{" "}
               Open in Editor
             </button>
@@ -207,7 +212,7 @@ export function RepositoryToolbar({
               }}
             >
               <span style={{ color: "var(--fg-dim)" }}>
-                <Icons.files size={15} />
+                <FilesIcon size={15} />
               </span>{" "}
               Open Files
             </button>

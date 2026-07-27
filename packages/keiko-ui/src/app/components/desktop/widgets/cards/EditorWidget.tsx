@@ -102,6 +102,12 @@ import {
   type TabInsertTarget,
 } from "./editorPaneGeometry";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const SplitIcon = Icons.split;
+const PanelDownIcon = Icons.panelDown;
+const CloseIcon = Icons.close;
+const SidebarIcon = Icons.sidebar;
+
 const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
   () => import("./EditorRuntimeWidget"),
   {
@@ -282,7 +288,7 @@ function renderPaneActions(
         aria-label={`Split ${pane.activeFile || "editor"} right`}
         onClick={() => splitPane(pane.id, "row")}
       >
-        <Icons.split size={14} />
+        <SplitIcon size={14} />
       </button>
       <button
         type="button"
@@ -290,7 +296,7 @@ function renderPaneActions(
         aria-label={`Split ${pane.activeFile || "editor"} down`}
         onClick={() => splitPane(pane.id, "column")}
       >
-        <Icons.panelDown size={14} />
+        <PanelDownIcon size={14} />
       </button>
       {showClose ? (
         <button
@@ -299,7 +305,7 @@ function renderPaneActions(
           aria-label={`Close split ${pane.activeFile || "editor"}`}
           onClick={() => closePane(pane.id)}
         >
-          <Icons.close size={14} />
+          <CloseIcon size={14} />
         </button>
       ) : null}
     </span>
@@ -598,7 +604,7 @@ export function EditorWidget({
   const [draggedTab, setDraggedTab] = useState<DraggedTab | null>(null);
   const [tabDragPosition, setTabDragPosition] = useState<PointerTabDragPosition | null>(null);
   const [tabDropTargetPaneId, setTabDropTargetPaneId] = useState<string | null>(null);
-  const [tabInsertTarget, setTabInsertTargetState] = useState<TabInsertTarget | null>(null);
+  const [tabInsertTargetState, setTabInsertTargetState] = useState<TabInsertTarget | null>(null);
   const [saveRequest, setSaveRequest] = useState<EditorExternalSaveRequest | null>(null);
   const [fileHistoryRequest, setFileHistoryRequest] = useState<{
     readonly paneId: string;
@@ -1795,8 +1801,8 @@ export function EditorWidget({
       onAgentChangesetCommitted: binding.onAgentChangesetCommitted,
       onAgentReconciliationComplete: completeAgentReconciliation,
       tabInsertTarget:
-        tabInsertTarget?.paneId === pane.id
-          ? { file: tabInsertTarget.file, edge: tabInsertTarget.edge }
+        tabInsertTargetState?.paneId === pane.id
+          ? { file: tabInsertTargetState.file, edge: tabInsertTargetState.edge }
           : undefined,
       renderTabHandle: binding.renderTabHandle,
       onOpenDebugPanel,
@@ -1919,7 +1925,7 @@ export function EditorWidget({
           data-tip="Show project tree"
           onClick={toggleSidebar}
         >
-          <Icons.sidebar size={15} />
+          <SidebarIcon size={15} />
         </button>
       ) : (
         <>
@@ -1932,7 +1938,7 @@ export function EditorWidget({
                 data-tip="Hide project tree"
                 onClick={toggleSidebar}
               >
-                <Icons.sidebar size={14} />
+                <SidebarIcon size={14} />
               </button>
             </div>
             <EditorOutlinePanel

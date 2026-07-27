@@ -277,6 +277,9 @@ import {
   safeDomIdSegment,
 } from "./editorDocumentUri";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const EditorIcon = Icons.editor;
+
 const RestoreIcon = Icons.restore;
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
@@ -6092,7 +6095,7 @@ function EditorRuntimeWidget({
             tabIndex={0}
             data-tip="Editor"
           >
-            <Icons.editor size={12} />
+            <EditorIcon size={12} />
             <span className="ed-tab-label">Editor</span>
           </span>
         </span>

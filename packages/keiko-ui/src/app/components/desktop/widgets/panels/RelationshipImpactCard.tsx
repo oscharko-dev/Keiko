@@ -51,10 +51,10 @@ function ImpactDirection({
   report,
   onSelectRelationship,
 }: {
-  title: string;
-  help: string;
-  report: DependencyReport | null;
-  onSelectRelationship: (id: string) => void;
+  readonly title: string;
+  readonly help: string;
+  readonly report: DependencyReport | null;
+  readonly onSelectRelationship: (id: string) => void;
 }): ReactNode {
   if (report === null) {
     return (

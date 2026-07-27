@@ -100,7 +100,7 @@ function totalFindings(f: HealthFindings): number {
 
 // ─── Sub-renderers ─────────────────────────────────────────────────────────────
 
-function TruncationNote({ category }: { category: string }): ReactNode {
+function TruncationNote({ category }: { readonly category: string }): ReactNode {
   return (
     <p
       role="note"
@@ -122,8 +122,8 @@ function RelationshipFindingList({
   category,
   onSelectRelationship,
 }: {
-  category: RelationshipCategory;
-  onSelectRelationship: (id: string) => void;
+  readonly category: RelationshipCategory;
+  readonly onSelectRelationship: (id: string) => void;
 }): ReactNode {
   if (category.items.length === 0) return null;
   const shown = category.items.slice(0, UI_RENDER_CAP);
@@ -180,7 +180,7 @@ function RelationshipFindingList({
   );
 }
 
-function OrphanedEndpointList({ findings }: { findings: HealthFindings }): ReactNode {
+function OrphanedEndpointList({ findings }: { readonly findings: HealthFindings }): ReactNode {
   if (findings.orphanedEndpoints.length === 0) return null;
   const shown = findings.orphanedEndpoints.slice(0, UI_RENDER_CAP);
   return (

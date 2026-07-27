@@ -34,6 +34,11 @@ import {
   summaryFieldStyle,
 } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const PullRequestIcon = Icons.pullRequest;
+const MergeIcon = Icons.merge;
+const CommitIcon = Icons.commit;
+
 const PREVIEW_DEBOUNCE_MS = 400;
 const InfoIcon = Icons.info;
 const CheckIcon = Icons.check;
@@ -102,7 +107,7 @@ function CommitFlowActions({
           onClick={onCreatePullRequest}
         >
           <span style={{ color: "var(--fg-dim)" }}>
-            <Icons.pullRequest size={16} />
+            <PullRequestIcon size={16} />
           </span>
           {t("commitComposer.action.createPullRequest")}
         </button>
@@ -115,7 +120,7 @@ function CommitFlowActions({
           onClick={onMerge}
         >
           <span style={{ color: "var(--fg-dim)" }}>
-            <Icons.merge size={16} />
+            <MergeIcon size={16} />
           </span>
           {t("commitComposer.action.merge")}
         </button>
@@ -219,7 +224,7 @@ export function CommitComposer({
         aria-describedby={hintId}
         onClick={() => onCommit(message)}
       >
-        <Icons.commit size={16} /> {commitLabel}
+        <CommitIcon size={16} /> {commitLabel}
       </button>
       <CommitFlowActions
         hasRepository={hasRepository}

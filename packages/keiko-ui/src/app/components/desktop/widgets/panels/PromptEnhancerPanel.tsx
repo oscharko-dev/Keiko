@@ -28,6 +28,14 @@ import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { humanizeToken } from "../../GroundedAnswer";
 import { buildConnectedRunSources } from "../quality-intelligence/connectedSources";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CheckIcon = Icons.check;
+const InfoIcon = Icons.info;
+const SparkIcon = Icons.spark;
+const LayersIcon = Icons.layers;
+const ResetIcon = Icons.reset;
+const FileIcon = Icons.file;
+
 const PROFILE_VALUES = [
   "auto",
   "fast",
@@ -249,7 +257,7 @@ function ModelRoutingBanner({
       aria-live="polite"
     >
       <span className="pe-routing-icon" aria-hidden="true">
-        {tone === "ok" ? <Icons.check size={14} /> : <Icons.info size={14} />}
+        {tone === "ok" ? <CheckIcon size={14} /> : <InfoIcon size={14} />}
       </span>
       <span>{label}</span>
     </div>
@@ -341,7 +349,7 @@ function GroundingPanel({
         aria-live="polite"
       >
         <span className="pe-routing-icon" aria-hidden="true">
-          <Icons.info size={14} />
+          <InfoIcon size={14} />
         </span>
         <span>{readinessText}</span>
       </div>
@@ -710,7 +718,7 @@ export function PromptEnhancerPanel({
     <div className="pe-panel" data-testid="prompt-enhancer-panel">
       <div className="pe-header" data-testid="pe-header">
         <span className="pe-header-icon" aria-hidden="true">
-          <Icons.spark size={18} />
+          <SparkIcon size={18} />
         </span>
         <div className="pe-header-copy">
           <p className="pe-eyebrow">{t("promptEnhancer.header.eyebrow")}</p>
@@ -812,7 +820,7 @@ export function PromptEnhancerPanel({
             data-testid="pe-grounding-context"
           >
             <span className="pe-routing-icon" aria-hidden="true">
-              <Icons.layers size={14} />
+              <LayersIcon size={14} />
             </span>
             <span>
               <span className="pe-context-label">{t("promptEnhancer.context.title")}</span>
@@ -831,7 +839,7 @@ export function PromptEnhancerPanel({
               className="pe-button pe-button-primary pe-enhance"
               disabled={loading || draftLength === 0}
             >
-              <Icons.spark size={15} />
+              <SparkIcon size={15} />
               <span>
                 {loading
                   ? t("promptEnhancer.action.enhancing")
@@ -845,7 +853,7 @@ export function PromptEnhancerPanel({
               disabled={!hasWorkspaceContent}
               aria-label={t("promptEnhancer.action.clearAriaLabel")}
             >
-              <Icons.reset size={15} />
+              <ResetIcon size={15} />
               <span>{t("promptEnhancer.action.clear")}</span>
             </button>
           </div>
@@ -904,7 +912,7 @@ export function PromptEnhancerPanel({
                   void handleCopy();
                 }}
               >
-                <Icons.file size={15} />
+                <FileIcon size={15} />
                 <span>
                   {copyState === "copying"
                     ? t("promptEnhancer.action.copying")
@@ -932,7 +940,7 @@ export function PromptEnhancerPanel({
         </div>
       ) : (
         <div className="pe-empty-state" aria-label={t("promptEnhancer.empty.ariaLabel")}>
-          <Icons.layers size={18} />
+          <LayersIcon size={18} />
           <span>{t("promptEnhancer.empty.message")}</span>
         </div>
       )}

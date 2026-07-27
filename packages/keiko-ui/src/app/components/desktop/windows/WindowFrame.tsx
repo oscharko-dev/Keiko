@@ -42,6 +42,14 @@ import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import selectionStyles from "../WorkspaceSelection.module.css";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const ZoomOutIcon = Icons.zoomOut;
+const ZoomInIcon = Icons.zoomIn;
+const MinimizeIcon = Icons.minimize;
+const RestoreIcon = Icons.restore;
+const MaximizeIcon = Icons.maximize;
+const CloseIcon = Icons.close;
+
 type CurrentRef<T> = { current: T };
 
 const HANDLES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
@@ -1273,7 +1281,7 @@ function WindowFrameImpl({
                   }}
                   onClick={() => setZoom(zoom - 0.1)}
                 >
-                  <Icons.zoomOut size={13} />
+                  <ZoomOutIcon size={13} />
                 </button>
                 <button
                   type="button"
@@ -1300,7 +1308,7 @@ function WindowFrameImpl({
                   }}
                   onClick={() => setZoom(zoom + 0.1)}
                 >
-                  <Icons.zoomIn size={13} />
+                  <ZoomInIcon size={13} />
                 </button>
               </div>
             ) : null}
@@ -1316,7 +1324,7 @@ function WindowFrameImpl({
                 }}
                 onClick={minimizeWithFocusRestore}
               >
-                <Icons.minimize size={17} />
+                <MinimizeIcon size={17} />
               </button>
               <button
                 type="button"
@@ -1331,7 +1339,7 @@ function WindowFrameImpl({
                 }}
                 onClick={() => api.maximize(win.id)}
               >
-                {win.max ? <Icons.restore size={17} /> : <Icons.maximize size={17} />}
+                {win.max ? <RestoreIcon size={17} /> : <MaximizeIcon size={17} />}
               </button>
               <button
                 type="button"
@@ -1344,7 +1352,7 @@ function WindowFrameImpl({
                 }}
                 onClick={closeWithFocusRestore}
               >
-                <Icons.close size={17} />
+                <CloseIcon size={17} />
               </button>
             </div>
           </header>

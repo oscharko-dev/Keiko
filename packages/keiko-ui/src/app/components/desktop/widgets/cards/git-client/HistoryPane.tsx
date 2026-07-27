@@ -15,6 +15,9 @@ import {
   SUBTLE_TEXT_STYLE,
 } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const ActivityIcon = Icons.activity;
+
 interface HistoryPaneProps {
   readonly history: GitHistoryResponse | null;
   readonly loading: boolean;
@@ -89,7 +92,7 @@ export function HistoryPane({
   if (history === null) {
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
-        <Icons.activity size={20} />
+        <ActivityIcon size={20} />
         <p style={SUBTLE_TEXT_STYLE}>Commit history appears after selecting a repository.</p>
       </div>
     );
@@ -97,7 +100,7 @@ export function HistoryPane({
   if (!history.available) {
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
-        <Icons.activity size={20} />
+        <ActivityIcon size={20} />
         <p style={SUBTLE_TEXT_STYLE}>History is unavailable for this repository.</p>
       </div>
     );
@@ -105,7 +108,7 @@ export function HistoryPane({
   if (entries.length === 0) {
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
-        <Icons.activity size={20} />
+        <ActivityIcon size={20} />
         <p style={SUBTLE_TEXT_STYLE}>No commits yet. Make a commit to start history.</p>
       </div>
     );

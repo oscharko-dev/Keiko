@@ -14,6 +14,9 @@ import {
   disabledStyle,
 } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CloseIcon = Icons.close;
+
 const OVERLAY_STYLE: CSSProperties = {
   position: "fixed",
   inset: 0,
@@ -200,7 +203,7 @@ export function AddRepositoryDialog({
             aria-label="Close"
             title="Close"
           >
-            <Icons.close size={14} />
+            <CloseIcon size={14} />
           </button>
         </div>
 

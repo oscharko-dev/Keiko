@@ -1,6 +1,6 @@
 // Global mutable bus intentionally outside React — Welle 4 AgentRun writes here
 // from outside the React tree, and TimelinePanel subscribes via custom event.
-import { useState, useEffect } from "react";
+import { useReducer, useEffect } from "react";
 
 export interface ActivityEvent {
   type:
@@ -30,9 +30,7 @@ declare global {
 export function logActivity(evt: Omit<ActivityEvent, "time">): void {
   if (typeof window === "undefined") return;
   const item: ActivityEvent = { ...evt, time: Date.now() };
-  if (window[STORE_KEY] === undefined) {
-    window[STORE_KEY] = [];
-  }
+  window[STORE_KEY] ??= [];
   const store = window[STORE_KEY];
   if (store !== undefined) {
     store.unshift(item);
@@ -47,10 +45,10 @@ export function getActivity(): readonly ActivityEvent[] {
 }
 
 export function useActivitySubscription(): readonly ActivityEvent[] {
-  const [, force] = useState(0);
+  const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     const h = (): void => {
-      force((n) => n + 1);
+      forceUpdate();
     };
     window.addEventListener(EVENT_NAME, h);
     return () => {

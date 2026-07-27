@@ -26,6 +26,13 @@ import {
   SUBTLE_TEXT_STYLE,
 } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const FolderIcon = Icons.folder;
+const ChevronRIcon = Icons.chevronR;
+const BranchIcon = Icons.branch;
+const LinkIcon = Icons.link;
+const SparkIcon = Icons.spark;
+
 interface ConnectPanelProps {
   readonly repositories: readonly ProjectWithAvailability[];
   readonly loading: boolean;
@@ -89,7 +96,7 @@ function RecentRepositories({
             onClick={() => onSelect(repo.path)}
           >
             <span aria-hidden="true" style={RECENT_MEDALLION_STYLE}>
-              <Icons.folder size={16} />
+              <FolderIcon size={16} />
             </span>
             <span
               style={{
@@ -106,7 +113,7 @@ function RecentRepositories({
               <span style={MONO_PATH_STYLE}>{repo.path}</span>
             </span>
             <span aria-hidden="true" style={{ color: "var(--fg-faint)" }}>
-              <Icons.chevronR size={15} />
+              <ChevronRIcon size={15} />
             </span>
           </button>
         </li>
@@ -127,7 +134,7 @@ export function ConnectPanel({
     <div style={CONNECT_WRAP_STYLE}>
       <div style={CONNECT_COLUMN_STYLE}>
         <div aria-hidden="true" style={CONNECT_MEDALLION_STYLE}>
-          <Icons.branch size={28} />
+          <BranchIcon size={28} />
         </div>
         <h2 style={CONNECT_TITLE_STYLE}>No repository connected</h2>
         <p style={CONNECT_SUBTITLE_STYLE}>
@@ -137,10 +144,10 @@ export function ConnectPanel({
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 22 }}>
           <button type="button" style={PRIMARY_BTN} onClick={onConnect}>
-            <Icons.folder size={16} /> Connect repository
+            <FolderIcon size={16} /> Connect repository
           </button>
           <button type="button" style={SECONDARY_BTN} onClick={onClone}>
-            <Icons.link size={15} /> Clone from URL
+            <LinkIcon size={15} /> Clone from URL
           </button>
         </div>
 
@@ -159,7 +166,7 @@ export function ConnectPanel({
             aria-hidden="true"
             style={{ display: "inline-flex", color: "var(--accent-text)", marginTop: 1 }}
           >
-            <Icons.spark size={14} />
+            <SparkIcon size={14} />
           </span>
           <span style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.55 }}>
             Once a repository is connected, Keiko can summarize your working changes and draft

@@ -28,6 +28,9 @@ import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const ServerIcon = Icons.server;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ConnectorPickerCfg {
@@ -235,7 +238,7 @@ function KnowledgeConnectorNode({
   return (
     <div className="connector-node" data-testid="knowledge-connector-node">
       <div className="connector-node-icon" aria-hidden="true">
-        <Icons.server size={42} />
+        <ServerIcon size={42} />
       </div>
       <div className="connector-node-copy">
         <p className="connector-node-kicker">{connectorNodeStateLabel(selectedState)}</p>

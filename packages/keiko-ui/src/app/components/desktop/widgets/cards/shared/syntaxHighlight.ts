@@ -148,7 +148,7 @@ function jsonLines(code: string): Token[][] {
         i += sm[0].length;
         continue;
       }
-      const nm = /^-?\d[\d.eE+\-]*/.exec(rest);
+      const nm = /^-?\d[\d.eE+-]*/.exec(rest);
       if (nm !== null) {
         toks.push(["num", nm[0]]);
         i += nm[0].length;

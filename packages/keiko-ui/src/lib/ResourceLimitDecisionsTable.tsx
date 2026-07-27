@@ -11,7 +11,7 @@ import type { AuditResultEntry } from "@/lib/types";
 
 interface Props {
   /** The verification result rows whose appliedLimits will be rendered. */
-  results: AuditResultEntry[];
+  readonly results: AuditResultEntry[];
 }
 
 /**

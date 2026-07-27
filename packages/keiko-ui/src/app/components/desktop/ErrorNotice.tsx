@@ -6,6 +6,9 @@ import { Icons } from "./Icons";
 import { toUserErrorNotice, type UserErrorNotice } from "./format-error";
 import { useTranslate } from "@/lib/i18n";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CloseIcon = Icons.close;
+
 interface ErrorNoticeProps {
   readonly error: unknown;
   readonly fallback: string;
@@ -43,7 +46,7 @@ function ErrorNotice({
             onDismiss?.();
           }}
         >
-          <Icons.close size={14} />
+          <CloseIcon size={14} />
         </button>
       </div>
       <div className="ui-error-notice-message">{notice.message}</div>

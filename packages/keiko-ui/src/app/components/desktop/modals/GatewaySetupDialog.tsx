@@ -22,6 +22,9 @@ import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CubeIcon = Icons.cube;
+
 type FormSubmitEvent = { preventDefault: () => void };
 
 // Human-readable message first; the machine code (useful for support) is kept
@@ -2343,7 +2346,7 @@ export function GatewaySetupDialog({
         <form className="gw-form" onSubmit={(event) => void submit(event)}>
           <div className="gw-head">
             <div className="gw-setup-badge">
-              <Icons.cube size={18} />
+              <CubeIcon size={18} />
               {preserveExisting ? "Credential update" : "Model gateway setup"}
             </div>
             <h1 id="gw-setup-title">{dialogCopy.title}</h1>

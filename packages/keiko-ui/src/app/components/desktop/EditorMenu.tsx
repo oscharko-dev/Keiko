@@ -4,6 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { Icons } from "./Icons";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const FolderIcon = Icons.folder;
+const ChevronIcon = Icons.chevron;
+const CheckIcon = Icons.check;
+
 interface Editor {
   id: string;
   name: string;
@@ -47,8 +52,8 @@ function nextItemIndex(key: string, activeIndex: number, count: number): number 
 }
 
 interface EditorTileProps {
-  ed: Editor;
-  size?: number;
+  readonly ed: Editor;
+  readonly size?: number;
 }
 
 function EditorTile({ ed, size = 20 }: EditorTileProps): ReactNode {
@@ -79,13 +84,13 @@ function EditorTile({ ed, size = 20 }: EditorTileProps): ReactNode {
         background: "linear-gradient(180deg,#36c4ff,#1e7cf0)",
       }}
     >
-      <Icons.folder size={size * 0.56} style={{ color: "#fff" }} />
+      <FolderIcon size={size * 0.56} style={{ color: "#fff" }} />
     </span>
   );
 }
 
 interface EditorMenuProps {
-  project: string;
+  readonly project: string;
 }
 
 export function EditorMenu({ project }: EditorMenuProps): ReactNode {
@@ -169,7 +174,7 @@ export function EditorMenu({ project }: EditorMenuProps): ReactNode {
       >
         <EditorTile ed={current} size={20} />
         <span className="edm-trigger-label">{triggerLabel}</span>
-        <Icons.chevron size={13} style={{ color: "var(--fg-faint)" }} />
+        <ChevronIcon size={13} style={{ color: "var(--fg-faint)" }} />
       </button>
       {open ? (
         <>
@@ -200,7 +205,7 @@ export function EditorMenu({ project }: EditorMenuProps): ReactNode {
                 <EditorTile ed={editor} size={24} />
                 <span className="edm-name">{editor.name}</span>
                 {editor.id === selectedId ? (
-                  <Icons.check size={14} style={{ color: "var(--accent)" }} />
+                  <CheckIcon size={14} style={{ color: "var(--accent)" }} />
                 ) : null}
               </button>
             ))}

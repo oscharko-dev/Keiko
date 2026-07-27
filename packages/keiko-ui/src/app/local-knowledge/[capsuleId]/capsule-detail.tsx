@@ -189,7 +189,13 @@ export function staleChunksTone(health: ContextualRetrievalHealth): "ok" | "warn
 // SectionHeading
 // ---------------------------------------------------------------------------
 
-function SectionHeading({ children, help }: { children: ReactNode; help?: string }): ReactNode {
+function SectionHeading({
+  children,
+  help,
+}: {
+  readonly children: ReactNode;
+  readonly help?: string;
+}): ReactNode {
   return (
     <h2 className="lk-section-head">
       {help === undefined ? children : <Explainable description={help}>{children}</Explainable>}
@@ -219,11 +225,11 @@ function MoreRowsButton({
   noun,
   t,
 }: {
-  hiddenCount: number;
-  showAll: boolean;
-  onToggle: () => void;
-  noun: string;
-  t: I18nTranslate;
+  readonly hiddenCount: number;
+  readonly showAll: boolean;
+  readonly onToggle: () => void;
+  readonly noun: string;
+  readonly t: I18nTranslate;
 }): ReactNode {
   if (!showAll && hiddenCount <= 0) return null;
   return (
@@ -246,11 +252,11 @@ function MetricCard({
   help,
   tone = "neutral",
 }: {
-  label: string;
-  value: ReactNode;
-  meta: ReactNode;
-  help?: string;
-  tone?: "neutral" | "ok" | "warn" | "danger";
+  readonly label: string;
+  readonly value: ReactNode;
+  readonly meta: ReactNode;
+  readonly help?: string;
+  readonly tone?: "neutral" | "ok" | "warn" | "danger";
 }): ReactNode {
   const card = (
     <div className="lkd-metric-card" data-tone={tone}>
@@ -272,9 +278,9 @@ function ProgressBar({
   label,
   tone = "ok",
 }: {
-  value: number;
-  label: string;
-  tone?: "ok" | "warn" | "danger";
+  readonly value: number;
+  readonly label: string;
+  readonly tone?: "ok" | "warn" | "danger";
 }): ReactNode {
   return (
     <div className="lkd-progress" role="img" aria-label={`${label}: ${formatPercent(value)}`}>
@@ -289,10 +295,10 @@ function ProgressRow({
   help,
   tone = "ok",
 }: {
-  label: string;
-  value: number;
-  help: string;
-  tone?: "ok" | "warn" | "danger";
+  readonly label: string;
+  readonly value: number;
+  readonly help: string;
+  readonly tone?: "ok" | "warn" | "danger";
 }): ReactNode {
   return (
     <Explainable as="div" block={true} description={help}>
@@ -413,7 +419,7 @@ function latestJobTone(job: IndexingJobRecord | undefined): "neutral" | "warn" |
   return "neutral";
 }
 
-function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode {
+function IndexingStatusSection({ data }: { readonly data: CapsuleDetailData }): ReactNode {
   const t = useTranslate();
   const job = latestJob(data);
   const total = job?.totalDocuments ?? data.health.documentCount;
@@ -487,7 +493,7 @@ function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode
 // EmbeddingCompatibilitySection
 // ---------------------------------------------------------------------------
 
-function EmbeddingCompatibilitySection({ data }: { data: CapsuleDetailData }): ReactNode {
+function EmbeddingCompatibilitySection({ data }: { readonly data: CapsuleDetailData }): ReactNode {
   const t = useTranslate();
   const compatibility = data.health.embeddingCompatibility;
   const status = compatibilityStatus(data);
@@ -560,9 +566,9 @@ function OverviewRow({
   value,
   help,
 }: {
-  label: string;
-  value: ReactNode;
-  help?: string;
+  readonly label: string;
+  readonly value: ReactNode;
+  readonly help?: string;
 }): ReactNode {
   return (
     <div className="lkd-row">
@@ -574,7 +580,7 @@ function OverviewRow({
   );
 }
 
-function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
+function OverviewSection({ data }: { readonly data: CapsuleDetailData }): ReactNode {
   const t = useTranslate();
   const { capsule, health } = data;
   const embId = capsule.embeddingModelIdentity;
@@ -1109,7 +1115,13 @@ function diagnosticGroups(diagnostics: readonly ParserDiagnostic[]): readonly Di
   return [...groups.values()].sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
 }
 
-function DiagnosticGroupRow({ group, t }: { group: DiagnosticGroup; t: I18nTranslate }): ReactNode {
+function DiagnosticGroupRow({
+  group,
+  t,
+}: {
+  readonly group: DiagnosticGroup;
+  readonly t: I18nTranslate;
+}): ReactNode {
   const severityLabel = diagnosticSeverityLabel(group.severity, t);
   return (
     <li
@@ -1132,7 +1144,13 @@ function DiagnosticGroupRow({ group, t }: { group: DiagnosticGroup; t: I18nTrans
   );
 }
 
-function DiagnosticRow({ diag, t }: { diag: ParserDiagnostic; t: I18nTranslate }): ReactNode {
+function DiagnosticRow({
+  diag,
+  t,
+}: {
+  readonly diag: ParserDiagnostic;
+  readonly t: I18nTranslate;
+}): ReactNode {
   const severityLabel = diagnosticSeverityLabel(diag.severity, t);
   return (
     <li
@@ -1159,7 +1177,7 @@ function DiagnosticRow({ diag, t }: { diag: ParserDiagnostic; t: I18nTranslate }
 function HealthDiagnosticsSection({
   diagnostics,
 }: {
-  diagnostics: readonly ParserDiagnostic[];
+  readonly diagnostics: readonly ParserDiagnostic[];
 }): ReactNode {
   const t = useTranslate();
   const { visibleCount, showAll, setShowAll } = useVisibleRows(diagnostics.length);
@@ -1219,7 +1237,13 @@ function jobStatusLabel(status: IndexingJobStatus, t: I18nTranslate): string {
   return t("localKnowledge.detail.jobs.status.cancelled");
 }
 
-function JobRow({ job, t }: { job: IndexingJobRecord; t: I18nTranslate }): ReactNode {
+function JobRow({
+  job,
+  t,
+}: {
+  readonly job: IndexingJobRecord;
+  readonly t: I18nTranslate;
+}): ReactNode {
   const duration =
     job.finishedAt !== undefined
       ? formatDuration(job.finishedAt - job.startedAt)
@@ -1269,7 +1293,7 @@ function JobRow({ job, t }: { job: IndexingJobRecord; t: I18nTranslate }): React
   );
 }
 
-function IndexingJobsSection({ jobs }: { jobs: readonly IndexingJobRecord[] }): ReactNode {
+function IndexingJobsSection({ jobs }: { readonly jobs: readonly IndexingJobRecord[] }): ReactNode {
   const t = useTranslate();
   const { visibleCount, showAll, setShowAll } = useVisibleRows(jobs.length);
   const visible = jobs.slice(0, visibleCount);
@@ -1335,8 +1359,8 @@ function LargeDocumentRow({
   progress,
   t,
 }: {
-  progress: LargeDocumentJobProgress;
-  t: I18nTranslate;
+  readonly progress: LargeDocumentJobProgress;
+  readonly t: I18nTranslate;
 }): ReactNode {
   return (
     <li className="lkd-source-card" title={t("localKnowledge.detail.help.largeDocumentRow")}>
