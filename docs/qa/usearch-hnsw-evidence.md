@@ -1,7 +1,7 @@
 # USearch HNSW runtime and supply-chain evidence
 
 This body-free record qualifies the native runtime adopted by
-[ADR-0163](../adr/ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md). The executable sources of
+[ADR-0164](../adr/ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md). The executable sources of
 truth are:
 
 - `packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts`;

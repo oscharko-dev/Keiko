@@ -1,4 +1,4 @@
-# ADR-0163 — One bounded in-memory USearch HNSW runtime
+# ADR-0164 — One bounded in-memory USearch HNSW runtime
 
 - Status: Accepted
 - Date: 2026-07-27

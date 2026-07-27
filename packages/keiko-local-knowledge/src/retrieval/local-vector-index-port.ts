@@ -4,7 +4,7 @@
 // Knowledge backing that composes it onto the two namespaces whose vectors live in the LK
 // capsule store. Memory is intentionally excluded from this store adapter because its vectors live
 // in keiko-memory-vault; the server composes those already authorized/decrypted candidates onto the
-// same USearch service through the port's tighten-only candidate allow-list (ADR-0163 D1).
+// same USearch service through the port's tighten-only candidate allow-list (ADR-0164 D1).
 //
 // Both a port implementation and a matching `VectorIndexAdapter` shim are exported here. The
 // port is what pillar-neutral consumers call; the shim is what the LK retrieval path consumes

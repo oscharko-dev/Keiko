@@ -4,7 +4,7 @@
 
 Accepted (maintainer decision, 2026-07-18; recorded by Issue #2565 for Epic #2556 and
 program Epic #2554). D1–D3 are amended by
-[ADR-0163](ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md); the sqlite-vec activation and
+[ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md); the sqlite-vec activation and
 memory-deferral passages below remain as historical activation records, not the current runtime.
 
 ## Related decisions
@@ -127,7 +127,7 @@ receive only `semanticById`; the shared port never becomes a dependency of that 
 > record on D3 for the wiring points and the deferral rationale.
 >
 > **Amended (2026-07-27) by
-> [ADR-0163](ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md).** The port now carries a
+> [ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md).** The port now carries a
 > bounded candidate-id allow-list, which resolves the recorded memory shape mismatch without
 > widening its authorized partition. Knowledge, repository pods, and memory all compose the one
 > shared service; the vault and final ranker remain owners of their existing behavior.
@@ -135,7 +135,7 @@ receive only `semanticById`; the shared port never becomes a dependency of that 
 ### D2 — sqlite-vec remains dormant until its runtime is explicitly and safely configured
 
 > **Mechanism superseded (2026-07-27) by
-> [ADR-0163](ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md).** The paragraphs in D2 record
+> [ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md).** The paragraphs in D2 record
 > the wave's prior sqlite-vec decisions. The current product uses a digest-pinned, portable,
 > in-memory USearch HNSW runtime, never enables SQLite extensions, and has deleted the sqlite-vec
 > provisioner and TEMP-index path. The closed namespaces, fail-closed posture, encryption
@@ -289,7 +289,7 @@ conditions into an empty successful result that suppresses candidates.
 > generate candidates from the vault partition directly.
 >
 > **Superseded (2026-07-27) by
-> [ADR-0163](ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md) D1.** `candidateIds` is the
+> [ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md) D1.** `candidateIds` is the
 > tighten-only port shape anticipated above. Memory passes its already selected, authorized,
 > decrypted candidate IDs through the same service; its vault ownership, signal fusion, weights,
 > MMR, and final ranking remain unchanged. Repository search is now durable-pod-only and the

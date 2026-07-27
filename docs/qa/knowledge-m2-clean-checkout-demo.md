@@ -103,7 +103,7 @@ uses more than 20,000 rows and is the executable proof of actual `searchMode=ann
 recall, latency, and memory bounds. Artificially inflating this clean-checkout corpus would weaken,
 not strengthen, the evidence.
 
-[ADR-0163](../adr/ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md) supersedes Issue #2634's
+[ADR-0164](../adr/ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md) supersedes Issue #2634's
 original sqlite-vec assumption that every non-empty run could honestly call itself ANN. The
 acceptance pair is now explicit: this run proves real clean-checkout composition over real files;
 `npm run check:knowledge-m2-closeout` proves genuine HNSW above the production crossover. Evidence

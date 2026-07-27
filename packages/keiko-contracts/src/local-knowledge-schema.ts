@@ -1554,7 +1554,7 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
     reason:
       "Discard runtime-only vector materialization state written with the collision-prone v1 " +
       "embedding-identity key. Stored encrypted vectors remain intact and the bounded in-memory " +
-      "index is rebuilt on demand with the versioned collision-free v2 key (Epic #2556, ADR-0163).",
+      "index is rebuilt on demand with the versioned collision-free v2 key (Epic #2556, ADR-0164).",
     up: ["DELETE FROM vector_index_state;"],
   },
   {
@@ -1563,7 +1563,7 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "Make vector-index cache invalidation fail closed for every SQLite vector mutation, " +
       "including cascades, retention, encryption migration, and package-internal maintenance. " +
       "Schema-owned triggers dirty the runtime materialization marker so a ready lookup remains " +
-      "constant-time without trusting callers to remember an invalidation side effect (Epic #2556, ADR-0163).",
+      "constant-time without trusting callers to remember an invalidation side effect (Epic #2556, ADR-0164).",
     up: [
       CREATE_VECTORS_INDEX_STATE_INSERT_TRIGGER,
       CREATE_VECTORS_INDEX_STATE_UPDATE_TRIGGER,

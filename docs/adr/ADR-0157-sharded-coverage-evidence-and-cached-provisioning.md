@@ -11,7 +11,7 @@
 - Extends: [ADR-0156](ADR-0156-measurement-and-verdict-separation.md) (D1, the producer/judge
   separation, from performance evidence to coverage evidence)
 - D4 runtime-cache mechanism amended by
-  [ADR-0163](ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md): the retired sqlite-vec cache
+  [ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md): the retired sqlite-vec cache
   is replaced by the digest-pinned USearch cache; re-verification after every restore is unchanged.
 
 ## Context

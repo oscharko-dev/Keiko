@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded by [ADR-0163](ADR-0163-one-bounded-in-memory-usearch-hnsw-runtime.md) (2026-07-27).
+Superseded by [ADR-0164](ADR-0164-one-bounded-in-memory-usearch-hnsw-runtime.md) (2026-07-27).
 This record remains the historical proof that encrypted ANN requires bounded memory and no second
 plaintext copy. Its sqlite-vec TEMP mechanism is retired: the current USearch service exposes no
 persistence API and SQLite extension authority remains denied. Originally accepted for Issue #2630,
