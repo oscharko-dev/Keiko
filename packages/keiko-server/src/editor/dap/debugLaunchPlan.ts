@@ -30,7 +30,7 @@ import {
   type DebugLaunchTarget,
 } from "./debugLaunchCatalog.js";
 import { isSafeDapSocketBasename, isSha256Digest } from "./debugLaunchSecurityPredicates.js";
-import { workspaceRootIdentityDigestFor } from "../../workspace-root-identity.js";
+import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 
 const CAPSULE_ROOT = "/keiko-execution-root" as const;
 const CAPSULE_RUNTIME_ROOT = "/run/keiko-debug" as const;
@@ -261,9 +261,14 @@ function validateWorkspaceIdentity(context: DebugLaunchRuntimeContext): void {
   // what let the two drift apart once the producer was migrated. The alias rejection is
   // deliberately not repeated here: the root was already resolved and alias-checked upstream, and
   // re-imposing it rejects a canonical root reached through a symlinked parent.
-  const workspaceStat = lstatSync(context.canonicalWorkspaceRoot);
+  const workspaceStat = inspectWorkspaceRootIdentity(context.canonicalWorkspaceRoot);
   const workspaceIdentity = context.workspaceIdentity;
-  const observed = [workspaceStat.dev, workspaceStat.ino, workspaceStat.mode, workspaceStat.uid];
+  const observed = [
+    workspaceStat.device,
+    workspaceStat.inode,
+    workspaceStat.mode,
+    workspaceStat.ownerUid,
+  ];
   const expected = [
     workspaceIdentity.device,
     workspaceIdentity.inode,
@@ -275,8 +280,9 @@ function validateWorkspaceIdentity(context: DebugLaunchRuntimeContext): void {
     context.fs.realPath(context.workspaceRoot) !== context.canonicalWorkspaceRoot ||
     workspaceIdentity.realPath !== context.canonicalWorkspaceRoot ||
     observed.some((value, index) => value !== expected[index]) ||
-    workspaceIdentity.identityDigest !==
-      workspaceRootIdentityDigestFor(context.canonicalWorkspaceRoot, workspaceStat);
+    workspaceIdentity.identityDigest !== workspaceStat.identityDigest ||
+    workspaceStat.objectIdentityDigest === undefined ||
+    workspaceIdentity.objectIdentityDigest !== workspaceStat.objectIdentityDigest;
   if (invalid) throw new DebugCapsulePlanError();
 }
 

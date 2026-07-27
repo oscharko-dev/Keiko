@@ -23,6 +23,7 @@ import {
   type VerificationRunInput,
   type VerificationRunnerManager,
   type VerificationRunnerManagerOptions,
+  type VerificationRunnerWorkspaceTrustDecider,
 } from "./verificationRunner.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -174,6 +175,46 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     manager.execute(input({ kinds: ["typecheck"] }));
     await done;
     expect(port.calls).toBe(1);
+  });
+
+  it("revalidates workspace trust after plan derivation and denies drift before a human run", () => {
+    const port = fakePort(report(["typecheck"]));
+    const trust = vi
+      .fn<VerificationRunnerWorkspaceTrustDecider>()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    const manager = makeManager({
+      execute: port.port,
+      isWorkspaceTrustedForPackageScripts: trust,
+    });
+
+    expect(() => manager.execute(input({ kinds: ["typecheck"] }))).toThrow(
+      expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED", status: 403 }),
+    );
+
+    expect(trust).toHaveBeenCalledTimes(2);
+    expect(port.calls).toBe(0);
+    expect(manager.inFlightCount()).toBe(0);
+  });
+
+  it("revalidates workspace trust after plan derivation and denies drift before an agent run", async () => {
+    const port = fakePort(report(["typecheck"]));
+    const trust = vi
+      .fn<VerificationRunnerWorkspaceTrustDecider>()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    const manager = makeManager({
+      execute: port.port,
+      isWorkspaceTrustedForPackageScripts: trust,
+    });
+
+    await expect(
+      manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal),
+    ).rejects.toMatchObject({ code: "WORKSPACE_TRUST_REQUIRED", status: 403 });
+
+    expect(trust).toHaveBeenCalledTimes(2);
+    expect(port.calls).toBe(0);
+    expect(manager.inFlightCount()).toBe(0);
   });
 
   it("does NOT gate targeted-test on workspace trust (parity with post-apply)", async () => {

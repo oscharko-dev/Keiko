@@ -12,10 +12,30 @@ import { errorBody } from "./routes.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "./routes.js";
 import { WorkspaceManifestError, WorkspaceManifestService } from "./workspace-manifests.js";
 import type { WorkspaceManifestMutationResult } from "./workspace-manifests.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 
 const MAX_BODY_BYTES = 65_536;
 
 class InvalidWorkspaceRequest extends Error {}
+
+// Every successful route in this group projects a manifest or binding containing canonical roots.
+// Mutations therefore check the existing launcher-paired read authority before parsing the body or
+// touching membership; the cookie admits disclosure, while the closed dispatch remains the sole
+// routing intent and is revalidated independently before any effect.
+function hasWorkspacePathReadAuthority(ctx: RouteContext, deps: UiHandlerDeps): boolean {
+  return resolveAppSessionReadAuthority(deps, ctx.req) !== undefined;
+}
+
+function unpairedWorkspaceList(): RouteResult {
+  return { status: 200, body: { session: "unpaired", manifests: [] } };
+}
+
+function unpairedWorkspaceRequest(): RouteResult {
+  return {
+    status: 403,
+    body: errorBody("APP_SESSION_REQUIRED", "The local app session is not paired."),
+  };
+}
 
 function errorStatus(error: WorkspaceManifestError): number {
   if (error.code === "WORKSPACE_MANIFEST_UNAVAILABLE") return 404;
@@ -214,7 +234,8 @@ async function applyRootBindingChanges(
   }
 }
 
-export function handleListWorkspaceManifests(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleListWorkspaceManifests(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceList();
   try {
     return { status: 200, body: { manifests: new WorkspaceManifestService(deps.store).list() } };
   } catch (error) {
@@ -223,6 +244,7 @@ export function handleListWorkspaceManifests(_ctx: RouteContext, deps: UiHandler
 }
 
 export function handleGetWorkspaceManifest(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
   try {
     const service = new WorkspaceManifestService(deps.store);
     const manifest = service.get(ctx.params.workspaceId ?? "");
@@ -236,6 +258,7 @@ export async function handleAddWorkspaceRoot(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
   try {
     const body = await readBody(ctx.req, ["dispatch", "projectPath"]);
     const workspaceId = ctx.params.workspaceId ?? "";
@@ -254,6 +277,7 @@ export async function handleRemoveWorkspaceRoot(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
   try {
     const body = await readBody(ctx.req, ["dispatch"]);
     const workspaceId = ctx.params.workspaceId ?? "";
@@ -272,6 +296,7 @@ export async function handleReorderWorkspaceRoots(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
   try {
     const body = await readBody(ctx.req, ["dispatch", "orderedRootRefs"]);
     const workspaceId = ctx.params.workspaceId ?? "";
@@ -290,6 +315,7 @@ export async function handleFocusWorkspaceRoot(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceRequest();
   try {
     const body = await readBody(ctx.req, ["dispatch", "focusedRootRef"]);
     const workspaceId = ctx.params.workspaceId ?? "";

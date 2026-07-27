@@ -40,6 +40,7 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type {
   UiStore,
+  WorkspaceManifestRecordRow,
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
@@ -155,7 +156,12 @@ function workspaceInfoForRoot(root: string): WorkspaceInfo {
  * a coded error keeps that state governed: the routes map it to a typed response instead of letting
  * a bare Error reach the top-level catch as an opaque 500.
  */
-function manifestForCanonicalRoot(store: UiStore, canonicalRoot: string): WorkspaceManifest {
+interface ManifestState {
+  readonly manifest: WorkspaceManifest;
+  readonly row: WorkspaceManifestRecordRow;
+}
+
+function manifestForCanonicalRoot(store: UiStore, canonicalRoot: string): ManifestState {
   const rootRef = deriveWorkspaceRootRef(canonicalRoot);
   const row = store.findWorkspaceManifestRecordByRoot(rootRef);
   if (row === undefined) {
@@ -184,7 +190,7 @@ function manifestForCanonicalRoot(store: UiStore, canonicalRoot: string): Worksp
   ) {
     throw unavailable();
   }
-  return manifest;
+  return { manifest, row };
 }
 
 /**
@@ -196,15 +202,20 @@ function manifestForCanonicalRoot(store: UiStore, canonicalRoot: string): Worksp
  * source before every decision; if the digest no longer matches the persisted record,
  * `invalidatedTrustedRecord` demotes the row deterministically. #2615.
  */
-function currentTrustBinding(
+interface CurrentTrustContext {
+  readonly binding: WorkspaceTrustBinding;
+  readonly objectIdentityMatches: boolean;
+}
+
+function currentTrustContext(
   store: UiStore,
   canonicalRoot: string,
   basis: WorkspaceFact<WorkspaceTrustBasisDigest>,
-): WorkspaceTrustBinding {
-  const manifest = manifestForCanonicalRoot(store, canonicalRoot);
-  let liveIdentityDigest: WorkspaceTrustBinding["rootIdentityDigest"];
+): CurrentTrustContext {
+  const state = manifestForCanonicalRoot(store, canonicalRoot);
+  let liveIdentity: ReturnType<typeof inspectWorkspaceRootIdentity>;
   try {
-    liveIdentityDigest = inspectWorkspaceRootIdentity(canonicalRoot).identityDigest;
+    liveIdentity = inspectWorkspaceRootIdentity(canonicalRoot);
   } catch (cause) {
     // The path was resolvable at resolveCanonicalRoot() but the live identity cannot be read now
     // (removed, replaced with a non-directory, or an alias appeared). This is state-unavailable
@@ -218,7 +229,28 @@ function currentTrustBinding(
       cause,
     );
   }
-  return deriveWorkspaceTrustBinding(canonicalRoot, basis, manifest, liveIdentityDigest);
+  const storedObjectIdentity = state.row.rootProjects.find(
+    (candidate) => candidate.rootRef === liveIdentity.rootRef,
+  )?.objectIdentityDigest;
+  return {
+    binding: deriveWorkspaceTrustBinding(
+      canonicalRoot,
+      basis,
+      state.manifest,
+      liveIdentity.identityDigest,
+    ),
+    objectIdentityMatches:
+      liveIdentity.objectIdentityDigest !== undefined &&
+      liveIdentity.objectIdentityDigest === storedObjectIdentity,
+  };
+}
+
+function requireCurrentObjectIdentity(context: CurrentTrustContext): WorkspaceTrustBinding {
+  if (context.objectIdentityMatches) return context.binding;
+  throw new WorkspaceScriptTrustError(
+    "WORKSPACE_STATE_UNAVAILABLE",
+    "The workspace state for this project is unavailable.",
+  );
 }
 
 // Preserves the pre-#2521 canonicalization and single-root assertion exactly: the project must be
@@ -465,7 +497,9 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
         "The project package manifest is unavailable for script trust.",
       );
     }
-    const binding = currentTrustBinding(this.store, canonicalRoot, basis);
+    const binding = requireCurrentObjectIdentity(
+      currentTrustContext(this.store, canonicalRoot, basis),
+    );
     persistRecord(
       this.store,
       binding,
@@ -479,7 +513,9 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   public readonly revoke = (projectId: string): WorkspaceScriptTrustSnapshot => {
     const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
-    const binding = currentTrustBinding(this.store, canonicalRoot, basis);
+    const binding = requireCurrentObjectIdentity(
+      currentTrustContext(this.store, canonicalRoot, basis),
+    );
     persistRecord(
       this.store,
       binding,
@@ -497,11 +533,11 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     const trusted = this.isTrusted(projectId, workspace);
     let binding: WorkspaceTrustBinding;
     try {
-      binding = currentTrustBinding(
+      binding = currentTrustContext(
         this.store,
         canonicalRoot,
         resolveTrustBasisFact(this.fs, canonicalRoot),
-      );
+      ).binding;
     } catch {
       // Status is a read of governed state, so unreadable workspace state projects as
       // restricted/state-unavailable (ADR-0147 D9) rather than failing the request. Grant and
@@ -522,8 +558,22 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     try {
       const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId, workspace);
       const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
-      const expected = currentTrustBinding(this.store, canonicalRoot, basis);
+      const context = currentTrustContext(this.store, canonicalRoot, basis);
+      const expected = context.binding;
       const assessment = readAssessment(this.store, expected.rootRef);
+      if (!context.objectIdentityMatches) {
+        if (assessment.outcome === "known" && assessment.value.trust === "trusted") {
+          persistRecord(
+            this.store,
+            expected,
+            "restricted",
+            "identity-changed",
+            assessment.value.revision + 1,
+          );
+          this.notifyRestricted(canonicalRoot);
+        }
+        return false;
+      }
       const projectedTrusted = projectCommandTaskTrustState(assessment, expected) === "trusted";
       const invalidated = invalidatedTrustedRecord(assessment, expected, projectedTrusted);
       if (invalidated !== undefined) {

@@ -99,15 +99,13 @@ describe("redeemCodingAppSessionPairingFragment (#2478)", () => {
 });
 
 describe("boot pairing ordering (#2478, Qodo #2514 finding 3)", () => {
-  it("settles immediately when no boot redemption was started", async () => {
-    await expect(codingAppSessionPairingSettled()).resolves.toBe(false);
-  });
-
-  it("runs the boot redemption single-flight and orders settled() behind it", async () => {
+  it("starts the boot redemption from settled() and keeps it single-flight", async () => {
     // jsdom location carries no pairing fragment, so the boot attempt resolves false without
     // posting — the point here is identity (single flight) and settled() joining that promise.
+    const settled = codingAppSessionPairingSettled();
     const first = redeemCodingAppSessionPairingOnBoot();
     const second = redeemCodingAppSessionPairingOnBoot();
+    expect(settled).toBe(first);
     expect(second).toBe(first);
     expect(codingAppSessionPairingSettled()).toBe(first);
     await expect(first).resolves.toBe(false);

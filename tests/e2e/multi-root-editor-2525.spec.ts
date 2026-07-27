@@ -8,6 +8,7 @@ import {
   firstPane,
   typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -26,7 +27,8 @@ async function seedFilesWindow(page: Page, root: string): Promise<void> {
     ({ key, projectRoot }) => {
       window.localStorage.setItem("keiko.theme", "dark");
       window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-      if (window.localStorage.getItem(key) !== null) return;
+      const seededKey = `${key}.issue-2525-seeded`;
+      if (window.sessionStorage.getItem(seededKey) === "1") return;
       window.localStorage.setItem(
         key,
         JSON.stringify([
@@ -54,6 +56,7 @@ async function seedFilesWindow(page: Page, root: string): Promise<void> {
           },
         ]),
       );
+      window.sessionStorage.setItem(seededKey, "1");
     },
     { key: WORKSPACE_KEY, projectRoot: root },
   );
@@ -104,7 +107,7 @@ async function addSecondRoot(page: Page, actorRoot: string, projectPath: string)
 }
 
 async function openFileFromRoot(page: Page, group: Locator, path: string): Promise<void> {
-  await group.locator(`button.tr-file[data-path=${JSON.stringify(path)}]`).click();
+  await group.locator(`[role="treeitem"].tr-file[data-path=${JSON.stringify(path)}]`).click();
   await group.getByRole("button", { name: "Open in editor" }).click();
   await expect(page.locator(`${EDITOR_SELECTORS.workspace}:visible`)).toHaveCount(1);
 }
@@ -129,10 +132,11 @@ async function storedWorkspace(page: Page): Promise<string> {
 }
 
 async function revokeRootTrust(page: Page, root: Locator, projectName: string): Promise<void> {
+  const revokeButton = page.getByRole("button", { name: "Revoke", exact: true });
   const trustCard = page
     .getByTestId("workspace-trust-panel")
     .getByTestId("workspace-trust-root")
-    .filter({ hasText: projectName });
+    .filter({ hasText: projectName, has: revokeButton });
   await expect(trustCard).toBeVisible();
   const response = page.waitForResponse(
     (candidate) =>
@@ -173,6 +177,11 @@ function createMultiRootFixtures(): readonly [
   ];
 }
 
+async function pairAppSession(page: Page): Promise<void> {
+  await page.goto(`/${editorM11PairingFragment("2525")}`);
+  await expect.poll(() => page.url()).not.toContain("keiko-app-session");
+}
+
 test.afterEach(() => {
   cleanupEditorWorkspaces();
 });
@@ -181,6 +190,7 @@ test("two roots retain independent editor and trust state through focused-root c
   page,
 }) => {
   const [a, b] = createMultiRootFixtures();
+  await pairAppSession(page);
   await registerProject(page, a.root, "Multi-root A");
   await registerProject(page, b.root, "Multi-root B");
   await addSecondRoot(page, a.root, b.root);
@@ -214,7 +224,7 @@ test("two roots retain independent editor and trust state through focused-root c
   const trustPrompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
   await expect(trustPrompt).toBeVisible();
   await trustPrompt.getByRole("button", { name: "Stay restricted" }).click();
-  await editor.locator('button.tr-file[data-path="b.txt"]').click();
+  await editor.locator('[role="treeitem"].tr-file[data-path="b.txt"]').click();
   await expect(rootB).toHaveAttribute("aria-selected", "true");
   await expect(editor).toContainText("b.txt");
   await expect.poll(() => storedWorkspace(page)).toContain("b.txt");

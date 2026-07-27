@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+  type Stats,
+} from "node:fs";
 import { join, relative, resolve } from "node:path";
 import {
   createShardedLocalSecretVault,
@@ -47,6 +55,9 @@ const HISTORY_KEY_ENV = "KEIKO_EDITOR_LOCAL_HISTORY_KEY";
 const HISTORY_KEYCHAIN_SERVICE = "keiko-editor-local-history-vault";
 const PAYLOAD_KIND = "editor-local-history-payload";
 const PAYLOAD_SCHEMA_VERSION = 1 as const;
+const PRIVATE_INDEX_KIND = "local-history-private-index";
+const PRIVATE_INDEX_SCHEMA_VERSION = 1 as const;
+export const EDITOR_LOCAL_HISTORY_INDEX_MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_COALESCE_MS = 1_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -79,6 +90,7 @@ export interface EditorLocalHistoryCaptureInput {
   readonly workspaceId: string;
   readonly rootRef: WorkspaceRootRef;
   readonly rootIdentityDigest: WorkspaceRootIdentityDigest;
+  readonly objectIdentityDigest: string;
   readonly realRoot: string;
   readonly relativePath: string;
   readonly absolutePath: string;
@@ -102,6 +114,7 @@ export interface EditorLocalHistoryRootScope {
   readonly workspaceId: string;
   readonly rootRef: WorkspaceRootRef;
   readonly rootIdentityDigest: WorkspaceRootIdentityDigest;
+  readonly objectIdentityDigest: string;
 }
 
 export interface EditorLocalHistoryStore {
@@ -164,7 +177,23 @@ type HistoryPayloadBase = Omit<HistoryPayload, "payloadBindingDigest" | "content
 interface WorkspaceState {
   readonly indexPath: string;
   readonly vault: LocalSecretVault;
+  readonly objectIdentityDigest: string;
   index: EditorLocalHistoryIndex;
+}
+
+// The object binding stays outside the public contract and encrypted payload. This lets a matching
+// legacy index acquire durable filesystem-object authority without rewriting or resealing any
+// checkpoint body; the contract index schema remains unchanged inside this private envelope.
+interface PrivateHistoryIndexDocument {
+  readonly kind: typeof PRIVATE_INDEX_KIND;
+  readonly schemaVersion: typeof PRIVATE_INDEX_SCHEMA_VERSION;
+  readonly objectIdentityDigest: string;
+  readonly index: unknown;
+}
+
+interface LoadedHistoryIndex {
+  readonly index: EditorLocalHistoryIndex;
+  readonly legacy: boolean;
 }
 
 export interface CreateEditorLocalHistoryStoreOptions {
@@ -262,26 +291,170 @@ function emptyIndex(workspaceId: string): EditorLocalHistoryIndex {
   };
 }
 
-function readIndex(path: string, workspaceId: string): EditorLocalHistoryIndex {
-  assertNoSymlinkedPathSegments(path);
-  if (!existsSync(path)) return emptyIndex(workspaceId);
-  let parsed: unknown;
+function unavailableIndex(detail?: string): never {
+  throw new EditorLocalHistoryError(
+    "INDEX_UNAVAILABLE",
+    "Local-history index is unavailable.",
+    detail,
+  );
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function checkedIndexFile(path: string): Stats | undefined {
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    assertNoSymlinkedPathSegments(path);
+    const stats = lstatSync(path);
+    if (stats.isSymbolicLink() || !stats.isFile()) {
+      return unavailableIndex("INDEX_FILE_INVALID");
+    }
+    if (stats.size > EDITOR_LOCAL_HISTORY_INDEX_MAX_BYTES) {
+      return unavailableIndex("INDEX_TOO_LARGE");
+    }
+    return stats;
+  } catch (error) {
+    if (error instanceof EditorLocalHistoryError) throw error;
+    if (isMissingFile(error)) return undefined;
+    return unavailableIndex("INDEX_FILE_INVALID");
+  }
+}
+
+function readStableIndexText(file: number, expectedSize: number): string {
+  const buffer = Buffer.allocUnsafe(expectedSize + 1);
+  let offset = 0;
+  while (offset < buffer.length) {
+    const bytesRead = readSync(file, buffer, offset, buffer.length - offset, null);
+    if (bytesRead === 0) break;
+    offset += bytesRead;
+  }
+  if (offset > EDITOR_LOCAL_HISTORY_INDEX_MAX_BYTES) {
+    return unavailableIndex("INDEX_TOO_LARGE");
+  }
+  if (offset !== expectedSize) return unavailableIndex("INDEX_FILE_INVALID");
+  return buffer.toString("utf8", 0, offset);
+}
+
+function indexFileIdentityIsStable(expected: Stats, opened: Stats, current: Stats): boolean {
+  return [
+    opened.isFile(),
+    current.isFile(),
+    !current.isSymbolicLink(),
+    opened.dev === expected.dev,
+    opened.ino === expected.ino,
+    current.dev === opened.dev,
+    current.ino === opened.ino,
+  ].every(Boolean);
+}
+
+function closeIndexFile(file: number): void {
+  try {
+    closeSync(file);
   } catch {
-    throw new EditorLocalHistoryError("INDEX_UNAVAILABLE", "Local-history index is unavailable.");
+    unavailableIndex("INDEX_FILE_INVALID");
   }
-  if (!validateEditorLocalHistoryIndex(parsed).ok) {
-    throw new EditorLocalHistoryError("INDEX_UNAVAILABLE", "Local-history index is unavailable.");
+}
+
+function readCheckedIndexText(path: string, expected: Stats): string {
+  let file: number | undefined;
+  try {
+    file = openSync(path, "r");
+    const opened = fstatSync(file);
+    const current = lstatSync(path);
+    if (!indexFileIdentityIsStable(expected, opened, current)) {
+      return unavailableIndex("INDEX_FILE_INVALID");
+    }
+    if (opened.size > EDITOR_LOCAL_HISTORY_INDEX_MAX_BYTES) {
+      return unavailableIndex("INDEX_TOO_LARGE");
+    }
+    return readStableIndexText(file, opened.size);
+  } catch (error) {
+    if (error instanceof EditorLocalHistoryError) throw error;
+    return unavailableIndex("INDEX_FILE_INVALID");
+  } finally {
+    if (file !== undefined) closeIndexFile(file);
   }
-  const index = parsed as EditorLocalHistoryIndex;
+}
+
+function parseIndexJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return unavailableIndex();
+  }
+}
+
+function isObjectIdentityDigest(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+}
+
+function privateIndexDocument(value: unknown): value is PrivateHistoryIndexDocument {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  return (
+    Object.keys(record).length === 4 &&
+    record.kind === PRIVATE_INDEX_KIND &&
+    record.schemaVersion === PRIVATE_INDEX_SCHEMA_VERSION &&
+    isObjectIdentityDigest(record.objectIdentityDigest) &&
+    "index" in record
+  );
+}
+
+function validatedIndex(value: unknown, workspaceId: string): EditorLocalHistoryIndex {
+  if (!validateEditorLocalHistoryIndex(value).ok) return unavailableIndex();
+  const index = value as EditorLocalHistoryIndex;
   const pathsMatchDigests = index.entries.every(
     (entry): boolean => pathDigest(entry.relativePath) === entry.relativePathDigest,
   );
-  if (index.workspaceId !== workspaceId || !pathsMatchDigests) {
-    throw new EditorLocalHistoryError("INDEX_UNAVAILABLE", "Local-history index is unavailable.");
-  }
+  if (index.workspaceId !== workspaceId || !pathsMatchDigests) return unavailableIndex();
   return index;
+}
+
+function indexMatchesScope(
+  index: EditorLocalHistoryIndex,
+  scope: EditorLocalHistoryRootScope,
+): boolean {
+  return index.entries.every(
+    (entry): boolean =>
+      entry.rootRef === scope.rootRef && entry.rootIdentityDigest === scope.rootIdentityDigest,
+  );
+}
+
+function readIndex(path: string, scope: EditorLocalHistoryRootScope): LoadedHistoryIndex {
+  const indexFile = checkedIndexFile(path);
+  if (indexFile === undefined) {
+    return { index: emptyIndex(scope.workspaceId), legacy: false };
+  }
+  const parsed = parseIndexJson(readCheckedIndexText(path, indexFile));
+  if (privateIndexDocument(parsed)) {
+    if (parsed.objectIdentityDigest !== scope.objectIdentityDigest) {
+      return unavailableIndex("ROOT_OBJECT_IDENTITY_DRIFT");
+    }
+    const index = validatedIndex(parsed.index, scope.workspaceId);
+    if (!indexMatchesScope(index, scope)) return unavailableIndex("ROOT_IDENTITY_MISMATCH");
+    return { index, legacy: false };
+  }
+  // A raw contract index predates the private envelope. Its entries are the only persisted public
+  // root binding available, so adoption is allowed only while every retained entry still agrees
+  // with the currently authorized root.
+  const legacy = validatedIndex(parsed, scope.workspaceId);
+  if (!indexMatchesScope(legacy, scope)) {
+    return unavailableIndex("LEGACY_ROOT_IDENTITY_MISMATCH");
+  }
+  return { index: legacy, legacy: true };
+}
+
+function privateIndexValue(
+  objectIdentityDigest: string,
+  index: EditorLocalHistoryIndex,
+): Record<string, unknown> {
+  return {
+    kind: PRIVATE_INDEX_KIND,
+    schemaVersion: PRIVATE_INDEX_SCHEMA_VERSION,
+    objectIdentityDigest,
+    index,
+  };
 }
 
 function createVault(options: CreateEditorLocalHistoryStoreOptions, dir: string): LocalSecretVault {
@@ -684,22 +857,35 @@ export function createEditorLocalHistoryStore(
   const limits = defaultLimits(options.limits);
   const save = options.saveIndex ?? savePrivateJson;
 
-  const stateFor = (workspaceId: string): WorkspaceState => {
-    const cached = states.get(workspaceId);
-    if (cached !== undefined) return cached;
-    const dir = workspaceDirectory(rootDir, workspaceId);
+  const stateFor = (scope: EditorLocalHistoryRootScope): WorkspaceState => {
+    if (!isObjectIdentityDigest(scope.objectIdentityDigest)) {
+      return unavailableIndex("ROOT_OBJECT_IDENTITY_INVALID");
+    }
+    const cached = states.get(scope.workspaceId);
+    if (cached !== undefined) {
+      if (cached.objectIdentityDigest !== scope.objectIdentityDigest) {
+        return unavailableIndex("ROOT_OBJECT_IDENTITY_DRIFT");
+      }
+      return cached;
+    }
+    const dir = workspaceDirectory(rootDir, scope.workspaceId);
     const indexPath = join(dir, HISTORY_INDEX_FILE);
-    const state = {
+    const loaded = readIndex(indexPath, scope);
+    const state: WorkspaceState = {
       indexPath,
       vault: createVault(options, dir),
-      index: readIndex(indexPath, workspaceId),
+      objectIdentityDigest: scope.objectIdentityDigest,
+      index: loaded.index,
     };
-    states.set(workspaceId, state);
+    if (loaded.legacy) {
+      save(indexPath, privateIndexValue(state.objectIdentityDigest, state.index));
+    }
+    states.set(scope.workspaceId, state);
     return state;
   };
 
   const persist = (state: WorkspaceState, index: EditorLocalHistoryIndex): void => {
-    save(state.indexPath, index as unknown as Record<string, unknown>);
+    save(state.indexPath, privateIndexValue(state.objectIdentityDigest, index));
     state.index = index;
   };
 
@@ -770,7 +956,7 @@ export function createEditorLocalHistoryStore(
       if (!Number.isFinite(nowMs)) {
         throw new EditorLocalHistoryError("INVALID_CAPTURE", "Local-history capture is invalid.");
       }
-      const state = stateFor(input.workspaceId);
+      const state = stateFor(input);
       pruneExpired(state, nowMs);
       const built = buildCheckpoint(input, state.index.entries, nowMs);
       const coalesced = coalescedEntry(state.index.entries, built.entry, nowMs, limits.coalesceMs);
@@ -805,7 +991,7 @@ export function createEditorLocalHistoryStore(
     },
 
     list(scope, relativePath, nowMs = Date.now()): readonly EditorLocalHistoryEntry[] {
-      const state = stateFor(scope.workspaceId);
+      const state = stateFor(scope);
       pruneExpired(state, nowMs);
       const digestFilter = relativePath === undefined ? undefined : pathDigest(relativePath);
       return state.index.entries
@@ -821,13 +1007,13 @@ export function createEditorLocalHistoryStore(
     },
 
     entry(scope, entryRef, nowMs = Date.now()): EditorLocalHistoryEntry {
-      const state = stateFor(scope.workspaceId);
+      const state = stateFor(scope);
       pruneExpired(state, nowMs);
       return requireEntry(state, scope, entryRef);
     },
 
     read(scope, entryRef, nowMs = Date.now()): EditorLocalHistoryReadResult {
-      const state = stateFor(scope.workspaceId);
+      const state = stateFor(scope);
       pruneExpired(state, nowMs);
       const entry = requireEntry(state, scope, entryRef);
       let payload: HistoryPayload;
@@ -850,7 +1036,7 @@ export function createEditorLocalHistoryStore(
     },
 
     setPinned(scope, entryRef, pinned, nowMs = Date.now()): EditorLocalHistoryEntry {
-      const state = stateFor(scope.workspaceId);
+      const state = stateFor(scope);
       pruneExpired(state, nowMs);
       const entry = requireEntry(state, scope, entryRef);
       const pinnedBytes = state.index.entries.reduce(
@@ -878,7 +1064,7 @@ export function createEditorLocalHistoryStore(
     },
 
     delete(scope, entryRef): void {
-      const state = stateFor(scope.workspaceId);
+      const state = stateFor(scope);
       requireEntry(state, scope, entryRef);
       const entries = state.index.entries.filter(
         (candidate): boolean => candidate.entryRef !== entryRef,

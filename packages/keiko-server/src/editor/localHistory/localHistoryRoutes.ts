@@ -73,6 +73,7 @@ async function rootScope(
     workspaceId: identity.workspaceId,
     rootRef: identity.rootRef,
     rootIdentityDigest: identity.rootIdentityDigest,
+    objectIdentityDigest: identity.objectIdentityDigest,
   };
 }
 
@@ -93,20 +94,57 @@ async function fileScope(
   return { scope: await rootScope(deps, file.realRoot), relativePath: file.relativePath };
 }
 
+function scopeMatches(
+  expected: EditorLocalHistoryRootScope,
+  actual: EditorLocalHistoryRootScope,
+): boolean {
+  return (
+    expected.workspaceId === actual.workspaceId &&
+    expected.rootRef === actual.rootRef &&
+    expected.rootIdentityDigest === actual.rootIdentityDigest &&
+    expected.objectIdentityDigest === actual.objectIdentityDigest
+  );
+}
+
+function staleEntryAuthorization(): never {
+  throw new EditorLocalHistoryError(
+    "INVALID_CAPTURE",
+    "Local-history workspace is unavailable.",
+    "IDENTITY_DRIFT",
+  );
+}
+
 async function authorizedEntry(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<{
   readonly scope: EditorLocalHistoryRootScope;
   readonly entry: EditorLocalHistoryEntry;
+  readonly realRoot: string;
   readonly store: EditorLocalHistoryStore;
 }> {
   const rootInput = ctx.url.searchParams.get("root");
   const scope = await rootScope(deps, rootInput);
   const store = historyStore(deps);
   const entry = store.entry(scope, ctx.params.entryRef ?? "");
-  await resolveContainedEditorFilePath(deps.store, rootInput, entry.relativePath, deps.redactor);
-  return { scope, entry, store };
+  const contained = await resolveContainedEditorFilePath(
+    deps.store,
+    rootInput,
+    entry.relativePath,
+    deps.redactor,
+  );
+  const current = resolveEditorLocalHistoryRoot(deps, contained.realRoot);
+  if (!scopeMatches(scope, current)) return staleEntryAuthorization();
+  return { scope, entry, realRoot: contained.realRoot, store };
+}
+
+function revalidateEffectRoot(
+  deps: UiHandlerDeps,
+  realRoot: string,
+  expected: EditorLocalHistoryRootScope,
+): void {
+  const current = resolveEditorLocalHistoryRoot(deps, realRoot);
+  if (!scopeMatches(expected, current)) staleEntryAuthorization();
 }
 
 export async function handleListEditorLocalHistory(
@@ -139,6 +177,7 @@ export async function handleReadEditorLocalHistory(
   return runHistoryRoute(async () => {
     if (!hasReadAuthority(ctx, deps)) return unpairedEntry();
     const authorized = await authorizedEntry(ctx, deps);
+    revalidateEffectRoot(deps, authorized.realRoot, authorized.scope);
     return {
       status: 200,
       body: authorized.store.read(authorized.scope, authorized.entry.entryRef),
@@ -162,6 +201,7 @@ export async function handlePinEditorLocalHistory(
       return { status: 400, body: errorBody("BAD_REQUEST", "pinned is required.") };
     }
     const authorized = await authorizedEntry(ctx, deps);
+    revalidateEffectRoot(deps, authorized.realRoot, authorized.scope);
     const entry = authorized.store.setPinned(
       authorized.scope,
       authorized.entry.entryRef,
@@ -178,6 +218,7 @@ export async function handleDeleteEditorLocalHistory(
   return runHistoryRoute(async () => {
     if (!hasReadAuthority(ctx, deps)) return unpairedEntry();
     const authorized = await authorizedEntry(ctx, deps);
+    revalidateEffectRoot(deps, authorized.realRoot, authorized.scope);
     authorized.store.delete(authorized.scope, authorized.entry.entryRef);
     return { status: 200, body: { deleted: true } };
   });

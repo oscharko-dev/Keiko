@@ -7,6 +7,7 @@ import {
   APP_SESSION_GIT_COOKIE_PATH,
   APP_SESSION_COOKIE_NAME,
   APP_SESSION_RUNTIME_COOKIE_PATH,
+  APP_SESSION_WORKSPACES_COOKIE_PATH,
   clearSessionCookie,
   clearSessionCookies,
   readSessionCookie,
@@ -43,25 +44,26 @@ describe("serializeSessionCookie", () => {
   it("issues the bearer only on protected coding-session route families", () => {
     const cookies = serializeSessionCookies("t", { secure: false, maxAgeSeconds: 10 });
 
-    expect(cookies).toHaveLength(7);
+    expect(cookies).toHaveLength(8);
     expect(cookies[0]).toContain("Path=/api/coding-workbench;");
     expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
     expect(cookies[2]).toContain(`Path=${APP_SESSION_FILES_COOKIE_PATH};`);
     expect(cookies[3]).toContain(`Path=${APP_SESSION_EDITOR_COOKIE_PATH};`);
     expect(cookies[4]).toContain(`Path=${APP_SESSION_RUNTIME_COOKIE_PATH};`);
+    expect(cookies[5]).toContain(`Path=${APP_SESSION_WORKSPACES_COOKIE_PATH};`);
     // The predecessor broad-path bearer is expired on issuance: a browser that paired before the
     // narrowing holds the SAME cookie name at Path=/api and would keep sending it to unrelated
     // /api routes until it lapsed on its own.
-    expect(cookies[5]).toContain("Path=/api/editor/local-history;");
-    expect(cookies[5]).toContain("Max-Age=0");
-    expect(cookies[6]).toContain("Path=/api;");
+    expect(cookies[6]).toContain("Path=/api/editor/local-history;");
     expect(cookies[6]).toContain("Max-Age=0");
+    expect(cookies[7]).toContain("Path=/api;");
+    expect(cookies[7]).toContain("Max-Age=0");
     // Only the final expiring projection may carry the broad path; no live bearer does.
     expect(cookies.slice(0, -1).every((cookie) => !cookie.includes("Path=/api;"))).toBe(true);
   });
 
-  // Structural pin (#2627 W2-15): the by-index assertions above catch the four cookies this
-  // release ships, but a future edit that reorders indices — or that adds a FIFTH projection at
+  // Structural pin (#2627 W2-15): the by-index assertions above catch the current narrow
+  // projections, but a future edit that reorders indices — or adds another projection at
   // `Path=/api` with a live Max-Age — could re-widen the bearer scope while every index assertion
   // still passed. The Wave-2 pre-merge audit flagged a prior iteration of this very pin that had
   // been rewritten to accept a `Path=/api` widening under a false ADR-0147 D7 attribution; the
@@ -112,15 +114,16 @@ describe("clearSessionCookie", () => {
   it("expires every route-family projection", () => {
     const cookies = clearSessionCookies(false);
 
-    expect(cookies).toHaveLength(7);
+    expect(cookies).toHaveLength(8);
     expect(cookies.every((cookie) => cookie.includes("Max-Age=0"))).toBe(true);
     expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
     expect(cookies[2]).toContain(`Path=${APP_SESSION_FILES_COOKIE_PATH};`);
     expect(cookies[3]).toContain(`Path=${APP_SESSION_EDITOR_COOKIE_PATH};`);
     expect(cookies[4]).toContain(`Path=${APP_SESSION_RUNTIME_COOKIE_PATH};`);
-    expect(cookies[5]).toContain("Path=/api/editor/local-history;");
+    expect(cookies[5]).toContain(`Path=${APP_SESSION_WORKSPACES_COOKIE_PATH};`);
+    expect(cookies[6]).toContain("Path=/api/editor/local-history;");
     // Sign-out must also remove the predecessor broad-path bearer, not just the narrow ones.
-    expect(cookies[6]).toContain("Path=/api;");
+    expect(cookies[7]).toContain("Path=/api;");
   });
 });
 

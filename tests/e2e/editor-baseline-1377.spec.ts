@@ -139,14 +139,20 @@ async function openSeededEditor(
   } = {},
 ): Promise<Locator> {
   const { root } = createEditorWorkspace(WORKSPACE_FILES);
+  const openFiles = options.openFiles ?? OPEN_FILES;
   await seedEditorWindow(page, {
     root,
-    openFiles: options.openFiles ?? OPEN_FILES,
+    openFiles,
     active: options.active === undefined ? APP_FILE : options.active,
     resetWorkspace: true,
+    maximized: true,
   });
   await page.goto("/");
-  return openEditorWorkspace(page);
+  const workspace = await openEditorWorkspace(page);
+  await expect(firstPane(workspace).locator(EDITOR_SELECTORS.tabLabel)).toHaveCount(
+    openFiles.length,
+  );
+  return workspace;
 }
 
 async function openNavigationEditor(
@@ -182,6 +188,19 @@ function occurrenceOffset(text: string, needle: string, occurrence: number): num
     from = found + needle.length;
   }
   return -1;
+}
+
+function modelLineContaining(needle: string): string {
+  const matches = WORKSPACE_FILES.flatMap((file) =>
+    file.content.split("\n").filter((line) => line.includes(needle)),
+  );
+  const match = matches[0];
+  if (match === undefined || matches.length !== 1) {
+    throw new Error(
+      `expected one model line containing ${needle}, received ${String(matches.length)}`,
+    );
+  }
+  return match;
 }
 
 async function monacoClickPoint(line: Locator, textOffset: number): Promise<MonacoClickPoint> {
@@ -251,16 +270,22 @@ async function placeCursorOnSymbol(
   });
 }
 
-async function moveCursorFromLineStart(page: Page, line: Locator, offset: number): Promise<void> {
-  const startPoint = await line.evaluate((element) => ({
-    x: 2,
-    y: element.getBoundingClientRect().height / 2,
-  }));
-  await line.click({ position: startPoint });
-  await page.keyboard.press("Home");
-  for (let index = 0; index < offset; index += 1) {
-    await page.keyboard.press("ArrowRight");
-  }
+async function moveCursorToModelPosition(
+  page: Page,
+  pane: Locator,
+  lineNumber: number,
+  column: number,
+): Promise<void> {
+  await pane.locator(EDITOR_SELECTORS.monaco).first().click();
+  await page.keyboard.press("Control+G");
+  const lineInput = page.locator(".quick-input-widget input").first();
+  await expect(lineInput).toBeVisible();
+  await lineInput.fill(`:${String(lineNumber)}:${String(column)}`);
+  await page.keyboard.press("Enter");
+  await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="cursor"]`)).toHaveAttribute(
+    "aria-label",
+    `Line ${String(lineNumber)}, column ${String(column)}`,
+  );
 }
 
 async function placeCursorOnSymbolWithKeyboard(
@@ -271,13 +296,9 @@ async function placeCursorOnSymbolWithKeyboard(
   lineNumber: number,
   options: { readonly exactColumn?: boolean } = {},
 ): Promise<void> {
-  const line = pane
-    .locator(".monaco-editor .view-lines .view-line")
-    .filter({ hasText: lineNeedle })
-    .first();
-  await revealLine(pane, line);
-  const offset = occurrenceOffset(await lineText(line), symbol, 0) + Math.floor(symbol.length / 2);
-  await moveCursorFromLineStart(page, line, offset);
+  const offset =
+    occurrenceOffset(modelLineContaining(lineNeedle), symbol, 0) + Math.floor(symbol.length / 2);
+  await moveCursorToModelPosition(page, pane, lineNumber, offset + 1);
   const expectedLabel =
     options.exactColumn === false
       ? new RegExp(`^Line ${String(lineNumber)}, column \\d+$`, "u")
@@ -295,17 +316,8 @@ async function placeCursorAfterSymbolWithKeyboard(
   symbol: string,
   lineNumber: number,
 ): Promise<void> {
-  const line = pane
-    .locator(".monaco-editor .view-lines .view-line")
-    .filter({ hasText: lineNeedle })
-    .first();
-  await revealLine(pane, line);
-  const offset = occurrenceOffset(await lineText(line), symbol, 0) + symbol.length;
-  await moveCursorFromLineStart(page, line, offset);
-  await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="cursor"]`)).toHaveAttribute(
-    "aria-label",
-    `Line ${String(lineNumber)}, column ${String(offset + 1)}`,
-  );
+  const offset = occurrenceOffset(modelLineContaining(lineNeedle), symbol, 0) + symbol.length;
+  await moveCursorToModelPosition(page, pane, lineNumber, offset + 1);
 }
 
 async function triggerRename(page: Page, pane: Locator, nextName: string): Promise<void> {

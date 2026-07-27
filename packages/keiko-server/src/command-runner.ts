@@ -345,6 +345,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     if (this.runs.size >= MAX_CONCURRENT_RUNS) {
       throw new CommandRunnerError("RUN_LIMIT_EXCEEDED", "Too many in-flight command runs.");
     }
+    this.assertWorkspaceTrustAtEffect(input.projectId, workspace);
     return this.runExecution(task, workspace, input);
   };
 
@@ -358,6 +359,14 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     } catch {
       return false;
     }
+  }
+
+  private assertWorkspaceTrustAtEffect(projectId: string, workspace: WorkspaceInfo): void {
+    if (this.workspaceTrustedForPackageScripts(projectId, workspace)) return;
+    throw new CommandRunnerError(
+      "TASK_REQUIRES_TRUST",
+      "Repository package scripts require server-side workspace trust before execution.",
+    );
   }
 
   private resolveWorkspace(projectId: string): WorkspaceInfo {

@@ -321,9 +321,11 @@ export function inspectDebugWorkspaceIdentity(path: string): DebugWorkspaceIdent
   } catch {
     throw new Error("INVALID_DEBUG_WORKSPACE");
   }
+  if (inspected.objectIdentityDigest === undefined) throw new Error("INVALID_DEBUG_WORKSPACE");
   return Object.freeze({
     realPath: inspected.canonicalRoot,
     identityDigest: inspected.identityDigest,
+    objectIdentityDigest: inspected.objectIdentityDigest,
     device: inspected.device,
     inode: inspected.inode,
     mode: inspected.mode,
@@ -341,7 +343,8 @@ function workspaceIdentityMatches(
     observed.inode === expected.inode &&
     observed.mode === expected.mode &&
     observed.ownerUid === expected.ownerUid &&
-    observed.identityDigest === expected.identityDigest
+    observed.identityDigest === expected.identityDigest &&
+    observed.objectIdentityDigest === expected.objectIdentityDigest
   );
 }
 

@@ -4,6 +4,16 @@
 
 Accepted (Issue #2520, Epic #2285, 2026-07-18).
 
+Amended by Issue #2772 (Epic #2285, 2026-07-27) to add a server-private, path-free filesystem-object
+identity while preserving the public V1 root identity contract.
+
+Amended by Issue #2773 (Epic #2285, 2026-07-27) to allow canonical workspace paths in the
+launcher-paired local app session while keeping the unpaired workspace-manifest projection
+path-free.
+
+Amended by Issue #2774 (Epic #2285, 2026-07-27) to bound the private history index before parsing
+and repeat root identity validation immediately before history effects.
+
 The independent architecture, security, and contract-test reviews required by Issue #2520 were
 completed before implementation. The maintainer clarified on
 [Issue #2520](https://github.com/oscharko-dev/Keiko/issues/2520#issuecomment-5012022731) that
@@ -48,8 +58,10 @@ This decision reconciles, without replacing:
   provisioning remain single-root and consume V1. The server still resolves live roots and mints
   authority; a browser-provided root reference is routing intent, not authority.
 - [ADR-0141](ADR-0141-authenticated-local-app-session-channel.md): content-bearing local-history
-  reads reuse the launcher-attested app-session boundary and distinct authenticated fetch channel.
-  Loopback, Origin, CSRF, root references, and checkpoint references remain routing facts only.
+  reads and path-bearing workspace-manifest projections reuse the launcher-attested app-session
+  boundary and existing session verifier; local-history content retains its distinct authenticated
+  fetch channel. Loopback, Origin, CSRF, paths, root references, and checkpoint references remain
+  routing facts only.
 
 [ADR-0123](ADR-0123-workspace-multi-window-selection.md) is not amended. Its “workspace” is
 transient desktop-window selection/layout state; this record governs durable editor root identity
@@ -96,6 +108,14 @@ inspection; the leaf contract cannot perform IO. Root order is preserved exactly
 manifest digest. The digest uses domain-separated, versioned canonical serialization with explicit
 length framing; ambiguous string concatenation is prohibited.
 
+The public V1 `rootRef` and `identityDigest` fields and their existing formulas remain compatible;
+they continue to carry routing and contract-currency facts. Durable server authority additionally
+binds a server-private filesystem-object digest: domain-separated, length-framed SHA-256 over the
+exact bigint `dev`, `ino`, and positive `birthtimeNs` values. It contains no canonical or supplied
+path and never enters a public contract, evidence, diagnostic, profile, or export. A missing,
+zero/negative, unsupported, ambiguous, or mismatched private digest is stored as unavailable and
+fails closed for durable trust and effects.
+
 The focused root is presentation state only. It may drive Explorer/search/default navigation but
 never supplies a missing root for mutation, execution, trust, an Authority Envelope, or evidence.
 Changing focus does not grant access and does not inherit another root's trust.
@@ -103,6 +123,21 @@ Changing focus does not grant access and does not inherit another root's trust.
 The existing ADR-0090 singleton pointer remains one pointer, now selecting a manifest instead of
 implying that the selected editor workspace contains only one root. Code-task instances continue to
 select a single V1 task-workspace binding.
+
+The local app may receive `canonicalRoot` and other absolute paths carried by workspace manifests,
+V2 bindings, and manifest mutation results only when the request presents a live launcher-paired
+ADR-0141 app session. The browser client waits for its existing boot pairing attempt before its
+first manifest read. An unpaired manifest-list request receives a bounded path-free projection;
+other unpaired manifest requests return a path-free refusal before lookup, body parsing, or effect.
+This reuses the existing app-session cookie and verifier and introduces no token or authentication
+system. Pairing authorizes only this disclosure: a path remains routing intent and never mints
+membership, identity, trust, containment, policy, or effect authority.
+
+This amendment is deliberately limited to the ADR-0147 workspace-manifest and V2-binding
+projection. It does not migrate or reclassify historical `/api/projects`, ordinary `/api/files`, or
+other pre-M11 route families, whose disclosure and authorization boundaries remain governed by
+their existing decisions. It therefore makes no product-wide claim that every legacy path-bearing
+API now requires an app session.
 
 ### D2 — `WorkspaceBinding` V1 is byte-identical; V2 is separate and explicit
 
@@ -156,6 +191,10 @@ not resurrect the prior grant; a new explicit grant is required. The existing co
 verification, and debug decider seams remain the only consumer path until #2521 migrates their
 implementation.
 
+Every durable trust or effect resolution also compares the manifest row's server-private
+filesystem-object digest with a fresh inspection. The public V1 identity remains necessary for
+dispatch compatibility but is not sufficient to authorize a replaced object or a path alias.
+
 Restricted Mode is a per-root display/projection of this axis, not a `CodingWorkbenchMode`:
 
 | Trust | Read/planning | Mutation | Execution |
@@ -205,12 +244,20 @@ annotation/tightening ceiling after source resolution and never rewrites stored 
 Managed-LSP configuration does not adopt this source list. Multi-root composition selects one
 root's existing ADR-0132 workspace record and then applies that control plane's current precedence.
 
+An existing settings record that predates the private object binding is adopted in place only when
+its public V1 root identity matches the live root and a durable private identity is available. Any
+public or private mismatch contributes no settings and is never repaired by path equality alone.
+
 ### D6 — Profiles are portable personalization, never authority
 
 Profile V1 contains only a branded profile reference, bounded display name, revision, and a
 validated M11 profile settings layer. `keybindingOverrides` rides through the existing M7 setting
 value and registry; no second keyboard subsystem is introduced. Workspace snippets remain
 workspace-scoped, and UI layout remains browser-local and out of profile V1.
+
+Profile V1 is global personalization for settings and keybindings. Its records and active-profile
+selection have no workspace/root binding and never adopt or carry either public or private root
+identity.
 
 Profiles cannot represent roots, absolute paths, trust, autonomy modes, deployment ceilings,
 Authority Envelopes, approval grants, managed-LSP activation/runtime identities, connector scopes,
@@ -254,9 +301,18 @@ capacity, new capture returns `PINNED_CAPACITY_EXHAUSTED`; it never deletes pins
 Capture failure never rolls back a successful save/apply and emits only a correlation id plus closed
 content-free reason.
 
+The private metadata index itself is capped at 16 MiB before reading or JSON parsing. Symlinks,
+non-regular files, size drift, and a changed opened-file identity fail closed with content-free
+codes. Read, pin, and delete routes repeat live public and private root-identity validation
+synchronously after asynchronous containment work and immediately before the store effect.
+
 Filename-bearing metadata and checkpoint content require the ADR-0141 launcher-attested app session.
 Unauthenticated status/SSE remains content-free and is not widened. Restore in #2531 routes through
 the existing governed save/apply/conflict flow and checkpoints the pre-restore state.
+
+A legacy local-history index is adopted and sealed to the private object identity only when every
+entry's public V1 root identity matches the live root. A mismatch, unavailable private identity, or
+subsequent object replacement makes the index unavailable before read, pin, delete, or restore.
 
 ### D8 — Each state class has exactly one storage substrate
 
@@ -281,8 +337,15 @@ idempotent, version checked, and fail closed: corrupt/future state yields unavai
 cannot authorize an effect. Rollback may remove new M11 state but cannot reinterpret V2 as V1 or
 restore invalidated grants.
 
-Profiles and history have no legacy records. Missing state is tagged `absent`; unreadable/corrupt
-state is `unavailable`. Those outcomes are not silently conflated.
+At M11 introduction, profiles and history had no pre-M11 records. Missing state is tagged `absent`;
+unreadable/corrupt state is `unavailable`. Those outcomes are not silently conflated.
+
+The V17 `uiDb` migration backfills the private object digest only for roots whose live public V1
+identity still matches the stored descriptor and whose private digest is unique across all
+candidates. All other rows retain an explicit `NULL` unavailable binding. Because pre-V17 trust was
+never bound to this fact, V17 revokes all legacy trust rows once in the migration transaction; no
+grant is inferred or resurrected. Settings and local history migrate lazily under their matching
+public-identity adoption rules above.
 
 ## Threat model and security invariants
 
@@ -312,6 +375,9 @@ Failure-first co-located tests must cover:
 - exact V1 serialized bytes and old forbidden-field/root-equality behavior;
 - valid one/multi-root V2 plus duplicate, overlapping, foreign-focus, mixed-version, and per-root
   divergence rejection;
+- paired positive and unpaired path-free workspace-manifest route/browser projections;
+- exact-bigint private object identity, unique V17 backfill, unsupported-filesystem denial, and
+  one-time legacy trust revocation;
 - every trust fact, stale binding dimension, package-basis mismatch, and legacy binary projection;
 - exhaustive mode clamp and trust-effect monotonicity, including denied absorption;
 - every settings precedence layer and policy-last provenance;
@@ -331,8 +397,8 @@ combined contracts tree and committed as the final evidence change.
 - Later M11 children receive one contract vocabulary before any store, route, or UI wiring lands.
 - Code-task V1 consumers keep compiling and serializing exactly as before.
 - Trust becomes durable and root-aware without adding an autonomy mode or policy matrix.
-- Profiles are intentionally narrower than the epic's broad long-term aspiration; snippets,
-  managed-LSP state, roots, layout, and authority stay out until a separately justified amendment.
+- Profile V1 deliberately contains only settings and keybindings; snippets, managed-LSP state,
+  roots, layout, and authority stay out until a separately justified amendment.
 - Local history gains stronger identity binding than a literal hot-exit copy and remains separate
   from Code-task transcript, memory, chat, Git history, and evidence stores.
 - The cost is explicit versioning, more tagged states, transactional membership/trust storage, and

@@ -7,6 +7,7 @@ import {
   type WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
 import { bffFetchJson } from "./http";
+import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 
 const WORKSPACES_URL = "/api/workspaces";
 
@@ -59,6 +60,7 @@ export function workspaceManifestEventValue(event: Event): WorkspaceManifest | n
 }
 
 export async function fetchWorkspaceManifests(): Promise<readonly WorkspaceManifest[]> {
+  await codingAppSessionPairingSettled();
   return bffFetchJson(WORKSPACES_URL, undefined, {
     validator: manifestListValidator,
     parseFailureMessage: () => "workspace manifest request rejected",

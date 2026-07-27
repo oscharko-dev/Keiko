@@ -17,8 +17,26 @@ import type { EditorSettingsControlService } from "./editor/settings/editorSetti
 import { createEditorSettingsStore } from "./editor/settings/editorSettingsStore.js";
 import { createWorkspaceMutexRegistry } from "./task-workspace/mutex.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { WorkspaceManifestService } from "./workspace-manifests.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "./coding-app-session/_support.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 
-const JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
+const JSON_HEADERS = {
+  "Content-Type": "application/json",
+  "X-Keiko-CSRF": "1",
+  get Cookie(): string {
+    return sessionCookie;
+  },
+} as const;
+const UNPAIRED_JSON_HEADERS = {
+  "Content-Type": "application/json",
+  "X-Keiko-CSRF": "1",
+} as const;
 
 let server: Server;
 let port: number;
@@ -29,6 +47,7 @@ let rootB: string;
 let store: UiStore;
 let editorSettingsControl: EditorSettingsControlService;
 let diagnostics: ServerDiagnosticRecord[];
+let sessionCookie: string;
 // Read at call time, not at server construction, so a test can arm the failure after the fixture
 // has already built its handler deps.
 let invalidateRootFailure: Error | undefined;
@@ -54,6 +73,13 @@ function dispatch(manifest: WorkspaceManifest): WorkspaceRootDispatch {
 }
 
 function deps(): UiHandlerDeps {
+  const codingAppSessionChannel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = codingAppSessionChannel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new Error("workspace route pairing failed");
+  sessionCookie = `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
   return {
     config: undefined,
     configPresent: false,
@@ -76,6 +102,7 @@ function deps(): UiHandlerDeps {
         diagnostics.push(entry);
       },
     },
+    codingAppSessionChannel,
   };
 }
 
@@ -135,8 +162,61 @@ afterEach(async () => {
 });
 
 describe("workspace manifest routes", () => {
+  it("withholds canonical roots from an unpaired caller and serves them to the paired app", async () => {
+    const unpaired = await fetch(requestUrl("/api/workspaces"));
+    const unpairedText = await unpaired.text();
+    expect(unpaired.status).toBe(200);
+    expect(JSON.parse(unpairedText)).toEqual({ session: "unpaired", manifests: [] });
+    expect(unpairedText).not.toContain(rootA);
+    expect(unpairedText).not.toContain(rootB);
+
+    const paired = await fetch(requestUrl("/api/workspaces"), {
+      headers: { Cookie: sessionCookie },
+    });
+    const pairedText = await paired.text();
+    expect(paired.status).toBe(200);
+    expect(pairedText).toContain(rootA);
+    expect(pairedText).toContain(rootB);
+
+    const body = JSON.parse(pairedText) as { readonly manifests: readonly WorkspaceManifest[] };
+    const knownWorkspaceId = body.manifests[0]?.workspaceId;
+    if (knownWorkspaceId === undefined) throw new Error("missing paired workspace");
+    const known = await fetch(requestUrl(`/api/workspaces/${knownWorkspaceId}`));
+    const unknown = await fetch(requestUrl("/api/workspaces/ws-does-not-exist"));
+    const knownText = await known.text();
+    const unknownText = await unknown.text();
+    expect(known.status).toBe(403);
+    expect(unknown.status).toBe(403);
+    expect(knownText).toBe(unknownText);
+    expect(knownText).not.toContain(rootA);
+    expect(knownText).not.toContain(rootB);
+  });
+
+  it("rejects an unpaired mutation before it can change membership or echo a path", async () => {
+    const manifest = await alphaManifest();
+    const response = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}/roots`), {
+      method: "POST",
+      headers: UNPAIRED_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: rootB, dispatch: dispatch(manifest) }),
+    });
+    const responseText = await response.text();
+
+    expect(response.status).toBe(403);
+    expect(JSON.parse(responseText)).toEqual({
+      error: {
+        code: "APP_SESSION_REQUIRED",
+        message: "The local app session is not paired.",
+      },
+    });
+    expect(responseText).not.toContain(rootA);
+    expect(responseText).not.toContain(rootB);
+    expect(new WorkspaceManifestService(store).get(manifest.workspaceId).roots).toHaveLength(1);
+  });
+
   it("accepts a member-root dispatch and rejects missing or non-member authority", async () => {
-    const listed = await fetch(requestUrl("/api/workspaces"));
+    const listed = await fetch(requestUrl("/api/workspaces"), {
+      headers: { Cookie: sessionCookie },
+    });
     const listBody = (await listed.json()) as { readonly manifests: readonly WorkspaceManifest[] };
     const manifest = listBody.manifests.find((item) => item.roots[0]?.canonicalRoot === rootA);
     if (manifest === undefined) throw new Error("missing alpha manifest");
@@ -181,7 +261,9 @@ describe("workspace manifest routes", () => {
 
   it("serves a manifest with its binding and 404s an unknown workspace id", async () => {
     const manifest = await alphaManifest();
-    const found = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}`));
+    const found = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}`), {
+      headers: { Cookie: sessionCookie },
+    });
     expect(found.status).toBe(200);
     const foundBody = (await found.json()) as {
       readonly manifest: WorkspaceManifest;
@@ -190,7 +272,9 @@ describe("workspace manifest routes", () => {
     expect(foundBody.manifest.workspaceId).toBe(manifest.workspaceId);
     expect(foundBody.binding).toBeDefined();
 
-    const missing = await fetch(requestUrl("/api/workspaces/ws-does-not-exist"));
+    const missing = await fetch(requestUrl("/api/workspaces/ws-does-not-exist"), {
+      headers: { Cookie: sessionCookie },
+    });
     expect(missing.status).toBe(404);
     const missingBody = (await missing.json()) as { readonly error: { readonly code: string } };
     expect(missingBody.error.code).toBe("WORKSPACE_MANIFEST_UNAVAILABLE");
@@ -498,7 +582,9 @@ describe("workspace manifest routes", () => {
 });
 
 async function alphaManifest(): Promise<WorkspaceManifest> {
-  const listed = await fetch(requestUrl("/api/workspaces"));
+  const listed = await fetch(requestUrl("/api/workspaces"), {
+    headers: { Cookie: sessionCookie },
+  });
   const body = (await listed.json()) as { readonly manifests: readonly WorkspaceManifest[] };
   const manifest = body.manifests.find((item) => item.roots[0]?.canonicalRoot === rootA);
   if (manifest === undefined) throw new Error("missing alpha manifest");

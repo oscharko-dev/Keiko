@@ -63,6 +63,9 @@ function fixture(): Fixture {
   const stateDir = tempDir("keiko-local-history-scale-state-");
   mkdirSync(join(root, "src"));
   const identity = inspectWorkspaceRootIdentity(root);
+  if (identity.objectIdentityDigest === undefined) {
+    throw new Error("fixture filesystem has no durable object identity");
+  }
   return {
     root,
     stateDir,
@@ -70,6 +73,7 @@ function fixture(): Fixture {
       workspaceId: editorLocalHistoryWorkspaceId(identity.rootRef),
       rootRef: identity.rootRef,
       rootIdentityDigest: identity.identityDigest,
+      objectIdentityDigest: identity.objectIdentityDigest,
     },
   };
 }

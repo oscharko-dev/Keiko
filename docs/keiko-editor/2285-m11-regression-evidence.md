@@ -25,15 +25,15 @@ model-disposal assertion this document bullets and previously did not execute.
 
 ## Closeout status
 
-| Evidence                         | Disposition                                                                                                                                                       |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dependency entry condition       | **PASS** — all thirteen prerequisite M11 child issues #2520–#2532 are closed.                                                                                     |
-| Adversarial matrix ownership     | **IMPLEMENTED** — 16 named rows are mapped to executable child tests and collected by one focused command.                                                        |
-| Migration and rollback ownership | **IMPLEMENTED** — four named drills cover pre-M11 upgrade, downgrade guard, corrupt trust, and explicit re-grant.                                                 |
-| Supplemental M11 measurement     | **PASS** — local `darwin-arm64` informational run; every deterministic disposition and every observed local budget passed.                                        |
-| Focused M11 closeout             | **PASS** — both halves of the one command: 18 files / 201 tests in the package collection, then 11 files / 120 tests in the `keiko-ui` workspace collection.      |
-| Real product-path Playwright     | **PASS** — one Chromium journey passed in 20.5 s; every scanned surface, the multi-root Explorer included, is now asserted free of serious/critical axe findings. |
-| Exact epic-head CI               | **REMOTE RECEIPT AFTER PUSH** — the integration-branch push triggers the repository workflows; local evidence does not replace them.                              |
+| Evidence                         | Disposition                                                                                                                                                          |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dependency entry condition       | **PASS** — all thirteen prerequisite M11 child issues #2520–#2532 are closed.                                                                                        |
+| Adversarial matrix ownership     | **IMPLEMENTED** — 30 named rows are mapped to executable child tests and collected by one focused command.                                                           |
+| Migration and rollback ownership | **IMPLEMENTED** — seven named drills cover pre-M11 upgrade, object-identity adoption and rejection, rollback, downgrade guard, corrupt trust, and explicit re-grant. |
+| Supplemental M11 measurement     | **PASS** — local `darwin-arm64` informational run; every deterministic disposition and every observed local budget passed.                                           |
+| Focused M11 closeout             | **PASS** — both halves of the one command: 18 files / 201 tests in the package collection, then 11 files / 120 tests in the `keiko-ui` workspace collection.         |
+| Real product-path Playwright     | **PASS** — one Chromium journey passed in 20.5 s; every scanned surface, the multi-root Explorer included, is now asserted free of serious/critical axe findings.    |
+| Exact epic-head CI               | **REMOTE RECEIPT AFTER PUSH** — the integration-branch push triggers the repository workflows; local evidence does not replace them.                                 |
 
 ## Focused executable collection
 
@@ -43,9 +43,11 @@ repository-level files, then the `keiko-ui` workspace run — and a receipt for 
 The collection includes:
 
 - closed manifest, trust, profile, and local-history contract tests;
-- canonical trust persistence, manifest migration/mutation, explicit dispatch, agent-root, managed
-  LSP live-trust, profile portability, encrypted history, authenticated history routes, and
-  forbidden-field tests;
+- canonical trust persistence, manifest migration/mutation, explicit dispatch, command/
+  verification/debug effect-time trust, agent-root, managed LSP live-trust, settings replacement
+  races, profile portability, encrypted history, authenticated history routes, and forbidden-field
+  tests;
+- paired/unpaired workspace-path projection and real React child-before-parent boot ordering;
 - the measurement harness tests, browser source-contract guard, and this evidence guard; and
 - the M11 multi-root, trust, profile, history, Settings/search, axe, keyboard, responsive, and i18n
   UI component tests.
@@ -55,12 +57,15 @@ to this child-to-epic closeout command.
 
 ## Migration and rollback drills
 
-| Row                                | Drill                                                                                   | Fail-closed result                                                                                                                                                                                                   | Executable owner                   |
-| ---------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `MIGRATION-PRE-M11-UPGRADE`        | Open a user-version 11 store containing a legacy project.                               | Migration creates one deterministic manifest, preserves the project registry, and remains idempotent.                                                                                                                | `store/workspaceManifests.test.ts` |
-| `MIGRATION-DOWNGRADE-GUARD`        | Open state written by a schema newer than the current binary.                           | The typed `UI_STORE_SCHEMA_NEWER` error is returned; state is not quarantined or reinterpreted as V1.                                                                                                                | `store/workspaceManifests.test.ts` |
-| `MIGRATION-CORRUPT-TRUST-RECOVERY` | Read malformed persisted trust JSON.                                                    | Trust projects to restricted and no corrupt bytes become authority.                                                                                                                                                  | `workspace-script-trust.test.ts`   |
-| `MIGRATION-TRUST-REGRANT`          | Change the trust basis after an explicit grant, then roll it back to the granted bytes. | The demotion is read back at the same revision from a closed and reopened database, restored bytes do not resurrect the grant, and only a new explicit server grant returns the root to trusted at a newer revision. | `workspace-script-trust.test.ts`   |
+| Row                                 | Drill                                                                                                 | Fail-closed result                                                                                                                                                                                                   | Executable owner                   |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `MIGRATION-PRE-M11-UPGRADE`         | Open a user-version 11 store containing a legacy project.                                             | Migration creates one deterministic manifest, preserves the project registry, and remains idempotent.                                                                                                                | `store/workspaceManifests.test.ts` |
+| `MIGRATION-DOWNGRADE-GUARD`         | Open state written by a schema newer than the current binary.                                         | The typed `UI_STORE_SCHEMA_NEWER` error is returned; state is not quarantined or reinterpreted as V1.                                                                                                                | `store/workspaceManifests.test.ts` |
+| `MIGRATION-CORRUPT-TRUST-RECOVERY`  | Read malformed persisted trust JSON.                                                                  | Trust projects to restricted and no corrupt bytes become authority.                                                                                                                                                  | `workspace-script-trust.test.ts`   |
+| `MIGRATION-TRUST-REGRANT`           | Change the trust basis after an explicit grant, then roll it back to the granted bytes.               | The demotion is read back at the same revision from a closed and reopened database, restored bytes do not resurrect the grant, and only a new explicit server grant returns the root to trusted at a newer revision. | `workspace-script-trust.test.ts`   |
+| `MIGRATION-ROOT-OBJECT-BINDING`     | Upgrade a V16 manifest/trust store, including mismatched, unavailable, ambiguous, and rollback cases. | Only live unambiguous roots gain a path-free object binding; all other rows remain unbound, every legacy trust grant is revoked exactly once, and a failed revocation rolls the whole migration back.                | `store/migrations.test.ts`         |
+| `MIGRATION-SETTINGS-OBJECT-BINDING` | Read a legacy per-root settings record.                                                               | Existing values and revisions survive while the record is atomically rebound to the private filesystem-object identity.                                                                                              | `editorSettingsStore.test.ts`      |
+| `MIGRATION-HISTORY-OBJECT-BINDING`  | Read a matching legacy encrypted-history index.                                                       | The index is rebound without resealing checkpoint payloads; mismatched public identity refuses adoption.                                                                                                             | `localHistoryStore.test.ts`        |
 
 Every drill above names the assertion that runs it, and the matrix guard
 [`tests/qa/editor-m11-closeout-evidence.test.ts`](../../tests/qa/editor-m11-closeout-evidence.test.ts)
@@ -68,9 +73,28 @@ pins the mapping. `MIGRATION-TRUST-REGRANT` was mapped until #2626 to a test tha
 fresh store and never touches the trust basis — it performed no leg of this drill, so the row rested
 on its own wording. It now owns a test that runs the whole loop.
 
-Profiles and local history have no legacy records. Missing state remains `absent`; corrupt or
-future state remains `unavailable`. Rollback may remove M11 state, but it cannot reinterpret a V2
-binding as the byte-identical V1 task-workspace contract.
+Profile V1 is global settings plus keybinding overrides and has no per-root identity to migrate.
+Settings and local-history records created before the private object binding are adopted only when
+their public root identity still matches; values, ordering, revisions, and encrypted checkpoint
+payloads remain unchanged. Missing state remains `absent`; corrupt, future, or contradictory state
+remains `unavailable`. Rollback may remove M11 state, but it cannot reinterpret a V2 binding as the
+byte-identical V1 task-workspace contract.
+
+## Historical delivery record
+
+This record is immutable history, not a retroactive green claim:
+
+- **PR #2612 exact head** `7abe26f8633d65e8afad6cb5744c49fd27461138` merged on
+  2026-07-24 while the app-bound `Keiko for Quality` check concluded `failure`.
+- **PR #2765 exact head** `a1ff65c1df930f78125c5d138494e025b1cc15d6` merged on
+  2026-07-27 while required `ci`, `ui`, and `Keiko for Quality` checks concluded `failure`.
+- **PR #2770 exact head** `f4fb22d74f2be5f9919a98afd89e93afcbe9c429` shows the
+  observed required checks green. Its pull-request record reports `auto_merge: null`, so it does
+  not provide the native auto-merge receipt required by the current ADR-0135 delivery rule.
+
+The final Wave-3 pull request must supply the missing fully green exact-head, settled-review,
+native auto-merge receipt. None of the historical rows above is rewritten or excused by that later
+receipt.
 
 ## Product-path browser proof
 

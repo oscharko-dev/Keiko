@@ -310,6 +310,78 @@ describe("WorkspaceScriptTrustService", () => {
     expect(spawn).toHaveBeenCalledOnce();
   });
 
+  it("stops a command when the real trust basis drifts after task derivation", async () => {
+    const trust = createWorkspaceScriptTrustService({ store });
+    const spawn = successfulSpawn();
+    expect(trust.grant(root)).toEqual({ trusted: true });
+    let checks = 0;
+    const trustAtEffect = vi.fn((projectId: string, workspace: WorkspaceInfo): boolean => {
+      const trusted = trust.isTrusted(projectId, workspace);
+      checks += 1;
+      if (checks === 1) writeFileSync(join(root, "package.json"), `${MANIFEST}\n`, "utf8");
+      return trusted;
+    });
+    const command = createCommandRunnerManager({
+      store,
+      evidenceStore: createInMemoryEvidenceStore(),
+      isWorkspaceTrustedForPackageScripts: trustAtEffect,
+      processEnv: { PATH: "/usr/bin" },
+      runDeps: {
+        spawn,
+        resolveExecutable: (value): string => value,
+        sandboxAvailability: {
+          bubblewrap: true,
+          unshare: false,
+          seatbelt: false,
+          docker: false,
+          podman: false,
+        },
+        platform: "linux",
+      },
+    });
+
+    await expect(
+      command.execute({ projectId: root, taskId: "npm-script:test" }),
+    ).rejects.toMatchObject({ code: "TASK_REQUIRES_TRUST", status: 403 });
+
+    expect(trustAtEffect).toHaveBeenCalledTimes(2);
+    expect(trust.status(root)).toMatchObject({
+      trust: "restricted",
+      reason: "trust-basis-changed",
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("stops verification when the real trust basis drifts after plan derivation", () => {
+    const trust = createWorkspaceScriptTrustService({ store });
+    const execute = vi.fn(() => Promise.reject(new Error("verification must not run")));
+    expect(trust.grant(root)).toEqual({ trusted: true });
+    let checks = 0;
+    const trustAtEffect = vi.fn((projectId: string, workspace: WorkspaceInfo): boolean => {
+      const trusted = trust.isTrusted(projectId, workspace);
+      checks += 1;
+      if (checks === 1) writeFileSync(join(root, "package.json"), `${MANIFEST}\n`, "utf8");
+      return trusted;
+    });
+    const verification = createVerificationRunnerManager({
+      store,
+      evidenceStore: createInMemoryEvidenceStore(),
+      isWorkspaceTrustedForPackageScripts: trustAtEffect,
+      execute,
+    });
+
+    expect(() => verification.execute({ projectId: root, kinds: ["typecheck"] })).toThrow(
+      expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED", status: 403 }),
+    );
+
+    expect(trustAtEffect).toHaveBeenCalledTimes(2);
+    expect(trust.status(root)).toMatchObject({
+      trust: "restricted",
+      reason: "trust-basis-changed",
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("projects a registered project the D9 migration left pre-manifest as unavailable", () => {
     // ADR-0147 D9 migrates a one-root manifest for the CURRENT ACTIVE project only, so every other
     // registered project stays pre-manifest after the upgrade. D9 requires that state to fail
@@ -501,6 +573,39 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const row = store.readWorkspaceTrustRecord(rootReference());
     expect(row?.trust).toBe("restricted");
     expect(readReasonFrom(row?.recordJson)).toBe("identity-changed");
+  });
+
+  it("invalidates a grant when only the private filesystem object binding differs", () => {
+    const granted = createWorkspaceScriptTrustService({ store });
+    granted.grant(root);
+    const guardedStore: UiStore = {
+      ...store,
+      findWorkspaceManifestRecordByRoot: (rootRef) => {
+        const row = store.findWorkspaceManifestRecordByRoot(rootRef);
+        if (row === undefined) return undefined;
+        return {
+          ...row,
+          rootProjects: row.rootProjects.map((project) => ({
+            ...project,
+            objectIdentityDigest: "f".repeat(64),
+          })),
+        };
+      },
+    };
+    const notified: string[] = [];
+    const trust = createWorkspaceScriptTrustService({
+      store: guardedStore,
+      onRestricted: (canonicalRoot) => notified.push(canonicalRoot),
+    });
+
+    expect(
+      trust.isTrusted(root, detectWorkspaceAt(nodeWorkspaceFs.realPath(root), nodeWorkspaceFs)),
+    ).toBe(false);
+    const row = store.readWorkspaceTrustRecord(rootReference());
+    expect(row?.trust).toBe("restricted");
+    expect(row?.revision).toBe(1);
+    expect(readReasonFrom(row?.recordJson)).toBe("identity-changed");
+    expect(notified).toEqual([nodeWorkspaceFs.realPath(root)]);
   });
 
   it("resolves a canonical root to its registered project alias (#2615)", () => {
