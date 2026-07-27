@@ -286,4 +286,54 @@ describe("EditorRuntimeWidget local-history restore", () => {
     expect(surface.props?.fileModel.dirty).toBe(false);
     expect(screen.queryByText(/version was not restored/iu)).toBeNull();
   });
+
+  // The pane switching file mid-save does NOT discard the adopted text: an effect mirrors every
+  // commit into the session cache, so a failed restore's content stays the cached state of the
+  // document it was made against — and re-opening that file shows checkpoint content the server
+  // never accepted. The rollback used to run only for the still-active document.
+  it("rolls back the adoption in the cached document when the pane switched file mid-save", async () => {
+    let rejectSave: (reason: Error) => void = () => undefined;
+    vi.mocked(saveFilesContent).mockReturnValue(
+      new Promise((_resolve, reject) => {
+        rejectSave = reject;
+      }) as ReturnType<typeof saveFilesContent>,
+    );
+
+    const view = render(
+      <EditorRuntimeWidget windowId="history-restore" root="/repo" file="src/app.ts" />,
+    );
+    await screen.findByTestId("editor-surface");
+    expect(surface.props?.buffer.content.text).toBe(DISK_CONTENT);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open file history" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^restore$/iu }));
+    fireEvent.click(await screen.findByRole("button", { name: /restore version/iu }));
+
+    // The checkpoint is adopted into the buffer while the write is still in flight.
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.text).toBe(CHECKPOINT_CONTENT);
+    });
+
+    // The human moves the pane to another file, then the write is refused.
+    view.rerender(
+      <EditorRuntimeWidget windowId="history-restore" root="/repo" file="src/other.ts" />,
+    );
+    await waitFor(() => {
+      expect(
+        vi.mocked(fetchFilesContent).mock.calls.some(([, path]) => path === "src/other.ts"),
+      ).toBe(true);
+    });
+    rejectSave(new Error("write denied"));
+    await waitFor(() => {
+      expect(vi.mocked(saveFilesContent)).toHaveBeenCalled();
+    });
+
+    // Returning to the original document must show what was on disk, not the refused checkpoint.
+    view.rerender(
+      <EditorRuntimeWidget windowId="history-restore" root="/repo" file="src/app.ts" />,
+    );
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.text).toBe(DISK_CONTENT);
+    });
+  });
 });
