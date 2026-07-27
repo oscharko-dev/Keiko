@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import type {
   WorkspaceManifest,
   WorkspaceRootDescriptor,
@@ -88,6 +96,44 @@ function RootGroup({
   const trust = useWorkspaceTrust(root.canonicalRoot);
   const [expanded, setExpanded] = useState(true);
   const focused = manifest.focusedRootRef === root.rootRef;
+  // One Files window owns ONE cfg, and `onActiveFileChange` is its writer: it sets
+  // `activeFilePath`/`resolvedRoot`, which every connected window reads as this window's root
+  // binding. Mounting a FilesWidget per root fanned that single writer out across all of them, and
+  // FilesWidget reports on unattended lifecycle events too — a mount, a refresh, or a top-level
+  // directory load — not only on user selection. So collapsing and re-expanding a non-focused group,
+  // or simply whichever tree finished loading last on first open, silently re-pointed the bound root
+  // of every connected window with no user action naming it. `watchActive` already gates the sibling
+  // concern one line below for the same reason; this gates the writer.
+  // Every report this group produces is remembered, focused or not, so becoming focused can replay
+  // what this root actually shows instead of asserting a cleared selection.
+  const lastReport = useRef<{
+    readonly path: string | null;
+    readonly fileRoot: string | null;
+    readonly activeDirectoryPath: string | null | undefined;
+  }>({ path: null, fileRoot: root.canonicalRoot, activeDirectoryPath: undefined });
+  const reportActiveFile = useCallback(
+    (path: string | null, fileRoot: string | null, activeDirectoryPath?: string | null): void => {
+      lastReport.current = { path, fileRoot, activeDirectoryPath };
+      if (!focused) return;
+      onActiveFileChange(path, fileRoot, activeDirectoryPath);
+    },
+    [focused, onActiveFileChange],
+  );
+  // Gating the writer alone leaves the binding stale in one case: FilesWidget's "root resolved"
+  // report fires during its initial directory load, so a group that finished loading while it was
+  // NOT focused has already spent that report — and switching focus to it later produces no new
+  // one, leaving cfg.resolvedRoot on the previously focused root. Becoming focused is itself the
+  // event that rebinds the window, so replay this group's last known state then.
+  //
+  // Replay rather than clear: opening a file in a non-focused group focuses that group first, so an
+  // unconditional `(null, root, null)` here would land AFTER the selection report was suppressed
+  // and wipe the very file the human just clicked, leaving the binding on the right root with no
+  // file. The remembered report is that selection.
+  useEffect(() => {
+    if (!focused) return;
+    const { path, fileRoot, activeDirectoryPath } = lastReport.current;
+    onActiveFileChange(path, fileRoot ?? root.canonicalRoot, activeDirectoryPath);
+  }, [focused, onActiveFileChange, root.canonicalRoot]);
   const move = (offset: -1 | 1): void => {
     void workspace.reorderRoots(root.rootRef, rootOrderAfterMove(manifest.roots, index, offset));
   };
@@ -178,7 +224,7 @@ function RootGroup({
           <FilesWidget
             root={root.canonicalRoot}
             watchActive={focused}
-            onActiveFileChange={onActiveFileChange}
+            onActiveFileChange={reportActiveFile}
             onOpenFile={(fileRoot, path) => {
               void workspace.focusRoot(root.rootRef);
               onOpenFile(fileRoot, path);

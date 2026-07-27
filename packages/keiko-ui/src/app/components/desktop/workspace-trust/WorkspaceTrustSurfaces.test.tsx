@@ -60,6 +60,44 @@ describe("Workspace Trust governance surfaces", () => {
     );
   });
 
+  it("surfaces a refused revoke on a workspace that is still trusted", () => {
+    // The banner returned null for every trusted state before the `issue === "update"` alert could
+    // run, so a revoke the server refused was completely silent: the human asked to withdraw trust,
+    // the request failed, and the UI showed an ordinary trusted workspace. The copy is
+    // direction-aware because the shared string asserts the workspace "remains restricted", which
+    // is the opposite of what happened here.
+    render(
+      <I18nProvider>
+        <WorkspaceTrustBanner
+          status={{ ...restrictedStatus("human-grant"), trust: "trusted" }}
+          issue="update"
+          failure={{ code: "WORKSPACE_TRUST_UPDATE_FAILED", correlationId: "revoke-2523" }}
+          surface="editor"
+          onManage={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    const banner = screen.getByTestId("workspace-trust-banner-editor");
+    expect(banner).toHaveTextContent("This workspace remains trusted.");
+    expect(banner).not.toHaveTextContent("This workspace remains restricted.");
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.queryByText("Restricted Mode")).toBeNull();
+  });
+
+  it("stays silent on a trusted workspace with no failed transition", () => {
+    const { container } = render(
+      <I18nProvider>
+        <WorkspaceTrustBanner
+          status={{ ...restrictedStatus("human-grant"), trust: "trusted" }}
+          issue={undefined}
+          surface="editor"
+        />
+      </I18nProvider>,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("distinguishes unavailable, restricted, and trusted badge states", () => {
     const view = render(
       <I18nProvider>

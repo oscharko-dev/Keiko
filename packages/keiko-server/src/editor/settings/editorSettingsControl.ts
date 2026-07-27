@@ -49,6 +49,7 @@ import {
   editorSettingsWorkspaceFingerprint,
   EditorSettingsRootIdentityError,
   emptyEditorSettingsRootRecord,
+  emptyEditorSettingsWorkspaceRecord,
   formatEditorSettingsEtag,
   type EditorSettingsChangeEvent,
   type EditorSettingsIdempotencyRecord,
@@ -300,13 +301,33 @@ function latestEventSequence(args: SnapshotRecords): number {
   );
 }
 
+/**
+ * The live identity of a root, or `undefined` when it cannot be read — a removed root, a path that
+ * is no longer a directory, a symlink alias. The same fail-closed rule the store already applies:
+ * an unreadable root's record neither applies nor accepts a write.
+ *
+ * Letting `inspectWorkspaceRootIdentity` throw here escaped both `read()` and `mutateLocked()` as
+ * an opaque 500 whenever a root disappeared between resolving the request root and assembling the
+ * snapshot — the untyped sibling of the very condition the commit path already reports as a typed
+ * state. A root that vanishes mid-request is an expected race, not an internal error.
+ */
+function liveRootIdentity(
+  realRoot: string | undefined,
+): ReturnType<typeof inspectWorkspaceRootIdentity> | undefined {
+  if (realRoot === undefined) return undefined;
+  try {
+    return inspectWorkspaceRootIdentity(realRoot);
+  } catch {
+    return undefined;
+  }
+}
+
 function snapshotFromRecords(args: SnapshotRecords): EditorM11SettingsSnapshot {
   const workspaceRevision = optionalRecordRevision(args.workspace.record);
   const rootRevision = optionalRecordRevision(args.rootLayer.record);
   const userRevision = args.user.record.revision;
   const profileRevision = args.profiles.record.revision;
-  const identity =
-    args.realRoot === undefined ? undefined : inspectWorkspaceRootIdentity(args.realRoot);
+  const identity = liveRootIdentity(args.realRoot);
   const settings = effectiveSettings(
     args.user.record,
     args.workspace.record,
@@ -1576,10 +1597,23 @@ async function mutateProfileLocked(
  */
 function invalidateRootLocked(realRoot: string, options: EditorSettingsControlOptions): void {
   const loaded = options.store.loadRoot(realRoot);
-  if (loaded.state === "absent") return;
-  options.store.commitRoot(realRoot, {
-    ...emptyEditorSettingsRootRecord(realRoot),
-    revision: loaded.record.revision + 1,
+  if (loaded.state !== "absent") {
+    options.store.commitRoot(realRoot, {
+      ...emptyEditorSettingsRootRecord(realRoot),
+      revision: loaded.record.revision + 1,
+    });
+  }
+  // The workspace record is keyed per root path too, and it is the layer holding the governed
+  // capability opt-ins. A root that leaves its workspace must not keep them for whoever binds that
+  // reference next — the same #2620 reason the root record is cleared. Identity binding alone does
+  // not cover this case: a departing root keeps its filesystem identity, so only the membership
+  // signal can retire the layer. Empty at the next revision, so workspaceRevision stays monotonic
+  // and a stale ETag cannot re-match different content.
+  const workspace = options.store.loadWorkspace(realRoot);
+  if (workspace.state === "absent") return;
+  options.store.commitWorkspace(realRoot, {
+    ...emptyEditorSettingsWorkspaceRecord(realRoot),
+    revision: workspace.record.revision + 1,
   });
 }
 
@@ -1587,10 +1621,12 @@ function invalidateRootBinding(
   realRoot: string,
   options: EditorSettingsControlOptions,
 ): Promise<void> {
-  // The same lock key `mutate` takes for root scope, so invalidation cannot interleave with a patch
-  // and lose either write.
+  // The same lock keys `mutate` takes, so invalidation cannot interleave with a patch and lose
+  // either write. Both scopes are held because invalidation now clears both records, and a
+  // workspace-scope mutation locks on its own key.
+  const fingerprint = editorSettingsWorkspaceFingerprint(realRoot);
   return options.mutex.runExclusive(
-    [`editor-settings:root:${editorSettingsWorkspaceFingerprint(realRoot)}`],
+    [`editor-settings:root:${fingerprint}`, `editor-settings:workspace:${fingerprint}`],
     (): Promise<void> => {
       invalidateRootLocked(realRoot, options);
       return Promise.resolve();

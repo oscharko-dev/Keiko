@@ -1388,6 +1388,13 @@ export function FilesWidget({
             type="button"
             tabIndex={-1}
             disabled={!entry.readable}
+            // role="tree" may own only treeitem/group, so an assistive-technology-visible caret
+            // button is an invalid owned child and axe fails aria-required-children (#2605). The
+            // caret is a pointer-only duplicate: the row's own treeitem carries aria-expanded and
+            // Arrow Right/Left operate expansion by dispatching to this button, so hiding it from
+            // the accessibility tree removes the invalid child without removing any capability.
+            // The aria-label stays as the DOM hook that pointer-level tests locate it by.
+            aria-hidden="true"
             aria-label={t(
               open ? "filesWidget.tree.collapseFolder" : "filesWidget.tree.expandFolder",
               { name: entry.name },
@@ -1565,15 +1572,22 @@ export function FilesWidget({
       : renderFileEntry(entry, depth, entryTip);
   };
 
-  const renderDirectory = (path: string, depth: number, state = directories[path]): ReactNode => {
+  // role="tree" may own only treeitem and group children, so every status note, error block,
+  // inline editor and load-more control is an invalid owned child of the tree element itself and
+  // fails axe's aria-required-children (#2605). Splitting a directory into its chrome and its rows
+  // lets the ROOT level put only rows inside role="tree" and keep the chrome outside it. Nested
+  // levels are unaffected: they render into role="group", which has no required children.
+  const directorySections = (
+    path: string,
+    depth: number,
+    state = directories[path],
+  ): { readonly notices: ReactNode; readonly rows: ReactNode; readonly trailer: ReactNode } => {
     const entries = state?.entries ?? [];
     const visibleCount = renderLimitForDirectory(path, entries);
     const hiddenCount = entries.length - visibleCount;
     const visibleEntries = hiddenCount > 0 ? entries.slice(0, visibleCount) : entries;
-    return (
-      // Nested levels are role="group" so the treeitem hierarchy is exposed (audit C143);
-      // the root level sits directly under role="tree".
-      <div className="tr-dir" role={depth === 0 ? undefined : "group"}>
+    const notices = (
+      <>
         {state?.loading === true ? (
           <output
             className="files-note"
@@ -1621,7 +1635,10 @@ export function FilesWidget({
               pendingEntryDraftLabel(pendingEntry.kind, t),
             )
           : null}
-        {visibleEntries.map((entry) => renderEntry(entry, depth))}
+      </>
+    );
+    const trailer = (
+      <>
         {hiddenCount > 0 ? (
           <button
             type="button"
@@ -1646,6 +1663,33 @@ export function FilesWidget({
             {t("filesWidget.directory.empty")}
           </output>
         ) : null}
+      </>
+    );
+    return {
+      notices,
+      rows: <>{visibleEntries.map((entry) => renderEntry(entry, depth))}</>,
+      trailer,
+    };
+  };
+
+  // Nested levels render into role="group" so the treeitem hierarchy stays exposed (audit C143).
+  // group has no required children, so a nested directory keeps its chrome inline.
+  //
+  // S6819 asks for a native element instead of role="group". None exists for this position: the
+  // ARIA tree pattern requires a nested level to be exactly role="group" so its treeitems stay
+  // owned by the tree, and <details>/<fieldset>/<optgroup>/<address> would each introduce semantics
+  // a tree level must not have. Removing the role flattens the hierarchy and puts this level's
+  // notices back under role="tree" — the #2605 defect this file just repaired.
+  const renderDirectory = (path: string, depth: number, state = directories[path]): ReactNode => {
+    const { notices, rows, trailer } = directorySections(path, depth, state);
+    return (
+      <div // NOSONAR typescript:S6819 — required ARIA tree level, see the note above.
+        className="tr-dir"
+        role="group"
+      >
+        {notices}
+        {rows}
+        {trailer}
       </div>
     );
   };
@@ -1841,6 +1885,38 @@ export function FilesWidget({
     );
   };
 
+  // tabIndex -1: the tree container only receives programmatic focus; rows stay native buttons
+  // (Tab fallback) while onTreeKeyDown adds the arrow-key traversal (C215). `.tr` keeps the
+  // scroll/keyboard host role it has always had, but role="tree" sits on the element that owns ONLY
+  // the rows: a tree may own nothing but treeitem and group, and the root level's status notes,
+  // error block, inline editor and load-more button are none of those. Nesting them under the tree
+  // is what axe reported as a critical aria-required-children violation on a populated root (#2605).
+  const renderRootTree = (): ReactNode => {
+    const { notices, rows, trailer } = directorySections(currentDirectoryPath ?? "", 0);
+    // `tr files-tree` stays on THIS element: it is the flex item that owns `overflow: auto`, and
+    // the C203 rule `.files .files-tree { min-height: 0 }` is what lets it shrink below its content
+    // so scrolling engages instead of the tree growing the window body. globals.css is SHA-locked,
+    // so the class pair has to stay where the rule expects it.
+    return (
+      <div className="tr files-tree">
+        {notices}
+        {/* Only the rows carry role="tree" — a tree may own nothing but treeitem and group, and the
+            root level's notices, error block, inline editor and load-more button are none of those
+            (#2605). The keyboard host moves with the role: arrow traversal is a tree behaviour and
+            every row it navigates is inside this element. */}
+        <div
+          role="tree"
+          aria-label={t("filesWidget.tree.label")}
+          tabIndex={-1}
+          onKeyDown={onTreeKeyDown}
+        >
+          {rows}
+        </div>
+        {trailer}
+      </div>
+    );
+  };
+
   const renderTreeView = (): ReactNode => (
     // tabIndex -1: programmatic focus target only — the fallback for the focus restore above
     // when the previously previewed row no longer exists after a refresh.
@@ -1865,17 +1941,7 @@ export function FilesWidget({
       <span id={unreadableReasonId} className="visually-hidden">
         {t("filesWidget.tree.unreadableLinkReason")}
       </span>
-      {/* tabIndex -1: the tree container only receives programmatic focus; rows stay native
-          buttons (Tab fallback) while onTreeKeyDown adds the arrow-key traversal (C215). */}
-      <div
-        className="tr files-tree"
-        role="tree"
-        aria-label={t("filesWidget.tree.label")}
-        tabIndex={-1}
-        onKeyDown={onTreeKeyDown}
-      >
-        {renderDirectory(currentDirectoryPath ?? "", 0)}
-      </div>
+      {renderRootTree()}
       {menu !== null ? (
         <div
           ref={menuRef}

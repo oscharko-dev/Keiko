@@ -85,3 +85,43 @@ describe("editor profiles store", () => {
     expect(emptyEditorProfilesRecord().activeProfileRef).toBe(EDITOR_M11_DEFAULT_PROFILE_REF);
   });
 });
+
+describe("persisted profile identity (#2618)", () => {
+  function storedRecord(profiles: readonly WorkspaceProfileManifest[], stateDir: string): void {
+    writeFileSync(
+      editorProfilesRecordPath(stateDir),
+      JSON.stringify({ ...emptyEditorProfilesRecord(), revision: 1, profiles }),
+      "utf8",
+    );
+  }
+
+  function named(ref: string, displayName: string): WorkspaceProfileManifest {
+    const base = focusProfile();
+    const profileRef = ref as WorkspaceProfileManifest["profileRef"];
+    return { ...base, profileRef, displayName, settings: { ...base.settings, profileRef } };
+  }
+
+  // The reserved-name and collision checks only lower-cased, while the key that decides when two
+  // display names are the same name to a reader also TRIMS. A persisted profile named " Default "
+  // therefore passed both and shadowed the built-in one: two entries reading "Default" in the
+  // picker, with nothing saying which is built in.
+  it("rejects a persisted profile that claims the reserved name with padding", () => {
+    const stateDir = temporaryDirectory("editor-profiles-reserved-padded");
+    storedRecord([named("profile-a", " Default ")], stateDir);
+
+    expect(createEditorProfilesStore({ stateDir }).load()).toEqual({
+      state: "unavailable",
+      record: emptyEditorProfilesRecord(),
+    });
+  });
+
+  it("rejects two persisted profiles whose names differ only by padding", () => {
+    const stateDir = temporaryDirectory("editor-profiles-padded-collision");
+    storedRecord([named("profile-a", "Focus"), named("profile-b", " Focus ")], stateDir);
+
+    expect(createEditorProfilesStore({ stateDir }).load()).toEqual({
+      state: "unavailable",
+      record: emptyEditorProfilesRecord(),
+    });
+  });
+});

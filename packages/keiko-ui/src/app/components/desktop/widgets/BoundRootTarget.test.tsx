@@ -6,7 +6,9 @@ import {
   BOUND_ROOT_SURFACES,
   BoundRootTarget,
   resolveExplicitWindowRoot,
+  workspaceManifestAvailability,
   type BoundRootSurfaceType,
+  type WorkspaceManifestAvailability,
 } from "./BoundRootTarget";
 import { resolveBoundRoot } from "./index";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
@@ -16,6 +18,24 @@ vi.mock("../hooks/useWorkspaceManifest", () => ({ useWorkspaceManifest: vi.fn() 
 const useWorkspaceManifestMock = vi.mocked(useWorkspaceManifest);
 
 type RootDescriptor = WorkspaceManifest["roots"][number];
+
+function loaded(manifest: WorkspaceManifest): WorkspaceManifestAvailability {
+  return { status: "loaded", manifest };
+}
+
+// The hook's own shape, so a test can express "the fetch failed" and "the first load is in flight"
+// as the distinct states they are rather than as one shared `null`.
+function manifestView(
+  overrides: Partial<ReturnType<typeof useWorkspaceManifest>>,
+): ReturnType<typeof useWorkspaceManifest> {
+  return {
+    manifest: null,
+    loading: false,
+    mutating: false,
+    issue: null,
+    ...overrides,
+  } as ReturnType<typeof useWorkspaceManifest>;
+}
 
 function root(index: number): RootDescriptor {
   const suffix = String.fromCharCode(97 + index);
@@ -67,7 +87,7 @@ beforeEach(() => {
 describe("BoundRootTarget", () => {
   it("keeps the task-workspace root locked even when cfg names a sibling root", () => {
     expect(
-      resolveExplicitWindowRoot(manifest(), "/repo/b", "/task/root", true, "execution"),
+      resolveExplicitWindowRoot(loaded(manifest()), "/repo/b", "/task/root", true, "execution"),
     ).toEqual({ status: "bound", root: "/task/root" });
   });
 
@@ -105,7 +125,7 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
       // iteration the same call and the loop decorative.
       const { surfaceClass } = BOUND_ROOT_SURFACES[surface];
       expect(
-        resolveExplicitWindowRoot(manifest(), undefined, "/repo/a", false, surfaceClass),
+        resolveExplicitWindowRoot(loaded(manifest()), undefined, "/repo/a", false, surfaceClass),
         surface,
       ).toEqual({ status: "denied", reason: "root-binding-required" });
     }
@@ -119,7 +139,7 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
     for (const surface of READ_ONLY_SURFACES) {
       const { surfaceClass } = BOUND_ROOT_SURFACES[surface];
       expect(
-        resolveExplicitWindowRoot(manifest(), undefined, "/repo/a", false, surfaceClass),
+        resolveExplicitWindowRoot(loaded(manifest()), undefined, "/repo/a", false, surfaceClass),
         surface,
       ).toEqual({ status: "bound", root: "/repo/b" });
     }
@@ -161,7 +181,7 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
           for (const member of members) {
             for (const fallback of [undefined, "/repo/a", "/elsewhere"]) {
               expect(
-                resolveExplicitWindowRoot(current, member, fallback, false, surfaceClass),
+                resolveExplicitWindowRoot(loaded(current), member, fallback, false, surfaceClass),
                 `${context}/${member}`,
               ).toEqual({ status: "bound", root: member });
             }
@@ -170,7 +190,7 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
           // a read-only surface follows focus. Neither may invent a root outside the manifest.
           for (const configured of [undefined, "/not/a/member", ""]) {
             const decision = resolveExplicitWindowRoot(
-              current,
+              loaded(current),
               configured,
               "/repo/a",
               false,
@@ -193,14 +213,109 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
     }
   });
 
+  // #2619 removed the implicit-root fallback for execution surfaces, but only for a manifest that
+  // was successfully read. "No manifest" and "manifest not readable right now" were the same value
+  // (`null`), so a failed or in-flight load put every execution surface back on the fallback root
+  // with no picker and no denial — the exact implicit binding that issue exists to forbid. One
+  // unreadable or future-schema manifest anywhere in the store makes the whole list throw, so this
+  // is reachable without touching the workspace being acted on.
+  it("denies execution while the workspace membership is unknown, and still binds read-only", () => {
+    expect(
+      resolveExplicitWindowRoot(
+        { status: "unavailable", reason: "failed" },
+        undefined,
+        "/repo/a",
+        false,
+        "execution",
+      ),
+    ).toEqual({ status: "denied", reason: "root-binding-required" });
+    expect(
+      resolveExplicitWindowRoot(
+        { status: "unavailable", reason: "failed" },
+        "/repo/a",
+        "/repo/a",
+        false,
+        "execution",
+      ),
+    ).toEqual({ status: "denied", reason: "root-binding-required" });
+    expect(
+      resolveExplicitWindowRoot(
+        { status: "unavailable", reason: "failed" },
+        undefined,
+        "/repo/a",
+        false,
+        "read-only",
+      ),
+    ).toEqual({ status: "bound", root: "/repo/a" });
+  });
+
+  it("separates an unreadable manifest from a workspace that has none", () => {
+    const view = { manifest: null, loading: false, issue: null } as const;
+    expect(workspaceManifestAvailability(view)).toEqual({ status: "absent" });
+    expect(workspaceManifestAvailability({ ...view, loading: true })).toEqual({
+      status: "unavailable",
+      reason: "loading",
+    });
+    expect(workspaceManifestAvailability({ ...view, issue: "load" })).toEqual({
+      status: "unavailable",
+      reason: "failed",
+    });
+    const current = manifestOf(2);
+    expect(workspaceManifestAvailability({ ...view, manifest: current })).toEqual(loaded(current));
+  });
+
+  it("renders the denial instead of the child when the manifest cannot be read", () => {
+    useWorkspaceManifestMock.mockReturnValue(
+      manifestView({ manifest: null, loading: false, issue: "load" }),
+    );
+    const child = vi.fn((bound: string | undefined) => <div>child:{bound}</div>);
+    render(
+      <BoundRootTarget
+        fallbackRoot="/repo/a"
+        configuredRoot={undefined}
+        lockedToActiveRoot={false}
+        surface="terminal"
+        onSelect={vi.fn()}
+      >
+        {child}
+      </BoundRootTarget>,
+    );
+    expect(screen.getByTestId("bound-root-denied-terminal")).toBeInTheDocument();
+    expect(child).not.toHaveBeenCalled();
+  });
+
+  // The first read is in flight on every mount, so denying is right but announcing it is not. What
+  // matters for the fail-open is that the child stays unmounted in BOTH unavailable states.
+  it("mounts no execution child while the first manifest read is still in flight", () => {
+    useWorkspaceManifestMock.mockReturnValue(
+      manifestView({ manifest: null, loading: true, issue: null }),
+    );
+    const child = vi.fn((bound: string | undefined) => <div>child:{bound}</div>);
+    render(
+      <BoundRootTarget
+        fallbackRoot="/repo/a"
+        configuredRoot={undefined}
+        lockedToActiveRoot={false}
+        surface="terminal"
+        onSelect={vi.fn()}
+      >
+        {child}
+      </BoundRootTarget>,
+    );
+    expect(child).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("bound-root-denied-terminal")).toBeNull();
+  });
+
   it("keeps the legacy single-root and unbound chains untouched", () => {
     for (const surfaceClass of ["execution", "read-only"] as const) {
-      expect(resolveExplicitWindowRoot(null, undefined, "/repo/a", false, surfaceClass)).toEqual({
+      expect(
+        resolveExplicitWindowRoot({ status: "absent" }, undefined, "/repo/a", false, surfaceClass),
+      ).toEqual({
         status: "bound",
         root: "/repo/a",
       });
       expect(
-        resolveExplicitWindowRoot(manifestOf(1), undefined, "/repo/a", false, surfaceClass),
+        resolveExplicitWindowRoot(loaded(manifestOf(1)), undefined, "/repo/a", false, surfaceClass),
       ).toEqual({ status: "bound", root: "/repo/a" });
     }
   });

@@ -9,8 +9,16 @@ closed over named executable rows so additions cannot silently become prose-only
 
 The security matrix reports zero severity-1 or severity-2 security findings. Every exercised
 hostile input has a typed fail-closed result, and no product defect was repaired inside #2533. The
-composed accessibility scan found one critical semantic defect in existing multi-root markup; it
-is filed as #2605 and retained as an exact executable assertion rather than suppressed.
+composed accessibility scan found one critical semantic defect in existing multi-root markup, filed
+as #2605 and retained at the time as an exact executable assertion rather than suppressed.
+
+That defect is now repaired at its owning layer. `role="tree"` may own only `treeitem` and `group`
+children, and the file tree owned two other things: the caret toggle button beside each directory
+row, and the root level's status notes, error block, inline editor and load-more control. The caret
+is a pointer-only duplicate of the row's own `aria-expanded` and is hidden from the accessibility
+tree; the tree role moved onto the element that owns only the rows. The Explorer scan is now held to
+the same zero-violation bar as Settings and history, with no rule disabled or excluded, and the
+closeout journey asserts it green rather than asserting a tolerated finding.
 
 ## Adversarial matrix
 
@@ -119,9 +127,10 @@ Linux-authoritative release proof. The supplemental harness cannot replace or re
 budget.
 
 The CI UI lane runs the composed M11 Playwright journey. It attaches content-free profile-switch
-and restore timings, the #2605 finding reference, and a populated screenshot after real-browser
-axe checks. Raw traces remain outside manifest evidence because they can contain deterministic
-fixture content.
+and restore timings and a populated screenshot after real-browser axe checks. The known-finding
+reference it used to carry was removed with the #2605 repair — there is no tolerated finding left to
+name. Raw traces remain outside manifest evidence because they can contain deterministic fixture
+content.
 
 ## Accessibility, visual, and i18n review
 
@@ -137,11 +146,20 @@ The focused UI tests and composed browser proof cover:
 
 The settings scan is taken with the Editor tab open and its profile controls proven visible — the
 settings window mounts on its Models tab, and until #2626 the journey scanned that default instead
-of the profile surface this row is about. Settings/profile and history are green for
-serious/critical axe findings. The populated nested file trees report exactly two
-`aria-required-children` nodes under one critical finding. #2605 owns the product-source
-remediation; the closeout E2E asserts the exact id, impact, and node count so a new violation or
-accidental suppression fails the lane.
+of the profile surface this row is about. Settings/profile, history and the populated multi-root
+Explorer are all green for serious/critical axe findings. The Explorer reported exactly two
+`aria-required-children` nodes under one critical finding until #2605 was repaired; the closeout
+E2E now asserts that surface green like the other two, and its source guard forbids both a
+reintroduced known-finding allowance and a disabled rule, so neither can restore the tolerance
+quietly.
+
+One instance of the same rule survives outside this milestone's surface and is deliberately not
+repaired here: a git-decorated row renders its diff control as a sibling of the treeitem rather than
+inside it, which only occurs when a root is a Git repository — not in the multi-root closeout
+fixtures. Correcting it means relocating `role="treeitem"` from the row button onto the row wrapper,
+which changes the accessible name and focus target of every tree locator in the repository. It is
+tracked separately; `FilesWidget.a11y.test.tsx` is the single fixture that still disables the rule,
+narrowed to that scenario and annotated with the reason.
 
 All M11 component styling is module-scoped. The SHA-pinned global stylesheet is not part of the
 #2533 diff.
@@ -157,7 +175,9 @@ All M11 component styling is module-scoped. The SHA-pinned global stylesheet is 
 - Local-history keyfile fallback remains weaker than OS keychain custody, as documented by ADR-0147;
   content is plaintext in process memory during an authenticated read.
 - Cross-root mutations remain decomposed. There is no M11 atomic multi-root transaction.
-- The nested multi-root file trees require the ARIA ownership correction tracked by #2605.
+- A Git-decorated file row still places its diff control beside its treeitem rather than inside it,
+  so `aria-required-children` remains disabled in that one component fixture. It is out of reach of
+  the multi-root surfaces this milestone ships and is tracked as its own follow-up.
 
 ## Capability delta against #2088
 
