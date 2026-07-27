@@ -7,7 +7,6 @@
 
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  estimateTokens,
   type ContextLaneId,
   type ContextToolRehydrationHandle,
 } from "@oscharko-dev/keiko-contracts";
@@ -97,4 +96,4 @@ export function buildToolRehydrationHandle(
   };
 }
 
-export { estimateTokens };
+export { estimateTokens } from "@oscharko-dev/keiko-contracts";

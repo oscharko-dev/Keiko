@@ -219,7 +219,7 @@ function parseOklchComponents(color: string): OklchComponents | undefined {
   const chroma = Number.parseFloat(cToken);
   const hueDeg = parseOklchHue(hToken);
   if (!Number.isFinite(lightness) || !Number.isFinite(chroma) || !Number.isFinite(hueDeg)) {
-    throw new Error(`Keiko editor theme: unparseable oklch colour "${color}".`);
+    throw new TypeError(`Keiko editor theme: unparseable oklch colour "${color}".`);
   }
   return { alpha, chroma, hueDeg, lightness };
 }
@@ -282,7 +282,7 @@ function parseLabComponents(color: string): LabComponents | undefined {
   const a = parseLabAxis(aToken);
   const b = parseLabAxis(bToken);
   if (!Number.isFinite(lightness) || !Number.isFinite(a) || !Number.isFinite(b)) {
-    throw new Error(`Keiko editor theme: unparseable lab colour "${color}".`);
+    throw new TypeError(`Keiko editor theme: unparseable lab colour "${color}".`);
   }
   return { alpha, a, b, lightness };
 }

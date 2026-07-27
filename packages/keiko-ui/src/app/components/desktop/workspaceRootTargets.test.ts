@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
-import { requestWorkspaceRoots, workspaceRootTargets } from "./workspaceRootTargets";
+import {
+  requestWorkspaceRoots,
+  WORKSPACE_ROOT_REQUEST_CONCURRENCY,
+  workspaceRootTargets,
+  type WorkspaceRootTarget,
+} from "./workspaceRootTargets";
 
 function manifest(): WorkspaceManifest {
   return {
@@ -48,5 +53,29 @@ describe("workspaceRootTargets", () => {
       { status: "success", target: targets[0], value: "/repo/a" },
       { status: "error", target: targets[1], message: "denied" },
     ]);
+  });
+
+  it("bounds a 32-root fan-out at the explicit concurrency ceiling", async () => {
+    const targets: readonly WorkspaceRootTarget[] = Array.from({ length: 32 }, (_, index) => ({
+      id: `root-${String(index)}`,
+      root: `/repo/${String(index)}`,
+      label: `Root ${String(index + 1)}`,
+    }));
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
+
+    const outcomes = await requestWorkspaceRoots(targets, async (target) => {
+      activeRequests += 1;
+      maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+      await Promise.resolve();
+      activeRequests -= 1;
+      return target.id;
+    });
+
+    expect(maximumActiveRequests).toBe(WORKSPACE_ROOT_REQUEST_CONCURRENCY);
+    expect(outcomes).toHaveLength(32);
+    expect(outcomes.map((outcome) => outcome.target.id)).toEqual(
+      targets.map((target) => target.id),
+    );
   });
 });

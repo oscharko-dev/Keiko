@@ -317,8 +317,10 @@ export async function checkWorkspacePackageGraph(root) {
     .filter((pkg) => pkg.name !== UI_PACKAGE)
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  failures.push(...rootScriptFailures(rootManifest));
-  failures.push(...solutionRefFailures(packagesSolution, graphPackages));
+  failures.push(
+    ...rootScriptFailures(rootManifest),
+    ...solutionRefFailures(packagesSolution, graphPackages),
+  );
   const uiPackage = packages.find((pkg) => pkg.name === UI_PACKAGE);
   if (uiPackage) {
     failures.push(...workspaceDependencyAllowlistFailures(uiPackage));

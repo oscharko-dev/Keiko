@@ -248,7 +248,7 @@ async function fetchJson<T>(
       Accept: "application/json",
       ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
       ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-      ...(init?.headers ?? {}),
+      ...init?.headers,
     },
   });
 
@@ -284,7 +284,7 @@ async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array
       Accept: "application/pdf",
       ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
       ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-      ...(init?.headers ?? {}),
+      ...init?.headers,
     },
   });
 

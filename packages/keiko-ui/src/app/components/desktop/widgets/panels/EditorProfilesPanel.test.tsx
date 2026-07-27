@@ -215,6 +215,29 @@ describe("EditorProfilesPanel", () => {
   );
 
   /**
+   * The rejection table above proves only which names Create refuses; nothing proved that an
+   * accepted name reaches the control plane, or that Create acts on the typed name rather than the
+   * selected profile. Creating a profile through Settings is the step the M11 operator walkthrough
+   * asks for, and the composed browser journey deliberately does not cover it — it creates through
+   * the settings profile route before the browser opens — so this is where the control is proven
+   * (#2626).
+   */
+  it("creates a profile from an accepted typed name and touches no other action", () => {
+    const currentView = view(FOCUS.profileRef);
+    renderPanel(currentView);
+
+    fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "Focused M11" } });
+    const create = screen.getByRole("button", { name: "Create" });
+    expect(create).toBeEnabled();
+    fireEvent.click(create);
+
+    expect(currentView.createProfile).toHaveBeenCalledWith("Focused M11");
+    expect(currentView.renameProfile).not.toHaveBeenCalled();
+    expect(currentView.duplicateProfile).not.toHaveBeenCalled();
+    expect(currentView.switchProfile).not.toHaveBeenCalled();
+  });
+
+  /**
    * A draft is typed for one profile. When the selection moves on its own — the chosen profile is
    * deleted and the fallback takes over — carrying the draft along would rename or duplicate a
    * profile the text was never meant for.

@@ -101,6 +101,7 @@ export function ManagedLanguageSettings({
         <WorkspaceTrustBanner
           status={trust.status}
           issue={trust.issue}
+          failure={trust.failure}
           surface="languages"
           onManage={onOpenWorkspaceTrust}
         />

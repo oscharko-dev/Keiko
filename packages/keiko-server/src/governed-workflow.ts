@@ -47,8 +47,8 @@ function filePatchBytes(file: PatchFileChange): number {
   for (const hunk of file.hunks) {
     lines.push(
       `@@ -${String(hunk.oldStart)},${String(hunk.oldLines)} +${String(hunk.newStart)},${String(hunk.newLines)} @@`,
+      ...hunk.lines,
     );
-    lines.push(...hunk.lines);
   }
   return Buffer.byteLength(lines.join("\n"), "utf8");
 }

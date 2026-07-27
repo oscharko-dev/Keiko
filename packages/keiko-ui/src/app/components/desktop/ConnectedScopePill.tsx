@@ -210,8 +210,8 @@ function ScopePillItem({
       const response = await updateScopes(chat.id, remaining.length > 0 ? remaining : null);
       onDisconnect?.(response.chat);
       restoreScopeHeaderFocus(header);
-    } catch (caught) {
-      setError(formatErrorMessage(caught, t));
+    } catch (error_) {
+      setError(formatErrorMessage(error_, t));
     } finally {
       setBusy(false);
     }

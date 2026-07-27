@@ -15,7 +15,6 @@
 import type {
   EgressDestinationClass,
   VoiceTwinEgressAudit,
-  VoiceTwinEgressDestination,
   VoiceTwinManifestFixture,
   VoiceTwinManifestScan,
 } from "./types.js";
@@ -119,4 +118,4 @@ export function scanManifestsForDeniedMediaPackages(
 }
 
 // Re-export the destination type so fixture / runner callers need not reach into types for it.
-export type { VoiceTwinEgressDestination };
+export type { VoiceTwinEgressDestination } from "./types.js";

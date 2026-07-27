@@ -55,7 +55,7 @@ function unquoteYamlScalar(value) {
 }
 
 function matrixValues(source, key) {
-  const match = source.match(new RegExp(`^\\s*${key}:\\s*\\[([^\\]]+)\\]`, "m"));
+  const match = source.match(new RegExp(String.raw`^\s*${key}:\s*\[([^\]]+)\]`, "m"));
   if (match === null) return [];
   return match[1]
     .split(",")
@@ -125,7 +125,7 @@ function allWorkflowJobNames() {
 }
 
 function envValue(source, name) {
-  const match = source.match(new RegExp(`^\\s*${name}:\\s*(.+)$`, "m"));
+  const match = source.match(new RegExp(String.raw`^\s*${name}:\s*(.+)$`, "m"));
   return match === null ? undefined : unquoteYamlScalar(match[1]);
 }
 

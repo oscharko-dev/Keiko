@@ -1307,6 +1307,34 @@ describe("useChatSession canonical Voice FIFO", () => {
     }
   });
 
+  // Issue #2550: a settled spoken final is answered by this same canonical chat pipeline, so the
+  // server cannot infer that the turn came from Voice — only this caller knows. Declaring the origin
+  // here is what lets the Memory Journal show what was learned during voice; without it every voice
+  // capture is filed as desktop.
+  it("declares the voice capture surface on a canonical voice final", async () => {
+    const rendered = await setupVoiceQueueSession();
+
+    await act(async () => {
+      await rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("I prefer stand-ups at 9am.", "surface-voice-final"),
+      );
+    });
+
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0].memory).toMatchObject({
+      surface: "voice",
+    });
+  });
+
+  it("leaves a typed send free of a surface marker so its request stays byte-identical", async () => {
+    const rendered = await setupVoiceQueueSession();
+
+    await act(async () => {
+      await rendered.result.current.sendMessage({ text: "A typed turn." });
+    });
+
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0].memory).not.toHaveProperty("surface");
+  });
+
   it("persists a 16,001-character final as one user turn with one assistant before the next utterance", async () => {
     const rendered = await setupVoiceQueueSession();
     const longFinal = `${"a".repeat(8_000)} ${"b".repeat(8_000)}`;
@@ -2611,6 +2639,61 @@ describe("useChatSession canonical Voice FIFO", () => {
       ]);
     } finally {
       now.mockRestore();
+    }
+  });
+
+  it("renders a durably admitted transcript once across a queue re-attempt", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const spoken = "voice retried after a lost socket";
+    // The BFF persists the canonical user row at admission, so the row outlives a transport
+    // failure with an unknown commit state. Reconciliation rebuilds `messages` from that row and
+    // drops the projection's local row — the queue then re-attempts the SAME turn identity.
+    const durableUser = message({
+      id: "durable-retry-user",
+      content: spoken,
+      role: "user",
+      timestamp: 30_000,
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [durableUser] });
+    const pending = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    const sends: Array<string | undefined> = [];
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      sends.push(request.clientTurnId);
+      // Attempt 1 loses the socket mid-generation (retryable, commit state unknown); attempt 2
+      // never settles, so the assertions observe the state the re-attempt leaves on screen.
+      return sends.length === 1
+        ? Promise.reject(new TypeError("network unavailable"))
+        : pending.promise;
+    });
+    const spokenUserRowIds = (): string[] =>
+      rendered.result.current.messages
+        .filter((candidate) => candidate.role === "user" && candidate.content === spoken)
+        .map((candidate) => candidate.id);
+    vi.useFakeTimers();
+    vi.setSystemTime(30_000);
+    try {
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(spoken, "voice-durable-retry"),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+
+      expect(delivery).toBeDefined();
+      expect(sends).toEqual(["voice-durable-retry"]);
+      expect(spokenUserRowIds()).toEqual(["durable-retry-user"]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(sends).toHaveLength(2);
+      expect(spokenUserRowIds()).toEqual(["durable-retry-user"]);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

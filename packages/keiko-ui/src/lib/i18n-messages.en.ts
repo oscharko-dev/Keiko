@@ -111,13 +111,16 @@ export const EN_MESSAGES = {
   "workspaceTrust.title": "Workspace Trust",
   "workspaceTrust.restrictedMode": "Restricted Mode",
   "workspaceTrust.trustedMode": "Trusted workspace",
+  "workspaceTrust.unavailable": "Workspace Trust unavailable",
   "workspaceTrust.manage": "Manage Workspace Trust",
   "workspaceTrust.loading": "Loading server-owned trust state…",
   "workspaceTrust.retry": "Retry",
   "workspaceTrust.loadFailed":
-    "Workspace Trust could not be read safely. This workspace remains restricted.",
+    "Workspace Trust could not be read safely. Execution capabilities remain unavailable.",
   "workspaceTrust.updateFailed":
     "The server did not confirm the trust change. This workspace remains restricted.",
+  "workspaceTrust.errorCode": "Error code: {code}",
+  "workspaceTrust.supportId": "Support ID: {correlationId}",
   "workspaceTrust.banner.editor":
     "Workspace scripts, language servers, and agent execution remain unavailable for this root.",
   "workspaceTrust.banner.commands":

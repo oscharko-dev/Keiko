@@ -354,7 +354,7 @@ export function createMacosNativeFileDialogAdapter(
 // execution policy. The stdin config is base64-wrapped so the bytes stay ASCII regardless of the
 // console input codepage.
 function windowsPowershellPath(): string {
-  const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+  const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
   return join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 

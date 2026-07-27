@@ -313,7 +313,7 @@ export function decodeUtf8(bytes: Uint8Array): DecodedText {
 // participate in tag filtering and preserves the parser's CodeQL `js/bad-tag-filter` posture. The
 // `name` argument is always a hard-coded literal at call sites, so the interpolation is safe.
 export function readAttribute(tagRaw: string, name: string): string | undefined {
-  const pattern = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "iu");
+  const pattern = new RegExp(String.raw`(?:^|\s)${name}\s*=\s*(?:"([^"]*)"|'([^']*)')`, "iu");
   const match = pattern.exec(tagRaw);
   if (match === null) return undefined;
   const value = match[1] ?? match[2];

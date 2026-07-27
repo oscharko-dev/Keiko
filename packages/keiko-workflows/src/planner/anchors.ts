@@ -308,8 +308,7 @@ function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
     while (match !== null) {
       const full = match[0];
       pushAnchor(out, entry.term, "identifier", 0.85);
-      parts.push(remaining.slice(cursor, match.index));
-      parts.push(" ".repeat(full.length));
+      parts.push(remaining.slice(cursor, match.index), " ".repeat(full.length));
       cursor = match.index + full.length;
       match = re.exec(remaining);
     }

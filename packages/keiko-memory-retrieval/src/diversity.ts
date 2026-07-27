@@ -33,7 +33,7 @@ function cosine(a: Float32Array, b: Float32Array): number {
   if (na === 0 || nb === 0) return 0;
   const c = dot / (Math.sqrt(na) * Math.sqrt(nb));
   if (c <= 0) return 0;
-  return c > 1 ? 1 : c;
+  return Math.min(c, 1);
 }
 
 export interface MmrItem {

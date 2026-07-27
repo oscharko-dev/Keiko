@@ -336,7 +336,7 @@ const MANUAL_REFRESH_COUNT_KEYS = [
   "deniedLinks",
 ] as const;
 
-const READINESS: readonly KnowledgePodReadiness[] = [
+const READINESS: ReadonlySet<KnowledgePodReadiness> = new Set([
   "draft",
   "indexing",
   "ready",
@@ -344,24 +344,24 @@ const READINESS: readonly KnowledgePodReadiness[] = [
   "degraded",
   "unavailable",
   "error",
-];
-const KINDS: readonly KnowledgePodSummaryKind[] = ["pod", "pod-set"];
+]);
+const KINDS: ReadonlySet<KnowledgePodSummaryKind> = new Set(["pod", "pod-set"]);
 const BACKINGS: readonly KnowledgePodBackingKind[] = ["knowledge-capsule", "capsule-set"];
-const LOCATION_KINDS: readonly KnowledgePodLocationKind[] = [
+const LOCATION_KINDS: ReadonlySet<KnowledgePodLocationKind> = new Set([
   "local",
   "remote",
   "federated",
   "ephemeral",
-];
+]);
 const SEALING_POSTURES: readonly KnowledgePodSealingPosture[] = [
   "local-store-policy",
   "sealed-pod-policy",
 ];
 const POLICY_POSTURES: readonly KnowledgePodPolicyPosture[] = ["policy-pack", "not-declared"];
-const MODEL_USE_POLICY_SOURCES: readonly KnowledgePodModelUsePolicySource[] = [
+const MODEL_USE_POLICY_SOURCES: ReadonlySet<KnowledgePodModelUsePolicySource> = new Set([
   "explicit",
   "legacy-default",
-];
+]);
 const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
   "folder",
   "repository",
@@ -377,11 +377,11 @@ const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
 
 type FuturePodPlaceholderKind = "remote" | "federated" | "ephemeral";
 
-const FUTURE_POD_PLACEHOLDER_KINDS: readonly FuturePodPlaceholderKind[] = [
+const FUTURE_POD_PLACEHOLDER_KINDS: ReadonlySet<FuturePodPlaceholderKind> = new Set([
   "remote",
   "federated",
   "ephemeral",
-];
+]);
 
 const FUTURE_POD_REASON_BY_KIND: Record<
   FuturePodPlaceholderKind,
@@ -939,7 +939,7 @@ function validateGovernance(value: unknown, errors: string[]): void {
     return;
   }
   onlyKeys(value, GOVERNANCE_KEYS, "governance", errors);
-  if (!LOCATION_KINDS.includes(value.locationKind as KnowledgePodLocationKind)) {
+  if (!LOCATION_KINDS.has(value.locationKind as KnowledgePodLocationKind)) {
     errors.push("governance.locationKind is invalid");
   }
   if (!SEALING_POSTURES.includes(value.sealingPosture as KnowledgePodSealingPosture)) {
@@ -959,7 +959,7 @@ function validateModelUsePolicy(value: unknown, errors: string[]): void {
     return;
   }
   onlyKeys(value, MODEL_USE_POLICY_KEYS, "modelUsePolicy", errors);
-  if (!MODEL_USE_POLICY_SOURCES.includes(value.source as KnowledgePodModelUsePolicySource)) {
+  if (!MODEL_USE_POLICY_SOURCES.has(value.source as KnowledgePodModelUsePolicySource)) {
     errors.push("modelUsePolicy.source is invalid");
   }
   if (!KNOWLEDGE_POD_MODEL_USE_POLICY_MODES.includes(value.mode as never)) {
@@ -1057,8 +1057,7 @@ function futurePlaceholderKinds(
 
 function isFuturePodPlaceholderKind(value: unknown): value is FuturePodPlaceholderKind {
   return (
-    typeof value === "string" &&
-    FUTURE_POD_PLACEHOLDER_KINDS.includes(value as FuturePodPlaceholderKind)
+    typeof value === "string" && FUTURE_POD_PLACEHOLDER_KINDS.has(value as FuturePodPlaceholderKind)
   );
 }
 
@@ -1091,14 +1090,13 @@ function validateSummaryScalars(input: Record<string, unknown>, errors: string[]
     errors.push("summary.schemaVersion is invalid");
   }
   if (!isSafePodText(input.id, false)) errors.push("summary.id must be an evidence-safe string");
-  if (!KINDS.includes(input.kind as KnowledgePodSummaryKind))
-    errors.push("summary.kind is invalid");
+  if (!KINDS.has(input.kind as KnowledgePodSummaryKind)) errors.push("summary.kind is invalid");
   if (!isSafePodText(input.displayName, false)) {
     errors.push("summary.displayName must be an evidence-safe string");
   }
   validateOptionalSafeText(input.description, "summary.description", errors);
   validateSafeTextArray(input.tags, "summary.tags", errors, false);
-  if (!READINESS.includes(input.readiness as KnowledgePodReadiness)) {
+  if (!READINESS.has(input.readiness as KnowledgePodReadiness)) {
     errors.push("summary.readiness is invalid");
   }
   validateLifecycleState(input.lifecycleState, errors);

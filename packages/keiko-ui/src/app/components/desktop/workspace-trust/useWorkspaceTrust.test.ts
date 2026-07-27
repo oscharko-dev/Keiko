@@ -4,6 +4,7 @@ import {
   WORKSPACE_TRUST_SCHEMA_VERSION,
   type WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { ApiError } from "@/lib/api";
 import { WORKSPACE_TRUST_CHANGED_EVENT } from "@/lib/workspace-trust-api";
 import { useWorkspaceTrust } from "./useWorkspaceTrust";
 
@@ -62,12 +63,18 @@ describe("useWorkspaceTrust", () => {
   });
 
   it("drops the status and reports a load issue when the read fails", async () => {
-    fetchStatus.mockRejectedValue(new Error("boom"));
+    const error = new ApiError("WORKSPACE_STATE_UNAVAILABLE", "unavailable", 503);
+    error.correlationId = "trust-hook-request-2625";
+    fetchStatus.mockRejectedValue(error);
     const view = renderHook(() => useWorkspaceTrust("/repo-a"));
 
     await waitFor(() => expect(view.result.current.issue).toBe("load"));
     expect(view.result.current.status).toBeUndefined();
     expect(view.result.current.loading).toBe(false);
+    expect(view.result.current.failure).toEqual({
+      code: "WORKSPACE_STATE_UNAVAILABLE",
+      correlationId: "trust-hook-request-2625",
+    });
   });
 
   it("ignores a superseded in-flight read so a stale status cannot overwrite a newer one", async () => {

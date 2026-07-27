@@ -22,7 +22,7 @@
 
 import type { VoiceProfile } from "./gateway.js";
 import type { VoiceTranscriptEvidenceSummary, VoiceTranscriptSource } from "./voice-transcript.js";
-import { isVoiceTranscriptSource, voiceTranscriptCaptureAllowed } from "./voice-transcript.js";
+import { voiceTranscriptCaptureAllowed } from "./voice-transcript.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 export const VOICE_SESSION_RECAP_SCHEMA_VERSION = "1" as const;
@@ -168,4 +168,4 @@ export function validateVoiceSessionRecapAuditRecord(
 
 // Re-export the guard the descriptors depend on so consumers validating a descriptor's `source` do
 // not need a second import site.
-export { isVoiceTranscriptSource };
+export { isVoiceTranscriptSource } from "./voice-transcript.js";

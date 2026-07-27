@@ -43,7 +43,7 @@ function memoryRecord({ provenance, ...overrides }) {
       confidence: 0.8,
       sensitivity: "confidential",
       captureRationale: "fixture",
-      ...(provenance ?? {}),
+      ...provenance,
     },
     validity: { validFrom: FIXTURE_TS },
     status: "accepted",

@@ -15,11 +15,8 @@ import type {
   GitDeliveryPolicyDecision,
   GitDeliveryProviderCapability,
 } from "./git-delivery.js";
-import {
-  isGitDeliveryActionKind,
-  isGitDeliveryConstraint,
-  isGitDeliveryProviderCapability,
-} from "./git-delivery.js";
+import { isGitDeliveryActionKind, isGitDeliveryConstraint } from "./git-delivery.js";
+export { isGitDeliveryProviderCapability } from "./git-delivery.js";
 
 export const GIT_DELIVERY_POLICY_SCHEMA_VERSION = "1" as const;
 
@@ -187,7 +184,7 @@ function isRuleDecision(value: unknown): value is GitDeliveryRuleDecision {
 
 // ─── Guards ──────────────────────────────────────────────────────────────────────
 
-export { isGitDeliveryConstraint, isGitDeliveryProviderCapability };
+export { isGitDeliveryConstraint };
 
 function isActionKind(value: unknown): boolean {
   return isGitDeliveryActionKind(value);
@@ -245,8 +242,7 @@ function commonPackErrors(value: Record<string, unknown>): readonly string[] {
   if (value.schemaVersion !== GIT_DELIVERY_POLICY_SCHEMA_VERSION) {
     errors.push("pack.schemaVersion must equal the GIT_DELIVERY_POLICY_SCHEMA_VERSION literal");
   }
-  errors.push(...ruleErrors(value.rules, "rules"));
-  errors.push(...defaultRuleErrors(value.defaultRule));
+  errors.push(...ruleErrors(value.rules, "rules"), ...defaultRuleErrors(value.defaultRule));
   return errors;
 }
 

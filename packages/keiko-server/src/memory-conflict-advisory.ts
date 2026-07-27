@@ -13,7 +13,11 @@ import {
   type ResponseFormat,
 } from "@oscharko-dev/keiko-contracts";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
-import { memoryTextEgressRejectionReason } from "@oscharko-dev/keiko-memory-capture";
+import {
+  memoryTextEgressRejectionReason,
+  type CapturePolicyOptions,
+} from "@oscharko-dev/keiko-memory-capture";
+import { memoryCapturePolicyForDeps } from "./memory-capture-policy.js";
 import type {
   ConsolidationEvidence,
   ProposedAction,
@@ -96,11 +100,14 @@ function resolveParticipantRecords(
 // the stored label is set once at capture time and never re-evaluated later. Called with the FULL
 // set of ids the review item references (`gatingIdsForItem`), not just the ≤4 prompt participants,
 // so a non-public cluster member the model never sees still blocks the suggestion it's about.
-function passesSensitivityGate(records: readonly MemoryRecord[]): boolean {
+function passesSensitivityGate(
+  records: readonly MemoryRecord[],
+  policy: CapturePolicyOptions,
+): boolean {
   return records.every(
-    (record) =>
+    (record): boolean =>
       record.provenance.sensitivity === "public" &&
-      memoryTextEgressRejectionReason(record.body) === null,
+      memoryTextEgressRejectionReason(record.body, policy) === null,
   );
 }
 
@@ -194,11 +201,13 @@ function prepareAdvisoryCandidate(
   item: ReviewItem,
   memoriesById: ReadonlyMap<MemoryId, MemoryRecord>,
   redactor: Redactor,
+  policy: CapturePolicyOptions,
 ): PreparedAdvisoryCandidate | undefined {
   if (!isEligibleForAdvisory(item) || item.proposedAction === undefined) return undefined;
   const ids = participantIdsForAction(item.proposedAction);
   const gatingRecords = resolveParticipantRecords(gatingIdsForItem(item, ids), memoriesById);
-  if (gatingRecords === undefined || !passesSensitivityGate(gatingRecords)) return undefined;
+  if (gatingRecords === undefined || !passesSensitivityGate(gatingRecords, policy))
+    return undefined;
   const records = resolveParticipantRecords(ids, memoriesById);
   if (records === undefined) return undefined;
   const labels = LABELS.slice(0, records.length);
@@ -262,7 +271,11 @@ async function callAdvisoryModel(
 // Output is untrusted model text: redacted, stripped of format/pseudo-role tricks, NFKC
 // normalized, and re-run through the SAME egress gate used on the way in — never a partial or
 // best-guess acceptance (ADR-0120 D6 / security triage BLOCKING item 1).
-function sanitizeRationale(raw: unknown, redactor: Redactor): string | undefined {
+function sanitizeRationale(
+  raw: unknown,
+  redactor: Redactor,
+  policy: CapturePolicyOptions,
+): string | undefined {
   if (typeof raw !== "string" || raw.length === 0) return undefined;
   if (raw.includes("```") || containsPseudoRoleMarker(stripUnsafeFormatChars(raw)))
     return undefined;
@@ -273,7 +286,7 @@ function sanitizeRationale(raw: unknown, redactor: Redactor): string | undefined
     .replace(/\s+/gu, " ")
     .trim();
   if (normalized.length === 0 || containsPseudoRoleMarker(normalized)) return undefined;
-  if (memoryTextEgressRejectionReason(normalized) !== null) return undefined;
+  if (memoryTextEgressRejectionReason(normalized, policy) !== null) return undefined;
   return clampText(normalized, MAX_RATIONALE_CHARS);
 }
 
@@ -286,11 +299,12 @@ function parseAdvisoryStructuredOutput(
   structuredOutput: NormalizedResponse["structuredOutput"],
   labels: readonly string[],
   redactor: Redactor,
+  policy: CapturePolicyOptions,
 ): ParsedAdvisory | undefined {
   if (typeof structuredOutput !== "object" || structuredOutput === null) return undefined;
   const candidate = structuredOutput as { keep?: unknown; rationale?: unknown };
   if (typeof candidate.keep !== "string" || !labels.includes(candidate.keep)) return undefined;
-  const rationale = sanitizeRationale(candidate.rationale, redactor);
+  const rationale = sanitizeRationale(candidate.rationale, redactor, policy);
   if (rationale === undefined) return undefined;
   return { keep: candidate.keep, rationale };
 }
@@ -309,6 +323,7 @@ function advisoryOutcomeFromCall(
   call: AdvisoryCallResult,
   candidate: PreparedAdvisoryCandidate,
   redactor: Redactor,
+  policy: CapturePolicyOptions,
 ): AdvisoryCallOutcome {
   if (call.kind === "timed-out") return { kind: "timeout" };
   if (call.kind === "call-failed") return { kind: "model-call-failed", error: call.error };
@@ -316,6 +331,7 @@ function advisoryOutcomeFromCall(
     call.response.structuredOutput,
     candidate.labels,
     redactor,
+    policy,
   );
   if (parsed === undefined) return { kind: "invalid-response" };
   const recommendedWinnerId = candidate.ids[candidate.labels.indexOf(parsed.keep)];
@@ -398,6 +414,12 @@ async function runAdvisoryPhase(
   modelId: string,
 ): Promise<MemoryConflictAdvisoryOutcome> {
   const memoriesById = new Map(memories.map((record) => [record.id, record] as const));
+  // The egress gate is only as strong as the policy it runs with: since #2551 gave
+  // memoryTextEgressRejectionReason a deployment-configured denied-category tier (and the
+  // customer-identifier matchers before it), calling it policy-free here would silently admit
+  // exactly the bodies capture refuses. Resolve the same policy the write path uses so the
+  // "re-run through the SAME egress gate" contract below holds literally.
+  const policy = memoryCapturePolicyForDeps(deps);
   const enriched: ReviewItem[] = [];
   const counts: AdvisoryPhaseCounts = {
     modelCallFailures: 0,
@@ -409,7 +431,7 @@ async function runAdvisoryPhase(
   const startedAt = Date.now();
   let attempted = 0;
   for (const item of reviewItems) {
-    const candidate = prepareAdvisoryCandidate(item, memoriesById, deps.redactor);
+    const candidate = prepareAdvisoryCandidate(item, memoriesById, deps.redactor, policy);
     if (candidate === undefined) {
       enriched.push(item);
       continue;
@@ -433,7 +455,7 @@ async function runAdvisoryPhase(
       candidate.prompt,
       advisoryResponseFormat(candidate.labels),
     );
-    const outcome = advisoryOutcomeFromCall(call, candidate, deps.redactor);
+    const outcome = advisoryOutcomeFromCall(call, candidate, deps.redactor, policy);
     enriched.push(applyAdvisoryOutcome(item, outcome, deps, jobId, counts));
   }
   emitAdvisoryPhaseSummary(deps, jobId, counts);

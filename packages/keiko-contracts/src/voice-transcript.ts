@@ -361,7 +361,7 @@ export function summarizeVoiceTranscript(
   // The committed character count is the length of the consumable projection text, so the evidence
   // summary, the projection, and the reducer's onCommit observation all report the same number.
   const committedChars = projection.text.length;
-  const highestSeq = segments.reduce((max, segment) => (segment.seq > max ? segment.seq : max), 0);
+  const highestSeq = segments.reduce((max, segment) => Math.max(segment.seq, max), 0);
   return {
     schemaVersion: VOICE_TRANSCRIPT_SCHEMA_VERSION,
     segmentCount: segments.length,

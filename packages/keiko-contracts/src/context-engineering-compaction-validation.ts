@@ -23,14 +23,14 @@ import { isContextLaneId } from "./context-engineering-validation.js";
 import type { ContextValidationResult } from "./context-engineering-validation.js";
 import { containsAbsolutePath, containsPseudoRoleMarker } from "./text-safety.js";
 
-const PROVENANCE_REF_KINDS: readonly string[] = [
+const PROVENANCE_REF_KINDS: ReadonlySet<string> = new Set([
   "repo-file",
   "tool-result",
   "evidence-atom",
   "message",
-];
+]);
 
-const ASSUMPTION_CONFIDENCES: readonly string[] = ["low", "medium", "high"];
+const ASSUMPTION_CONFIDENCES: ReadonlySet<string> = new Set(["low", "medium", "high"]);
 
 const COMMAND_OUTCOME_SUMMARY_MAX_CHARS = 200;
 
@@ -71,7 +71,7 @@ function isOneOf(value: unknown, allowed: readonly string[]): value is string {
 
 // ─── ContextProvenanceRefKind ──────────────────────────────────────────────────
 export function isContextProvenanceRefKind(value: unknown): value is ContextProvenanceRefKind {
-  return typeof value === "string" && PROVENANCE_REF_KINDS.includes(value);
+  return typeof value === "string" && PROVENANCE_REF_KINDS.has(value);
 }
 
 // ─── lineRange (shared by ref + rehydration handle) ─────────────────────────────
@@ -156,8 +156,10 @@ function collectPreservedFact(value: unknown, prefix: string): string[] {
   const hasSource = value.sourceRef !== undefined;
   const isInferred = value.inferred === true;
   pushIf(reasons, !hasSource && !isInferred, `${prefix} requires sourceRef or inferred`);
-  reasons.push(...collectOptionalRef(value.sourceRef, `${prefix}.sourceRef`));
-  reasons.push(...collectRefArray(value.corroborating, `${prefix}.corroborating`));
+  reasons.push(
+    ...collectOptionalRef(value.sourceRef, `${prefix}.sourceRef`),
+    ...collectRefArray(value.corroborating, `${prefix}.corroborating`),
+  );
   return reasons;
 }
 
@@ -175,7 +177,7 @@ function collectAssumption(value: unknown, prefix: string): string[] {
   pushIf(reasons, !isNonEmptyTrimmed(value.rationale), `${prefix}.rationale invalid`);
   pushIf(
     reasons,
-    typeof value.confidence !== "string" || !ASSUMPTION_CONFIDENCES.includes(value.confidence),
+    typeof value.confidence !== "string" || !ASSUMPTION_CONFIDENCES.has(value.confidence),
     `${prefix}.confidence invalid`,
   );
   return reasons;
@@ -341,8 +343,8 @@ function collectModelSummary(value: unknown, prefix: string): string[] {
       `${prefix}.modelSummary.debuggingContext`,
     ),
     ...collectModelSummaryStrings(value.openThreads, `${prefix}.modelSummary.openThreads`),
+    ...collectModelSummaryStatusRules(value, prefix),
   );
-  reasons.push(...collectModelSummaryStatusRules(value, prefix));
   return reasons;
 }
 
@@ -532,25 +534,19 @@ function collectRecordOptionals(value: Record<string, unknown>, prefix: string):
     value.orderedAt !== undefined && !isFiniteNumber(value.orderedAt),
     `${prefix}.orderedAt invalid`,
   );
-  reasons.push(...collectRefArray(value.sourceSpans, `${prefix}.sourceSpans`));
   reasons.push(
+    ...collectRefArray(value.sourceSpans, `${prefix}.sourceSpans`),
     ...collectTypedArray(value.preservedFacts, `${prefix}.preservedFacts`, collectPreservedFact),
-  );
-  reasons.push(...collectTypedArray(value.assumptions, `${prefix}.assumptions`, collectAssumption));
-  reasons.push(
+    ...collectTypedArray(value.assumptions, `${prefix}.assumptions`, collectAssumption),
     ...collectTypedArray(value.userConstraints, `${prefix}.userConstraints`, collectUserConstraint),
-  );
-  reasons.push(
     ...collectTypedArray(value.commandOutcomes, `${prefix}.commandOutcomes`, collectCommandOutcome),
-  );
-  reasons.push(
     ...collectTypedArray(
       value.invalidationKeys,
       `${prefix}.invalidationKeys`,
       collectInvalidationKey,
     ),
+    ...collectModelSummary(value.modelSummary, prefix),
   );
-  reasons.push(...collectModelSummary(value.modelSummary, prefix));
   for (const key of [
     "decisions",
     "openQuestions",

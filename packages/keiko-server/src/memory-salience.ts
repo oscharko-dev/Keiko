@@ -13,7 +13,10 @@ import type {
   CodingWorkbenchMode,
   MemoryAuditInitiatorSurface,
 } from "@oscharko-dev/keiko-contracts";
-import type { ConversationMemoryActionWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ConversationMemoryActionWire,
+  ConversationMemoryCaptureSurfaceWire,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   MemoryId,
   MemoryProposalId,
@@ -430,7 +433,10 @@ interface SalienceTurnRequest {
     { readonly enabled: boolean; readonly mode?: CodingWorkbenchMode | undefined } | undefined;
 }
 
-type SalienceCaptureSurface = "desktop" | "voice";
+// The capture surface vocabulary is the wire contract's, not a server-local twin (ADR-0019): the UI
+// declares the originating surface on the memory request and the server only maps it to the audit
+// envelope below.
+type SalienceCaptureSurface = ConversationMemoryCaptureSurfaceWire;
 
 // Maps the scheduler's capture surface to the audit envelope's initiatorSurface vocabulary so the
 // Memory Journal projection (#2547) can distinguish a voice-originated capture from desktop chat.

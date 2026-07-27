@@ -67,14 +67,23 @@ This shapes the product _and_ how you work on it:
 ## 2. Setup and the commands you will actually run
 
 ```bash
-npm install          # installs all workspaces from the single root lockfile
-npm run build        # build:packages (tsc -b) then the root build
-npm run dev:start    # Node BFF + Next.js UI on ONE loopback URL (http://127.0.0.1:1983)
+npm install               # installs all workspaces from the single root lockfile
+npm run provision:sqlite-vec  # ONCE per checkout — see below; without it `npm test` is red
+npm run build             # build:packages (tsc -b) then the root build
+npm run dev:start         # Node BFF + Next.js UI on ONE loopback URL (http://127.0.0.1:1983)
 npm run dev:stop
 ```
 
 The dev UI and BFF bind loopback port **1983** (not Vite's 5173, not 3000). If 1983 is taken,
 `dev:start` picks the next free loopback port and prints it.
+
+**`provision:sqlite-vec` is a real prerequisite, not an optional extra.** The sqlite-vec loadable
+extension is deliberately not an npm dependency (upstream publishes an invalid SPDX license string
+that two supply-chain gates reject), so it is fetched and SHA-256-verified by that script instead.
+CI runs it as a setup step before every test lane. `npm test` does **not** run it for you, so on a
+fresh checkout the two Knowledge-M2 proof suites — `knowledge-m2-closeout` (its `ann-active` proof)
+and `knowledge-m2-clean-checkout-demo` — fail until you have run it once. They fail rather than skip
+on purpose: a missing extension must never quietly mask a real ANN regression.
 
 Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
 pnpm/yarn/bun lockfile. Do not add one.
@@ -186,6 +195,7 @@ evidence.
 | Context lanes / compaction                     | `check:context-quality`                                                                                                                                                                 |
 | Server error handling / diagnostics            | `check:error-observability`                                                                                                                                                             |
 | An ADR (added/renumbered)                      | `npm run check:adr-index`                                                                                                                                                               |
+| Added or renamed a `test:e2e:*` script         | `npm run check:e2e-suite-wiring` — a suite no lane runs is not coverage (#2629)                                                                                                         |
 | Package versions / release metadata            | `check:version-consistency`, `check:release-impact`                                                                                                                                     |
 | Coverage-sensitive code                        | `npm run test:coverage:quality`                                                                                                                                                         |
 | **Any code at all, before every pull request** | **`npm run gates:sonar`** — the only local run that sees the SonarJS rules `eslint-plugin-sonarjs` does not ship ([`docs/qa/local-sonar.md`](docs/qa/local-sonar.md))                   |
@@ -274,6 +284,14 @@ sent back.
 
 - **Prove the failure first.** A regression test must fail before your fix and pass after. A test
   that passes with and without the fix proves nothing.
+- **A fixture never restates a formula the code under test owns — it derives it from the production
+  entry point.** A fixture that recomputes the expectation cannot detect the case where the
+  production formula moves and the fixture's copy does not: both sides change together and the test
+  stays green over a broken product. Import the producer and call it. Epic #2285: the debug-launch
+  validator re-derived the workspace identity digest as `sha256(JSON.stringify([...]))` while the
+  producer had migrated to the shared framed digest, so every Linux debug launch failed
+  `INVALID_CAPSULE_PLAN` with the suite green (#2643). The same rule applies to a mock: simplify it
+  past the point where the violation it guards can occur and it will never fail again.
 - **Fix the whole class, at the owning layer.** Don't patch one call site if the same bug exists
   behind three others — fix it where the invariant lives (usually a contract or the layer that
   owns the state). One implementation, not a special case bolted on.

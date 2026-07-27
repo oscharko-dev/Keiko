@@ -82,13 +82,9 @@ function pushUnique(out: string[], candidate: string): void {
 function sourceLikeTestBase(base: string, ext: string): readonly string[] {
   const out: string[] = [];
   if (ext === ".go" || ext === ".py" || ext === ".pyi") {
-    out.push(`${base}_test`);
-    out.push(`test_${base}`);
+    out.push(`${base}_test`, `test_${base}`);
   }
-  out.push(`${base}Test`);
-  out.push(`${base}Tests`);
-  out.push(`${base}Spec`);
-  out.push(`${base}IT`);
+  out.push(`${base}Test`, `${base}Tests`, `${base}Spec`, `${base}IT`);
   return out;
 }
 

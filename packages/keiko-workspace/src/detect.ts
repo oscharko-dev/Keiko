@@ -104,7 +104,7 @@ function detectFramework(record: Record<string, unknown>): TestFramework {
 const EMPTY_META: PackageMeta = { name: undefined, version: undefined, testFramework: "unknown" };
 
 function toRelative(root: string, absolutePath: string): string {
-  return relative(root, absolutePath).split("\\").join("/");
+  return relative(root, absolutePath).replaceAll("\\", "/");
 }
 
 function toRealRelative(root: string, fs: WorkspaceFs, absolutePath: string): string {

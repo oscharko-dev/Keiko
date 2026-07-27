@@ -34,7 +34,7 @@ import type {
   VoiceReplayClass,
   VoiceRedactionClass,
 } from "./voice-protocol.js";
-import { VOICE_MEDIA_PLANE, voiceMessageAllowedForProfile } from "./voice-protocol.js";
+import { voiceMessageAllowedForProfile } from "./voice-protocol.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 export const VOICE_PLAYBACK_SCHEMA_VERSION = "1" as const;
@@ -152,7 +152,7 @@ export const VOICE_PLAYBACK_PHASE_REDACTION: Record<VoicePlaybackPhase, VoiceRed
 
 // Immutable v1 value retained for public compatibility. Current canonical assistant output uses the
 // separately named batch descriptor below and never reactivates WebRTC provider output.
-export const VOICE_PLAYBACK_AUDIO_PLANE = VOICE_MEDIA_PLANE;
+export { VOICE_MEDIA_PLANE as VOICE_PLAYBACK_AUDIO_PLANE } from "./voice-protocol.js";
 
 // Productive speech output is fetched once from the canonical assistant answer through the existing
 // Model Gateway batch/BFF seam and played locally (ADR-0154).

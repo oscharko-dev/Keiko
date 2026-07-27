@@ -185,7 +185,7 @@ function chunkingOptionsForState(state: RunState): ChunkingOptions {
     `lexical-analyzer=${LEXICAL_ANALYZER_KEY}`,
   ].join("|");
   return {
-    ...(state.options.chunkingOptions ?? {}),
+    ...state.options.chunkingOptions,
     tokenizer: state.tokenizer,
     indexingTextStrategyKey,
   };
@@ -204,7 +204,7 @@ function resolveSources(
     );
   }
   if (options.sourceIds === undefined) return all;
-  const allow = new Set(options.sourceIds.map((s) => String(s)));
+  const allow = new Set(options.sourceIds.map(String));
   if (allow.size === 0) {
     throw new IndexingError("INVALID_OPTIONS", "sourceIds must contain at least one source id.");
   }

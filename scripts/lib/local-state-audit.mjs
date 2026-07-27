@@ -42,6 +42,11 @@ const FIGMA_SUBDIR = "figma";
 const FIGMA_VAULT = "figma-token.vault";
 const PE_SUBDIR = "pe";
 const FIGMA_SNAPSHOT_SUBDIR = "figma-snapshots";
+// Retired surface: releases before issue #2670 persisted the structural code-intelligence index as
+// plaintext JSON under this subdirectory. The index is in-process only now, so anything found here
+// is a leftover cleartext projection of the workspace (paths, symbol and DTO field names, endpoint
+// routes) and is reported as residue to be deleted. The auditor never deletes it itself.
+const RETIRED_CODE_INTELLIGENCE_SUBDIR = "code-intelligence";
 const EDITOR_HOT_EXIT_SUBDIR = "editor-hot-exit";
 const EDITOR_HOT_EXIT_VAULT = "snapshots.vault";
 const EDITOR_HOT_EXIT_KEYFILE = "editor-hot-exit-vault.key";
@@ -1183,6 +1188,11 @@ function collectRuntimeIntegrityResidue(stateDir) {
       }
       if (name.includes(QI_QUARANTINED_MANIFEST_MARKER)) {
         findings.push(`${rel} is an unresolved quarantined QI manifest`);
+      }
+      if (rel.startsWith(`${RETIRED_CODE_INTELLIGENCE_SUBDIR}/`)) {
+        findings.push(
+          `${rel} is a retired plaintext code-intelligence index artifact (delete it; the index is in-process only)`,
+        );
       }
     },
     () => undefined,

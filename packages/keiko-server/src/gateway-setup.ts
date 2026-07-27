@@ -165,7 +165,7 @@ function unbracketHostname(hostname: string): string {
 function isIpv4LinkLocal(hostname: string): boolean {
   const parts = hostname.split(".");
   if (parts.length !== 4) return false;
-  const octets = parts.map((part) => Number(part));
+  const octets = parts.map(Number);
   if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
     return false;
   }

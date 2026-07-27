@@ -463,7 +463,10 @@ export interface CitedClaim {
 
 /** Per-answer bounds so the judge is never invoked unboundedly. */
 export interface EntailmentOptions {
-  // Upper bound on claims submitted to the judge for one answer.
+  // Upper bound on claims submitted to the judge for one answer. Cited claims beyond the ceiling
+  // are NOT dropped: like the wall-clock budget below they are counted `unavailable`, so a long
+  // answer degrades to the entailment-unavailable caveat instead of rendering its untested tail as
+  // verified (#2670 AC6).
   readonly maxClaims: number;
   readonly maxExcerptChars: number;
   // Stage-wide wall-clock budget for the whole entailment pass. Once it (or the caller signal) is
@@ -616,16 +619,15 @@ export async function reconcileClaimEntailment(
   let judgedClaims = 0;
   let unavailableClaims = 0;
   for (const claim of segmentCitedClaims(answerText)) {
-    if (judgedClaims >= options.maxClaims) {
-      break;
-    }
     const valid = claim.citations.filter((c) => !membershipFailed.has(citationDedupKey(c)));
     if (valid.length === 0) {
       continue;
     }
-    if (budget?.aborted === true) {
-      // Budget exhausted (deadline hit or caller cancelled): stop calling the judge and count the
-      // claim as unavailable rather than dropping it silently or assuming support.
+    // Budget exhausted (claim ceiling reached, deadline hit, or caller cancelled): stop calling the
+    // judge and count the claim as unavailable rather than dropping it silently or assuming
+    // support. The ceiling is checked AFTER the membership filter so a claim already reported by
+    // `unsupportedCitationMarker` is not counted a second time here.
+    if (judgedClaims >= options.maxClaims || budget?.aborted === true) {
       unavailableClaims += 1;
       continue;
     }

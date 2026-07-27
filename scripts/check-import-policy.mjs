@@ -267,7 +267,7 @@ function importSpecifierEntry(node) {
 }
 
 function normalizeImportPath(path) {
-  return path.split("\\").join("/");
+  return path.replaceAll("\\", "/");
 }
 
 function candidateImportPaths(specifier, relativePath) {

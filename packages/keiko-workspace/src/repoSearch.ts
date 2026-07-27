@@ -524,7 +524,7 @@ function directoryFingerprint(
 }
 
 function ancestorDirectoryPaths(scopePath: string): readonly string[] {
-  const normalized = scopePath.split("\\").join("/");
+  const normalized = scopePath.replaceAll("\\", "/");
   const parts = normalized.split("/").filter((part) => part.length > 0);
   const paths: string[] = [""];
   let current = "";
@@ -546,7 +546,7 @@ function selectedDirectoryPath(
   scopePath: string,
   fs: WorkspaceFs,
 ): string | undefined {
-  const normalized = scopePath.split("\\").join("/");
+  const normalized = scopePath.replaceAll("\\", "/");
   if (normalized.length === 0) {
     return "";
   }
@@ -2062,7 +2062,7 @@ function isWithinSelectedScope(scope: SearchScope, scopePath: string): boolean {
 }
 
 function normalizeScopePath(scopePath: string): string {
-  return scopePath.split("\\").join("/");
+  return scopePath.replaceAll("\\", "/");
 }
 
 function assertExcerptWithinSelectedScope(scope: SearchScope, scopePath: string): void {

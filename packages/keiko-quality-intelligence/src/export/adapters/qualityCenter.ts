@@ -27,16 +27,18 @@ const joinPipe = (items: readonly string[]): string =>
 
 function renderEntry(candidate: QualityIntelligenceTestCaseCandidate, index: number): string {
   const lines: string[] = [];
-  lines.push(DIVIDER);
-  lines.push(`QC-${String(index + 1).padStart(4, "0")} ${inlineField(candidate.title)}`);
-  lines.push(`  ID:           ${candidate.id}`);
-  lines.push(`  Priority:     ${candidate.priority}`);
-  lines.push(`  Risk class:   ${candidate.riskClass}`);
-  lines.push(`  Status:       ${candidate.status}`);
-  lines.push(`  Tags:         ${joinPipe(candidate.tags)}`);
-  lines.push(`  Precond:      ${joinPipe(candidate.preconditions)}`);
-  lines.push(`  Steps:        ${joinPipe(candidate.steps)}`);
-  lines.push(`  Expected:     ${joinPipe(candidate.expectedResults)}`);
+  lines.push(
+    DIVIDER,
+    `QC-${String(index + 1).padStart(4, "0")} ${inlineField(candidate.title)}`,
+    `  ID:           ${candidate.id}`,
+    `  Priority:     ${candidate.priority}`,
+    `  Risk class:   ${candidate.riskClass}`,
+    `  Status:       ${candidate.status}`,
+    `  Tags:         ${joinPipe(candidate.tags)}`,
+    `  Precond:      ${joinPipe(candidate.preconditions)}`,
+    `  Steps:        ${joinPipe(candidate.steps)}`,
+    `  Expected:     ${joinPipe(candidate.expectedResults)}`,
+  );
   return lines.join("\n");
 }
 

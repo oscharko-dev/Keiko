@@ -240,12 +240,13 @@ interface GoModuleAlias {
   readonly root: string;
 }
 
+// The index is cached in process only. It is a reconstructive projection of the workspace — symbol
+// and DTO field names, call/reference edges, endpoint paths — so it must never reach an unsealed
+// on-disk artifact (issue #2670, AC6). A cold start rebuilds instead.
 const INDEX_CACHE_LIMIT = 16;
-const PERSISTENT_CACHE_SCHEMA_VERSION = 13;
 // Structural indexing benefits from whole declarations/import sections. Keep this bounded, but do
 // not inherit the lexical scanner's smaller per-file prefix cap that is tuned for fast grep-style IO.
 const CODE_INDEX_MAX_SOURCE_BYTES = 2_097_152;
-const PERSISTENT_CACHE_DIR = ".keiko/code-intelligence";
 const GRAPH_NEIGHBOR_DEPTH_LIMIT = 4;
 const GRAPH_NEIGHBOR_ATOM_LIMIT = 80;
 const GRAPH_NEIGHBOR_SEED_ATOM_LIMIT = 32;
@@ -428,7 +429,7 @@ function declarationNameText(
 }
 
 function normalizeScopePath(scopePath: string): string {
-  return normalize(scopePath).split("\\").join("/");
+  return normalize(scopePath).replaceAll("\\", "/");
 }
 
 function resolveCandidate(
@@ -3118,13 +3119,12 @@ function dotNetMinimalApiMethod(mapMethod: string, args: string): string {
   return mapMethod.toUpperCase();
 }
 
-function goHttpMethodFromMethodsArgs(args: string | undefined): string {
-  const value = args ?? "";
-  const literal = /["']([A-Z]+)["']/u.exec(value)?.[1];
+function goHttpMethodFromMethodsArgs(args = ""): string {
+  const literal = /["']([A-Z]+)["']/u.exec(args)?.[1];
   if (literal !== undefined) {
     return literal;
   }
-  const constant = /\bhttp\.Method(Get|Post|Put|Patch|Delete|Head|Options)\b/u.exec(value)?.[1];
+  const constant = /\bhttp\.Method(Get|Post|Put|Patch|Delete|Head|Options)\b/u.exec(args)?.[1];
   return constant === undefined ? "ANY" : constant.toUpperCase();
 }
 
@@ -4079,9 +4079,11 @@ function collectEndpoints(file: SourceFile): readonly ApiEndpoint[] {
   }
   const scan = maskEndpointCommentOrDocstringText(file.text, file.language);
   const endpoints: ApiEndpoint[] = [];
-  endpoints.push(...collectGraphqlClientEndpoints(file, scan));
-  endpoints.push(...collectProtobufClientEndpoints(file, scan));
-  endpoints.push(...collectFetchClientEndpoints(file, scan));
+  endpoints.push(
+    ...collectGraphqlClientEndpoints(file, scan),
+    ...collectProtobufClientEndpoints(file, scan),
+    ...collectFetchClientEndpoints(file, scan),
+  );
   const state = createEndpointCollectionState();
   const hasRtkQueryApi =
     /\bcreateApi\s*\(/u.test(scan.text) || /\bbuilder\.(?:query|mutation)\b/u.test(scan.text);
@@ -4228,277 +4230,12 @@ function rememberIndex(cacheKey: string, index: CodeIntelligenceIndex): void {
   }
 }
 
-type PersistentWorkspaceFs = WorkspaceFs & Required<Pick<WorkspaceFs, "makeDir" | "writeFileUtf8">>;
-
-function hasPersistentWorkspaceState(fs: WorkspaceFs): fs is PersistentWorkspaceFs {
-  return fs.makeDir !== undefined && fs.writeFileUtf8 !== undefined;
-}
-
-function persistentCacheId(fingerprint: string): string {
-  return createHash("sha256").update(fingerprint).digest("hex");
-}
-
-function persistentCachePath(scope: SearchScope, fingerprint: string): string {
-  return resolveWithinWorkspace(
-    scope.workspace.root,
-    `${PERSISTENT_CACHE_DIR}/${persistentCacheId(fingerprint)}.json`,
-  );
-}
-
-function persistentCacheDir(scope: SearchScope): string {
-  return resolveWithinWorkspace(scope.workspace.root, PERSISTENT_CACHE_DIR);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isString(value: unknown): value is string {
   return typeof value === "string";
-}
-
-function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
-function isParserKind(value: unknown): value is CodeParserKind {
-  return value === "typescript-compiler-ast" || value === "polyglot-regex";
-}
-
-function isLineRange(value: unknown): value is LineRange {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.startLine === "number" &&
-    Number.isInteger(value.startLine) &&
-    typeof value.endLine === "number" &&
-    Number.isInteger(value.endLine)
-  );
-}
-
-function isImportEdge(value: unknown): value is CodeImportEdge {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    (value.kind === "import" || value.kind === "export") &&
-    typeof value.importerPath === "string" &&
-    typeof value.importerLine === "number" &&
-    typeof value.specifier === "string" &&
-    (value.targetPath === undefined || typeof value.targetPath === "string") &&
-    (value.confidence === "resolved" || value.confidence === "heuristic") &&
-    typeof value.language === "string" &&
-    isParserKind(value.parser)
-  );
-}
-
-function isCodeSymbol(value: unknown): value is CodeSymbol {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.name === "string" &&
-    typeof value.kind === "string" &&
-    typeof value.scopePath === "string" &&
-    typeof value.language === "string" &&
-    isLineRange(value.lineRange) &&
-    isStringArray(value.fields) &&
-    isParserKind(value.parser)
-  );
-}
-
-function isCallEdge(value: unknown): value is CodeCallEdge {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.callerPath === "string" &&
-    typeof value.callerLine === "number" &&
-    typeof value.calleeName === "string" &&
-    typeof value.targetName === "string" &&
-    typeof value.targetPath === "string" &&
-    isLineRange(value.targetLineRange) &&
-    (value.confidence === "resolved" || value.confidence === "heuristic") &&
-    isParserKind(value.parser)
-  );
-}
-
-function isReferenceEdge(value: unknown): value is CodeReferenceEdge {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.referencerPath === "string" &&
-    isLineRange(value.referenceLineRange) &&
-    typeof value.referenceName === "string" &&
-    typeof value.targetName === "string" &&
-    typeof value.targetPath === "string" &&
-    isLineRange(value.targetLineRange) &&
-    (value.confidence === "resolved" || value.confidence === "heuristic") &&
-    isParserKind(value.parser)
-  );
-}
-
-function isApiEndpoint(value: unknown): value is ApiEndpoint {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    (value.role === "server" || value.role === "client") &&
-    typeof value.method === "string" &&
-    typeof value.path === "string" &&
-    typeof value.scopePath === "string" &&
-    isLineRange(value.lineRange) &&
-    typeof value.language === "string" &&
-    isParserKind(value.parser)
-  );
-}
-
-function isParserCoverage(value: unknown): value is CodeParserCoverage {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return isParserKind(value.parser) && typeof value.filesIndexed === "number";
-}
-
-function isApiContractEdge(value: unknown): value is ApiContractEdge {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    isApiEndpoint(value.client) &&
-    isApiEndpoint(value.server) &&
-    (value.confidence === "resolved" || value.confidence === "heuristic")
-  );
-}
-
-function isDtoContractEdge(value: unknown): value is DtoContractEdge {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    isCodeSymbol(value.source) &&
-    isCodeSymbol(value.target) &&
-    isStringArray(value.sharedFields) &&
-    (value.confidence === "resolved" || value.confidence === "heuristic")
-  );
-}
-
-function isPackageDependencyKind(value: unknown): value is PackageDependencyKind {
-  return (
-    value === "dependencies" ||
-    value === "devDependencies" ||
-    value === "peerDependencies" ||
-    value === "optionalDependencies"
-  );
-}
-
-function isPackageDependencyEdge(value: unknown): value is PackageDependencyEdge {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.sourcePackage === "string" &&
-    typeof value.sourcePath === "string" &&
-    typeof value.targetPackage === "string" &&
-    typeof value.targetPath === "string" &&
-    isPackageDependencyKind(value.dependencyKind) &&
-    (value.confidence === "resolved" || value.confidence === "heuristic")
-  );
-}
-
-function isArrayOf<T>(value: unknown, guard: (item: unknown) => item is T): value is readonly T[] {
-  return Array.isArray(value) && value.every((item) => guard(item));
-}
-
-function isCodeIntelligenceIndex(value: unknown): value is CodeIntelligenceIndex {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    isArrayOf(value.imports, isImportEdge) &&
-    isArrayOf(value.symbols, isCodeSymbol) &&
-    isArrayOf(value.calls, isCallEdge) &&
-    isArrayOf(value.references, isReferenceEdge) &&
-    isArrayOf(value.endpoints, isApiEndpoint) &&
-    isArrayOf(value.apiContracts, isApiContractEdge) &&
-    isArrayOf(value.dtoContracts, isDtoContractEdge) &&
-    isArrayOf(value.packageDependencies, isPackageDependencyEdge) &&
-    typeof value.filesIndexed === "number" &&
-    typeof value.filesSkipped === "number" &&
-    typeof value.filesPartiallyIndexed === "number" &&
-    isArrayOf(value.parserCoverage, isParserCoverage)
-  );
-}
-
-function readPersistentIndex(
-  scope: SearchScope,
-  fs: WorkspaceFs,
-  fingerprint: string,
-): CodeIntelligenceIndex | undefined {
-  if (!hasPersistentWorkspaceState(fs)) {
-    return undefined;
-  }
-  try {
-    const cacheFile = assertContainedRealPath(
-      fs,
-      scope.workspace.root,
-      persistentCachePath(scope, fingerprint),
-      "code-intelligence cache file",
-    );
-    if (!fs.exists(cacheFile)) {
-      return undefined;
-    }
-    const parsed: unknown = JSON.parse(fs.readFileUtf8(cacheFile));
-    if (
-      !isRecord(parsed) ||
-      parsed.schemaVersion !== PERSISTENT_CACHE_SCHEMA_VERSION ||
-      parsed.fingerprint !== fingerprint ||
-      !isCodeIntelligenceIndex(parsed.index)
-    ) {
-      return undefined;
-    }
-    return parsed.index;
-  } catch {
-    return undefined;
-  }
-}
-
-function writePersistentIndex(
-  scope: SearchScope,
-  fs: WorkspaceFs,
-  fingerprint: string,
-  index: CodeIntelligenceIndex,
-): void {
-  if (!hasPersistentWorkspaceState(fs)) {
-    return;
-  }
-  try {
-    const cacheDir = assertContainedRealPath(
-      fs,
-      scope.workspace.root,
-      persistentCacheDir(scope),
-      "code-intelligence cache directory",
-    );
-    fs.makeDir(cacheDir);
-    const cacheFile = assertContainedRealPath(
-      fs,
-      scope.workspace.root,
-      persistentCachePath(scope, fingerprint),
-      "code-intelligence cache file",
-    );
-    fs.writeFileUtf8(
-      cacheFile,
-      JSON.stringify({
-        schemaVersion: PERSISTENT_CACHE_SCHEMA_VERSION,
-        fingerprint,
-        index,
-      }),
-    );
-  } catch {
-    // Cache writes are an optimization; retrieval must keep working on read-only workspaces.
-  }
 }
 
 function sourceReadCap(limits: SearchLimits): number {
@@ -4634,11 +4371,6 @@ export function buildCodeIntelligenceIndex(
       indexCache.set(cacheKey, cached);
       return cached;
     }
-    const persisted = readPersistentIndex(scope, fs, fingerprint);
-    if (persisted !== undefined) {
-      rememberIndex(cacheKey, persisted);
-      return persisted;
-    }
   }
   const { files, skipped, partiallyIndexed } = readSources(scope, limits, fs, candidates);
   const pathSet = new Set(files.map((file) => file.scopePath));
@@ -4679,7 +4411,6 @@ export function buildCodeIntelligenceIndex(
   };
   if (deps?.disableCache !== true) {
     rememberIndex(cacheKey, index);
-    writePersistentIndex(scope, fs, fingerprint, index);
   }
   return index;
 }

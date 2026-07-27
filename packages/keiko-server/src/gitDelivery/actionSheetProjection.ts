@@ -30,7 +30,6 @@ import {
   type GitDeliveryPullRequestState,
   type GitDeliveryRecoveryActionHint,
   type GitDeliveryRecoveryHint,
-  type GitDeliveryRemediationClass,
   type GitDeliveryRepoPolicyPack,
   type GitDeliveryResolvedInputs,
   evaluateGitPolicy,
@@ -127,17 +126,17 @@ function policyBlocker(
   };
 }
 
-const PROVIDER_BLOCKER_KINDS: readonly GitDeliveryActionKind[] = [
+const PROVIDER_BLOCKER_KINDS: ReadonlySet<GitDeliveryActionKind> = new Set([
   "merge",
   "pr-create",
   "pr-update",
-];
+]);
 
 function providerBlocker(
   inputs: GitDeliveryResolvedInputs,
   mergeReadiness: GitDeliveryMergeReadiness | undefined,
 ): GitDeliveryExpectedBlocker | undefined {
-  if (!PROVIDER_BLOCKER_KINDS.includes(inputs.kind)) {
+  if (!PROVIDER_BLOCKER_KINDS.has(inputs.kind)) {
     return undefined;
   }
   if (mergeReadiness?.ready !== false || mergeReadiness.blockingReason === undefined) {
@@ -334,4 +333,4 @@ export function buildActionSheetFromFacts(facts: BuildActionSheetFacts): GitDeli
 
 // Re-export the remediation-class type so the route handler's tests can reference the projection's
 // vocabulary without reaching into the contracts barrel a second time.
-export type { GitDeliveryRemediationClass };
+export type { GitDeliveryRemediationClass } from "@oscharko-dev/keiko-contracts";

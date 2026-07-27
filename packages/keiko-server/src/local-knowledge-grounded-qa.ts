@@ -592,9 +592,7 @@ function buildReferenceLines(
     );
     lines.push(`[${String(i + 1)}] ${label}`);
     if (excerpt.length > 0) {
-      lines.push("```text");
-      lines.push(excerpt);
-      lines.push("```");
+      lines.push("```text", excerpt, "```");
     } else {
       lines.push("(No excerpt text available for this citation.)");
     }
@@ -1623,7 +1621,7 @@ function stateForPod(
   capsuleId?: KnowledgeCapsuleId,
 ): KnowledgePodRetrievalActivityState {
   const codes = reasonCodesForPod(result, referenceCount, capsuleId);
-  if (referenceCount > 0 && codes.some((code) => code === "policy-denied")) return "degraded";
+  if (referenceCount > 0 && codes.includes("policy-denied")) return "degraded";
   if (codes.some((code) => DENIED_ACTIVITY_REASONS.has(code))) return "denied";
   if (referenceCount > 0 && codes.some((code) => DENSE_FALLBACK_ACTIVITY_REASONS.has(code))) {
     return "degraded";
@@ -1631,7 +1629,7 @@ function stateForPod(
   if (codes.some((code) => DEGRADED_ACTIVITY_REASONS.has(code))) return "degraded";
   if (codes.some((code) => UNAVAILABLE_ACTIVITY_REASONS.has(code))) return "unavailable";
   if (codes.some((code) => SKIPPED_ACTIVITY_REASONS.has(code))) return "skipped";
-  if (codes.some((code) => code === "not-selected")) return "not-selected";
+  if (codes.includes("not-selected")) return "not-selected";
   return "searched";
 }
 

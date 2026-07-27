@@ -68,7 +68,7 @@ export function langOf(name: string): Lang {
   if (n === "dockerfile" || n.startsWith("dockerfile")) return "docker";
   if (n.includes("docker-compose")) return "yaml";
   const parts = n.split(".");
-  const ext = parts.length > 1 ? parts[parts.length - 1] : undefined;
+  const ext = parts.length > 1 ? parts.at(-1) : undefined;
   if (ext === undefined) return "code";
   return EXT_LANG[ext] ?? "code";
 }

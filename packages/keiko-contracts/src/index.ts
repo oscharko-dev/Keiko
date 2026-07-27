@@ -2206,6 +2206,7 @@ export type {
   ConversationDocumentContextWire,
   ConversationAttachmentDescriptorWire,
   ConversationMemoryRequestWire,
+  ConversationMemoryCaptureSurfaceWire,
   MemoryAutonomyPolicyWire,
   UpdateMemoryAutonomyPolicyWire,
   ConversationMemoryResultWire,

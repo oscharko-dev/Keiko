@@ -37,7 +37,7 @@ const MAX_SYMBOL_RECORD_MULTIPLIER = 20;
 const MIN_SYMBOL_RECORD_CAP = 1_000;
 
 function normalizeScopePath(scopePath: string): string {
-  return path.normalize(scopePath.split("\\").join("/")).replace(/^\.\//u, "");
+  return path.normalize(scopePath.replaceAll("\\", "/")).replace(/^\.\//u, "");
 }
 
 async function readSymbolSource(

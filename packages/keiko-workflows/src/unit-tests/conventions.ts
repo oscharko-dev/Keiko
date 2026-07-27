@@ -8,7 +8,7 @@ import type { ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { FileNamingStyle, TestConventions } from "./types.js";
 
 const MAX_ASSERTION_SAMPLES = 2;
-const TEST_SEGMENTS: readonly string[] = ["test", "spec"];
+const TEST_SEGMENTS: ReadonlySet<string> = new Set(["test", "spec"]);
 
 // Normalises a path to forward slashes so dir/segment checks are platform-independent.
 function toPosix(path: string): string {
@@ -22,7 +22,7 @@ function basenameMarksTest(path: string): boolean {
   const ext = extname(path);
   const stem = basename(path, ext);
   const segments = stem.split(".");
-  return segments.some((segment) => TEST_SEGMENTS.includes(segment));
+  return segments.some((segment) => TEST_SEGMENTS.has(segment));
 }
 
 // True when the path's directory equals or sits under one of the configured testDirs.

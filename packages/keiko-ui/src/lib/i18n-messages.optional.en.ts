@@ -559,6 +559,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "searchPanel.status.readyToSearch": "Ready to search.",
   "searchPanel.status.results": "{count} matches{roots} in {filesScanned} files scanned.{suffix}",
   "searchPanel.status.resultsCappedSuffix": " Results were capped; refine the query.",
+  "searchPanel.status.resultsCappedPerRootSuffix":
+    " Results are capped per root and merged fairly at the workspace limit; refine the query.",
   "searchPanel.status.searching": "Searching workspace...",
   "searchPanel.status.searchingRoots": "Searching workspace roots...",
   "searchPanel.status.selectWorkspace": "Select a workspace before searching.",

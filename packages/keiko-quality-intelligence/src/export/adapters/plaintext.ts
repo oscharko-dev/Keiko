@@ -31,24 +31,24 @@ const numberedList = (items: readonly string[], indent = "  "): string =>
 
 function renderCandidate(candidate: QualityIntelligenceTestCaseCandidate, index: number): string {
   const lines: string[] = [];
-  lines.push(`${DIVIDER}\n`);
-  lines.push(`CANDIDATE ${String(index + 1)}: ${inlineField(candidate.title)}\n`);
-  lines.push(`  ID:         ${candidate.id}`);
-  lines.push(`  Priority:   ${candidate.priority}`);
-  lines.push(`  Risk class: ${candidate.riskClass}`);
-  lines.push(`  Status:     ${candidate.status}`);
   lines.push(
+    `${DIVIDER}\n`,
+    `CANDIDATE ${String(index + 1)}: ${inlineField(candidate.title)}\n`,
+    `  ID:         ${candidate.id}`,
+    `  Priority:   ${candidate.priority}`,
+    `  Risk class: ${candidate.riskClass}`,
+    `  Status:     ${candidate.status}`,
     `  Tags:       ${candidate.tags.length > 0 ? inlineFields(candidate.tags).join(", ") : "(none)"}`,
+    "",
+    "  Preconditions:",
+    listItems(inlineFields(candidate.preconditions), "    ").trimEnd(),
+    "",
+    "  Steps:",
+    numberedList(inlineFields(candidate.steps), "    ").trimEnd(),
+    "",
+    "  Expected results:",
+    listItems(inlineFields(candidate.expectedResults), "    ").trimEnd(),
   );
-  lines.push("");
-  lines.push("  Preconditions:");
-  lines.push(listItems(inlineFields(candidate.preconditions), "    ").trimEnd());
-  lines.push("");
-  lines.push("  Steps:");
-  lines.push(numberedList(inlineFields(candidate.steps), "    ").trimEnd());
-  lines.push("");
-  lines.push("  Expected results:");
-  lines.push(listItems(inlineFields(candidate.expectedResults), "    ").trimEnd());
   return lines.join("\n") + "\n";
 }
 
@@ -63,13 +63,15 @@ export function adaptToPlainText(
   }
   const sortedEntries = [...bundle.contents].sort(byCandidateIdAsc);
   const sections: string[] = [];
-  sections.push(`${RULE}\n`);
-  sections.push("QUALITY INTELLIGENCE EXPORT\n");
-  sections.push(`${RULE}\n`);
-  sections.push(`Bundle: ${bundle.id}`);
-  sections.push(`Run:    ${bundle.runId}`);
-  sections.push(`Format: ${bundle.targetAdapter}`);
-  sections.push("");
+  sections.push(
+    `${RULE}\n`,
+    "QUALITY INTELLIGENCE EXPORT\n",
+    `${RULE}\n`,
+    `Bundle: ${bundle.id}`,
+    `Run:    ${bundle.runId}`,
+    `Format: ${bundle.targetAdapter}`,
+    "",
+  );
   let index = 0;
   for (const entry of sortedEntries) {
     const candidate = byId.get(entry.candidateId);

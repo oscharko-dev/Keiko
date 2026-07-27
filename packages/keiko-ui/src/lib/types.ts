@@ -348,6 +348,7 @@ export type {
   ConversationMemoryActionWire,
   ConversationMemoryContextEntryWire,
   ConversationMemoryContextWire,
+  ConversationMemoryCaptureSurfaceWire,
   ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
   ConversationMemoryScopeContextWire,

@@ -115,13 +115,16 @@ export const DE_MESSAGES = {
   "workspaceTrust.title": "Arbeitsbereichsvertrauen",
   "workspaceTrust.restrictedMode": "Eingeschränkter Modus",
   "workspaceTrust.trustedMode": "Vertrauenswürdiger Arbeitsbereich",
+  "workspaceTrust.unavailable": "Arbeitsbereichsvertrauen nicht verfügbar",
   "workspaceTrust.manage": "Arbeitsbereichsvertrauen verwalten",
   "workspaceTrust.loading": "Serverseitigen Vertrauensstatus laden…",
   "workspaceTrust.retry": "Erneut versuchen",
   "workspaceTrust.loadFailed":
-    "Das Arbeitsbereichsvertrauen konnte nicht sicher gelesen werden. Dieser Arbeitsbereich bleibt eingeschränkt.",
+    "Das Arbeitsbereichsvertrauen konnte nicht sicher gelesen werden. Ausführungsfunktionen bleiben nicht verfügbar.",
   "workspaceTrust.updateFailed":
     "Der Server hat die Vertrauensänderung nicht bestätigt. Dieser Arbeitsbereich bleibt eingeschränkt.",
+  "workspaceTrust.errorCode": "Fehlercode: {code}",
+  "workspaceTrust.supportId": "Support-ID: {correlationId}",
   "workspaceTrust.banner.editor":
     "Arbeitsbereichsskripte, Sprachserver und Agentenausführung bleiben für diese Wurzel nicht verfügbar.",
   "workspaceTrust.banner.commands":

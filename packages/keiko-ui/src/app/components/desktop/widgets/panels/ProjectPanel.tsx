@@ -46,7 +46,7 @@ function focusFirstTreeItem({ items }: TreeKeyContext): void {
 }
 
 function focusLastTreeItem({ items }: TreeKeyContext): void {
-  items[items.length - 1]?.focus();
+  items.at(-1)?.focus();
 }
 
 function focusParentTreeItem({ items, index }: TreeKeyContext): void {

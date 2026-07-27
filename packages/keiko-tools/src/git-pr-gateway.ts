@@ -42,7 +42,6 @@ import {
   gitDeliveryBranchNameMatchesAny,
   gitDeliveryRiskClassWithinCeiling,
   gitPrRejectionToDisposition,
-  gitPrRejectionToErrorCode,
 } from "@oscharko-dev/keiko-contracts";
 import type { CommandRule } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
@@ -738,4 +737,4 @@ export async function runGitPullRequest(
 
 // Re-export the contract bridges so the server/UI consume the error-code mapping from this gateway,
 // keeping the publish/PR gateway surfaces symmetric.
-export { gitPrRejectionToErrorCode };
+export { gitPrRejectionToErrorCode } from "@oscharko-dev/keiko-contracts";

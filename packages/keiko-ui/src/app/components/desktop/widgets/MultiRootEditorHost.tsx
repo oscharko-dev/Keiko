@@ -138,7 +138,7 @@ function EditorRootTab({
       onClick={onSelect}
     >
       <span>{root.displayName}</span>
-      <WorkspaceTrustBadge status={trust.status} />
+      <WorkspaceTrustBadge status={trust.status} issue={trust.issue} />
     </button>
   );
 }

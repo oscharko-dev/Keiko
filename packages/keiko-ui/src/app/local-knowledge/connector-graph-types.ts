@@ -12,10 +12,10 @@ import type {
   deleteCapsuleSet,
   CapsuleListEntry,
   CapsuleSetListEntry,
-  CapsuleActionResponse,
 } from "@/lib/local-knowledge-api";
+export type { CapsuleActionResponse } from "@/lib/local-knowledge-api";
 
-export type { CapsuleListEntry, CapsuleSetListEntry, CapsuleActionResponse };
+export type { CapsuleListEntry, CapsuleSetListEntry };
 
 export type LoadStatus = "loading" | "ready" | "error";
 

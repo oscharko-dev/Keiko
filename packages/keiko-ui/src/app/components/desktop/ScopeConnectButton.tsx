@@ -154,8 +154,8 @@ export function ScopeConnectButton({
       const next = [...filtered, newScope];
       const response = await updateScope(chatId, next);
       onConnected?.(response.chat);
-    } catch (caught) {
-      setError(formatErrorMessage(caught, t));
+    } catch (error_) {
+      setError(formatErrorMessage(error_, t));
     } finally {
       setBusy(false);
     }

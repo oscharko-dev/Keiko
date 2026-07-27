@@ -114,7 +114,7 @@ function parseJavaScript(source, sourceType) {
   const violations = [];
   collectSyntaxViolations(ast, violations);
   if (violations.length > 0) {
-    throw new Error(violations.join("\n"));
+    throw new Error(`disallowed syntax detected:\n${violations.join("\n")}`);
   }
 }
 

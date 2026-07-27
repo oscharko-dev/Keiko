@@ -49,28 +49,26 @@ const mdList = (items: readonly string[]): string =>
 
 function renderCandidate(candidate: QualityIntelligenceTestCaseCandidate, runId: string): string {
   const lines: string[] = [];
-  lines.push(`## ${mdText(candidate.title)}\n`);
-  lines.push(`**ID:** ${candidate.id}  `);
-  lines.push(`**Run:** ${runId}  `);
-  lines.push(`**Priority:** ${candidate.priority}  `);
-  lines.push(`**Risk class:** ${candidate.riskClass}  `);
-  lines.push(`**Status:** ${candidate.status}  `);
   lines.push(
+    `## ${mdText(candidate.title)}\n`,
+    `**ID:** ${candidate.id}  `,
+    `**Run:** ${runId}  `,
+    `**Priority:** ${candidate.priority}  `,
+    `**Risk class:** ${candidate.riskClass}  `,
+    `**Status:** ${candidate.status}  `,
     `**Tags:** ${candidate.tags.length > 0 ? mdTextList(candidate.tags).join(", ") : "_none_"}  `,
-  );
-  lines.push("");
-  lines.push("### Preconditions\n");
-  lines.push(mdList(candidate.preconditions));
-  lines.push("### Steps\n");
-  lines.push(
+    "",
+    "### Preconditions\n",
+    mdList(candidate.preconditions),
+    "### Steps\n",
     candidate.steps.length === 0
       ? "_none_\n"
       : mdTextList(candidate.steps)
           .map((s, i) => `${String(i + 1)}. ${s}`)
           .join("\n") + "\n",
+    "### Expected results\n",
+    mdList(candidate.expectedResults),
   );
-  lines.push("### Expected results\n");
-  lines.push(mdList(candidate.expectedResults));
   return lines.join("\n");
 }
 
@@ -85,11 +83,13 @@ export function adaptToMarkdown(
   }
   const sortedEntries = [...bundle.contents].sort(byCandidateIdAsc);
   const sections: string[] = [];
-  sections.push(`# Quality Intelligence Export\n`);
-  sections.push(`**Bundle:** ${bundle.id}  `);
-  sections.push(`**Run:** ${bundle.runId}  `);
-  sections.push(`**Adapter:** ${bundle.targetAdapter}  `);
-  sections.push("");
+  sections.push(
+    `# Quality Intelligence Export\n`,
+    `**Bundle:** ${bundle.id}  `,
+    `**Run:** ${bundle.runId}  `,
+    `**Adapter:** ${bundle.targetAdapter}  `,
+    "",
+  );
   for (const entry of sortedEntries) {
     const candidate = byId.get(entry.candidateId);
     if (candidate === undefined) {

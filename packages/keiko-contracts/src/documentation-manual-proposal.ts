@@ -276,20 +276,20 @@ function isIndexEntry(pathname: string): boolean {
 // `/docs/foo.html` does. Each token is normalised to a bare segment name (strip leading/trailing
 // slashes) and compared against the path split on `/`, so a token only matches a whole segment.
 function hasDocumentationPathToken(pathname: string): boolean {
-  const segments = pathname.toLowerCase().split("/");
+  const segments = new Set(pathname.toLowerCase().split("/"));
   return DOCUMENTATION_PATH_TOKENS.some((token) => {
     const bareToken = token.replace(/^\/|\/$/gu, "");
-    return segments.includes(bareToken);
+    return segments.has(bareToken);
   });
 }
 
 // Segment-anchored for the same reason as hasDocumentationPathToken: `/docs/authoring-guide.html`
 // must NOT match `/auth` the way `/auth/callback` does.
 function hasActionPathToken(pathname: string): boolean {
-  const segments = pathname.toLowerCase().split("/");
+  const segments = new Set(pathname.toLowerCase().split("/"));
   return ACTION_PATH_TOKENS.some((token) => {
     const bareToken = token.replace(/^\/|\/$/gu, "");
-    return segments.includes(bareToken);
+    return segments.has(bareToken);
   });
 }
 

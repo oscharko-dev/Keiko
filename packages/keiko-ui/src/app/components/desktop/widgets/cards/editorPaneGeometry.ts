@@ -458,7 +458,7 @@ export function remapDirtyFilesToPresetPanes(
   const next: Record<string, Record<string, true>> = {};
   for (const path of dirtyFiles) {
     const targetPane = panes.find((pane) => pane.openFiles.includes(path)) ?? fallbackPane;
-    next[targetPane.id] = { ...(next[targetPane.id] ?? {}), [path]: true };
+    next[targetPane.id] = { ...next[targetPane.id], [path]: true };
   }
   return next;
 }

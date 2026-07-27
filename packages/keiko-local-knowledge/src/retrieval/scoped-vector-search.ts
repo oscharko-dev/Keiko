@@ -2220,10 +2220,7 @@ function denseCandidatesFromVectorIndex(
   laneKey: string,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
 ): readonly DenseCandidate[] {
-  const allowedSources =
-    sourceFilter === undefined
-      ? undefined
-      : new Set(sourceFilter.map((sourceId) => String(sourceId)));
+  const allowedSources = sourceFilter === undefined ? undefined : new Set(sourceFilter.map(String));
   const out: DenseCandidate[] = [];
   for (const candidate of candidates) {
     if (String(candidate.capsuleId) !== String(capsule.id)) continue;

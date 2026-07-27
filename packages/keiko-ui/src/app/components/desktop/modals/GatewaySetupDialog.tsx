@@ -176,11 +176,11 @@ function voiceCapabilityStatus(
   );
 }
 
-const VOICE_PROVIDER_LOCALITIES: readonly VoiceProviderLocality[] = [
+const VOICE_PROVIDER_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
   "azure-foundry",
   "customer-hosted",
   "local-only",
-];
+]);
 
 const VOICE_PROVIDER_LOCALITY_SECTIONS = [
   {
@@ -200,7 +200,7 @@ const VOICE_PROVIDER_LOCALITY_SECTIONS = [
 ];
 
 function isVoiceProviderLocality(value: string): value is VoiceProviderLocality {
-  return VOICE_PROVIDER_LOCALITIES.includes(value as VoiceProviderLocality);
+  return VOICE_PROVIDER_LOCALITIES.has(value as VoiceProviderLocality);
 }
 
 function trimOrUndefined(value: string): string | undefined {
@@ -2135,7 +2135,7 @@ export function GatewaySetupDialog({
       const focusables = focusableInside(dialog);
       if (focusables.length === 0) return;
       const first = focusables[0] as HTMLElement;
-      const last = focusables[focusables.length - 1] as HTMLElement;
+      const last = focusables.at(-1) as HTMLElement;
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
@@ -2214,8 +2214,8 @@ export function GatewaySetupDialog({
         () => window.location.reload(),
         outcome.skippedModelCount === 0 ? 800 : 1800,
       );
-    } catch (caught) {
-      const details = errorDetails(caught);
+    } catch (error_) {
+      const details = errorDetails(error_);
       setError(details.message);
       setErrorCode(details.code);
       setBusy(false);

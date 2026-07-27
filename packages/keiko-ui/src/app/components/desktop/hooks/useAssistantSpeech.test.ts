@@ -17,6 +17,7 @@ import type {
   AssistantSpeechStreamHandlers,
   AssistantSpeechStreamingSink,
 } from "./assistant-speech-streaming";
+import { playbackPhaseToTurnState } from "./voice-dialog-state";
 
 // Issue #1559 persona routing is proved against the REAL production synthesize path: the BFF client
 // `synthesizeAssistantSpeech` is mocked so the hook's own `makeDefaultSynthesize(persona)` closure runs
@@ -291,6 +292,31 @@ describe("useAssistantSpeech — resource release (AC3)", () => {
     expect(h.revoked).toContain(h.created[0]);
     expect(h.synthCalls[0]?.signal.aborted).toBe(true);
     expect(result.current.snapshot.phase).toBe("interrupted");
+  });
+
+  // ADR-0154 D4 — a barge-in stops the local canonical TTS playback AND returns the floor to input
+  // capture. During the pre-audible `preparing` window (worklet load + TTS TTFB) there is no audible
+  // audio to interrupt, so the `interrupted` transition does not apply — the floor must still come
+  // back, or the session stays pinned to "thinking" and never listens or speaks again. The synthesis
+  // promise never settles, which holds the hook in exactly that window with no timer and no ordering
+  // luck. Asserted on the released floor rather than a phase literal, so the pin outlives the shape.
+  it("interrupt before audio is audible aborts synthesis and returns the floor", async () => {
+    const signals: AbortSignal[] = [];
+    const h = harness({
+      synthesize: (_text, signal) => {
+        signals.push(signal);
+        return new Promise(() => undefined);
+      },
+    });
+    const { result } = renderHook(() => useAssistantSpeech(h.options));
+    await flush();
+    expect(result.current.snapshot.phase).toBe("preparing");
+
+    act(() => result.current.interrupt(900));
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(result.current.snapshot.active).toBe(false);
+    expect(playbackPhaseToTurnState(result.current.snapshot.phase)).toBe("idle");
   });
 
   it("toggleMute mutes the snapshot and releases an active turn", async () => {

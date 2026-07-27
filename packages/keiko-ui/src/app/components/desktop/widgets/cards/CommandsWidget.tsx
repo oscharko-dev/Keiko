@@ -145,26 +145,24 @@ function CommandResult({
             ) : null}
           </div>
           {result.stdout.length > 0 ? (
-            <pre
+            <section
               className="tm-stdout"
-              role="region"
               aria-label={t("commandsWidget.result.stdoutAriaLabel")}
               // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
               tabIndex={0}
             >
-              {result.stdout}
-            </pre>
+              <pre className="tm-output-content">{result.stdout}</pre>
+            </section>
           ) : null}
           {result.stderr.length > 0 ? (
-            <pre
+            <section
               className="tm-stderr"
-              role="region"
               aria-label={t("commandsWidget.result.stderrAriaLabel")}
               // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
               tabIndex={0}
             >
-              {result.stderr}
-            </pre>
+              <pre className="tm-output-content">{result.stderr}</pre>
+            </section>
           ) : null}
         </div>
       ) : null}
@@ -296,6 +294,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
         <WorkspaceTrustBanner
           status={trust.status}
           issue={trust.issue}
+          failure={trust.failure}
           surface="commands"
           onManage={props.onOpenWorkspaceTrust}
         />

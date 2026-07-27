@@ -17,6 +17,7 @@ import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 import { isContained, walkSource } from "../discovery/walk.js";
 import type { DiscoveryOptions } from "../discovery/types.js";
+import { compareFingerprintKeys } from "../fingerprint-diff.js";
 import type { KnowledgeStore } from "../store.js";
 
 const MAX_GIT_INDEX_BYTES = 64 * 1024 * 1024;
@@ -340,7 +341,7 @@ export function repositoryFingerprintSetDigest(
 ): string {
   const hash = createHash("sha256");
   for (const item of [...fingerprints].sort((left, right) =>
-    left.relativePath.localeCompare(right.relativePath),
+    compareFingerprintKeys(left.relativePath, right.relativePath),
   )) {
     hash.update(item.relativePath, "utf8");
     hash.update("\0", "utf8");

@@ -576,7 +576,7 @@ export function listRelationships(
   const truncated = rows.length > q.limit;
   const slice = truncated ? rows.slice(0, q.limit) : rows;
   const entries = slice.map(rowToRelationship);
-  const last = slice[slice.length - 1];
+  const last = slice.at(-1);
   const nextCursor = truncated && last !== undefined ? last.etag : undefined;
   // Always return undefined when not truncated; `nextCursor` is `string | undefined` so
   // exactOptionalPropertyTypes-safe.
@@ -838,7 +838,7 @@ function dfsFromStart(
   const stack: DfsFrame[] = [{ key: startKey, index: 0, viaRelId: null }];
   state.set(startKey, "visiting");
   while (stack.length > 0) {
-    const frame = stack[stack.length - 1];
+    const frame = stack.at(-1);
     if (frame === undefined) break;
     const neighbours = adjacency.get(frame.key) ?? [];
     if (frame.index >= neighbours.length) {

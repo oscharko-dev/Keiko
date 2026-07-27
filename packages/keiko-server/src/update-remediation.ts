@@ -100,7 +100,7 @@ function materializeAction(
 export function overallStatus(
   actions: readonly UpdateRemediationAction[],
 ): UpdateRemediationOverallStatus {
-  if (actions.length === 0 || actions.every((item) => item.status === "not-needed")) {
+  if (actions.every((item) => item.status === "not-needed")) {
     return "not-required";
   }
   const mapped = actions.map<UpdateRemediationOverallStatus>((action) => {

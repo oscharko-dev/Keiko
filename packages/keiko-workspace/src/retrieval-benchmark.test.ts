@@ -57,6 +57,10 @@ interface BenchCase {
   // scopePaths that must NOT appear in the emitted atoms (e.g. prose decoys that lost, or
   // generated artifacts that should be omitted).
   readonly mustNotInclude?: readonly string[];
+  // Ordering invariants below the winner: `higher` must be emitted strictly before `lower`, and
+  // both must be present. Used where the top answer is the symbol's own declaration but the
+  // question is ABOUT a relation, so the graded ordering of the remaining evidence is the pin.
+  readonly expectRankedAbove?: readonly { readonly higher: string; readonly lower: string }[];
 }
 
 const POM_JAVA21 = [
@@ -76,6 +80,13 @@ const README_JAVA8_DECOY = [
   "the authoritative Java version lives in the build manifest.",
   "",
 ].join("\n");
+
+// Issue #2670 AC5: the declaration lives in a module that is NOT named after the symbol (the
+// ordinary index.ts / multi-symbol module case). Every decoy paired with it below carries the
+// symbol in its FILENAME only — prose, a JSON config, a snapshot — and declares nothing, so a
+// ranking that reads the filename instead of the file's structure puts the decoy first.
+const NON_EPONYMOUS_TOKEN_VALIDATOR =
+  "export class TokenValidator {\n  rejectExpiredJwt(): boolean { return true; }\n}\n";
 
 const CASES: readonly BenchCase[] = [
   {
@@ -460,7 +471,123 @@ const CASES: readonly BenchCase[] = [
     expectTop: "go.mod",
     expectLinePattern: /^(go|toolchain)\s/iu,
   },
+  {
+    id: "definition-not-eponymous-vs-markdown",
+    category: "language-ranking",
+    files: {
+      "src/auth/index.ts": NON_EPONYMOUS_TOKEN_VALIDATOR,
+      "docs/TokenValidator.md": "Prose about TokenValidator. No code here.\n",
+    },
+    query: "Where is TokenValidator defined?",
+    intent: "targeted-code-search",
+    expectTop: "src/auth/index.ts",
+    expectLinePattern: /class\s+TokenValidator/u,
+  },
+  {
+    // Same defect, German wording — the audit measured the German phrasing losing to the prose
+    // decoy by the same margin, so the repair has to hold for both catalog languages, not just
+    // the one the English fixtures happen to exercise.
+    id: "definition-not-eponymous-vs-markdown-de",
+    category: "language-ranking",
+    files: {
+      "src/auth/index.ts": NON_EPONYMOUS_TOKEN_VALIDATOR,
+      "docs/TokenValidator.md": "Prose about TokenValidator. No code here.\n",
+    },
+    query: "Wo ist TokenValidator definiert?",
+    intent: "targeted-code-search",
+    expectTop: "src/auth/index.ts",
+    expectLinePattern: /class\s+TokenValidator/u,
+  },
+  {
+    id: "definition-not-eponymous-vs-json-config",
+    category: "language-ranking",
+    files: {
+      "src/auth/index.ts": NON_EPONYMOUS_TOKEN_VALIDATOR,
+      "config/TokenValidator.json": '{\n  "TokenValidator": { "enabled": true }\n}\n',
+    },
+    query: "Where is TokenValidator defined?",
+    intent: "targeted-code-search",
+    expectTop: "src/auth/index.ts",
+    expectLinePattern: /class\s+TokenValidator/u,
+  },
+  {
+    id: "definition-not-eponymous-vs-snapshot",
+    category: "language-ranking",
+    files: {
+      "src/auth/index.ts": NON_EPONYMOUS_TOKEN_VALIDATOR,
+      "src/__snapshots__/TokenValidator.test.ts.snap":
+        "exports[`TokenValidator rejects an expired jwt 1`] = `false`;\n",
+    },
+    query: "Where is TokenValidator defined?",
+    intent: "targeted-code-search",
+    expectTop: "src/auth/index.ts",
+    expectLinePattern: /class\s+TokenValidator/u,
+  },
+  {
+    id: "caller-lookup-source-over-prose",
+    category: "symbol-relation",
+    files: {
+      "src/payments/refund.ts":
+        "export function refundPayment(orderId: string): boolean {\n  return orderId.length > 0;\n}\n",
+      "src/http/routes.ts":
+        'router.post("/api/refunds", (req, res) => refundPayment(req.body.orderId));\n',
+      "docs/refunds.md": "Refund handling is described here; refundPayment is prose only.\n",
+    },
+    query: "What calls refundPayment?",
+    intent: "targeted-code-search",
+    // The declaration answers "which refundPayment", but the real CALL SITE must outrank the
+    // prose that merely names the symbol (AC5).
+    expectTop: "src/payments/refund.ts",
+    expectRankedAbove: [{ higher: "src/http/routes.ts", lower: "docs/refunds.md" }],
+  },
+  {
+    id: "usage-lookup-source-over-prose",
+    category: "symbol-relation",
+    files: {
+      "src/auth/TokenValidator.ts":
+        "export class TokenValidator {\n  rejectExpiredJwt(): boolean { return true; }\n}\n",
+      "src/http/middleware.ts":
+        'import { TokenValidator } from "../auth/TokenValidator.js";\nexport const guard = (): boolean => new TokenValidator().rejectExpiredJwt();\n',
+      "docs/auth-notes.md": "TokenValidator appears in this prose note and nowhere else here.\n",
+    },
+    query: "Where is TokenValidator used?",
+    intent: "targeted-code-search",
+    expectTop: "src/auth/TokenValidator.ts",
+    expectRankedAbove: [{ higher: "src/http/middleware.ts", lower: "docs/auth-notes.md" }],
+  },
+  {
+    id: "source-to-test-symbol",
+    category: "test-to-source",
+    files: {
+      "src/payments/PaymentService.ts":
+        "export class PaymentService {\n  authorize(): boolean { return true; }\n}\n",
+      "tests/payments/PaymentService.test.ts":
+        'describe("PaymentService", () => it("authorizes", () => {}));\n',
+      "docs/payment-service.md": "PaymentService test coverage is described in this prose.\n",
+    },
+    query: "Which test file covers PaymentService?",
+    intent: "targeted-code-search",
+    // Source -> test direction (AC5 "test-symbol"). The question asks which TEST covers the
+    // symbol, so the paired test file is the answer and the declaration is not. This also fences
+    // the structural-definition award added for AC5's definition intent: that award must not fire
+    // on a question that merely names an identifier, or it demotes the very file asked for.
+    expectTop: "tests/payments/PaymentService.test.ts",
+    expectLinePattern: /describe\("PaymentService"/u,
+    expectRankedAbove: [
+      { higher: "tests/payments/PaymentService.test.ts", lower: "docs/payment-service.md" },
+    ],
+  },
 ];
+
+function expectRankingOrder(paths: readonly string[], benchCase: BenchCase): void {
+  for (const ordering of benchCase.expectRankedAbove ?? []) {
+    const higher = paths.indexOf(ordering.higher);
+    const lower = paths.indexOf(ordering.lower);
+    expect(higher, `${ordering.higher} must be surfaced`).toBeGreaterThanOrEqual(0);
+    expect(lower, `${ordering.lower} must be surfaced`).toBeGreaterThanOrEqual(0);
+    expect(higher, `${ordering.higher} must outrank ${ordering.lower}`).toBeLessThan(lower);
+  }
+}
 
 function caseById(id: string): BenchCase {
   const found = CASES.find((x) => x.id === id);
@@ -505,6 +632,7 @@ describe("repository-retrieval benchmark — golden top-k over synthetic polyglo
       for (const banned of c.mustNotInclude ?? []) {
         expect(paths).not.toContain(banned);
       }
+      expectRankingOrder(paths, c);
     });
   }
 

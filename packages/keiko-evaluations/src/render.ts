@@ -44,29 +44,25 @@ export function renderEvalSummary(scorecard: EvalScorecard): string {
   const lines: string[] = [];
   lines.push(
     `Keiko evaluation summary (schema v${scorecard.schemaVersion}, mode=${scorecard.mode})`,
-  );
-  lines.push(`Evaluated at: ${scorecard.evaluatedAt}`);
-  lines.push(
+    `Evaluated at: ${scorecard.evaluatedAt}`,
     `Fixtures: ${String(scorecard.summary.totalFixtures)} total, ${String(scorecard.summary.fullyPassedFixtures)} fully passed`,
+    "",
+    "Fixtures:",
   );
-  lines.push("");
-  lines.push("Fixtures:");
   for (const fixture of scorecard.fixtureResults) {
     lines.push(fixtureLine(fixture));
   }
-  lines.push("");
-  lines.push("Dimensions:");
+  lines.push("", "Dimensions:");
   for (const entry of scorecard.dimensions) {
     lines.push(dimensionLine(entry));
   }
-  lines.push("");
   lines.push(
+    "",
     `Surface parity: ${scorecard.surfaceParity.allPassed ? "PASS" : "FAIL"} (${String(scorecard.surfaceParity.checks.length)} checks)`,
   );
   for (const check of scorecard.surfaceParity.checks.filter((c) => !c.passed)) {
     lines.push(`  FAIL ${check.check} [${check.workflowKind}] — ${check.reason ?? "unknown"}`);
   }
-  lines.push("");
-  lines.push(verdictLine(scorecard));
+  lines.push("", verdictLine(scorecard));
   return lines.join("\n");
 }

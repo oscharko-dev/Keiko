@@ -2393,7 +2393,7 @@ function mergeLineWindows(windows: readonly LineWindow[]): readonly LineWindow[]
   );
   const merged: LineWindow[] = [];
   for (const window of sorted) {
-    const previous = merged[merged.length - 1];
+    const previous = merged.at(-1);
     if (previous === undefined || window.startLine > previous.endLine + 1) {
       merged.push(window);
       continue;

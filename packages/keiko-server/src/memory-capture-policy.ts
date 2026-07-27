@@ -46,7 +46,7 @@ const DEFAULT_MEMORY_DENIED_CATEGORY_MATCHERS: NonNullable<
 ];
 
 function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
 function exactMatcherFor(value: string): RegExp | null {

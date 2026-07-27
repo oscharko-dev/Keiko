@@ -1749,7 +1749,7 @@
         function applyWhen() {
           var state = win.dataset.state;
           win.querySelectorAll("[data-when]").forEach(function (el) {
-            var ok = el.dataset.when.split(" ").indexOf(state) !== -1;
+            var ok = el.dataset.when.split(" ").includes(state);
             el.classList.toggle("gw-hide", !ok);
           });
         }

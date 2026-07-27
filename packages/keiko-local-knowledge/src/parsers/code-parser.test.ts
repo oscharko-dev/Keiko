@@ -30,8 +30,29 @@ describe("codeParser", () => {
     });
   });
 
+  // The ECMAScript module/CommonJS TypeScript extensions are TypeScript by definition — `.mts` and
+  // `.cts` differ from `.ts` only in module resolution, never in syntax. Their JavaScript siblings
+  // `.mjs`/`.cjs` were in the language table from the start, so omitting the TypeScript pair sent
+  // every `.mts`/`.cts` file to the permissive text adapter: whole-file chunking with no symbol
+  // anchor, which is a citation section path. This repository ships five such files
+  // (`tests/e2e/servers/*.mts`), so the gap was reachable on the repository pod for Keiko itself.
+  it.each([
+    ["mts", "export function load(): void {}", "function load"],
+    ["cts", "export function load(): void {}", "function load"],
+  ])("routes the %s TypeScript extension to the code parser, not the text adapter", (extension) => {
+    const resolution = createDefaultParserRegistry().resolve(
+      selectionFromText("export const value = 1;", { extension }),
+    );
+    expect(resolution).toMatchObject({
+      kind: "matched",
+      adapter: { capability: { parserId: "code-text" } },
+    });
+  });
+
   it.each([
     ["ts", "export function load(): void {}", "function load"],
+    ["mts", "export function load(): void {}", "function load"],
+    ["cts", "export function load(): void {}", "function load"],
     ["py", "def load():\n    return None", "function load"],
     ["go", "func Load() {}", "function Load"],
     ["rs", "pub fn load() {}", "function load"],

@@ -217,8 +217,8 @@ describe("CommandsWidget", () => {
   });
 
   it("exposes the task stdout/stderr as keyboard-focusable named regions", async () => {
-    // GEN-UI-KEYBOARD-005 (test-plan #31) — the overflow:auto output <pre> must be a
-    // focusable region with an accessible name so keyboard-only users can scroll it.
+    // GEN-UI-KEYBOARD-005 (test-plan #31) — the overflow:auto output container must be a
+    // focusable, semantic region with an accessible name so keyboard-only users can scroll it.
     vi.mocked(createCommandRun).mockResolvedValue({
       ...RESULT,
       stdout: "x".repeat(4000),
@@ -229,11 +229,13 @@ describe("CommandsWidget", () => {
     await userEvent.click(screen.getByRole("button", { name: /run task/i }));
 
     const stdout = await screen.findByRole("region", { name: /task stdout/i });
-    expect(stdout.tagName).toBe("PRE");
+    expect(stdout.tagName).toBe("SECTION");
     expect(stdout).toHaveAttribute("tabindex", "0");
+    expect(stdout.querySelector("pre")).toHaveTextContent("x".repeat(4000));
     const stderr = screen.getByRole("region", { name: /task stderr/i });
-    expect(stderr.tagName).toBe("PRE");
+    expect(stderr.tagName).toBe("SECTION");
     expect(stderr).toHaveAttribute("tabindex", "0");
+    expect(stderr.querySelector("pre")).toHaveTextContent("e".repeat(4000));
   });
 
   it("surfaces a failure reason badge for a non-zero exit", async () => {

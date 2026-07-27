@@ -385,6 +385,33 @@ describe("enrichReviewItemsWithAdvisory — fail-closed sensitivity gate (ADR-01
     expect(calls).toHaveLength(0);
   });
 
+  // #2551 gave memoryTextEgressRejectionReason a deployment-configured denied-category tier, but
+  // this gate called it policy-free — so a body capture would refuse outright still reached the
+  // model here. The gate's own comment claims it re-runs "the SAME egress gate used on the way in";
+  // this pin makes that literally true for the policy-dependent tiers.
+  it("skips an item whose body trips a denied category, matching what capture itself refuses", async () => {
+    const calls: GatewayRequest[] = [];
+    const older = memoryId("mem-old");
+    const newer = memoryId("mem-new");
+    const item = supersedeItem("rv-1", older, newer);
+    const deps = baseDeps(
+      respondingModel(calls, () => structuredResponse({ keep: "A", rationale: "ok" })),
+      [],
+    );
+
+    await enrichReviewItemsWithAdvisory(
+      deps,
+      JOB_ID,
+      [item],
+      [
+        record(older, "Deployment region is eu-west-1."),
+        record(newer, "The user's chronic condition affects the on-call rotation."),
+      ],
+    );
+
+    expect(calls).toHaveLength(0);
+  });
+
   it("skips a multi-way-duplicate item when a non-participant cluster member is confidential (ADR-0120 D5 full-reference gate)", async () => {
     // `merge` participants cap at MAX_PARTICIPANTS_PER_ITEM (4), so the 5th member (`loser4`)
     // never appears in the prompt — but it is still part of `relatedMemoryIds`/`sourceMemoryIds`

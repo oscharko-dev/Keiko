@@ -4,8 +4,10 @@ This is a characterization snapshot, not a golden file. It records the most rece
 closeout measurement of the ANN vs brute-force retrieval latency on a realistic-dimensional
 (384-dim) fixture. Wall-clock milliseconds are not
 reproducible across hosts, so the closeout gate does NOT compare this document against a
-committed baseline; the operational claim (ANN faster than brute force at the large corpus)
-is enforced by `evaluateAnnProof` instead.
+committed baseline; the operational claim is enforced by `evaluateAnnProof` instead. Read that
+claim in the precise sense set out below the table — ANN answers above the exact-scan cap, where
+brute force is refused — and not as "ANN has the lower measured latency", which the measurements
+below do not say at either corpus size.
 
 Content-free by construction: row counts, milliseconds, recall floors, and a categorical
 winner. No vector values, no source text, no host identifiers.

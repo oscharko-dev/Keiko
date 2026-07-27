@@ -283,7 +283,7 @@ function isChromiumUserAgent(userAgent: string | null): boolean {
 function stripWrappingQuotes(value: string): string {
   if (value.length < 2) return value;
   const first = value[0];
-  const last = value[value.length - 1];
+  const last = value.at(-1);
   if ((first === `"` && last === `"`) || (first === `'` && last === `'`)) {
     return value.slice(1, -1);
   }

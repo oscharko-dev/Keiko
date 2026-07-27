@@ -55,9 +55,9 @@ const findReleaseNamedNode = (root: FigmaNode, marker: string): FigmaNode | unde
   let match: FigmaNode | undefined;
   walk(root, (node) => {
     const lowerName = node.name.toLowerCase();
-    const tokens = lowerName.split(TOKEN_SPLIT).filter((token) => token.length > 0);
+    const tokens = new Set(lowerName.split(TOKEN_SPLIT).filter((token) => token.length > 0));
     const markerMatched =
-      tokens.includes(needle) || (needle === DEFAULT_RELEASE_MARKER && tokens.includes("released"));
+      tokens.has(needle) || (needle === DEFAULT_RELEASE_MARKER && tokens.has("released"));
     if (markerMatched && !NEGATED_RELEASE_NAME.test(lowerName)) {
       match = node;
       return true;

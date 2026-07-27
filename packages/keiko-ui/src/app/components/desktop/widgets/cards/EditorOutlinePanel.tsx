@@ -68,7 +68,7 @@ function treeNavigation(
   if (key === "ArrowDown") return { focusId: visibleNodes[index + 1]?.id };
   if (key === "ArrowUp") return { focusId: visibleNodes[index - 1]?.id };
   if (key === "Home") return { focusId: visibleNodes[0]?.id };
-  if (key === "End") return { focusId: visibleNodes[visibleNodes.length - 1]?.id };
+  if (key === "End") return { focusId: visibleNodes.at(-1)?.id };
   if (key === "ArrowRight" && node.children.length > 0) {
     return expandedIds.has(node.id)
       ? { focusId: visibleNodes[index + 1]?.id }

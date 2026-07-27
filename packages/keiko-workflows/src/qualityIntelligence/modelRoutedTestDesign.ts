@@ -444,8 +444,8 @@ function mergeModelParameters(
 ): Record<string, unknown> | undefined {
   if (generationParameters === undefined && judgeParameters === undefined) return undefined;
   return {
-    ...(generationParameters ?? {}),
-    ...(judgeParameters ?? {}),
+    ...generationParameters,
+    ...judgeParameters,
   };
 }
 
@@ -1228,8 +1228,8 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         : {}),
       ...(degradedReason !== undefined ? { reasonSummary: degradedReason } : {}),
     });
-  } catch (caught: unknown) {
-    return finaliseFailureOrCancellation(ctx, caught, {
+  } catch (error_: unknown) {
+    return finaliseFailureOrCancellation(ctx, error_, {
       candidatesCount: 0,
       findings: Object.freeze([]),
       evidenceRefs,
