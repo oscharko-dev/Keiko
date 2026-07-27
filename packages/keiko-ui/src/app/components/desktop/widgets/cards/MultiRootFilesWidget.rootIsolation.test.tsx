@@ -209,4 +209,65 @@ describe("MultiRootFilesWidget root isolation over the real file tree", () => {
 
     expect(onActiveFileChange).not.toHaveBeenCalled();
   });
+
+  it("replays the focused group's own selection instead of clearing it", async () => {
+    // Opening a file in a NON-focused group focuses that group first, so the selection report is
+    // suppressed while it is still unfocused and the focus effect runs immediately after. Clearing
+    // there would wipe the very file the human just clicked and leave the binding on the right root
+    // with no file — so the focus effect replays this group's last known report.
+    const onActiveFileChange = vi.fn();
+    const current = manifest([
+      root("root-populated", POPULATED_ROOT, "Populated"),
+      root("root-empty", EMPTY_ROOT, "Empty"),
+    ]);
+    // Focus the EMPTY root, so the populated group below is the non-focused one.
+    const focusedOnEmpty: WorkspaceManifest = {
+      ...current,
+      focusedRootRef: current.roots[1]!.rootRef,
+    };
+    const view = workspace(focusedOnEmpty);
+    const { rerender } = render(
+      <I18nProvider>
+        <MultiRootFilesWidget
+          manifest={focusedOnEmpty}
+          workspace={view}
+          onActiveFileChange={onActiveFileChange}
+          onOpenFile={vi.fn()}
+          onOpenGitDelivery={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    await settledTrees(2);
+    // The human selects a file in the NON-focused group. Its report is suppressed by the writer
+    // gate — that suppression is what makes the replay load-bearing.
+    await userEvent.click(await screen.findByRole("treeitem", { name: /app\.ts/u }));
+    expect(onActiveFileChange).not.toHaveBeenCalledWith(
+      expect.stringContaining("app.ts"),
+      POPULATED_ROOT,
+      expect.anything(),
+    );
+    onActiveFileChange.mockClear();
+
+    // Focus flips to the populated root, exactly as focusRoot() would land it.
+    rerender(
+      <I18nProvider>
+        <MultiRootFilesWidget
+          manifest={current}
+          workspace={workspace(current)}
+          onActiveFileChange={onActiveFileChange}
+          onOpenFile={vi.fn()}
+          onOpenGitDelivery={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(onActiveFileChange).toHaveBeenCalled();
+    });
+    // The replay must carry the SELECTION, not just the root: clearing here would leave the
+    // binding on the right root with no file, discarding the click that caused the focus change.
+    const reported = onActiveFileChange.mock.calls.at(-1);
+    expect(reported?.[1]).toBe(POPULATED_ROOT);
+    expect(reported?.[0]).toContain("app.ts");
+  });
 });

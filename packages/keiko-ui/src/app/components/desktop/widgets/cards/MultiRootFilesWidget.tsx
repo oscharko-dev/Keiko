@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useMemo,
   useState,
   type KeyboardEvent,
@@ -103,8 +104,16 @@ function RootGroup({
   // or simply whichever tree finished loading last on first open, silently re-pointed the bound root
   // of every connected window with no user action naming it. `watchActive` already gates the sibling
   // concern one line below for the same reason; this gates the writer.
+  // Every report this group produces is remembered, focused or not, so becoming focused can replay
+  // what this root actually shows instead of asserting a cleared selection.
+  const lastReport = useRef<{
+    readonly path: string | null;
+    readonly fileRoot: string | null;
+    readonly activeDirectoryPath: string | null | undefined;
+  }>({ path: null, fileRoot: root.canonicalRoot, activeDirectoryPath: undefined });
   const reportActiveFile = useCallback(
     (path: string | null, fileRoot: string | null, activeDirectoryPath?: string | null): void => {
+      lastReport.current = { path, fileRoot, activeDirectoryPath };
       if (!focused) return;
       onActiveFileChange(path, fileRoot, activeDirectoryPath);
     },
@@ -114,12 +123,16 @@ function RootGroup({
   // report fires during its initial directory load, so a group that finished loading while it was
   // NOT focused has already spent that report — and switching focus to it later produces no new
   // one, leaving cfg.resolvedRoot on the previously focused root. Becoming focused is itself the
-  // event that rebinds the window, so announce the root then. Path and directory are deliberately
-  // cleared: the newly focused root has no selection in this window yet, and carrying the previous
-  // root's file path across would name a file that does not exist under this root.
+  // event that rebinds the window, so replay this group's last known state then.
+  //
+  // Replay rather than clear: opening a file in a non-focused group focuses that group first, so an
+  // unconditional `(null, root, null)` here would land AFTER the selection report was suppressed
+  // and wipe the very file the human just clicked, leaving the binding on the right root with no
+  // file. The remembered report is that selection.
   useEffect(() => {
     if (!focused) return;
-    onActiveFileChange(null, root.canonicalRoot, null);
+    const { path, fileRoot, activeDirectoryPath } = lastReport.current;
+    onActiveFileChange(path, fileRoot ?? root.canonicalRoot, activeDirectoryPath);
   }, [focused, onActiveFileChange, root.canonicalRoot]);
   const move = (offset: -1 | 1): void => {
     void workspace.reorderRoots(root.rootRef, rootOrderAfterMove(manifest.roots, index, offset));
