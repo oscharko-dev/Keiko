@@ -1256,7 +1256,7 @@ async function parseSnapshotMetadataPatch(
     return { status: 400, body: figmaErrorBody("FIGMA_BAD_METADATA") };
   }
   const body = parseSnapshotMetadataJson(raw);
-  if (body === undefined || !Object.prototype.hasOwnProperty.call(body, "displayName")) {
+  if (body === undefined || !Object.hasOwn(body, "displayName")) {
     return { status: 400, body: figmaErrorBody("FIGMA_BAD_METADATA") };
   }
   const displayName = normalizePatchDisplayName(body.displayName);

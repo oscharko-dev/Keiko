@@ -4,7 +4,12 @@
 // `readonly` everywhere; optional props are `| undefined` because exactOptionalPropertyTypes
 // is on. Every report shape is plain JSON-serializable so the #10 audit ledger can persist it.
 
-import type { MemoryWorkflowPort } from "@oscharko-dev/keiko-contracts";
+import type {
+  FileNamingStyle,
+  MemoryWorkflowPort,
+  WorkflowLimits,
+  WorkflowStatus,
+} from "@oscharko-dev/keiko-contracts";
 import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
@@ -21,12 +26,6 @@ import type { TestStyle, TestVerification } from "./frontend.js";
 // WorkflowStatus, FileNamingStyle, WorkflowLimits, and DEFAULT_WORKFLOW_LIMITS were extracted to
 // @oscharko-dev/keiko-contracts in issue #158. Re-exported here so consumers of
 // "./types.js" continue to resolve them unchanged.
-import type {
-  FileNamingStyle,
-  WorkflowLimits,
-  WorkflowStatus,
-} from "@oscharko-dev/keiko-contracts";
-
 export type {
   WorkflowStatus,
   FileNamingStyle,
