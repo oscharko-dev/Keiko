@@ -208,6 +208,19 @@ function AnalysisSummary({
   );
 }
 
+// #2723 (S3358): the routing-banner tone was a nested ternary
+// (executionStatus === "model-applied" ? "ok" : availability/status check ? "warn" : "muted");
+// extracted to a named if/else-if chain.
+function modelRoutingTone(
+  routing: PromptEnhancementWireResponse["modelRouting"],
+): "ok" | "warn" | "muted" {
+  if (routing.executionStatus === "model-applied") return "ok";
+  if (routing.availability === "unavailable" || routing.executionStatus === "model-fallback") {
+    return "warn";
+  }
+  return "muted";
+}
+
 function ModelRoutingBanner({
   routing,
   t,
@@ -215,12 +228,7 @@ function ModelRoutingBanner({
   readonly routing: PromptEnhancementWireResponse["modelRouting"];
   readonly t: OptionalWidgetTranslate;
 }): ReactNode {
-  const tone =
-    routing.executionStatus === "model-applied"
-      ? "ok"
-      : routing.availability === "unavailable" || routing.executionStatus === "model-fallback"
-        ? "warn"
-        : "muted";
+  const tone = modelRoutingTone(routing);
   let label = t("promptEnhancer.routing.deterministic");
   if (routing.executionStatus === "model-applied") {
     label = t("promptEnhancer.routing.modelEnhanced", {
@@ -304,6 +312,9 @@ function SafetyPanel({
   );
 }
 
+// #2723 (S3358): the readiness-text lookup was a nested ternary
+// (status === "ready" ? … : status === "unavailable" ? … : …); extracted to a named
+// if/else-if chain.
 function GroundingPanel({
   plan,
   readiness,
@@ -313,12 +324,14 @@ function GroundingPanel({
   readonly readiness: PromptEnhancementWireResponse["groundingReadiness"];
   readonly t: OptionalWidgetTranslate;
 }): ReactNode {
-  const readinessText =
-    readiness.status === "ready"
-      ? t("promptEnhancer.grounding.ready")
-      : readiness.status === "unavailable"
-        ? t("promptEnhancer.grounding.unavailable")
-        : t("promptEnhancer.grounding.notRequired");
+  let readinessText: string;
+  if (readiness.status === "ready") {
+    readinessText = t("promptEnhancer.grounding.ready");
+  } else if (readiness.status === "unavailable") {
+    readinessText = t("promptEnhancer.grounding.unavailable");
+  } else {
+    readinessText = t("promptEnhancer.grounding.notRequired");
+  }
   return (
     <Section title={t("promptEnhancer.grounding.title")}>
       <div
@@ -515,15 +528,15 @@ function EnhancedPromptSections({
   );
 }
 
-function promptEnhancerStatus(
-  loading: boolean,
-  draftLength: number,
-  t: OptionalWidgetTranslate,
-): string {
-  if (loading) return t("promptEnhancer.status.enhancing");
-  return draftLength === 0
-    ? t("promptEnhancer.status.waitingForDraft")
-    : t("promptEnhancer.status.ready");
+type PromptEnhancerStatusKey =
+  | "promptEnhancer.status.enhancing"
+  | "promptEnhancer.status.waitingForDraft"
+  | "promptEnhancer.status.ready";
+
+function promptEnhancerStatusKey(loading: boolean, draftLength: number): PromptEnhancerStatusKey {
+  if (loading) return "promptEnhancer.status.enhancing";
+  if (draftLength === 0) return "promptEnhancer.status.waitingForDraft";
+  return "promptEnhancer.status.ready";
 }
 
 export function PromptEnhancerPanel({
@@ -680,6 +693,7 @@ export function PromptEnhancerPanel({
     },
   ];
   const draftLength = draft.trim().length;
+  const statusText = t(promptEnhancerStatusKey(loading, draftLength));
   const hasWorkspaceContent =
     draftLength > 0 ||
     result !== null ||
@@ -836,7 +850,7 @@ export function PromptEnhancerPanel({
             </button>
           </div>
           <p className="pe-status" role="status" aria-live="polite">
-            {promptEnhancerStatus(loading, draftLength, t)}
+            {statusText}
           </p>
         </aside>
       </form>

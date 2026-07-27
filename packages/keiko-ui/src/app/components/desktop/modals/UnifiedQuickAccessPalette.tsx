@@ -11,8 +11,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type RefObject,
+  type SetStateAction,
 } from "react";
 import { fetchFilesSearch, fetchWorkspaceSearch, fetchWorkspaceSymbols } from "@/lib/api";
 import {
@@ -137,20 +140,6 @@ function symbolResults(
     symbol: result.symbol,
     detail: result.enclosingSymbol ?? result.kind,
   }));
-}
-
-// The attributes every option row in the listbox shares, so the two row shapes below cannot drift
-// apart on the a11y-load-bearing ones (`role`, `aria-selected`, the roving `tabIndex`).
-interface CommonRowProps {
-  readonly type: "button";
-  readonly id: string;
-  readonly role: "option";
-  readonly "aria-selected": boolean;
-  readonly className: string;
-  readonly "data-sel": boolean;
-  readonly tabIndex: number;
-  readonly onPointerEnter: () => void;
-  readonly onClick: () => void;
 }
 
 interface QuickAccessRootResponse {
@@ -284,45 +273,44 @@ function quickAccessResultsStatus(
   return `${t(resultKey, { count: itemCount })}${truncated ? t(suffixKey) : ""}`;
 }
 
-export function UnifiedQuickAccessPalette({
-  initialMode,
-  root,
-  roots,
-  commands,
-  openEditorFile,
-  onClose,
-}: UnifiedQuickAccessPaletteProps): ReactNode {
-  const t = useOptionalWidgetTranslate();
-  const [query, setQuery] = useState(initialMode === "commands" ? ">" : "");
-  const [searchResults, setSearchResults] = useState<readonly SearchResult[]>([]);
-  const [truncated, setTruncated] = useState(false);
-  const [failedRoots, setFailedRoots] = useState<readonly string[]>([]);
-  const [selected, setSelected] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const listId = useId();
+// Restores focus to whatever had it before the palette opened, once the palette closes.
+function useQuickAccessFocusRestore(inputRef: RefObject<HTMLInputElement | null>): void {
   const openerRef = useRef<HTMLElement | null>(
     typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null),
   );
-  const mode: QuickAccessMode = query.startsWith(">") ? "commands" : "files";
-  const commandQuery = query.startsWith(">") ? query.slice(1).trim() : "";
-  const targets = useMemo(() => quickAccessTargets(root, roots), [root, roots]);
-  const multiRoot = targets.length > 1;
-
   useEffect(() => {
     const opener = openerRef.current;
     inputRef.current?.focus();
-    return () => {
+    return (): void => {
       if (opener?.isConnected === true) opener.focus();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+}
+
+interface QuickAccessFileSearchState {
+  readonly searchResults: readonly SearchResult[];
+  readonly truncated: boolean;
+  readonly failedRoots: readonly string[];
+}
+
+// Debounced workspace file/symbol search: re-queries targets shortly after the query settles,
+// aborting the in-flight request if the query or target set changes first.
+function useQuickAccessFileSearch(
+  mode: QuickAccessMode,
+  query: string,
+  targets: readonly WorkspaceRootTarget[],
+): QuickAccessFileSearchState {
+  const [searchResults, setSearchResults] = useState<readonly SearchResult[]>([]);
+  const [truncated, setTruncated] = useState(false);
+  const [failedRoots, setFailedRoots] = useState<readonly string[]>([]);
 
   useEffect(() => {
     if (mode !== "files" || targets.length === 0 || query.trim().length === 0) {
       setSearchResults([]);
       setTruncated(false);
       setFailedRoots([]);
-      return;
+      return undefined;
     }
     const controller = new AbortController();
     const trimmed = query.trim();
@@ -346,11 +334,64 @@ export function UnifiedQuickAccessPalette({
           }
         });
     }, SEARCH_DEBOUNCE_MS);
-    return () => {
+    return (): void => {
       clearTimeout(handle);
       controller.abort();
     };
   }, [mode, query, targets]);
+
+  return { searchResults, truncated, failedRoots };
+}
+
+function quickAccessKeyDownHandler(
+  itemCount: number,
+  selected: number,
+  setSelected: Dispatch<SetStateAction<number>>,
+  activate: (index: number) => void,
+  onClose: () => void,
+  inputRef: RefObject<HTMLInputElement | null>,
+): (event: ReactKeyboardEvent<HTMLInputElement>) => void {
+  return (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (itemCount > 0) setSelected((current) => (current + 1) % itemCount);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (itemCount > 0) setSelected((current) => (current - 1 + itemCount) % itemCount);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      activate(selected);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      inputRef.current?.focus();
+    }
+  };
+}
+
+export function UnifiedQuickAccessPalette({
+  initialMode,
+  root,
+  roots,
+  commands,
+  openEditorFile,
+  onClose,
+}: UnifiedQuickAccessPaletteProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  const [query, setQuery] = useState(initialMode === "commands" ? ">" : "");
+  const [selected, setSelected] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const mode: QuickAccessMode = query.startsWith(">") ? "commands" : "files";
+  const commandQuery = query.startsWith(">") ? query.slice(1).trim() : "";
+  const targets = useMemo(() => quickAccessTargets(root, roots), [root, roots]);
+  const multiRoot = targets.length > 1;
+
+  useQuickAccessFocusRestore(inputRef);
+  const { searchResults, truncated, failedRoots } = useQuickAccessFileSearch(mode, query, targets);
 
   const commandResults = useMemo(
     () =>
@@ -387,70 +428,17 @@ export function UnifiedQuickAccessPalette({
     [commandResults, mode, onClose, openEditorFile, searchResults],
   );
 
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      if (itemCount > 0) setSelected((current) => (current + 1) % itemCount);
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      if (itemCount > 0) setSelected((current) => (current - 1 + itemCount) % itemCount);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      activate(selected);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    } else if (event.key === "Tab") {
-      event.preventDefault();
-      inputRef.current?.focus();
-    }
-  };
+  const onKeyDown = quickAccessKeyDownHandler(
+    itemCount,
+    selected,
+    setSelected,
+    activate,
+    onClose,
+    inputRef,
+  );
 
   const optionId = (index: number): string => `${listId}-option-${String(index)}`;
   const emptyText = quickAccessEmptyText(t, mode, root, query);
-  const rowProps = (index: number): CommonRowProps => ({
-    type: "button",
-    id: optionId(index),
-    role: "option",
-    "aria-selected": index === selected,
-    className: "cmdk-row",
-    "data-sel": index === selected,
-    tabIndex: -1,
-    onPointerEnter: () => setSelected(index),
-    onClick: () => activate(index),
-  });
-  // Chosen with an independent statement rather than a nested ternary in the JSX (S3358): three
-  // outcomes chained as `a ? x : b ? y : z` read as one expression while being two decisions.
-  let listBody: ReactNode;
-  if (itemCount === 0) {
-    listBody = <div className="cmdk-empty">{emptyText}</div>;
-  } else if (mode === "commands") {
-    listBody = commandResults.map((command, index) => (
-      <button key={command.id} {...rowProps(index)}>
-        <span className="cmdk-label">{command.label}</span>
-        <span className="spacer" />
-        {command.shortcut === undefined ? null : <span className="kbd">{command.shortcut}</span>}
-        <span className="cmdk-group mono">{command.group}</span>
-      </button>
-    ));
-  } else {
-    listBody = searchResults.map((result, index) => (
-      <button
-        key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
-        {...rowProps(index)}
-      >
-        <span className="cmdk-ico">
-          <FileIcon name={result.path} />
-        </span>
-        <span className="cmdk-label">{result.kind === "symbol" ? result.symbol : result.path}</span>
-        <span className="spacer" />
-        <span className="cmdk-group mono">
-          {multiRoot ? `${result.rootLabel} · ` : ""}
-          {result.path}:{String(result.line)}
-        </span>
-      </button>
-    ));
-  }
   const resultsStatus = quickAccessResultsStatus(
     t,
     itemCount,
@@ -508,7 +496,58 @@ export function UnifiedQuickAccessPalette({
           </div>
         ) : null}
         <div id={listId} role="listbox" className="cmdk-list">
-          {listBody}
+          {itemCount === 0 && <div className="cmdk-empty">{emptyText}</div>}
+          {itemCount > 0 &&
+            mode === "commands" &&
+            commandResults.map((command, index) => (
+              <button
+                key={command.id}
+                type="button"
+                id={optionId(index)}
+                role="option"
+                aria-selected={index === selected}
+                className="cmdk-row"
+                data-sel={index === selected}
+                tabIndex={-1}
+                onPointerEnter={() => setSelected(index)}
+                onClick={() => activate(index)}
+              >
+                <span className="cmdk-label">{command.label}</span>
+                <span className="spacer" />
+                {command.shortcut !== undefined ? (
+                  <span className="kbd">{command.shortcut}</span>
+                ) : null}
+                <span className="cmdk-group mono">{command.group}</span>
+              </button>
+            ))}
+          {itemCount > 0 &&
+            mode !== "commands" &&
+            searchResults.map((result, index) => (
+              <button
+                key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
+                type="button"
+                id={optionId(index)}
+                role="option"
+                aria-selected={index === selected}
+                className="cmdk-row"
+                data-sel={index === selected}
+                tabIndex={-1}
+                onPointerEnter={() => setSelected(index)}
+                onClick={() => activate(index)}
+              >
+                <span className="cmdk-ico">
+                  <FileIcon name={result.path} />
+                </span>
+                <span className="cmdk-label">
+                  {result.kind === "symbol" ? result.symbol : result.path}
+                </span>
+                <span className="spacer" />
+                <span className="cmdk-group mono">
+                  {multiRoot ? `${result.rootLabel} · ` : ""}
+                  {result.path}:{String(result.line)}
+                </span>
+              </button>
+            ))}
         </div>
       </div>
     </div>

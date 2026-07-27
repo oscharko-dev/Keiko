@@ -1057,24 +1057,25 @@ function countDocumentStatus(
   capsuleId: string,
   status: "failed" | "skipped" | "unsupported",
 ): number {
-  const row =
-    status === "failed"
-      ? (store._internal.db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'failed'",
-          )
-          .get({ c: capsuleId }) as { readonly n: number })
-      : status === "unsupported"
-        ? (store._internal.db
-            .prepare(
-              "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'unsupported'",
-            )
-            .get({ c: capsuleId }) as { readonly n: number })
-        : (store._internal.db
-            .prepare(
-              "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status IN ('skipped', 'unsupported')",
-            )
-            .get({ c: capsuleId }) as { readonly n: number });
+  if (status === "failed") {
+    const row = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'failed'")
+      .get({ c: capsuleId }) as { readonly n: number };
+    return row.n;
+  }
+  if (status === "unsupported") {
+    const row = store._internal.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'unsupported'",
+      )
+      .get({ c: capsuleId }) as { readonly n: number };
+    return row.n;
+  }
+  const row = store._internal.db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status IN ('skipped', 'unsupported')",
+    )
+    .get({ c: capsuleId }) as { readonly n: number };
   return row.n;
 }
 

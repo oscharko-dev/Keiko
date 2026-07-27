@@ -24,6 +24,14 @@ export function formatBytes(bytes: number, locale?: string): string {
   return `${formatByteMagnitude(bytes / (1024 * 1024 * 1024), locale)} GB`;
 }
 
+// The digit count for formatBytesPrecise: whole bytes carry no decimals, everything
+// above that carries two decimals below magnitude 10 and one at or above.
+function formatPreciseMagnitude(size: number, idx: number): string {
+  if (idx === 0) return size.toFixed(0);
+  if (size >= 10) return size.toFixed(1);
+  return size.toFixed(2);
+}
+
 // A higher-precision byte presenter: two decimals below magnitude 10, one at or
 // above. Used by the file preview / files widget size chips (GEN-DUP-SEMANTIC-001)
 // where the extra precision distinguishes near-equal small files.
@@ -36,7 +44,7 @@ export function formatBytesPrecise(bytes: number): string {
     size /= 1024;
     idx += 1;
   }
-  const value = idx === 0 ? size.toFixed(0) : size.toFixed(size >= 10 ? 1 : 2);
+  const value = formatPreciseMagnitude(size, idx);
   return `${value} ${units[idx]}`;
 }
 

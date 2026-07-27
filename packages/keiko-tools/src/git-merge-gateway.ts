@@ -388,12 +388,14 @@ function mergeReadinessFromState(mergeableState: string | undefined): GitDeliver
   }
 }
 
+function pullRequestStatus(raw: RawMergeReadiness): GitDeliveryPullRequestState["status"] {
+  if (raw.merged) return "merged";
+  if (raw.state === "closed") return "closed";
+  return "open";
+}
+
 export function mapRawMergeReadiness(raw: RawMergeReadiness): GitDeliveryPullRequestState {
-  const status: GitDeliveryPullRequestState["status"] = raw.merged
-    ? "merged"
-    : raw.state === "closed"
-      ? "closed"
-      : "open";
+  const status = pullRequestStatus(raw);
   return {
     schemaVersion: "1",
     externalId: raw.prNumber,

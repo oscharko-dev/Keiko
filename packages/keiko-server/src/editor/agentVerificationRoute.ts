@@ -37,7 +37,10 @@ import {
   editorAgentAuditRootAttribution,
   recordEditorAgentActionAudit,
 } from "./agentActionAudit.js";
-import { editorAgentAuthorityRegistry } from "./agentAuthorityRegistry.js";
+import {
+  editorAgentAuthorityRegistry,
+  type EditorAgentAuthorityFailureReason,
+} from "./agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
@@ -123,6 +126,17 @@ function denyByAuthority(
   };
 }
 
+// Exported for direct regression coverage (Issue #2723): pure, no closures, otherwise only reachable
+// by forcing a real authority resolution failure (expiry, revocation, or budget exhaustion) through
+// the full governed verification route.
+export function verificationAuthorityDenyReason(
+  reason: EditorAgentAuthorityFailureReason,
+): EditorAgentActionDenyReason {
+  if (reason === "expired") return "authority-expired";
+  if (reason === "budget-exceeded") return "authority-budget-exceeded";
+  return "authority-invalid";
+}
+
 function verificationWorkspaceTrust(
   deps: UiHandlerDeps,
   workspaceRoot: string,
@@ -161,13 +175,7 @@ function decideVerificationPolicy(
     new Date().toISOString(),
   );
   if (!resolution.ok) {
-    const reason =
-      resolution.reason === "expired"
-        ? "authority-expired"
-        : resolution.reason === "budget-exceeded"
-          ? "authority-budget-exceeded"
-          : "authority-invalid";
-    return denyByAuthority(baseline, reason);
+    return denyByAuthority(baseline, verificationAuthorityDenyReason(resolution.reason));
   }
   return composeEditorAgentActionPolicyDecision(
     baseline,

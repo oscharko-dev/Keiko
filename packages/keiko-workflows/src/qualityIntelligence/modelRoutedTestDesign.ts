@@ -385,6 +385,18 @@ function selectReviewCandidates(
   return persistedDelta.length > 0 ? Object.freeze(persistedDelta) : baseline;
 }
 
+function seedUsedField(result: QualityIntelligenceGenerationPortResult): {
+  readonly seedUsed?: number | null;
+} {
+  if (result.modelId !== undefined) {
+    return { seedUsed: result.seedUsed ?? null };
+  }
+  if (result.seedUsed !== undefined) {
+    return { seedUsed: result.seedUsed };
+  }
+  return {};
+}
+
 function modelGenerationOutput(
   result: QualityIntelligenceGenerationPortResult,
   ctx: RunContext,
@@ -399,11 +411,7 @@ function modelGenerationOutput(
     candidates,
     reviewCandidates: selectReviewCandidates(candidates, baseline, delta),
     ...(result.modelId !== undefined ? { modelId: result.modelId } : {}),
-    ...(result.modelId !== undefined
-      ? { seedUsed: result.seedUsed ?? null }
-      : result.seedUsed !== undefined
-        ? { seedUsed: result.seedUsed }
-        : {}),
+    ...seedUsedField(result),
     modelParameters: result.modelParameters,
   };
 }

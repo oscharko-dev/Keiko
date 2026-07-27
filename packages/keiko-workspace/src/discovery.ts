@@ -16,6 +16,7 @@ import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
 import { FileTooLargeError, PathDeniedError, WorkspaceReadError } from "./errors.js";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_READ_OPTIONS,
@@ -200,7 +201,7 @@ export function discoverWithStats(
   const walk = runWalk(workspace, opts, fs);
   return {
     files: walk.out,
-    directories: [...new Set(walk.directories)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    directories: [...new Set(walk.directories)].sort(compareStrings),
     stats: {
       discovered: walk.out.length,
       denied: walk.denied,

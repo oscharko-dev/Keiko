@@ -71,7 +71,6 @@ export function createSqliteAuditSink(store: KnowledgeStore): AuditEventSink {
       }
       if (event.kind === "source-removed") {
         insertMembershipRow(insertMembership, event, "remove-source");
-        return;
       }
     },
   };

@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceDirEntry, WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -166,7 +167,7 @@ export function collectFromEntries(
   }
   return {
     files: out.slice(0, limits.maxFilesScanned),
-    directories: [...new Set(walk.directories)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    directories: [...new Set(walk.directories)].sort(compareStrings),
     filesDiscovered: out.length,
     truncated: walk.truncated,
     depthPruned: walk.depthPruned,

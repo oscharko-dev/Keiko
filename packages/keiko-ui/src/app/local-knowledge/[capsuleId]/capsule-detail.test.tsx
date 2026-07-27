@@ -8,9 +8,10 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CapsuleDetail } from "./capsule-detail";
+import { CapsuleDetail, resumeButtonLabel, staleChunksTone } from "./capsule-detail";
 import type { CapsuleDetail as CapsuleDetailData } from "@/lib/local-knowledge-api";
 import type {
+  CapsuleContextualRetrievalHealth,
   CapsuleLargeDocumentHealth,
   DocumentId,
   KnowledgeCapsuleId,
@@ -21,6 +22,7 @@ import {
   DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
 } from "@oscharko-dev/keiko-contracts";
+import { translateLocalKnowledge, type I18nTranslate } from "../local-knowledge-i18n";
 
 // ---------------------------------------------------------------------------
 // Mock next/navigation so useSearchParams() resolves synchronously in jsdom
@@ -1041,5 +1043,65 @@ describe("CapsuleDetail — large-document progress", () => {
     });
     const results = await axe(container);
     expect(results).toHaveNoViolations();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// staleChunksTone (pure helper)
+// ---------------------------------------------------------------------------
+
+function contextualRetrievalHealth(
+  overrides: Partial<CapsuleContextualRetrievalHealth> = {},
+): CapsuleContextualRetrievalHealth {
+  return {
+    enabled: true,
+    source: "capsule",
+    status: "ready",
+    strict: false,
+    rebuildRequired: false,
+    staleChunkCount: 0,
+    degradedChunkCount: 0,
+    message: "Contextual retrieval is ready.",
+    ...overrides,
+  };
+}
+
+describe("staleChunksTone", () => {
+  it("warns when a rebuild is required, regardless of the degraded count", () => {
+    expect(
+      staleChunksTone(contextualRetrievalHealth({ rebuildRequired: true, degradedChunkCount: 0 })),
+    ).toBe("warn");
+  });
+
+  it("warns on degraded chunks alone, even when no rebuild is required", () => {
+    expect(
+      staleChunksTone(contextualRetrievalHealth({ rebuildRequired: false, degradedChunkCount: 3 })),
+    ).toBe("warn");
+  });
+
+  it("is ok when neither a rebuild is required nor any chunk is degraded", () => {
+    expect(
+      staleChunksTone(contextualRetrievalHealth({ rebuildRequired: false, degradedChunkCount: 0 })),
+    ).toBe("ok");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resumeButtonLabel (pure helper)
+// ---------------------------------------------------------------------------
+
+describe("resumeButtonLabel", () => {
+  const t: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
+
+  it("shows the busy label while a resume is in flight", () => {
+    expect(resumeButtonLabel(true, 1, t)).toBe("Resuming…");
+  });
+
+  it("uses the singular label for exactly one resumable document", () => {
+    expect(resumeButtonLabel(false, 1, t)).toBe("Resume 1 document");
+  });
+
+  it("pluralizes the label when more than one document is resumable", () => {
+    expect(resumeButtonLabel(false, 2, t)).toBe("Resume 2 documents");
   });
 });

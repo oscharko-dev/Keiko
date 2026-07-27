@@ -120,6 +120,18 @@ function playbackHeadline(phase: VoicePlaybackSnapshot["phase"], t: I18nTranslat
   }
 }
 
+// S3358 — the decorative phase glyph: a loading dot while preparing, a speaking dot while
+// speaking, nothing otherwise.
+function playbackPhaseGlyph(phase: VoicePlaybackSnapshot["phase"]): ReactNode {
+  if (phase === "preparing") {
+    return <span className="cmp-loading-dot" aria-hidden="true" />;
+  }
+  if (phase === "speaking") {
+    return <span className="cmp-voice-dot" aria-hidden="true" />;
+  }
+  return null;
+}
+
 interface VoicePlaybackStatusProps {
   readonly snapshot: VoicePlaybackSnapshot;
   readonly onPause: () => void;
@@ -169,11 +181,7 @@ export function VoicePlaybackStatus({
       data-phase={phase}
     >
       <p className={isFailure ? "cmp-voice-error-text" : undefined}>
-        {phase === "preparing" ? (
-          <span className="cmp-loading-dot" aria-hidden="true" />
-        ) : phase === "speaking" ? (
-          <span className="cmp-voice-dot" aria-hidden="true" />
-        ) : null}
+        {playbackPhaseGlyph(phase)}
         {headline}
       </p>
       <div className="cmp-voice-actions">

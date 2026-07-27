@@ -209,6 +209,23 @@ describe("ReviewWidget", () => {
     expect(screen.getAllByText("Applied").length).toBeGreaterThan(0);
   });
 
+  it("shows no Apply control for a report status that is neither dry-run nor fix-proposed", async () => {
+    // canApplyReport requires status "dry-run"/"fix-proposed"; a "completed" report with a diff
+    // still has appliedAt undefined, so ApplyControl falls through to its final `return null`
+    // instead of rendering an Apply button.
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: { ...MINIMAL_REPORT, status: "completed" as const },
+    });
+    mockEvidenceNotFound();
+
+    render(<ReviewWidget runId="r-123" />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("src/foo.ts").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByRole("button", { name: /apply/i })).not.toBeInTheDocument();
+  });
+
   it("shows error message on 409 NOT_APPLIABLE and re-enables the Apply button", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
     mockEvidenceNotFound();

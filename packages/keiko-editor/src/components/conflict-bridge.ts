@@ -128,6 +128,15 @@ function decorations(
   );
 }
 
+/** Index to land on after a next/previous step: wraps at the ends, jumps to an edge when nothing
+ * is currently selected (start of list going forward, end of list going backward). */
+function resolveNavigationIndex(current: number, step: 1 | -1, length: number): number {
+  if (current < 0) {
+    return step === 1 ? 0 : length - 1;
+  }
+  return (current + step + length) % length;
+}
+
 const RESOLUTIONS = [
   { choice: "ours", id: "keiko.editor.acceptConflictOurs" },
   { choice: "theirs", id: "keiko.editor.acceptConflictTheirs" },
@@ -197,12 +206,7 @@ class ConflictController implements ConflictBridge {
   private navigate(step: 1 | -1): void {
     if (this.blocks.length === 0 || this.model === null) return;
     const current = this.currentIndex();
-    const index =
-      current < 0
-        ? step === 1
-          ? 0
-          : this.blocks.length - 1
-        : (current + step + this.blocks.length) % this.blocks.length;
+    const index = resolveNavigationIndex(current, step, this.blocks.length);
     const block = this.blocks[index];
     if (block === undefined) return;
     const range = monacoRange(this.model, block.range.start, block.range.end);

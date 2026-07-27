@@ -34,8 +34,15 @@ export interface DesignTestCaseCandidatesInput {
   readonly profile?: PolicyProfile;
 }
 
-const compareString = (left: string, right: string): number =>
-  left < right ? -1 : left > right ? 1 : 0;
+export const compareString = (left: string, right: string): number => {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+};
 
 const stableSortAtoms = (
   atoms: readonly QualityIntelligence.QualityIntelligenceEvidenceAtom[],

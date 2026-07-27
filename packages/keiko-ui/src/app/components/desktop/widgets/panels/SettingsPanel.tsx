@@ -433,6 +433,21 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
   );
 }
 
+// #2723 (S3358): the row status title was a nested ternary (conversationEligible ? … :
+// embeddingReady ? … : voiceReady ? … : …); extracted to a named if/else-if chain.
+function modelStatusTitle(
+  model: ModelCapability,
+  conversationEligible: boolean,
+  embeddingReady: boolean,
+  voiceReady: boolean,
+  t: I18nTranslate,
+): string {
+  if (conversationEligible) return t("settings.models.statusConversationEligible");
+  if (embeddingReady) return t("settings.models.statusEmbedding");
+  if (voiceReady) return voiceProviderAvailabilityLabel(model, t);
+  return t("settings.models.statusNotSelectable");
+}
+
 function ModelCapabilityRow({
   model,
   readiness,
@@ -448,13 +463,7 @@ function ModelCapabilityRow({
   const voiceReady = isConfiguredVoiceProvider(model);
   const statusClass =
     conversationEligible || embeddingReady || voiceReady ? "connected" : "ineligible";
-  const statusTitle = conversationEligible
-    ? t("settings.models.statusConversationEligible")
-    : embeddingReady
-      ? t("settings.models.statusEmbedding")
-      : voiceReady
-        ? voiceProviderAvailabilityLabel(model, t)
-        : t("settings.models.statusNotSelectable");
+  const statusTitle = modelStatusTitle(model, conversationEligible, embeddingReady, voiceReady, t);
   const RowIcon = model.kind === "voice" ? Icons.mic : Icons.cube;
   return (
     <div className="ml-row">
@@ -1041,6 +1050,53 @@ interface ModelsTabContentProps {
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
 }
 
+// #2723 (S3358): the models-list body was a nested ternary (loadingModels ? … :
+// models.length === 0 ? … : …); extracted to a named render function with early returns.
+function renderModelsListBody({
+  loadingModels,
+  models,
+  gatewayConfigured,
+  readiness,
+  onRunReadiness,
+  t,
+}: {
+  readonly loadingModels: boolean;
+  readonly models: readonly ModelCapability[];
+  readonly gatewayConfigured: boolean;
+  readonly readiness: Record<string, ReadinessRunState>;
+  readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (loadingModels) {
+    return (
+      <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
+        {t("settings.models.loading")}
+      </output>
+    );
+  }
+  if (models.length === 0) {
+    return (
+      <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
+        {gatewayConfigured
+          ? t("settings.models.emptyConfigured")
+          : t("settings.models.emptyUnconfigured")}
+      </output>
+    );
+  }
+  return (
+    <div className="set-list">
+      {models.map((model) => (
+        <ModelCapabilityRow
+          key={model.id}
+          model={model}
+          readiness={readiness[model.id]}
+          onRunReadiness={onRunReadiness}
+        />
+      ))}
+    </div>
+  );
+}
+
 // uiux-fix C147/C285/C287: the "models" tab body, mirrored after GeneralPrefs — its own
 // component instead of an inline nested-ternary block in SettingsPanel's return.
 function ModelsTabContent({
@@ -1129,28 +1185,14 @@ function ModelsTabContent({
       ) : null}
 
       {/* uiux-fix C285: loading -> result transition is announced */}
-      {loadingModels ? (
-        <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
-          {t("settings.models.loading")}
-        </output>
-      ) : models.length === 0 ? (
-        <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
-          {gatewayConfigured
-            ? t("settings.models.emptyConfigured")
-            : t("settings.models.emptyUnconfigured")}
-        </output>
-      ) : (
-        <div className="set-list">
-          {models.map((model) => (
-            <ModelCapabilityRow
-              key={model.id}
-              model={model}
-              readiness={readiness[model.id]}
-              onRunReadiness={onRunReadiness}
-            />
-          ))}
-        </div>
-      )}
+      {renderModelsListBody({
+        loadingModels,
+        models,
+        gatewayConfigured,
+        readiness,
+        onRunReadiness,
+        t,
+      })}
 
       {setupOpen ? (
         <GatewaySetupDialog

@@ -12,7 +12,10 @@ import type {
   WorkflowRunId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { auditRunIdFor } from "./memory-audit-handler.js";
-import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
+import {
+  createWorkflowMemoryPort,
+  describeWorkflowWriteCandidateSummary,
+} from "./memory-workflow-port.js";
 
 function memoryId(value: string): MemoryId {
   return value as MemoryId;
@@ -341,5 +344,19 @@ describe("createWorkflowMemoryPort", () => {
 
     expect(listAllMemories(vault, { includeExpired: true })).toEqual([]);
     vault.close();
+  });
+});
+
+describe("describeWorkflowWriteCandidateSummary", () => {
+  it("describes a single governed candidate in the singular", () => {
+    expect(describeWorkflowWriteCandidateSummary(1, "workflow-success")).toBe(
+      "Workflow produced 1 governed memory write candidate (workflow-success).",
+    );
+  });
+
+  it("describes multiple governed candidates in the plural with the count", () => {
+    expect(describeWorkflowWriteCandidateSummary(3, "workflow-correction")).toBe(
+      "Workflow produced 3 governed memory write candidates (workflow-correction).",
+    );
   });
 });

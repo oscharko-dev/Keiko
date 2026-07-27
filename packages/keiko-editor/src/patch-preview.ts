@@ -133,6 +133,14 @@ function isBinarySource(source: PatchPreviewSource | undefined): boolean {
   return source?.binary === true || (source !== undefined && containsNul(source.content.text));
 }
 
+/** Byte length of a single Unicode code point when encoded as UTF-8. */
+function utf8ByteLength(codePoint: number): number {
+  if (codePoint <= 0x7f) return 1;
+  if (codePoint <= 0x7ff) return 2;
+  if (codePoint <= 0xffff) return 3;
+  return 4;
+}
+
 function clampToLimit(
   text: string,
   maxBytes: number,
@@ -146,7 +154,7 @@ function clampToLimit(
   for (let index = 0; index < text.length;) {
     const codePoint = text.codePointAt(index) ?? 0;
     const codeUnits = codePoint > 0xffff ? 2 : 1;
-    const nextBytes = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    const nextBytes = utf8ByteLength(codePoint);
     if (bytes + nextBytes > maxBytes) {
       return { text: text.slice(0, end), truncated: true };
     }

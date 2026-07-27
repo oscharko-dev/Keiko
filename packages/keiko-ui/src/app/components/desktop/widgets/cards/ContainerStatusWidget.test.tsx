@@ -279,6 +279,24 @@ describe("ContainerStatusWidget", () => {
     expect(source?.closed).toBe(true);
   });
 
+  it("renders the policy-blocked engine state with its danger tone", async () => {
+    // engineStateTone maps "policy-blocked" to the "danger" tone, the one tone none of the other
+    // fixtures in this file exercise, so toneCssVar's "danger" case never ran before this.
+    const POLICY_BLOCKED: ContainerCapabilityResponse = {
+      schemaVersion: "1",
+      generatedAtMs: 1,
+      deadlineMs: 4000,
+      anyAvailable: false,
+      engines: [{ engine: "docker", state: "policy-blocked" }],
+    };
+    vi.mocked(fetchContainerCapability).mockResolvedValue(POLICY_BLOCKED);
+    const { container } = render(<ContainerStatusWidget projectPath="/proj" />);
+
+    expect(await screen.findByText(/blocked by policy/i)).toBeInTheDocument();
+    const dot = container.querySelector(".dot");
+    expect(dot).toHaveStyle({ background: "var(--danger)" });
+  });
+
   it("has no axe violations in the unavailable state", async () => {
     vi.mocked(fetchContainerCapability).mockResolvedValue(UNAVAILABLE);
     const { container } = render(<ContainerStatusWidget projectPath="/proj" />);

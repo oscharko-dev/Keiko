@@ -535,6 +535,25 @@ function resolveApiKeyHeaderName(
   );
 }
 
+// Shared precedence for a per-model override: the per-model env var wins when set and
+// non-empty, otherwise the raw config value wins when present at all (even empty string),
+// otherwise the default-env fallback applies. Used by resolveProviderEndpointStyle,
+// resolveProviderApiVersion, and resolveRealtimeAuthMode, which all resolve a value from the
+// same three-source precedence.
+function resolvePerModelValue(
+  perModel: string | undefined,
+  rawValue: unknown,
+  defaultValue: string | undefined,
+): unknown {
+  if (perModel !== undefined && perModel.length > 0) {
+    return perModel;
+  }
+  if (rawValue !== undefined) {
+    return rawValue;
+  }
+  return defaultValue;
+}
+
 function resolveProviderEndpointStyle(
   rawValue: unknown,
   path: string,
@@ -545,12 +564,7 @@ function resolveProviderEndpointStyle(
   const perModelName = `KEIKO_MODEL_${token}_ENDPOINT_STYLE`;
   const perModel = env[perModelName];
   const defaultValue = env.KEIKO_DEFAULT_ENDPOINT_STYLE;
-  const value =
-    perModel !== undefined && perModel.length > 0
-      ? perModel
-      : rawValue !== undefined
-        ? rawValue
-        : defaultValue;
+  const value = resolvePerModelValue(perModel, rawValue, defaultValue);
   if (value === undefined || value === "") {
     return undefined;
   }
@@ -567,12 +581,7 @@ function resolveProviderApiVersion(
   const perModelName = `KEIKO_MODEL_${token}_API_VERSION`;
   const perModel = env[perModelName];
   const defaultValue = env.KEIKO_DEFAULT_API_VERSION;
-  const value =
-    perModel !== undefined && perModel.length > 0
-      ? perModel
-      : rawValue !== undefined
-        ? rawValue
-        : defaultValue;
+  const value = resolvePerModelValue(perModel, rawValue, defaultValue);
   if (value === undefined || value === "") {
     return undefined;
   }
@@ -610,12 +619,7 @@ function resolveRealtimeAuthMode(
   const perModelName = `KEIKO_MODEL_${token}_REALTIME_AUTH_MODE`;
   const perModel = env[perModelName];
   const defaultValue = env.KEIKO_DEFAULT_REALTIME_AUTH_MODE;
-  const value =
-    perModel !== undefined && perModel.length > 0
-      ? perModel
-      : rawValue !== undefined
-        ? rawValue
-        : defaultValue;
+  const value = resolvePerModelValue(perModel, rawValue, defaultValue);
   if (value === undefined || value === "") {
     return undefined;
   }
@@ -1365,12 +1369,14 @@ function rerankerBaseUrl(
   egress: OutboundHttpEgressConfig | undefined,
 ): string {
   const envValue = env.KEIKO_RERANKER_BASE_URL;
-  const baseUrl =
-    envValue !== undefined && envValue.length > 0
-      ? envValue
-      : typeof block.baseUrl === "string"
-        ? block.baseUrl
-        : "";
+  let baseUrl: string;
+  if (envValue !== undefined && envValue.length > 0) {
+    baseUrl = envValue;
+  } else if (typeof block.baseUrl === "string") {
+    baseUrl = block.baseUrl;
+  } else {
+    baseUrl = "";
+  }
   if (baseUrl.length === 0) {
     throw new ConfigInvalidError("reranker.baseUrl must be set via config or environment");
   }

@@ -43,6 +43,7 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 
 import {
   ClarificationNeededError,
+  clarificationUserMessage,
   isSymbolDefinitionPath,
   retrieveConnectedContextPack,
   runGroundedExploration,
@@ -2521,5 +2522,29 @@ describe("isSymbolDefinitionPath", () => {
     expect(
       isSymbolDefinitionPath("src/test/java/com/acme/PaymentServiceTest.java", "PaymentService"),
     ).toBe(false);
+  });
+});
+
+describe("clarificationUserMessage", () => {
+  it("maps scope-empty to the 'nothing searchable' intro with no anchor hint", () => {
+    const message = clarificationUserMessage(
+      new ClarificationNeededError({
+        reason: "scope-empty",
+        suggestedQuestions: [],
+        minimumAnchorCount: 1,
+      }),
+    );
+    expect(message).toBe("Die verbundene Quelle enthält nichts Durchsuchbares.");
+  });
+
+  it("maps scope-invalid to the 'could not be searched' intro with no anchor hint", () => {
+    const message = clarificationUserMessage(
+      new ClarificationNeededError({
+        reason: "scope-invalid",
+        suggestedQuestions: [],
+        minimumAnchorCount: 1,
+      }),
+    );
+    expect(message).toBe("Die verbundene Quelle konnte nicht durchsucht werden.");
   });
 });

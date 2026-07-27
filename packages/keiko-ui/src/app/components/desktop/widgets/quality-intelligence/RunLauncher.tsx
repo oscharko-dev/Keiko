@@ -181,10 +181,9 @@ function progressAnnouncement(running: boolean, progress: Progress): string {
   }
   const stage = progress.stageName !== null ? `Stage: ${progress.stageName}. ` : "";
   const cases = `${progress.candidates.toString()} test case${progress.candidates !== 1 ? "s" : ""}`;
+  const findingsSuffix = progress.findings !== 1 ? "s" : "";
   const findings =
-    progress.findings > 0
-      ? `, ${progress.findings.toString()} finding${progress.findings !== 1 ? "s" : ""}`
-      : "";
+    progress.findings > 0 ? `, ${progress.findings.toString()} finding${findingsSuffix}` : "";
   return `${stage}${cases}${findings}`;
 }
 
@@ -513,6 +512,14 @@ function droppedSourcesNotice(droppedSourceCount: number): string | null {
   return `${droppedSourceCount.toString()} source${plural ? "s" : ""} over the 16-source limit ${plural ? "were" : "was"} not included.`;
 }
 
+// APG radiogroup step for the source-type radios: Right/Down moves forward, Left/Up moves back,
+// any other key does not move the selection.
+function arrowKeyDelta(key: string): number {
+  if (key === "ArrowRight" || key === "ArrowDown") return 1;
+  if (key === "ArrowLeft" || key === "ArrowUp") return -1;
+  return 0;
+}
+
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
@@ -679,12 +686,7 @@ export function RunLauncher({
   const onSourceKindKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
       if (running) return;
-      const delta =
-        event.key === "ArrowRight" || event.key === "ArrowDown"
-          ? 1
-          : event.key === "ArrowLeft" || event.key === "ArrowUp"
-            ? -1
-            : 0;
+      const delta = arrowKeyDelta(event.key);
       if (delta === 0) return;
       event.preventDefault();
       const count = SOURCE_KIND_OPTIONS.length;
@@ -1324,6 +1326,9 @@ export function RunLauncher({
     // Visible-only progress block (aria-hidden): the announcement is owned by the persistent
     // sr-only region below (a11y M-01), so this block must not also be a live region or it would
     // double-announce. Kept conditional for layout.
+    const findingsSuffix = progress.findings !== 1 ? "s" : "";
+    const findingsText =
+      progress.findings > 0 ? ` · ${progress.findings.toString()} finding${findingsSuffix}` : "";
     return (
       <div className="qi-progress" data-testid="qi-launch-progress" aria-hidden="true">
         <span className="qi-progress-spinner" aria-hidden="true" />
@@ -1332,9 +1337,7 @@ export function RunLauncher({
           {progress.candidates.toString()} test case{progress.candidates !== 1 ? "s" : ""}
           {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count two
               tokens earlier (uiux-fix F047 C276). */}
-          {progress.findings > 0
-            ? ` · ${progress.findings.toString()} finding${progress.findings !== 1 ? "s" : ""}`
-            : ""}
+          {findingsText}
         </span>
       </div>
     );

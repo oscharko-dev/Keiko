@@ -6,6 +6,7 @@
 
 import { createHash } from "node:crypto";
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ export interface IndexKeyInput {
 // ─── Key derivation ───────────────────────────────────────────────────────────
 
 function canonicalKeyInput(input: IndexKeyInput): string {
-  const sorted = [...input.atomStableIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const sorted = [...input.atomStableIds].sort(compareStrings);
   return JSON.stringify([input.scopeId, input.queryKind, input.queryText, sorted]);
 }
 

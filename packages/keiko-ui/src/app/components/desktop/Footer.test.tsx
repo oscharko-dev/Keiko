@@ -155,6 +155,18 @@ describe("Footer — window status trigger", () => {
     expect(screen.getByText("Minimized")).toBeInTheDocument();
   });
 
+  // Issue #2723 — windowStateLabel's third state (maximized/fullscreen), alongside the already
+  // covered minimized and visible states above.
+  it("labels a maximized window as Fullscreen in the footer palette", () => {
+    renderFooter({
+      winCount: 1,
+      windowPaletteOpen: true,
+      windows: [footerWindow({ id: "files-1", type: "files", cfg: { root: "/repo" }, max: true })],
+    });
+
+    expect(screen.getByText("Fullscreen")).toBeInTheDocument();
+  });
+
   it("selects a window from the footer palette", async () => {
     const user = userEvent.setup();
     const onSelectWindow = vi.fn();

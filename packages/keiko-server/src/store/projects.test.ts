@@ -114,6 +114,13 @@ describe("updateProject", () => {
     expect(updated.favorite).toBe(true);
   });
 
+  it("unsets favorite when patched with favorite: false", () => {
+    store.createProject(projA);
+    store.updateProject(projA, { favorite: true });
+    const updated = store.updateProject(projA, { favorite: false });
+    expect(updated.favorite).toBe(false);
+  });
+
   it("touches lastOpenedAt to now() when patch is empty", () => {
     const created = store.createProject(projA);
     const updated = store.updateProject(projA, {});

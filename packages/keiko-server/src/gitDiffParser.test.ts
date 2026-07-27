@@ -98,6 +98,31 @@ describe("parseGitEditorUnifiedDiff", () => {
     ]);
   });
 
+  it("drops a file outside the selected-root prefix while keeping one inside it", () => {
+    const parsed = parseGitEditorUnifiedDiff(
+      [
+        "diff --git a/workspace/src/app.ts b/workspace/src/app.ts",
+        "--- a/workspace/src/app.ts",
+        "+++ b/workspace/src/app.ts",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "diff --git a/other/src/util.ts b/other/src/util.ts",
+        "--- a/other/src/util.ts",
+        "+++ b/other/src/util.ts",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      ].join("\n"),
+      { scope: "unstaged", selectedRootPrefix: "workspace", processTruncated: false },
+    );
+
+    expect(parsed.totalFiles).toBe(2);
+    expect(parsed.files).toMatchObject([{ path: "src/app.ts", status: "modified" }]);
+    expect(parsed.files.some((file) => file.path.includes("other"))).toBe(false);
+  });
+
   it("drops incomplete final hunks and marks the file and response truncated", () => {
     const parsed = parseGitEditorUnifiedDiff(
       [

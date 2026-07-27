@@ -3961,8 +3961,6 @@ function EditorRuntimeWidget({
       return;
     }
     const controller = new AbortController();
-    // Bumped as its own statement rather than inside the object literal: an assignment nested in an
-    // expression reads as a comparison at a glance (S1121).
     symbolSeqRef.current += 1;
     const request: EditorRequestIdentity = {
       requestId: createEditorRequestId(),

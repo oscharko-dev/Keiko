@@ -292,6 +292,37 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     expect(JSON.stringify(summary.rankingSummary)).not.toContain("README");
   });
 
+  it("breaks an ecosystem count tie by ascending id", () => {
+    const summary = buildGroundedAnswerContextPackSummary(
+      pack({
+        diagnostics: {
+          rankedCandidates: [
+            {
+              scopePath: "package.json",
+              bucket: "canonical-metadata",
+              score: 50,
+              ecosystem: "npm",
+              signals: [],
+            },
+            {
+              scopePath: "Cargo.toml",
+              bucket: "canonical-metadata",
+              score: 50,
+              ecosystem: "cargo",
+              signals: [],
+            },
+          ],
+        },
+      }),
+      0,
+      0,
+    );
+    expect(summary.rankingSummary?.ecosystems).toStrictEqual([
+      { id: "cargo", count: 1 },
+      { id: "npm", count: 1 },
+    ]);
+  });
+
   it("maps workspace-root scope to the -1 file-count sentinel", () => {
     const summary = buildGroundedAnswerContextPackSummary(
       pack({ scope: scope("workspace-root", []) }),

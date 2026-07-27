@@ -879,18 +879,19 @@ function alignReplacementEntries(
     const pair = matrixValue(costs, oldIndex - 1, currentIndex - 1) + pairCost;
     const deletion = matrixValue(costs, oldIndex - 1, currentIndex) + ALIGN_INSERT_DELETE_COST;
     const insertion = matrixValue(costs, oldIndex, currentIndex - 1) + ALIGN_INSERT_DELETE_COST;
-    if (pairCost === 0 && currentCost === pair) {
+    // A diagonal move — either an exact zero-cost pair match, or the cost-minimal fallback once
+    // insertion/deletion are both ruled out — always records the mapping and consumes both sides.
+    if (
+      (pairCost === 0 && currentCost === pair) ||
+      (currentCost !== insertion && currentCost !== deletion)
+    ) {
       mapping.set(oldEntry.atomId, currentEntry.atomId);
       oldIndex -= 1;
       currentIndex -= 1;
     } else if (currentCost === insertion) {
       currentIndex -= 1;
-    } else if (currentCost === deletion) {
-      oldIndex -= 1;
     } else {
-      mapping.set(oldEntry.atomId, currentEntry.atomId);
       oldIndex -= 1;
-      currentIndex -= 1;
     }
   }
   return mapping;

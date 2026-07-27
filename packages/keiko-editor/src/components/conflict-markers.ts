@@ -160,6 +160,12 @@ function consumeMarker(
   }
 }
 
+/** End of a line's content, excluding a trailing `\r\n`/`\n` (or a lone trailing `\r`). */
+function lineContentEnd(text: string, newline: number, end: number): number {
+  if (newline < 0) return end;
+  return text.codePointAt(newline - 1) === 13 ? newline - 1 : newline;
+}
+
 /** Parse exact column-one two-way/diff3 conflict grammar in one bounded pass. */
 export function parseConflictMarkers(text: string): ConflictMarkerModel {
   const state: ParseState = {
@@ -174,8 +180,7 @@ export function parseConflictMarkers(text: string): ConflictMarkerModel {
   while (offset < text.length && !state.malformed) {
     const newline = text.indexOf("\n", offset);
     const end = newline < 0 ? text.length : newline + 1;
-    const contentEnd =
-      newline < 0 ? end : text.codePointAt(newline - 1) === 13 ? newline - 1 : newline;
+    const contentEnd = lineContentEnd(text, newline, end);
     const line = text.slice(offset, contentEnd);
     const kind = marker(line);
     if (kind !== null) consumeMarker(state, kind, line, offset, end, lineNumber);
@@ -200,5 +205,7 @@ export function conflictReplacement(
 ): string {
   const ours = text.slice(conflict.ours.start, conflict.ours.end);
   const theirs = text.slice(conflict.theirs.start, conflict.theirs.end);
-  return choice === "ours" ? ours : choice === "theirs" ? theirs : ours + theirs;
+  if (choice === "ours") return ours;
+  if (choice === "theirs") return theirs;
+  return ours + theirs;
 }

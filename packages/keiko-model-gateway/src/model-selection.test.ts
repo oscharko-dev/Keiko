@@ -302,6 +302,13 @@ describe("findConfiguredCapability — embedding-id heuristic (no explicit capab
     expect(cap?.kind).toBe("chat");
   });
 
+  // The default-capability fallback only applies to ids that are actually configured as
+  // providers — an id absent from both the registry and the provider list must yield undefined.
+  it("returns undefined for a model id that is not configured as a provider", () => {
+    const cap = findConfiguredCapability(config(["example-chat-model"]), "not-configured-model-id");
+    expect(cap).toBeUndefined();
+  });
+
   // Explicit capability ALWAYS wins — even when the id looks like an embedding.
   it("respects an explicit kind:'chat' capability for an embedding-looking id", () => {
     const explicitChatCap: ModelCapability = {

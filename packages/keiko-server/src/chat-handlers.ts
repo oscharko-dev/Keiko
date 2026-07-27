@@ -289,8 +289,14 @@ export function redactErrorMessage(message: string, deps: UiHandlerDeps): string
   return redact(message, currentRedactionSecrets(deps));
 }
 
+function gatewayErrorStatus(error: GatewayError): number {
+  if (error.code === "GATEWAY_AUTHENTICATION") return 401;
+  if (error.retryable) return 503;
+  return 502;
+}
+
 function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResult {
-  const status = error.code === "GATEWAY_AUTHENTICATION" ? 401 : error.retryable ? 503 : 502;
+  const status = gatewayErrorStatus(error);
   return { status, body: errorBody(error.code, redactErrorMessage(error.message, deps)) };
 }
 

@@ -209,6 +209,32 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     expect(status).toBeEmptyDOMElement();
   });
 
+  it("renders the role=status lifecycle indicator with assistive text while queued (AC#1)", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi")],
+        sendStatus: "queued",
+        sending: true,
+      }),
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Submitting your message…");
+  });
+
+  it("renders the role=status lifecycle indicator with assistive text after cancellation (AC#1)", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi")],
+        sendStatus: "cancelled",
+        sending: false,
+      }),
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Response cancelled.");
+  });
+
   it("renders the role=status lifecycle indicator with assistive text during contacting (AC#1)", () => {
     renderWindow(
       makeSession({

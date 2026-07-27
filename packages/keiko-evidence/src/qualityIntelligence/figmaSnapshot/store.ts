@@ -32,6 +32,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type Dirent, linkSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
@@ -230,6 +231,15 @@ export function __resetFigmaSnapshotSweepRegistryForTests(): void {
  */
 export const DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS = 500;
 
+// ─── Sort comparators ─────────────────────────────────────────────────────────────────────────
+// Plain lexicographic (code-unit) `<`/`>` comparison — deliberately not `localeCompare`, so
+// ordering never shifts with locale/collation. Shared by every stable-sort call site below
+// (screenId, fetchedAt ascending, fetchedAt descending) instead of re-inlining a nested ternary.
+
+const compareAscending = (a: string, b: string): number => compareStrings(a, b);
+
+const compareDescending = (a: string, b: string): number => compareStrings(b, a);
+
 // ─── Integrity hash (mirrors figmaSnapshotHash.ts — inlined so keiko-evidence does not depend
 //     on the private keiko-server package). MUST stay bit-identical with the server builder. ────
 
@@ -327,7 +337,7 @@ const artifactHashesFor = (record: {
 // fetchedAt and links/tokens are excluded by design (non-identity metadata).
 function recomputeSnapshotIntegrityHash(record: FigmaSnapshotRecord): string {
   const screens = [...record.screens, ...(record.structuralScreens ?? [])]
-    .sort((a, b) => (a.screenId < b.screenId ? -1 : a.screenId > b.screenId ? 1 : 0))
+    .sort((a, b) => compareAscending(a.screenId, b.screenId))
     .map((s) => ({ integrityHash: s.integrityHash, screenId: s.screenId }));
   return sha256Hex(
     canonical({
@@ -880,7 +890,7 @@ function listRecentOp(ctx: StoreCtx, limit = 12): readonly string[] {
     if (fetchedAt === undefined) continue;
     records.push({ runId: file.runId, fetchedAt });
   }
-  records.sort((a, b) => (a.fetchedAt > b.fetchedAt ? -1 : a.fetchedAt < b.fetchedAt ? 1 : 0));
+  records.sort((a, b) => compareDescending(a.fetchedAt, b.fetchedAt));
   return records.slice(0, boundedLimit).map((record) => record.runId);
 }
 
@@ -917,7 +927,7 @@ export function enforceFigmaSnapshotRetention(
     if (fetchedAt !== undefined) records.push({ runId: file.runId, fetchedAt });
   }
   // Sort oldest first (ascending fetchedAt) so we evict the oldest beyond the cap.
-  records.sort((a, b) => (a.fetchedAt < b.fetchedAt ? -1 : a.fetchedAt > b.fetchedAt ? 1 : 0));
+  records.sort((a, b) => compareAscending(a.fetchedAt, b.fetchedAt));
   const toEvict = records.slice(0, Math.max(0, records.length - profile.maxRecords));
   for (const { runId } of toEvict) {
     removeOwnedRunDirectory(sideFileBase, runId, nodeWorkspaceFs, "Figma snapshot side-file", {
@@ -1120,7 +1130,7 @@ function listByScopeOp(
     const entry = parseScopeEntry(file.path, fileKey, nodeId);
     if (entry !== null) results.push(entry);
   }
-  results.sort((a, b) => (a.fetchedAt > b.fetchedAt ? -1 : a.fetchedAt < b.fetchedAt ? 1 : 0));
+  results.sort((a, b) => compareDescending(a.fetchedAt, b.fetchedAt));
   return results;
 }
 

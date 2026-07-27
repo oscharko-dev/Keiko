@@ -2164,3 +2164,30 @@ describe("FilesWidget path helpers (S8786 regex-safety)", () => {
     expect(displayPath("/repo", "")).toBe("/repo");
   });
 });
+
+describe("FilesWidget context-menu and git-decoration helpers", () => {
+  it("contextMenuParentPath targets the current directory when the menu opened on the empty background", () => {
+    const { contextMenuParentPath } = filesWidgetTestInternals;
+    expect(contextMenuParentPath(null, "src/nested")).toBe("src/nested");
+    expect(contextMenuParentPath(null, null)).toBeNull();
+  });
+
+  it("contextMenuParentPath targets a directory row's own path", () => {
+    const { contextMenuParentPath } = filesWidgetTestInternals;
+    const dir = { ...treeEntryBase, name: "src", path: "src", kind: "directory" as const };
+    expect(contextMenuParentPath(dir, "some/other/dir")).toBe("src");
+  });
+
+  it("contextMenuParentPath targets a file row's parent directory", () => {
+    const { contextMenuParentPath } = filesWidgetTestInternals;
+    const file = { ...treeEntryBase, name: "app.ts", path: "src/app.ts", kind: "file" as const };
+    expect(contextMenuParentPath(file, null)).toBe("src");
+  });
+
+  it("gitDirectoryLabelKey prioritizes conflicted over deleted/changed for a folder aggregate", () => {
+    const { gitDirectoryLabelKey } = filesWidgetTestInternals;
+    expect(gitDirectoryLabelKey({ count: 1, conflicted: true, deleted: true })).toBe(
+      "git.folder.conflicted",
+    );
+  });
+});

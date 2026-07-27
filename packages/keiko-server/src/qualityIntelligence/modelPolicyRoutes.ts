@@ -26,6 +26,7 @@ import type {
   QualityIntelligenceModelPolicyResponse,
   QualityIntelligenceModelPreflightErrorCategory,
   QualityIntelligenceModelPreflightStageResult,
+  QualityIntelligenceModelPreflightStatus,
   QualityIntelligenceModelPreflightSummary,
   QualityIntelligenceModelRouting,
   QualityIntelligenceStartRunRequest,
@@ -400,16 +401,20 @@ async function preflightStage(
   }
 }
 
+function preflightSummaryStatus(
+  generation: QualityIntelligenceModelPreflightStageResult,
+  judge: QualityIntelligenceModelPreflightStageResult | undefined,
+): QualityIntelligenceModelPreflightStatus {
+  if (generation.status === "failed" || judge?.status === "failed") return "failed";
+  if (generation.status === "unavailable") return "unavailable";
+  return "passed";
+}
+
 function summarizePreflight(
   generation: QualityIntelligenceModelPreflightStageResult,
   judge: QualityIntelligenceModelPreflightStageResult | undefined,
 ): QualityIntelligenceModelPreflightSummary {
-  const status =
-    generation.status === "failed" || judge?.status === "failed"
-      ? "failed"
-      : generation.status === "unavailable"
-        ? "unavailable"
-        : "passed";
+  const status = preflightSummaryStatus(generation, judge);
   return {
     status,
     generation,

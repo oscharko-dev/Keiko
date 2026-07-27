@@ -109,6 +109,16 @@ export function ForgetConfirmDialog({
     }
   }, [deleteMemoryImpl, forgetMemoryImpl, isDeleteMode, onComplete, record.id]);
 
+  // One of four mutually exclusive confirm-button labels — extracted as early
+  // returns instead of a nested ternary chain (mirrors ReviewRowActions in
+  // ReviewQueue.tsx).
+  function resolveConfirmButtonLabel(): string {
+    if (submitting && isDeleteMode) return t("memoria.deleting");
+    if (submitting) return t("memoria.forgetting");
+    if (isDeleteMode) return t("memoria.deleteRecord");
+    return t("memoria.forgetMemory");
+  }
+
   return (
     <div
       ref={backdropRef}
@@ -164,13 +174,7 @@ export function ForgetConfirmDialog({
             disabled={submitting}
             aria-busy={submitting}
           >
-            {submitting
-              ? isDeleteMode
-                ? t("memoria.deleting")
-                : t("memoria.forgetting")
-              : isDeleteMode
-                ? t("memoria.deleteRecord")
-                : t("memoria.forgetMemory")}
+            {resolveConfirmButtonLabel()}
           </button>
         </div>
       </div>

@@ -347,6 +347,25 @@ describe("ConnectedScopePill", () => {
     expect(screen.getByText(/Last grounded run:/)).toHaveTextContent("1.4k tokens, 5 files");
   });
 
+  // Issue #2723 — pressureFromRatio's other three thresholds (low/high/exceeded), reached through
+  // the same exported entry point the "Moderate" case above already uses.
+  it.each([
+    [2, "Low"],
+    [6, "High"],
+    [7, "Exceeded"],
+  ] as const)("labels the budget badge when filesRead is %i (%s)", (filesRead, expectedLabel) => {
+    const chat = makeChat({
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+    });
+    const status = buildLastGroundedBudgetStatus(
+      contextPack({ usage: { ...contextPack().usage, filesRead } }),
+    );
+    render(
+      <ConnectedScopePill chat={chat} updateScopes={vi.fn()} lastGroundedBudgetStatus={status} />,
+    );
+    expect(screen.getByText(expectedLabel)).toBeInTheDocument();
+  });
+
   // GEN-UI-STATE-001 (WCAG 4.1.3): the visible pill label must NOT be a live region — that re-announced
   // the unchanged label on every routine re-render / chat switch. A single always-mounted sr-only
   // polite announcer must stay silent across a routine re-render (e.g. switching to a different chat

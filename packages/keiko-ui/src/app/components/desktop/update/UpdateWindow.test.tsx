@@ -1240,6 +1240,80 @@ describe("UpdateWindow", () => {
     }
   });
 
+  it("shows a text-selection fallback label when clipboard write is unavailable", async () => {
+    const api = apiFor({
+      report: preflight({
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        userActionRequired: true,
+      }),
+    });
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+    Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
+
+    try {
+      render(<UpdateWindow api={api} />);
+
+      expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+      fireEvent.click(screen.getByText("Manual update instructions"));
+
+      const npmCopyButton = screen.getByRole("button", { name: "Copy npm command" });
+      fireEvent.click(npmCopyButton);
+
+      await waitFor(() => {
+        expect(npmCopyButton).toHaveAttribute("data-selected", "true");
+      });
+      expect(npmCopyButton).toHaveAttribute("title", "Text selected");
+    } finally {
+      restoreClipboard(clipboardDescriptor);
+      if (execCommandDescriptor === undefined) {
+        Reflect.deleteProperty(document, "execCommand");
+      } else {
+        Object.defineProperty(document, "execCommand", execCommandDescriptor);
+      }
+    }
+  });
+
+  it("reports a copy failure label when neither clipboard nor a text-selection fallback succeeds", async () => {
+    const api = apiFor({
+      report: preflight({
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        userActionRequired: true,
+      }),
+    });
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+    Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
+    const getSelectionSpy = vi.spyOn(window, "getSelection").mockReturnValue(null);
+
+    try {
+      render(<UpdateWindow api={api} />);
+
+      expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+      fireEvent.click(screen.getByText("Manual update instructions"));
+
+      const npmCopyButton = screen.getByRole("button", { name: "Copy npm command" });
+      fireEvent.click(npmCopyButton);
+
+      await waitFor(() => {
+        expect(npmCopyButton).toHaveAttribute("data-failed", "true");
+      });
+      expect(npmCopyButton).toHaveAttribute("title", "Copy failed");
+    } finally {
+      getSelectionSpy.mockRestore();
+      restoreClipboard(clipboardDescriptor);
+      if (execCommandDescriptor === undefined) {
+        Reflect.deleteProperty(document, "execCommand");
+      } else {
+        Object.defineProperty(document, "execCommand", execCommandDescriptor);
+      }
+    }
+  });
+
   it("shows update installed when manual check verifies the target version is running", async () => {
     const manualStatus = sessionStatus({
       installMode: {

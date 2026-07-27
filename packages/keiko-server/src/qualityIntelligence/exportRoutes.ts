@@ -12,6 +12,7 @@
 
 import type { IncomingMessage } from "node:http";
 import {
+  compareStrings,
   QualityIntelligence,
   sortedStrings,
   type QualityIntelligence as QI,
@@ -174,7 +175,7 @@ function addMapValue<K, V>(map: Map<K, Set<V>>, key: K, value: V): void {
 }
 
 function sortedValues<T extends string>(set: ReadonlySet<T> | undefined): readonly T[] {
-  return Object.freeze([...(set ?? new Set<T>())].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+  return Object.freeze([...(set ?? new Set<T>())].sort(compareStrings));
 }
 
 function buildCoverageRefsByCandidate(

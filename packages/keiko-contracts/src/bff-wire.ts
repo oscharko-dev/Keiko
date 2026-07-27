@@ -953,13 +953,13 @@ function displayScopeId(scopeId: string): string {
   return `scope-${hashString32(scopeId)}`;
 }
 
-function compareEcosystemCount(
-  left: { readonly id: string; readonly count: number },
-  right: { readonly id: string; readonly count: number },
+// Ecosystem ranking order: highest count first, then id ascending to break ties deterministically.
+function compareEcosystemCounts(
+  a: { readonly id: string; readonly count: number },
+  b: { readonly id: string; readonly count: number },
 ): number {
-  if (left.count !== right.count) return right.count - left.count;
-  if (left.id === right.id) return 0;
-  return left.id < right.id ? -1 : 1;
+  if (b.count !== a.count) return b.count - a.count;
+  return a.id < b.id ? -1 : 1;
 }
 
 // Derives the path-free ranking aggregate from the pack diagnostics. Deterministic: bucket keys in
@@ -980,7 +980,7 @@ function buildRankingSummary(pack: ConnectedContextPack): GroundedAnswerRankingS
   }
   const ecosystems = [...ecosystemCounts.entries()]
     .map(([id, count]) => ({ id, count }))
-    .sort(compareEcosystemCount);
+    .sort(compareEcosystemCounts);
   return { bucketCounts, ecosystems };
 }
 
