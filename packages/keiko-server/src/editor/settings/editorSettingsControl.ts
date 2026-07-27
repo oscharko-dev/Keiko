@@ -49,6 +49,7 @@ import {
   editorSettingsWorkspaceFingerprint,
   EditorSettingsRootIdentityError,
   emptyEditorSettingsRootRecord,
+  emptyEditorSettingsWorkspaceRecord,
   formatEditorSettingsEtag,
   type EditorSettingsChangeEvent,
   type EditorSettingsIdempotencyRecord,
@@ -1576,10 +1577,23 @@ async function mutateProfileLocked(
  */
 function invalidateRootLocked(realRoot: string, options: EditorSettingsControlOptions): void {
   const loaded = options.store.loadRoot(realRoot);
-  if (loaded.state === "absent") return;
-  options.store.commitRoot(realRoot, {
-    ...emptyEditorSettingsRootRecord(realRoot),
-    revision: loaded.record.revision + 1,
+  if (loaded.state !== "absent") {
+    options.store.commitRoot(realRoot, {
+      ...emptyEditorSettingsRootRecord(realRoot),
+      revision: loaded.record.revision + 1,
+    });
+  }
+  // The workspace record is keyed per root path too, and it is the layer holding the governed
+  // capability opt-ins. A root that leaves its workspace must not keep them for whoever binds that
+  // reference next — the same #2620 reason the root record is cleared. Identity binding alone does
+  // not cover this case: a departing root keeps its filesystem identity, so only the membership
+  // signal can retire the layer. Empty at the next revision, so workspaceRevision stays monotonic
+  // and a stale ETag cannot re-match different content.
+  const workspace = options.store.loadWorkspace(realRoot);
+  if (workspace.state === "absent") return;
+  options.store.commitWorkspace(realRoot, {
+    ...emptyEditorSettingsWorkspaceRecord(realRoot),
+    revision: workspace.record.revision + 1,
   });
 }
 
@@ -1587,10 +1601,12 @@ function invalidateRootBinding(
   realRoot: string,
   options: EditorSettingsControlOptions,
 ): Promise<void> {
-  // The same lock key `mutate` takes for root scope, so invalidation cannot interleave with a patch
-  // and lose either write.
+  // The same lock keys `mutate` takes, so invalidation cannot interleave with a patch and lose
+  // either write. Both scopes are held because invalidation now clears both records, and a
+  // workspace-scope mutation locks on its own key.
+  const fingerprint = editorSettingsWorkspaceFingerprint(realRoot);
   return options.mutex.runExclusive(
-    [`editor-settings:root:${editorSettingsWorkspaceFingerprint(realRoot)}`],
+    [`editor-settings:root:${fingerprint}`, `editor-settings:workspace:${fingerprint}`],
     (): Promise<void> => {
       invalidateRootLocked(realRoot, options);
       return Promise.resolve();

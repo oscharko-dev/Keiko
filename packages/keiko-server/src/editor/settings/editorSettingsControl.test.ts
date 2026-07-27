@@ -890,6 +890,69 @@ describe("editor settings control service", () => {
     ).toMatchObject({ value: 20, source: "root", scope: "root" });
   });
 
+  it("retires the departed root's workspace-scope opt-ins as well as its root scope", async () => {
+    // Identity binding cannot cover departure: a root that leaves its workspace keeps its
+    // filesystem identity, so only the membership signal can retire the layer. The workspace scope
+    // holds the governed capability opt-ins, so leaving it behind would let whoever binds that
+    // reference next inherit them — the same #2620 reason the root record is cleared.
+    const control = service();
+    const departing = temporaryDirectory("editor-settings-ws-invalidate");
+    await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "ws-invalidate-departing",
+      realRoot: departing,
+      scope: "workspace",
+      values: { fontSize: 19 },
+    });
+    const before = await control.read(departing);
+    expect(before.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
+      value: 19,
+      source: "workspace",
+    });
+    expect(before.workspaceRevision).toBe(1);
+
+    const invalidate = control.invalidateRoot;
+    if (invalidate === undefined) throw new Error("missing invalidateRoot");
+    await invalidate(departing);
+
+    const after = await control.read(departing);
+    expect(after.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
+      source: "builtInDefault",
+    });
+    expect(after.workspaceRevision).toBe(2);
+  });
+
+  it("does not hand a replacement directory the previous occupant's workspace-scope opt-ins", async () => {
+    // The root record has carried a filesystem-identity binding since #2620, but the workspace
+    // record was keyed on sha256(realRoot) alone — a path, not a directory. The workspace scope is
+    // where the governed capability opt-ins live, so replacing a directory at a granted path handed
+    // the new occupant `debuggingEnabled` (and `patchApply`/`testGeneration`) already switched on:
+    // the ADR-0147 "root replacement at the same path" threat, on the layer that grants capability.
+    const stateDir = temporaryDirectory("editor-settings-ws-identity-state");
+    const parent = temporaryDirectory("editor-settings-ws-identity");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const control = service(stateDir);
+    await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "workspace-opt-in-before-replacement",
+      realRoot: root,
+      scope: "workspace",
+      values: { fontSize: 21 },
+    });
+    expect(
+      (await control.read(root)).settings.find((entry) => entry.id === "fontSize"),
+    ).toMatchObject({ value: 21, source: "workspace" });
+
+    replaceDirectory(root);
+
+    expect(
+      (await control.read(root)).settings.find((entry) => entry.id === "fontSize"),
+    ).toMatchObject({ source: "builtInDefault" });
+  });
+
   it("keeps every settings scope writable after the root directory is replaced", async () => {
     // The blast radius of getting the store state wrong: `loadMutationState` rejects EVERY mutation
     // carrying a root whose record is unavailable, so tagging a superseded root record as
