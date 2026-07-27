@@ -86,6 +86,7 @@ vi.mock("@/lib/memory-api", () => ({
     requestedMode: "governed-assist",
     effectiveMode: "governed-assist",
     deploymentCeiling: "governed-assist",
+    revision: 0,
   }),
 }));
 
@@ -2911,6 +2912,7 @@ describe("useChatSession memory autonomy hydration", () => {
       requestedMode: "autonomous-delivery",
       effectiveMode: "autonomous-delivery",
       deploymentCeiling: "autonomous-delivery",
+      revision: 1,
     });
 
     renderHook(() => useChatSession({ autoCreate: false }));
@@ -2925,6 +2927,7 @@ describe("useChatSession memory autonomy hydration", () => {
       requestedMode: "supervised-coding";
       effectiveMode: "supervised-coding";
       deploymentCeiling: "supervised-coding";
+      revision: number;
     }>();
     vi.mocked(loadMemoryAutonomyMode).mockReturnValue(hydration.promise);
 
@@ -2940,6 +2943,7 @@ describe("useChatSession memory autonomy hydration", () => {
         requestedMode: "supervised-coding",
         effectiveMode: "supervised-coding",
         deploymentCeiling: "supervised-coding",
+        revision: 0,
       });
       await hydration.promise;
     });
@@ -2953,6 +2957,7 @@ describe("useChatSession memory autonomy hydration", () => {
       requestedMode: "supervised-coding";
       effectiveMode: "supervised-coding";
       deploymentCeiling: "supervised-coding";
+      revision: number;
     }>();
     vi.mocked(loadMemoryAutonomyMode).mockReturnValue(hydration.promise);
 
@@ -2969,6 +2974,7 @@ describe("useChatSession memory autonomy hydration", () => {
         requestedMode: "supervised-coding",
         effectiveMode: "supervised-coding",
         deploymentCeiling: "supervised-coding",
+        revision: 0,
       });
       await hydration.promise;
     });

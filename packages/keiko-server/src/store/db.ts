@@ -94,8 +94,8 @@ import {
 } from "./workspaceManifests.js";
 import { validateProjectPath } from "./validation.js";
 import {
-  getMemoryAutonomyMode as sqlGetMemoryAutonomyMode,
-  setMemoryAutonomyMode as sqlSetMemoryAutonomyMode,
+  readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
+  updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
 } from "./memory-autonomy-policy.js";
 import { basename } from "node:path";
 import { invalidRequest } from "./errors.js";
@@ -665,10 +665,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
     replaceAssistantMessageContent: (id: string, content: string, timestamp: number): ChatMessage =>
       sqlReplaceAssistantMessageContent(db, id, content, timestamp),
-    getMemoryAutonomyMode: () => sqlGetMemoryAutonomyMode(db),
-    setMemoryAutonomyMode: (mode): void => {
-      sqlSetMemoryAutonomyMode(db, mode);
-    },
+    readMemoryAutonomyPolicy: () => sqlReadMemoryAutonomyPolicy(db),
+    updateMemoryAutonomyPolicy: (mode, expectedRevision) =>
+      sqlUpdateMemoryAutonomyPolicy(db, mode, expectedRevision),
     readWorkspaceTrustRecord: (rootRef: string): WorkspaceTrustRecordRow | undefined =>
       sqlReadWorkspaceTrustRecord(db, rootRef),
     writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput): void => {

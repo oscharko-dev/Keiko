@@ -353,13 +353,14 @@ describe("memory autonomy policy API helpers", () => {
       requestedMode: "governed-assist",
       effectiveMode: "governed-assist",
       deploymentCeiling: "autonomous-delivery",
+      revision: 0,
     } as const;
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(response)));
     vi.stubGlobal("fetch", fetchMock);
 
     await loadMemoryAutonomyMode();
     const controller = new AbortController();
-    await persistMemoryAutonomyMode("autonomous-delivery", controller.signal);
+    await persistMemoryAutonomyMode("autonomous-delivery", 0, controller.signal);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -371,7 +372,7 @@ describe("memory autonomy policy API helpers", () => {
       "/api/memory/autonomy-policy",
       expect.objectContaining({
         method: "PUT",
-        body: JSON.stringify({ requestedMode: "autonomous-delivery" }),
+        body: JSON.stringify({ requestedMode: "autonomous-delivery", expectedRevision: 0 }),
         signal: controller.signal,
         headers: expect.objectContaining({
           "Content-Type": "application/json",

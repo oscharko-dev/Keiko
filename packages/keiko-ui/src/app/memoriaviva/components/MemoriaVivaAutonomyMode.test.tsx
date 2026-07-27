@@ -1,17 +1,23 @@
 import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode, MemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
 import {
   resetConversationMemorySettingsForTests,
   useConversationMemorySettings,
 } from "@/app/components/desktop/hooks/memorySettings";
+import { resetAutonomyPersistenceQueueForTests } from "@/app/components/desktop/hooks/useAutonomyModePolicy";
 import type { MemoryListResponse } from "@/lib/memory-api";
 import { MemoriaVivaWindow } from "./MemoriaVivaWindow";
 
 function policy(mode: CodingWorkbenchMode): MemoryAutonomyPolicyWire {
-  return { requestedMode: mode, effectiveMode: mode, deploymentCeiling: "autonomous-delivery" };
+  return {
+    requestedMode: mode,
+    effectiveMode: mode,
+    deploymentCeiling: "autonomous-delivery",
+    revision: 0,
+  };
 }
 
 function fetchEmptyMemories(): Promise<MemoryListResponse> {
@@ -31,6 +37,10 @@ function deferred<T>(): {
 
 beforeEach(() => {
   resetConversationMemorySettingsForTests();
+});
+
+afterEach(() => {
+  resetAutonomyPersistenceQueueForTests();
 });
 
 describe("MemoriaViva memory autonomy mode", () => {
@@ -59,7 +69,7 @@ describe("MemoriaViva memory autonomy mode", () => {
     const supervised = within(group).getByRole("radio", { name: /Supervised workspace/ });
     await user.click(supervised);
     await waitFor(() => expect(supervised).toBeChecked());
-    expect(persistMode).toHaveBeenCalledWith("supervised-coding", expect.any(AbortSignal));
+    expect(persistMode).toHaveBeenCalledWith("supervised-coding", 0, expect.any(AbortSignal));
     expect(await axe(first.container)).toHaveNoViolations();
 
     first.unmount();

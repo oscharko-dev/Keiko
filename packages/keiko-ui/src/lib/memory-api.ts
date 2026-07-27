@@ -251,12 +251,13 @@ export async function loadMemoryAutonomyMode(
 
 export async function persistMemoryAutonomyMode(
   requestedMode: CodingWorkbenchMode,
+  expectedRevision: number,
   signal?: AbortSignal,
   fetchImpl = fetchJson<MemoryAutonomyPolicyWire>,
 ): Promise<MemoryAutonomyPolicyWire> {
   return fetchImpl("/api/memory/autonomy-policy", {
     method: "PUT",
-    body: JSON.stringify({ requestedMode }),
+    body: JSON.stringify({ requestedMode, expectedRevision }),
     ...(signal === undefined ? {} : { signal }),
   });
 }

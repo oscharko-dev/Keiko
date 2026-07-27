@@ -15,6 +15,7 @@ import {
 type AutonomyModePolicyError = "hydrate" | "persist" | null;
 type PersistAutonomyMode = (
   mode: CodingWorkbenchMode,
+  expectedRevision: number,
   signal?: AbortSignal,
 ) => Promise<MemoryAutonomyPolicyWire>;
 type PersistenceOutcome =
@@ -23,7 +24,14 @@ type PersistenceOutcome =
 
 const DEFAULT_PERSIST_TIMEOUT_MS = 15_000;
 let latestPersistenceRequest = 0;
+let latestServerRevision = 0;
 let persistenceQueue: Promise<void> = Promise.resolve();
+
+function observeServerRevision(policy: MemoryAutonomyPolicyWire): void {
+  if (Number.isSafeInteger(policy.revision) && policy.revision > latestServerRevision) {
+    latestServerRevision = policy.revision;
+  }
+}
 
 async function settlePersistence(
   persist: PersistAutonomyMode,
@@ -40,7 +48,11 @@ async function settlePersistence(
     }, timeoutMs);
   });
   try {
-    const policy = await Promise.race([persist(mode, controller.signal), deadline]);
+    const policy = await Promise.race([
+      persist(mode, latestServerRevision, controller.signal),
+      deadline,
+    ]);
+    observeServerRevision(policy);
     return { kind: "success", policy };
   } catch {
     // Convert the rejection to an explicit queue outcome; change() surfaces it to the user.
@@ -58,6 +70,12 @@ function persistInIntentOrder(
   const pending = persistenceQueue.then(() => settlePersistence(persist, mode, timeoutMs));
   persistenceQueue = pending.then((): void => undefined);
   return pending;
+}
+
+export function resetAutonomyPersistenceQueueForTests(): void {
+  latestPersistenceRequest = 0;
+  latestServerRevision = 0;
+  persistenceQueue = Promise.resolve();
 }
 
 export interface AutonomyModePolicy {
@@ -99,6 +117,7 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
     const revisionAtStart = currentConversationMemoryModeRevision();
     void load()
       .then((policy): void => {
+        observeServerRevision(policy);
         if (!active || request !== sequence.current) return;
         if (currentConversationMemoryModeRevision() === revisionAtStart) {
           setMemoryMode(policy.requestedMode);
