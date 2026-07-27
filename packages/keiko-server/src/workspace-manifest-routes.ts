@@ -3,7 +3,11 @@
 
 import type { IncomingMessage } from "node:http";
 import type { UiHandlerDeps } from "./deps.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
 import { errorBody } from "./routes.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "./routes.js";
 import { WorkspaceManifestError, WorkspaceManifestService } from "./workspace-manifests.js";
@@ -102,26 +106,66 @@ function dispatchForWorkspace(body: Record<string, unknown>, workspaceId: string
   return dispatch;
 }
 
-/** Redacted operator signal for a post-commit propagation step that could not complete. */
+/** Declared, code-owned class name for the diagnostic below — never derived from request data. */
+class WorkspaceRootNotRestoredError extends Error {}
+
+/**
+ * Redacted operator signal for a post-commit propagation step that could not complete.
+ * `occurrenceCount` carries a bounded numeric fact (e.g. how many roots were affected) through the
+ * same record the error class travels in, rather than being baked into a message string the
+ * diagnostic sink never reads (#2768).
+ */
 function reportRootBindingFailure(
   deps: UiHandlerDeps,
   workspaceId: string,
   operation: string,
   error: unknown,
+  occurrenceCount?: number,
 ): void {
+  const record = serverDiagnosticFromError({
+    correlationId: workspaceId,
+    operation,
+    source: "workspace-manifest-routes",
+    error,
+    redact: (message): string => {
+      const redacted = deps.redactor(message);
+      return typeof redacted === "string" ? redacted : "[REDACTED]";
+    },
+  });
   emitServerDiagnostic(
     deps.diagnostics,
-    serverDiagnosticFromError({
-      correlationId: workspaceId,
-      operation,
-      source: "workspace-manifest-routes",
-      error,
-      redact: (message): string => {
-        const redacted = deps.redactor(message);
-        return typeof redacted === "string" ? redacted : "[REDACTED]";
-      },
-    }),
+    occurrenceCount === undefined ? record : { ...record, occurrenceCount },
   );
+}
+
+/**
+ * `restoreFailureClasses` names every restore that threw while the store attempted to give a
+ * released root back its own standalone workspace. It is independent of `unrestoredProjectPaths`
+ * and NOT index-aligned with it — a restore can leave a project unrestored without throwing at
+ * all — so the two facts are never zipped into one record. Each distinct class is reported on its
+ * own, grouped only with occurrences of itself, as the reason half of the count-and-reason pair
+ * this diagnostic exists to carry.
+ */
+function reportRestoreFailureClasses(
+  deps: UiHandlerDeps,
+  workspaceId: string,
+  restoreFailureClasses: readonly string[],
+): void {
+  const occurrencesByClass = new Map<string, number>();
+  for (const errorClass of restoreFailureClasses) {
+    occurrencesByClass.set(errorClass, (occurrencesByClass.get(errorClass) ?? 0) + 1);
+  }
+  for (const [errorClass, occurrenceCount] of occurrencesByClass) {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: workspaceId,
+      timestamp: new Date().toISOString(),
+      operation: "workspace.root.restore.reason",
+      source: "workspace-manifest-routes",
+      errorClass,
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      occurrenceCount,
+    });
+  }
 }
 
 /**
@@ -142,17 +186,19 @@ async function applyRootBindingChanges(
   deps.workspaceScriptTrust?.recomputeForRoots?.(result.affectedRoots);
   // A root that left with no workspace of its own stays registered and undispatchable. The
   // membership change is already committed and must not be undone for it, but the loss is a real
-  // degradation and is surfaced here rather than dying inside the store transaction.
+  // degradation and is surfaced here rather than dying inside the store transaction — with both
+  // the count and the failure reason reaching the operator record, not just a message string the
+  // diagnostic sink never reads (#2768).
   if (result.unrestoredProjectPaths.length > 0) {
     reportRootBindingFailure(
       deps,
       workspaceId,
       "workspace.root.restore",
-      new Error(
-        `WORKSPACE_ROOT_NOT_RESTORED count=${String(result.unrestoredProjectPaths.length)}`,
-      ),
+      new WorkspaceRootNotRestoredError(),
+      result.unrestoredProjectPaths.length,
     );
   }
+  reportRestoreFailureClasses(deps, workspaceId, result.restoreFailureClasses);
   const invalidate = deps.editorSettingsControl?.invalidateRoot;
   if (invalidate === undefined) return;
   for (const root of result.invalidatedRoots) {
