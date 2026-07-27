@@ -27,13 +27,15 @@ import { createCodingAppSessionChannel } from "./coding-app-session/sessionChann
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 
 const TEST_CORRELATION_ID = "workspace-routes-test";
+const TEST_SESSION_ID = `sess_${"a".repeat(24)}`;
+const TEST_SESSION_SECRET = "workspace-routes-session-secret";
+const TEST_SESSION_TOKEN = `${TEST_SESSION_ID}.${TEST_SESSION_SECRET}`;
+const TEST_SESSION_COOKIE = `${APP_SESSION_COOKIE_NAME}=${TEST_SESSION_TOKEN}`;
 const JSON_HEADERS = {
   "Content-Type": "application/json",
   "X-Keiko-CSRF": "1",
   "X-Keiko-Correlation-Id": TEST_CORRELATION_ID,
-  get Cookie(): string {
-    return sessionCookie;
-  },
+  Cookie: TEST_SESSION_COOKIE,
 } as const;
 const UNPAIRED_JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -50,7 +52,6 @@ let rootB: string;
 let store: UiStore;
 let editorSettingsControl: EditorSettingsControlService;
 let diagnostics: ServerDiagnosticRecord[];
-let sessionCookie: string;
 // Read at call time, not at server construction, so a test can arm the failure after the fixture
 // has already built its handler deps.
 let invalidateRootFailure: Error | undefined;
@@ -77,12 +78,17 @@ function dispatch(manifest: WorkspaceManifest): WorkspaceRootDispatch {
 
 function deps(): UiHandlerDeps {
   const codingAppSessionChannel = createCodingAppSessionChannel({
-    registry: createSessionRegistry(),
+    registry: createSessionRegistry({
+      mintSessionId: (): string => TEST_SESSION_ID,
+      mintSecret: (): string => TEST_SESSION_SECRET,
+    }),
     pairingPort: createFakeSessionPairingPort(),
   });
   const paired = codingAppSessionChannel.pair(fakePairingRequestBody());
   if (!paired.paired) throw new Error("workspace route pairing failed");
-  sessionCookie = `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
+  if (paired.cookieToken !== TEST_SESSION_TOKEN) {
+    throw new Error("workspace route pairing returned an unexpected token");
+  }
   return {
     config: undefined,
     configPresent: false,
@@ -174,7 +180,7 @@ describe("workspace manifest routes", () => {
     expect(unpairedText).not.toContain(rootB);
 
     const paired = await fetch(requestUrl("/api/workspaces"), {
-      headers: { Cookie: sessionCookie },
+      headers: { Cookie: TEST_SESSION_COOKIE },
     });
     const pairedText = await paired.text();
     expect(paired.status).toBe(200);
@@ -224,7 +230,7 @@ describe("workspace manifest routes", () => {
 
   it("accepts a member-root dispatch and rejects missing or non-member authority", async () => {
     const listed = await fetch(requestUrl("/api/workspaces"), {
-      headers: { Cookie: sessionCookie },
+      headers: { Cookie: TEST_SESSION_COOKIE },
     });
     const listBody = (await listed.json()) as { readonly manifests: readonly WorkspaceManifest[] };
     const manifest = listBody.manifests.find((item) => item.roots[0]?.canonicalRoot === rootA);
@@ -272,7 +278,7 @@ describe("workspace manifest routes", () => {
   it("serves a manifest with its binding and 404s an unknown workspace id", async () => {
     const manifest = await alphaManifest();
     const found = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}`), {
-      headers: { Cookie: sessionCookie },
+      headers: { Cookie: TEST_SESSION_COOKIE },
     });
     expect(found.status).toBe(200);
     const foundBody = (await found.json()) as {
@@ -283,7 +289,7 @@ describe("workspace manifest routes", () => {
     expect(foundBody.binding).toBeDefined();
 
     const missing = await fetch(requestUrl("/api/workspaces/ws-does-not-exist"), {
-      headers: { Cookie: sessionCookie },
+      headers: { Cookie: TEST_SESSION_COOKIE },
     });
     expect(missing.status).toBe(404);
     const missingBody = (await missing.json()) as { readonly error: { readonly code: string } };
@@ -593,7 +599,7 @@ describe("workspace manifest routes", () => {
 
 async function alphaManifest(): Promise<WorkspaceManifest> {
   const listed = await fetch(requestUrl("/api/workspaces"), {
-    headers: { Cookie: sessionCookie },
+    headers: { Cookie: TEST_SESSION_COOKIE },
   });
   const body = (await listed.json()) as { readonly manifests: readonly WorkspaceManifest[] };
   const manifest = body.manifests.find((item) => item.roots[0]?.canonicalRoot === rootA);
