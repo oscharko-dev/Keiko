@@ -340,11 +340,13 @@ function createMemoryVectorIndexPort(
         return entry === undefined ? [] : [entry];
       });
       const canonicalEntries = [...requestedEntries].sort(compareMemoryEntryIds);
+      const cacheKey = `keiko-memory-vector-partition-v2:${createHash("sha256")
+        .update(JSON.stringify([query.partitionKey]), "utf8")
+        .digest("hex")}`;
       const result = await searchUsearchAnnIndex({
         partition: {
-          cacheKey: `keiko-memory-vector-partition-v2:${createHash("sha256")
-            .update(JSON.stringify([query.partitionKey]), "utf8")
-            .digest("hex")}`,
+          cacheKey,
+          cacheGroupKey: cacheKey,
           revision: memoryPartitionRevision(identity, canonicalEntries),
           identity,
           rowCount: canonicalEntries.length,
@@ -423,12 +425,22 @@ function hasNonZeroMagnitude(vector: Float32Array): boolean {
   return false;
 }
 
+function hasFiniteNonZeroNorm(vector: Float32Array): boolean {
+  let squared = 0;
+  for (const value of vector) {
+    if (!Number.isFinite(value)) return false;
+    squared += value * value;
+    if (!Number.isFinite(squared)) return false;
+  }
+  return squared > 0;
+}
+
 function vectorsComparable(query: Float32Array, stored: Float32Array): boolean {
   return (
     query.length > 0 &&
     query.length === stored.length &&
     hasNonZeroMagnitude(query) &&
-    hasNonZeroMagnitude(stored)
+    hasFiniteNonZeroNorm(stored)
   );
 }
 

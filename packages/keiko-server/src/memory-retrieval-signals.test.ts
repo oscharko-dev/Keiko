@@ -97,8 +97,10 @@ function vaultFor(
   } as unknown as MemoryVaultStore;
 }
 
-async function collectSignals(vault: MemoryVaultStore): Promise<void> {
-  await buildConversationRetrievalSignals(DEPS, vault, "memory query", [SCOPE], NOW_MS, {
+function collectSignals(
+  vault: MemoryVaultStore,
+): ReturnType<typeof buildConversationRetrievalSignals> {
+  return buildConversationRetrievalSignals(DEPS, vault, "memory query", [SCOPE], NOW_MS, {
     allowed: true,
     reason: "allowed",
   });
@@ -167,5 +169,39 @@ describe("buildConversationRetrievalSignals", () => {
     await collectSignals(vault);
 
     expect(observations[0]?.revision).not.toBe(observations[1]?.revision);
+  });
+
+  it("skips only stored rows whose vector norm is zero or non-finite", async () => {
+    const invalidNonFinite = memoryId("invalid-non-finite");
+    const invalidZero = memoryId("invalid-zero");
+    const valid = memoryId("valid");
+    const embeddings = new Map<MemoryId, MemoryEmbeddingRow>([
+      [invalidNonFinite, embedding(invalidNonFinite, new Float32Array([Number.NaN, 1]))],
+      [invalidZero, embedding(invalidZero, new Float32Array([0, 0]))],
+      [valid, embedding(valid, new Float32Array([1, 0]))],
+    ]);
+    const vault = vaultFor(
+      () => [metadata(invalidNonFinite, 300), metadata(invalidZero, 200), metadata(valid, 100)],
+      embeddings,
+    );
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      const signals = await collectSignals(vault);
+
+      expect(observations[0]?.ids).toEqual(["valid"]);
+      expect([...(signals.semanticById?.keys() ?? [])]).toEqual([valid]);
+      expect(warning).toHaveBeenCalledWith(
+        "memory semantic scores skipped for incompatible embeddings",
+        {
+          reason: "identity-mismatch",
+          skipped: 2,
+          candidates: 3,
+          queryModelId: IDENTITY.modelId,
+        },
+      );
+    } finally {
+      warning.mockRestore();
+    }
   });
 });

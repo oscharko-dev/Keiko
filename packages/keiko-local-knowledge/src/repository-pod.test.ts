@@ -281,6 +281,39 @@ describe("repository pod prune", () => {
     );
     expect(documentRows().map((row) => row.document_path)).toContain("src/worker.go");
   });
+
+  it("preserves the prior baseline and refuses prune after a malformed document", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    await refreshRepositoryPod(indexingDeps(adapter), { runId: "malformed-initial" });
+    const prior = [...readRepositoryFileFingerprints(store, CAPSULE_ID, SOURCE_ID).entries()];
+    writeFileSync(join(repositoryRoot, "broken.json"), "{", "utf8");
+    writeFileSync(join(repositoryRoot, "src", "app.ts"), "export const changed = true;\n", "utf8");
+    unlinkSync(join(repositoryRoot, "src", "worker.go"));
+    const events: import("./indexing/index.js").IndexingEvent[] = [];
+
+    const incomplete = await refreshRepositoryPod(
+      indexingDeps(adapter, {
+        trackedPaths: new Set([...TRACKED_PATHS, "broken.json"]),
+        onIndexEvent: (event) => events.push(event),
+      }),
+      { runId: "malformed-incomplete" },
+    );
+
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "document-failed" &&
+          event.error.code === "DISCOVERY_FAILED:MALFORMED_INPUT",
+      ),
+    ).toBe(true);
+    expect(incomplete.run.applied).toBe(false);
+    expect(incomplete.run.counts.removedFiles).toBe(0);
+    expect([...readRepositoryFileFingerprints(store, CAPSULE_ID, SOURCE_ID).entries()]).toEqual(
+      prior,
+    );
+    expect(documentRows().map((row) => row.document_path)).toContain("src/worker.go");
+  });
 });
 
 describe("repository pod executable journey", () => {

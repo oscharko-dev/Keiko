@@ -85,6 +85,7 @@ function partition(
 ): UsearchAnnPartition {
   return {
     cacheKey: "partition-a",
+    cacheGroupKey: "partition-owner-a",
     revision,
     identity: IDENTITY,
     rowCount: entries.length,
@@ -134,6 +135,7 @@ describe("USearch ANN index", () => {
     const request = {
       partition: {
         cacheKey: "small",
+        cacheGroupKey: "small-owner",
         revision: "1",
         identity,
         rowCount: entries.length,
@@ -155,6 +157,39 @@ describe("USearch ANN index", () => {
       ],
     });
     expect(afterMutation).toEqual(beforeMutation);
+  });
+
+  it("isolates otherwise-identical cached partitions by owning group", async () => {
+    const identity: EmbeddingModelIdentity = {
+      ...IDENTITY,
+      modelId: "owner-scoped-2",
+      vectorDimensions: 2,
+    };
+    const ownerA = [{ id: "owner-a", vector: new Float32Array([1, 0]) }] as const;
+    const ownerB = [{ id: "owner-b", vector: new Float32Array([0, 1]) }] as const;
+    const search = async (
+      cacheGroupKey: string,
+      entries: readonly UsearchVectorEntry[],
+      queryVector: Float32Array,
+    ): Promise<Awaited<ReturnType<typeof searchUsearchAnnIndex>>> =>
+      await searchUsearchAnnIndex({
+        partition: {
+          cacheKey: "shared-partition",
+          cacheGroupKey,
+          revision: "shared-revision",
+          identity,
+          rowCount: entries.length,
+          loadEntries: () => entries,
+        },
+        queryVector,
+        candidateLimit: 1,
+      });
+
+    const first = await search("owner-a", ownerA, ownerA[0].vector);
+    const second = await search("owner-b", ownerB, ownerB[0].vector);
+
+    expect(first).toMatchObject({ ok: true, candidates: [{ id: "owner-a", score: 1 }] });
+    expect(second).toMatchObject({ ok: true, candidates: [{ id: "owner-b", score: 1 }] });
   });
 
   it(
@@ -246,6 +281,16 @@ describe("USearch ANN index", () => {
     expect(
       await searchUsearchAnnIndex({
         partition: { ...partition(corpus.entries), cacheGroupKey: "" },
+        queryVector: corpus.entries[0]?.vector ?? new Float32Array(64),
+        candidateLimit: 5,
+      }),
+    ).toEqual({ ok: false, reason: "invalid-partition" });
+    expect(
+      await searchUsearchAnnIndex({
+        partition: {
+          ...partition(corpus.entries),
+          cacheGroupKey: undefined as unknown as string,
+        },
         queryVector: corpus.entries[0]?.vector ?? new Float32Array(64),
         candidateLimit: 5,
       }),

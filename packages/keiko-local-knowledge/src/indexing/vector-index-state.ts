@@ -75,9 +75,6 @@ const DELETE_OBSOLETE_VECTOR_INDEX_STATE_SQL = [
   "DELETE FROM vector_index_state",
   "WHERE capsule_id = :capsule_id",
   "  AND provider = :provider",
-  "  AND index_name = :index_name",
-  "  AND vector_dimensions = :vector_dimensions",
-  "  AND vector_metric = :vector_metric",
   "  AND embedding_identity_key <> :embedding_identity_key",
 ].join(" ");
 
@@ -137,9 +134,6 @@ export function writeVectorIndexState(db: DatabaseSync, record: VectorIndexState
   db.prepare(DELETE_OBSOLETE_VECTOR_INDEX_STATE_SQL).run({
     capsule_id: parameters.capsule_id,
     provider: parameters.provider,
-    index_name: parameters.index_name,
-    vector_dimensions: parameters.vector_dimensions,
-    vector_metric: parameters.vector_metric,
     embedding_identity_key: parameters.embedding_identity_key,
   });
   db.prepare(UPSERT_VECTOR_INDEX_STATE_SQL).run(parameters);

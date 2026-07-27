@@ -46,6 +46,11 @@ function throwFailure(message) {
   throw new CleanCheckoutDemoFailure(message);
 }
 
+function failClosed(fail, message) {
+  fail(message);
+  throwFailure(message);
+}
+
 // Everything a test needs to inject into the CLI's runtime seams: env, argv, stdout/stderr, and
 // the sub-runner. Defaults are the ambient globals for direct invocation.
 function resolveEnv(env) {
@@ -65,7 +70,7 @@ function resolveOutputs(stderr, stdout) {
 
 function defaultOrRequiredDimensions({ required, defaultDimensions, fail }) {
   if (required) {
-    fail("KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS is required in acceptance mode");
+    return failClosed(fail, "KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS is required in acceptance mode");
   }
   return defaultDimensions;
 }
@@ -82,7 +87,10 @@ export function requestedDimensions({
   }
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed) || parsed < 8 || parsed > 4_096) {
-    fail(`KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS must be an integer in 8..4096, got '${raw}'`);
+    return failClosed(
+      fail,
+      `KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS must be an integer in 8..4096, got '${raw}'`,
+    );
   }
   return parsed;
 }
@@ -94,10 +102,10 @@ export function shouldPrettyPrint({ argv } = {}) {
 function requireApprovedUsearchTarget(platform, arch, fail) {
   const target = usearchRuntimeTargetKey(platform, arch);
   if (target !== undefined) return target;
-  fail(
+  return failClosed(
+    fail,
     `USearch has no approved Keiko runtime for ${platform}-${arch}; the vector provider cannot reach 'available' on this host.`,
   );
-  return undefined;
 }
 
 function requireVerifiedProvisionedPath({
@@ -109,10 +117,13 @@ function requireVerifiedProvisionedPath({
 }) {
   if (provisioned !== undefined) {
     if (verifyRuntime(provisioned, expectedSha256)) return provisioned;
-    fail("USearch native runtime failed its platform-pinned SHA-256 verification");
-    return "";
+    return failClosed(
+      fail,
+      "USearch native runtime failed its platform-pinned SHA-256 verification",
+    );
   }
-  fail(
+  return failClosed(
+    fail,
     [
       "USearch native runtime is not provisioned.",
       `  expected: ${expectedPath}`,
@@ -120,7 +131,6 @@ function requireVerifiedProvisionedPath({
       "  fix:      npm run provision:usearch",
     ].join("\n"),
   );
-  return "";
 }
 
 export function requireProvisionedUsearchRuntime({
@@ -155,8 +165,7 @@ function verifyUsearchRuntime(path, expectedSha256) {
 function requiredEnv(env, name, fail) {
   const value = env[name]?.trim();
   if (value === undefined || value.length === 0) {
-    fail(`${name} is required in acceptance mode`);
-    return "";
+    return failClosed(fail, `${name} is required in acceptance mode`);
   }
   return value;
 }
@@ -173,8 +182,7 @@ export function loadAcceptanceRuntime({
   try {
     gatewayConfig = loadConfig(configPath, env);
   } catch {
-    fail("could not load or validate the configured model provider");
-    return undefined;
+    return failClosed(fail, "could not load or validate the configured model provider");
   }
   return { gatewayConfig, embeddingModelId, answerModelId };
 }
@@ -185,12 +193,15 @@ function logLine(stderr, message) {
 
 function refuseFailedEvidence({ evidence, contractFailures, redactionFailures, acceptance, fail }) {
   if (redactionFailures.length > 0) {
-    fail(`evidence carries redaction violations: ${redactionFailures.join(", ")}`);
+    return failClosed(
+      fail,
+      `evidence carries redaction violations: ${redactionFailures.join(", ")}`,
+    );
   }
   if (!acceptance.ok || contractFailures.length > 0) {
     const detail =
       contractFailures.length === 0 ? "acceptance-not-ok" : contractFailures.join(", ");
-    fail(`evidence contract violations: ${detail}`);
+    return failClosed(fail, `evidence contract violations: ${detail}`);
   }
   return evidence;
 }
@@ -229,7 +240,7 @@ function emitAcceptanceAndEnforce({ evidence, log, fail }) {
     evidence.executionMode !== CLEAN_CHECKOUT_EXECUTION_MODES.acceptance ||
     evidence.acceptanceEligible !== true
   ) {
-    fail("evidence is not acceptance-eligible");
+    return failClosed(fail, "evidence is not acceptance-eligible");
   }
   refuseFailedEvidence({ evidence, contractFailures, redactionFailures, acceptance, fail });
 }

@@ -130,6 +130,14 @@ describe("requestedDimensions", () => {
     expect(fail).toHaveBeenCalledWith(expect.stringContaining("integer in 8..4096, got 'abc'"));
   });
 
+  it("fails closed when an injected failure callback unexpectedly returns", () => {
+    const fail = vi.fn();
+    expect(() =>
+      requestedDimensions({ env: { KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS: "abc" }, fail }),
+    ).toThrow(CleanCheckoutDemoFailure);
+    expect(fail).toHaveBeenCalledOnce();
+  });
+
   it("rejects a value below the floor", () => {
     const fail = vi.fn(() => {
       throw new Error("floor");
@@ -213,6 +221,19 @@ describe("requireProvisionedUsearchRuntime", () => {
     expect(fail).toHaveBeenCalledWith(
       expect.stringContaining("no approved Keiko runtime for sunos-sparc"),
     );
+  });
+
+  it("fails closed without dereferencing a sentinel target when the failure callback returns", () => {
+    const fail = vi.fn();
+    expect(() =>
+      requireProvisionedUsearchRuntime({
+        resolveRuntimePath: () => undefined,
+        platform: "sunos",
+        arch: "sparc",
+        fail,
+      }),
+    ).toThrow(CleanCheckoutDemoFailure);
+    expect(fail).toHaveBeenCalledOnce();
   });
 });
 
@@ -320,6 +341,31 @@ describe("main", () => {
     );
     const scaffolded = scaffold({ runDemo });
     await expect(scaffolded.run()).rejects.toBeInstanceOf(CleanCheckoutDemoFailure);
+  });
+
+  it("does not emit evidence when an acceptance failure callback unexpectedly returns", async () => {
+    const fail = vi.fn();
+    const stderr = collectStrings();
+    const stdout = collectStrings();
+    await expect(
+      main({
+        env: { KEIKO_CLEAN_CHECKOUT_DEMO_DIMENSIONS: "32" },
+        argv: ["node", "cli.mjs"],
+        stderr: stderr.write,
+        stdout: stdout.write,
+        repoRoot: "/repo",
+        runDemo: () =>
+          Promise.resolve({
+            ...CONTENT_FREE_EVIDENCE,
+            executionMode: "hermetic-test",
+            acceptanceEligible: false,
+          }),
+        loadRuntime: () => runtime,
+        requireRuntime: () => "/tmp/usearch.node",
+        fail,
+      }),
+    ).rejects.toBeInstanceOf(CleanCheckoutDemoFailure);
+    expect(stdout.buffer).toEqual([]);
   });
 
   it("throws CleanCheckoutDemoFailure when the evidence carries a redaction violation", async () => {

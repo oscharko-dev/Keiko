@@ -1552,22 +1552,38 @@ function provisionedUsearchRuntime(target) {
   return { approved, sourceBinary, sourceLicense };
 }
 
-function stageUsearchFiles(resourceRoot, runtime) {
+function stageUsearchFiles(resourceRoot, runtime, copyFile) {
   const executablePath = "runtime/native/usearch.node";
   const licensePath = "runtime/licenses/usearch/LICENSE";
   const destination = join(resourceRoot, ...executablePath.split("/"));
   const licenseDestination = join(resourceRoot, ...licensePath.split("/"));
   mkdirSync(dirname(destination), { recursive: true });
   mkdirSync(dirname(licenseDestination), { recursive: true });
-  copyFileSync(runtime.sourceBinary, destination);
-  copyFileSync(runtime.sourceLicense, licenseDestination);
+  copyFile(runtime.sourceBinary, destination);
+  copyFile(runtime.sourceLicense, licenseDestination);
   chmodLauncher(destination);
   return { destination, executablePath, licensePath };
 }
 
-function stageUsearchAddon(target, resourceRoot) {
-  const runtime = provisionedUsearchRuntime(target);
-  const staged = stageUsearchFiles(resourceRoot, runtime);
+function failUsearchStaging(onFailure, message) {
+  onFailure(message);
+  throw new Error("portable USearch staging aborted");
+}
+
+export function stageUsearchAddon(
+  target,
+  resourceRoot,
+  { copyFile = copyFileSync, onFailure = fail, resolveRuntime = provisionedUsearchRuntime } = {},
+) {
+  const runtime = resolveRuntime(target);
+  const staged = stageUsearchFiles(resourceRoot, runtime, copyFile);
+  const shippedSha256 = sha256Bytes(readFileSync(staged.destination));
+  if (shippedSha256 !== runtime.approved.binarySha256) {
+    return failUsearchStaging(
+      onFailure,
+      "USearch staged runtime failed its platform-pinned digest",
+    );
+  }
   return [
     {
       name: "usearch",
@@ -1585,7 +1601,7 @@ function stageUsearchAddon(target, resourceRoot) {
         licenseSha256: USEARCH_RUNTIME_MANIFEST.licenseSha256,
       },
       unsignedSha256: runtime.approved.binarySha256,
-      shippedSha256: runtime.approved.binarySha256,
+      shippedSha256,
       sizeBytes: lstatSync(staged.destination).size,
       sbomBomRef: `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target.platformTarget}`,
       signing: {

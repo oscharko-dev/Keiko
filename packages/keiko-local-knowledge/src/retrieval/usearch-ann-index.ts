@@ -26,7 +26,7 @@ export interface UsearchVectorEntry {
 
 export interface UsearchAnnPartition {
   readonly cacheKey: string;
-  readonly cacheGroupKey?: string;
+  readonly cacheGroupKey: string;
   readonly revision: string;
   readonly identity: EmbeddingModelIdentity;
   readonly rowCount: number;
@@ -473,14 +473,26 @@ function stopIndex(index: SearchIndex): void {
 
 function baseCacheKey(partition: UsearchAnnPartition): string {
   return `keiko-usearch-base-v2:${createHash("sha256")
-    .update(JSON.stringify([partition.cacheKey, embeddingIdentityKey(partition.identity)]), "utf8")
+    .update(
+      JSON.stringify([
+        partition.cacheGroupKey,
+        partition.cacheKey,
+        embeddingIdentityKey(partition.identity),
+      ]),
+      "utf8",
+    )
     .digest("hex")}`;
 }
 
 function revisionCacheKey(partition: UsearchAnnPartition): string {
   return `keiko-usearch-revision-v2:${createHash("sha256")
     .update(
-      JSON.stringify([baseCacheKey(partition), partition.revision, partition.rowCount]),
+      JSON.stringify([
+        partition.cacheGroupKey,
+        baseCacheKey(partition),
+        partition.revision,
+        partition.rowCount,
+      ]),
       "utf8",
     )
     .digest("hex")}`;
@@ -512,7 +524,7 @@ function cacheIndex(partition: UsearchAnnPartition, index: SearchIndex): SearchI
   const key = revisionCacheKey(partition);
   INDEX_CACHE.set(key, {
     baseKey: baseCacheKey(partition),
-    groupKey: partition.cacheGroupKey ?? partition.cacheKey,
+    groupKey: partition.cacheGroupKey,
     index,
   });
   cachedIndexBytes += index.byteSize;
@@ -711,12 +723,8 @@ function annSearch(
   return operation;
 }
 
-function validPartitionKey(value: string): boolean {
-  return value.length > 0 && value.length <= 4_096;
-}
-
-function validOptionalPartitionKey(value: string | undefined): boolean {
-  return value === undefined || validPartitionKey(value);
+function validPartitionKey(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 4_096;
 }
 
 function validPartitionDimensions(dimensions: number): boolean {
@@ -726,7 +734,7 @@ function validPartitionDimensions(dimensions: number): boolean {
 function validPartition(partition: UsearchAnnPartition): boolean {
   return (
     validPartitionKey(partition.cacheKey) &&
-    validOptionalPartitionKey(partition.cacheGroupKey) &&
+    validPartitionKey(partition.cacheGroupKey) &&
     validPartitionKey(partition.revision) &&
     Number.isSafeInteger(partition.rowCount) &&
     partition.rowCount >= 0 &&

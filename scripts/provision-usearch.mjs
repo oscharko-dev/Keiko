@@ -11,6 +11,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -50,6 +51,41 @@ function sha256Of(path) {
 function verify(path, expected) {
   const actual = sha256Of(path);
   if (actual !== expected) fail(`checksum mismatch: expected ${expected}, got ${actual}`);
+}
+
+function trustedPosixOwnerAndMode(entry, currentUid) {
+  if (currentUid === undefined) return true;
+  return (entry.uid === currentUid || entry.uid === 0) && (entry.mode & 0o022) === 0;
+}
+
+function trustedProvisionedEntries(entry, parent, currentUid) {
+  return (
+    entry.isFile() &&
+    !entry.isSymbolicLink() &&
+    parent.isDirectory() &&
+    !parent.isSymbolicLink() &&
+    trustedPosixOwnerAndMode(entry, currentUid) &&
+    trustedPosixOwnerAndMode(parent, currentUid)
+  );
+}
+
+export function isTrustedProvisionedUsearchFile(
+  path,
+  expectedSha256,
+  { currentUid = process.getuid?.() } = {},
+) {
+  // Same-uid POSIX mutation and Windows ACL evaluation remain outside Node's mode-bit model. This
+  // check establishes the portable minimum used by the worker: no symlink, regular bytes, pinned
+  // digest, current/root POSIX ownership, and no group/world write authority.
+  try {
+    const entry = lstatSync(path);
+    const parent = lstatSync(dirname(path));
+    return (
+      trustedProvisionedEntries(entry, parent, currentUid) && sha256Of(path) === expectedSha256
+    );
+  } catch {
+    return false;
+  }
 }
 
 function systemBinary(name) {
@@ -110,10 +146,8 @@ function main() {
   const binaryPath = join(targetDir, "usearch.node");
   const licensePath = join(targetDir, "LICENSE");
   if (
-    existsSync(binaryPath) &&
-    existsSync(licensePath) &&
-    sha256Of(binaryPath) === target.binarySha256 &&
-    sha256Of(licensePath) === USEARCH_RUNTIME_MANIFEST.licenseSha256
+    isTrustedProvisionedUsearchFile(binaryPath, target.binarySha256) &&
+    isTrustedProvisionedUsearchFile(licensePath, USEARCH_RUNTIME_MANIFEST.licenseSha256)
   ) {
     console.log(`provision-usearch: already verified at ${binaryPath}`);
     return;
@@ -130,13 +164,20 @@ function main() {
     verify(extractedBinary, target.binarySha256);
     verify(extractedLicense, USEARCH_RUNTIME_MANIFEST.licenseSha256);
     rmSync(targetDir, { recursive: true, force: true });
-    mkdirSync(targetDir, { recursive: true });
+    mkdirSync(targetDir, { recursive: true, mode: 0o755 });
+    chmodSync(targetDir, 0o755);
     copyFileSync(extractedBinary, binaryPath);
     copyFileSync(extractedLicense, licensePath);
-    verify(binaryPath, target.binarySha256);
-    verify(licensePath, USEARCH_RUNTIME_MANIFEST.licenseSha256);
     chmodSync(binaryPath, 0o755);
+    chmodSync(licensePath, 0o644);
     writeProvenance(targetDir, targetKey);
+    chmodSync(join(targetDir, "PROVENANCE.txt"), 0o644);
+    if (
+      !isTrustedProvisionedUsearchFile(binaryPath, target.binarySha256) ||
+      !isTrustedProvisionedUsearchFile(licensePath, USEARCH_RUNTIME_MANIFEST.licenseSha256)
+    ) {
+      fail("provisioned runtime ownership, permissions, or digest verification failed");
+    }
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }

@@ -112,6 +112,14 @@ digest, file identity, size, and modification time. The worker repeats the diges
 check before loading the addon. A missing, moved, changed, unsupported, or mismatched runtime fails
 closed.
 
+The provisioned runtime must be a regular file and its immediate parent must be a directory; neither
+may be a symlink. On POSIX both must be owned by the current user or root and deny group/world
+writes. The worker opens the addon with `O_NOFOLLOW`, hashes the held descriptor, and rechecks
+path/descriptor identity and the digest after native loading. This narrows the path-swap window
+without claiming complete protection from a malicious same-UID process; Windows retains the
+symlink, descriptor-identity, digest, signed-inventory, and isolated-smoke controls because POSIX
+owner/mode bits cannot express Windows ACL authority.
+
 ### D4 — One narrow worker boundary isolates the addon
 
 ADR-0019 v1.1 permits exactly two Local Knowledge files to import `node:worker_threads`: the

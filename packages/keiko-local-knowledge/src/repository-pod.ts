@@ -23,9 +23,13 @@ import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 import { createCapsule, deleteCapsule, getCapsule } from "./capsule-lifecycle.js";
-import { documentIdFor } from "./discovery/types.js";
 import { deleteDocumentRow } from "./discovery/persist.js";
-import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveryOptions } from "./discovery/types.js";
+import {
+  DEFAULT_DISCOVERY_OPTIONS,
+  documentIdFor,
+  type DiscoveryErrorCode,
+  type DiscoveryOptions,
+} from "./discovery/types.js";
 import { KnowledgeStoreError } from "./errors.js";
 import { diffFingerprintSets } from "./fingerprint-diff.js";
 import {
@@ -198,12 +202,23 @@ interface DrainedIndexing {
   readonly enumerationComplete: boolean;
 }
 
-const INCOMPLETE_DISCOVERY_CODES: ReadonlySet<string> = new Set([
-  "DISCOVERY_FAILED:INVALID_SCOPE",
-  "DISCOVERY_FAILED:LIMIT_REACHED",
-  "DISCOVERY_FAILED:READ_FAILED",
-  "DISCOVERY_FAILED:STAT_FAILED",
+type DiscoveryFailureCode = `DISCOVERY_FAILED:${DiscoveryErrorCode}`;
+
+// A discovery failure preserves completeness only when it rejects one known entry without
+// interrupting enumeration. Deny by default so a new DiscoveryErrorCode cannot silently permit
+// baseline replacement or destructive pruning.
+const COMPLETE_DISCOVERY_FAILURE_CODES: ReadonlySet<DiscoveryFailureCode> = new Set([
+  "DISCOVERY_FAILED:PATH_ESCAPE",
+  "DISCOVERY_FAILED:OVERSIZED_FILE",
+  "DISCOVERY_FAILED:UNSUPPORTED_FORMAT",
 ]);
+
+function marksEnumerationIncomplete(code: string): boolean {
+  return (
+    code.startsWith("DISCOVERY_FAILED:") &&
+    !COMPLETE_DISCOVERY_FAILURE_CODES.has(code as DiscoveryFailureCode)
+  );
+}
 
 function terminalIndexingResult(event: IndexingEvent): IndexingResult | undefined {
   if (
@@ -228,7 +243,7 @@ async function drainIndexing(
     if (event.kind === "document-failed" && event.relativePath !== undefined) {
       failedRelativePaths.add(event.relativePath);
     }
-    if (event.kind === "document-failed" && INCOMPLETE_DISCOVERY_CODES.has(event.error.code)) {
+    if (event.kind === "document-failed" && marksEnumerationIncomplete(event.error.code)) {
       enumerationComplete = false;
     }
     result = terminalIndexingResult(event) ?? result;

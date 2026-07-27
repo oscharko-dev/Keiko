@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,7 +37,8 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 const loadFixtureModule = createRequire(import.meta.url);
 const EXPECTED_VERSION = "test-usearch-1";
 
-type RuntimeMode = "success" | "size-mismatch" | "build-error" | "search-error" | "mutate-on-load";
+type RuntimeMode =
+  "success" | "size-mismatch" | "build-error" | "search-error" | "mutate-on-load" | "side-effect";
 
 interface RuntimeTelemetry {
   readonly constructorArguments: readonly unknown[];
@@ -63,11 +72,13 @@ function runtimeSource(mode: RuntimeMode): string {
   const mutate =
     mode === "mutate-on-load"
       ? 'require("node:fs").appendFileSync(__filename, "\\n// changed during load");'
-      : "";
+      : mode === "side-effect"
+        ? 'require("node:fs").writeFileSync(`${__filename}.executed`, "executed");'
+        : "";
   const size =
     mode === "size-mismatch" ? "return this.keys.length - 1;" : "return this.keys.length;";
   const add =
-    mode === "build-error"
+    mode === "build-error" || mode === "side-effect"
       ? 'throw new Error("synthetic native build failure");'
       : [
           "telemetry.addKeys = Array.from(keys);",
@@ -272,6 +283,67 @@ describe("USearch index worker", () => {
       removeRuntimeFixture(runtime);
     }
   });
+
+  it.skipIf(process.getuid === undefined)(
+    "rejects a writable runtime before its module body can execute",
+    async () => {
+      const runtime = createRuntimeFixture("side-effect");
+      const harness = createWorkerHarness(runtime);
+      chmodSync(runtime.path, 0o666);
+      try {
+        await executeWorker(harness.data);
+        expect(existsSync(`${runtime.path}.executed`)).toBe(false);
+        expect(Atomics.load(harness.control, USEARCH_CONTROL.state)).toBe(USEARCH_STATE.failed);
+        expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(
+          USEARCH_ERROR.runtimeInvalid,
+        );
+      } finally {
+        removeRuntimeFixture(runtime);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a symlinked runtime before its module body can execute",
+    async () => {
+      const runtime = createRuntimeFixture("side-effect");
+      const linkedPath = join(runtime.directory, "linked-runtime.cjs");
+      symlinkSync(runtime.path, linkedPath);
+      const harness = createWorkerHarness({ ...runtime, path: linkedPath });
+      try {
+        await executeWorker(harness.data);
+        expect(existsSync(`${runtime.path}.executed`)).toBe(false);
+        expect(Atomics.load(harness.control, USEARCH_CONTROL.state)).toBe(USEARCH_STATE.failed);
+        expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(
+          USEARCH_ERROR.runtimeInvalid,
+        );
+      } finally {
+        removeRuntimeFixture(runtime);
+      }
+    },
+  );
+
+  it.skipIf(process.getuid === undefined || process.getuid() === 0)(
+    "rejects a runtime outside the current/root POSIX ownership boundary",
+    async () => {
+      const runtime = createRuntimeFixture("side-effect");
+      const harness = createWorkerHarness(runtime);
+      const actualUid = process.getuid?.();
+      if (actualUid === undefined) throw new Error("expected POSIX uid");
+      const untrustedUid = actualUid === 1 ? 2 : 1;
+      vi.spyOn(process, "getuid").mockReturnValue(untrustedUid);
+      try {
+        await executeWorker(harness.data);
+        expect(existsSync(`${runtime.path}.executed`)).toBe(false);
+        expect(Atomics.load(harness.control, USEARCH_CONTROL.state)).toBe(USEARCH_STATE.failed);
+        expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(
+          USEARCH_ERROR.runtimeInvalid,
+        );
+      } finally {
+        removeRuntimeFixture(runtime);
+      }
+    },
+  );
 
   it("publishes a build failure when the native index reports the wrong row count", async () => {
     const runtime = createRuntimeFixture("size-mismatch");

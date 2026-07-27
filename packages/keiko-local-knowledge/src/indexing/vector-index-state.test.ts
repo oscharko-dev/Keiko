@@ -1,7 +1,12 @@
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import {
+  embeddingIdentityKey,
+  type EmbeddingModelIdentity,
+  type KnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
+import { usearchIndexName } from "../retrieval/vector-index.js";
 import {
   readVectorIndexState,
   writeVectorIndexState,
@@ -33,17 +38,33 @@ function database(): DatabaseSync {
   return db;
 }
 
+function identity(
+  fingerprint: string,
+  overrides: Partial<EmbeddingModelIdentity> = {},
+): EmbeddingModelIdentity {
+  return {
+    provider: "test",
+    modelId: "state-test",
+    vectorDimensions: 4,
+    vectorMetric: "cosine",
+    normalization: "l2",
+    instructionVersion: "v1",
+    embeddingSpaceFingerprint: fingerprint,
+    ...overrides,
+  };
+}
+
 function record(
-  embeddingIdentityKey: string,
+  embeddingIdentity: EmbeddingModelIdentity,
   overrides: Partial<VectorIndexStateRecord> = {},
 ): VectorIndexStateRecord {
   return {
     capsuleId: "capsule-1" as KnowledgeCapsuleId,
     provider: "usearch",
-    indexName: "keiko-hnsw-4-cosine",
-    vectorDimensions: 4,
-    vectorMetric: "cosine",
-    embeddingIdentityKey,
+    indexName: usearchIndexName(embeddingIdentity),
+    vectorDimensions: embeddingIdentity.vectorDimensions,
+    vectorMetric: embeddingIdentity.vectorMetric,
+    embeddingIdentityKey: embeddingIdentityKey(embeddingIdentity),
     vectorCount: 3,
     vectorMaxCreatedAt: 100,
     status: "ready",
@@ -56,9 +77,10 @@ describe("vector index state", () => {
   it("upserts one identity without changing the logical index cardinality", () => {
     const db = database();
     try {
-      const initial = record("identity-v2");
+      const currentIdentity = identity("identity-v2");
+      const initial = record(currentIdentity);
       writeVectorIndexState(db, initial);
-      writeVectorIndexState(db, record("identity-v2", { vectorCount: 4, updatedAt: 300 }));
+      writeVectorIndexState(db, record(currentIdentity, { vectorCount: 4, updatedAt: 300 }));
 
       expect(readVectorIndexState(db, initial)).toMatchObject({
         vectorCount: 4,
@@ -75,8 +97,10 @@ describe("vector index state", () => {
   it("removes obsolete identity state while preserving the current logical index", () => {
     const db = database();
     try {
-      const obsolete = record("identity-v1");
-      const current = record("identity-v2", { updatedAt: 300 });
+      const obsolete = record(
+        identity("identity-v1", { vectorDimensions: 3, vectorMetric: "dot" }),
+      );
+      const current = record(identity("identity-v2"), { updatedAt: 300 });
       writeVectorIndexState(db, obsolete);
       writeVectorIndexState(db, current);
 
