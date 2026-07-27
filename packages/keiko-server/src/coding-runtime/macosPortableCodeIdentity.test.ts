@@ -7,15 +7,15 @@ import {
   macosTeamIdentifierFromOutput,
 } from "./macosPortableCodeIdentity.js";
 
-describe("macOS portable code identity", () => {
-  it("accepts only closed ten-character Apple team identifiers", () => {
+describe("macOS portable code identity", (): void => {
+  it("accepts only closed ten-character Apple team identifiers", (): void => {
     expect(isMacosTeamIdentifier("AB12CD34EF")).toBe(true);
     expect(isMacosTeamIdentifier("")).toBe(false);
     expect(isMacosTeamIdentifier("ab12cd34ef")).toBe(false);
     expect(isMacosTeamIdentifier('AB12CD34E"')).toBe(false);
   });
 
-  it("extracts exactly one closed Apple team identifier", () => {
+  it("extracts exactly one closed Apple team identifier", (): void => {
     expect(
       macosTeamIdentifierFromOutput("Authority=Developer ID\nTeamIdentifier=AB12CD34EF\n"),
     ).toBe("AB12CD34EF");
@@ -26,7 +26,7 @@ describe("macOS portable code identity", () => {
     expect(macosTeamIdentifierFromOutput("TeamIdentifier=not set\n")).toBeUndefined();
   });
 
-  it("builds a Developer ID requirement bound to team and bundle identity", () => {
+  it("builds a Developer ID requirement bound to team and bundle identity", (): void => {
     expect(macosDeveloperIdRequirement("AB12CD34EF", "dev.oscharko.keiko.macos-arm64")).toBe(
       'anchor apple generic and identifier "dev.oscharko.keiko.macos-arm64"' +
         ' and certificate leaf[subject.OU] = "AB12CD34EF"',
@@ -34,10 +34,10 @@ describe("macOS portable code identity", () => {
     expect(macosDeveloperIdRequirement("AB12CD34EF")).toBe(
       'anchor apple generic and certificate leaf[subject.OU] = "AB12CD34EF"',
     );
-    expect(() => macosDeveloperIdRequirement("invalid")).toThrow(TypeError);
+    expect((): string => macosDeveloperIdRequirement("invalid")).toThrow(TypeError);
   });
 
-  it("keeps an unbound development build unqualified", () => {
+  it("keeps an unbound development build unqualified", (): void => {
     expect(macosReleaseTeamIdentifier()).toBeUndefined();
   });
 });

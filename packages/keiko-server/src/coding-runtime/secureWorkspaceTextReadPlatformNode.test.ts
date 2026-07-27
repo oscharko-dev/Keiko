@@ -12,7 +12,7 @@ import {
 
 const roots: string[] = [];
 
-afterEach(() => {
+afterEach((): void => {
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
@@ -32,8 +32,8 @@ function fixture(contents = "signed helper"): {
   return { executable, resourceRoot };
 }
 
-describe("node portable secure workspace-read inspection", () => {
-  it("inspects every resource path component without following links", async () => {
+describe("node portable secure workspace-read inspection", (): void => {
+  it("inspects every resource path component without following links", async (): Promise<void> => {
     const { executable, resourceRoot } = fixture();
     const inspection = createNodePortableSecureWorkspaceReadInspection();
 
@@ -52,7 +52,7 @@ describe("node portable secure workspace-read inspection", () => {
     ]);
   });
 
-  it("rejects the resource root and paths outside the immutable resource tree", async () => {
+  it("rejects the resource root and paths outside the immutable resource tree", async (): Promise<void> => {
     const { executable, resourceRoot } = fixture();
     const inspection = createNodePortableSecureWorkspaceReadInspection();
 
@@ -72,7 +72,7 @@ describe("node portable secure workspace-read inspection", () => {
     ).toBe(false);
   });
 
-  it("opens the verified bytes and preserves exact file identity metadata", async () => {
+  it("opens the verified bytes and preserves exact file identity metadata", async (): Promise<void> => {
     const { executable } = fixture();
     const inspection = createNodePortableSecureWorkspaceReadInspection();
     const result = await inspection.openReadSameIdentity(executable, 1024);
@@ -90,17 +90,20 @@ describe("node portable secure workspace-read inspection", () => {
   it.each([
     ["", 1024],
     ["oversized", 4],
-  ] as const)("rejects invalid helper size for %j", async (contents, maximumBytes) => {
-    const { executable } = fixture(contents);
-    await expect(
-      createNodePortableSecureWorkspaceReadInspection().openReadSameIdentity(
-        executable,
-        maximumBytes,
-      ),
-    ).rejects.toThrow("secure-workspace-read-size-invalid");
-  });
+  ] as const)(
+    "rejects invalid helper size for %j",
+    async (contents, maximumBytes): Promise<void> => {
+      const { executable } = fixture(contents);
+      await expect(
+        createNodePortableSecureWorkspaceReadInspection().openReadSameIdentity(
+          executable,
+          maximumBytes,
+        ),
+      ).rejects.toThrow("secure-workspace-read-size-invalid");
+    },
+  );
 
-  it("executes the fixed platform signature verifiers without an ambient shell", async () => {
+  it("executes the fixed platform signature verifiers without an ambient shell", async (): Promise<void> => {
     const inspection = createNodePortableSecureWorkspaceReadInspection();
 
     await expect(inspection.verifySignature("/usr/bin/true", "darwin-arm64")).resolves.toBe(false);
@@ -116,7 +119,7 @@ describe("node portable secure workspace-read inspection", () => {
     );
   });
 
-  it("fails closed when the fixed platform verifier rejects packaged helper bytes", async () => {
+  it("fails closed when the fixed platform verifier rejects packaged helper bytes", async (): Promise<void> => {
     const { executable, resourceRoot } = fixture();
     writeFileSync(join(resourceRoot, "Keiko.exe"), "not signed");
     const macosInspection = createNodePortableSecureWorkspaceReadInspection({
@@ -131,9 +134,9 @@ describe("node portable secure workspace-read inspection", () => {
     await expect(windowsInspection.verifySignature(executable, "win32-x64")).resolves.toBe(false);
   });
 
-  it("rechecks the macOS app resource seal without repeating full runtime discovery", async () => {
+  it("rechecks the macOS app resource seal without repeating full runtime discovery", async (): Promise<void> => {
     const calls: { readonly args: readonly string[]; readonly command: string }[] = [];
-    const run = vi.fn((command: string, args: readonly string[]) => {
+    const run = vi.fn((command: string, args: readonly string[]): Promise<boolean> => {
       calls.push({ args, command });
       return Promise.resolve(true);
     });
@@ -182,8 +185,8 @@ describe("node portable secure workspace-read inspection", () => {
     ]);
   });
 
-  it("requires the outer app's Developer ID team for the macOS helper", async () => {
-    const run = vi.fn(() => Promise.resolve(true));
+  it("requires the outer app's Developer ID team for the macOS helper", async (): Promise<void> => {
+    const run = vi.fn((): Promise<boolean> => Promise.resolve(true));
     const inspection = createNodePortableSecureWorkspaceReadInspection({
       resourceRoot: "/Applications/Keiko.app/Contents/Resources",
       macosRunCommand: run,
@@ -201,8 +204,8 @@ describe("node portable secure workspace-read inspection", () => {
     ]);
   });
 
-  it("rejects a macOS helper when the outer app team cannot be established", async () => {
-    const run = vi.fn(() => Promise.resolve(true));
+  it("rejects a macOS helper when the outer app team cannot be established", async (): Promise<void> => {
+    const run = vi.fn((): Promise<boolean> => Promise.resolve(true));
     const inspection = createNodePortableSecureWorkspaceReadInspection({
       resourceRoot: "/Applications/Keiko.app/Contents/Resources",
       macosRunCommand: run,
@@ -214,10 +217,10 @@ describe("node portable secure workspace-read inspection", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("rejects a macOS helper signed by a different Developer ID team", async () => {
+  it("rejects a macOS helper signed by a different Developer ID team", async (): Promise<void> => {
     const inspection = createNodePortableSecureWorkspaceReadInspection({
       resourceRoot: "/Applications/Keiko.app/Contents/Resources",
-      macosRunCommand: () => Promise.resolve(false),
+      macosRunCommand: (): Promise<boolean> => Promise.resolve(false),
       macosExpectedTeamIdentifier: "AB12CD34EF",
     });
 
@@ -228,8 +231,8 @@ describe("node portable secure workspace-read inspection", () => {
 
   it.each(["", "invalid"] as const)(
     "rejects the malformed macOS team identifier %j without invoking codesign",
-    async (teamIdentifier) => {
-      const run = vi.fn(() => Promise.resolve(true));
+    async (teamIdentifier): Promise<void> => {
+      const run = vi.fn((): Promise<boolean> => Promise.resolve(true));
       const inspection = createNodePortableSecureWorkspaceReadInspection({
         resourceRoot: "/Applications/Keiko.app/Contents/Resources",
         macosRunCommand: run,
@@ -251,9 +254,9 @@ describe("node portable secure workspace-read inspection", () => {
     },
   );
 
-  it("rejects a mismatched macOS team in both admission paths", async () => {
-    const run = vi.fn((_command: string, args: readonly string[]) =>
-      Promise.resolve(args.some((arg) => arg.includes("AB12CD34EF"))),
+  it("rejects a mismatched macOS team in both admission paths", async (): Promise<void> => {
+    const run = vi.fn((_command: string, args: readonly string[]): Promise<boolean> =>
+      Promise.resolve(args.some((arg): boolean => arg.includes("AB12CD34EF"))),
     );
     const inspection = createNodePortableSecureWorkspaceReadInspection({
       resourceRoot: "/Applications/Keiko.app/Contents/Resources",
@@ -274,7 +277,7 @@ describe("node portable secure workspace-read inspection", () => {
     ).resolves.toBe(false);
   });
 
-  it("fails closed when the macOS release team has not been bound", async () => {
+  it("fails closed when the macOS release team has not been bound", async (): Promise<void> => {
     await expect(
       provePortableImmutableResourceTree(
         "/definitely/missing/Keiko.app/Contents/Resources",
@@ -283,14 +286,18 @@ describe("node portable secure workspace-read inspection", () => {
     ).resolves.toBe(false);
   });
 
-  it("accepts a Windows helper only when it matches the fixed launcher's signer", async () => {
+  it("accepts a Windows helper only when it matches the fixed launcher's signer", async (): Promise<void> => {
     const { executable, resourceRoot } = fixture();
     writeFileSync(join(resourceRoot, "Keiko.exe"), "signed launcher");
     const identities = ["A".repeat(40), "A".repeat(40), "A".repeat(40), "B".repeat(40)];
     let index = 0;
     const inspection = createNodePortableSecureWorkspaceReadInspection({
       resourceRoot,
-      windowsRunCommand: () => ({
+      windowsRunCommand: (): {
+        readonly status: number;
+        readonly stderr: string;
+        readonly stdout: string;
+      } => ({
         status: 0,
         stderr: "",
         stdout: identities[index++] ?? "",
@@ -301,7 +308,7 @@ describe("node portable secure workspace-read inspection", () => {
     await expect(inspection.verifySignature(executable, "win32-x64")).resolves.toBe(false);
   });
 
-  it("rejects Windows verification when the fixed launcher is absent", async () => {
+  it("rejects Windows verification when the fixed launcher is absent", async (): Promise<void> => {
     const { executable, resourceRoot } = fixture();
     const inspection = createNodePortableSecureWorkspaceReadInspection({ resourceRoot });
 

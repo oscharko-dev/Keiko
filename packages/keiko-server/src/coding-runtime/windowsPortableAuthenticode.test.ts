@@ -27,8 +27,8 @@ function signerRunner(...identities: readonly string[]): {
   };
 }
 
-describe("Windows portable Authenticode identity", () => {
-  it("uses the fixed system verifier and accepts only the trusted launcher's signer", () => {
+describe("Windows portable Authenticode identity", (): void => {
+  it("uses the fixed system verifier and accepts only the trusted launcher's signer", (): void => {
     const signer = "A".repeat(40);
     const matching = signerRunner(signer, signer);
 
@@ -43,22 +43,30 @@ describe("Windows portable Authenticode identity", () => {
     { status: 1, stderr: "", stdout: "A".repeat(40) },
     { status: 0, stderr: "failure", stdout: "A".repeat(40) },
     { status: 0, stderr: "", stdout: "not-a-thumbprint" },
-  ])("rejects invalid signer output %#", (result) => {
-    expect(windowsSignerIdentity("helper.exe", () => result)).toBeUndefined();
+  ])("rejects invalid signer output %#", (result): void => {
+    expect(
+      windowsSignerIdentity(
+        "helper.exe",
+        (): ReturnType<WindowsAuthenticodeCommandRunner> => result,
+      ),
+    ).toBeUndefined();
   });
 
-  it("supports the same signer binding through a nonblocking command port", async () => {
+  it("supports the same signer binding through a nonblocking command port", async (): Promise<void> => {
     const signer = "A".repeat(40);
     const results = [signer, signer];
     let index = 0;
 
     await expect(
-      windowsPublisherIdentityMatchesAsync("Keiko.exe", "helper.exe", () =>
-        Promise.resolve({
-          status: 0,
-          stderr: "",
-          stdout: results[index++] ?? "",
-        }),
+      windowsPublisherIdentityMatchesAsync(
+        "Keiko.exe",
+        "helper.exe",
+        (): Promise<ReturnType<WindowsAuthenticodeCommandRunner>> =>
+          Promise.resolve({
+            status: 0,
+            stderr: "",
+            stdout: results[index++] ?? "",
+          }),
       ),
     ).resolves.toBe(true);
   });
@@ -67,41 +75,55 @@ describe("Windows portable Authenticode identity", () => {
     { status: 1, stderr: "", stdout: "A".repeat(40) },
     { status: 0, stderr: "failure", stdout: "A".repeat(40) },
     { status: 0, stderr: "", stdout: "not-a-thumbprint" },
-  ])("rejects invalid signer output through the nonblocking command port %#", async (result) => {
-    await expect(
-      windowsPublisherIdentityMatchesAsync("Keiko.exe", "helper.exe", () =>
-        Promise.resolve(result),
-      ),
-    ).resolves.toBe(false);
-  });
+  ])(
+    "rejects invalid signer output through the nonblocking command port %#",
+    async (result): Promise<void> => {
+      await expect(
+        windowsPublisherIdentityMatchesAsync(
+          "Keiko.exe",
+          "helper.exe",
+          (): Promise<ReturnType<WindowsAuthenticodeCommandRunner>> => Promise.resolve(result),
+        ),
+      ).resolves.toBe(false);
+    },
+  );
 
   it.each([
     { status: 1, stderr: "", stdout: "A".repeat(40) },
     { status: 0, stderr: "failure", stdout: "A".repeat(40) },
     { status: 0, stderr: "", stdout: "" },
     { status: 0, stderr: "", stdout: "not-a-thumbprint" },
-  ])("rejects invalid helper output through the nonblocking command port %#", async (result) => {
-    const results = [{ status: 0, stderr: "", stdout: "A".repeat(40) }, result];
-    let index = 0;
+  ])(
+    "rejects invalid helper output through the nonblocking command port %#",
+    async (result): Promise<void> => {
+      const results = [{ status: 0, stderr: "", stdout: "A".repeat(40) }, result];
+      let index = 0;
 
-    await expect(
-      windowsPublisherIdentityMatchesAsync("Keiko.exe", "helper.exe", () =>
-        Promise.resolve(results[index++] ?? result),
-      ),
-    ).resolves.toBe(false);
-  });
+      await expect(
+        windowsPublisherIdentityMatchesAsync(
+          "Keiko.exe",
+          "helper.exe",
+          (): Promise<ReturnType<WindowsAuthenticodeCommandRunner>> =>
+            Promise.resolve(results[index++] ?? result),
+        ),
+      ).resolves.toBe(false);
+    },
+  );
 
-  it("rejects a nonblocking helper signed by a different publisher", async () => {
+  it("rejects a nonblocking helper signed by a different publisher", async (): Promise<void> => {
     const results = ["A".repeat(40), "B".repeat(40)];
     let index = 0;
 
     await expect(
-      windowsPublisherIdentityMatchesAsync("Keiko.exe", "helper.exe", () =>
-        Promise.resolve({
-          status: 0,
-          stderr: "",
-          stdout: results[index++] ?? "",
-        }),
+      windowsPublisherIdentityMatchesAsync(
+        "Keiko.exe",
+        "helper.exe",
+        (): Promise<ReturnType<WindowsAuthenticodeCommandRunner>> =>
+          Promise.resolve({
+            status: 0,
+            stderr: "",
+            stdout: results[index++] ?? "",
+          }),
       ),
     ).resolves.toBe(false);
   });
