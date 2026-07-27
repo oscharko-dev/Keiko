@@ -974,4 +974,12 @@ describe("parseArgs — --state-dir value must not look like a flag", () => {
     const parsed = _cliTestables.parseArgs(["--state-dir"]);
     expect(parsed).toEqual({ kind: "usage" });
   });
+
+  it("rejects an empty --state-dir value rather than silently using it as a path", () => {
+    // An empty string does not start with "-", so it slipped past the flag-shaped-value
+    // guard; left unrejected, `parsed.stateDir ?? defaultDir` in main() would have used ""
+    // (not the default), since `??` only falls back on null/undefined, not on "".
+    const parsed = _cliTestables.parseArgs(["--state-dir", ""]);
+    expect(parsed).toEqual({ kind: "usage" });
+  });
 });

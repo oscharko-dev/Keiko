@@ -101,6 +101,22 @@ describe("utf8ByteLength — the last-resort UTF-8 fallback", () => {
     expect(utf8ByteLength(over)).toBeGreaterThan(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES);
   });
 
+  it("is 0 for the empty string", () => {
+    expect(utf8ByteLength("")).toBe(0);
+    expect(utf8ByteLength("")).toBe(independentUtf8ByteLength(""));
+  });
+
+  it("agrees with the oracle at the exact budget and the first byte over it", () => {
+    // Single-byte ASCII so the string length is exactly the byte count, isolating the
+    // off-by-one boundary from any multi-byte rounding.
+    const exactBudget = "x".repeat(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES);
+    const firstOverBudget = "x".repeat(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES + 1);
+    expect(utf8ByteLength(exactBudget)).toBe(independentUtf8ByteLength(exactBudget));
+    expect(utf8ByteLength(exactBudget)).toBe(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES);
+    expect(utf8ByteLength(firstOverBudget)).toBe(independentUtf8ByteLength(firstOverBudget));
+    expect(utf8ByteLength(firstOverBudget)).toBe(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES + 1);
+  });
+
   it("throws for a lone surrogate, matching encodeURIComponent's own rejection", () => {
     // A bare high surrogate is invalid UTF-16; encodeURIComponent throws URIError for
     // it too, so the fallback must fail the same way rather than silently miscounting.

@@ -16,6 +16,7 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { auditLocalState } from "./lib/local-state-audit.mjs";
 
@@ -37,7 +38,7 @@ function parseArgs(argv) {
     if (arg === "--self-test") args.selfTest = true;
     else if (arg === "--state-dir") {
       const value = argv[i + 1];
-      if (value === undefined || value.startsWith("-")) return { kind: "usage" };
+      if (value === undefined || value === "" || value.startsWith("-")) return { kind: "usage" };
       args.stateDir = value;
       i += 1;
     } else if (arg === "--help" || arg === "-h") return { kind: "help" };
@@ -111,8 +112,11 @@ async function main() {
 // the module's operational surface.
 export const _testables = Object.freeze({ parseArgs });
 
-// Run as a CLI unless imported by a test.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run as a CLI unless imported by a test. `pathToFileURL` (not manual `file://` string
+// interpolation) is required for this comparison to hold on a path containing a space,
+// `%`, `#`, `?`, or a Windows drive letter — all of which import.meta.url always encodes
+// canonically.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
     .then((code) => process.exit(code))
     .catch((error) => {
