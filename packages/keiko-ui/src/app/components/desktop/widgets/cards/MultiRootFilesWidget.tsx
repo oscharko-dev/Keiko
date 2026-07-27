@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import type {
   WorkspaceManifest,
   WorkspaceRootDescriptor,
@@ -88,6 +95,21 @@ function RootGroup({
   const trust = useWorkspaceTrust(root.canonicalRoot);
   const [expanded, setExpanded] = useState(true);
   const focused = manifest.focusedRootRef === root.rootRef;
+  // One Files window owns ONE cfg, and `onActiveFileChange` is its writer: it sets
+  // `activeFilePath`/`resolvedRoot`, which every connected window reads as this window's root
+  // binding. Mounting a FilesWidget per root fanned that single writer out across all of them, and
+  // FilesWidget reports on unattended lifecycle events too — a mount, a refresh, or a top-level
+  // directory load — not only on user selection. So collapsing and re-expanding a non-focused group,
+  // or simply whichever tree finished loading last on first open, silently re-pointed the bound root
+  // of every connected window with no user action naming it. `watchActive` already gates the sibling
+  // concern one line below for the same reason; this gates the writer.
+  const reportActiveFile = useCallback(
+    (path: string | null, fileRoot: string | null, activeDirectoryPath?: string | null): void => {
+      if (!focused) return;
+      onActiveFileChange(path, fileRoot, activeDirectoryPath);
+    },
+    [focused, onActiveFileChange],
+  );
   const move = (offset: -1 | 1): void => {
     void workspace.reorderRoots(root.rootRef, rootOrderAfterMove(manifest.roots, index, offset));
   };
@@ -178,7 +200,7 @@ function RootGroup({
           <FilesWidget
             root={root.canonicalRoot}
             watchActive={focused}
-            onActiveFileChange={onActiveFileChange}
+            onActiveFileChange={reportActiveFile}
             onOpenFile={(fileRoot, path) => {
               void workspace.focusRoot(root.rootRef);
               onOpenFile(fileRoot, path);
