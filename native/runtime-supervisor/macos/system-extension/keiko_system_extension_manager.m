@@ -16,6 +16,9 @@
 static NSString *const KEIKO_EXTENSION_IDENTIFIER =
     @"com.oscharko.keiko.runtime-monitor.systemextension";
 
+#define KEIKO_ACTIVATION_TIMEOUT_SECONDS 600u
+#define KEIKO_MONITOR_ATTEMPTS 2400u
+
 static int write_exact(int descriptor, const void *buffer, size_t length) {
   const unsigned char *bytes = buffer;
   size_t offset = 0;
@@ -92,23 +95,18 @@ static void open_full_disk_access_settings(void) {
 
 static int wait_for_active_monitor(void) {
   int settings_opened = 0;
-  int unavailable_attempts = 0;
-  for (;;) {
+  unsigned int attempt;
+  for (attempt = 0; attempt < KEIKO_MONITOR_ATTEMPTS; ++attempt) {
     uint16_t status = monitor_status();
     if (status == KEIKO_MONITOR_ACTIVE) return 1;
     if (status == KEIKO_MONITOR_FAILED) return 0;
-    if (status == 0) {
-      unavailable_attempts += 1;
-      if (unavailable_attempts >= 240) return 0;
-    } else {
-      unavailable_attempts = 0;
-    }
     if (status == KEIKO_MONITOR_NEEDS_FULL_DISK_ACCESS && !settings_opened) {
       open_full_disk_access_settings();
       settings_opened = 1;
     }
     usleep(250000);
   }
+  return 0;
 }
 
 @interface KeikoActivationDelegate : NSObject <OSSystemExtensionRequestDelegate>
@@ -162,7 +160,9 @@ static int activate_extension(void) {
                                                         queue:queue];
   request.delegate = delegate;
   [[OSSystemExtensionManager sharedManager] submitRequest:request];
-  (void)dispatch_semaphore_wait(delegate.completion, DISPATCH_TIME_FOREVER);
+  dispatch_time_t deadline = dispatch_time(
+      DISPATCH_TIME_NOW, (int64_t)KEIKO_ACTIVATION_TIMEOUT_SECONDS * NSEC_PER_SEC);
+  if (dispatch_semaphore_wait(delegate.completion, deadline) != 0) return 1;
   if (delegate.outcome != 0) return 1;
   if (!wait_for_active_monitor()) return 1;
   (void)puts("active");

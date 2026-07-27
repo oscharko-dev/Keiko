@@ -371,9 +371,9 @@ export async function main(argv = process.argv.slice(2)) {
     await finalize(options);
     return;
   }
-  const handler = synchronousCommandHandlers(options)[command];
-  if (typeof handler !== "function") fail("unsupported command");
-  handler();
+  const handlers = synchronousCommandHandlers(options);
+  if (!Object.hasOwn(handlers, command)) fail("unsupported command");
+  handlers[command]();
 }
 
 function synchronousCommandHandlers(options) {

@@ -162,11 +162,13 @@ function windowsPrepareStage() {
   writeFileSync(
     verificationInputPath,
     JSON.stringify({
+      peInventorySha256: sha256(readFileSync(inventoryPath)),
       reasonCodes: [],
       verificationChecks: { publisherChainVerified: true, timestampVerified: true },
       sidecarRuntimes: [
         {
           name: sidecar.name,
+          payloadSha256: hashDirectoryTree(join(payload, ...sidecar.payloadRootPath.split("/"))),
           verificationChecks: { publisherChainVerified: true, timestampVerified: true },
         },
       ],
@@ -193,6 +195,12 @@ describe("Windows portable PE signing inventory", () => {
     );
     write(supervisorPath, supervisorBytes);
     write(secureReadPath, secureReadBytes);
+    write(join(resourceRoot, "Keiko.exe"), portableExecutable(1));
+    write(join(resourceRoot, "runtime", "node", "node.exe"), portableExecutable(2));
+    const sidecarRoot = join(resourceRoot, "runtime", "sidecars", "opencode-compatible");
+    write(join(sidecarRoot, "opencode.exe"), portableExecutable(9));
+    write(join(sidecarRoot, "LICENSE.txt"), Buffer.from("MIT"));
+    const sidecarDigest = hashDirectoryTree(sidecarRoot);
     const sourceCommitSha = "a".repeat(40);
     const activationPath = join(resourceRoot, ".portable", "runtime-activation.json");
     write(
@@ -223,27 +231,61 @@ describe("Windows portable PE signing inventory", () => {
               shippedSha256: sha256(secureReadBytes),
             },
           ],
-          sidecarRuntimes: [{ name: "opencode-compatible", payloadSha256: "b".repeat(64) }],
+          sidecarRuntimes: [
+            {
+              name: "opencode-compatible",
+              platformTarget: "windows-x64",
+              payloadRootPath: "runtime/sidecars/opencode-compatible",
+              payloadSha256: sidecarDigest,
+            },
+          ],
           releaseImpact: {},
         }),
       ),
     );
+    const expectedInventoryPath = join(resourceRoot, "inventory.json");
+    writeFileSync(
+      expectedInventoryPath,
+      JSON.stringify(inventoryWindowsPortablePeFiles(resourceRoot)),
+    );
+    const verificationInputPath = join(resourceRoot, "verification.json");
+    writeFileSync(
+      verificationInputPath,
+      JSON.stringify({
+        peInventorySha256: sha256(readFileSync(expectedInventoryPath)),
+        reasonCodes: [],
+        verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+        sidecarRuntimes: [
+          {
+            name: "opencode-compatible",
+            payloadSha256: sidecarDigest,
+            reasonCodes: [],
+            verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+          },
+        ],
+      }),
+    );
+    const qualificationInput = {
+      activationPath,
+      expectedInventoryPath,
+      resourceRoot,
+      sourceCommitSha,
+      verificationInputPath,
+    };
 
-    expect(
-      qualificationReceiptFor({ activationPath, resourceRoot, sourceCommitSha }),
-    ).toMatchObject({
+    expect(qualificationReceiptFor(qualificationInput)).toMatchObject({
       platformTarget: "windows-x64",
       sourceCommitSha,
       supervisorSha256: sha256(supervisorBytes),
       secureReadSha256: sha256(secureReadBytes),
-      sidecars: [{ name: "opencode-compatible", sha256: "b".repeat(64) }],
+      sidecars: [{ name: "opencode-compatible", sha256: sidecarDigest }],
       backend: "windows-job-object",
       result: "passed",
     });
     write(supervisorPath, portableExecutable(8));
-    expect(() =>
-      qualificationReceiptFor({ activationPath, resourceRoot, sourceCommitSha }),
-    ).toThrow(/helper bytes are invalid/u);
+    expect(() => qualificationReceiptFor(qualificationInput)).toThrow(
+      /authenticated PE inventory no longer matches/u,
+    );
   });
 
   it("requalifies the extracted supervisor and executes the signed attestor on a fresh runner", () => {
@@ -684,11 +726,13 @@ describe("Windows portable PE signing inventory", () => {
       return path;
     };
     const verified = {
+      peInventorySha256: "a".repeat(64),
       reasonCodes: [],
       verificationChecks: { publisherChainVerified: true, timestampVerified: true },
       sidecarRuntimes: [
         {
           name: "worker",
+          payloadSha256: "b".repeat(64),
           verificationChecks: { publisherChainVerified: true, timestampVerified: true },
         },
       ],

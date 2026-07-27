@@ -1,10 +1,14 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createNodePortableSecureWorkspaceReadInspection } from "./secureWorkspaceTextReadPlatformNode.js";
+import {
+  createNodePortableSecureWorkspaceReadInspection,
+  isContainedPortableRelativePath,
+  provePortableImmutableResourceTree,
+} from "./secureWorkspaceTextReadPlatformNode.js";
 
 const roots: string[] = [];
 
@@ -61,6 +65,11 @@ describe("node portable secure workspace-read inspection", () => {
     await expect(
       inspection.inspectPath(join(resourceRoot, "runtime"), executable),
     ).resolves.toHaveLength(3);
+    expect(
+      isContainedPortableRelativePath(
+        win32.relative(String.raw`C:\Keiko`, String.raw`D:\attacker\helper.exe`),
+      ),
+    ).toBe(false);
   });
 
   it("opens the verified bytes and preserves exact file identity metadata", async () => {
@@ -104,6 +113,54 @@ describe("node portable secure workspace-read inspection", () => {
     await expect(inspection.verifySignature("/missing/helper.exe", "win32-x64")).resolves.toBe(
       false,
     );
+  });
+
+  it("rechecks the macOS app resource seal without repeating full runtime discovery", async () => {
+    const calls: { readonly args: readonly string[]; readonly command: string }[] = [];
+    const run = vi.fn((command: string, args: readonly string[]) => {
+      calls.push({ args, command });
+      return Promise.resolve(true);
+    });
+
+    await expect(
+      provePortableImmutableResourceTree(
+        "/Applications/Keiko.app/Contents/Resources",
+        "darwin-arm64",
+        run,
+      ),
+    ).resolves.toBe(true);
+    await expect(provePortableImmutableResourceTree("C:\\Keiko", "win32-x64", run)).resolves.toBe(
+      true,
+    );
+    expect(calls).toEqual([
+      {
+        command: "/usr/bin/codesign",
+        args: [
+          "--verify",
+          "--deep",
+          "--strict",
+          '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-arm64"',
+          "/Applications/Keiko.app",
+        ],
+      },
+    ]);
+  });
+
+  it("requires an Apple-anchored signature for the macOS helper", async () => {
+    const run = vi.fn(() => Promise.resolve(true));
+    const inspection = createNodePortableSecureWorkspaceReadInspection({
+      macosRunCommand: run,
+    });
+
+    await expect(
+      inspection.verifySignature("/Applications/Keiko/helper", "darwin-x64"),
+    ).resolves.toBe(true);
+    expect(run).toHaveBeenCalledWith("/usr/bin/codesign", [
+      "--verify",
+      "--strict",
+      "-R=anchor apple generic",
+      "/Applications/Keiko/helper",
+    ]);
   });
 
   it("accepts a Windows helper only when it matches the fixed launcher's signer", async () => {

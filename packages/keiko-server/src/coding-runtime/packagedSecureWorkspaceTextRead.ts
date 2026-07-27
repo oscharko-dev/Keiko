@@ -9,11 +9,11 @@ import {
   createPortableSecureWorkspaceReadVerifier,
   resolvePortableSecureWorkspaceReadBinding,
 } from "./secureWorkspaceTextReadPortable.js";
-import { createNodePortableSecureWorkspaceReadInspection } from "./secureWorkspaceTextReadPlatformNode.js";
 import {
-  verifyQualifiedPortableRuntimeAtPointOfUse,
-  type QualifiedPortableOpenCodeRuntime,
-} from "./productionPortableCodingRuntime.js";
+  createNodePortableSecureWorkspaceReadInspection,
+  provePortableImmutableResourceTree,
+} from "./secureWorkspaceTextReadPlatformNode.js";
+import type { QualifiedPortableOpenCodeRuntime } from "./productionPortableCodingRuntime.js";
 
 export interface PackagedSecureWorkspaceTextReadInput {
   readonly runtime: QualifiedPortableOpenCodeRuntime;
@@ -36,7 +36,10 @@ export function createPackagedSecureWorkspaceTextReadPort(
     artifact: binding.artifact,
     artifactVerifier: createPortableSecureWorkspaceReadVerifier(binding, {
       proveImmutableResourceTree: () =>
-        Promise.resolve(verifyQualifiedPortableRuntimeAtPointOfUse(input.runtime)),
+        provePortableImmutableResourceTree(
+          input.runtime.installRoot,
+          artifactTargetFor(input.runtime.target),
+        ),
       platform: createNodePortableSecureWorkspaceReadInspection({
         resourceRoot: input.runtime.installRoot,
       }),
@@ -47,6 +50,13 @@ export function createPackagedSecureWorkspaceTextReadPort(
     }),
     platform,
   });
+}
+
+function artifactTargetFor(
+  target: UpdatePortableTarget,
+): "win32-x64" | "darwin-arm64" | "darwin-x64" {
+  if (target === "windows-x64") return "win32-x64";
+  return target === "macos-arm64" ? "darwin-arm64" : "darwin-x64";
 }
 
 function platformForTarget(target: UpdatePortableTarget): {

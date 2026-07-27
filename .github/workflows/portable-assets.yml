@@ -292,6 +292,8 @@ jobs:
             --verification-input "$env:RUNNER_TEMP\windows-core-verification-input.json"
           node scripts/qualify-windows-runtime-release.mjs `
             --stage-root .portable-runtime/staging/windows-x64 `
+            --expected-inventory "$env:RUNNER_TEMP\windows-pe-core-verified.json" `
+            --verification-input "$env:RUNNER_TEMP\windows-core-verification-input.json" `
             --source-commit-sha "$env:GITHUB_SHA" `
             --output "$env:RUNNER_TEMP\windows-runtime-qualification.json"
       - name: Build the bounded runtime attestation carrier
@@ -499,6 +501,7 @@ jobs:
         run: |
           source_app=".macos-qualification-stage/${{ matrix.platform_target }}/payload/Keiko/Keiko.app"
           execution_app="/Applications/KeikoQualification-${{ matrix.platform_target }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.app"
+          /usr/bin/find /Applications -maxdepth 1 -type d -name "KeikoQualification-${{ matrix.platform_target }}-*.app" -prune -exec /bin/rm -rf -- {} +
           test ! -e "$execution_app"
           cleanup() { /bin/rm -rf -- "$execution_app"; }
           trap cleanup EXIT
@@ -688,6 +691,7 @@ jobs:
         run: |
           source_app=".isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app"
           execution_app="/Applications/KeikoQualification-final-${{ matrix.platform_target }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.app"
+          /usr/bin/find /Applications -maxdepth 1 -type d -name "KeikoQualification-final-${{ matrix.platform_target }}-*.app" -prune -exec /bin/rm -rf -- {} +
           test ! -e "$execution_app"
           cleanup() { /bin/rm -rf -- "$execution_app"; }
           trap cleanup EXIT

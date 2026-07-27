@@ -111,9 +111,14 @@ type ResolvedRuntime =
     };
 
 function resolveRuntime(
-  input: Pick<ProductionOpenCodeActivationInput, "env" | "platform" | "arch">,
+  input: Pick<ProductionOpenCodeActivationInput, "env" | "platform" | "arch" | "diagnostics">,
 ): ResolvedRuntime {
-  const host = { env: input.env, platform: input.platform, arch: input.arch };
+  const host = {
+    env: input.env,
+    platform: input.platform,
+    arch: input.arch,
+    diagnostics: input.diagnostics,
+  };
   const packaged = discoverQualifiedPortableOpenCode(host);
   if (packaged !== undefined) return { portable: packaged };
   return devLaneRuntime(discoverDevLaneOpenCode(host));

@@ -911,6 +911,21 @@ function writeVerificationInput(dir, input) {
   return path;
 }
 
+function completeWindowsVerificationInput(input) {
+  return {
+    ...input,
+    peInventorySha256: "a".repeat(64),
+    ...(input.sidecarRuntimes === undefined
+      ? {}
+      : {
+          sidecarRuntimes: input.sidecarRuntimes.map((sidecar) => ({
+            ...sidecar,
+            payloadSha256: "b".repeat(64),
+          })),
+        }),
+  };
+}
+
 function preparePackageSurfaceForTest() {
   if (packageSurfacePreparedForTest) return;
   runFixtureCommand("npm", ["run", "build"], process.cwd());
@@ -1937,13 +1952,16 @@ describe("verify-portable-runtime-signing", () => {
     const dir = tempDir();
     const candidate = manifest();
     const { manifestPath } = writeManifestFixture(candidate, dir);
-    const verificationInput = writeVerificationInput(dir, {
-      reasonCodes: ["credential-unavailable"],
-      verificationChecks: {
-        publisherChainVerified: false,
-        timestampVerified: true,
-      },
-    });
+    const verificationInput = writeVerificationInput(
+      dir,
+      completeWindowsVerificationInput({
+        reasonCodes: ["credential-unavailable"],
+        verificationChecks: {
+          publisherChainVerified: false,
+          timestampVerified: true,
+        },
+      }),
+    );
 
     const result = runSigningVerify([
       "--manifest",
@@ -2082,12 +2100,15 @@ describe("verify-portable-runtime-signing", () => {
     ];
     syncReviewedBinding(candidate);
     const { manifestPath, stageRoot } = writeManifestFixture(candidate, dir);
-    const verificationInput = writeVerificationInput(dir, {
-      verificationChecks: windowsVerificationChecks(),
-      sidecarRuntimes: [
-        { name: "opencode-compatible", verificationChecks: windowsVerificationChecks() },
-      ],
-    });
+    const verificationInput = writeVerificationInput(
+      dir,
+      completeWindowsVerificationInput({
+        verificationChecks: windowsVerificationChecks(),
+        sidecarRuntimes: [
+          { name: "opencode-compatible", verificationChecks: windowsVerificationChecks() },
+        ],
+      }),
+    );
 
     const result = runSigningVerify([
       "--manifest",
@@ -2122,15 +2143,18 @@ describe("verify-portable-runtime-signing", () => {
       signing: stagingSidecarSigning(portableTarget("windows-x64")),
     });
     const { manifestPath } = writeManifestFixture(candidate, dir);
-    const verificationInput = writeVerificationInput(dir, {
-      verificationChecks: windowsVerificationChecks(),
-      sidecarRuntimes: [
-        {
-          name: "opencode-compatible",
-          verificationChecks: windowsVerificationChecks({ publisherChainVerified: false }),
-        },
-      ],
-    });
+    const verificationInput = writeVerificationInput(
+      dir,
+      completeWindowsVerificationInput({
+        verificationChecks: windowsVerificationChecks(),
+        sidecarRuntimes: [
+          {
+            name: "opencode-compatible",
+            verificationChecks: windowsVerificationChecks({ publisherChainVerified: false }),
+          },
+        ],
+      }),
+    );
 
     const result = runSigningVerify([
       "--manifest",
@@ -2158,9 +2182,12 @@ describe("verify-portable-runtime-signing", () => {
       signing: stagingSidecarSigning(portableTarget("windows-x64")),
     });
     const { manifestPath } = writeManifestFixture(candidate, dir);
-    const verificationInput = writeVerificationInput(dir, {
-      verificationChecks: windowsVerificationChecks(),
-    });
+    const verificationInput = writeVerificationInput(
+      dir,
+      completeWindowsVerificationInput({
+        verificationChecks: windowsVerificationChecks(),
+      }),
+    );
 
     const result = runSigningVerify([
       "--manifest",
@@ -2180,13 +2207,16 @@ describe("verify-portable-runtime-signing", () => {
     const candidate = manifest();
     addSidecarRuntime(candidate, "windows-x64");
     const { manifestPath } = writeManifestFixture(candidate, dir);
-    const duplicateInput = writeVerificationInput(dir, {
-      verificationChecks: windowsVerificationChecks(),
-      sidecarRuntimes: [
-        { name: "opencode-compatible", verificationChecks: windowsVerificationChecks() },
-        { name: "opencode-compatible", verificationChecks: windowsVerificationChecks() },
-      ],
-    });
+    const duplicateInput = writeVerificationInput(
+      dir,
+      completeWindowsVerificationInput({
+        verificationChecks: windowsVerificationChecks(),
+        sidecarRuntimes: [
+          { name: "opencode-compatible", verificationChecks: windowsVerificationChecks() },
+          { name: "opencode-compatible", verificationChecks: windowsVerificationChecks() },
+        ],
+      }),
+    );
     expect(
       runSigningVerify([
         "--manifest",
@@ -2197,12 +2227,15 @@ describe("verify-portable-runtime-signing", () => {
         duplicateInput,
       ]).stderr,
     ).toContain("sidecar verification input is duplicated");
-    const unknownInput = writeVerificationInput(dir, {
-      verificationChecks: windowsVerificationChecks(),
-      sidecarRuntimes: [
-        { name: "unknown-sidecar", verificationChecks: windowsVerificationChecks() },
-      ],
-    });
+    const unknownInput = writeVerificationInput(
+      dir,
+      completeWindowsVerificationInput({
+        verificationChecks: windowsVerificationChecks(),
+        sidecarRuntimes: [
+          { name: "unknown-sidecar", verificationChecks: windowsVerificationChecks() },
+        ],
+      }),
+    );
     expect(
       runSigningVerify([
         "--manifest",

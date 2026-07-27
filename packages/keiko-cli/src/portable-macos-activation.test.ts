@@ -32,6 +32,7 @@ describe("activateMacosPortableRuntime", () => {
     const calls: string[][] = [];
 
     const active = await activateMacosPortableRuntime(fixture.layout, {
+      verifyImmutableOwnership: () => true,
       runManager: (path, cwd) => {
         calls.push([path, cwd]);
         return Promise.resolve({ ok: true, stdout: "active\n", stderr: "" });
@@ -51,6 +52,7 @@ describe("activateMacosPortableRuntime", () => {
 
     await expect(
       activateMacosPortableRuntime(fixture.layout, {
+        verifyImmutableOwnership: () => true,
         runManager: () => Promise.resolve(result),
       }),
     ).resolves.toBe(false);
@@ -65,6 +67,23 @@ describe("activateMacosPortableRuntime", () => {
     symlinkSync(outside, fixture.manager);
 
     const active = await activateMacosPortableRuntime(fixture.layout, {
+      verifyImmutableOwnership: () => true,
+      runManager: () => {
+        executed = true;
+        return Promise.resolve({ ok: true, stdout: "active\n", stderr: "" });
+      },
+    });
+
+    expect(active).toBe(false);
+    expect(executed).toBe(false);
+  });
+
+  it("rejects a mutable or non-root-owned activation path before execution", async () => {
+    const fixture = activationFixture();
+    let executed = false;
+
+    const active = await activateMacosPortableRuntime(fixture.layout, {
+      verifyImmutableOwnership: () => false,
       runManager: () => {
         executed = true;
         return Promise.resolve({ ok: true, stdout: "active\n", stderr: "" });

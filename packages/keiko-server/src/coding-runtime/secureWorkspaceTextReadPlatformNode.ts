@@ -1,8 +1,8 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 
 import { safeRealFile } from "./nativeRuntimeProcessPaths.js";
 import type {
@@ -12,13 +12,19 @@ import type {
 } from "./secureWorkspaceTextReadPortable.js";
 import {
   windowsPublisherIdentityMatches,
+  windowsPublisherIdentityMatchesAsync,
   type WindowsAuthenticodeCommandRunner,
 } from "./windowsPortableAuthenticode.js";
 
 const MAX_SIGNATURE_CHECK_MS = 10_000;
 
+type PortableNativeTarget = "win32-x64" | "darwin-arm64" | "darwin-x64";
+
+export type MacosCodeCommandRunner = (command: string, args: readonly string[]) => Promise<boolean>;
+
 export interface NodePortableSecureWorkspaceReadInspectionOptions {
   readonly resourceRoot?: string | undefined;
+  readonly macosRunCommand?: MacosCodeCommandRunner | undefined;
   readonly windowsRunCommand?: WindowsAuthenticodeCommandRunner | undefined;
 }
 
@@ -40,7 +46,7 @@ async function inspectPathEntries(
   executable: string,
 ): Promise<readonly PortableSecureWorkspaceReadPathEntry[]> {
   const rel = relative(resourceRoot, executable);
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`)) {
+  if (!isContainedPortableRelativePath(rel)) {
     throw new Error("secure-workspace-read-path-invalid");
   }
   const paths = [resourceRoot];
@@ -60,6 +66,16 @@ async function inspectPathEntries(
         safeType: !symbolicLink && (leaf ? entry.isFile() : entry.isDirectory()),
       };
     }),
+  );
+}
+
+export function isContainedPortableRelativePath(value: string): boolean {
+  return (
+    value !== "" &&
+    value !== ".." &&
+    !value.startsWith(`..${sep}`) &&
+    !isAbsolute(value) &&
+    !win32.isAbsolute(value)
   );
 }
 
@@ -102,25 +118,25 @@ function metadata(stat: BigIntStats): PortableSecureWorkspaceReadMetadata {
 
 function verifySignature(
   executable: string,
-  target: "win32-x64" | "darwin-arm64" | "darwin-x64",
+  target: PortableNativeTarget,
   options: NodePortableSecureWorkspaceReadInspectionOptions,
 ): Promise<boolean> {
-  return Promise.resolve(
-    target === "win32-x64"
-      ? verifyWindowsAuthenticode(executable, options)
-      : verifyMacosCode(executable),
-  );
+  return target === "win32-x64"
+    ? verifyWindowsAuthenticode(executable, options)
+    : verifyMacosCode(executable, options.macosRunCommand ?? runMacosCodeCommand);
 }
 
-function verifyWindowsAuthenticode(
+async function verifyWindowsAuthenticode(
   executable: string,
   options: NodePortableSecureWorkspaceReadInspectionOptions,
-): boolean {
+): Promise<boolean> {
   const launcher = windowsLauncher(options.resourceRoot);
-  return (
-    launcher !== undefined &&
-    windowsPublisherIdentityMatches(launcher, executable, options.windowsRunCommand)
-  );
+  if (launcher === undefined) return false;
+  return options.windowsRunCommand === undefined
+    ? windowsPublisherIdentityMatchesAsync(launcher, executable)
+    : Promise.resolve(
+        windowsPublisherIdentityMatches(launcher, executable, options.windowsRunCommand),
+      );
 }
 
 function windowsLauncher(resourceRoot: string | undefined): string | undefined {
@@ -132,13 +148,42 @@ function windowsLauncher(resourceRoot: string | undefined): string | undefined {
   }
 }
 
-function verifyMacosCode(executable: string): boolean {
-  return (
-    spawnSync("/usr/bin/codesign", ["--verify", "--strict", executable], {
-      encoding: "utf8",
-      env: { PATH: "/usr/bin" },
-      shell: false,
-      timeout: MAX_SIGNATURE_CHECK_MS,
-    }).status === 0
-  );
+function verifyMacosCode(executable: string, run: MacosCodeCommandRunner): Promise<boolean> {
+  return run("/usr/bin/codesign", ["--verify", "--strict", "-R=anchor apple generic", executable]);
+}
+
+export function provePortableImmutableResourceTree(
+  resourceRoot: string,
+  target: PortableNativeTarget,
+  run: MacosCodeCommandRunner = runMacosCodeCommand,
+): Promise<boolean> {
+  // Windows has no immutable app-resource seal. The caller instead reopens and hashes the
+  // receipt-bound helper, then independently matches its Authenticode signer on every admission.
+  if (target === "win32-x64") return Promise.resolve(true);
+  const manifestTarget = target === "darwin-arm64" ? "macos-arm64" : "macos-x64";
+  return run("/usr/bin/codesign", [
+    "--verify",
+    "--deep",
+    "--strict",
+    `-R=anchor apple generic and identifier "dev.oscharko.keiko.${manifestTarget}"`,
+    dirname(dirname(resourceRoot)),
+  ]);
+}
+
+function runMacosCodeCommand(command: string, args: readonly string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile(
+      command,
+      [...args],
+      {
+        encoding: "utf8",
+        env: { PATH: "/usr/bin" },
+        shell: false,
+        timeout: MAX_SIGNATURE_CHECK_MS,
+      },
+      (error) => {
+        resolve(error === null);
+      },
+    );
+  });
 }

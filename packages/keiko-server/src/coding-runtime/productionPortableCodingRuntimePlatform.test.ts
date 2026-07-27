@@ -161,7 +161,7 @@ describe("production portable runtime platform attestation", () => {
       commandResult({ stdout: "active\n" }),
     );
 
-    expect(readMacosAttestation(resourceRoot, runner.run)).toEqual({
+    expect(readMacosAttestation(resourceRoot, "macos-arm64", runner.run)).toEqual({
       result: "passed",
       backend: "endpoint-security",
     });
@@ -171,12 +171,19 @@ describe("production portable runtime platform attestation", () => {
       realpathSync(join(resourceRoot, "..", "MacOS", "KeikoSystemExtensionManager")),
     ]);
     expect(runner.calls[0]?.options.env).toEqual({ PATH: "/usr/bin:/usr/sbin" });
+    expect(runner.calls[0]?.args).toContain(
+      '-R=anchor apple generic and identifier "dev.oscharko.keiko.macos-arm64"',
+    );
   });
 
   it("fails closed for an invalid app seal or inactive system extension", () => {
     const resourceRoot = macosFixture();
     expect(() =>
-      readMacosAttestation(resourceRoot, recordingRunner(commandResult({ status: 1 })).run),
+      readMacosAttestation(
+        resourceRoot,
+        "macos-arm64",
+        recordingRunner(commandResult({ status: 1 })).run,
+      ),
     ).toThrow("runtime-app-seal-invalid");
 
     for (const managerResult of [
@@ -185,7 +192,7 @@ describe("production portable runtime platform attestation", () => {
       commandResult({ stdout: "active", stderr: "redacted failure" }),
     ]) {
       const runner = recordingRunner(commandResult(), commandResult(), managerResult);
-      expect(() => readMacosAttestation(resourceRoot, runner.run)).toThrow(
+      expect(() => readMacosAttestation(resourceRoot, "macos-x64", runner.run)).toThrow(
         "runtime-system-extension-inactive",
       );
     }

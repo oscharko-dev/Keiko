@@ -549,6 +549,15 @@ describe("Windows portable production signing workflow", () => {
     );
     expect(windowsVerifier).toContain("*> $null");
     expect(windowsVerifier).not.toMatch(/thumbprint|subject/iu);
+    expect(windowsVerifier).toContain("peInventorySha256");
+    expect(windowsVerifier).toContain("Get-DirectoryTreeSha256");
+    expect(windowsVerifier).toContain("payloadSha256 = Get-DirectoryTreeSha256");
+    expect(portableWorkflow).toContain(
+      '--expected-inventory "$env:RUNNER_TEMP\\windows-pe-core-verified.json"',
+    );
+    expect(portableWorkflow).toContain(
+      '--verification-input "$env:RUNNER_TEMP\\windows-core-verification-input.json"',
+    );
   });
 
   it.skipIf(!hasPowerShell)(
@@ -815,6 +824,9 @@ describe("macOS portable production signing workflow", () => {
     );
     expect(runtimeQualificationJob).toContain("macos-runtime-qualification-transport.mjs snapshot");
     expect(runtimeQualificationJob).toContain("/Applications/KeikoQualification-");
+    expect(runtimeQualificationJob).toContain(
+      '/usr/bin/find /Applications -maxdepth 1 -type d -name "KeikoQualification-',
+    );
     expect(runtimeQualificationJob).toContain("qualify-macos-runtime-release.mjs");
     expect(runtimeQualificationJob).toContain("Prove qualification added only the bounded receipt");
     expect(runtimeQualificationJob).toContain("Upload qualified macOS target artifact");
@@ -829,6 +841,9 @@ describe("macOS portable production signing workflow", () => {
     expect(smokeJob).toContain("environment: portable-release-signing");
     expect(smokeJob).not.toMatch(/secrets\.|id-token: write|upload-artifact/u);
     expect(smokeJob).toContain("Download immutable verified macOS artifact");
+    expect(smokeJob).toContain(
+      '/usr/bin/find /Applications -maxdepth 1 -type d -name "KeikoQualification-final-',
+    );
     const execute = smokeJob.indexOf("Execute bundled runtimes in isolated disposable copy");
     expect(execute).toBeGreaterThan(0);
     expect(smokeJob.slice(execute)).not.toMatch(/\n\s+- name:|\n\s+- uses:/u);

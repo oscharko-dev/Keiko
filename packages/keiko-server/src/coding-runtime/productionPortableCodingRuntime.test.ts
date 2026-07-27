@@ -76,6 +76,33 @@ describe("production portable OpenCode discovery", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("emits one body-free diagnostic when discovery fails unexpectedly", () => {
+    const records: unknown[] = [];
+    const root = portableInstall();
+
+    expect(
+      discoverQualifiedPortableOpenCode({
+        env: {},
+        installRoot: root,
+        platform: "win32",
+        arch: "x64",
+        diagnostics: { record: (record): void => void records.push(record) },
+        attestation: {
+          readReceipt: () => {
+            throw new Error("customer-secret-value");
+          },
+        },
+      }),
+    ).toBeUndefined();
+    expect(records).toHaveLength(1);
+    expect(JSON.stringify(records)).not.toContain("customer-secret-value");
+    expect(records[0]).toMatchObject({
+      operation: "coding.runtime.discover",
+      source: "coding.runtime.discovery",
+      errorClass: "Error",
+    });
+  });
 });
 
 function discover(

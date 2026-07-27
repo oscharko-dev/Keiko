@@ -139,19 +139,26 @@ async function qualify(helper, fixture, root) {
     child.once("close", resolve);
   });
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
-  child.stdio[3].write(launchPacket(fixture, root));
-  assert.deepEqual(await response(responses), { kind: 1, payload: Buffer.alloc(0) });
-  const observation = await readBytes(output, 12);
-  assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
-  const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
-  child.stdio[3].write(frame("KRC1", 3, 0));
-  const proof = await response(responses);
-  assert.equal(proof.kind, 2);
-  assert.equal(proof.payload.readUInt32LE(4), 0);
-  await Promise.all(pids.map(waitGone));
-  assert.equal(await exited, 0);
-  assert.equal(Buffer.concat(errors).length, 0);
-  clearTimeout(deadline);
+  let completed = false;
+  try {
+    child.stdio[3].write(launchPacket(fixture, root));
+    assert.deepEqual(await response(responses), { kind: 1, payload: Buffer.alloc(0) });
+    const observation = await readBytes(output, 12);
+    assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
+    const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
+    child.stdio[3].write(frame("KRC1", 3, 0));
+    const proof = await response(responses);
+    assert.equal(proof.kind, 2);
+    assert.equal(proof.payload.readUInt32LE(4), 0);
+    await Promise.all(pids.map(waitGone));
+    assert.equal(await exited, 0);
+    assert.equal(Buffer.concat(errors).length, 0);
+    completed = true;
+  } finally {
+    clearTimeout(deadline);
+    if (!completed) child.kill("SIGKILL");
+    await exited.catch(() => undefined);
+  }
 }
 
 const sourceText = await readFile(source, "utf8");

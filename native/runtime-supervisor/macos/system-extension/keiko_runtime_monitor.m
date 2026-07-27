@@ -18,6 +18,7 @@
 
 #define KEIKO_MAX_SESSIONS 16u
 #define KEIKO_MAX_PROCESSES 4096u
+#define KEIKO_MAX_CONNECTIONS 32u
 
 struct monitor_session {
   int active;
@@ -34,7 +35,9 @@ struct monitor_session {
 static struct monitor_session sessions[KEIKO_MAX_SESSIONS];
 static pthread_mutex_t sessions_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t endpoint_state_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t connection_lock = PTHREAD_MUTEX_INITIALIZER;
 static es_client_t *endpoint_client;
+static size_t connection_count;
 
 enum endpoint_state {
   ENDPOINT_STATE_STARTING = 1,
@@ -59,15 +62,23 @@ static int read_exact(int descriptor, void *buffer, size_t length) {
   return 1;
 }
 
-static void reply_to(struct monitor_session *session, uint16_t kind) {
+static void kill_session_processes(const struct monitor_session *session);
+
+static int reply_to(struct monitor_session *session, uint16_t kind) {
   struct keiko_monitor_reply reply;
-  if (session->descriptor < 0) return;
+  ssize_t sent;
+  if (session->descriptor < 0) return 0;
   memset(&reply, 0, sizeof(reply));
   memcpy(reply.magic, "KES1", 4);
   reply.version = KEIKO_MONITOR_VERSION;
   reply.kind = kind;
   reply.live_processes = (uint32_t)session->process_count;
-  (void)send(session->descriptor, &reply, sizeof(reply), MSG_DONTWAIT);
+  sent = send(session->descriptor, &reply, sizeof(reply), MSG_DONTWAIT);
+  if (sent == (ssize_t)sizeof(reply)) return 1;
+  session->stopping = 1;
+  kill_session_processes(session);
+  (void)shutdown(session->descriptor, SHUT_RDWR);
+  return 0;
 }
 
 static void set_endpoint_state(enum endpoint_state state) {
@@ -118,6 +129,26 @@ static void kill_session_processes(const struct monitor_session *session) {
   size_t index;
   for (index = 0; index < session->process_count; ++index)
     (void)kill(session->processes[index], SIGKILL);
+}
+
+static int reserve_connection(void) {
+  int reserved = 0;
+  pthread_mutex_lock(&connection_lock);
+  if (connection_count < KEIKO_MAX_CONNECTIONS) {
+    connection_count += 1;
+    reserved = 1;
+  }
+  pthread_mutex_unlock(&connection_lock);
+  return reserved;
+}
+
+static void release_connection(void *opaque) {
+  int descriptor = *(int *)opaque;
+  close(descriptor);
+  free(opaque);
+  pthread_mutex_lock(&connection_lock);
+  connection_count -= 1;
+  pthread_mutex_unlock(&connection_lock);
 }
 
 static void session_add(struct monitor_session *session, pid_t pid) {
@@ -298,35 +329,31 @@ static void *serve_client(void *opaque) {
   uid_t uid;
   gid_t gid;
   pid_t peer = peer_pid(descriptor);
-  free(opaque);
+  pthread_cleanup_push(release_connection, opaque);
   memset(&transient, 0, sizeof(transient));
   transient.descriptor = descriptor;
   if (peer <= 0 || getpeereid(descriptor, &uid, &gid) != 0 || !same_team_process(peer) ||
       !read_exact(descriptor, &request, sizeof(request)) || !request_valid(&request, peer)) {
-    close(descriptor);
-    return NULL;
+    goto complete;
   }
   if (request.command == KEIKO_MONITOR_PING) {
-    reply_to(&transient, endpoint_status_reply());
-    close(descriptor);
-    return NULL;
+    (void)reply_to(&transient, endpoint_status_reply());
+    goto complete;
   }
   if (current_endpoint_state() != ENDPOINT_STATE_ACTIVE) {
-    reply_to(&transient, KEIKO_MONITOR_ERROR);
-    close(descriptor);
-    return NULL;
+    (void)reply_to(&transient, KEIKO_MONITOR_ERROR);
+    goto complete;
   }
   if (!handle_valid(request.recovery_handle)) {
-    reply_to(&transient, KEIKO_MONITOR_ERROR);
-    close(descriptor);
-    return NULL;
+    (void)reply_to(&transient, KEIKO_MONITOR_ERROR);
+    goto complete;
   }
   pthread_mutex_lock(&sessions_lock);
   if (request.command == KEIKO_MONITOR_ARM) {
     session = allocate_session(descriptor, uid, &request);
   } else if (request.command == KEIKO_MONITOR_RECONCILE) {
     session = session_for_handle(request.recovery_handle);
-    if (session != NULL && session->descriptor < 0) {
+    if (session != NULL && session->descriptor < 0 && session->uid == uid) {
       session->descriptor = descriptor;
     } else {
       session = NULL;
@@ -335,17 +362,16 @@ static void *serve_client(void *opaque) {
   pthread_mutex_unlock(&sessions_lock);
   if (session == NULL) {
     if (request.command == KEIKO_MONITOR_RECONCILE) {
-      reply_to(&transient, KEIKO_MONITOR_ZERO_LIVE);
+      (void)reply_to(&transient, KEIKO_MONITOR_ZERO_LIVE);
     } else {
-      reply_to(&transient, KEIKO_MONITOR_ERROR);
+      (void)reply_to(&transient, KEIKO_MONITOR_ERROR);
     }
-    close(descriptor);
-    return NULL;
+    goto complete;
   }
   if (request.command == KEIKO_MONITOR_RECONCILE) {
     stop_session(session);
   } else {
-    reply_to(session, KEIKO_MONITOR_ARMED);
+    (void)reply_to(session, KEIKO_MONITOR_ARMED);
   }
   while (read_exact(descriptor, &request, sizeof(request)) &&
          request_valid(&request, peer)) {
@@ -356,7 +382,8 @@ static void *serve_client(void *opaque) {
     stop_session(session);
   }
   close_session(session);
-  close(descriptor);
+complete:
+  pthread_cleanup_pop(1);
   return NULL;
 }
 
@@ -421,17 +448,30 @@ int main(void) {
     int descriptor = accept(listener, NULL, NULL);
     pthread_t thread;
     int *owned;
-    if (descriptor == -1) continue;
+    if (descriptor == -1) {
+      if (errno != EINTR && errno != ECONNABORTED) usleep(100000);
+      continue;
+    }
     (void)setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &(int){1}, sizeof(int));
+    if (!reserve_connection()) {
+      close(descriptor);
+      continue;
+    }
     owned = malloc(sizeof(int));
     if (owned == NULL) {
       close(descriptor);
+      pthread_mutex_lock(&connection_lock);
+      connection_count -= 1;
+      pthread_mutex_unlock(&connection_lock);
       continue;
     }
     *owned = descriptor;
     if (pthread_create(&thread, NULL, serve_client, owned) != 0) {
       free(owned);
       close(descriptor);
+      pthread_mutex_lock(&connection_lock);
+      connection_count -= 1;
+      pthread_mutex_unlock(&connection_lock);
       continue;
     }
     (void)pthread_detach(thread);

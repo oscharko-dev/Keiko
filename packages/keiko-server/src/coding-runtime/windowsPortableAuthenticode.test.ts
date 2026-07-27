@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   WINDOWS_SYSTEM_POWERSHELL,
   windowsPublisherIdentityMatches,
+  windowsPublisherIdentityMatchesAsync,
   windowsSignerIdentity,
   type WindowsAuthenticodeCommandRunner,
 } from "./windowsPortableAuthenticode.js";
@@ -44,5 +45,21 @@ describe("Windows portable Authenticode identity", () => {
     { status: 0, stderr: "", stdout: "not-a-thumbprint" },
   ])("rejects invalid signer output %#", (result) => {
     expect(windowsSignerIdentity("helper.exe", () => result)).toBeUndefined();
+  });
+
+  it("supports the same signer binding through a nonblocking command port", async () => {
+    const signer = "A".repeat(40);
+    const results = [signer, signer];
+    let index = 0;
+
+    await expect(
+      windowsPublisherIdentityMatchesAsync("Keiko.exe", "helper.exe", () =>
+        Promise.resolve({
+          status: 0,
+          stderr: "",
+          stdout: results[index++] ?? "",
+        }),
+      ),
+    ).resolves.toBe(true);
   });
 });

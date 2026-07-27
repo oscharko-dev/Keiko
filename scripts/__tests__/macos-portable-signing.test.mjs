@@ -1022,6 +1022,11 @@ describe("macOS protected configuration and native result", () => {
     }
   });
 
+  it("rejects inherited object properties as command names", async () => {
+    await expect(main(["constructor"])).rejects.toThrow("unsupported command");
+    await expect(main(["toString"])).rejects.toThrow("unsupported command");
+  });
+
   it("keeps key material non-extractable, sign-only, and scoped to one identity", () => {
     const helper = readFileSync(
       new URL("../../native/portable-launcher/macos-keychain-helper.c", import.meta.url),

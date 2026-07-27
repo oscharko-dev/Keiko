@@ -5,10 +5,17 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import { hashDirectoryTree, isSafePortableRelativePath } from "./portable-runtime.mjs";
 import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
   RUNTIME_QUALIFICATION_SUITE,
 } from "./runtime-activation-manifest.mjs";
+import {
+  inventoriesMatch,
+  inventoryWindowsPortablePeFiles,
+  readWindowsPortablePeInventory,
+} from "./windows-portable-signing.mjs";
+import { assertWindowsProductionVerificationInput } from "./windows-portable-verification-input.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -111,32 +118,74 @@ function activationRuntimeIsValid(activation) {
 }
 
 function activationSidecarIsValid(activation) {
+  const sidecar = activation.sidecarRuntimes?.[0];
   return (
     Array.isArray(activation.sidecarRuntimes) &&
     activation.sidecarRuntimes.length === 1 &&
-    activation.sidecarRuntimes[0]?.name === "opencode-compatible" &&
-    SHA256.test(activation.sidecarRuntimes[0]?.payloadSha256)
+    sidecar?.name === "opencode-compatible" &&
+    sidecar.platformTarget === WINDOWS_TARGET &&
+    isSafePortableRelativePath(sidecar.payloadRootPath) &&
+    SHA256.test(sidecar.payloadSha256)
   );
 }
 
-function componentDigest(resourceRoot, helper) {
+function authenticatedInventoryEntry(inventory, relativePath) {
+  const matches = inventory.files.filter((entry) => entry.relativePath === relativePath);
+  if (matches.length !== 1) fail("authenticated PE inventory binding is incomplete");
+  return matches[0];
+}
+
+function componentDigest(resourceRoot, helper, inventory) {
   const path = join(resourceRoot, ...helper.executablePath.split("/"));
   const entry = lstatSync(path);
+  const inventoryEntry = authenticatedInventoryEntry(inventory, helper.executablePath);
   if (
     !entry.isFile() ||
     entry.isSymbolicLink() ||
     entry.nlink !== 1 ||
     entry.size !== helper.sizeBytes ||
-    sha256(path) !== helper.shippedSha256
+    sha256(path) !== helper.shippedSha256 ||
+    inventoryEntry.sha256 !== helper.shippedSha256
   ) {
     fail("activation helper bytes are invalid");
   }
   return helper.shippedSha256;
 }
 
+function authenticatedQualificationInputs(input, activation) {
+  const expectedInventory = readWindowsPortablePeInventory(input.expectedInventoryPath);
+  const actualInventory = inventoryWindowsPortablePeFiles(input.resourceRoot);
+  const verification = assertWindowsProductionVerificationInput(
+    input.verificationInputPath,
+    activation,
+  );
+  if (
+    !inventoriesMatch(expectedInventory, actualInventory) ||
+    sha256(input.expectedInventoryPath) !== verification.peInventorySha256
+  ) {
+    fail("authenticated PE inventory no longer matches the qualified payload");
+  }
+  const sidecar = activation.sidecarRuntimes[0];
+  const sidecarVerification = verification.sidecarRuntimes.find(
+    (entry) => entry.name === sidecar.name,
+  );
+  const sidecarDigest = hashDirectoryTree(
+    join(input.resourceRoot, ...sidecar.payloadRootPath.split("/")),
+  );
+  if (
+    sidecarVerification === undefined ||
+    sidecarVerification.payloadSha256 !== sidecarDigest ||
+    sidecar.payloadSha256 !== sidecarDigest
+  ) {
+    fail("authenticated OpenCode payload binding is invalid");
+  }
+  return { expectedInventory, sidecarDigest };
+}
+
 export function qualificationReceiptFor(input) {
   const activation = readJson(input.activationPath, "activation manifest");
   validateActivation(activation, input.sourceCommitSha);
+  const authenticated = authenticatedQualificationInputs(input, activation);
   const supervisor = helperByName(activation, "keiko-runtime-supervisor");
   const secureRead = helperByName(activation, "keiko-secure-workspace-read");
   return {
@@ -145,11 +194,19 @@ export function qualificationReceiptFor(input) {
     platformTarget: WINDOWS_TARGET,
     sourceCommitSha: input.sourceCommitSha,
     activationManifestSha256: sha256(input.activationPath),
-    supervisorSha256: componentDigest(input.resourceRoot, supervisor),
-    secureReadSha256: componentDigest(input.resourceRoot, secureRead),
+    supervisorSha256: componentDigest(
+      input.resourceRoot,
+      supervisor,
+      authenticated.expectedInventory,
+    ),
+    secureReadSha256: componentDigest(
+      input.resourceRoot,
+      secureRead,
+      authenticated.expectedInventory,
+    ),
     sidecars: activation.sidecarRuntimes.map((sidecar) => ({
       name: sidecar.name,
-      sha256: sidecar.payloadSha256,
+      sha256: authenticated.sidecarDigest,
     })),
     backend: "windows-job-object",
     result: "passed",
@@ -199,8 +256,10 @@ export function qualifyWindowsRuntimeRelease(
   const activationPath = join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/"));
   const receipt = qualificationReceiptFor({
     activationPath,
+    expectedInventoryPath: resolve(required(options, "expected-inventory")),
     resourceRoot,
     sourceCommitSha,
+    verificationInputPath: resolve(required(options, "verification-input")),
   });
   const output = resolve(required(options, "output"));
   if (dirname(output) === output) fail("output path is invalid");

@@ -296,7 +296,12 @@ static int supervise(int monitor, const char *handle, pid_t root) {
   struct keiko_monitor_reply reply;
   int stopping = 0;
   for (;;) {
-    if (poll(descriptors, 2, -1) <= 0) continue;
+    int poll_result = poll(descriptors, 2, -1);
+    if (poll_result < 0) {
+      if (errno == EINTR) continue;
+      return 0;
+    }
+    if (poll_result == 0) continue;
     if ((descriptors[0].revents & (POLLIN | POLLHUP)) != 0 && !stopping) {
       consume_control();
       stopping = 1;
@@ -312,7 +317,7 @@ static int supervise(int monitor, const char *handle, pid_t root) {
         (void)waitpid(root, &status, 0);
         write_u32(proof, WIFEXITED(status) ? (uint32_t)WEXITSTATUS(status) : 137u);
         return send_response(RESPONSE_REAPED, proof, sizeof(proof));
-      } else if (reply.kind == KEIKO_MONITOR_ERROR) {
+      } else {
         return 0;
       }
     }

@@ -10,6 +10,8 @@ import {
   qualifyWindowsRuntimeRelease,
 } from "../qualify-windows-runtime-release.mjs";
 import { RUNTIME_QUALIFICATION_SUITE } from "../runtime-activation-manifest.mjs";
+import { hashDirectoryTree } from "../portable-runtime.mjs";
+import { inventoryWindowsPortablePeFiles } from "../windows-portable-signing.mjs";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const roots = [];
@@ -24,11 +26,20 @@ function root() {
   return value;
 }
 
+function portableExecutable(marker = 0) {
+  const bytes = Buffer.alloc(128, marker);
+  bytes[0] = 0x4d;
+  bytes[1] = 0x5a;
+  bytes.writeUInt32LE(64, 0x3c);
+  bytes.set([0x50, 0x45, 0x00, 0x00], 64);
+  return bytes;
+}
+
 function fixture() {
   const stageRoot = root();
   const resourceRoot = join(stageRoot, "payload", "Keiko");
-  const supervisor = Buffer.from("supervisor\n");
-  const secureRead = Buffer.from("secure-read\n");
+  const supervisor = portableExecutable(6);
+  const secureRead = portableExecutable(7);
   const helpers = [
     {
       name: "keiko-runtime-supervisor",
@@ -53,6 +64,15 @@ function fixture() {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, bytes);
   }
+  writeFileSync(join(resourceRoot, "Keiko.exe"), portableExecutable(1));
+  const nodePath = join(resourceRoot, "runtime", "node", "node.exe");
+  mkdirSync(dirname(nodePath), { recursive: true });
+  writeFileSync(nodePath, portableExecutable(2));
+  const sidecarRoot = join(resourceRoot, "runtime", "sidecars", "opencode-compatible");
+  mkdirSync(sidecarRoot, { recursive: true });
+  writeFileSync(join(sidecarRoot, "opencode.exe"), portableExecutable(9));
+  writeFileSync(join(sidecarRoot, "LICENSE.txt"), "MIT");
+  const sidecarDigest = hashDirectoryTree(sidecarRoot);
   const activation = {
     schemaVersion: 1,
     suiteVersion: RUNTIME_QUALIFICATION_SUITE,
@@ -63,13 +83,59 @@ function fixture() {
     runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
     security: { verificationStatus: "verified-production" },
     nativeHelpers: helpers,
-    sidecarRuntimes: [{ name: "opencode-compatible", payloadSha256: "a".repeat(64) }],
+    sidecarRuntimes: [
+      {
+        name: "opencode-compatible",
+        platformTarget: "windows-x64",
+        payloadRootPath: "runtime/sidecars/opencode-compatible",
+        payloadSha256: sidecarDigest,
+      },
+    ],
     releaseImpact: { entryId: "fixture" },
   };
   const activationPath = join(resourceRoot, ".portable", "runtime-activation.json");
   mkdirSync(dirname(activationPath), { recursive: true });
   writeFileSync(activationPath, `${JSON.stringify(activation)}\n`);
-  return { activation, activationPath, resourceRoot, stageRoot };
+  const expectedInventoryPath = join(stageRoot, "inventory.json");
+  writeFileSync(
+    expectedInventoryPath,
+    JSON.stringify(inventoryWindowsPortablePeFiles(resourceRoot)),
+  );
+  const verificationInputPath = join(stageRoot, "verification.json");
+  writeFileSync(
+    verificationInputPath,
+    JSON.stringify({
+      peInventorySha256: sha256(readFileSync(expectedInventoryPath)),
+      reasonCodes: [],
+      verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+      sidecarRuntimes: [
+        {
+          name: "opencode-compatible",
+          payloadSha256: sidecarDigest,
+          reasonCodes: [],
+          verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+        },
+      ],
+    }),
+  );
+  return {
+    activation,
+    activationPath,
+    expectedInventoryPath,
+    resourceRoot,
+    stageRoot,
+    verificationInputPath,
+  };
+}
+
+function receiptInput(value) {
+  return {
+    activationPath: value.activationPath,
+    expectedInventoryPath: value.expectedInventoryPath,
+    resourceRoot: value.resourceRoot,
+    sourceCommitSha: COMMIT,
+    verificationInputPath: value.verificationInputPath,
+  };
 }
 
 afterEach(() => {
@@ -79,20 +145,19 @@ afterEach(() => {
 describe("Windows runtime qualification", () => {
   it("binds the exact activation, helper bytes, OpenCode payload, and backend", () => {
     const value = fixture();
-    expect(
-      qualificationReceiptFor({
-        activationPath: value.activationPath,
-        resourceRoot: value.resourceRoot,
-        sourceCommitSha: COMMIT,
-      }),
-    ).toMatchObject({
+    expect(qualificationReceiptFor(receiptInput(value))).toMatchObject({
       schemaVersion: 1,
       suiteVersion: RUNTIME_QUALIFICATION_SUITE,
       platformTarget: "windows-x64",
       sourceCommitSha: COMMIT,
       supervisorSha256: value.activation.nativeHelpers[0].shippedSha256,
       secureReadSha256: value.activation.nativeHelpers[1].shippedSha256,
-      sidecars: [{ name: "opencode-compatible", sha256: "a".repeat(64) }],
+      sidecars: [
+        {
+          name: "opencode-compatible",
+          sha256: value.activation.sidecarRuntimes[0].payloadSha256,
+        },
+      ],
       backend: "windows-job-object",
       result: "passed",
     });
@@ -106,7 +171,9 @@ describe("Windows runtime qualification", () => {
     qualifyWindowsRuntimeRelease(
       {
         "stage-root": value.stageRoot,
+        "expected-inventory": value.expectedInventoryPath,
         "source-commit-sha": COMMIT,
+        "verification-input": value.verificationInputPath,
         output,
       },
       { platform: "win32", spawnSyncImpl },
@@ -129,7 +196,9 @@ describe("Windows runtime qualification", () => {
     const value = fixture();
     const options = {
       "stage-root": value.stageRoot,
+      "expected-inventory": value.expectedInventoryPath,
       "source-commit-sha": COMMIT,
+      "verification-input": value.verificationInputPath,
       output: join(value.stageRoot, "qualification.json"),
     };
     expect(() => qualifyWindowsRuntimeRelease(options, { platform: "darwin" })).toThrow(
@@ -153,13 +222,9 @@ describe("Windows runtime qualification", () => {
       ...value.activation.nativeHelpers[0].executablePath.split("/"),
     );
     writeFileSync(helperPath, "tampered\n");
-    expect(() =>
-      qualificationReceiptFor({
-        activationPath: value.activationPath,
-        resourceRoot: value.resourceRoot,
-        sourceCommitSha: COMMIT,
-      }),
-    ).toThrow("activation helper bytes are invalid");
+    expect(() => qualificationReceiptFor(receiptInput(value))).toThrow(
+      "an executable-named payload file is not valid PE",
+    );
   });
 
   it("rejects malformed activation manifests and ambiguous helper or OpenCode sets", () => {
@@ -168,13 +233,7 @@ describe("Windows runtime qualification", () => {
       const activation = structuredClone(value.activation);
       mutate(activation);
       writeFileSync(value.activationPath, `${JSON.stringify(activation)}\n`);
-      expect(() =>
-        qualificationReceiptFor({
-          activationPath: value.activationPath,
-          resourceRoot: value.resourceRoot,
-          sourceCommitSha: COMMIT,
-        }),
-      ).toThrow(message);
+      expect(() => qualificationReceiptFor(receiptInput(value))).toThrow(message);
     };
     assertInvalid((activation) => {
       activation.extra = true;

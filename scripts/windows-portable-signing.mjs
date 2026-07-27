@@ -165,7 +165,7 @@ export function inventoryWindowsPortablePeFiles(payloadRoot) {
   return { schemaVersion: 1, target: WINDOWS_TARGET, files: state.peFiles };
 }
 
-function readInventory(path) {
+export function readWindowsPortablePeInventory(path) {
   const inventory = JSON.parse(readFileSync(path, "utf8"));
   assertInventoryDocument(inventory);
   const seen = new Set();
@@ -265,20 +265,20 @@ function inventoryCommand(options) {
 
 function verifyInventoryCommand(options) {
   const stageRoot = resolve(required(options, "stage-root"));
-  const expected = readInventory(required(options, "expected-inventory"));
+  const expected = readWindowsPortablePeInventory(required(options, "expected-inventory"));
   const actual = inventoryWindowsPortablePeFiles(join(stageRoot, "payload", "Keiko"));
   if (!inventoriesMatch(expected, actual)) fail("verified PE inventory no longer matches payload");
 }
 
 function comparePathsCommand(options) {
-  const expected = readInventory(required(options, "expected-inventory"));
-  const actual = readInventory(required(options, "actual-inventory"));
+  const expected = readWindowsPortablePeInventory(required(options, "expected-inventory"));
+  const actual = readWindowsPortablePeInventory(required(options, "actual-inventory"));
   if (!inventoryPathsMatch(expected, actual)) fail("PE inventory changed during signing");
 }
 
 function compareWithAttestationCommand(options) {
-  const expected = readInventory(required(options, "expected-inventory"));
-  const actual = readInventory(required(options, "actual-inventory"));
+  const expected = readWindowsPortablePeInventory(required(options, "expected-inventory"));
+  const actual = readWindowsPortablePeInventory(required(options, "actual-inventory"));
   if (!inventoryAddsOnlyRuntimeAttestation(expected, actual)) {
     fail("PE inventory changed outside the runtime attestation carrier");
   }

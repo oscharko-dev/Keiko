@@ -27,11 +27,12 @@ try {
   $inventory = Join-Path $scratch "inventory.json"
   $catalog = Join-Path $scratch "catalog.txt"
   node scripts/windows-portable-signing.mjs inventory --stage-root $stage --inventory $inventory --catalog $catalog
-  ./scripts/verify-windows-portable-signing.ps1 -StageRoot $stage -InventoryPath $inventory -VerificationInput (Join-Path $scratch "verification.json") -ExpectedIdentityEku $ExpectedIdentityEku
+  $verification = Join-Path $scratch "verification.json"
+  ./scripts/verify-windows-portable-signing.ps1 -StageRoot $stage -InventoryPath $inventory -VerificationInput $verification -ExpectedIdentityEku $ExpectedIdentityEku
   $activationPath = Join-Path $stage "payload\Keiko\.portable\runtime-activation.json"
   $activation = Get-Content -LiteralPath $activationPath -Raw | ConvertFrom-Json
   $receiptPath = Join-Path $scratch "runtime-qualification.json"
-  node scripts/qualify-windows-runtime-release.mjs --stage-root $stage --source-commit-sha $activation.sourceCommitSha --output $receiptPath
+  node scripts/qualify-windows-runtime-release.mjs --stage-root $stage --expected-inventory $inventory --verification-input $verification --source-commit-sha $activation.sourceCommitSha --output $receiptPath
   if ($LASTEXITCODE -ne 0) { throw "fresh-windows-qualification: runtime supervisor qualification failed" }
   $attestor = Join-Path $stage "payload\Keiko\runtime\native\keiko-runtime-attestation.exe"
   $embeddedReceipt = (& $attestor --emit | Out-String).Trim()

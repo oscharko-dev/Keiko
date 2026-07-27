@@ -43,6 +43,34 @@ function Test-Rfc3161Timestamp([string]$Path) {
   return $result.Valid -and $result.Certificates.Count -gt 0
 }
 
+function Get-DirectoryTreeSha256([string]$Root) {
+  $canonicalRoot = [System.IO.Path]::GetFullPath($Root)
+  $paths = [System.Collections.Generic.List[string]]::new()
+  $files = @{}
+  foreach ($file in Get-ChildItem -LiteralPath $canonicalRoot -File -Recurse -Force) {
+    if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      Fail-Bounded "sidecar payload contains a reparse point"
+    }
+    $relative = [System.IO.Path]::GetRelativePath($canonicalRoot, $file.FullName).Replace('\', '/')
+    $paths.Add($relative)
+    $files[$relative] = $file.FullName
+  }
+  $paths.Sort([System.StringComparer]::Ordinal)
+  $hash = [System.Security.Cryptography.IncrementalHash]::CreateHash(
+    [System.Security.Cryptography.HashAlgorithmName]::SHA256
+  )
+  try {
+    foreach ($relative in $paths) {
+      $fileDigest = (Get-FileHash -LiteralPath $files[$relative] -Algorithm SHA256).Hash.ToLowerInvariant()
+      $hash.AppendData([System.Text.Encoding]::UTF8.GetBytes("$relative`0$fileDigest`0"))
+    }
+    return [System.Convert]::ToHexString($hash.GetHashAndReset()).ToLowerInvariant()
+  }
+  finally {
+    $hash.Dispose()
+  }
+}
+
 try {
   $references = [string][AppContext]::GetData("TRUSTED_PLATFORM_ASSEMBLIES") -split [IO.Path]::PathSeparator
   Add-Type -Path (Join-Path $PSScriptRoot "windows-portable-rfc3161.cs") -ReferencedAssemblies $references
@@ -113,8 +141,16 @@ foreach ($sidecar in @($manifest.sidecarRuntimes)) {
   if (-not $inventoryPaths.Contains($sidecar.executablePath)) {
     Fail-Bounded "sidecar PE verification coverage is incomplete"
   }
+  $sidecarRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $payload ($sidecar.payloadRootPath -replace '/', '\'))
+  )
+  $payloadPrefix = $payload.TrimEnd('\') + '\'
+  if (-not $sidecarRoot.StartsWith($payloadPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Fail-Bounded "sidecar payload root escapes the payload"
+  }
   $sidecars += [ordered]@{
     name = $sidecar.name
+    payloadSha256 = Get-DirectoryTreeSha256 $sidecarRoot
     reasonCodes = @()
     verificationChecks = [ordered]@{
       publisherChainVerified = $publisherVerified
@@ -126,6 +162,7 @@ $reasonCodes = @()
 if (-not $publisherVerified) { $reasonCodes += "windows-publisher-chain-unverified" }
 if (-not $timestampVerified) { $reasonCodes += "windows-timestamp-unverified" }
 $result = [ordered]@{
+  peInventorySha256 = (Get-FileHash -LiteralPath $InventoryPath -Algorithm SHA256).Hash.ToLowerInvariant()
   reasonCodes = $reasonCodes
   verificationChecks = [ordered]@{
     publisherChainVerified = $publisherVerified

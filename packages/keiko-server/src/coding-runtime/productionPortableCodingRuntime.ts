@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -11,6 +11,12 @@ import {
 } from "@oscharko-dev/keiko-sandbox";
 
 import { productionUpdateFacts } from "../update-install-mode.js";
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import {
   evaluatePortableSidecarAvailability,
   verifyPortableAttestedSidecars,
@@ -71,6 +77,7 @@ export interface PortableOpenCodeDiscoveryInput {
   /** Resource root injection for deterministic tests; production derives it from the package. */
   readonly installRoot?: string | undefined;
   readonly attestation?: PortableRuntimeAttestationPort | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 interface PortableRuntimeCandidate {
@@ -96,25 +103,19 @@ export function discoverQualifiedPortableOpenCode(
   try {
     const candidate = portableRuntimeCandidate(input);
     return candidate === undefined ? undefined : qualifiedRuntime(candidate, input.attestation);
-  } catch {
+  } catch (error) {
+    emitServerDiagnostic(
+      input.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: randomUUID(),
+        operation: "coding.runtime.discover",
+        source: "coding.runtime.discovery",
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
     return undefined;
   }
-}
-
-/** Re-runs platform trust and exact-byte discovery before each privileged helper admission. */
-export function verifyQualifiedPortableRuntimeAtPointOfUse(
-  runtime: QualifiedPortableOpenCodeRuntime,
-): boolean {
-  const host = hostForTarget(runtime.target);
-  const current = discoverQualifiedPortableOpenCode({
-    env: {},
-    installRoot: runtime.installRoot,
-    ...host,
-  });
-  return (
-    current?.target === runtime.target &&
-    current.qualification.releaseReceipt === runtime.qualification.releaseReceipt
-  );
 }
 
 function portableRuntimeCandidate(
@@ -190,7 +191,7 @@ const PLATFORM_ATTESTATION: PortableRuntimeAttestationPort = Object.freeze({
   }) =>
     target === "windows-x64"
       ? readWindowsAttestation(resourceRoot)
-      : readMacosAttestation(resourceRoot),
+      : readMacosAttestation(resourceRoot, target),
 });
 
 export function readWindowsAttestation(
@@ -226,10 +227,16 @@ function verifyWindowsSignature(
 
 export function readMacosAttestation(
   resourceRoot: string,
+  target: Extract<UpdatePortableTarget, "macos-arm64" | "macos-x64">,
   run: PortableRuntimeCommandRunner = runPortableRuntimeCommand,
 ): unknown {
   const appRoot = dirname(dirname(resourceRoot));
-  runMacosVerifier("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot], run);
+  const requirement = `anchor apple generic and identifier "dev.oscharko.keiko.${target}"`;
+  runMacosVerifier(
+    "/usr/bin/codesign",
+    ["--verify", "--deep", "--strict", `-R=${requirement}`, appRoot],
+    run,
+  );
   runMacosVerifier("/usr/sbin/spctl", ["--assess", "--type", "execute", appRoot], run);
   const manager = safeRealFile(
     join(dirname(dirname(resourceRoot)), "Contents", "MacOS", "KeikoSystemExtensionManager"),
@@ -285,18 +292,6 @@ function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableT
   if (platform === "darwin" && arch === "arm64") return "macos-arm64";
   if (platform === "darwin" && arch === "x64") return "macos-x64";
   return undefined;
-}
-
-function hostForTarget(target: UpdatePortableTarget): {
-  readonly platform: NodeJS.Platform;
-  readonly arch: "arm64" | "x64";
-} {
-  return target === "windows-x64"
-    ? { platform: "win32", arch: "x64" }
-    : {
-        platform: "darwin",
-        arch: target === "macos-arm64" ? "arm64" : "x64",
-      };
 }
 
 function setupMatches(root: string, target: UpdatePortableTarget): boolean {
