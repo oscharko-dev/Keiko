@@ -4099,6 +4099,7 @@ export {
   isWorkspaceProfileDisplayName,
   isAssignableWorkspaceProfileDisplayName,
   isReservedWorkspaceProfileDisplayName,
+  WORKSPACE_PROFILE_DISPLAY_NAME_FIELD,
   workspaceProfileDisplayNameKey,
   validateWorkspaceProfileManifest,
   redactWorkspaceProfileForExport,
