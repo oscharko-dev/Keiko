@@ -255,7 +255,13 @@ export function selectContentPrescoreFiles(
   limit: number,
 ): readonly DiscoveredFile[] {
   if (files.length <= limit) return files;
-  const ordered = orderCandidatesForSearch(files, query, policy, 0, 0).files;
+  const ordered = orderCandidatesForSearch({
+    files,
+    query,
+    policy,
+    ignoredByDiscovery: 0,
+    deniedByDiscovery: 0,
+  }).files;
   if (routeQueryTermsForSearch(query) === undefined || limit <= 0) {
     return ordered.slice(0, limit);
   }
@@ -435,16 +441,16 @@ function orderCollectedCandidates(
       ? result.files
       : result.files.filter((file) => inputs.candidatePathPredicate?.(file.relativePath) === true);
   const contentScores = contentScoresForOrdering(scope, files, inputs);
-  const ordered = orderCandidatesForSearch(
+  const ordered = orderCandidatesForSearch({
     files,
-    inputs.query,
-    inputs.policy,
+    query: inputs.query,
+    policy: inputs.policy,
     ignoredByDiscovery,
     deniedByDiscovery,
-    result.depthPruned,
-    result.maxFilesPruned,
+    depthPrunedByDiscovery: result.depthPruned,
+    maxFilesPrunedByDiscovery: result.maxFilesPruned,
     contentScores,
-  );
+  });
   return {
     files: ordered.files,
     directories: result.directories,
