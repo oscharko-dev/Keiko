@@ -28,10 +28,6 @@ const hasPowerShell =
 
 const portableWorkflow = readFileSync(".github/workflows/portable-assets.yml", "utf8");
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
-const portableRuntimeArtifactContract = readFileSync(
-  "docs/release/portable-runtime-artifact-contract.md",
-  "utf8",
-);
 const windowsVerifier = readFileSync("scripts/verify-windows-portable-signing.ps1", "utf8");
 const windowsNativePolicy = readFileSync("scripts/windows-portable-native-policy.ps1", "utf8");
 const secureReadSmoke = readFileSync("scripts/portable-secure-read-smoke.mjs", "utf8");
@@ -40,21 +36,6 @@ const secureReadNative = readFileSync(
   "native/secure-workspace-read/secure_workspace_read.c",
   "utf8",
 );
-
-describe("portable coding runtime contract", () => {
-  it("requires exactly one approved OpenCode runtime in every newly produced customer artifact", () => {
-    expect(portableRuntimeArtifactContract).toContain(
-      "Every newly staged, candidate, and published customer artifact must contain exactly one",
-    );
-    expect(portableRuntimeArtifactContract).toContain("`opencode-compatible` coding runtime entry");
-    expect(portableRuntimeArtifactContract).not.toContain(
-      "stable releases can ship without Coding Workbench enabled",
-    );
-    expect(portableRuntimeArtifactContract).not.toContain(
-      "## Optional Product-Owned Sidecar Runtimes",
-    );
-  });
-});
 
 describe("portable secure-read qualification", () => {
   it("functionally smokes unsigned and fresh signed helpers on all three native runners", () => {

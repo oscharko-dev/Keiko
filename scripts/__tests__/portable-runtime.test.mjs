@@ -1487,6 +1487,27 @@ describe("validatePortableManifest", () => {
     expect(validatePortableManifest(candidate)).toEqual([]);
   });
 
+  it.each([
+    ["missing", (candidate) => delete candidate.sidecarRuntimes],
+    ["empty", (candidate) => (candidate.sidecarRuntimes = [])],
+    ["multiple", (candidate) => candidate.sidecarRuntimes.push(sidecarRuntimeFor("windows-x64"))],
+    ["wrong name", (candidate) => (candidate.sidecarRuntimes[0].name = "other-runtime")],
+    ["wrong kind", (candidate) => (candidate.sidecarRuntimes[0].kind = "tool-runtime")],
+  ])("rejects %s OpenCode runtime sets in every new artifact lifecycle", (_label, mutate) => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64");
+    mutate(candidate);
+    syncReviewedBinding(candidate);
+
+    const expected =
+      "sidecarRuntimes: must contain exactly one approved OpenCode runtime for newly produced artifacts";
+    expect(validatePortableStagingManifest(candidate)).toContain(expected);
+    expect(validatePortableCandidateManifest(candidate)).toContain(expected);
+    expect(
+      validatePortablePublishedManifest(candidate, { assetId: 123456789, releaseId: 123456789 }),
+    ).toContain(expected);
+  });
+
   it("accepts generic sidecar runtime metadata for every portable target", () => {
     for (const platformTarget of ["windows-x64", "macos-arm64", "macos-x64"]) {
       const candidate = manifest();
