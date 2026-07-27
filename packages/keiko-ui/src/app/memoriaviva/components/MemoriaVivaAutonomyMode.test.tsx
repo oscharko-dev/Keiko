@@ -59,7 +59,7 @@ describe("MemoriaViva memory autonomy mode", () => {
     const supervised = within(group).getByRole("radio", { name: /Supervised workspace/ });
     await user.click(supervised);
     await waitFor(() => expect(supervised).toBeChecked());
-    expect(persistMode).toHaveBeenCalledWith("supervised-coding");
+    expect(persistMode).toHaveBeenCalledWith("supervised-coding", expect.any(AbortSignal));
     expect(await axe(first.container)).toHaveNoViolations();
 
     first.unmount();

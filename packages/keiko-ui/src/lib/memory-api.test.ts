@@ -358,7 +358,8 @@ describe("memory autonomy policy API helpers", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await loadMemoryAutonomyMode();
-    await persistMemoryAutonomyMode("autonomous-delivery");
+    const controller = new AbortController();
+    await persistMemoryAutonomyMode("autonomous-delivery", controller.signal);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -371,6 +372,7 @@ describe("memory autonomy policy API helpers", () => {
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({ requestedMode: "autonomous-delivery" }),
+        signal: controller.signal,
         headers: expect.objectContaining({
           "Content-Type": "application/json",
           "X-Keiko-CSRF": "1",

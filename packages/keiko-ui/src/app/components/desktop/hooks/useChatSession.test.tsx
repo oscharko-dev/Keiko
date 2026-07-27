@@ -6,10 +6,13 @@ import {
   ApiError,
   askGrounded,
   createDesktopChat,
+  createProject,
   fetchChatMessages,
   fetchChats,
+  fetchRunReport,
   fetchModels,
   fetchProjects,
+  regenerateDesktopChat,
   sendDesktopChat,
 } from "@/lib/api";
 import {
@@ -64,8 +67,12 @@ vi.mock("@/lib/api", () => ({
   createProject: vi.fn(),
   fetchChatMessages: vi.fn(),
   fetchChats: vi.fn(),
+  fetchEvidenceManifest: vi.fn(),
+  fetchRunReport: vi.fn(),
   fetchModels: vi.fn(),
   fetchProjects: vi.fn(),
+  patchChatMessage: vi.fn(),
+  regenerateDesktopChat: vi.fn(),
   sendDesktopChat: vi.fn(),
   sendDesktopChatStream: vi.fn(),
   updateChat: vi.fn(),
@@ -328,6 +335,84 @@ describe("useChatSession bootstrap", () => {
     expect(opened?.id).toBe("chat-project-override");
     expect(result.current.activeProject?.path).toBe("/other");
     expect(result.current.messages[0]?.id).toBe("created-msg");
+  });
+
+  it("surfaces bootstrap and navigation mutation failures without stale state", async () => {
+    vi.mocked(fetchModels).mockRejectedValueOnce(new TypeError("bootstrap unavailable"));
+    const failedBootstrap = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(failedBootstrap.result.current.loading).toBe(false));
+    expect(failedBootstrap.result.current.error).toContain("bootstrap unavailable");
+    failedBootstrap.unmount();
+    clearChatSessionBootstrapCacheForTests();
+
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+
+    vi.mocked(createDesktopChat).mockRejectedValueOnce(new TypeError("create unavailable"));
+    await act(async () => {
+      await expect(rendered.result.current.openNewChat()).resolves.toBeUndefined();
+    });
+    expect(rendered.result.current.error).toContain("create unavailable");
+
+    vi.mocked(fetchChats).mockRejectedValueOnce(new TypeError("project unavailable"));
+    await act(async () => {
+      await rendered.result.current.openProject(project("/other"));
+    });
+    expect(rendered.result.current.error).toContain("project unavailable");
+
+    vi.mocked(fetchChatMessages).mockRejectedValueOnce(new TypeError("chat unavailable"));
+    await act(async () => {
+      await rendered.result.current.openChat(chat({ id: "chat-other", projectPath: "/other" }));
+    });
+    expect(rendered.result.current.error).toContain("chat unavailable");
+
+    vi.mocked(createProject).mockRejectedValueOnce(new TypeError("add unavailable"));
+    await act(async () => {
+      await rendered.result.current.addProject("/added");
+    });
+    expect(rendered.result.current.error).toContain("add unavailable");
+  });
+
+  it("parks run-summary polling after a non-retryable report failure", async () => {
+    const pendingSummary = message({
+      id: "run-summary",
+      role: "system",
+      runId: "run-1",
+      workflowStatus: "running",
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [pendingSummary] });
+    vi.mocked(fetchRunReport).mockRejectedValue(new TypeError("report unavailable"));
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(fetchRunReport).toHaveBeenCalledWith("run-1"));
+    expect(rendered.result.current.messages).toEqual([pendingSummary]);
+  });
+
+  it("surfaces regeneration failures and releases the owned send state", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [message({ id: "assistant-1", role: "assistant" })],
+    });
+    vi.mocked(regenerateDesktopChat).mockRejectedValue(new TypeError("regeneration unavailable"));
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+
+    await act(async () => {
+      await rendered.result.current.regenerateMessage("assistant-1");
+    });
+
+    expect(rendered.result.current.error).toContain("regeneration unavailable");
+    expect(rendered.result.current.sendStatus).toBe("failed");
+    expect(rendered.result.current.regeneratingMessageId).toBeUndefined();
   });
 
   it("does not auto-create when no conversation-eligible model is available", async () => {

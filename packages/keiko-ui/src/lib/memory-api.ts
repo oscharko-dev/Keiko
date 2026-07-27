@@ -218,7 +218,8 @@ export async function fetchMemories(
   if (filters.limit !== undefined) params.set("limit", filters.limit.toString());
   if (filters.offset !== undefined) params.set("offset", filters.offset.toString());
   const qs = params.toString();
-  return fetchImpl(`/api/memory${qs.length > 0 ? `?${qs}` : ""}` as string);
+  const suffix = qs.length > 0 ? `?${qs}` : "";
+  return fetchImpl(`/api/memory${suffix}`);
 }
 
 export async function fetchRecentCaptures(
@@ -250,11 +251,13 @@ export async function loadMemoryAutonomyMode(
 
 export async function persistMemoryAutonomyMode(
   requestedMode: CodingWorkbenchMode,
+  signal?: AbortSignal,
   fetchImpl = fetchJson<MemoryAutonomyPolicyWire>,
 ): Promise<MemoryAutonomyPolicyWire> {
   return fetchImpl("/api/memory/autonomy-policy", {
     method: "PUT",
     body: JSON.stringify({ requestedMode }),
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 

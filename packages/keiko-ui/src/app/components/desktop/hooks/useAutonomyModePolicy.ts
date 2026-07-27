@@ -1,27 +1,62 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import {
+  resolveEffectiveCodingWorkbenchMode,
+  type CodingWorkbenchMode,
+  type MemoryAutonomyPolicyWire,
+} from "@oscharko-dev/keiko-contracts";
 import { loadMemoryAutonomyMode, persistMemoryAutonomyMode } from "@/lib/memory-api";
 import {
-  currentConversationMemoryMode,
   currentConversationMemoryModeRevision,
   useConversationMemorySettings,
 } from "./memorySettings";
 
 type AutonomyModePolicyError = "hydrate" | "persist" | null;
+type PersistAutonomyMode = (
+  mode: CodingWorkbenchMode,
+  signal?: AbortSignal,
+) => Promise<MemoryAutonomyPolicyWire>;
+type PersistenceOutcome =
+  | { readonly kind: "success"; readonly policy: MemoryAutonomyPolicyWire }
+  | { readonly kind: "failure" };
+
+const DEFAULT_PERSIST_TIMEOUT_MS = 15_000;
 let latestPersistenceRequest = 0;
 let persistenceQueue: Promise<void> = Promise.resolve();
 
-function persistInIntentOrder(
-  persist: typeof persistMemoryAutonomyMode,
+async function settlePersistence(
+  persist: PersistAutonomyMode,
   mode: CodingWorkbenchMode,
-): ReturnType<typeof persistMemoryAutonomyMode> {
-  const pending = persistenceQueue.then(() => persist(mode));
-  persistenceQueue = pending.then(
-    () => undefined,
-    () => undefined,
-  );
+  timeoutMs: number,
+): Promise<PersistenceOutcome> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject): void => {
+    timeout = setTimeout((): void => {
+      const error_ = new DOMException("Memory autonomy persistence timed out.", "TimeoutError");
+      controller.abort(error_);
+      reject(error_);
+    }, timeoutMs);
+  });
+  try {
+    const policy = await Promise.race([persist(mode, controller.signal), deadline]);
+    return { kind: "success", policy };
+  } catch {
+    // Convert the rejection to an explicit queue outcome; change() surfaces it to the user.
+    return { kind: "failure" };
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+function persistInIntentOrder(
+  persist: PersistAutonomyMode,
+  mode: CodingWorkbenchMode,
+  timeoutMs: number,
+): Promise<PersistenceOutcome> {
+  const pending = persistenceQueue.then(() => settlePersistence(persist, mode, timeoutMs));
+  persistenceQueue = pending.then((): void => undefined);
   return pending;
 }
 
@@ -36,16 +71,17 @@ export interface AutonomyModePolicy {
 
 interface AutonomyModePolicyOptions {
   readonly load?: typeof loadMemoryAutonomyMode;
-  readonly persist?: typeof persistMemoryAutonomyMode;
+  readonly persist?: PersistAutonomyMode;
+  readonly persistTimeoutMs?: number;
 }
 
 export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): AutonomyModePolicy {
   const load = options.load ?? loadMemoryAutonomyMode;
   const persist = options.persist ?? persistMemoryAutonomyMode;
+  const persistTimeoutMs = options.persistTimeoutMs ?? DEFAULT_PERSIST_TIMEOUT_MS;
   const { memoryMode, setMemoryMode } = useConversationMemorySettings();
   const [pending, setPending] = useState(true);
   const [error, setError] = useState<AutonomyModePolicyError>(null);
-  const [effectiveMode, setEffectiveMode] = useState<CodingWorkbenchMode | null>(null);
   const [deploymentCeiling, setDeploymentCeiling] = useState<CodingWorkbenchMode | null>(null);
   const sequence = useRef(0);
   const mounted = useRef(true);
@@ -67,11 +103,8 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
         if (currentConversationMemoryModeRevision() === revisionAtStart) {
           setMemoryMode(policy.requestedMode);
         }
-        if (currentConversationMemoryMode() === policy.requestedMode) {
-          setEffectiveMode(policy.effectiveMode);
-          setDeploymentCeiling(policy.deploymentCeiling);
-          setError(null);
-        }
+        setDeploymentCeiling(policy.deploymentCeiling);
+        setError(null);
       })
       .catch((): void => {
         if (
@@ -96,8 +129,23 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
       const persistenceRequest = ++latestPersistenceRequest;
       setPending(true);
       setError(null);
-      void persistInIntentOrder(persist, mode)
-        .then((policy): void => {
+      void persistInIntentOrder(persist, mode, persistTimeoutMs)
+        .then((outcome): void => {
+          if (outcome.kind === "failure") {
+            if (
+              mounted.current &&
+              request === sequence.current &&
+              persistenceRequest === latestPersistenceRequest
+            ) {
+              setError("persist");
+            }
+            return;
+          }
+          const { policy } = outcome;
+          // Every fulfilled PUT is authoritative server state. Publish it even when a newer local
+          // intent exists or the initiating surface unmounted; serialization ensures a later
+          // fulfilled intent will supersede it in the same order on both client and server.
+          setMemoryMode(policy.requestedMode);
           if (
             !mounted.current ||
             request !== sequence.current ||
@@ -105,31 +153,21 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
           ) {
             return;
           }
-          setMemoryMode(policy.requestedMode);
-          if (currentConversationMemoryMode() === policy.requestedMode) {
-            setEffectiveMode(policy.effectiveMode);
-            setDeploymentCeiling(policy.deploymentCeiling);
-          }
-        })
-        .catch((): void => {
-          if (
-            mounted.current &&
-            request === sequence.current &&
-            persistenceRequest === latestPersistenceRequest
-          ) {
-            setError("persist");
-          }
+          setDeploymentCeiling(policy.deploymentCeiling);
         })
         .finally((): void => {
           if (mounted.current && request === sequence.current) setPending(false);
         });
     },
-    [persist, setMemoryMode],
+    [persist, persistTimeoutMs, setMemoryMode],
   );
 
   return {
     requestedMode: memoryMode,
-    effectiveMode,
+    effectiveMode:
+      deploymentCeiling === null
+        ? null
+        : resolveEffectiveCodingWorkbenchMode(memoryMode, deploymentCeiling),
     deploymentCeiling,
     pending,
     error,
