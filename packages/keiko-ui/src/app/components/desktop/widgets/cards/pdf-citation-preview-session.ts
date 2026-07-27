@@ -354,7 +354,7 @@ function consumePendingBackNavigation(chatWindowId: string): void {
   const request = pendingBackNavigationByChatWindowId.get(chatWindowId);
   if (request === undefined) return;
   const renderedWindow = renderedChatWindowsById.get(chatWindowId);
-  if (renderedWindow === undefined || renderedWindow.chatId !== request.chatId) return;
+  if (renderedWindow?.chatId !== request.chatId) return;
   const messageElement = renderedWindow.messages.get(request.assistantMessageId);
   if (messageElement === undefined) return;
 
@@ -398,7 +398,7 @@ function backToChatAvailability(
   }
 
   const workspaceChatWindow = workspaceChatWindowForOrigin(origin);
-  if (workspaceChatWindow === undefined || workspaceChatWindow.chatId !== origin.chatId) {
+  if (workspaceChatWindow?.chatId !== origin.chatId) {
     return { enabled: false, reason: CHAT_UNAVAILABLE_REASON };
   }
 
