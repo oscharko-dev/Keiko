@@ -24,6 +24,7 @@ import type { RetrievalEvalScorecard } from "./types.js";
 import { PASS_THRESHOLDS } from "./types.js";
 
 import { mean } from "../metrics.js";
+import { evaluateFloors } from "../quality-helpers.js";
 
 const HYBRID_MODE = "hybrid";
 
@@ -97,12 +98,15 @@ function clearsAggregateFloor(
   meanReciprocalRank: number,
   ndcg: number,
 ): boolean {
-  return (
-    recall >= PASS_THRESHOLDS.recall &&
-    precision >= PASS_THRESHOLDS.precision &&
-    meanReciprocalRank >= PASS_THRESHOLDS.meanReciprocalRank &&
-    ndcg >= PASS_THRESHOLDS.ndcg
-  );
+  return evaluateFloors(
+    { recall, precision, meanReciprocalRank, ndcg },
+    {
+      recall: PASS_THRESHOLDS.recall,
+      precision: PASS_THRESHOLDS.precision,
+      meanReciprocalRank: PASS_THRESHOLDS.meanReciprocalRank,
+      ndcg: PASS_THRESHOLDS.ndcg,
+    },
+  ).ok;
 }
 
 function rowForMode(

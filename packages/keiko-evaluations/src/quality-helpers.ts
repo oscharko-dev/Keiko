@@ -10,6 +10,14 @@ import type {
 export type MinimumFloorResult<Metric extends string = string> = EvalFloorResult<Metric>;
 export type { EvalBudget, EvalFloorResult, RegressionProbeResult };
 
+export function meetsFiniteFloor(value: number, minimum: number): boolean {
+  return Number.isFinite(value) && Number.isFinite(minimum) && value >= minimum;
+}
+
+export function meetsFiniteCeiling(value: number, maximum: number): boolean {
+  return Number.isFinite(value) && Number.isFinite(maximum) && value <= maximum;
+}
+
 export function evaluateFloors<const Metric extends string>(
   metrics: Readonly<Partial<Record<NoInfer<Metric>, number>>>,
   minimums: EvalBudget<Metric>,
@@ -18,7 +26,20 @@ export function evaluateFloors<const Metric extends string>(
   const metricNames = Object.keys(minimums) as Metric[];
   for (const metric of metricNames) {
     const value = metrics[metric];
-    if (value === undefined || value < minimums[metric]) failures.push(metric);
+    if (value === undefined || !meetsFiniteFloor(value, minimums[metric])) failures.push(metric);
+  }
+  return { ok: failures.length === 0, failures };
+}
+
+export function evaluateCeilings<const Metric extends string>(
+  metrics: Readonly<Partial<Record<NoInfer<Metric>, number>>>,
+  maximums: EvalBudget<Metric>,
+): EvalFloorResult<Metric> {
+  const failures: Metric[] = [];
+  const metricNames = Object.keys(maximums) as Metric[];
+  for (const metric of metricNames) {
+    const value = metrics[metric];
+    if (value === undefined || !meetsFiniteCeiling(value, maximums[metric])) failures.push(metric);
   }
   return { ok: failures.length === 0, failures };
 }

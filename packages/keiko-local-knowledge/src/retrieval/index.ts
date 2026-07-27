@@ -16,7 +16,7 @@ export {
 export {
   resolveVectorIndexOptions,
   searchVectorIndex,
-  sqliteVecIndexName,
+  usearchIndexName,
   type VectorIndexAdapter,
   type VectorIndexCandidate,
   type VectorIndexMode,
@@ -24,7 +24,17 @@ export {
   type VectorIndexOptions,
   type VectorIndexSearchRequest,
   type VectorIndexSearchResult,
+  type VectorIndexUnexpectedFailureDiagnostic,
 } from "./vector-index.js";
+
+export {
+  searchUsearchAnnIndex,
+  type UsearchAnnCandidate,
+  type UsearchAnnPartition,
+  type UsearchAnnSearchRequest,
+  type UsearchAnnSearchResult,
+  type UsearchVectorEntry,
+} from "./usearch-ann-index.js";
 
 // The `knowledge`/`repo` implementations of the pillar-neutral `VectorIndexPort` (ADR-0152
 // D1/D3). Both are exported here; the server composes them into the LK retrieval path

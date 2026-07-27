@@ -292,4 +292,21 @@ describe("scoreContextBudgetFit", () => {
     expect(scoreContextBudgetFit(returned, tokens, 0)).toBe(0);
     expect(scoreContextBudgetFit(returned, tokens, -5)).toBe(0);
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "fails closed for a non-finite configured budget (%s)",
+    (budget) => {
+      expect(scoreContextBudgetFit([makeRef("c1", "cap")], new Map([["c1", 20]]), budget)).toBe(0);
+    },
+  );
+
+  it("fails closed for a non-finite retrieved token count", () => {
+    expect(
+      scoreContextBudgetFit(
+        [makeRef("c1", "cap")],
+        new Map([["c1", Number.POSITIVE_INFINITY]]),
+        20,
+      ),
+    ).toBe(0);
+  });
 });

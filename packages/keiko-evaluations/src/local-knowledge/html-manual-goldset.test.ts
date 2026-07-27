@@ -5,7 +5,7 @@
 //   1. Every new manual query class clears all eight scorecard dimensions deterministically.
 //   2. The denied-link and malformed-page classes return no evidence with the `below-min-score`
 //      reason rather than a confident wrong answer.
-//   3. A repointed ground-truth expectation drops the scorecard below the floors, so a real
+//   3. Genuinely empty retrieval output drops the unchanged goldset below the floors, so a real
 //      retrieval/citation regression is caught and the failing dimension identifies the root area.
 
 import { describe, expect, it } from "vitest";
@@ -19,6 +19,7 @@ import {
   htmlManualMultilingualFixture,
   htmlManualTableRowFixture,
 } from "./fixtures.js";
+import { runBadOutputRetrievalProbe } from "./regression-probes.js";
 import { runRetrievalEval, runRetrievalEvalReferences } from "./runner.js";
 import { PASS_THRESHOLDS, type RetrievalEvalFixture } from "./types.js";
 
@@ -104,28 +105,15 @@ describe("html-manual goldset fixtures — citation-open resolves an openable an
 });
 
 describe("html-manual goldset fixtures — the scorecard is non-tautological", () => {
-  it("repointing a ground-truth expectation at a decoy chunk drops recall below the floor", async () => {
-    // Mirror the gate's regression probe: swap the first citation-open query's expected chunk for a
-    // sibling the retriever will NOT return, and assert the scorecard now fails on recall — proving
-    // the pass in the suites above reflects real retrieval, not a vacuous fixture.
+  it("genuinely empty retrieval output drops recall below the unchanged gold floor", async () => {
     const baseline = await runRetrievalEval(htmlManualDeniedLinkFixture);
     expect(baseline.passed).toBe(true);
 
-    // Pull the already-branded decoy ChunkId from the fixture rather than casting a raw string.
-    const allChunks = htmlManualDeniedLinkFixture.capsules.flatMap((capsule) =>
-      capsule.sources.flatMap((source) => source.documents.flatMap((doc) => doc.chunks)),
+    const expected = htmlManualDeniedLinkFixture.queries.map((query) => query.expectedChunkIds);
+    const scorecard = await runBadOutputRetrievalProbe(htmlManualDeniedLinkFixture);
+    expect(htmlManualDeniedLinkFixture.queries.map((query) => query.expectedChunkIds)).toEqual(
+      expected,
     );
-    const decoy = allChunks.find((chunk) => String(chunk.id) === "c-denied-scope-note");
-    if (decoy === undefined) throw new Error("expected decoy chunk c-denied-scope-note not found");
-
-    const regressed: RetrievalEvalFixture = {
-      ...htmlManualDeniedLinkFixture,
-      id: "html-manual-denied-link-regression-probe",
-      queries: htmlManualDeniedLinkFixture.queries.map((query) =>
-        query.id === "q-denied-citation-open" ? { ...query, expectedChunkIds: [decoy.id] } : query,
-      ),
-    };
-    const scorecard = await runRetrievalEval(regressed);
     expect(scorecard.dimensions.recall).toBeLessThan(PASS_THRESHOLDS.recall);
     expect(scorecard.passed).toBe(false);
   });

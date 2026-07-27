@@ -13,6 +13,7 @@ import {
   type VoiceAcousticTraceEvent,
   type VoiceAcousticTraceEventKind,
 } from "./types.js";
+import { meetsFiniteCeiling } from "../quality-helpers.js";
 
 export const DEFAULT_VOICE_ACOUSTIC_BUDGETS: VoiceAcousticBudgets = {
   maxWer: 0.08,
@@ -173,7 +174,7 @@ function numericCheck(
     metric,
     actual,
     budget,
-    passed: actual !== null && actual >= 0 && actual <= budget,
+    passed: actual !== null && actual >= 0 && meetsFiniteCeiling(actual, budget),
   };
 }
 

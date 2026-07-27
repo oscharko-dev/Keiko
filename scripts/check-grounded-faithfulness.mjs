@@ -8,12 +8,32 @@
 
 import {
   DEFAULT_GROUNDED_FAITHFULNESS_BUDGET,
-  evaluateGroundedFaithfulnessBudget,
   runGroundedFaithfulnessEval,
 } from "@oscharko-dev/keiko-server";
+import { evaluateFloors } from "@oscharko-dev/keiko-evaluations";
 
 function formatPct(value) {
   return `${(value * 100).toFixed(1)}%`;
+}
+
+export function evaluateFaithfulnessFloors(
+  scorecard,
+  budget = DEFAULT_GROUNDED_FAITHFULNESS_BUDGET,
+) {
+  const floorResult = evaluateFloors(
+    {
+      unsupportedDetectionRate: scorecard.unsupportedDetectionRate,
+      citationPrecision: scorecard.citationPrecision,
+      abstentionOnEmptyRate: scorecard.abstentionOnEmptyRate,
+    },
+    {
+      unsupportedDetectionRate: budget.minUnsupportedDetectionRate,
+      citationPrecision: budget.minCitationPrecision,
+      abstentionOnEmptyRate: budget.minAbstentionOnEmptyRate,
+    },
+  );
+  const failures = [...scorecard.failures, ...floorResult.failures];
+  return { ok: failures.length === 0, failures };
 }
 
 export function runGroundedFaithfulnessGate({ log, fail } = {}) {
@@ -26,7 +46,7 @@ export function runGroundedFaithfulnessGate({ log, fail } = {}) {
     });
 
   const scorecard = runGroundedFaithfulnessEval();
-  const result = evaluateGroundedFaithfulnessBudget(scorecard);
+  const result = evaluateFaithfulnessFloors(scorecard);
   onLog(
     `grounded-faithfulness: fixtures=${String(scorecard.fixtures)} ` +
       `unsupported-detection=${formatPct(scorecard.unsupportedDetectionRate)} ` +

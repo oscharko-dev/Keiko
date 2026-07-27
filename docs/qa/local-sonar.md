@@ -38,11 +38,13 @@ single MINOR of this class fails the required `ci` context.
 
 1. Starts a **self-hosted** SonarQube (digest-pinned, bound to `127.0.0.1:9234`) from
    `docker/gates/sonar-compose.yml`. First start pulls the image and takes a few minutes; every later
-   start reuses the cached volumes and takes seconds.
+   start reuses the cached volumes and takes seconds. Worktrees of one repository share that
+   server, its persisted administrator credential, and its cache.
 2. Provisions a local analysis token. There is no account, no secret and no network dependency.
-3. Analyses the working tree under a checkout-scoped project key (`keiko-local-<hash>`), so
-   several checkouts or agent sessions on one machine can run the lane concurrently without
-   overwriting each other's analysis state or revoking each other's in-flight token.
+3. Analyses committed branch changes plus staged, unstaged, and untracked working-tree files under
+   a checkout-scoped project key (`keiko-local-<hash>`), so several checkouts or agent sessions on
+   one machine can run the lane concurrently without overwriting each other's analysis state or
+   revoking each other's in-flight token.
 4. Prints the findings that land **on files this branch changed against `origin/dev`**, and exits
    non-zero if there are any.
 
@@ -51,6 +53,15 @@ npm run gates:sonar          # findings on your diff — the pre-push question
 npm run gates:sonar:all      # every finding in the project
 npm run gates:sonar:stop     # stop the server, keep its cache
 ./docker/gates/run-sonar.sh --base main   # diff against another base
+```
+
+If port 9234 is occupied by another local analyzer, select an unused loopback port. The port is
+part of the Compose-project identity, so this starts an isolated server and leaves the existing
+container and volumes untouched:
+
+```bash
+KEIKO_LOCAL_SONAR_PORT=9235 npm run gates:sonar
+KEIKO_LOCAL_SONAR_PORT=9235 npm run gates:sonar:stop
 ```
 
 ## What it is not
@@ -88,9 +99,10 @@ anyway: the rule is real, and the organisation's profile can change.
 
 ## Troubleshooting
 
-| Symptom                                   | Cause and fix                                                                                                                                                                          |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `could not obtain a local analysis token` | The server is up but the bootstrap failed. `npm run gates:sonar:stop`, then `docker volume rm gates_sonar-data` and re-run — the first-run password change is recorded in that volume. |
-| The server never becomes healthy          | SonarQube needs roughly 2 GB. Raise Docker Desktop's memory limit, then re-run.                                                                                                        |
-| `no diff against origin/dev`              | Fetch first (`git fetch origin`). The scan falls back to reporting every finding in the project.                                                                                       |
-| The scan is slow on the first run         | Expected: the analyzer downloads its Node runtime once into a cached volume. Later runs reuse it.                                                                                      |
+| Symptom                                   | Cause and fix                                                                                                                                                                                                                                        |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Port 9234 is already allocated            | Another analyzer is active. Run with an unused `KEIKO_LOCAL_SONAR_PORT` as shown above; do not stop or delete an unrelated server.                                                                                                                   |
+| `could not obtain a local analysis token` | The selected server's persisted password and credential file disagree. Stop that same port, remove only its repository/port-scoped `sonar-data` volume and reported credential file, then re-run. Never delete a different Compose project's volume. |
+| The server never becomes healthy          | SonarQube needs roughly 2 GB. Raise Docker Desktop's memory limit, then re-run.                                                                                                                                                                      |
+| `no diff against origin/dev`              | Fetch first (`git fetch origin`). The scan falls back to reporting every finding in the project.                                                                                                                                                     |
+| The scan is slow on the first run         | Expected: the analyzer downloads its Node runtime once into a cached volume. Later runs reuse it.                                                                                                                                                    |

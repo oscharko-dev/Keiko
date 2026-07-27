@@ -99,6 +99,34 @@ function rebindNativeHelper(stageRoot, helper, resourceRoot) {
   writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
 }
 
+function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
+  if (manifest.nativeAddons === undefined) return;
+  if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
+    fail("signed payload must contain exactly one native addon");
+  }
+  const addon = manifest.nativeAddons[0];
+  const executable = containedResourcePath(resourceRoot, addon.executablePath);
+  const entry = lstatSync(executable);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("native addon is not a regular single-link file");
+  }
+  addon.shippedSha256 = sha256Bytes(readFileSync(executable));
+  addon.sizeBytes = entry.size;
+  const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
+  let sbom;
+  try {
+    sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
+  } catch {
+    fail("portable SBOM is invalid");
+  }
+  const matches = (sbom.components ?? []).filter(
+    (component) => component?.["bom-ref"] === addon.sbomBomRef,
+  );
+  if (matches.length !== 1) fail("native addon CycloneDX component is missing or ambiguous");
+  matches[0].hashes = [{ alg: "SHA-256", content: addon.shippedSha256 }];
+  writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
+}
+
 function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -194,6 +222,7 @@ export function rebindSignedPayload(stageRoot, manifest, platformTarget) {
   const resourceRoot = portableResourceRoot(stageRoot, platformTarget);
   rebindSidecars(manifest, resourceRoot, true);
   rebindNativeHelpers(stageRoot, manifest, resourceRoot);
+  rebindNativeAddon(stageRoot, manifest, resourceRoot);
   if (manifest.runtimeActivation !== undefined) {
     writeRuntimeActivationManifest(resourceRoot, manifest);
   }
@@ -212,6 +241,9 @@ function rebindReviewedBinding(manifest, archiveSha256) {
   }
   if (manifest.nativeHelpers !== undefined) {
     binding.nativeHelpers = globalThis.structuredClone(manifest.nativeHelpers);
+  }
+  if (manifest.nativeAddons !== undefined) {
+    binding.nativeAddons = globalThis.structuredClone(manifest.nativeAddons);
   }
   if (manifest.runtimeAttestation !== undefined) {
     binding.runtimeAttestation = globalThis.structuredClone(manifest.runtimeAttestation);
@@ -260,17 +292,10 @@ function rebindProvenance(stageRoot, manifest, archiveSha256) {
   const provenance = JSON.parse(readFileSync(provenancePath, "utf8"));
   provenance.subjectDigest = archiveSha256;
   if (manifest.nativeHelpers !== undefined) {
-    provenance.nativeHelpers = manifest.nativeHelpers.map((helper) => ({
-      architecture: helper.architecture,
-      executablePath: helper.executablePath,
-      name: helper.name,
-      shippedSha256: helper.shippedSha256,
-      signatureKind: helper.signing.signatureKind,
-      signatureVerified: helper.signing.signatureVerified,
-      notarizationVerified: helper.signing.notarizationVerified,
-      sourceTreeSha256: helper.source.treeSha256,
-      unsignedSha256: helper.unsignedSha256,
-    }));
+    provenance.nativeHelpers = manifest.nativeHelpers.map(nativeHelperProvenance);
+  }
+  if (manifest.nativeAddons !== undefined) {
+    provenance.nativeAddons = manifest.nativeAddons.map(nativeAddonProvenance);
   }
   if (manifest.runtimeAttestation !== undefined) {
     provenance.runtimeAttestation = {
@@ -290,4 +315,34 @@ function rebindProvenance(stageRoot, manifest, archiveSha256) {
   const provenanceText = `${JSON.stringify(provenance)}\n`;
   writeFileSync(provenancePath, provenanceText);
   return provenanceText;
+}
+
+function nativeHelperProvenance(helper) {
+  return {
+    architecture: helper.architecture,
+    executablePath: helper.executablePath,
+    name: helper.name,
+    shippedSha256: helper.shippedSha256,
+    signatureKind: helper.signing.signatureKind,
+    signatureVerified: helper.signing.signatureVerified,
+    notarizationVerified: helper.signing.notarizationVerified,
+    sourceTreeSha256: helper.source.treeSha256,
+    unsignedSha256: helper.unsignedSha256,
+  };
+}
+
+function nativeAddonProvenance(addon) {
+  return {
+    architecture: addon.architecture,
+    executablePath: addon.executablePath,
+    name: addon.name,
+    shippedSha256: addon.shippedSha256,
+    signatureKind: addon.signing.signatureKind,
+    signatureVerified: addon.signing.signatureVerified,
+    notarizationVerified: addon.signing.notarizationVerified,
+    sourceCommitSha: addon.source.commitSha,
+    tarballSha256: addon.source.tarballSha256,
+    unsignedSha256: addon.unsignedSha256,
+    version: addon.version,
+  };
 }

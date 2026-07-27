@@ -9,15 +9,22 @@ reports them on stdout and deliberately keeps them out of this document.
 | -------------- | -------------------------------------- | ---------------------------------------------------------------: |
 | ANN            | vector rows                            |                                                            20001 |
 | ANN            | exact scan cap                         |                                                            20000 |
+| ANN            | provider                               |                                                          usearch |
+| ANN            | search mode                            |                                                              ann |
+| ANN            | examined candidate ceiling             |                                                           <20001 |
+| ANN            | index byte ceiling                     |                                                      <=268435456 |
 | ANN            | minimum recall@10                      |                                                            1.000 |
 | ANN            | encrypted ANN diagnostic               |                                                        available |
-| ANN            | encrypted temp_store                   |                                                           memory |
-| ANN            | encrypted unpinned diagnostic          |                                         fallback-encrypted-store |
-| ANN            | load diagnostic                        |                                 sqlite-vec-extension-load-failed |
+| ANN            | SQLite extension authority denied      |                                                             true |
+| ANN            | native persistence API references      |                                                                0 |
+| ANN            | load diagnostic                        |                                              runtime-unavailable |
 | ANN            | partition violations                   |                                                                0 |
 | ANN            | latency vector dimensions              |                                                              384 |
 | ANN            | latency large rows                     |                                                            50000 |
 | ANN            | latency small rows                     |                                                              500 |
+| ANN            | latency large search mode              |                                                              ann |
+| ANN            | latency small search mode              |                                                            exact |
+| ANN            | qualified RSS delta ceiling            |                                                      <=536870912 |
 | ANN            | latency large minimum recall@10        |                                                            1.000 |
 | ANN            | degenerate injection max recall        |                                                            0.000 |
 | ANN            | degenerate decoy chunk count           |                                                               10 |

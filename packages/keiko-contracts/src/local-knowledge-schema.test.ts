@@ -225,11 +225,11 @@ function seedVectorIndexState(db: DatabaseSync, capsuleId: string): void {
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       capsuleId,
-      "sqlite-vec",
+      "usearch",
       "keiko_lk_vec_1536_cosine",
       1536,
       "cosine",
-      "openai|text-embedding-3-small|1536|cosine|legacy|legacy|unverified|",
+      'keiko-embedding-identity:v2:["openai","text-embedding-3-small",1536,"cosine",null,null,null,null]',
       1,
       1000,
       "ready",
@@ -244,7 +244,10 @@ function countRows(db: DatabaseSync, table: string): number {
   return typeof row.n === "number" ? row.n : 0;
 }
 
-function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly string[] {
+function listSqliteMaster(
+  db: DatabaseSync,
+  type: "table" | "index" | "trigger",
+): readonly string[] {
   const rows = db
     .prepare(`SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE 'sqlite_%'`)
     .all(type) as { name?: string }[];
@@ -253,8 +256,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 30 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(30);
+  it("is the integer 32 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(32);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -338,6 +341,42 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       expect(byName.has("embedding")).toBe(false);
       const indexes = listSqliteMaster(db, "index");
       expect(indexes).toContain("idx_vector_index_state_capsule_status");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("dirties ready vector-index state after every vector mutation class", () => {
+    const db = openSchemaDb();
+    try {
+      seedFullLineage(db);
+      const readyState = (): void => {
+        db.prepare("UPDATE vector_index_state SET status = 'ready'").run();
+      };
+      const status = (): unknown =>
+        db.prepare("SELECT status FROM vector_index_state").get()?.status;
+
+      readyState();
+      db.prepare("UPDATE vectors SET created_at = created_at + 1").run();
+      expect(status()).toBe("dirty");
+
+      readyState();
+      db.prepare(
+        `INSERT INTO vectors (
+          id, capsule_id, source_id, document_id, chunk_id, embedding,
+          embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric,
+          storage_reference, created_at
+        ) SELECT
+          'vector-copy', capsule_id, source_id, document_id, chunk_id, embedding,
+          embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric,
+          storage_reference, created_at
+        FROM vectors LIMIT 1`,
+      ).run();
+      expect(status()).toBe("dirty");
+
+      readyState();
+      db.prepare("DELETE FROM vectors WHERE id = 'vector-copy'").run();
+      expect(status()).toBe("dirty");
     } finally {
       db.close();
     }
@@ -709,6 +748,35 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
       for (const expected of KNOWLEDGE_CAPSULE_TABLES) {
         expect(tables).toContain(expected);
       }
+      expect(listSqliteMaster(db, "trigger")).toEqual(
+        expect.arrayContaining([
+          "vectors_index_state_ai",
+          "vectors_index_state_au",
+          "vectors_index_state_ad",
+        ]),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("v31 discards only obsolete runtime vector-index materialization state", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v31 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((migration) => migration.version === 31);
+      if (v31 === undefined) throw new Error("expected v31 migration");
+      for (const migration of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (migration.version >= 31) break;
+        for (const statement of migration.up) db.exec(statement);
+      }
+      seedFullLineage(db);
+      expect(countRows(db, "vectors")).toBe(1);
+      expect(countRows(db, "vector_index_state")).toBe(1);
+
+      for (const statement of v31.up) db.exec(statement);
+
+      expect(countRows(db, "vectors")).toBe(1);
+      expect(countRows(db, "vector_index_state")).toBe(0);
     } finally {
       db.close();
     }

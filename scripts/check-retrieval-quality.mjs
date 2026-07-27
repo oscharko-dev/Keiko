@@ -20,9 +20,12 @@ import { DEFAULT_SEARCH_LIMITS, readExcerpt, searchText } from "@oscharko-dev/ke
 const {
   ALL_FIXTURES,
   PASS_THRESHOLDS,
+  RETRIEVAL_REGRESSION_PROBE_FIXTURE_IDS,
   computeRetrievalModeComparison,
+  hasRetrievalGroundTruth,
   renderRetrievalModeComparisonReport,
   renderRetrievalEvalQualityGateReport,
+  runBadOutputRetrievalProbe,
   runRetrievalEval,
 } = LocalKnowledgeEval;
 
@@ -299,7 +302,11 @@ export function evaluateQualityBudget(summary, budget) {
     lineHitRate: budget.minLineHitRate,
   });
   const failures = [...minimumResult.failures];
-  if (summary.generatedLeakCount > budget.maxGeneratedLeakCount)
+  if (
+    !Number.isFinite(summary.generatedLeakCount) ||
+    !Number.isFinite(budget.maxGeneratedLeakCount) ||
+    summary.generatedLeakCount > budget.maxGeneratedLeakCount
+  )
     failures.push("generatedLeakCount");
   if (summary.failedCases.length > 0) failures.push("caseFailures");
   return { ok: failures.length === 0, failures };
@@ -604,89 +611,23 @@ export async function runLocalKnowledgeQualityCheck(
 // ─── Non-tautology regression probes ─────────────────────────────────────────
 // A scorecard gate that only ever runs passing fixtures cannot prove it would catch a real
 // regression. Mirroring the injected-regression proof in `check-grounded-retrieval-quality.mjs`,
-// we deliberately repoint a probe fixture's ground-truth expectations at a decoy chunk the
-// retriever will NOT return, then assert the scorecard drops below the pass thresholds. If a
-// regressed probe still clears the floors, the Local Knowledge quality gate is tautological and is
-// failed here rather than silently rubber-stamping retrieval changes.
+// we preserve each probe's gold expectations and replace the real retriever's references with a
+// genuinely bad empty output immediately before scoring. If that output still clears the floors,
+// the Local Knowledge quality gate is tautological and fails closed.
 
-export const REGRESSION_PROBE_FIXTURE_IDS = [
-  "exact-technical",
-  "semantic-paraphrase",
-  "multilingual-retrieval",
-  // #1818 embedding-space governance: prove the multi-space (two-lane) scorecard is not
-  // tautological either. The fixture's corpus is exactly its expected chunks, so the probe
-  // repoints expectations at the ABSENT_CHUNK_SENTINEL and asserts recall drops below floors.
-  "multi-space",
-  // #1855 technical HTML structure: prove the new manual-structure axis is non-tautological —
-  // repointing each query at a different-topic decoy row must drop recall below the floors.
-  "html-manual-structure",
-  // Code-repository + chained-question retrieval: prove the new source-code and multi-part
-  // question axes are non-tautological the same way — repointed expectations must fail.
-  "code-repository",
-  "chained-question",
-  // #1858 HTML manual goldset extensions (#1902/#1903): each new manual query class must be
-  // non-tautological too — repointing every ground-truth expectation at a decoy chunk must drop
-  // recall below the floors. No-evidence queries carry no expectedChunkIds and are skipped by the
-  // probe, so each of these fixtures is probed through its ground-truth retrieval queries.
-  "html-manual-table-row",
-  "html-manual-frameset",
-  "html-manual-code-block",
-  "html-manual-malformed",
-  "html-manual-denied-link",
-  "html-manual-index-page",
-  "html-manual-multilingual",
-  // #2242/#2243 connector-pod goldsets (Epic #2238): the synced-Confluence and synced-Jira
-  // retrieval axes must be non-tautological the same way — repointed expectations must drop
-  // below the floors.
-  "confluence-connector-pod",
-  "jira-connector-pod",
-];
-
-const ABSENT_CHUNK_SENTINEL = "__keiko_regression_absent_chunk__";
-
-function corpusChunkIds(fixture) {
-  const ids = [];
-  for (const capsule of fixture.capsules) {
-    for (const source of capsule.sources) {
-      for (const document of source.documents) {
-        for (const chunk of document.chunks) ids.push(String(chunk.id));
-      }
-    }
-  }
-  return ids;
-}
-
-export function regressFixtureExpectations(fixture) {
-  // Fixtures are plain JSON data (branded-string ids, numbers, nested arrays/objects) with no
-  // functions, Dates, Maps, or Sets, so a structured-clone round-trip is a safe, dependency-free
-  // deep clone.
-  const clone = structuredClone(fixture);
-  const chunkIds = corpusChunkIds(clone);
-  clone.id = `${fixture.id}-regression-probe`;
-  clone.queries = clone.queries
-    .filter((query) => Array.isArray(query.expectedChunkIds) && query.expectedChunkIds.length > 0)
-    .map((query) => {
-      const expected = new Set(query.expectedChunkIds.map(String));
-      const decoy = chunkIds.find((id) => !expected.has(id)) ?? ABSENT_CHUNK_SENTINEL;
-      return { ...query, expectedChunkIds: [decoy] };
-    });
-  return clone;
-}
+export const REGRESSION_PROBE_FIXTURE_IDS = RETRIEVAL_REGRESSION_PROBE_FIXTURE_IDS;
 
 export async function runLocalKnowledgeRegressionProbes(
   log,
   fixtures = ALL_FIXTURES,
-  runner = runRetrievalEval,
+  runner = runBadOutputRetrievalProbe,
   probeFixtureIds = REGRESSION_PROBE_FIXTURE_IDS,
 ) {
   const result = await runRegressionProbes({
     fixtures,
     probeFixtureIds,
     fixtureId: (fixture) => fixture.id,
-    regressFixture: (fixture) => {
-      const regressed = regressFixtureExpectations(fixture);
-      return regressed.queries.length === 0 ? undefined : regressed;
-    },
+    regressFixture: (fixture) => (hasRetrievalGroundTruth(fixture) ? fixture : undefined),
     runFixture: runner,
     droppedBelowFloors: (card) => localKnowledgeFailuresFor(card).length > 0,
     observe: ({ fixtureId, droppedBelowFloors }) =>

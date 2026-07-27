@@ -11,6 +11,11 @@ import {
   type CodingContextRequest,
   type EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import type {
+  GatewayConfig,
+  LiteLLMRerankRequest,
+  RerankOutcome,
+} from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
 import type { GitHubCodeContextApiPort } from "../coding-context/githubCodeContextConnector.js";
@@ -22,6 +27,37 @@ let root: string;
 
 function deps(): UiHandlerDeps {
   return { redactor: buildRedactor({}) } as unknown as UiHandlerDeps;
+}
+
+function rerankerConfig(): GatewayConfig {
+  return {
+    providers: [],
+    capabilities: [],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    egress: { noProxy: ["pinned.example.com"] },
+    reranker: {
+      modelId: "coding-context-reranker",
+      baseUrl: "https://pinned.example.com/v1",
+      apiKey: "reranker-test-key",
+      timeoutMs: 30_000,
+    },
+  };
+}
+
+function rerankingDeps(
+  current: () => GatewayConfig | undefined,
+  rerankRequest: (request: LiteLLMRerankRequest) => Promise<RerankOutcome>,
+): UiHandlerDeps {
+  return {
+    ...deps(),
+    gatewayConfig: {
+      storagePath: "/runtime/config.json",
+      current,
+      present: () => true,
+      set: () => undefined,
+    },
+    rerankRequest,
+  };
 }
 
 const CONNECTED_ISSUE_TITLE = "Widget crash on save";
@@ -136,6 +172,79 @@ describe("assembleCodingContext", () => {
     expect(JSON.stringify(wire)).not.toContain("parseConfig(value");
     expect(wire.entries.every((entry) => !("text" in entry))).toBe(true);
     expect(wire.usedBytes).toBe(pack.usedBytes);
+  });
+
+  it("routes final context ranking through one immutable gateway-config snapshot", async () => {
+    await writeFile(join(root, "src", "b.ts"), "export const secondary = true;\n", "utf8");
+    const input = request({ queryText: undefined, changedFiles: ["src/b.ts"] });
+    const baseline = await assembleCodingContext(input, ctx(new AbortController().signal));
+    const pinned = rerankerConfig();
+    const saved: GatewayConfig = {
+      ...rerankerConfig(),
+      egress: { noProxy: ["saved.example.com"] },
+      reranker: {
+        ...rerankerConfig().reranker,
+        modelId: "saved-reranker",
+        baseUrl: "https://saved.example.com/v1",
+        apiKey: "saved-reranker-test-key",
+        timeoutMs: 30_000,
+      },
+    };
+    let configReads = 0;
+    let captured: LiteLLMRerankRequest | undefined;
+    const configured = rerankingDeps(
+      () => {
+        configReads += 1;
+        return configReads === 1 ? pinned : saved;
+      },
+      (rerankRequest) => {
+        captured = rerankRequest;
+        return Promise.resolve({
+          ok: true,
+          value: {
+            modelId: rerankRequest.modelId,
+            results: rerankRequest.documents.map((_document, index) => ({
+              index: rerankRequest.documents.length - index - 1,
+            })),
+          },
+        });
+      },
+    );
+
+    const pack = await assembleCodingContext(
+      input,
+      ctx(new AbortController().signal, { deps: configured }),
+    );
+
+    expect(baseline.excerpts.length).toBeGreaterThan(1);
+    expect(pack.excerpts.map((entry) => entry.citation.id)).toEqual(
+      baseline.excerpts.map((entry) => entry.citation.id).reverse(),
+    );
+    expect(pack.excerpts.map((entry) => entry.citation.rank)).toEqual(
+      pack.excerpts.map((_entry, index) => index),
+    );
+    expect(configReads).toBe(1);
+    expect(captured?.endpoint).toBe("https://pinned.example.com/v1");
+    expect(captured?.egress).toEqual({ noProxy: ["pinned.example.com"] });
+    expect(JSON.stringify(pack)).not.toContain("reranker-test-key");
+  });
+
+  it("does not externally rerank keystroke-sensitive context", async () => {
+    const rerankRequest = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        value: { modelId: "coding-context-reranker", results: [{ index: 0 }] },
+      } as const),
+    );
+    const pack = await assembleCodingContext(
+      request({ purpose: "inline" }),
+      ctx(new AbortController().signal, {
+        deps: rerankingDeps(rerankerConfig, rerankRequest),
+      }),
+    );
+
+    expect(rerankRequest).not.toHaveBeenCalled();
+    expect(pack.excerpts.length).toBeGreaterThan(0);
   });
 
   it("excludes embedding-cost providers for the keystroke-sensitive inline purpose", async () => {

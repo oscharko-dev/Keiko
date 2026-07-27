@@ -23,6 +23,7 @@ import {
   type PromptQualityDimensionResult,
   type PromptQualityScorecardEntry,
 } from "./types.js";
+import { meetsFiniteCeiling, meetsFiniteFloor } from "../quality-helpers.js";
 
 const DEFAULT_MIN_CLARITY = 0.85;
 const DEFAULT_MIN_COMPLETENESS = 0.2;
@@ -73,7 +74,10 @@ function scoreClarity(
     { label: "goal present", ok: p.goal.trim().length > 0 },
     { label: "context populated", ok: p.context.length > 0 },
     { label: "at least two ordered steps", ok: p.taskDecomposition.length >= 2 },
-    { label: `clarity critic >= ${String(min)}`, ok: criticScore(obs, "clarity") >= min },
+    {
+      label: `clarity critic >= ${String(min)}`,
+      ok: meetsFiniteFloor(criticScore(obs, "clarity"), min),
+    },
   ]);
 }
 
@@ -88,7 +92,10 @@ function scoreCompleteness(
     { label: "quality criteria present", ok: p.qualityCriteria.length > 0 },
     { label: "constraints present", ok: p.constraints.length > 0 },
     { label: "uncertainty handling present", ok: p.uncertaintyHandling.length > 0 },
-    { label: `completeness critic >= ${String(min)}`, ok: criticScore(obs, "completeness") >= min },
+    {
+      label: `completeness critic >= ${String(min)}`,
+      ok: meetsFiniteFloor(criticScore(obs, "completeness"), min),
+    },
   ]);
 }
 
@@ -270,11 +277,13 @@ function scoreTokenEfficiency(
     {
       label: `estimated tokens within fixture ceiling (${String(obs.estimatedTokens)})`,
       ok:
-        oracle.maxEstimatedTokens === undefined || obs.estimatedTokens <= oracle.maxEstimatedTokens,
+        oracle.maxEstimatedTokens === undefined
+          ? Number.isFinite(obs.estimatedTokens)
+          : meetsFiniteCeiling(obs.estimatedTokens, oracle.maxEstimatedTokens),
     },
     {
       label: `token-efficiency critic >= ${String(min)}`,
-      ok: criticScore(obs, "token-efficiency") >= min,
+      ok: meetsFiniteFloor(criticScore(obs, "token-efficiency"), min),
     },
   ]);
 }

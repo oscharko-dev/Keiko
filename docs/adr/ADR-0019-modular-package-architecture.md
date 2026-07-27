@@ -4,7 +4,7 @@ Status: Accepted
 
 Date: 2026-06-03
 
-Version: 1.0
+Version: 1.1
 
 ## Decision
 
@@ -88,6 +88,17 @@ The architecture sprint must add automated rules for these invariants:
 - CLI and server may wire dependencies; they must not bypass package ports.
 - Package-local tests may use narrowly documented exceptions for integration coverage, but production source must follow the dependency graph.
 
+`keiko-local-knowledge` remains network- and process-egress-free. One narrowly bounded local
+execution exception is permitted for the in-memory USearch HNSW runtime introduced by Epic #2556:
+`retrieval/usearch-ann-index.ts` may launch the checked-in
+`retrieval/usearch-index-worker.ts`, and that worker may read its startup data from
+`node:worker_threads`. The exception exists to isolate the reviewed, digest-pinned native addon
+from the BFF thread; it does not authorize arbitrary worker entrypoints, child processes, network
+modules, generated code, or filesystem persistence. The worker receives only bounded
+`SharedArrayBuffer` inputs and the already verified addon path, repeats runtime integrity checks,
+and exposes add/search only. Architecture negative controls must keep every other Local Knowledge
+worker import denied.
+
 The rules should be enforced by TypeScript project references, package `exports`, dependency-cruiser, lint configuration, and package-surface verification.
 
 ## Build And Packaging Model
@@ -170,4 +181,5 @@ This ADR is the anchor for the architecture sprint. If a package boundary, depen
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1 | 2026-07-27 | Narrowly permit the statically checked, egress-free USearch ANN worker boundary while preserving the general Local Knowledge worker/network denial. |
 | 1.0 | 2026-06-03 | Accepted modular package architecture as Keiko's next foundation before major feature expansion. |

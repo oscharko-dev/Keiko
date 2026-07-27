@@ -68,10 +68,6 @@ const LEXICAL_RECALL_MIN_TOKEN_LENGTH = 3;
 const MAX_DECODED_VECTOR_CACHE_ENTRIES = 16;
 const DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS = 20_000;
 const GUIDED_DENSE_RERANK_MAX_ROWS = 1_000;
-const ANN_HASH_BITS = 18;
-const ANN_PROJECTION_WIDTH = 32;
-const ANN_RERANK_MAX_ROWS = 1_000;
-const DEFAULT_MAX_ANN_INDEX_ROWS = 250_000;
 const EXACT_TERM_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}._:/#-]{2,}/gu;
 const EXACT_QUOTED_PHRASE_PATTERN = /"([^"\r\n]{3,})"/gu;
 const BROAD_QUERY_PATTERN =
@@ -136,6 +132,10 @@ export interface RetrievalScopeInput {
 
 export interface SearchOptions {
   readonly topK: number;
+  // Restricts every dense and lexical lane to an exact caller-owned candidate set. An empty
+  // filter means "search nothing", never "all chunks". Repository freshness uses this to keep
+  // newly embedded live-file candidates from competing with unrelated pod-wide rows.
+  readonly chunkFilter?: readonly string[];
   readonly minScore?: number;
   readonly signal?: AbortSignal;
   readonly strategy?: RetrievalStrategy;
@@ -271,8 +271,6 @@ function touchStoreCache<V>(cache: Map<string, V>, identity: string, created: V)
 }
 
 const DECODED_VECTOR_CACHE = new Map<string, Map<string, readonly DecodedVectorRow[]>>();
-const ANN_INDEX_CACHE = new Map<string, Map<string, AnnIndex>>();
-const ANN_PROJECTION_CACHE = new Map<string, readonly AnnProjection[]>();
 
 function readVectorsForCapsule(
   store: KnowledgeStore,
@@ -344,275 +342,6 @@ function decodeCacheForStore(store: KnowledgeStore): Map<string, readonly Decode
   return touchStoreCache(DECODED_VECTOR_CACHE, identity, created);
 }
 
-interface AnnProjection {
-  readonly indices: Uint32Array;
-  readonly signs: Int8Array;
-}
-
-interface AnnIndex {
-  readonly rows: readonly DecodedVectorRow[];
-  readonly buckets: ReadonlyMap<number, readonly number[]>;
-  readonly projections: readonly AnnProjection[];
-  readonly rowCount: number;
-}
-
-type AnnIndexReadResult =
-  | { readonly kind: "ready"; readonly index: AnnIndex }
-  | { readonly kind: "empty"; readonly rowCount: number }
-  | { readonly kind: "skipped-too-large"; readonly rowCount: number; readonly limit: number };
-
-function annCacheForStore(store: KnowledgeStore): Map<string, AnnIndex> {
-  const identity = storeCacheIdentity(store);
-  const cached = ANN_INDEX_CACHE.get(identity);
-  if (cached !== undefined) {
-    return touchStoreCache(ANN_INDEX_CACHE, identity, cached);
-  }
-  const created = new Map<string, AnnIndex>();
-  return touchStoreCache(ANN_INDEX_CACHE, identity, created);
-}
-
-function fnv1a32(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
-}
-
-function mix32(value: number): number {
-  let x = value >>> 0;
-  x ^= x >>> 16;
-  x = Math.imul(x, 0x7feb352d) >>> 0;
-  x ^= x >>> 15;
-  x = Math.imul(x, 0x846ca68b) >>> 0;
-  x ^= x >>> 16;
-  return x >>> 0;
-}
-
-function annProjectionCacheKey(identity: EmbeddingModelIdentity): string {
-  return `${identityKey(identity)}|ann:${String(ANN_HASH_BITS)}:${String(ANN_PROJECTION_WIDTH)}`;
-}
-
-function annProjectionsFor(identity: EmbeddingModelIdentity): readonly AnnProjection[] {
-  const key = annProjectionCacheKey(identity);
-  const cached = ANN_PROJECTION_CACHE.get(key);
-  if (cached !== undefined) return cached;
-  const seed = fnv1a32(key);
-  const projections: AnnProjection[] = [];
-  for (let bit = 0; bit < ANN_HASH_BITS; bit += 1) {
-    const indices = new Uint32Array(ANN_PROJECTION_WIDTH);
-    const signs = new Int8Array(ANN_PROJECTION_WIDTH);
-    for (let lane = 0; lane < ANN_PROJECTION_WIDTH; lane += 1) {
-      const mixed = mix32(seed ^ Math.imul(bit + 1, 0x9e3779b1) ^ Math.imul(lane + 1, 0x85ebca6b));
-      indices[lane] = mixed % identity.vectorDimensions;
-      signs[lane] = (mixed & 0x80000000) === 0 ? 1 : -1;
-    }
-    projections.push({ indices, signs });
-  }
-  ANN_PROJECTION_CACHE.set(key, projections);
-  return projections;
-}
-
-function annHash(vector: Float32Array, projections: readonly AnnProjection[]): number {
-  let hash = 0;
-  for (let bit = 0; bit < projections.length; bit += 1) {
-    const projection = projections[bit];
-    if (projection === undefined) continue;
-    let sum = 0;
-    for (let lane = 0; lane < projection.indices.length; lane += 1) {
-      const idx = projection.indices[lane] ?? 0;
-      sum += (vector[idx] ?? 0) * (projection.signs[lane] ?? 1);
-    }
-    if (sum >= 0) hash |= 1 << bit;
-  }
-  return hash;
-}
-
-function hammingDistance(a: number, b: number): number {
-  let x = (a ^ b) >>> 0;
-  let count = 0;
-  while (x !== 0) {
-    x &= x - 1;
-    count += 1;
-  }
-  return count;
-}
-
-function collectAnnBucket(
-  buckets: ReadonlyMap<number, readonly number[]>,
-  bucket: number,
-  seenBuckets: Set<number>,
-  seenRows: Set<number>,
-  out: number[],
-  limit: number,
-): void {
-  if (out.length >= limit || seenBuckets.has(bucket)) return;
-  seenBuckets.add(bucket);
-  const rows = buckets.get(bucket);
-  if (rows === undefined) return;
-  for (const row of rows) {
-    if (seenRows.has(row)) continue;
-    seenRows.add(row);
-    out.push(row);
-    if (out.length >= limit) return;
-  }
-}
-
-// Flips a single hash bit off `target` and probes every resulting bucket — the
-// Hamming-distance-1 neighborhood of the query's ANN hash.
-function probeAnnBucketsWithinHammingDistanceOne(
-  index: AnnIndex,
-  target: number,
-  seenBuckets: Set<number>,
-  seenRows: Set<number>,
-  out: number[],
-  limit: number,
-): void {
-  for (let bit = 0; bit < ANN_HASH_BITS && out.length < limit; bit += 1) {
-    collectAnnBucket(index.buckets, target ^ (1 << bit), seenBuckets, seenRows, out, limit);
-  }
-}
-
-// Flips every distinct pair of hash bits off `target` — the Hamming-distance-2
-// neighborhood — widening recall once distance-1 buckets are exhausted.
-function probeAnnBucketsWithinHammingDistanceTwo(
-  index: AnnIndex,
-  target: number,
-  seenBuckets: Set<number>,
-  seenRows: Set<number>,
-  out: number[],
-  limit: number,
-): void {
-  for (let a = 0; a < ANN_HASH_BITS && out.length < limit; a += 1) {
-    for (let b = a + 1; b < ANN_HASH_BITS && out.length < limit; b += 1) {
-      collectAnnBucket(
-        index.buckets,
-        target ^ (1 << a) ^ (1 << b),
-        seenBuckets,
-        seenRows,
-        out,
-        limit,
-      );
-    }
-  }
-}
-
-// Flips every distinct triple of hash bits off `target` — the Hamming-distance-3
-// neighborhood — the widest ring probed before falling back to a full bucket scan.
-function probeAnnBucketsWithinHammingDistanceThree(
-  index: AnnIndex,
-  target: number,
-  seenBuckets: Set<number>,
-  seenRows: Set<number>,
-  out: number[],
-  limit: number,
-): void {
-  for (let a = 0; a < ANN_HASH_BITS && out.length < limit; a += 1) {
-    for (let b = a + 1; b < ANN_HASH_BITS && out.length < limit; b += 1) {
-      for (let c = b + 1; c < ANN_HASH_BITS && out.length < limit; c += 1) {
-        collectAnnBucket(
-          index.buckets,
-          target ^ (1 << a) ^ (1 << b) ^ (1 << c),
-          seenBuckets,
-          seenRows,
-          out,
-          limit,
-        );
-      }
-    }
-  }
-}
-
-// Last-resort fallback when no bucket within Hamming distance 3 held any rows: scans
-// every populated bucket ordered by ascending Hamming distance from `target`.
-function probeAnnBucketsByNearestHamming(
-  index: AnnIndex,
-  target: number,
-  seenBuckets: Set<number>,
-  seenRows: Set<number>,
-  out: number[],
-  limit: number,
-): void {
-  const nearestBuckets = [...index.buckets.keys()].sort((a, b) => {
-    const dist = hammingDistance(a, target) - hammingDistance(b, target);
-    return dist !== 0 ? dist : a - b;
-  });
-  for (const bucket of nearestBuckets) {
-    collectAnnBucket(index.buckets, bucket, seenBuckets, seenRows, out, limit);
-    if (out.length >= limit) break;
-  }
-}
-
-function annCandidateRowsForQuery(
-  index: AnnIndex,
-  queryVector: Float32Array,
-  limit: number,
-): readonly DecodedVectorRow[] {
-  const target = annHash(queryVector, index.projections);
-  const seenBuckets = new Set<number>();
-  const seenRows = new Set<number>();
-  const rowIndexes: number[] = [];
-  collectAnnBucket(index.buckets, target, seenBuckets, seenRows, rowIndexes, limit);
-  probeAnnBucketsWithinHammingDistanceOne(index, target, seenBuckets, seenRows, rowIndexes, limit);
-  probeAnnBucketsWithinHammingDistanceTwo(index, target, seenBuckets, seenRows, rowIndexes, limit);
-  probeAnnBucketsWithinHammingDistanceThree(
-    index,
-    target,
-    seenBuckets,
-    seenRows,
-    rowIndexes,
-    limit,
-  );
-  if (rowIndexes.length === 0) {
-    probeAnnBucketsByNearestHamming(index, target, seenBuckets, seenRows, rowIndexes, limit);
-  }
-  return rowIndexes
-    .map((rowIndex) => index.rows[rowIndex])
-    .filter((row): row is DecodedVectorRow => row !== undefined);
-}
-
-// eslint-disable-next-line complexity
-function readAnnIndexForCapsule(
-  store: KnowledgeStore,
-  capsule: KnowledgeCapsule,
-  sourceFilter: readonly KnowledgeSourceId[] | undefined,
-  maxRows: number = DEFAULT_MAX_ANN_INDEX_ROWS,
-): AnnIndexReadResult {
-  if (sourceFilter?.length === 0) return { kind: "empty", rowCount: 0 };
-  const stamp = vectorCacheStampForScope(store, capsule.id, sourceFilter);
-  if (stamp.n === 0) return { kind: "empty", rowCount: 0 };
-  if (stamp.n > maxRows) return { kind: "skipped-too-large", rowCount: stamp.n, limit: maxRows };
-  const cache = annCacheForStore(store);
-  const key = ["ann", decodeCacheKey(capsule, stamp, sourceFilter, undefined)].join("|");
-  const cached = cache.get(key);
-  if (cached !== undefined) return { kind: "ready", index: cached };
-  const projections = annProjectionsFor(capsule.embeddingModelIdentity);
-  const rows = readVectorsForCapsule(store, capsule.id, sourceFilter, undefined).map((row) =>
-    decodeVectorRowForIdentity(row, store._internal.contentCipher, capsule.embeddingModelIdentity),
-  );
-  const mutableBuckets = new Map<number, number[]>();
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex];
-    if (row === undefined) continue;
-    const bucket = annHash(row.vector, projections);
-    const bucketRows = mutableBuckets.get(bucket);
-    if (bucketRows === undefined) {
-      mutableBuckets.set(bucket, [rowIndex]);
-    } else {
-      bucketRows.push(rowIndex);
-    }
-  }
-  const index: AnnIndex = { rows, buckets: mutableBuckets, projections, rowCount: stamp.n };
-  cache.set(key, index);
-  while (cache.size > MAX_DECODED_VECTOR_CACHE_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest === undefined) break;
-    cache.delete(oldest);
-  }
-  return { kind: "ready", index };
-}
-
 function decodeCacheKey(
   capsule: KnowledgeCapsule,
   stamp: VectorCacheStampRow,
@@ -663,61 +392,113 @@ type DecodedVectorReadResult =
       readonly limit: number;
     };
 
-// eslint-disable-next-line max-lines-per-function, complexity
+interface DecodedVectorReadPlan {
+  readonly kind: "plan";
+  readonly fullStamp: VectorCacheStampRow;
+  readonly stamp: VectorCacheStampRow;
+  readonly chunkFilter: readonly string[] | undefined;
+  readonly readMode: "exact" | "guided";
+  readonly rowLimit: number;
+}
+
+function vectorReadPlan(
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  maxRows: number,
+  guidedChunkIds: readonly string[] | undefined,
+  requiredChunkFilter: readonly string[] | undefined,
+): DecodedVectorReadPlan | DecodedVectorReadResult {
+  if (sourceFilter?.length === 0) {
+    return { kind: "ready", rows: [], rowCount: 0, readMode: "exact" };
+  }
+  const fullStamp = vectorCacheStampForScope(store, capsule.id, sourceFilter, requiredChunkFilter);
+  if (fullStamp.n === 0) return { kind: "ready", rows: [], rowCount: 0, readMode: "exact" };
+  if (fullStamp.n <= maxRows) {
+    return {
+      kind: "plan",
+      fullStamp,
+      stamp: fullStamp,
+      chunkFilter: requiredChunkFilter,
+      readMode: "exact",
+      rowLimit: maxRows,
+    };
+  }
+  if (guidedChunkIds === undefined || guidedChunkIds.length === 0) {
+    return { kind: "skipped-too-large", rowCount: fullStamp.n, limit: maxRows };
+  }
+  const guided = new Set(guidedChunkIds);
+  const chunkFilter =
+    requiredChunkFilter === undefined
+      ? uniqueStrings(guidedChunkIds)
+      : uniqueStrings(requiredChunkFilter).filter((chunkId) => guided.has(chunkId));
+  const stamp = vectorCacheStampForScope(store, capsule.id, sourceFilter, chunkFilter);
+  if (stamp.n === 0) {
+    return { kind: "ready", rows: [], rowCount: fullStamp.n, readMode: "guided" };
+  }
+  return {
+    kind: "plan",
+    fullStamp,
+    stamp,
+    chunkFilter,
+    readMode: "guided",
+    rowLimit: GUIDED_DENSE_RERANK_MAX_ROWS,
+  };
+}
+
+function decodedRowsForPlan(
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  plan: DecodedVectorReadPlan,
+): readonly DecodedVectorRow[] {
+  const cache = decodeCacheForStore(store);
+  const key = decodeCacheKey(capsule, plan.stamp, sourceFilter, plan.chunkFilter);
+  const cached = cache.get(key);
+  if (cached !== undefined) {
+    cache.delete(key);
+    cache.set(key, cached);
+    return cached;
+  }
+  const rows = readVectorsForCapsule(store, capsule.id, sourceFilter, plan.chunkFilter).map((row) =>
+    decodeVectorRowForIdentity(row, store._internal.contentCipher, capsule.embeddingModelIdentity),
+  );
+  cache.set(key, rows);
+  while (cache.size > MAX_DECODED_VECTOR_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+  return rows;
+}
+
 function readDecodedVectorsForCapsule(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
   maxRows: number,
   guidedChunkIds: readonly string[] | undefined,
+  requiredChunkFilter: readonly string[] | undefined,
 ): DecodedVectorReadResult {
-  if (sourceFilter?.length === 0) {
-    return { kind: "ready", rows: [], rowCount: 0, readMode: "exact" };
+  const plan = vectorReadPlan(
+    store,
+    capsule,
+    sourceFilter,
+    maxRows,
+    guidedChunkIds,
+    requiredChunkFilter,
+  );
+  if (plan.kind !== "plan") return plan;
+  if (plan.stamp.n > plan.rowLimit) {
+    return { kind: "skipped-too-large", rowCount: plan.stamp.n, limit: plan.rowLimit };
   }
-  const fullStamp = vectorCacheStampForScope(store, capsule.id, sourceFilter);
-  if (fullStamp.n === 0) return { kind: "ready", rows: [], rowCount: 0, readMode: "exact" };
-
-  let stamp = fullStamp;
-  let chunkFilter: readonly string[] | undefined;
-  let readMode: "exact" | "guided" = "exact";
-  let rowLimit = maxRows;
-  if (fullStamp.n > maxRows) {
-    if (guidedChunkIds === undefined || guidedChunkIds.length === 0) {
-      return { kind: "skipped-too-large", rowCount: fullStamp.n, limit: maxRows };
-    }
-    chunkFilter = uniqueStrings(guidedChunkIds);
-    stamp = vectorCacheStampForScope(store, capsule.id, sourceFilter, chunkFilter);
-    readMode = "guided";
-    rowLimit = GUIDED_DENSE_RERANK_MAX_ROWS;
-    if (stamp.n === 0) {
-      return { kind: "ready", rows: [], rowCount: fullStamp.n, readMode };
-    }
-  }
-  if (stamp.n > rowLimit) {
-    return { kind: "skipped-too-large", rowCount: stamp.n, limit: rowLimit };
-  }
-  const cache = decodeCacheForStore(store);
-  const key = decodeCacheKey(capsule, stamp, sourceFilter, chunkFilter);
-  let rows = cache.get(key);
-  if (rows === undefined) {
-    rows = readVectorsForCapsule(store, capsule.id, sourceFilter, chunkFilter).map((row) =>
-      decodeVectorRowForIdentity(
-        row,
-        store._internal.contentCipher,
-        capsule.embeddingModelIdentity,
-      ),
-    );
-    cache.set(key, rows);
-    while (cache.size > MAX_DECODED_VECTOR_CACHE_ENTRIES) {
-      const oldest = cache.keys().next().value;
-      if (oldest === undefined) break;
-      cache.delete(oldest);
-    }
-  } else {
-    cache.delete(key);
-    cache.set(key, rows);
-  }
-  return { kind: "ready", rows, rowCount: fullStamp.n, readMode };
+  const rows = decodedRowsForPlan(store, capsule, sourceFilter, plan);
+  return {
+    kind: "ready",
+    rows,
+    rowCount: plan.fullStamp.n,
+    readMode: plan.readMode,
+  };
 }
 
 // ─── Citation row reader ─────────────────────────────────────────────────────
@@ -893,6 +674,15 @@ function scoreFor(
 interface EmbeddedQuery {
   readonly vector: Float32Array;
   readonly dimensions: number;
+}
+
+function fnv1a32(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.slice(i, i + 1).codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
 }
 
 function embeddingLaneId(identity: EmbeddingModelIdentity): string {
@@ -1261,60 +1051,56 @@ function sourceFilterClause(
 ): string {
   if (sourceFilter === undefined) return "";
   if (sourceFilter.length === 0) return " AND 0";
-  return ` AND ${qualifier}source_id IN (${sourceFilter
-    .map((_, i) => `:source${String(i)}`)
-    .join(", ")})`;
+  return ` AND ${qualifier}source_id IN (SELECT CAST(value AS TEXT) FROM json_each(:source_filter_json))`;
 }
 
 function sourceParams(
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
 ): Record<string, string> {
-  const params: Record<string, string> = {};
-  if (sourceFilter !== undefined) {
-    for (let i = 0; i < sourceFilter.length; i += 1) {
-      params[`source${String(i)}`] = String(sourceFilter[i]);
-    }
-  }
-  return params;
+  if (sourceFilter === undefined || sourceFilter.length === 0) return {};
+  return { source_filter_json: JSON.stringify(sourceFilter.map(String)) };
 }
 
 function chunkFilterClause(chunkFilter: readonly string[] | undefined, qualifier: string): string {
   if (chunkFilter === undefined) return "";
   if (chunkFilter.length === 0) return " AND 0";
-  return ` AND ${qualifier}chunk_id IN (${chunkFilter
-    .map((_, i) => `:chunk${String(i)}`)
-    .join(", ")})`;
+  return ` AND ${qualifier}chunk_id IN (SELECT CAST(value AS TEXT) FROM json_each(:chunk_filter_json))`;
 }
 
 function chunkParams(chunkFilter: readonly string[] | undefined): Record<string, string> {
-  const params: Record<string, string> = {};
-  if (chunkFilter !== undefined) {
-    for (let i = 0; i < chunkFilter.length; i += 1) {
-      params[`chunk${String(i)}`] = chunkFilter[i] ?? "";
-    }
-  }
-  return params;
+  if (chunkFilter === undefined || chunkFilter.length === 0) return {};
+  return { chunk_filter_json: JSON.stringify(chunkFilter) };
 }
 
 function countLexicalRowsForCapsuleScope(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  chunkFilter: readonly string[] | undefined,
 ): number {
   const row = store._internal.db
     .prepare(
       [
         "SELECT COUNT(*) AS n",
         "FROM chunk_lexical_index AS li",
-        `WHERE li.capsule_id = :capsule_id${sourceFilterClause(sourceFilter, "li.")}`,
+        `WHERE li.capsule_id = :capsule_id${sourceFilterClause(
+          sourceFilter,
+          "li.",
+        )}${chunkFilterClause(chunkFilter, "li.")}`,
       ].join(" "),
     )
-    .get({ capsule_id: String(capsuleId), ...sourceParams(sourceFilter) }) as
-    LexicalIndexCountRow | undefined;
+    .get({
+      capsule_id: String(capsuleId),
+      ...sourceParams(sourceFilter),
+      ...chunkParams(chunkFilter),
+    }) as LexicalIndexCountRow | undefined;
   return typeof row?.n === "number" ? row.n : 0;
 }
 
-function lexicalFtsSql(sourceFilter: readonly KnowledgeSourceId[] | undefined): string {
+function lexicalFtsSql(
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  chunkFilter: readonly string[] | undefined,
+): string {
   return [
     "SELECT li.chunk_id AS chunk_id, li.capsule_id AS capsule_id,",
     "  bm25(chunk_lexical_fts) AS bm25_score",
@@ -1323,7 +1109,7 @@ function lexicalFtsSql(sourceFilter: readonly KnowledgeSourceId[] | undefined): 
     `WHERE chunk_lexical_fts MATCH :match AND li.capsule_id = :capsule_id${sourceFilterClause(
       sourceFilter,
       "li.",
-    )}`,
+    )}${chunkFilterClause(chunkFilter, "li.")}`,
     "ORDER BY bm25_score ASC, li.chunk_id ASC",
     "LIMIT :limit",
   ].join(" ");
@@ -1370,14 +1156,16 @@ function readFtsCandidatesForCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  chunkFilter: readonly string[] | undefined,
   matchQuery: string,
   limit: number,
 ): readonly LexicalCandidate[] {
-  const rows = store._internal.db.prepare(lexicalFtsSql(sourceFilter)).all({
+  const rows = store._internal.db.prepare(lexicalFtsSql(sourceFilter, chunkFilter)).all({
     capsule_id: String(capsuleId),
     match: matchQuery,
     limit,
     ...sourceParams(sourceFilter),
+    ...chunkParams(chunkFilter),
   }) as unknown as readonly LexicalIndexCandidateRow[];
   return rows.map((row) => ({
     chunkId: row.chunk_id,
@@ -1391,6 +1179,7 @@ function readFtsCandidatesForCapsule(
 
 function exactLexicalSql(
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  chunkFilter: readonly string[] | undefined,
   exactMatches: readonly string[],
 ): string {
   const matchExpressions = exactMatches.map(
@@ -1404,7 +1193,7 @@ function exactLexicalSql(
     `WHERE li.capsule_id = :capsule_id${sourceFilterClause(
       sourceFilter,
       "li.",
-    )} AND (${exactClause})`,
+    )}${chunkFilterClause(chunkFilter, "li.")} AND (${exactClause})`,
     "ORDER BY li.chunk_id ASC",
     "LIMIT :limit",
   ].join(" ");
@@ -1457,6 +1246,7 @@ function readExactLexicalCandidatesForCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  chunkFilter: readonly string[] | undefined,
   exactTerms: readonly string[],
   limit: number,
 ): readonly LexicalCandidate[] {
@@ -1464,12 +1254,15 @@ function readExactLexicalCandidatesForCapsule(
   const exactParams = Object.fromEntries(
     exactTerms.map((term, i) => [`exact${String(i)}`, term.toLocaleLowerCase("und")]),
   );
-  const rows = store._internal.db.prepare(exactLexicalSql(sourceFilter, exactTerms)).all({
-    capsule_id: String(capsuleId),
-    limit: exactCandidateScanLimit(limit),
-    ...sourceParams(sourceFilter),
-    ...exactParams,
-  }) as unknown as readonly ExactLexicalIndexCandidateRow[];
+  const rows = store._internal.db
+    .prepare(exactLexicalSql(sourceFilter, chunkFilter, exactTerms))
+    .all({
+      capsule_id: String(capsuleId),
+      limit: exactCandidateScanLimit(limit),
+      ...sourceParams(sourceFilter),
+      ...chunkParams(chunkFilter),
+      ...exactParams,
+    }) as unknown as readonly ExactLexicalIndexCandidateRow[];
   return rows
     .map((row): LexicalCandidate | undefined => {
       const matchCount = boundaryExactMatchCount(row.exact_text, exactTerms);
@@ -1550,6 +1343,7 @@ function mergeExactLexicalCandidates(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  chunkFilter: readonly string[] | undefined,
   profile: QueryProfile,
   limit: number,
 ): void {
@@ -1557,6 +1351,7 @@ function mergeExactLexicalCandidates(
     store,
     capsule.id,
     sourceFilter,
+    chunkFilter,
     uniqueStrings([...profile.exactTerms, ...profile.exactPhrases]),
     limit,
   )) {
@@ -1574,11 +1369,17 @@ function collectLexicalCandidatesForCapsule(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  chunkFilter: readonly string[] | undefined,
   profile: QueryProfile,
   limit: number,
   matchQuery: string | undefined,
 ): LexicalCapsuleCollection {
-  const indexedRowCount = countLexicalRowsForCapsuleScope(store, capsule.id, sourceFilter);
+  const indexedRowCount = countLexicalRowsForCapsuleScope(
+    store,
+    capsule.id,
+    sourceFilter,
+    chunkFilter,
+  );
   if (indexedRowCount === 0) return { candidates: [], indexedRowCount, policyDenied: false };
   if (!isRawContentReleaseAllowed(capsule)) {
     // The capsule's governance was tightened after its lexical rows were persisted
@@ -1592,13 +1393,14 @@ function collectLexicalCandidatesForCapsule(
       store,
       capsule.id,
       sourceFilter,
+      chunkFilter,
       matchQuery,
       limit,
     )) {
       byKey.set(`${String(candidate.capsuleId)}|${candidate.chunkId}`, candidate);
     }
   }
-  mergeExactLexicalCandidates(byKey, store, capsule, sourceFilter, profile, limit);
+  mergeExactLexicalCandidates(byKey, store, capsule, sourceFilter, chunkFilter, profile, limit);
   return {
     candidates: [...byKey.values()].sort(lexicalCandidateAsc).slice(0, limit),
     indexedRowCount,
@@ -1612,6 +1414,7 @@ function collectLexicalCandidates(
   scope: RetrievalScopeInput,
   profile: QueryProfile,
   topK: number,
+  chunkFilter: readonly string[] | undefined,
 ): LexicalCollection {
   const strict = collectLexicalCandidatesPass(
     store,
@@ -1620,6 +1423,7 @@ function collectLexicalCandidates(
     profile,
     topK,
     buildFtsMatchQuery(profile),
+    chunkFilter,
   );
   // Whole-lane OR fallback: only when the strict AND pass found NOTHING across every in-scope
   // capsule (and the pass didn't hard-fail) do we retry once with OR. Running the fallback per
@@ -1639,6 +1443,7 @@ function collectLexicalCandidates(
     profile,
     topK,
     fallbackQuery,
+    chunkFilter,
   );
   return {
     ...fallback,
@@ -1657,6 +1462,7 @@ function collectLexicalCandidatesPass(
   profile: QueryProfile,
   topK: number,
   matchQuery: string | undefined,
+  chunkFilter: readonly string[] | undefined,
 ): LexicalCollection {
   const limit = lexicalCandidateLimit(topK, profile);
   const out: LexicalCandidate[] = [];
@@ -1668,6 +1474,7 @@ function collectLexicalCandidatesPass(
         store,
         capsule,
         sourceFilterForCapsule(scope.sourceFilter, capsule),
+        chunkFilter,
         profile,
         limit,
         matchQuery,
@@ -1687,7 +1494,7 @@ function collectLexicalCandidatesPass(
     };
   }
   return {
-    candidates: out.sort(lexicalCandidateAsc).slice(0, limit),
+    candidates: [...out].sort(lexicalCandidateAsc).slice(0, limit),
     indexedRowCount,
     policyDenied,
     queryError: false,
@@ -1835,7 +1642,7 @@ function denseCandidateLanes(candidates: readonly DenseCandidate[]): readonly De
   }
   return [...byLane.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([, laneCandidates]) => laneCandidates.sort(scoreDesc));
+    .map(([, laneCandidates]) => [...laneCandidates].sort(scoreDesc));
 }
 
 function dedupeDenseCandidates(candidates: readonly DenseCandidate[]): readonly DenseCandidate[] {
@@ -2241,28 +2048,33 @@ function denseCandidatesFromVectorIndex(
   return out;
 }
 
-function tryVectorIndexForCapsule(
-  store: KnowledgeStore,
-  capsule: KnowledgeCapsule,
-  lane: EmbeddingLaneState,
-  sourceFilter: readonly KnowledgeSourceId[] | undefined,
-  embedded: EmbeddedQuery,
-  options: SearchOptions,
-  profile: QueryProfile,
-  state: SearchState,
-): boolean {
-  const indexed = searchVectorIndex(
+interface VectorIndexCapsuleInput {
+  readonly store: KnowledgeStore;
+  readonly capsule: KnowledgeCapsule;
+  readonly lane: EmbeddingLaneState;
+  readonly sourceFilter: readonly KnowledgeSourceId[] | undefined;
+  readonly embedded: EmbeddedQuery;
+  readonly options: SearchOptions;
+  readonly profile: QueryProfile;
+  readonly state: SearchState;
+}
+
+async function tryVectorIndexForCapsule(input: VectorIndexCapsuleInput): Promise<boolean> {
+  const { store, capsule, lane, sourceFilter, embedded, options, profile, state } = input;
+  const indexed = await searchVectorIndex(
     {
       store,
       capsule,
       ...(sourceFilter !== undefined ? { sourceFilter } : {}),
       queryVector: embedded.vector,
       candidateLimit: oversampleTopK(options.topK, profile),
+      ...(options.chunkFilter !== undefined ? { chunkFilter: options.chunkFilter } : {}),
       ...(options.minScore !== undefined ? { minScore: options.minScore } : {}),
     },
     options.vectorIndex,
   );
   state.vectorIndexDiagnostics.push(indexed.diagnostics);
+  if (indexed.ok && indexed.diagnostics.searchMode === "ann") state.denseAnn = true;
   if (indexed.sawIdentityIncompatible) {
     state.anyIdentityIncompatible = true;
     markLaneStatus(lane, "identity-incompatible");
@@ -2285,22 +2097,42 @@ function tryVectorIndexForCapsule(
   return true;
 }
 
-// eslint-disable-next-line max-lines-per-function, complexity
-async function processCapsule(
-  store: KnowledgeStore,
-  embeddingAdapter: OpenAIEmbeddingAdapter,
-  capsule: KnowledgeCapsule,
-  sourceFilter: readonly KnowledgeSourceId[] | undefined,
-  guidedChunkIds: readonly string[] | undefined,
-  query: string,
-  options: SearchOptions,
-  profile: QueryProfile,
-  cache: Map<string, Promise<EmbeddedQuery | RetrievalError>>,
-  preflightCache: Map<string, Promise<IdentityPreflightResult>>,
-  state: SearchState,
-): Promise<void> {
+interface ProcessCapsuleInput {
+  readonly store: KnowledgeStore;
+  readonly embeddingAdapter: OpenAIEmbeddingAdapter;
+  readonly capsule: KnowledgeCapsule;
+  readonly sourceFilter: readonly KnowledgeSourceId[] | undefined;
+  readonly guidedChunkIds: readonly string[] | undefined;
+  readonly query: string;
+  readonly options: SearchOptions;
+  readonly profile: QueryProfile;
+  readonly cache: Map<string, Promise<EmbeddedQuery | RetrievalError>>;
+  readonly preflightCache: Map<string, Promise<IdentityPreflightResult>>;
+  readonly state: SearchState;
+}
+
+// eslint-disable-next-line max-lines-per-function
+async function processCapsule(input: ProcessCapsuleInput): Promise<void> {
+  const {
+    store,
+    embeddingAdapter,
+    capsule,
+    sourceFilter,
+    guidedChunkIds,
+    query,
+    options,
+    profile,
+    cache,
+    preflightCache,
+    state,
+  } = input;
   const lane = laneStateFor(state, capsule);
-  const vectorStamp = vectorCacheStampForScope(store, capsule.id, sourceFilter);
+  const vectorStamp = vectorCacheStampForScope(
+    store,
+    capsule.id,
+    sourceFilter,
+    options.chunkFilter,
+  );
   if (vectorStamp.n === 0) return;
   lane.vectorCount += vectorStamp.n;
   state.anyVectorSeen = true;
@@ -2324,16 +2156,16 @@ async function processCapsule(
     return;
   }
   if (
-    tryVectorIndexForCapsule(
+    await tryVectorIndexForCapsule({
       store,
       capsule,
       lane,
       sourceFilter,
-      queryEmbedding.embedded,
+      embedded: queryEmbedding.embedded,
       options,
       profile,
       state,
-    )
+    })
   ) {
     return;
   }
@@ -2344,36 +2176,11 @@ async function processCapsule(
     sourceFilter,
     options.maxExactVectorScanRows ?? DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS,
     guidedChunkIds,
+    options.chunkFilter,
   );
   if (vectorRead.kind === "skipped-too-large") {
-    const annRead = readAnnIndexForCapsule(store, capsule, sourceFilter);
-    if (annRead.kind === "skipped-too-large") {
-      state.denseSkippedTooLarge = true;
-      markLaneStatus(lane, "degraded");
-      return;
-    }
-    if (annRead.kind === "empty") return;
-    const annRows = annCandidateRowsForQuery(
-      annRead.index,
-      queryEmbedding.embedded.vector,
-      ANN_RERANK_MAX_ROWS,
-    );
-    if (annRows.length === 0) {
-      state.denseSkippedTooLarge = true;
-      markLaneStatus(lane, "degraded");
-      return;
-    }
-    const scored = scoreCapsuleVectors(
-      annRows,
-      capsule,
-      lane.laneId,
-      lane.laneKey,
-      queryEmbedding.embedded.vector,
-      oversampleTopK(options.topK, profile),
-      options.minScore,
-    );
-    state.denseAnn = true;
-    pushScoredCandidates(state, lane, scored);
+    state.denseSkippedTooLarge = true;
+    markLaneStatus(lane, "degraded");
     return;
   }
   if (vectorRead.rowCount > 0) state.anyVectorSeen = true;
@@ -2442,7 +2249,12 @@ function prefetchQueryEmbeddings(inputs: {
   for (const capsule of inputs.capsules) {
     if (!isExternalEmbeddingAllowed(capsule)) continue;
     const sourceFilter = sourceFilterForCapsule(inputs.scope.sourceFilter, capsule);
-    if (vectorCacheStampForScope(inputs.store, capsule.id, sourceFilter).n === 0) continue;
+    if (
+      vectorCacheStampForScope(inputs.store, capsule.id, sourceFilter, inputs.options.chunkFilter)
+        .n === 0
+    ) {
+      continue;
+    }
     identities.set(identityKey(capsule.embeddingModelIdentity), capsule.embeddingModelIdentity);
   }
   for (const identity of identities.values()) {
@@ -2529,7 +2341,7 @@ function vectorIndexDiagnostics(
 ): RetrievalVectorIndexDiagnostics {
   const available = diagnostics.find((diagnostic) => diagnostic.status === "available");
   if (available !== undefined) return available;
-  const fallback = diagnostics.find((diagnostic) => diagnostic.provider === "sqlite-vec");
+  const fallback = diagnostics.find((diagnostic) => diagnostic.provider === "usearch");
   if (fallback !== undefined) return fallback;
   return {
     provider: "brute-force",
@@ -2689,22 +2501,23 @@ export async function searchVectorsForScope(
       scope,
       variantProfile,
       options.topK,
+      options.chunkFilter,
     );
     lexicalCollections.push(lexicalForQuery);
     for (const capsule of capsules) {
-      await processCapsule(
+      await processCapsule({
         store,
         embeddingAdapter,
         capsule,
-        sourceFilterForCapsule(scope.sourceFilter, capsule),
-        guidedChunkIdsForCapsule(lexicalForQuery.candidates, capsule.id),
-        searchQuery,
+        sourceFilter: sourceFilterForCapsule(scope.sourceFilter, capsule),
+        guidedChunkIds: guidedChunkIdsForCapsule(lexicalForQuery.candidates, capsule.id),
+        query: searchQuery,
         options,
-        variantProfile,
+        profile: variantProfile,
         cache,
         preflightCache,
         state,
-      );
+      });
     }
   }
   const lexical = mergeLexicalCollections(lexicalCollections);

@@ -5,12 +5,15 @@ import {
   CODING_CONTEXT_BUDGETS,
   embeddingProvidersAllowed,
   tierForCodingContextSource,
+  type CodingContextExcerpt,
   type CodingContextPack,
   type CodingContextRequest,
   type CodingContextSourceKind,
   type RetrievalContextBudget,
 } from "@oscharko-dev/keiko-contracts";
-import type { UiHandlerDeps } from "../deps.js";
+import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
+import { rerankSelection } from "../grounded-rerank-facade.js";
 import {
   assembleRetrievalContext,
   effectiveRetrievalContextBudget,
@@ -170,6 +173,52 @@ function codingProviders(
   ];
 }
 
+function codingContextQuery(request: CodingContextRequest): string {
+  return request.queryText ?? request.symbol ?? request.documentPath;
+}
+
+function completeRerankOrder(
+  candidates: readonly CodingContextExcerpt[],
+  selected: readonly CodingContextExcerpt[],
+): readonly CodingContextExcerpt[] {
+  const selectedSet = new Set(selected);
+  return [...selected, ...candidates.filter((candidate) => !selectedSet.has(candidate))];
+}
+
+function withContextRanks(
+  excerpts: readonly CodingContextExcerpt[],
+): readonly CodingContextExcerpt[] {
+  return excerpts.map((excerpt, rank) => ({
+    ...excerpt,
+    citation: { ...excerpt.citation, rank },
+  }));
+}
+
+async function rerankCodingContext(
+  request: CodingContextRequest,
+  context: AssembleCodingContextDeps,
+  pack: CodingContextPack,
+  gatewayConfig: GatewayConfig | undefined,
+  externalRerankingAllowed: boolean,
+): Promise<CodingContextPack> {
+  const selection = await rerankSelection({
+    deps: context.deps,
+    gatewayConfig: gatewayConfig ?? null,
+    query: codingContextQuery(request),
+    candidates: pack.excerpts,
+    documentFor: (excerpt) => excerpt.text,
+    topN: pack.excerpts.length,
+    signal: context.signal,
+    policy: {
+      externalReranking: externalRerankingAllowed && !context.signal.aborted ? "allow" : "deny",
+      localReranking: "allow",
+    },
+    fallbackMode: "identity",
+  });
+  const ordered = completeRerankOrder(pack.excerpts, selection.selected);
+  return { ...pack, excerpts: withContextRanks(ordered) };
+}
+
 export async function assembleCodingContext(
   request: CodingContextRequest,
   context: AssembleCodingContextDeps,
@@ -177,19 +226,22 @@ export async function assembleCodingContext(
   const currentTimeMs = context.currentTimeMs ?? Date.now;
   const baseBudget = CODING_CONTEXT_BUDGETS[request.purpose];
   const budget = effectiveRetrievalContextBudget(baseBudget, context.budgetBytes);
+  const allowEmbeddingProviders =
+    context.allowEmbeddingProviders ?? embeddingProvidersAllowed(request.purpose);
+  const gatewayConfig = currentGatewayConfig(context.deps);
   const providerContext = buildProviderContext(context, budget, currentTimeMs);
   const lease =
     request.editorSessionId === undefined
       ? undefined
       : acquireEditorStateContextLease(request.editorSessionId, currentTimeMs());
-  return assembleRetrievalContext({
+  const pack = await assembleRetrievalContext({
     purpose: request.purpose,
     budget: baseBudget,
     requestedBudgetBytes: context.budgetBytes,
-    allowEmbeddingProviders:
-      context.allowEmbeddingProviders ?? embeddingProvidersAllowed(request.purpose),
+    allowEmbeddingProviders,
     signal: context.signal,
     providers: codingProviders(request, providerContext, lease),
     tierForSourceKind: tierForCodingContextSource,
   });
+  return rerankCodingContext(request, context, pack, gatewayConfig, allowEmbeddingProviders);
 }

@@ -33,7 +33,7 @@ an unchecked required box keeps that gate red.
 | Phase  | Child | Exclusive outcome                                                                |
 | ------ | ----- | -------------------------------------------------------------------------------- |
 | A gate | M2.1  | ADR-0152, ADR index row, and this operational record                             |
-| A      | M2.2  | Shared vector port activation and sqlite-vec runtime qualification               |
+| A      | M2.2  | Shared vector port activation and native vector runtime qualification            |
 | A      | M2.3  | One server reranker facade and the empty-result regression correction            |
 | A      | M2.4  | One physical evaluation fold and the verbatim rule-3l amendment                  |
 | A      | M2.5  | Repository pod production on existing Local Knowledge substrate                  |

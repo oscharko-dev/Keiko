@@ -353,6 +353,7 @@ export {
 export {
   gitBlobFingerprint,
   readRepositoryFileFingerprints,
+  repositoryContentFingerprint,
   type RepositoryFileFingerprint,
   type RepositoryFingerprintKind,
 } from "./indexing/repository-fingerprints.js";

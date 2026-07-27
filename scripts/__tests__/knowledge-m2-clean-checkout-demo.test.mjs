@@ -8,12 +8,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   ABSTENTION_QUERY,
   ACCEPTANCE_CRITERIA,
+  CLEAN_CHECKOUT_EXECUTION_MODES,
   DEMO_INDEXED_PATHS,
   MULTI_FILE_QUERY,
   evaluateAcceptanceCriteria,
   evidenceRedactionFailures,
   renderAcceptanceReport,
-  resolveProvisionedSqliteVecPath,
+  resolveProvisionedUsearchPath,
   runCleanCheckoutDemo,
   validateEvidenceContract,
 } from "../lib/clean-checkout-demo.mjs";
@@ -23,12 +24,61 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const EMBEDDING_DIMENSIONS = 48;
 
-// The demo requires the sqlite-vec extension to be provisioned (npm run provision:sqlite-vec) so
-// the ANN diagnostic can reach `status=available`. Without it the DoD demo cannot even attempt
-// success — the fallback `sqlite-vec-runtime-not-configured` is one of the two statuses the AC
-// explicitly forbids. In that case the suite fails LOUDLY rather than silently skipping, so a
-// missing extension never masks a real regression on a host that should have one.
-const provisionedExtensionPath = resolveProvisionedSqliteVecPath(REPO_ROOT);
+// This suite is deliberately hermetic and therefore NOT acceptance-eligible. It exercises the
+// production retrieval/citation runner with an explicitly injected generator while the CLI-only
+// acceptance mode requires a configured provider and refuses all injected answer adapters.
+const provisionedUsearchPath = resolveProvisionedUsearchPath({ repoRoot: REPO_ROOT });
+
+const hermeticAnswerGenerator = {
+  generate: async ({ pack }) =>
+    pack.citations
+      .map(
+        (citation, index) =>
+          `${citation.safeDisplayName} participates in the indexed retrieval path [${String(index + 1)}].`,
+      )
+      .join(" "),
+};
+
+function acceptanceConfigForRejection(origin) {
+  return {
+    providers: [
+      {
+        modelId: "acceptance-embed",
+        baseUrl: `${origin}/v1`,
+        apiKey: "",
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 1,
+      },
+    ],
+    capabilities: [
+      {
+        id: "acceptance-embed",
+        kind: "embedding",
+        contextWindow: 8_191,
+        maxOutputTokens: 0,
+        toolCalling: false,
+        structuredOutput: false,
+        streaming: false,
+        supportsImageInput: false,
+        supportsDocumentInput: false,
+        workflowEligible: false,
+        costClass: "low",
+        latencyClass: "fast",
+        throughputHint: "Negative-control configuration.",
+        preferredUseCases: ["negative-control"],
+        knownLimitations: [],
+      },
+    ],
+    reranker: {
+      modelId: "rerank",
+      baseUrl: `${origin}/v1`,
+      apiKey: "",
+      timeoutMs: 30_000,
+    },
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+  };
+}
 
 function sha256Hex(value) {
   return createHash("sha256").update(String(value)).digest("hex");
@@ -40,9 +90,9 @@ describe("knowledge-m2 clean-checkout demo", () => {
   let priorAllowDirtyHost;
 
   beforeAll(async () => {
-    if (provisionedExtensionPath === undefined) {
+    if (provisionedUsearchPath === undefined) {
       throw new Error(
-        "clean-checkout demo test needs the sqlite-vec extension provisioned. Run `npm run provision:sqlite-vec` first.",
+        "clean-checkout demo test needs the USearch runtime provisioned. Run `npm run provision:usearch` first.",
       );
     }
     // A developer running the vitest suite on their own checkout almost always has `.keiko` state
@@ -56,9 +106,11 @@ describe("knowledge-m2 clean-checkout demo", () => {
     mock = await startCleanCheckoutMockServer({ embeddingDimensions: EMBEDDING_DIMENSIONS });
     evidence = await runCleanCheckoutDemo({
       repoRoot: REPO_ROOT,
+      executionMode: CLEAN_CHECKOUT_EXECUTION_MODES.hermeticTest,
       mockOrigin: mock.origin,
       embeddingDimensions: EMBEDDING_DIMENSIONS,
-      sqliteVecExtensionPath: provisionedExtensionPath,
+      testAnswerGenerator: hermeticAnswerGenerator,
+      usearchBinaryPath: provisionedUsearchPath,
     });
   }, 60_000);
 
@@ -75,13 +127,39 @@ describe("knowledge-m2 clean-checkout demo", () => {
     expect(ACCEPTANCE_CRITERIA.map((entry) => entry.id).sort()).toEqual(
       [
         "abstention",
-        "ann-active",
+        "vector-index-active",
         "clean-checkout",
         "content-free-evidence",
         "multi-file-citations",
         "reranker-toggle",
       ].sort(),
     );
+  });
+
+  it("refuses an injected answer adapter in acceptance mode before provider I/O", async () => {
+    await expect(
+      runCleanCheckoutDemo({
+        repoRoot: REPO_ROOT,
+        executionMode: CLEAN_CHECKOUT_EXECUTION_MODES.acceptance,
+        gatewayConfig: acceptanceConfigForRejection(mock.origin),
+        embeddingModelId: "acceptance-embed",
+        embeddingDimensions: EMBEDDING_DIMENSIONS,
+        testAnswerGenerator: hermeticAnswerGenerator,
+        usearchBinaryPath: provisionedUsearchPath,
+      }),
+    ).rejects.toThrow("acceptance mode refuses an injected answer adapter");
+  });
+
+  it("requires an explicitly injected adapter in hermetic-test mode", async () => {
+    await expect(
+      runCleanCheckoutDemo({
+        repoRoot: REPO_ROOT,
+        executionMode: CLEAN_CHECKOUT_EXECUTION_MODES.hermeticTest,
+        mockOrigin: mock.origin,
+        embeddingDimensions: EMBEDDING_DIMENSIONS,
+        usearchBinaryPath: provisionedUsearchPath,
+      }),
+    ).rejects.toThrow("hermetic-test mode requires an injected answer adapter");
   });
 
   it("indexes the intended real files from the checkout tree", () => {
@@ -94,20 +172,30 @@ describe("knowledge-m2 clean-checkout demo", () => {
     );
   });
 
-  it("proves ANN is active (sqlite-vec / available), not one of the forbidden fallback statuses", () => {
-    expect(evidence.annActive.provider).toBe("sqlite-vec");
-    expect(evidence.annActive.status).toBe("available");
-    expect(evidence.annActive.active).toBe(true);
-    expect(evidence.annActive.forbiddenStatusesAvoided).toEqual([
+  it("proves the verified USearch provider is available with the honest exact crossover", () => {
+    expect(evidence.vectorIndex.provider).toBe("usearch");
+    expect(evidence.vectorIndex.status).toBe("available");
+    expect(evidence.vectorIndex.searchMode).toBe("exact");
+    expect(evidence.vectorIndex.providerAvailable).toBe(true);
+    expect(evidence.vectorIndex.hnswQualifiedBy).toBe("npm run check:knowledge-m2-closeout");
+    expect(evidence.vectorIndex.forbiddenStatusesAvoided).toEqual([
+      "disabled",
+      "fallback-unavailable",
       "fallback-encrypted-store",
-      "sqlite-vec-runtime-not-configured",
+      "fallback-unsupported-metric",
+      "fallback-incompatible-identity",
+      "fallback-index-too-large",
+      "fallback-query-error",
     ]);
-    expect(evidence.annActive.status).not.toBe("fallback-encrypted-store");
-    expect(evidence.annActive.status).not.toBe("sqlite-vec-runtime-not-configured");
+    expect(evidence.vectorIndex.status.startsWith("fallback-")).toBe(false);
   });
 
-  it("resolves the multi-file grounded question to citations across ≥ 2 files with line ranges", () => {
+  it("runs the answer/citation flow across ≥ 2 files with line ranges", () => {
     expect(evidence.multiFileQuery.queryHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(evidence.multiFileQuery.generatedCharacters).toBeGreaterThan(0);
+    expect(evidence.multiFileQuery.generationHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(evidence.multiFileQuery.noEvidence).toBe(false);
+    expect(evidence.multiFileQuery.attachedCitationCount).toBeGreaterThan(0);
     expect(evidence.multiFileQuery.citationCount).toBeGreaterThan(0);
     expect(evidence.multiFileQuery.spansMultipleFiles).toBe(true);
     expect(evidence.multiFileQuery.distinctFileCount).toBeGreaterThanOrEqual(2);
@@ -122,6 +210,9 @@ describe("knowledge-m2 clean-checkout demo", () => {
   it("abstains on the evidence-free question rather than fabricating an answer", () => {
     expect(evidence.abstention.abstained).toBe(true);
     expect(evidence.abstention.references).toBe(0);
+    expect(evidence.abstention.citations).toBe(0);
+    expect(evidence.abstention.generatedCharacters).toBe(0);
+    expect(evidence.abstention.generationCalls).toBe(0);
     expect(evidence.abstention.noEvidence).toBe(true);
     // Independently-computed hash — catches a copy/paste divergence between the constant the
     // runner hashes and the constant the runbook advertises. The prior `.toBe(itself)` was a
@@ -148,6 +239,8 @@ describe("knowledge-m2 clean-checkout demo", () => {
   });
 
   it("emits content-free evidence and passes the full evidence contract", () => {
+    expect(evidence.executionMode).toBe("hermetic-test");
+    expect(evidence.acceptanceEligible).toBe(false);
     expect(evidenceRedactionFailures(evidence)).toEqual([]);
     expect(validateEvidenceContract(evidence)).toEqual([]);
     const acceptance = evaluateAcceptanceCriteria(evidence);
@@ -165,20 +258,20 @@ describe("knowledge-m2 clean-checkout demo", () => {
     expect(evidenceRedactionFailures(leaked)).toContain("endpoint");
   });
 
-  it("evaluateAcceptanceCriteria refuses evidence claiming a fallback status is ANN-active", () => {
+  it("evaluateAcceptanceCriteria refuses evidence claiming a fallback provider is available", () => {
     const withFallback = {
       ...evidence,
-      annActive: {
-        ...evidence.annActive,
-        provider: "sqlite-vec",
+      vectorIndex: {
+        ...evidence.vectorIndex,
+        provider: "usearch",
         status: "fallback-encrypted-store",
-        active: true,
+        providerAvailable: true,
       },
     };
     const acceptance = evaluateAcceptanceCriteria(withFallback);
     expect(acceptance.ok).toBe(false);
-    const annResult = acceptance.results.find((entry) => entry.id === "ann-active");
-    expect(annResult?.failures.join("|")).toContain("forbidden-status:fallback-encrypted-store");
+    const vectorResult = acceptance.results.find((entry) => entry.id === "vector-index-active");
+    expect(vectorResult?.failures.join("|")).toContain("forbidden-status:fallback-encrypted-store");
   });
 
   it("evaluateAcceptanceCriteria refuses evidence claiming abstention while emitting references", () => {

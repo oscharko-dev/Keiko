@@ -73,6 +73,22 @@ function withGroundingPlan(
   };
 }
 
+function withCriticScore(
+  obs: EnhancementObservation,
+  dimension: "clarity" | "completeness" | "token-efficiency",
+  score: number,
+): EnhancementObservation {
+  return {
+    ...obs,
+    critic: {
+      ...obs.critic,
+      dimensionScores: obs.critic.dimensionScores.map((candidate) =>
+        candidate.dimension === dimension ? { ...candidate, score } : candidate,
+      ),
+    },
+  };
+}
+
 const GROUNDED = { expectedTaskClasses: ["rag-question-answering", "factual-qa"] } as const;
 
 describe("scorePromptQuality regression gates (AC2)", () => {
@@ -270,6 +286,51 @@ describe("scorePromptQuality dimension paths", () => {
       minCompletenessScore: 0.99,
     };
     expect(outcomeOf(obs, ["completeness"], oracle, "completeness")).toBe("fail");
+  });
+
+  it.each(["clarity", "completeness", "token-efficiency"] as const)(
+    "%s fails closed for a non-finite critic score or floor",
+    (dimension) => {
+      const obs = observe("task-research");
+      const floorKey = {
+        clarity: "minClarityScore",
+        completeness: "minCompletenessScore",
+        "token-efficiency": "minTokenEfficiencyScore",
+      }[dimension];
+      const invalidFloor = {
+        expectedTaskClasses: ["research"],
+        [floorKey]: Number.POSITIVE_INFINITY,
+      } as PromptEnhancerOracle;
+      expect(outcomeOf(obs, [dimension], invalidFloor, dimension)).toBe("fail");
+      expect(
+        outcomeOf(
+          withCriticScore(obs, dimension, Number.POSITIVE_INFINITY),
+          [dimension],
+          { expectedTaskClasses: ["research"] },
+          dimension,
+        ),
+      ).toBe("fail");
+    },
+  );
+
+  it("token-efficiency fails closed for a non-finite estimate or ceiling", () => {
+    const obs = observe("task-research");
+    expect(
+      outcomeOf(
+        { ...obs, estimatedTokens: Number.NaN },
+        ["token-efficiency"],
+        { expectedTaskClasses: ["research"] },
+        "token-efficiency",
+      ),
+    ).toBe("fail");
+    expect(
+      outcomeOf(
+        obs,
+        ["token-efficiency"],
+        { expectedTaskClasses: ["research"], maxEstimatedTokens: Number.POSITIVE_INFINITY },
+        "token-efficiency",
+      ),
+    ).toBe("fail");
   });
 
   it("a dimension a fixture does not declare scores not-applicable", () => {

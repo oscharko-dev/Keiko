@@ -39,9 +39,9 @@ import {
   REGRESSION_PROBE_FIXTURE_IDS,
   runRetrievalQualityCheck,
 } from "../check-retrieval-quality.mjs";
+import { provisionedUsearchBinaryPath } from "../provision-usearch.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const EXTENSION_SUFFIX_BY_PLATFORM = { darwin: "dylib", win32: "dll" };
 const EVIDENCE_PATH = join(ROOT, "docs/qa/knowledge-m2-substrate-evidence.md");
 // Issue #2631: a companion characterization document for the recorded latency comparison. Kept
 // separate from EVIDENCE_PATH because wall-clock milliseconds are not hash-comparable across
@@ -58,24 +58,22 @@ const EXACT_SCAN_CAP = 20_000;
 const TOP_K = 10;
 const VECTOR_DIMENSIONS = 4;
 const VECTOR_MODEL_ID = "knowledge-m2-closeout-vector";
-// Issue #2631 acceptance: the latency claim needs a corpus at realistic embedding-space dimensions.
-// The 4-dim correctness fixture above is deterministic and hermetic, but vec0's K-nearest search has
-// no meaningful advantage at 4 dims — brute force in JS is O(N * dims) with a tiny constant, and
-// vec0's per-query overhead dominates. A single 128-dim fixture is the smallest realistic size that
-// exercises vec0's SIMD path and lets the "ANN is faster than brute force at scale" claim be
-// measured on the same closeout run.
-// 384-dim matches the smallest real Keiko embedding space (text-embedding-3-small at reduced
-// dimensions). vec0's SIMD dot-product amortizes against per-query SQL overhead once dims are large
-// enough for real embedding work to dominate, which does not happen at the 4-dim correctness
-// fixture. The small fixture at 500 rows anchors the break-even statement — brute force wins for
-// corpora that small, matching the operational intuition ADR-0152 D2's original carve-out captured.
+// Issue #2631 acceptance: the latency claim needs a realistic embedding space and diverse held-out
+// queries. The 4-dim correctness fixture stays deterministic and cheap; this 384-dim fixture proves
+// that the shared service selects exact search below its crossover and genuine USearch HNSW above
+// it, while comparing the warm HNSW query against an independently computed exact top-K.
 const LATENCY_VECTOR_DIMENSIONS = 384;
 const LATENCY_MODEL_ID = "knowledge-m2-closeout-latency-vector";
 const LATENCY_LARGE_ROWS = 50_000;
 const LATENCY_SMALL_ROWS = 500;
-const LATENCY_QUERY_COUNT = 5;
+const LATENCY_QUERY_COUNT = 10;
+const ANN_RECALL_FLOOR = 0.95;
+const MAX_QUALIFIED_INDEX_BYTES = 256 * 1024 * 1024;
+const MAX_QUALIFIED_INDEX_RSS_DELTA_BYTES = 512 * 1024 * 1024;
 const EXPECTED_WIRE_SNAPSHOT_HASH =
   "9ee38880de5f349e56f27724dd35c7472c661629a79541434dde5ca27036b8a9";
+export const EXPECTED_EVALUATION_SCORECARD_HASH =
+  "8c0b19e097f39cba61fbe588c64996db64c8b676c3f4b8b401ecd0c84bf0986b";
 const QUERY_VECTORS = [
   new Float32Array([1, 0, 0, 0]),
   new Float32Array([0, 1, 0, 0]),
@@ -109,51 +107,128 @@ function proof(id, failures, metrics) {
   return { id, ok: failures.length === 0, failures, metrics };
 }
 
+function appendFailure(failures, failed, message) {
+  if (failed) failures.push(message);
+}
+
+function narrowedCandidateCount(candidateCount, rowCount) {
+  return Number.isSafeInteger(candidateCount) && candidateCount > 0 && candidateCount < rowCount;
+}
+
+function qualifiedIndexBytes(estimatedIndexBytes) {
+  return (
+    Number.isSafeInteger(estimatedIndexBytes) &&
+    estimatedIndexBytes > 0 &&
+    estimatedIndexBytes <= MAX_QUALIFIED_INDEX_BYTES
+  );
+}
+
+function recallsMeetFloor(recalls) {
+  return recalls.every((recall) => Number.isFinite(recall) && recall >= ANN_RECALL_FLOOR);
+}
+
 // Extracted from `evaluateAnnProof` so each concern stays under the complexity/line ceiling: the
 // original correctness fixture, the ADR-0153 encrypted-store boundary, the Issue #2631 latency
 // comparison, and the Issue #2631 injected-regression proof. Each helper appends to a shared
 // `failures` array so the assertion order stays reader-visible.
 function annCorrectnessFailures(input) {
   const failures = [];
-  if (input.vectorRows <= input.exactScanCap) failures.push("corpus-not-above-exact-cap");
-  if (input.activeStatus !== "available") failures.push(`ann-status:${input.activeStatus}`);
-  if (input.recalls.some((recall) => recall < 0.95)) failures.push("ann-recall-below-0.95");
-  if (input.loadFailureReason !== "sqlite-vec-extension-load-failed")
-    failures.push("load-fallback");
-  if (input.disabledStatus !== "disabled") failures.push("disabled-negative-control");
-  if (input.partitionViolations !== 0) failures.push("capsule-partition-crossed");
+  appendFailure(failures, input.vectorRows <= input.exactScanCap, "corpus-not-above-exact-cap");
+  appendFailure(failures, input.activeStatus !== "available", `ann-status:${input.activeStatus}`);
+  appendFailure(failures, input.provider !== "usearch", `ann-provider:${input.provider}`);
+  appendFailure(failures, input.searchMode !== "ann", `ann-search-mode:${input.searchMode}`);
+  appendFailure(
+    failures,
+    !narrowedCandidateCount(input.examinedCandidateCount, input.vectorRows),
+    "ann-did-not-narrow-candidates",
+  );
+  appendFailure(
+    failures,
+    !qualifiedIndexBytes(input.estimatedIndexBytes),
+    "ann-index-bytes-over-bound",
+  );
+  appendFailure(failures, !recallsMeetFloor(input.recalls), "ann-recall-below-0.95");
+  appendFailure(failures, input.loadFailureReason !== "runtime-unavailable", "load-fallback");
+  appendFailure(failures, input.disabledStatus !== "disabled", "disabled-negative-control");
+  appendFailure(failures, input.partitionViolations !== 0, "capsule-partition-crossed");
   return failures;
 }
 
-// ADR-0153 D1 replaced the blanket encrypted-store refusal with a boundary, so the gate certifies
-// the boundary rather than one side of it: ANN must be REACHABLE on an encrypted store that pins
-// TEMP storage to memory (Outcome 3 is false otherwise), the pin must actually be in force, and an
-// encrypted store without it must still fail closed. Three assertions where ADR-0152 D2 had one.
+// The native graph is rebuilt only from vectors decrypted inside the store boundary. SQLite never
+// receives extension authority, and the reviewed runtime path may not call persistence APIs; these
+// assertions jointly prove encryption reachability plus the no-spill design.
 function annEncryptedBoundaryFailures(input) {
   const failures = [];
   if (input.encryptedAnnStatus !== "available")
     failures.push(`encrypted-ann:${input.encryptedAnnStatus}`);
-  if (input.encryptedTempStore !== "memory") failures.push("encrypted-temp-store-unpinned");
-  if (input.encryptedUnpinnedStatus !== "fallback-encrypted-store")
-    failures.push(`encrypted-unpinned:${input.encryptedUnpinnedStatus}`);
+  if (input.sqliteExtensionDenied !== true) failures.push("sqlite-extension-authority-open");
+  if (input.persistenceApiReferences !== 0) failures.push("usearch-persistence-api-referenced");
   return failures;
 }
 
-// Issue #2631 acceptance: a recorded latency comparison at two corpus sizes. Row counts and recall
-// are asserted so a future change cannot silently shrink the comparison to a vacuous one; raw
-// milliseconds are NOT asserted (they are not reproducible across hosts). The operational
-// "ANN is faster than brute force at that size" claim is separately proved by
-// `corpus-not-above-exact-cap` above: at the closeout's `vectorRows`, production refuses
-// brute force (`DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS`) so ANN is the only path — faster in the
-// operational sense that brute force cannot answer at all.
+// Raw milliseconds are host-specific, but their within-run ordering is not: at 50k x 384 the warm
+// HNSW median must beat an independently computed exact median while retaining recall. The build
+// and RSS checks qualify the cost that query-only measurements intentionally exclude.
+function annLatencyBeatsExact(input) {
+  return (
+    Number.isFinite(input.latencyLargeAnnMedianMs) &&
+    Number.isFinite(input.latencyLargeExactMedianMs) &&
+    input.latencyLargeAnnMedianMs < input.latencyLargeExactMedianMs
+  );
+}
+
+function qualifiedBuildLatency(latencyLargeBuildMs) {
+  return Number.isFinite(latencyLargeBuildMs) && latencyLargeBuildMs > 0;
+}
+
+function qualifiedRssDelta(latencyLargeRssDeltaBytes) {
+  return (
+    Number.isFinite(latencyLargeRssDeltaBytes) &&
+    latencyLargeRssDeltaBytes >= 0 &&
+    latencyLargeRssDeltaBytes <= MAX_QUALIFIED_INDEX_RSS_DELTA_BYTES
+  );
+}
+
 function annLatencyFailures(input) {
   const failures = [];
-  if (input.latencyLargeRows !== LATENCY_LARGE_ROWS)
-    failures.push(`latency-large-rows:${String(input.latencyLargeRows)}`);
-  if (input.latencySmallRows !== LATENCY_SMALL_ROWS)
-    failures.push(`latency-small-rows:${String(input.latencySmallRows)}`);
-  if (input.latencyLargeMinRecall === undefined || input.latencyLargeMinRecall < 0.95)
-    failures.push("latency-large-recall-below-0.95");
+  appendFailure(
+    failures,
+    input.latencyLargeRows !== LATENCY_LARGE_ROWS,
+    `latency-large-rows:${String(input.latencyLargeRows)}`,
+  );
+  appendFailure(
+    failures,
+    input.latencySmallRows !== LATENCY_SMALL_ROWS,
+    `latency-small-rows:${String(input.latencySmallRows)}`,
+  );
+  appendFailure(
+    failures,
+    !Number.isFinite(input.latencyLargeMinRecall) || input.latencyLargeMinRecall < ANN_RECALL_FLOOR,
+    "latency-large-recall-below-0.95",
+  );
+  appendFailure(failures, input.latencyLargeSearchMode !== "ann", "latency-large-not-ann");
+  appendFailure(failures, input.latencySmallSearchMode !== "exact", "latency-small-not-exact");
+  appendFailure(
+    failures,
+    !narrowedCandidateCount(input.latencyLargeExaminedCandidateCount, input.latencyLargeRows),
+    "latency-large-did-not-narrow-candidates",
+  );
+  appendFailure(
+    failures,
+    !qualifiedIndexBytes(input.latencyLargeEstimatedIndexBytes),
+    "latency-large-index-bytes-over-bound",
+  );
+  appendFailure(failures, !annLatencyBeatsExact(input), "latency-large-ann-not-faster");
+  appendFailure(
+    failures,
+    !qualifiedBuildLatency(input.latencyLargeBuildMs),
+    "latency-large-build-not-measured",
+  );
+  appendFailure(
+    failures,
+    !qualifiedRssDelta(input.latencyLargeRssDeltaBytes),
+    "latency-large-rss-over-bound",
+  );
   return failures;
 }
 
@@ -167,7 +242,7 @@ function annDegenerateInjectionFailures(input) {
     input.degenerateInjectionRecalls.length === 0
   )
     return ["degenerate-injection-not-measured"];
-  if (input.degenerateInjectionRecalls.some((recall) => recall >= 0.95))
+  if (input.degenerateInjectionRecalls.some((recall) => !Number.isFinite(recall) || recall >= 0.95))
     return ["degenerate-injection-still-above-floor"];
   return [];
 }
@@ -193,7 +268,8 @@ export function evaluateFacadeProof(input) {
 
 export function evaluateEvalProof(input) {
   const failures = [];
-  if (input.firstHash !== input.secondHash) failures.push("scorecards-not-byte-identical");
+  if (input.actualScorecardHash !== input.expectedScorecardHash)
+    failures.push("scorecards-not-golden-identical");
   if (!input.regressionProbesLive) failures.push("regression-probes-not-live");
   if (!input.tautologyDetected) failures.push("tautology-control-not-detected");
   if (!input.groundedGateOk) failures.push("grounded-retrieval-gate");
@@ -395,9 +471,8 @@ async function seedLargeVectorCorpus(store, seeded, identity) {
 }
 
 // A pseudo-random L2-unit vector for `dimensions`-dim latency measurements. Deterministic in
-// `ordinal` so a rerun measures the same corpus; the spread across the unit sphere means any query
-// vector will have varying similarity to different rows, so vec0's K-nearest search has meaningful
-// work to do rather than tie-breaking on identical distances.
+// `ordinal` so a rerun measures the same corpus; the spread across the unit sphere gives HNSW
+// meaningful neighbourhood structure rather than identical-distance tie breaking.
 function latencyVector(ordinal, dimensions) {
   const values = new Float32Array(dimensions);
   let sumOfSquares = 0;
@@ -411,6 +486,34 @@ function latencyVector(ordinal, dimensions) {
     values[index] = (values[index] ?? 0) * scale;
   }
   return values;
+}
+
+function perturbedLatencyVector(center, seed, amplitude) {
+  const values = new Float32Array(center.length);
+  let sumOfSquares = 0;
+  for (let index = 0; index < center.length; index += 1) {
+    const noise = Math.sin((seed + 1) * (index + 3) * 0.019) * amplitude;
+    const value = (center[index] ?? 0) + noise;
+    values[index] = value;
+    sumOfSquares += value * value;
+  }
+  const scale = 1 / Math.sqrt(Math.max(sumOfSquares, Number.EPSILON));
+  for (let index = 0; index < values.length; index += 1) {
+    values[index] = (values[index] ?? 0) * scale;
+  }
+  return values;
+}
+
+function latencyCorpusVector(ordinal) {
+  const cluster = Math.floor(ordinal / 50);
+  const center = latencyVector(100_000 + cluster * 97, LATENCY_VECTOR_DIMENSIONS);
+  return perturbedLatencyVector(center, ordinal, 0.025);
+}
+
+function latencyQueryVector(queryIndex) {
+  const cluster = queryIndex * 67;
+  const center = latencyVector(100_000 + cluster * 97, LATENCY_VECTOR_DIMENSIONS);
+  return perturbedLatencyVector(center, -queryIndex - 1, 0.02);
 }
 
 function decodedVector(bytes) {
@@ -453,46 +556,35 @@ function measure(run) {
   return { value, elapsedMs: performance.now() - started };
 }
 
+async function measureAsync(run) {
+  const started = performance.now();
+  const value = await run();
+  return { value, elapsedMs: performance.now() - started };
+}
+
 function recallAtK(actual, expected) {
   const expectedIds = new Set(expected.map((candidate) => candidate.chunkId));
   return actual.filter((candidate) => expectedIds.has(candidate.chunkId)).length / TOP_K;
 }
 
-// One encrypted-store probe. `storeVectorIndex` decides whether the store is opened with the vector
-// runtime configured, which is what makes `openKnowledgeStore` pin TEMP storage (ADR-0153 D2);
-// omitting it produces the unpinned store the guard must still refuse.
-async function encryptedProbe(identity, storeVectorIndex, searchOptions, capsuleId) {
-  const store = openKnowledgeStore({
-    dbPath: ":memory:",
-    ...(storeVectorIndex === undefined ? {} : { vectorIndex: storeVectorIndex }),
-    protection: {
-      mode: "encrypted-key-provider",
-      keyProvider: { providerId: "m2-closeout", resolveKey: () => new Uint8Array(32).fill(17) },
-    },
-  });
+function sqliteExtensionAuthorityDenied(store) {
   try {
-    const seeded = await seedCapsuleWithVectors(store, { capsuleId, identity });
-    const capsule = getCapsule(store, seeded.capsuleId);
-    if (capsule === undefined) throw new Error("missing encrypted capsule");
-    const status = searchVectorIndex(
-      { store, capsule, queryVector: QUERY_VECTORS[0], candidateLimit: TOP_K },
-      searchOptions,
-    ).diagnostics.status;
-    const tempStore = store._internal.db.prepare("PRAGMA temp_store").get()?.temp_store;
-    return { status, tempStore: tempStore === 2 ? "memory" : "file" };
-  } finally {
-    store.close();
+    store._internal.db.enableLoadExtension(true);
+    return false;
+  } catch {
+    return true;
   }
 }
 
-async function encryptedAnnBoundary(identity, vectorIndex) {
-  const pinned = await encryptedProbe(identity, vectorIndex, vectorIndex, "m2-encrypted-pinned");
-  const unpinned = await encryptedProbe(identity, undefined, vectorIndex, "m2-encrypted-unpinned");
-  return {
-    encryptedAnnStatus: pinned.status,
-    encryptedTempStore: pinned.tempStore,
-    encryptedUnpinnedStatus: unpinned.status,
-  };
+function usearchPersistenceApiReferences() {
+  const paths = [
+    join(ROOT, "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts"),
+    join(ROOT, "packages/keiko-local-knowledge/src/retrieval/usearch-index-worker.ts"),
+  ];
+  return paths.reduce((count, path) => {
+    const source = readFileSync(path, "utf8");
+    return count + [...source.matchAll(/\bindex\.(?:load|save|view)\s*\(/gu)].length;
+  }, 0);
 }
 
 async function annMeasurements(store, capsule, rows, vectorIndex) {
@@ -502,7 +594,7 @@ async function annMeasurements(store, capsule, rows, vectorIndex) {
   let partitionViolations = 0;
   for (const queryVector of QUERY_VECTORS) {
     const exact = measure(() => exactTopK(rows, queryVector));
-    const ann = measure(() =>
+    const ann = await measureAsync(() =>
       searchVectorIndex({ store, capsule, queryVector, candidateLimit: TOP_K }, vectorIndex),
     );
     if (!ann.value.ok) throw new Error(`ANN query failed:${ann.value.diagnostics.reason}`);
@@ -523,22 +615,25 @@ async function annMeasurements(store, capsule, rows, vectorIndex) {
 // dependency — the assertion here is exactly the one that fails when the injection is reverted.
 function degenerateVectorIndexAdapter(fixedChunkIds, capsuleId) {
   return {
-    searchCapsule: () => ({
+    searchCapsule: async () => ({
       ok: true,
       candidates: fixedChunkIds.map((chunkId) => ({ chunkId, capsuleId, score: 0.5 })),
       sawDimensionCompatible: true,
       sawIdentityIncompatible: false,
       diagnostics: {
-        provider: "sqlite-vec",
+        provider: "usearch",
         status: "available",
         indexName: "m2-ann-degenerate-injection",
         vectorCount: fixedChunkIds.length,
+        searchMode: "ann",
+        examinedCandidateCount: fixedChunkIds.length,
+        estimatedIndexBytes: 1,
       },
     }),
   };
 }
 
-function measureDegenerateInjection(store, capsule, rows) {
+async function measureDegenerateInjection(store, capsule, rows) {
   // Pick K chunks from the END of the corpus (ordinals >= TOP_K * 3), which corpusVector maps to
   // [-1, 0, 0, 0] — antipodal to every QUERY_VECTORS entry. These CANNOT be in any healthy top-K, so
   // if `evaluateAnnProof.degenerateInjectionRecalls` observes any recall >= 0.95, the injection has
@@ -548,7 +643,7 @@ function measureDegenerateInjection(store, capsule, rows) {
   const recalls = [];
   for (const queryVector of QUERY_VECTORS) {
     const exact = exactTopK(rows, queryVector);
-    const result = searchVectorIndex(
+    const result = await searchVectorIndex(
       { store, capsule, queryVector, candidateLimit: TOP_K },
       { mode: "auto", adapter },
     );
@@ -588,38 +683,58 @@ async function verifiedLatencyIdentity() {
   return result.identity;
 }
 
-function measureLatencyOnRows(store, capsule, rows, vectorIndex, queryVector) {
-  // Prime the ANN index once, off the clock: the first search rebuilds the vec0 TEMP table, which
-  // dominates a single measurement and is not what "ANN query latency" means. After the prime the
-  // vec0 state is `ready` and subsequent searches only query.
-  const prime = searchVectorIndex(
-    { store, capsule, queryVector, candidateLimit: TOP_K },
-    vectorIndex,
+async function measuredIndexBuild(store, capsule, vectorIndex, queryVector) {
+  const rssBefore = process.memoryUsage().rss;
+  const built = await measureAsync(() =>
+    searchVectorIndex({ store, capsule, queryVector, candidateLimit: TOP_K }, vectorIndex),
   );
-  if (!prime.ok) throw new Error(`latency ANN prime failed:${prime.diagnostics.reason}`);
+  if (!built.value.ok) {
+    throw new Error(`latency index build failed:${built.value.diagnostics.reason}`);
+  }
+  return {
+    buildMs: built.elapsedMs,
+    rssDeltaBytes: Math.max(0, process.memoryUsage().rss - rssBefore),
+    diagnostics: built.value.diagnostics,
+  };
+}
+
+async function measureLatencyOnRows(store, capsule, rows, vectorIndex, queryVectors) {
+  const firstQuery = queryVectors[0];
+  if (firstQuery === undefined) throw new Error("missing latency query");
+  const build = await measuredIndexBuild(store, capsule, vectorIndex, firstQuery);
   const annLatency = [];
   const exactLatency = [];
   const recalls = [];
-  for (let index = 0; index < LATENCY_QUERY_COUNT; index += 1) {
+  let examinedCandidateCount = 0;
+  for (const queryVector of queryVectors) {
     const exact = measure(() => exactTopK(rows, queryVector));
-    const ann = measure(() =>
+    const ann = await measureAsync(() =>
       searchVectorIndex({ store, capsule, queryVector, candidateLimit: TOP_K }, vectorIndex),
     );
     if (!ann.value.ok) throw new Error(`latency ANN query failed:${ann.value.diagnostics.reason}`);
     annLatency.push(ann.elapsedMs);
     exactLatency.push(exact.elapsedMs);
     recalls.push(recallAtK(ann.value.candidates, exact.value));
+    examinedCandidateCount = Math.max(
+      examinedCandidateCount,
+      ann.value.diagnostics.examinedCandidateCount ?? 0,
+    );
   }
   return {
     annMedianMs: percentile(annLatency, 0.5),
     exactMedianMs: percentile(exactLatency, 0.5),
     minRecall: Math.min(...recalls),
+    buildMs: build.buildMs,
+    rssDeltaBytes: build.rssDeltaBytes,
+    searchMode: build.diagnostics.searchMode,
+    examinedCandidateCount,
+    estimatedIndexBytes: build.diagnostics.estimatedIndexBytes,
   };
 }
 
 async function measureLatencyAt(vectorIndex, identity, rowCount, capsuleId, chunkIdPrefix) {
-  // A separate in-memory store per size keeps the vec0 TEMP table isolated — no cross-run cache from
-  // the 4-dim correctness fixture, and the two latency sizes measure independent builds.
+  // A separate store per size keeps the shared service cache isolated, so both sizes measure an
+  // independent build and the configured exact/HNSW crossover.
   const store = openKnowledgeStore({ dbPath: ":memory:", vectorIndex });
   try {
     const seeded = await seedCapsuleWithVectors(store, {
@@ -632,7 +747,7 @@ async function measureLatencyAt(vectorIndex, identity, rowCount, capsuleId, chun
     await seedSyntheticVectorCorpus(store, seeded, identity, {
       rowCount,
       chunkIdPrefix,
-      vector: (ordinal) => latencyVector(ordinal, LATENCY_VECTOR_DIMENSIONS),
+      vector: latencyCorpusVector,
     });
     const capsule = getCapsule(store, seeded.capsuleId);
     if (capsule === undefined) throw new Error("missing latency capsule");
@@ -641,10 +756,11 @@ async function measureLatencyAt(vectorIndex, identity, rowCount, capsuleId, chun
         "SELECT chunk_id, embedding FROM vectors WHERE capsule_id = :capsule ORDER BY chunk_id",
       )
       .all({ capsule: String(seeded.capsuleId) });
-    // Query is a fresh vector on the unit sphere — deterministic, and not identical to any corpus
-    // row, so brute force and ANN both do real work rather than short-circuiting on an exact hit.
-    const queryVector = latencyVector(-1, LATENCY_VECTOR_DIMENSIONS);
-    const measured = measureLatencyOnRows(store, capsule, rows, vectorIndex, queryVector);
+    // Queries are noisy held-out vectors around distinct corpus clusters.
+    const queryVectors = Array.from({ length: LATENCY_QUERY_COUNT }, (_, index) =>
+      latencyQueryVector(index),
+    );
+    const measured = await measureLatencyOnRows(store, capsule, rows, vectorIndex, queryVectors);
     return { rows: rows.length, ...measured };
   } finally {
     store.close();
@@ -689,46 +805,48 @@ async function seedAnnProofStore(store, identity) {
   return seeded;
 }
 
-// The extension is operator-provisioned rather than an npm dependency (see
-// scripts/provision-sqlite-vec.mjs for why), so the ANN proof drives the provisioned binary. This
-// stays a real proof: with nothing provisioned the gate FAILS rather than quietly certifying a
-// fallback as if ANN had been exercised.
-function provisionedSqliteVecPath() {
-  const configured = process.env.KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH;
+// The reviewed native addon is provisioned outside npm. With no verified target binary the proof
+// fails closed instead of certifying the exact fallback as though HNSW had run.
+function resolvedUsearchBinaryPath() {
+  const configured = process.env.KEIKO_USEARCH_BINARY_PATH;
   if (typeof configured === "string" && configured.length > 0 && existsSync(configured)) {
     return configured;
   }
-  const suffix = EXTENSION_SUFFIX_BY_PLATFORM[process.platform] ?? "so";
-  const candidate = join(ROOT, ".sqlite-vec", "0.1.9", `vec0.${suffix}`);
+  const candidate = provisionedUsearchBinaryPath(ROOT);
   return existsSync(candidate) ? candidate : undefined;
 }
 
 function resolveAnnProofVectorIndex() {
-  const extensionPath = provisionedSqliteVecPath();
+  const binaryPath = resolvedUsearchBinaryPath();
   return resolveVectorIndexOptions(undefined, {
-    KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "auto",
-    ...(extensionPath === undefined
-      ? {}
-      : { KEIKO_LOCAL_KNOWLEDGE_SQLITE_VEC_EXTENSION_PATH: extensionPath }),
+    KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX: "usearch",
+    ...(binaryPath === undefined ? {} : { KEIKO_USEARCH_BINARY_PATH: binaryPath }),
   });
 }
 
 function annStoreVectorRows(store, capsuleId) {
-  return store._internal.db
+  const encryptedRows = store._internal.db
     .prepare(
       "SELECT chunk_id, embedding FROM vectors WHERE capsule_id = :capsule ORDER BY chunk_id",
     )
     .all({ capsule: String(capsuleId) });
+  return encryptedRows.map((row) => ({
+    chunk_id: row.chunk_id,
+    embedding: store._internal.contentCipher.openVector(
+      row.embedding,
+      VECTOR_DIMENSIONS * Float32Array.BYTES_PER_ELEMENT,
+    ),
+  }));
 }
 
 // Fallback-diagnostic probes that establish `load-fallback` and `disabled-negative-control` for
 // `evaluateAnnProof`. Both are cheap `searchVectorIndex` calls that never actually run ANN.
-function annFallbackDiagnostics(store, capsule) {
-  const missing = searchVectorIndex(
+async function annFallbackDiagnostics(store, capsule) {
+  const missing = await searchVectorIndex(
     { store, capsule, queryVector: QUERY_VECTORS[0], candidateLimit: TOP_K },
-    { mode: "auto", sqliteVecExtensionPath: "/missing/keiko/m2-vec0" },
+    { mode: "usearch", usearchBinaryPath: "/missing/keiko/m2-usearch.node" },
   );
-  const disabled = searchVectorIndex(
+  const disabled = await searchVectorIndex(
     { store, capsule, queryVector: QUERY_VECTORS[0], candidateLimit: TOP_K },
     { mode: "disabled" },
   );
@@ -748,49 +866,99 @@ function annLatencyMetrics(measured, latency) {
     exactMedianMs: percentile(measured.exactLatency, 0.5),
     // Issue #2631 acceptance: recorded latency comparison at a realistic embedding-space fixture
     // (LATENCY_VECTOR_DIMENSIONS-dim). The 4-dim correctness fixture stays deliberately toy for
-    // hermetic recall/encryption assertions; the realistic-dim fixture here records ANN vs
-    // brute-force milliseconds so the characterization document can state the break-even. The
-    // operational "ANN is faster" claim rests on `corpus-not-above-exact-cap`.
+    // hermetic recall/encryption assertions; the realistic-dim fixture proves both execution modes
+    // and requires warm HNSW to beat the independently computed exact baseline at 50k rows.
     latencyVectorDimensions: LATENCY_VECTOR_DIMENSIONS,
     latencyLargeRows: latency.large.rows,
     latencyLargeAnnMedianMs: latency.large.annMedianMs,
     latencyLargeExactMedianMs: latency.large.exactMedianMs,
     latencyLargeMinRecall: latency.large.minRecall,
+    latencyLargeBuildMs: latency.large.buildMs,
+    latencyLargeRssDeltaBytes: latency.large.rssDeltaBytes,
+    latencyLargeSearchMode: latency.large.searchMode,
+    latencyLargeExaminedCandidateCount: latency.large.examinedCandidateCount,
+    latencyLargeEstimatedIndexBytes: latency.large.estimatedIndexBytes,
     latencySmallRows: latency.small.rows,
-    latencySmallAnnMedianMs: latency.small.annMedianMs,
+    latencySmallServiceMedianMs: latency.small.annMedianMs,
     latencySmallExactMedianMs: latency.small.exactMedianMs,
+    latencySmallSearchMode: latency.small.searchMode,
     productionExactScanCap: EXACT_SCAN_CAP,
   };
+}
+
+function requiredAnnCapsule(store, capsuleId) {
+  const capsule = getCapsule(store, capsuleId);
+  if (capsule === undefined) throw new Error("missing ANN capsule");
+  return capsule;
+}
+
+function valueOrFallback(value, fallback) {
+  return value ?? fallback;
+}
+
+function annPipelineMetrics(pipeline) {
+  const vectorIndex = pipeline.diagnostics?.vectorIndex;
+  if (vectorIndex === undefined) {
+    return {
+      activeStatus: "missing",
+      provider: "missing",
+      searchMode: "missing",
+      examinedCandidateCount: 0,
+      estimatedIndexBytes: 0,
+    };
+  }
+  return {
+    activeStatus: valueOrFallback(vectorIndex.status, "missing"),
+    provider: valueOrFallback(vectorIndex.provider, "missing"),
+    searchMode: valueOrFallback(vectorIndex.searchMode, "missing"),
+    examinedCandidateCount: valueOrFallback(vectorIndex.examinedCandidateCount, 0),
+    estimatedIndexBytes: valueOrFallback(vectorIndex.estimatedIndexBytes, 0),
+  };
+}
+
+async function evaluateAnnProofStore(store, identity, vectorIndex) {
+  const seeded = await seedAnnProofStore(store, identity);
+  const pipeline = await runLocalKnowledgeRetrieval(
+    { store, embeddingAdapter: vectorAdapter(QUERY_VECTORS[0]), vectorIndex },
+    { text: "m2-ann-query", capsuleId: seeded.capsuleId, topK: TOP_K },
+  );
+  const capsule = requiredAnnCapsule(store, seeded.capsuleId);
+  const rows = annStoreVectorRows(store, seeded.capsuleId);
+  const measured = await annMeasurements(store, capsule, rows, vectorIndex);
+  const degenerateInjection = await measureDegenerateInjection(store, capsule, rows);
+  const latency = await runLatencyBenchmark(vectorIndex);
+  const pipelineMetrics = annPipelineMetrics(pipeline);
+  return evaluateAnnProof({
+    vectorRows: rows.length,
+    exactScanCap: EXACT_SCAN_CAP,
+    ...pipelineMetrics,
+    recalls: measured.recalls,
+    partitionViolations: measured.partitionViolations,
+    ...annLatencyMetrics(measured, latency),
+    degenerateInjectionRecalls: degenerateInjection.recalls,
+    degenerateInjectionDecoyCount: degenerateInjection.decoyChunkCount,
+    encryptedAnnStatus: pipelineMetrics.activeStatus,
+    sqliteExtensionDenied: sqliteExtensionAuthorityDenied(store),
+    persistenceApiReferences: usearchPersistenceApiReferences(),
+    ...(await annFallbackDiagnostics(store, capsule)),
+  });
 }
 
 async function runAnnProof() {
   const identity = await verifiedVectorIdentity();
   const vectorIndex = resolveAnnProofVectorIndex();
-  const store = openKnowledgeStore({ dbPath: ":memory:", vectorIndex });
+  const store = openKnowledgeStore({
+    dbPath: ":memory:",
+    protection: {
+      mode: "encrypted-key-provider",
+      keyProvider: {
+        providerId: "m2-closeout",
+        resolveKey: () => new Uint8Array(32).fill(17),
+      },
+    },
+  });
   try {
-    const seeded = await seedAnnProofStore(store, identity);
-    const pipeline = await runLocalKnowledgeRetrieval(
-      { store, embeddingAdapter: vectorAdapter(QUERY_VECTORS[0]), vectorIndex },
-      { text: "m2-ann-query", capsuleId: seeded.capsuleId, topK: TOP_K },
-    );
-    const capsule = getCapsule(store, seeded.capsuleId);
-    if (capsule === undefined) throw new Error("missing ANN capsule");
-    const rows = annStoreVectorRows(store, seeded.capsuleId);
-    const measured = await annMeasurements(store, capsule, rows, vectorIndex);
-    const degenerateInjection = measureDegenerateInjection(store, capsule, rows);
-    const latency = await runLatencyBenchmark(vectorIndex);
-    return evaluateAnnProof({
-      vectorRows: rows.length,
-      exactScanCap: EXACT_SCAN_CAP,
-      activeStatus: pipeline.diagnostics?.vectorIndex?.status ?? "missing",
-      recalls: measured.recalls,
-      partitionViolations: measured.partitionViolations,
-      ...annLatencyMetrics(measured, latency),
-      degenerateInjectionRecalls: degenerateInjection.recalls,
-      degenerateInjectionDecoyCount: degenerateInjection.decoyChunkCount,
-      ...(await encryptedAnnBoundary(identity, vectorIndex)),
-      ...annFallbackDiagnostics(store, capsule),
-    });
+    return await evaluateAnnProofStore(store, identity, vectorIndex);
   } finally {
     store.close();
   }
@@ -894,17 +1062,16 @@ function failingGate(message) {
 
 async function runEvalProof() {
   const options = { log: () => undefined, fail: failingGate };
-  const first = await runRetrievalQualityCheck(options);
-  const second = await runRetrievalQualityCheck(options);
+  const current = await runRetrievalQualityCheck(options);
   const grounded = await runGroundedRetrievalQualityGate(options);
   const faithfulness = runGroundedFaithfulnessGate(options);
   return evaluateEvalProof({
-    firstHash: qualityScorecardHash(first),
-    secondHash: qualityScorecardHash(second),
-    fixtureCount: first.localKnowledge.scorecards.length,
-    regressionProbeCount: first.regression.probed,
+    actualScorecardHash: qualityScorecardHash(current),
+    expectedScorecardHash: EXPECTED_EVALUATION_SCORECARD_HASH,
+    fixtureCount: current.localKnowledge.scorecards.length,
+    regressionProbeCount: current.regression.probed,
     regressionProbesLive:
-      first.regression.ok && first.regression.probed === REGRESSION_PROBE_FIXTURE_IDS.length,
+      current.regression.ok && current.regression.probed === REGRESSION_PROBE_FIXTURE_IDS.length,
     tautologyDetected: await proveTautologyDetection(),
     groundedGateOk: grounded.ok,
     faithfulnessGateOk: faithfulness.ok,
@@ -1007,10 +1174,14 @@ function annEvidenceRows(ann) {
   return [
     ["ANN", "vector rows", String(ann.vectorRows)],
     ["ANN", "exact scan cap", String(ann.exactScanCap)],
+    ["ANN", "provider", ann.provider],
+    ["ANN", "search mode", ann.searchMode],
+    ["ANN", "examined candidate ceiling", `<${String(ann.vectorRows)}`],
+    ["ANN", "index byte ceiling", "<=268435456"],
     ["ANN", `minimum recall@${String(TOP_K)}`, Math.min(...ann.recalls).toFixed(3)],
     ["ANN", "encrypted ANN diagnostic", ann.encryptedAnnStatus],
-    ["ANN", "encrypted temp_store", ann.encryptedTempStore],
-    ["ANN", "encrypted unpinned diagnostic", ann.encryptedUnpinnedStatus],
+    ["ANN", "SQLite extension authority denied", String(ann.sqliteExtensionDenied)],
+    ["ANN", "native persistence API references", String(ann.persistenceApiReferences)],
     ["ANN", "load diagnostic", ann.loadFailureReason],
     ["ANN", "partition violations", String(ann.partitionViolations)],
     // Issue #2631 additions. Each field is deterministic per successful gate run: constants when a
@@ -1020,6 +1191,9 @@ function annEvidenceRows(ann) {
     ["ANN", "latency vector dimensions", String(ann.latencyVectorDimensions)],
     ["ANN", "latency large rows", String(ann.latencyLargeRows)],
     ["ANN", "latency small rows", String(ann.latencySmallRows)],
+    ["ANN", "latency large search mode", ann.latencyLargeSearchMode],
+    ["ANN", "latency small search mode", ann.latencySmallSearchMode],
+    ["ANN", "qualified RSS delta ceiling", "<=536870912"],
     ["ANN", `latency large minimum recall@${String(TOP_K)}`, ann.latencyLargeMinRecall.toFixed(3)],
     [
       "ANN",
@@ -1041,7 +1215,7 @@ function otherEvidenceRows(facade, evaluation, wire, pod, bookkeeping) {
     ["Reranker", "importer-set hash", facade.importerHash],
     ["Evaluation", "fixture count", String(evaluation.fixtureCount)],
     ["Evaluation", "live probe count", String(evaluation.regressionProbeCount)],
-    ["Evaluation", "scorecard hash", evaluation.firstHash],
+    ["Evaluation", "scorecard hash", evaluation.actualScorecardHash],
     ["Wire", "snapshot hash", wire.wireHash],
     ["Wire", "neutral purpose id", wire.neutralPurpose],
     ["Repository pod", "provider id", pod.providerName],
@@ -1198,8 +1372,10 @@ function logLatencyCharacterization(onLog, results) {
         `large-rows=${String(ann.latencyLargeRows)} ` +
         `large-ann-median-ms=${ann.latencyLargeAnnMedianMs.toFixed(3)} ` +
         `large-exact-median-ms=${ann.latencyLargeExactMedianMs.toFixed(3)} ` +
+        `large-build-ms=${ann.latencyLargeBuildMs.toFixed(3)} ` +
+        `large-rss-delta-bytes=${String(ann.latencyLargeRssDeltaBytes)} ` +
         `small-rows=${String(ann.latencySmallRows)} ` +
-        `small-ann-median-ms=${ann.latencySmallAnnMedianMs.toFixed(3)} ` +
+        `small-service-median-ms=${ann.latencySmallServiceMedianMs.toFixed(3)} ` +
         `small-exact-median-ms=${ann.latencySmallExactMedianMs.toFixed(3)}`,
     );
   }
@@ -1210,7 +1386,7 @@ function logLatencyCharacterization(onLog, results) {
 // bodies, no host details — only counts, milliseconds rounded to three decimals, and recall floors.
 // The characterization is NOT a golden file: raw milliseconds vary across hosts, so this document
 // is written whenever the gate runs with `--write` (alongside the main evidence) and is not
-// compared against a committed baseline. `evaluateAnnProof` enforces the operational claim; this
+// compared against a committed baseline. `evaluateAnnProof` enforces the within-run claim; this
 // document records the measurement.
 export function categorizeLatencyWinner(annMs, exactMs) {
   const ratio = exactMs === 0 ? Number.POSITIVE_INFINITY : annMs / exactMs;
@@ -1226,24 +1402,33 @@ export function breakEvenNarrative(smallWinner, largeWinner, smallRows, largeRow
   return [
     `Measured winners: at ${smallStr} rows → ${smallWinner}; at ${largeStr} rows → ${largeWinner}.`,
     "",
-    `The **operational** break-even is the production exact-scan cap`,
+    `The governed crossover is the production exact-scan cap`,
     `(\`DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS = ${capStr}\` in`,
     "`packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.ts`). Below the cap,",
-    "brute force answers directly and — as this fixture confirms — is often faster than vec0's",
-    "per-query SQL overhead for cosine KNN at synthetic dimensions. Above the cap, brute force is",
-    "refused and ANN is the only retrieval path, so the ANN path is faster in the operational sense",
-    "that brute force cannot answer at all. The `ann-active` proof enforces exactly that: it runs at",
-    "`vectorRows > exactScanCap` and asserts ANN succeeds where the cap forecloses brute force.",
+    "the shared service deliberately executes exact search; the small row therefore characterises",
+    "service overhead rather than pretending that HNSW ran. Above the cap it executes USearch HNSW.",
+    "The large row is a genuine within-run measurement: its warm HNSW median must be lower than an",
+    "independently computed exact median, with recall@10 >= 0.95 and fewer examined candidates than",
+    "the corpus. Build time and RSS delta are recorded separately so query latency cannot hide them.",
   ].join("\n");
 }
 
 function latencyCharacterizationRows(ann, smallWinner, largeWinner) {
   return [
-    ["Corpus", "Rows", "ANN median (ms)", "Brute-force median (ms)", "Min recall@10", "Faster"],
+    [
+      "Corpus",
+      "Rows",
+      "Mode",
+      "Service median (ms)",
+      "Exact median (ms)",
+      "Min recall@10",
+      "Faster",
+    ],
     [
       "Small",
       String(ann.latencySmallRows),
-      ann.latencySmallAnnMedianMs.toFixed(3),
+      ann.latencySmallSearchMode,
+      ann.latencySmallServiceMedianMs.toFixed(3),
       ann.latencySmallExactMedianMs.toFixed(3),
       "n/a",
       smallWinner,
@@ -1251,6 +1436,7 @@ function latencyCharacterizationRows(ann, smallWinner, largeWinner) {
     [
       "Large",
       String(ann.latencyLargeRows),
+      ann.latencyLargeSearchMode,
       ann.latencyLargeAnnMedianMs.toFixed(3),
       ann.latencyLargeExactMedianMs.toFixed(3),
       ann.latencyLargeMinRecall.toFixed(3),
@@ -1273,7 +1459,7 @@ export function renderLatencyCharacterization(results) {
   const ann = results.find((result) => result.id === "ann-active")?.metrics;
   if (ann?.latencyLargeAnnMedianMs === undefined) return undefined;
   const smallWinner = categorizeLatencyWinner(
-    ann.latencySmallAnnMedianMs,
+    ann.latencySmallServiceMedianMs,
     ann.latencySmallExactMedianMs,
   );
   const largeWinner = categorizeLatencyWinner(
@@ -1286,10 +1472,10 @@ export function renderLatencyCharacterization(results) {
     "# Knowledge M2 ANN latency characterization",
     "",
     "This is a characterization snapshot, not a golden file. It records the most recent local",
-    "closeout measurement of the ANN vs brute-force retrieval latency on a realistic-dimensional",
+    "closeout measurement of the shared search service vs exact retrieval on a realistic-dimensional",
     `(${String(ann.latencyVectorDimensions)}-dim) fixture. Wall-clock milliseconds are not`,
     "reproducible across hosts, so the closeout gate does NOT compare this document against a",
-    "committed baseline; the operational claim (ANN faster than brute force at the large corpus)",
+    "committed baseline; the within-run claim (ANN faster than exact at the large corpus)",
     "is enforced by `evaluateAnnProof` instead.",
     "",
     "Content-free by construction: row counts, milliseconds, recall floors, and a categorical",

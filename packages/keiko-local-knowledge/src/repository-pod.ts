@@ -23,9 +23,13 @@ import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 import { createCapsule, deleteCapsule, getCapsule } from "./capsule-lifecycle.js";
-import { documentIdFor } from "./discovery/types.js";
 import { deleteDocumentRow } from "./discovery/persist.js";
-import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveryOptions } from "./discovery/types.js";
+import {
+  DEFAULT_DISCOVERY_OPTIONS,
+  documentIdFor,
+  type DiscoveryErrorCode,
+  type DiscoveryOptions,
+} from "./discovery/types.js";
 import { KnowledgeStoreError } from "./errors.js";
 import { diffFingerprintSets } from "./fingerprint-diff.js";
 import {
@@ -195,6 +199,36 @@ function resolvedDiscoveryOptions(deps: RepositoryPodIndexingDeps): DiscoveryOpt
 interface DrainedIndexing {
   readonly result: IndexingResult;
   readonly failedRelativePaths: ReadonlySet<string>;
+  readonly enumerationComplete: boolean;
+}
+
+type DiscoveryFailureCode = `DISCOVERY_FAILED:${DiscoveryErrorCode}`;
+
+// A discovery failure preserves completeness only when it rejects one known entry without
+// interrupting enumeration. Deny by default so a new DiscoveryErrorCode cannot silently permit
+// baseline replacement or destructive pruning.
+const COMPLETE_DISCOVERY_FAILURE_CODES: ReadonlySet<DiscoveryFailureCode> = new Set([
+  "DISCOVERY_FAILED:PATH_ESCAPE",
+  "DISCOVERY_FAILED:OVERSIZED_FILE",
+  "DISCOVERY_FAILED:UNSUPPORTED_FORMAT",
+]);
+
+function marksEnumerationIncomplete(code: string): boolean {
+  return (
+    code.startsWith("DISCOVERY_FAILED:") &&
+    !COMPLETE_DISCOVERY_FAILURE_CODES.has(code as DiscoveryFailureCode)
+  );
+}
+
+function terminalIndexingResult(event: IndexingEvent): IndexingResult | undefined {
+  if (
+    event.kind === "job-completed" ||
+    event.kind === "job-failed" ||
+    event.kind === "job-cancelled"
+  ) {
+    return event.result;
+  }
+  return undefined;
 }
 
 async function drainIndexing(
@@ -203,22 +237,20 @@ async function drainIndexing(
 ): Promise<DrainedIndexing> {
   let result: IndexingResult | undefined;
   const failedRelativePaths = new Set<string>();
+  let enumerationComplete = true;
   for await (const event of events) {
     onEvent?.(event);
     if (event.kind === "document-failed" && event.relativePath !== undefined) {
       failedRelativePaths.add(event.relativePath);
     }
-    if (
-      event.kind === "job-completed" ||
-      event.kind === "job-failed" ||
-      event.kind === "job-cancelled"
-    ) {
-      result = event.result;
+    if (event.kind === "document-failed" && marksEnumerationIncomplete(event.error.code)) {
+      enumerationComplete = false;
     }
+    result = terminalIndexingResult(event) ?? result;
   }
   if (result === undefined)
     throw new KnowledgeStoreError("repository indexing ended without result");
-  return { result, failedRelativePaths };
+  return { result, failedRelativePaths, enumerationComplete };
 }
 
 function runRepositoryIndexing(
@@ -297,6 +329,7 @@ function runCounts(
   next: readonly RepositoryFileFingerprint[],
   result: IndexingResult,
   rejectedEntries: number,
+  enumerationComplete: boolean,
 ): RepositoryPodChangeCounts {
   const delta = diffFingerprintSets(fingerprintMap([...prior.values()]), fingerprintMap(next), {
     detectMoves: false,
@@ -304,7 +337,7 @@ function runCounts(
   return {
     addedFiles: delta.added,
     changedFiles: delta.changed,
-    removedFiles: delta.removed,
+    removedFiles: enumerationComplete ? delta.removed : 0,
     unchangedFiles: delta.unchanged,
     failedDocuments: result.failedDocuments,
     rejectedEntries,
@@ -360,7 +393,12 @@ function buildRunRecord(
   };
 }
 
-function indexingResultCanApply(result: IndexingResult, rejectedEntries: number): boolean {
+function indexingResultCanApply(
+  result: IndexingResult,
+  rejectedEntries: number,
+  enumerationComplete: boolean,
+): boolean {
+  if (!enumerationComplete) return false;
   if (result.status === "succeeded") return true;
   return (
     result.status === "failed" &&
@@ -387,7 +425,8 @@ export async function refreshRepositoryPod(
   const runId = input.runId ?? deps.idSource?.() ?? randomUUID();
   const drained = await runRepositoryIndexing(deps, discovery);
   const next = failedWithheldBaseline(scan.fingerprints, drained.failedRelativePaths);
-  const applied = indexingResultCanApply(drained.result, scan.rejectedEntries);
+  const enumerationComplete = scan.complete && drained.enumerationComplete;
+  const applied = indexingResultCanApply(drained.result, scan.rejectedEntries, enumerationComplete);
   if (applied) {
     replaceRepositoryFileFingerprints(
       deps.store,
@@ -401,7 +440,13 @@ export async function refreshRepositoryPod(
     );
   }
   const persisted = applied ? next : [...prior.values()];
-  const counts = runCounts(prior, scan.fingerprints, drained.result, scan.rejectedEntries);
+  const counts = runCounts(
+    prior,
+    scan.fingerprints,
+    drained.result,
+    scan.rejectedEntries,
+    enumerationComplete,
+  );
   const run = buildRunRecord(deps, runId, drained.result, counts, persisted, applied);
   persistRun(deps, run);
   return { run, indexing: drained.result, summary: buildSummary(deps.store, deps.capsuleId) };

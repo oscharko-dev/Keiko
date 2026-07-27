@@ -208,12 +208,12 @@ jobs:
         # claim is falsely flagged, an unavailable judge stops degrading to WARN, or a pass-through
         # judge still "detects" (the checker must be load-bearing — non-tautology proven in CI).
         run: npm run check:grounded-entailment
-      - name: Provision the sqlite-vec loadable extension (Issue #2566)
-        # The ANN proof in the closeout gate below drives the real extension. It is not an npm
-        # dependency — sqlite-vec publishes an invalid SPDX license string that both the
+      - name: Provision the USearch HNSW runtime (Epic #2556)
+        # The ANN proof in the closeout gate below drives the real native runtime. It is not an npm
+        # dependency — USearch publishes an invalid SPDX license string that both the
         # dependency-review policy and check:workspace-supply-chain reject — so it is fetched here
         # and verified against a pinned SHA-256, the same way the Sonar Scanner CLI is obtained.
-        run: npm run provision:sqlite-vec
+        run: npm run provision:usearch
       - name: Knowledge M2 closeout gate (Knowledge M2.8, Epic #2556)
         # The wave's anti-false-green artifact. Re-runs the six substrate proofs (ANN activation,
         # one reranker transport importer, the evaluation fold, the retrieval-context wire snapshot,
@@ -306,16 +306,16 @@ jobs:
           # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
           # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Restore the provisioned sqlite-vec extension
+      - name: Restore the provisioned USearch runtime
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          # `provision:sqlite-vec` recomputes the extension's SHA-256 and compares it against the
+          # `provision:usearch` recomputes the runtime's SHA-256 and compares it against the
           # pinned value on every run, restored or not, and refuses a file that does not match — so
           # this cache can only ever save the download, never substitute the artifact.
-          path: .sqlite-vec
-          key: sqlite-vec-${{ runner.os }}-${{ hashFiles('scripts/provision-sqlite-vec.mjs') }}
-      - name: Provision the sqlite-vec loadable extension (Issue #2566)
-        # Not an npm dependency: sqlite-vec publishes an invalid SPDX license string, which both the
+          path: .usearch
+          key: usearch-${{ runner.os }}-${{ hashFiles('scripts/provision-usearch.mjs', 'packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts') }}
+      - name: Provision the USearch HNSW runtime (Epic #2556)
+        # Not an npm dependency: USearch publishes an invalid SPDX license string, which both the
         # dependency-review policy and check:workspace-supply-chain reject — the latter by design has
         # no exception mechanism. Fetched here and verified against a pinned SHA-256 instead, the
         # same way the Sonar Scanner CLI is obtained in the finalizing job. Without the binary the
@@ -325,7 +325,7 @@ jobs:
         # not silently downgrade it to fallback coverage. Hosts with no published asset return
         # success. Provisioned in every coverage job so each suite executes in exactly the
         # environment it did when the three ran in one job.
-        run: npm run provision:sqlite-vec
+        run: npm run provision:usearch
       - name: Measure package coverage shard
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # `--reporter` on the command line REPLACES the reporter list, and vitest only auto-appends
@@ -396,13 +396,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Restore the provisioned sqlite-vec extension
+      - name: Restore the provisioned USearch runtime
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .sqlite-vec
-          key: sqlite-vec-${{ runner.os }}-${{ hashFiles('scripts/provision-sqlite-vec.mjs') }}
-      - name: Provision the sqlite-vec loadable extension (Issue #2566)
-        run: npm run provision:sqlite-vec
+          path: .usearch
+          key: usearch-${{ runner.os }}-${{ hashFiles('scripts/provision-usearch.mjs', 'packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts') }}
+      - name: Provision the USearch HNSW runtime (Epic #2556)
+        run: npm run provision:usearch
       # Not optional and easy to lose in the split: while the three suites shared one step, the
       # package build came free with `test:coverage:packages`, which runs first in that chain. The
       # UI imports workspace packages by bare specifier and they resolve to `dist`, which no
@@ -462,13 +462,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Restore the provisioned sqlite-vec extension
+      - name: Restore the provisioned USearch runtime
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .sqlite-vec
-          key: sqlite-vec-${{ runner.os }}-${{ hashFiles('scripts/provision-sqlite-vec.mjs') }}
-      - name: Provision the sqlite-vec loadable extension (Issue #2566)
-        run: npm run provision:sqlite-vec
+          path: .usearch
+          key: usearch-${{ runner.os }}-${{ hashFiles('scripts/provision-usearch.mjs', 'packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts') }}
+      - name: Provision the USearch HNSW runtime (Epic #2556)
+        run: npm run provision:usearch
       # Same reason as in `coverage-ui`: several `scripts/__tests__` suites import workspace
       # packages by bare specifier, which resolve to `dist`.
       - name: Build internal packages so workspace dist resolves

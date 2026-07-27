@@ -10,6 +10,7 @@
 
 import {
   buildPackCitationIndex,
+  GROUNDED_NO_EVIDENCE_ANSWER,
   packHasUsableEvidence,
   reconcileInlineCitations,
   type PackCitationIndex,
@@ -138,8 +139,7 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     name: "refusal-on-empty",
     variant: "refusal",
     packScopePaths: [],
-    answerText:
-      "I could not find repository evidence in the connected scope to answer this question.",
+    answerText: GROUNDED_NO_EVIDENCE_ANSWER,
     expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
 ];
@@ -171,7 +171,8 @@ export interface GroundedFaithfulnessScorecard {
   readonly unsupportedDetectionRate: number;
   // Of the faithful fixtures, the fraction with NO false-positive unsupported flag.
   readonly citationPrecision: number;
-  // Of the empty-evidence fixtures, the fraction that abstain (no usable evidence ⇒ must abstain).
+  // Of the empty-evidence fixtures, the fraction whose answer text is correctly classified:
+  // the canonical refusal abstains, while a confident answer is detected as a bad output.
   readonly abstentionOnEmptyRate: number;
   readonly failures: readonly string[];
 }
@@ -184,6 +185,18 @@ function citationsMatchExpected(actual: readonly string[], expected: readonly st
   return (
     actual.length === expected.length && actual.every((value, index) => value === expected[index])
   );
+}
+
+export function isGroundedEmptyEvidenceAbstention(
+  pack: ConnectedContextPack,
+  answerText: string,
+): boolean {
+  return !packHasUsableEvidence(pack) && answerText === GROUNDED_NO_EVIDENCE_ANSWER;
+}
+
+function emptyEvidenceVariantMatched(fixture: FaithfulnessFixture): boolean {
+  const abstained = isGroundedEmptyEvidenceAbstention(packFor(fixture), fixture.answerText);
+  return abstained === (fixture.variant === "refusal");
 }
 
 export function runGroundedFaithfulnessEval(): GroundedFaithfulnessScorecard {
@@ -217,10 +230,10 @@ export function runGroundedFaithfulnessEval(): GroundedFaithfulnessScorecard {
 
   let abstained = 0;
   for (const fixture of empty) {
-    if (!packHasUsableEvidence(packFor(fixture))) {
+    if (emptyEvidenceVariantMatched(fixture)) {
       abstained += 1;
     } else {
-      failures.push(`empty-evidence fixture '${fixture.name}' did not abstain`);
+      failures.push(`empty-evidence answer mismatch in '${fixture.name}'`);
     }
   }
 
@@ -247,15 +260,26 @@ export const DEFAULT_GROUNDED_FAITHFULNESS_BUDGET: GroundedFaithfulnessBudget = 
   minAbstentionOnEmptyRate: 1,
 };
 
+function missesFiniteFloor(value: number, floor: number): boolean {
+  return !Number.isFinite(value) || !Number.isFinite(floor) || value < floor;
+}
+
 export function evaluateGroundedFaithfulnessBudget(
   scorecard: GroundedFaithfulnessScorecard,
   budget: GroundedFaithfulnessBudget = DEFAULT_GROUNDED_FAITHFULNESS_BUDGET,
 ): EvalFloorResult {
   const failures = [...scorecard.failures];
-  if (scorecard.unsupportedDetectionRate < budget.minUnsupportedDetectionRate)
-    failures.push("unsupportedDetectionRate");
-  if (scorecard.citationPrecision < budget.minCitationPrecision) failures.push("citationPrecision");
-  if (scorecard.abstentionOnEmptyRate < budget.minAbstentionOnEmptyRate)
-    failures.push("abstentionOnEmptyRate");
+  const checks = [
+    [
+      "unsupportedDetectionRate",
+      scorecard.unsupportedDetectionRate,
+      budget.minUnsupportedDetectionRate,
+    ],
+    ["citationPrecision", scorecard.citationPrecision, budget.minCitationPrecision],
+    ["abstentionOnEmptyRate", scorecard.abstentionOnEmptyRate, budget.minAbstentionOnEmptyRate],
+  ] as const;
+  for (const [name, value, floor] of checks) {
+    if (missesFiniteFloor(value, floor)) failures.push(name);
+  }
   return { ok: failures.length === 0, failures };
 }

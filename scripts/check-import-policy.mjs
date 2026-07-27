@@ -11,18 +11,7 @@ const MODEL_GATEWAY_PROVIDER_RUNTIME_INTERNAL_PATTERN =
   /^@oscharko-dev\/keiko-model-gateway\/internal\/(openai-adapter|normalize)($|\/)/;
 const MODEL_GATEWAY_PROVIDER_RUNTIME_DEEP_PATH_PATTERN =
   /^(node_modules\/@oscharko-dev\/keiko-model-gateway\/|packages\/keiko-model-gateway\/)(src|dist)\/(openai-adapter|normalize)(\.[cm]?[jt]s)?($|\/)/;
-const LOCAL_KNOWLEDGE_EGRESS_PATTERN =
-  /^(fetch$|node:(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|undici($|\/)|node-fetch($|\/)|axios($|\/)|got($|\/)|tesseract\.js($|\/)|@google-cloud\/vision($|\/)|@aws-sdk\/client-textract($|\/)|libreoffice-convert($|\/)|pdf-poppler($|\/)|sharp($|\/))/;
-const CONTROLLED_TOOLS_FS_ADAPTER_PATTERN =
-  /^packages\/keiko-tools\/src\/(_support|exec|writer)\.[cm]?tsx?$/;
-// ADR-0128 D1 (Epic #2238): keiko-connectors has no concrete network OR filesystem capability —
-// egress arrives through the injected AtlassianHttpPort that keiko-server implements with
-// gatewayFetch, and persistence (vault + metadata) through injected ports keiko-server builds.
-// Forbidden here: bare fetch, every Node network module, node:fs (incl. fs/promises), the usual
-// HTTP client packages, and @oscharko-dev/keiko-model-gateway in EVERY import form (a type-only
-// gateway import would still couple the leaf to the gateway surface ADR-0128 D1 rules out).
-// Mirrors adr-0019-trust-9-local-knowledge-no-egress.
-const CONNECTORS_NETWORK_CORE_MODULES = [
+const NETWORK_CORE_MODULES = [
   "child_process",
   "http",
   "https",
@@ -33,12 +22,46 @@ const CONNECTORS_NETWORK_CORE_MODULES = [
   "dns",
   "worker_threads",
 ];
+const LOCAL_KNOWLEDGE_FORBIDDEN_EXACT = new Set([
+  "fetch",
+  ...NETWORK_CORE_MODULES,
+  ...NETWORK_CORE_MODULES.map((name) => `node:${name}`),
+]);
+const LOCAL_KNOWLEDGE_FORBIDDEN_PREFIXES = [
+  "undici",
+  "node-fetch",
+  "axios",
+  "got",
+  "tesseract.js",
+  "@google-cloud/vision",
+  "@aws-sdk/client-textract",
+  "libreoffice-convert",
+  "pdf-poppler",
+  "sharp",
+];
+// ADR-0019 v1.1: two reviewed files form one in-memory ANN isolation boundary. The launcher may
+// create only the checked-in worker entry, and that entry receives only SharedArrayBuffers plus the
+// digest-pinned native path. This is not a general worker capability exception: every other Local
+// Knowledge file, and every network/process specifier even in these files, remains denied.
+const LOCAL_KNOWLEDGE_ANN_WORKER_FILES = new Set([
+  "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts",
+  "packages/keiko-local-knowledge/src/retrieval/usearch-index-worker.ts",
+]);
+const CONTROLLED_TOOLS_FS_ADAPTER_PATTERN =
+  /^packages\/keiko-tools\/src\/(_support|exec|writer)\.[cm]?tsx?$/;
+// ADR-0128 D1 (Epic #2238): keiko-connectors has no concrete network OR filesystem capability —
+// egress arrives through the injected AtlassianHttpPort that keiko-server implements with
+// gatewayFetch, and persistence (vault + metadata) through injected ports keiko-server builds.
+// Forbidden here: bare fetch, every Node network module, node:fs (incl. fs/promises), the usual
+// HTTP client packages, and @oscharko-dev/keiko-model-gateway in EVERY import form (a type-only
+// gateway import would still couple the leaf to the gateway surface ADR-0128 D1 rules out).
+// Mirrors adr-0019-trust-9-local-knowledge-no-egress.
 // Forbidden only as an EXACT specifier (bare or `node:`-prefixed): `fetch` and every Node network
 // core module. A deeper subpath of these is not a core-module import.
 const CONNECTORS_FORBIDDEN_EXACT = new Set([
   "fetch",
-  ...CONNECTORS_NETWORK_CORE_MODULES,
-  ...CONNECTORS_NETWORK_CORE_MODULES.map((name) => `node:${name}`),
+  ...NETWORK_CORE_MODULES,
+  ...NETWORK_CORE_MODULES.map((name) => `node:${name}`),
 ]);
 // Forbidden as the specifier itself OR any subpath beneath it (`prefix` or `prefix/...`): node:fs
 // (incl. fs/promises), the bare fs, the usual HTTP client packages, and the model gateway.
@@ -52,11 +75,20 @@ const CONNECTORS_FORBIDDEN_PREFIXES = [
   "@oscharko-dev/keiko-model-gateway",
 ];
 
+function matchesSpecifierPrefix(specifier, prefix) {
+  return specifier === prefix || specifier.startsWith(`${prefix}/`);
+}
+
+function isLocalKnowledgeForbiddenCapability(specifier) {
+  return (
+    LOCAL_KNOWLEDGE_FORBIDDEN_EXACT.has(specifier) ||
+    LOCAL_KNOWLEDGE_FORBIDDEN_PREFIXES.some((prefix) => matchesSpecifierPrefix(specifier, prefix))
+  );
+}
+
 function isConnectorsForbiddenCapability(specifier) {
   if (CONNECTORS_FORBIDDEN_EXACT.has(specifier)) return true;
-  return CONNECTORS_FORBIDDEN_PREFIXES.some(
-    (prefix) => specifier === prefix || specifier.startsWith(`${prefix}/`),
-  );
+  return CONNECTORS_FORBIDDEN_PREFIXES.some((prefix) => matchesSpecifierPrefix(specifier, prefix));
 }
 
 // GEN-PERF-CLI-001 — the CLI barrel is evaluated on every `keiko` invocation (the
@@ -78,7 +110,7 @@ const IMPORT_POLICY_RULES = [
     matchesFile: (path, mode) =>
       mode === "fixtures"
         ? path.startsWith(`${FIXTURE_ROOT}/cli-lazy-heavy-imports/`)
-        : /^packages\/keiko-cli\/src\//.test(path) &&
+        : path.startsWith("packages/keiko-cli/src/") &&
           path !== "packages/keiko-cli/src/lazy-modules.ts",
     matchesSpecifier: (specifier) =>
       CLI_HEAVY_PACKAGE_PATTERN.test(specifier) &&
@@ -121,7 +153,12 @@ const IMPORT_POLICY_RULES = [
       mode === "fixtures"
         ? path.startsWith(`${FIXTURE_ROOT}/local-knowledge-no-egress/`)
         : path.startsWith("packages/keiko-local-knowledge/src/"),
-    matchesSpecifier: (specifier) => LOCAL_KNOWLEDGE_EGRESS_PATTERN.test(specifier),
+    matchesSpecifier: (specifier, path) =>
+      isLocalKnowledgeForbiddenCapability(specifier) &&
+      !(
+        (specifier === "node:worker_threads" || specifier === "worker_threads") &&
+        LOCAL_KNOWLEDGE_ANN_WORKER_FILES.has(path)
+      ),
   },
   {
     name: "adr-0128-connectors-no-direct-egress",
