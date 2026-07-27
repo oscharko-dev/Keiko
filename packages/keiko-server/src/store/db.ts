@@ -4,7 +4,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
@@ -97,7 +97,6 @@ import {
   readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
   updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
 } from "./memory-autonomy-policy.js";
-import { basename } from "node:path";
 import { invalidRequest } from "./errors.js";
 
 const DEFAULT_REDACT = (s: string): string => s;

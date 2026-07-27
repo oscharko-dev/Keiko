@@ -12,8 +12,7 @@ import type {
   ChatsResponse,
   ConversationMemoryRequestWire,
   ChatStatus,
-  ChatMessageRole,
-  ChatWorkflowStatus,
+  ChatRole,
   DesktopChatBootstrapResponse,
   DesktopChatSendResponse,
   EvidenceListEntry,
@@ -101,6 +100,7 @@ import type {
   UpdateSessionStartRequest,
   UpdateSessionStatus,
   WorkspaceSummary,
+  WorkflowStatus,
   WorkflowsResponse,
 } from "./types";
 import type {
@@ -990,12 +990,12 @@ export async function fetchChatMessages(
 export interface CreateMessageInput {
   chatId: string;
   projectPath: string;
-  role: ChatMessageRole;
+  role: ChatRole;
   content: string;
   timestamp: number;
   runId?: string;
   workflowId?: string;
-  workflowStatus?: ChatWorkflowStatus;
+  workflowStatus?: WorkflowStatus;
   shortResult?: string;
   /** Issue #66 — labels harness task runs (verify, explain-plan). */
   taskType?: string;
@@ -1017,7 +1017,7 @@ export interface CreateRunSummaryPairInput {
     timestamp: number;
     runId: string;
     workflowId?: string;
-    workflowStatus: ChatWorkflowStatus;
+    workflowStatus: WorkflowStatus;
     shortResult?: string;
     /** Issue #66 — labels harness task runs (verify, explain-plan). */
     taskType?: string;

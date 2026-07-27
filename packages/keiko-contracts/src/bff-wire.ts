@@ -274,14 +274,10 @@ export interface ProjectWithAvailability extends Project {
 // ─── Chat status (BFF wire — mirror of UiStore Chat["status"]) ───────────────────
 
 export type ChatStatus = "open" | "closed";
-export type ChatMessageRole = ChatRole;
-// Chat-side workflow status (issue #66). `cancelled` matches src/ui/runs.ts RunStatus so the
-// chat can faithfully record a terminal cancellation.
-export type ChatWorkflowStatus = WorkflowStatus;
 
 // PATCH body for /api/chats/messages?id=... (issue #66)
 export interface PatchChatMessageBody {
-  readonly workflowStatus?: ChatWorkflowStatus;
+  readonly workflowStatus?: WorkflowStatus;
   readonly shortResult?: string;
   readonly taskType?: string;
 }
@@ -944,8 +940,8 @@ function buildOmittedCounts(
 
 function hashString32(value: string): string {
   let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
@@ -953,6 +949,15 @@ function hashString32(value: string): string {
 
 function displayScopeId(scopeId: string): string {
   return `scope-${hashString32(scopeId)}`;
+}
+
+function compareEcosystemCount(
+  left: { readonly id: string; readonly count: number },
+  right: { readonly id: string; readonly count: number },
+): number {
+  if (left.count !== right.count) return right.count - left.count;
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? -1 : 1;
 }
 
 // Derives the path-free ranking aggregate from the pack diagnostics. Deterministic: bucket keys in
@@ -973,7 +978,7 @@ function buildRankingSummary(pack: ConnectedContextPack): GroundedAnswerRankingS
   }
   const ecosystems = [...ecosystemCounts.entries()]
     .map(([id, count]) => ({ id, count }))
-    .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.id < b.id ? -1 : 1));
+    .sort(compareEcosystemCount);
   return { bucketCounts, ecosystems };
 }
 
