@@ -149,7 +149,7 @@ export function changedSingleFileFeatureCatalogs(changedFileSet, repoRoot) {
 export function changedFeatureCatalogPairs(changedFileSet) {
   const pairs = [];
   for (const file of changedFileSet) {
-    if (!file.startsWith("packages/keiko-ui/src/") || !FEATURE_CATALOG_EN_PATTERN.test(file)) {
+    if (!file.startsWith("packages/keiko-ui/src/") || !file.endsWith("-i18n.en.ts")) {
       continue;
     }
     const counterpart = file.replace(FEATURE_CATALOG_EN_PATTERN, "-i18n.de.ts");
@@ -162,10 +162,10 @@ export function unpairedFeatureCatalogs(changedFileSet) {
   const unpaired = [];
   for (const file of changedFileSet) {
     if (!file.startsWith("packages/keiko-ui/src/")) continue;
-    if (FEATURE_CATALOG_EN_PATTERN.test(file)) {
+    if (file.endsWith("-i18n.en.ts")) {
       const de = file.replace(FEATURE_CATALOG_EN_PATTERN, "-i18n.de.ts");
       if (!changedFileSet.has(de)) unpaired.push(file);
-    } else if (FEATURE_CATALOG_DE_PATTERN.test(file)) {
+    } else if (file.endsWith("-i18n.de.ts")) {
       const en = file.replace(FEATURE_CATALOG_DE_PATTERN, "-i18n.en.ts");
       if (!changedFileSet.has(en)) unpaired.push(file);
     }
@@ -280,7 +280,7 @@ export function isUiProductionSource(file) {
   const normalized = normalizePath(file);
   const name = basename(normalized);
 
-  if (!/\.tsx$/.test(normalized)) {
+  if (!normalized.endsWith(".tsx")) {
     return false;
   }
 

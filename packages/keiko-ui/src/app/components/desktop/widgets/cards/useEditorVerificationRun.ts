@@ -149,8 +149,7 @@ function projectState(root: string): ProjectRunState {
 function pruneIfIdle(root: string): void {
   const entry = projectStates.get(root);
   if (
-    entry !== undefined &&
-    entry.listeners.size === 0 &&
+    entry?.listeners.size === 0 &&
     entry.activeRunId === null &&
     entry.startToken === null &&
     entry.dismissTimer === null &&

@@ -35,15 +35,16 @@ const JIRA_ISSUE_TYPE = "Test";
 const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): string => {
   const sections: string[] = [];
   if (candidate.preconditions.length > 0) {
-    sections.push(`Preconditions:\n${candidate.preconditions.map((p) => `- ${p}`).join("\n")}`);
+    const preconditionLines = candidate.preconditions.map((p) => `- ${p}`).join("\n");
+    sections.push(`Preconditions:\n${preconditionLines}`);
   }
   if (candidate.steps.length > 0) {
-    sections.push(
-      `Steps:\n${candidate.steps.map((step, i) => `${String(i + 1)}. ${step}`).join("\n")}`,
-    );
+    const stepLines = candidate.steps.map((step, i) => `${String(i + 1)}. ${step}`).join("\n");
+    sections.push(`Steps:\n${stepLines}`);
   }
   if (candidate.expectedResults.length > 0) {
-    sections.push(`Expected:\n${candidate.expectedResults.map((e) => `- ${e}`).join("\n")}`);
+    const expectedLines = candidate.expectedResults.map((e) => `- ${e}`).join("\n");
+    sections.push(`Expected:\n${expectedLines}`);
   }
   return sections.join("\n\n");
 };

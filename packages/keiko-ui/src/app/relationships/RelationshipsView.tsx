@@ -24,10 +24,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { RelationshipFilters } from "../components/desktop/widgets/panels/RelationshipListPanel";
+import type {
+  DensityMode,
+  RelationshipFilters,
+} from "../components/desktop/widgets/panels/RelationshipListPanel";
 import { RelationshipListPanel } from "../components/desktop/widgets/panels/RelationshipListPanel";
 import { RelationshipInspectorPanel } from "../components/desktop/widgets/panels/RelationshipInspectorPanel";
-import type { DensityMode } from "../components/desktop/widgets/panels/RelationshipListPanel";
 import { useRelationshipActivityStream } from "../components/desktop/widgets/panels/useRelationshipActivityStream";
 import { RelationshipHealthPanel } from "../components/desktop/widgets/panels/RelationshipHealthPanel";
 import { RelationshipCreateDialog } from "../components/desktop/modals/RelationshipCreateDialog";
