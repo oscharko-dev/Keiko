@@ -21,6 +21,11 @@ describe("portable runtime release documentation", () => {
     const approved = approvals.sidecarRuntimes[0];
 
     expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.sidecarRuntimes).toHaveLength(1);
+    expect(documented).toMatchObject({
+      kind: "coding-runtime",
+      name: "opencode-compatible",
+    });
     expect(documented.approvalSchemaVersion).toBe(2);
     expect(documented.upstream).toEqual(approved.upstream);
     expect(documented.adapterCompatibility).toEqual(approved.adapterCompatibility);

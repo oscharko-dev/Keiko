@@ -7,9 +7,19 @@ const BARE_EXECUTABLE = /^[A-Za-z0-9._-]+$/u;
 const GROUP_WRITE_BIT = 0o020;
 const WORLD_WRITE_BIT = 0o002;
 
+function environmentValue(env, name, platform) {
+  if (env[name] !== undefined || platform !== "win32") return env[name];
+  const matchingName = Object.keys(env).find(
+    (candidate) => candidate.toUpperCase() === name.toUpperCase(),
+  );
+  return matchingName === undefined ? undefined : env[matchingName];
+}
+
 function executableNames(command, env, platform) {
   if (platform !== "win32") return [command];
-  const extensions = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const extensions = (environmentValue(env, "PATHEXT", platform) ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .filter(Boolean);
   return [command, ...extensions.map((extension) => `${command}${extension.toLowerCase()}`)];
 }
 
@@ -86,7 +96,7 @@ export function resolveHostExecutable(
   const names = executableNames(command, env, platform);
   const realTrustedRoots = trustedRoots.map((root) => realpathSync(root));
   const resolved = resolveFromPath(
-    env.PATH,
+    environmentValue(env, "PATH", platform),
     names,
     workspaceRoot,
     platform,

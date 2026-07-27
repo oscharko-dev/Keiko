@@ -51,7 +51,7 @@ describe("resolveHostExecutable", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "resolves a PATHEXT executable under simulated Windows trust semantics",
+    "resolves mixed-case Windows keys and the default PATHEXT",
     () => {
       const workspace = temporary("keiko-host-executable-workspace-");
       const bin = temporary("keiko-host-executable-bin-");
@@ -60,7 +60,15 @@ describe("resolveHostExecutable", () => {
       chmodSync(bin, 0o777);
       expect(
         resolveHostExecutable("keiko-test-tool", {
-          env: { PATH: bin, PATHEXT: ".EXE" },
+          env: { Path: bin, Pathext: ".EXE" },
+          platform: "win32",
+          trustedRoots: [],
+          workspaceRoot: workspace,
+        }),
+      ).toBe(realpathSync(executable));
+      expect(
+        resolveHostExecutable("keiko-test-tool", {
+          env: { PATH: bin },
           platform: "win32",
           trustedRoots: [],
           workspaceRoot: workspace,
