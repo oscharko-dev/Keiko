@@ -26,6 +26,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { compareStrings } from "./lib/compare-strings.mjs";
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = join("docs", "qa", "unwired-e2e-suites.json");
 const E2E_SCRIPT_PREFIX = "test:e2e:";
@@ -65,7 +67,7 @@ export function isWiredInWorkflows(script, workflowText) {
  * means every suite either runs in a workflow or is a recorded, still-accurate baseline entry.
  */
 export function checkE2eSuiteWiring({ scripts, workflowText, baseline }) {
-  const suites = scripts.filter((name) => name.startsWith(E2E_SCRIPT_PREFIX)).sort();
+  const suites = scripts.filter((name) => name.startsWith(E2E_SCRIPT_PREFIX)).sort(compareStrings);
   const recorded = new Set(baseline);
   const problems = [];
 
@@ -78,7 +80,7 @@ export function checkE2eSuiteWiring({ scripts, workflowText, baseline }) {
   }
 
   const defined = new Set(suites);
-  for (const suite of [...recorded].sort()) {
+  for (const suite of [...recorded].sort(compareStrings)) {
     if (!defined.has(suite)) {
       problems.push(`${BASELINE_PATH} records ${suite}, which no longer exists. Remove the entry.`);
     } else if (isWiredInWorkflows(suite, workflowText)) {
