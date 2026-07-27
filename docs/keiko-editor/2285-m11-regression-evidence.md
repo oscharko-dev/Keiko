@@ -101,7 +101,9 @@ The focused UI collection executes existing component evidence rather than dupli
 system:
 
 - multi-root Explorer arrow navigation, collapse, 320 px/200% zoom behavior, and axe;
-- retained editor root session/layout behavior and model disposal after root removal;
+- retained editor root session/layout behavior, and model disposal after root removal — the
+  assertion that owns that claim is pinned as `MULTI-ROOT-REMOVED-ROOT-DISPOSAL`, because the
+  collection previously contained only the retarget case, which asserts disposal is NOT called;
 - trust prompt safe default, focus trap, malformed-success fail-closed handling, and English/German
   catalog ownership;
 - profile creation/switching/portability and Settings source-provenance controls;

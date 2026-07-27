@@ -107,6 +107,15 @@ const ADVERSARIAL_ROWS: readonly EvidenceRow[] = [
     markers: ["content-free projections before any lookup without an app session"],
   },
   {
+    // The regression evidence bullets "model disposal after root removal" as executed by the
+    // focused collection. The only removal test the collection contained asserted disposal is NOT
+    // called (the retarget case), so the claim rested on a test that proves its opposite. Pinning
+    // the owning assertion here means relocating it cannot silently un-back the bullet again.
+    id: "MULTI-ROOT-REMOVED-ROOT-DISPOSAL",
+    file: "packages/keiko-ui/src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.test.tsx",
+    markers: ["disposes the removed root's models when a two-root workspace drops to one"],
+  },
+  {
     id: "EVIDENCE-TRUST-REDACTION",
     file: "packages/keiko-server/src/store/forbidden-fields.test.ts",
     markers: ["workspace trust records are content-free"],

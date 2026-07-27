@@ -1874,7 +1874,17 @@ export function EditorWidget({
       <div className={`ed-main ${trustStyles.cmpEditorMain}`}>
         <WorkspaceTrustBanner
           status={verification.catalog?.workspaceTrust}
-          issue={trustMutationIssue ?? (verification.catalog === null ? "load" : undefined)}
+          // `catalog === null` alone is not a failed read: it is also the state before the first
+          // read returns, and the state right after a root switch resets it. Treating it as "load"
+          // made the banner assert "Workspace Trust could not be read safely" on every editor open
+          // — including for a fully trusted root, where it then vanished — which is the opposite of
+          // the #2625 requirement that a read FAILURE be distinguishable from every other state.
+          // `catalogSettled` is the fact that separates them: it turns true only once the read has
+          // resolved or definitively failed.
+          issue={
+            trustMutationIssue ??
+            (verification.catalog === null && verification.catalogSettled ? "load" : undefined)
+          }
           surface="editor"
           onManage={onOpenWorkspaceTrust}
           editor

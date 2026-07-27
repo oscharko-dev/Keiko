@@ -55,7 +55,11 @@ const entryBase = {
   readable: true,
 } as const;
 
-function root(rootRef: string, canonicalRoot: string, displayName: string): WorkspaceRootDescriptor {
+function root(
+  rootRef: string,
+  canonicalRoot: string,
+  displayName: string,
+): WorkspaceRootDescriptor {
   return {
     rootRef: rootRef as WorkspaceRootRef,
     canonicalRoot,

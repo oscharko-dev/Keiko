@@ -1885,9 +1885,18 @@ export function FilesWidget({
   const renderRootTree = (): ReactNode => {
     const { notices, rows, trailer } = directorySections(currentDirectoryPath ?? "", 0);
     return (
-      <div className="tr" tabIndex={-1} onKeyDown={onTreeKeyDown}>
+      <div className="tr">
         {notices}
-        <div className="files-tree" role="tree" aria-label={t("filesWidget.tree.label")}>
+        {/* The keyboard host moves with the role: arrow traversal is a tree behaviour, every row it
+            navigates is inside this element, and a bare scroll container carrying a key handler is
+            a non-native interactive element. */}
+        <div
+          className="files-tree"
+          role="tree"
+          aria-label={t("filesWidget.tree.label")}
+          tabIndex={-1}
+          onKeyDown={onTreeKeyDown}
+        >
           {rows}
         </div>
         {trailer}

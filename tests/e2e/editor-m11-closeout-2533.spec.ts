@@ -363,7 +363,29 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   await grantAlphaAndRestrictBeta(page);
   const switched = await switchProfile(page, harness.alpha.root, profileRef);
   const journeyPage = switched.page;
-  const editor = await openEditorWorkspace(journeyPage);
+  // Every trust assertion in this journey happens BEFORE the profile switch, inside
+  // grantAlphaAndRestrictBeta. The closeout documents nonetheless claim the journey proves "a
+  // profile switch does not alter trust" — and it did not: this call defaulted to
+  // dismissTrustPrompt, so a switch that dropped Alpha's grant would have re-raised the prompt on
+  // the replaced page and the shared helper would have quietly dismissed it, absorbing exactly the
+  // regression the claim is about. Assert the preserved state here instead of delegating it.
+  const editor = await openEditorWorkspace(journeyPage, { dismissTrustPrompt: false });
+  // openEditorWorkspace has already awaited data-trust-settled="true", so "no dialog in the DOM"
+  // provably means "no prompt will be raised for this load" — these need no timeout.
+  await expect(journeyPage.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(
+    0,
+  );
+  // …and the grant itself is read back from the governed route, which is what "the switch did not
+  // alter trust" actually means. Asserting the absence of the trust banner instead would also
+  // assert that the catalog read succeeded on the replaced page — a different property, and one
+  // this journey does not control.
+  const trustAfterSwitch = await request.get("/api/editor/verification/trust", {
+    params: { projectId: harness.alpha.root },
+  });
+  expect(trustAfterSwitch.ok(), await trustAfterSwitch.text()).toBe(true);
+  expect((await trustAfterSwitch.json()) as { readonly trust: string }).toMatchObject({
+    trust: "trusted",
+  });
   const pane = firstPane(editor);
   await saveVersion(journeyPage, pane, VERSION_ONE);
   // Read the oldest checkpoint's content from disk instead of hard-coding it (the sibling #2531
