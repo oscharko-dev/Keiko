@@ -31,10 +31,10 @@ import type { IncomingMessage, Server } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
-import { buildCspHeader } from "../../csp.js";
-import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";
-import { createRunRegistry } from "../../runs.js";
-import { createUiServer, UI_HOST } from "../../server.js";
+import { buildCspHeader } from "../csp.js";
+import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
+import { createRunRegistry } from "../runs.js";
+import { createUiServer, UI_HOST } from "../server.js";
 import {
   EXPECTED_FIGMA_SCOPES,
   FigmaConnectorError,
@@ -44,8 +44,8 @@ import {
   type FigmaRenderPort,
   deriveFigmaScopeRef,
   loadFigmaConnectorAudit,
-} from "../figma/index.js";
-import type { RouteContext } from "../../routes.js";
+} from "./figma/index.js";
+import type { RouteContext } from "../routes.js";
 import {
   compareByFetchedAtDescending,
   handleFigmaInspectSnapshotScreenJson,
@@ -59,7 +59,7 @@ import {
   makeInFlightMap,
   resetInFlightMap,
   type FigmaSnapshotSummary,
-} from "../figmaSnapshotRoutes.js";
+} from "./figmaSnapshotRoutes.js";
 
 // ─── Server harness (mirrors terminal-routes.test.ts) ─────────────────────────
 
@@ -183,7 +183,7 @@ const fakeRenderPort: FigmaRenderPort = () =>
 // ─── Helpers for consent recording ───────────────────────────────────────────
 
 async function recordConsent(dir: string): Promise<void> {
-  const { recordReadOnlyConsent, deriveFigmaScopeRef } = await import("../figma/index.js");
+  const { recordReadOnlyConsent, deriveFigmaScopeRef } = await import("./figma/index.js");
   const scopeRef = deriveFigmaScopeRef("KEY123", "0:1");
   recordReadOnlyConsent({
     scopeRef,
@@ -383,7 +383,7 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
       await recordConsent(evidenceDir);
     }
 
-    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
     spy.mockRejectedValueOnce(new FigmaConnectorError(code));
 
@@ -406,7 +406,7 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
 
   it("FIGMA_INTERNAL (unexpected build error) logs the redacted cause, token scrubbed (#750 F9)", async () => {
     await recordConsent(evidenceDir);
-    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
     // A non-coded build error whose message embeds the secret PAT (defence-in-depth redaction).
     spy.mockRejectedValueOnce(new TypeError(`render parse failed token=${TOKEN}`));
@@ -430,7 +430,7 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
   });
 
   it("FIGMA_BUILD_TIMEOUT → 504", async () => {
-    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
     // The build never resolves — the 1 ms deadline fires first.
     spy.mockImplementationOnce((): Promise<never> => new Promise(() => undefined));
@@ -462,7 +462,7 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
 describe("POST /api/figma/snapshots — consent-required scopes (#760)", () => {
   it("428 body carries the canonical read-only scopes and no write/admin scope", async () => {
     // Arrange: do NOT record consent so the gate fires before egress, then force the coded reject.
-    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
     spy.mockRejectedValueOnce(new FigmaConnectorError("FIGMA_CONSENT_REQUIRED"));
 
@@ -500,7 +500,7 @@ describe("POST /api/figma/snapshots — re-key scope hint (#758 SEC-3)", () => {
     "%s message lists every canonical read-only scope and no stale scope name",
     async (code) => {
       await recordConsent(evidenceDir);
-      const orchModule = await import("../figmaSnapshotOrchestration.js");
+      const orchModule = await import("./figmaSnapshotOrchestration.js");
       const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
       spy.mockRejectedValueOnce(new FigmaConnectorError(code));
 
@@ -530,7 +530,7 @@ describe("POST /api/figma/snapshots — re-key scope hint (#758 SEC-3)", () => {
 
 describe("env var parsing — KEIKO_FIGMA_BUILD_DEADLINE_MS", () => {
   it("accepts a valid positive integer ('8') — triggers timeout before hanging build", async () => {
-    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
     spy.mockImplementationOnce((): Promise<never> => new Promise(() => undefined));
 
@@ -596,7 +596,7 @@ describe("POST /api/figma/snapshots — in-flight coalescing", () => {
     await recordConsent(evidenceDir);
 
     let buildCallCount = 0;
-    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
     spy.mockImplementation(async (boardLink, deps) => {
       buildCallCount += 1;
@@ -632,7 +632,7 @@ describe("POST /api/figma/snapshots — in-flight coalescing", () => {
   it("does not coalesce an explicit re-snapshot with an in-flight first snapshot", async () => {
     await recordConsent(evidenceDir);
 
-    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
     const actualBuild = orchModule.governedSnapshotBuild;
     const operations: boolean[] = [];
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
@@ -717,7 +717,7 @@ describe("POST /api/figma/snapshots — persist failure", () => {
     await recordConsent(evidenceDir);
 
     // Make governedSnapshotBuild succeed but createNodeFigmaSnapshotStore.record throw.
-    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
     const orchSpy = vi.spyOn(orchModule, "governedSnapshotBuild");
     orchSpy.mockImplementationOnce(async (boardLink, deps) => {
       orchSpy.mockRestore();
@@ -931,7 +931,7 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
     // then call the load handler and assert the projected summary matches.
     await recordConsent(evidenceDir);
 
-    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
     spy.mockImplementation(async (boardLink, deps) => {
       spy.mockRestore();
@@ -1235,6 +1235,29 @@ describe("compareByFetchedAtDescending — snapshot listing ordering comparator"
       ),
     ).toBe(0);
   });
+
+  // Regression (#2723 review finding): equal fetchedAt values must fall back to a deterministic
+  // runId comparison instead of preserving readdirSync's OS-dependent enumeration order.
+  it("breaks an equal-fetchedAt tie by ascending runId", () => {
+    expect(
+      compareByFetchedAtDescending(
+        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-b" },
+        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-a" },
+      ),
+    ).toBe(1);
+    expect(
+      compareByFetchedAtDescending(
+        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-a" },
+        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-b" },
+      ),
+    ).toBe(-1);
+    expect(
+      compareByFetchedAtDescending(
+        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-a" },
+        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-a" },
+      ),
+    ).toBe(0);
+  });
 });
 
 describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
@@ -1283,6 +1306,35 @@ describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
       "fs-00000000-0000-0000-0000-000000000102",
       "fs-00000000-0000-0000-0000-000000000103",
       "fs-00000000-0000-0000-0000-000000000101",
+    ]);
+  });
+
+  // Regression (#2723 review finding): equal fetchedAt values must not depend on readdirSync's
+  // OS-dependent directory-enumeration order. Seeded deliberately out of runId order to prove the
+  // tie-break is applied, not incidentally satisfied by insertion order.
+  it("breaks equal-fetchedAt ties deterministically by ascending runId", () => {
+    const fetchedAt = "2026-06-05T10:00:00.000Z";
+    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000203", fetchedAt, {
+      fileKey: "KEY123",
+      nodeId: "0:1",
+    });
+    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000201", fetchedAt, {
+      fileKey: "KEY123",
+      nodeId: "0:1",
+    });
+    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000202", fetchedAt, {
+      fileKey: "KEY123",
+      nodeId: "0:1",
+    });
+
+    const result = handleFigmaListSnapshots(makeListCtx(), makeDeps(evidenceDir, {}));
+
+    expect(result.status).toBe(200);
+    const body = result.body as { snapshots: { runId: string }[] };
+    expect(body.snapshots.map((snapshot) => snapshot.runId)).toEqual([
+      "fs-00000000-0000-0000-0000-000000000201",
+      "fs-00000000-0000-0000-0000-000000000202",
+      "fs-00000000-0000-0000-0000-000000000203",
     ]);
   });
 

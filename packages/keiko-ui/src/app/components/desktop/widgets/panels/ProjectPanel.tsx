@@ -100,6 +100,106 @@ function handleTreeKey(event: ReactKeyboardEvent<HTMLDivElement>, container: HTM
   TREE_KEY_HANDLERS[event.key]?.({ items, index, btn });
 }
 
+interface ProjectHeadButtonProps {
+  readonly project: ProjectWithAvailability;
+  readonly isActiveProject: boolean;
+  readonly expanded: boolean;
+  readonly availabilityLabel: string;
+  readonly treeRef: React.RefObject<HTMLDivElement | null>;
+  readonly onToggle: () => void;
+}
+
+// Extracted from ProjectRow (#2723 / CodeRabbit): keeps the owning row under the 50-line limit.
+function ProjectHeadButton({
+  project,
+  isActiveProject,
+  expanded,
+  availabilityLabel,
+  treeRef,
+  onToggle,
+}: ProjectHeadButtonProps): ReactNode {
+  return (
+    <button
+      className="proj-head"
+      type="button"
+      role="treeitem"
+      aria-level={1}
+      aria-expanded={expanded}
+      aria-selected={isActiveProject}
+      data-active={isActiveProject ? "true" : "false"}
+      aria-current={isActiveProject ? "true" : undefined}
+      aria-label={`${project.name} (${availabilityLabel})`}
+      // Roving tabindex: the first item (or active item) is reachable via Tab;
+      // all others are skipped and reached via arrow keys only.
+      tabIndex={isActiveProject ? 0 : -1}
+      onClick={() => {
+        onToggle();
+        // After activation re-focus so arrow nav keeps the right item at tabIndex 0.
+        if (treeRef.current !== null) {
+          const items = getTreeItems(treeRef.current);
+          items.forEach((item) => {
+            item.tabIndex = -1;
+          });
+        }
+      }}
+    >
+      <span className="proj-caret" data-open={expanded} aria-hidden="true">
+        <Icons.chevronR size={13} />
+      </span>
+      <Icons.folder size={15} aria-hidden="true" />
+      <span className="proj-name">{project.name}</span>
+      <span className="chat-time">{availabilityLabel}</span>
+    </button>
+  );
+}
+
+interface ProjectChatListProps {
+  readonly project: ProjectWithAvailability;
+  readonly chats: readonly Chat[];
+  readonly activeChatId: string | undefined;
+  readonly isActiveProject: boolean;
+  readonly onChat: (chat: Chat) => void;
+}
+
+// Extracted from ProjectRow (#2723 / CodeRabbit): keeps the owning row under the 50-line limit.
+function ProjectChatList({
+  project,
+  chats,
+  activeChatId,
+  isActiveProject,
+  onChat,
+}: ProjectChatListProps): ReactNode {
+  return (
+    // role="group" groups child treeitems under their parent (APG tree pattern).
+    <div className="proj-chats" role="group" aria-label={project.name}>
+      {isActiveProject && chats.length === 0 && <div className="proj-empty">{"No chats"}</div>}
+      {isActiveProject &&
+        chats.length > 0 &&
+        chats.map((chat) => (
+          <button
+            key={chat.id}
+            type="button"
+            role="treeitem"
+            aria-level={2}
+            aria-selected={activeChatId === chat.id}
+            className="chat-row"
+            data-active={activeChatId === chat.id}
+            tabIndex={-1}
+            onClick={() => {
+              onChat(chat);
+            }}
+          >
+            <span className="chat-title">{chat.title}</span>
+            {chat.branchLabel !== undefined ? (
+              <span className="chat-meta mono">{chat.branchLabel}</span>
+            ) : null}
+          </button>
+        ))}
+      {!isActiveProject && <div className="proj-empty">{"Select project to load chats"}</div>}
+    </div>
+  );
+}
+
 function ProjectRow({
   project,
   activeProjectPath,
@@ -119,66 +219,25 @@ function ProjectRow({
 
   return (
     <div className="proj">
-      <button
-        className="proj-head"
-        type="button"
-        role="treeitem"
-        aria-level={1}
-        aria-expanded={expanded}
-        aria-selected={isActiveProject}
-        data-active={isActiveProject ? "true" : "false"}
-        aria-current={isActiveProject ? "true" : undefined}
-        aria-label={`${project.name} (${availabilityLabel})`}
-        // Roving tabindex: the first item (or active item) is reachable via Tab;
-        // all others are skipped and reached via arrow keys only.
-        tabIndex={isActiveProject ? 0 : -1}
-        onClick={() => {
+      <ProjectHeadButton
+        project={project}
+        isActiveProject={isActiveProject}
+        expanded={expanded}
+        availabilityLabel={availabilityLabel}
+        treeRef={treeRef}
+        onToggle={() => {
           setExpanded((current) => !current);
           onProject(project);
-          // After activation re-focus so arrow nav keeps the right item at tabIndex 0.
-          if (treeRef.current !== null) {
-            const items = getTreeItems(treeRef.current);
-            items.forEach((item) => {
-              item.tabIndex = -1;
-            });
-          }
         }}
-      >
-        <span className="proj-caret" data-open={expanded} aria-hidden="true">
-          <Icons.chevronR size={13} />
-        </span>
-        <Icons.folder size={15} aria-hidden="true" />
-        <span className="proj-name">{project.name}</span>
-        <span className="chat-time">{availabilityLabel}</span>
-      </button>
+      />
       {expanded && (
-        // role="group" groups child treeitems under their parent (APG tree pattern).
-        <div className="proj-chats" role="group" aria-label={project.name}>
-          {isActiveProject && chats.length === 0 && <div className="proj-empty">{"No chats"}</div>}
-          {isActiveProject &&
-            chats.length > 0 &&
-            chats.map((chat) => (
-              <button
-                key={chat.id}
-                type="button"
-                role="treeitem"
-                aria-level={2}
-                aria-selected={activeChatId === chat.id}
-                className="chat-row"
-                data-active={activeChatId === chat.id}
-                tabIndex={-1}
-                onClick={() => {
-                  onChat(chat);
-                }}
-              >
-                <span className="chat-title">{chat.title}</span>
-                {chat.branchLabel !== undefined ? (
-                  <span className="chat-meta mono">{chat.branchLabel}</span>
-                ) : null}
-              </button>
-            ))}
-          {!isActiveProject && <div className="proj-empty">{"Select project to load chats"}</div>}
-        </div>
+        <ProjectChatList
+          project={project}
+          chats={chats}
+          activeChatId={activeChatId}
+          isActiveProject={isActiveProject}
+          onChat={onChat}
+        />
       )}
     </div>
   );

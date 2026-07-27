@@ -528,6 +528,17 @@ function EnhancedPromptSections({
   );
 }
 
+type PromptEnhancerStatusKey =
+  | "promptEnhancer.status.enhancing"
+  | "promptEnhancer.status.waitingForDraft"
+  | "promptEnhancer.status.ready";
+
+function promptEnhancerStatusKey(loading: boolean, draftLength: number): PromptEnhancerStatusKey {
+  if (loading) return "promptEnhancer.status.enhancing";
+  if (draftLength === 0) return "promptEnhancer.status.waitingForDraft";
+  return "promptEnhancer.status.ready";
+}
+
 export function PromptEnhancerPanel({
   connectedRoot = null,
   connectedFilePath = null,
@@ -682,14 +693,7 @@ export function PromptEnhancerPanel({
     },
   ];
   const draftLength = draft.trim().length;
-  let statusText: string;
-  if (loading) {
-    statusText = t("promptEnhancer.status.enhancing");
-  } else if (draftLength === 0) {
-    statusText = t("promptEnhancer.status.waitingForDraft");
-  } else {
-    statusText = t("promptEnhancer.status.ready");
-  }
+  const statusText = t(promptEnhancerStatusKey(loading, draftLength));
   const hasWorkspaceContent =
     draftLength > 0 ||
     result !== null ||

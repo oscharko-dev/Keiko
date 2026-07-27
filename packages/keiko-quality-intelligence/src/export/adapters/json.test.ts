@@ -10,7 +10,7 @@ import type {
   QualityIntelligenceExportBundleEntry,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { adaptToJson, byCandidateIdAsc } from "../adapters/json.js";
+import { adaptToJson, byCandidateIdAsc } from "./json.js";
 
 const Q = QualityIntelligence;
 const RUN = Q.asQualityIntelligenceRunId("qi-run-json");

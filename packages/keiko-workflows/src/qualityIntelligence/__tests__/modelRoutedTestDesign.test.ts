@@ -388,6 +388,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     const manifest = store.load(String(PLAN.id));
     expect(manifest?.modelId).toBeUndefined();
     expect(manifest?.seedUsed).toBeUndefined();
+    expect(manifest).not.toHaveProperty("seedUsed");
   });
 
   it("uses the deterministic structural baseline when generation is model-free", async () => {

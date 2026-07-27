@@ -82,6 +82,7 @@ import {
   type FigmaSnapshotRecord,
   type FigmaSnapshotUserMetadata,
 } from "@oscharko-dev/keiko-evidence";
+import { compareStrings } from "@oscharko-dev/keiko-contracts";
 
 // ─── Error helpers ─────────────────────────────────────────────────────────────
 
@@ -1118,13 +1119,16 @@ function readSnapshotFetchedAt(qiDir: string, fileName: string): string | undefi
   }
 }
 
+// Descending by fetchedAt; ties (e.g. two snapshots built within the same fetchedAt tick) fall
+// back to an ascending, locale-independent runId comparison so the order never depends on
+// readdirSync's OS-dependent directory-enumeration order (#2723 review finding).
 export function compareByFetchedAtDescending(
-  a: { readonly fetchedAt: string },
-  b: { readonly fetchedAt: string },
+  a: { readonly fetchedAt: string; readonly runId?: string },
+  b: { readonly fetchedAt: string; readonly runId?: string },
 ): number {
   if (a.fetchedAt > b.fetchedAt) return -1;
   if (a.fetchedAt < b.fetchedAt) return 1;
-  return 0;
+  return compareStrings(a.runId ?? "", b.runId ?? "");
 }
 
 function listRecentSnapshotRunIds(evidenceDir: string, limit: number): readonly string[] {

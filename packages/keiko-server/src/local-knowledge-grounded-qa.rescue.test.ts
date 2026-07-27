@@ -3255,4 +3255,22 @@ describe("mapGroundedAskError", () => {
     expect(envelope.code).toBe("GATEWAY_TRANSPORT");
     expect(envelope.message).toBe("connection reset");
   });
+
+  it("scrubs a configured redaction secret out of a retryable GatewayError's message", () => {
+    // CWE-209 (Sensitive Data Exposure): with a real secret configured, an upstream failure
+    // message that echoes it must never reach the client-visible envelope. The sentinel below
+    // is deliberately NOT shaped like any built-in known-secret pattern (no "sk-", "Bearer ",
+    // "api_key=", etc.) so this only passes because the configured secret is scrubbed — not
+    // because redact()'s generic shape-matching happened to catch it anyway.
+    const sentinel = "acct-4471-echo-relay-fixture";
+    const deps: UiHandlerDeps = { ...minimalDeps(), env: { KEIKO_DEFAULT_API_KEY: sentinel } };
+    const result = mapGroundedAskError(
+      new TransportError(`connection reset: upstream said ${sentinel}`),
+      deps,
+    );
+    expect(result.status).toBe(503);
+    const envelope = (result.body as ApiError).error;
+    expect(envelope.code).toBe("GATEWAY_TRANSPORT");
+    expect(envelope.message).not.toContain(sentinel);
+  });
 });

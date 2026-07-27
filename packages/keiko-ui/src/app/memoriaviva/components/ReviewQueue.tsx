@@ -535,45 +535,50 @@ export function ReviewQueue({
   );
 
   // The section content is one of four mutually exclusive states — loading,
-  // error, empty, or populated. Extracted as early returns instead of a
-  // nested ternary chain (mirrors MemoryListBody in MemoryList.tsx).
-  function renderReviewSection(): ReactNode {
-    if (loading) {
-      return (
-        <p role="status" aria-live="polite" className="lk-loading">
-          {t("memoria.loadingReviewQueue")}
-        </p>
-      );
-    }
-    if (error !== null) {
-      return (
-        <div role="alert" aria-live="assertive" className="lk-alert">
-          {error}
-          <button
-            type="button"
-            className="lk-alert-retry"
-            onClick={() => {
-              void load();
-            }}
-          >
-            {t("memoria.retry")}
-          </button>
+  // error, empty, or populated. Each state's markup is extracted into its own
+  // small render helper so renderReviewSection itself stays a short dispatch
+  // instead of a nested ternary chain (mirrors MemoryListBody in
+  // MemoryList.tsx).
+  function renderQueueLoading(): ReactNode {
+    return (
+      <p role="status" aria-live="polite" className="lk-loading">
+        {t("memoria.loadingReviewQueue")}
+      </p>
+    );
+  }
+
+  function renderQueueError(): ReactNode {
+    return (
+      <div role="alert" aria-live="assertive" className="lk-alert">
+        {error}
+        <button
+          type="button"
+          className="lk-alert-retry"
+          onClick={() => {
+            void load();
+          }}
+        >
+          {t("memoria.retry")}
+        </button>
+      </div>
+    );
+  }
+
+  function renderQueueEmpty(): ReactNode {
+    return (
+      <div data-testid="review-queue-empty" className="lk-empty">
+        {/* wrapper div mirrors MemoryList's empty state so the title/body
+            gap matches (the flex gap + title margin added up to ~20px
+            without it — uiux-fix F035) */}
+        <div>
+          <p className="lk-empty-title">{t("memoria.queueClearTitle")}</p>
+          <p className="lk-empty-body">{t("memoria.queueClearBody")}</p>
         </div>
-      );
-    }
-    if (records.length === 0) {
-      return (
-        <div data-testid="review-queue-empty" className="lk-empty">
-          {/* wrapper div mirrors MemoryList's empty state so the title/body
-              gap matches (the flex gap + title margin added up to ~20px
-              without it — uiux-fix F035) */}
-          <div>
-            <p className="lk-empty-title">{t("memoria.queueClearTitle")}</p>
-            <p className="lk-empty-body">{t("memoria.queueClearBody")}</p>
-          </div>
-        </div>
-      );
-    }
+      </div>
+    );
+  }
+
+  function renderQueueList(): ReactNode {
     return (
       <ul
         ref={listRef}
@@ -608,6 +613,19 @@ export function ReviewQueue({
         ))}
       </ul>
     );
+  }
+
+  function renderReviewSection(): ReactNode {
+    if (loading) {
+      return renderQueueLoading();
+    }
+    if (error !== null) {
+      return renderQueueError();
+    }
+    if (records.length === 0) {
+      return renderQueueEmpty();
+    }
+    return renderQueueList();
   }
 
   return (

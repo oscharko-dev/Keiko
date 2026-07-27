@@ -3987,7 +3987,7 @@ export function MemoryActionForgetButtons({
 }): ReactNode {
   if (!action.requiresConfirmation) {
     return (
-      <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
+      <button type="button" disabled={busy} aria-busy={busy} onClick={executeForget}>
         {t("chat.memory.forget")}
       </button>
     );
@@ -3996,7 +3996,7 @@ export function MemoryActionForgetButtons({
     return (
       <button
         type="button"
-        aria-disabled={busy}
+        disabled={busy}
         aria-busy={busy}
         onClick={() => {
           if (busy) return;
@@ -4013,7 +4013,7 @@ export function MemoryActionForgetButtons({
     <>
       <button
         type="button"
-        aria-disabled={busy || forgetConfirmText !== "FORGET"}
+        disabled={busy || forgetConfirmText !== "FORGET"}
         aria-busy={busy}
         onClick={executeForget}
       >
@@ -4021,7 +4021,7 @@ export function MemoryActionForgetButtons({
       </button>
       <button
         type="button"
-        aria-disabled={busy}
+        disabled={busy}
         aria-busy={busy}
         onClick={() => {
           if (busy) return;
@@ -4059,6 +4059,7 @@ function MemoryActionForgetCard({
   const [confirmForget, setConfirmForget] = useState(false);
   const [forgetConfirmText, setForgetConfirmText] = useState("");
   const executeForget = (): void => {
+    if (busy) return;
     if (action.requiresConfirmation && forgetConfirmText !== "FORGET") return;
     runAction(
       () =>

@@ -439,6 +439,8 @@ describe("POST /api/coding-workbench/autonomous-delivery/execute", () => {
 
   it("denies command-task steps before delegation when the client-raised ceiling fails verification", async () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const execute = vi.fn<CommandRunnerManager["execute"]>(commandRunner().execute);
+    const spiedCommandRunner: CommandRunnerManager = { ...commandRunner(), execute };
     const request = body({
       operations: [
         {
@@ -451,7 +453,7 @@ describe("POST /api/coding-workbench/autonomous-delivery/execute", () => {
 
     const result = await handleAutonomousDeliveryExecute(
       ctx(request),
-      deps(runner, commandRunner(), undefined, {
+      deps(runner, spiedCommandRunner, undefined, {
         autonomousDeliveryDeploymentCeiling: "supervised-coding",
       }),
     );
@@ -463,6 +465,7 @@ describe("POST /api/coding-workbench/autonomous-delivery/execute", () => {
       ],
     });
     expect(runner).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("delegates bounded connector writes through the injected governed connector executor", async () => {

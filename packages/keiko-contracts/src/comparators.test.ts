@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { compareStrings } from "./comparators.js";
+import { compareStrings as compareStringsFromEntrypoint } from "@oscharko-dev/keiko-contracts";
 
 describe("compareStrings", () => {
   it("returns -1 when left sorts before right", () => {
@@ -33,5 +34,32 @@ describe("compareStrings", () => {
   it("produces a stable total order when used to sort an array", () => {
     const input = ["banana", "apple", "cherry", "apple"];
     expect([...input].sort(compareStrings)).toEqual(["apple", "apple", "banana", "cherry"]);
+  });
+});
+
+// Entrypoint coverage (Qodo #3655429860, issue #2723): the tests above exercise the
+// implementation module directly. This proves compareStrings is actually reachable through the
+// package's public export surface (`@oscharko-dev/keiko-contracts`), not just internally. The
+// entrypoint resolves to the built `dist/` output rather than this `src/` module, so the two
+// imports are distinct function instances by design — this asserts behavioral equivalence rather
+// than reference equality.
+describe("compareStrings (public entrypoint)", () => {
+  it("is exported from the package entrypoint and orders strings the same way", () => {
+    expect(compareStringsFromEntrypoint("a", "b")).toBe(-1);
+    expect(compareStringsFromEntrypoint("b", "a")).toBe(1);
+    expect(compareStringsFromEntrypoint("same", "same")).toBe(0);
+  });
+
+  it("agrees with the implementation-module export across representative inputs", () => {
+    for (const [left, right] of [
+      ["a", "b"],
+      ["b", "a"],
+      ["same", "same"],
+      ["", ""],
+      ["", "a"],
+      ["b2", "b10"],
+    ] as const) {
+      expect(compareStringsFromEntrypoint(left, right)).toBe(compareStrings(left, right));
+    }
   });
 });

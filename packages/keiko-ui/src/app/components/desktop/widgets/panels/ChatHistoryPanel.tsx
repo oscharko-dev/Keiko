@@ -200,9 +200,100 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   };
 
   // #2723 (S3358): the row-actions block was a four-way nested ternary chain
-  // (editing ? … : confirmingDelete ? … : deleted ? … : …); extracted to a named render
-  // function with early returns. Closes over the row action handlers above (a closure over
-  // per-row state passed as params, not the whole component) so each call site stays flat.
+  // (editing ? … : confirmingDelete ? … : deleted ? … : …); first extracted to a single
+  // named render function with early returns, then split further (CodeRabbit #3655533401)
+  // into one small renderer per branch so each stays well under the 50-line limit. Each
+  // renderer closes over the row action handlers above (a closure over per-row state
+  // passed as params, not the whole component) so every call site stays flat.
+  const renderEditingRowActions = (chat: Chat, busy: boolean): ReactNode => (
+    <>
+      <button
+        type="button"
+        className="lk-btn lk-btn-primary"
+        disabled={busy}
+        onClick={() => void commitRename(chat)}
+      >
+        Save
+      </button>
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        disabled={busy}
+        onClick={() => {
+          setEditingId(null);
+          setRenameError(null);
+        }}
+      >
+        Cancel
+      </button>
+    </>
+  );
+
+  // GEN-UI-FOCUS-016: Escape on either confirm button cancels the
+  // destructive confirmation and returns to the row's default actions.
+  const renderConfirmingDeleteRowActions = (chat: Chat, busy: boolean): ReactNode => (
+    <>
+      <button
+        ref={confirmDeleteRef}
+        type="button"
+        className="lk-btn lk-btn-danger"
+        disabled={busy}
+        onClick={() => void moveToTrash(chat)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setDeleteConfirmId(null);
+        }}
+      >
+        Delete
+      </button>
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        disabled={busy}
+        onClick={() => setDeleteConfirmId(null)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setDeleteConfirmId(null);
+        }}
+      >
+        Cancel
+      </button>
+    </>
+  );
+
+  const renderDeletedRowActions = (chat: Chat, busy: boolean): ReactNode => (
+    <>
+      <button
+        type="button"
+        className="lk-btn lk-btn-primary"
+        disabled={busy}
+        onClick={() => void restoreChat(chat)}
+      >
+        <Icons.restore size={14} />
+        Restore
+      </button>
+      <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
+        Rename
+      </button>
+    </>
+  );
+
+  const renderDefaultRowActions = (chat: Chat): ReactNode => (
+    <>
+      <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
+        Rename
+      </button>
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        onClick={() => {
+          setDeleteConfirmId(chat.id);
+          setEditingId(null);
+        }}
+      >
+        Delete
+      </button>
+    </>
+  );
+
   const renderRowActions = ({
     chat,
     editing,
@@ -216,97 +307,10 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     readonly deleted: boolean;
     readonly busy: boolean;
   }): ReactNode => {
-    if (editing) {
-      return (
-        <>
-          <button
-            type="button"
-            className="lk-btn lk-btn-primary"
-            disabled={busy}
-            onClick={() => void commitRename(chat)}
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            className="lk-btn lk-btn-ghost"
-            disabled={busy}
-            onClick={() => {
-              setEditingId(null);
-              setRenameError(null);
-            }}
-          >
-            Cancel
-          </button>
-        </>
-      );
-    }
-    if (confirmingDelete) {
-      // GEN-UI-FOCUS-016: Escape on either confirm button cancels the
-      // destructive confirmation and returns to the row's default actions.
-      return (
-        <>
-          <button
-            ref={confirmDeleteRef}
-            type="button"
-            className="lk-btn lk-btn-danger"
-            disabled={busy}
-            onClick={() => void moveToTrash(chat)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setDeleteConfirmId(null);
-            }}
-          >
-            Delete
-          </button>
-          <button
-            type="button"
-            className="lk-btn lk-btn-ghost"
-            disabled={busy}
-            onClick={() => setDeleteConfirmId(null)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setDeleteConfirmId(null);
-            }}
-          >
-            Cancel
-          </button>
-        </>
-      );
-    }
-    if (deleted) {
-      return (
-        <>
-          <button
-            type="button"
-            className="lk-btn lk-btn-primary"
-            disabled={busy}
-            onClick={() => void restoreChat(chat)}
-          >
-            <Icons.restore size={14} />
-            Restore
-          </button>
-          <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
-            Rename
-          </button>
-        </>
-      );
-    }
-    return (
-      <>
-        <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
-          Rename
-        </button>
-        <button
-          type="button"
-          className="lk-btn lk-btn-ghost"
-          onClick={() => {
-            setDeleteConfirmId(chat.id);
-            setEditingId(null);
-          }}
-        >
-          Delete
-        </button>
-      </>
-    );
+    if (editing) return renderEditingRowActions(chat, busy);
+    if (confirmingDelete) return renderConfirmingDeleteRowActions(chat, busy);
+    if (deleted) return renderDeletedRowActions(chat, busy);
+    return renderDefaultRowActions(chat);
   };
 
   return (

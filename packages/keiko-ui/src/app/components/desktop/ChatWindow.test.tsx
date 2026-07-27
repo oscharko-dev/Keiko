@@ -2355,6 +2355,65 @@ describe("ChatWindow memory controls", () => {
       expect(screen.getByText(/forget failed/i)).toBeInTheDocument();
     });
   });
+
+  // Issue #2723 (CodeRabbit 3655533390) — aria-disabled alone does not stop a real click, so a
+  // second click landing while forgetMemoryAction is still in flight used to be able to submit a
+  // duplicate forget. The confirm button now carries the native `disabled` attribute while busy
+  // (which real browsers and user-event both honor), and `executeForget` also short-circuits on
+  // `busy` directly, so a duplicate invocation from any path is a no-op.
+  it("disables the confirm button and ignores a duplicate click while a forget action is in flight", async () => {
+    const user = userEvent.setup();
+    let resolveForget: (() => void) | undefined;
+    const forgetMemoryAction = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveForget = resolve;
+        }),
+    );
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "- pref: strict TypeScript",
+            memories: [],
+            budget: { tokens: 1200, used: 180 },
+          },
+          actions: [
+            {
+              kind: "forget",
+              memoryId: "mem-forget-busy",
+              requiresConfirmation: true,
+            },
+          ],
+        },
+        forgetMemoryAction,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    await user.click(screen.getByRole("button", { name: /review forget/i }));
+    await user.type(screen.getByLabelText(/type forget/i), "FORGET");
+    const confirmButton = screen.getByRole("button", { name: /forget permanently/i });
+    await user.click(confirmButton);
+    expect(forgetMemoryAction).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(confirmButton).toBeDisabled());
+
+    await user.click(confirmButton);
+    expect(forgetMemoryAction).toHaveBeenCalledTimes(1);
+
+    resolveForget?.();
+    // A successful forget resets confirmForget, which swaps the confirm/cancel pair back out
+    // for the plain "review forget" button — confirming the guarded action actually completed
+    // rather than merely remaining disabled. Queried fresh by role/name (not the captured
+    // `confirmButton` reference) because React reuses the unkeyed button DOM node in place when
+    // this branch swap happens.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /forget permanently/i })).toBeNull(),
+    );
+    expect(forgetMemoryAction).toHaveBeenCalledTimes(1);
+  });
 });
 
 // Issue #2723 — MemoryActionForgetButtons is driven directly (rather than through the full
