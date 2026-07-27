@@ -8,6 +8,20 @@ import { resolveHostExecutable } from "./lib/host-executable.mjs";
 export const EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.en.ts";
 export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
+// The optional-widget catalog pair, read through `useOptionalWidgetTranslate`. It is a real
+// English/German catalog — the quick-access palette, the browser/commands/terminal widgets and the
+// search panel take every string from it — but it predates the `-i18n.{en,de}.ts` naming this guard
+// recognises, so a component whose strings legitimately live here was told to update shared
+// catalogs it never reads (#2768). Recognised by exact path rather than by loosening a pattern, and
+// only when BOTH halves change: the requirement this guard exists to enforce is "English and German
+// land together", which is exactly what that condition asserts.
+//
+// Key parity needs no separate check here, unlike the split-file feature catalogs: the German map is
+// declared `satisfies OptionalWidgetMessageCatalog`, whose key type is derived from the English map,
+// so a missing or extra German key is a type error before this gate ever runs.
+export const OPTIONAL_WIDGET_EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts";
+export const OPTIONAL_WIDGET_DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts";
+
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
 const I18N_USAGE_PATTERNS = [
   /\buseTranslate\s*\(/,
@@ -162,12 +176,37 @@ export function unpairedFeatureCatalogs(changedFileSet) {
 // Feature-scoped catalog pairs (e.g. the dynamically loaded Coding Workbench boundary from
 // #2257) satisfy the catalog-update requirement exactly like the shared catalogs, as long as
 // the English and German halves change together.
+// `satisfied` when both halves changed; a one-sided change is named for what it is rather than
+// falling through to the shared-catalog message, which would send the author to the wrong file.
+function optionalWidgetCatalogState(changedFileSet) {
+  const en = changedFileSet.has(OPTIONAL_WIDGET_EN_CATALOG);
+  const de = changedFileSet.has(OPTIONAL_WIDGET_DE_CATALOG);
+  if (en && de) return { satisfied: true, problem: undefined };
+  if (en === de) return { satisfied: false, problem: undefined };
+  const changed = en ? OPTIONAL_WIDGET_EN_CATALOG : OPTIONAL_WIDGET_DE_CATALOG;
+  const missing = en ? OPTIONAL_WIDGET_DE_CATALOG : OPTIONAL_WIDGET_EN_CATALOG;
+  return {
+    satisfied: false,
+    problem: `Optional-widget i18n catalog ${changed} changed without its counterpart ${missing}. Update the English and German halves together.`,
+  };
+}
+
 function catalogUpdateProblems(changedFileSet, repoRoot) {
   const featureCatalogPairs = changedFeatureCatalogPairs(changedFileSet);
   const singleFileCatalogs = changedSingleFileFeatureCatalogs(changedFileSet, repoRoot);
   const sharedCatalogsTouched = changedFileSet.has(EN_CATALOG) && changedFileSet.has(DE_CATALOG);
+  const optional = optionalWidgetCatalogState(changedFileSet);
   const problems = [];
-  if (sharedCatalogsTouched || featureCatalogPairs.length > 0 || singleFileCatalogs.length > 0) {
+  if (
+    sharedCatalogsTouched ||
+    optional.satisfied ||
+    featureCatalogPairs.length > 0 ||
+    singleFileCatalogs.length > 0
+  ) {
+    return { problems, featureCatalogPairs, singleFileCatalogs };
+  }
+  if (optional.problem !== undefined) {
+    problems.push(optional.problem);
     return { problems, featureCatalogPairs, singleFileCatalogs };
   }
   for (const catalog of [EN_CATALOG, DE_CATALOG]) {
