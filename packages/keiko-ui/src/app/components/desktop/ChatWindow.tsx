@@ -116,6 +116,7 @@ import styles from "./ChatWindow.module.css";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import {
@@ -423,43 +424,6 @@ function questionMapPreview(content: string): string {
   return `${normalized.slice(0, QUESTION_MAP_PREVIEW_MAX - 3).trimEnd()}...`;
 }
 
-async function writeTextWithFallback(text: string): Promise<void> {
-  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
-  if (writeText !== undefined && navigator.clipboard !== undefined) {
-    try {
-      await writeText.call(navigator.clipboard, text);
-      return;
-    } catch {
-      // Keep the manual-selection fallback below available for restricted clipboard contexts.
-    }
-  }
-
-  if (typeof document === "undefined" || document.body === null) {
-    throw new Error("clipboard-unavailable");
-  }
-
-  const previousFocus =
-    document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.inset = "0 auto auto -9999px";
-  textarea.style.width = "1px";
-  textarea.style.height = "1px";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  try {
-    textarea.focus();
-    textarea.select();
-    const copied = typeof document.execCommand === "function" && document.execCommand("copy");
-    if (!copied) throw new Error("clipboard-fallback-failed");
-  } finally {
-    textarea.remove();
-    previousFocus?.focus();
-  }
-}
-
 function isCollapsibleAssistantAnswer(content: string): boolean {
   return (
     content.length >= COLLAPSIBLE_ANSWER_MIN_CHARS ||
@@ -476,7 +440,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
   const [status, setStatus] = useState("");
 
   const handleCopy = useCallback(() => {
-    void writeTextWithFallback(copyableMessageText(content)).then(
+    void copyTextToClipboard(copyableMessageText(content)).then(
       () => {
         setCopyState("copied");
         setStatus(t("chat.copy.copiedStatus"));
@@ -1532,6 +1496,10 @@ function matchQualityLabel(
   }
 }
 
+function nestedRootSuffixLabel(result: FilesSearchResult, t: I18nTranslate): string {
+  return result.rootKind === "nested-git-root" ? `; ${t("chat.repository.nestedRoot")}` : "";
+}
+
 function formatRepositoryFocusError(error: unknown, t: I18nTranslate): string {
   if (error instanceof Error && error.message === "EMPTY_REPOSITORY_FILE_SELECTION") {
     return t("chat.repository.selectFirst");
@@ -1763,7 +1731,7 @@ function RepositoryFilePickerPanel({
               </span>
               <span className="repo-focus-result-path">{resultDirectoryLabel(result, t)}</span>
               <span className="sr-only">
-                {`${fileRoleLabel(result.fileRole, t)}; ${matchQualityLabel(result.matchQuality, t)}${result.rootKind === "nested-git-root" ? `; ${t("chat.repository.nestedRoot")}` : ""}.`}
+                {`${fileRoleLabel(result.fileRole, t)}; ${matchQualityLabel(result.matchQuality, t)}${nestedRootSuffixLabel(result, t)}.`}
               </span>
             </button>
           ))}
@@ -2668,7 +2636,6 @@ function ComposerCoreImpl({
   const session = useChatSessionComposer();
   const {
     draft,
-    loading,
     sending,
     sendStatus,
     setDraft,
@@ -3508,7 +3475,7 @@ interface KnowledgeCatalog {
 interface KnowledgeCatalogSnapshot {
   readonly capsules: readonly CapsuleListEntry[];
   readonly capsuleSets: readonly CapsuleSetListEntry[];
-  readonly loadError: unknown | null;
+  readonly loadError: unknown;
 }
 
 const EMPTY_KNOWLEDGE_CATALOG: KnowledgeCatalogSnapshot = {

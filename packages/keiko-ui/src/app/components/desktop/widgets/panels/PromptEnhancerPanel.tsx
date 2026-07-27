@@ -11,8 +11,8 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { enhancePrompt, fetchModels } from "@/lib/api";
-import { ApiError } from "@/lib/api";
+import { ApiError, enhancePrompt, fetchModels } from "@/lib/api";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
@@ -114,43 +114,6 @@ function summarizeConnectedContext(
     label,
     signature: JSON.stringify(sources),
   };
-}
-
-async function writeTextWithFallback(text: string): Promise<void> {
-  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
-  if (writeText !== undefined && navigator.clipboard !== undefined) {
-    try {
-      await writeText.call(navigator.clipboard, text);
-      return;
-    } catch {
-      // Fall through to the selection-backed copy path below.
-    }
-  }
-
-  if (typeof document === "undefined" || document.body === null) {
-    throw new Error("clipboard-unavailable");
-  }
-
-  const previousFocus =
-    document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.inset = "0 auto auto -9999px";
-  textarea.style.width = "1px";
-  textarea.style.height = "1px";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  try {
-    textarea.focus();
-    textarea.select();
-    const copied = typeof document.execCommand === "function" && document.execCommand("copy");
-    if (!copied) throw new Error("clipboard-fallback-failed");
-  } finally {
-    textarea.remove();
-    previousFocus?.focus();
-  }
 }
 
 function StringList({
@@ -670,7 +633,7 @@ export function PromptEnhancerPanel({
     setCopyState("copying");
     setCopyStatus(t("promptEnhancer.copy.copyingStatus"));
     try {
-      await writeTextWithFallback(result.renderedPrompt);
+      await copyTextToClipboard(result.renderedPrompt);
       setCopyState("copied");
       setCopyStatus(t("promptEnhancer.copy.copied"));
     } catch {

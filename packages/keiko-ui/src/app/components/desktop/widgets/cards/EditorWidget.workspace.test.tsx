@@ -845,8 +845,26 @@ describe("EditorWidget workspace session", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
     const dirtyEvent = new Event("beforeunload", { cancelable: true });
+    // typescript:S1874 (deprecated legacy attribute) regression pin: preventDefault()
+    // alone is not reliably honored by every engine this product supports (older
+    // Firefox/Safari, per packages/keiko-ui/package.json's browserslist floor), so the
+    // handler also writes the legacy `event.returnValue` string. jsdom's plain Event
+    // ties a `.returnValue` read back to `defaultPrevented` (spec's generic-Event
+    // boolean semantics) rather than exposing BeforeUnloadEvent's DOMString override,
+    // so this shadows the property with a spy to capture the exact write instead of
+    // relying on jsdom's read-back. Do not remove the write without confirming every
+    // supported browser floor no longer needs it.
+    let capturedReturnValue: unknown;
+    Object.defineProperty(dirtyEvent, "returnValue", {
+      configurable: true,
+      get: () => capturedReturnValue,
+      set: (value: unknown) => {
+        capturedReturnValue = value;
+      },
+    });
     window.dispatchEvent(dirtyEvent);
     expect(dirtyEvent.defaultPrevented).toBe(true);
+    expect(capturedReturnValue).toBe("");
 
     fireEvent.click(screen.getByRole("button", { name: "Mark clean pane-1" }));
     const cleanEvent = new Event("beforeunload", { cancelable: true });
