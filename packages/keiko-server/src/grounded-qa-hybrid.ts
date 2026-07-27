@@ -1043,10 +1043,11 @@ function knowledgeSummary(
   // display name containing a filesystem path or PII leaked verbatim. Gate each connector's label
   // individually before joining, so one unsafe label falls back without discarding the others.
   const safeLabel = connectors.map((src) => activityDisplayName(src.label)).join("+");
+  const chatLabelHash = hashString32(`${chat.id}|${label}`);
   return {
     kind: "local-knowledge",
     scopeKind: scopeKind ?? "capsule-set",
-    scopeId: `lk-${hashString32(`${chat.id}|${label}`)}`,
+    scopeId: `lk-${chatLabelHash}`,
     scopeLabel: safeLabel,
     capsuleCount,
     sourceCount: connectorSourceCount(connectors),
@@ -1524,17 +1525,30 @@ function projectHybridAnswer(
   };
 }
 
-function assembleHybridAnswer(
-  ctx: HybridGroundedAskCtx,
-  sources: RetrievedSources,
-  store: KnowledgeStore,
-  selected: readonly SelectedCandidate<HybridPayload>[],
-  limits: ReturnType<typeof currentGroundingLimits>,
-  assistant: GroundedAnswerResult,
-  reranker: GroundedRerankerDiagnostics,
-  ids: { readonly userMessageId: string; readonly assistantMessageId: string },
-  sourceEvidenceAvailable = true,
-): HybridGroundedAnswer {
+interface AssembleHybridAnswerInput {
+  readonly ctx: HybridGroundedAskCtx;
+  readonly sources: RetrievedSources;
+  readonly store: KnowledgeStore;
+  readonly selected: readonly SelectedCandidate<HybridPayload>[];
+  readonly limits: ReturnType<typeof currentGroundingLimits>;
+  readonly assistant: GroundedAnswerResult;
+  readonly reranker: GroundedRerankerDiagnostics;
+  readonly ids: { readonly userMessageId: string; readonly assistantMessageId: string };
+  readonly sourceEvidenceAvailable?: boolean;
+}
+
+function assembleHybridAnswer(input: AssembleHybridAnswerInput): HybridGroundedAnswer {
+  const {
+    ctx,
+    sources,
+    store,
+    selected,
+    limits,
+    assistant,
+    reranker,
+    ids,
+    sourceEvidenceAvailable = true,
+  } = input;
   const { redactor } = ctx.deps;
   const projection = projectHybridAnswer(
     ctx,
@@ -1633,9 +1647,9 @@ async function assembleHybridNoEvidenceRoute(
     content,
     ctx.userMessage,
   );
-  const answer = assembleHybridAnswer(
+  const answer = assembleHybridAnswer({
     ctx,
-    {
+    sources: {
       folders: meta.folderResult.retrieved,
       connectors: meta.connectorResult.retrieved,
       skipped: meta.connectorResult.skipped,
@@ -1646,11 +1660,11 @@ async function assembleHybridNoEvidenceRoute(
     store,
     selected,
     limits,
-    { ...assistant, content },
+    assistant: { ...assistant, content },
     reranker,
-    { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
-    false,
-  );
+    ids: { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
+    sourceEvidenceAvailable: false,
+  });
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
   ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer, previewCitations);
   return { status: 200, body: answer };
@@ -1957,9 +1971,9 @@ async function finalizeHybridAnswer(
 ): Promise<RouteResult> {
   const { selected, limits, assistant, reranker, ids } = input;
   const folders = meta.folderResult.retrieved;
-  const answer = assembleHybridAnswer(
+  const answer = assembleHybridAnswer({
     ctx,
-    {
+    sources: {
       folders,
       connectors: meta.connectorResult.retrieved,
       skipped: meta.connectorResult.skipped,
@@ -1973,7 +1987,7 @@ async function finalizeHybridAnswer(
     assistant,
     reranker,
     ids,
-  );
+  });
   const finalAnswer = await applyHybridEntailment(
     ctx,
     answer,
