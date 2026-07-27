@@ -24,10 +24,15 @@ import {
   useCodingWorkbenchResearch,
   type CodingWorkbenchResearchState,
 } from "@/lib/useCodingWorkbenchResearch";
+import {
+  useCodingWorkbenchEditorBridge,
+  type CodingWorkbenchChangesetReview,
+} from "@/lib/useCodingWorkbenchEditorBridge";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
+import { DiffFileSection } from "../cards/shared/diffView";
 import { PanelTitle, TaskStartSection, Timeline, WorkbenchHeader } from "./CodingWorkbenchSections";
 import { CodingWorkbenchSetup } from "./CodingWorkbenchSetup";
-import { CodingWorkbenchChanges } from "./CodingWorkbenchChanges";
+import { CodingWorkbenchChanges, diffLabels } from "./CodingWorkbenchChanges";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import {
   activeRunState,
@@ -209,6 +214,12 @@ function WorkbenchColumns({
     runState: state.run.value?.state,
     runtimeEventSignal,
   });
+  const editorBridge = useCodingWorkbenchEditorBridge({
+    root:
+      activeWorkspace.error === null ? (activeWorkspace.activeBinding?.activeRoot ?? null) : null,
+    runId: state.run.value?.runId,
+    active: activeRunState(state.run.value?.state),
+  });
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
@@ -245,6 +256,12 @@ function WorkbenchColumns({
         tabIndex={0}
       >
         <PermissionPrompt state={state} research={research} onDecision={onDecision} />
+        <ChangesetReviewPanel
+          review={editorBridge.pendingReview}
+          onApprove={editorBridge.approve}
+          onDeny={editorBridge.deny}
+          onRetry={editorBridge.retry}
+        />
         <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
         <ResearchGrantChip
           grant={research.grant ?? undefined}
@@ -414,6 +431,87 @@ function PermissionPrompt({
           onClick={() => onDecision("denied")}
         >
           {t("codingWorkbench.approval.deny")}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The one place a Code task's edit tool surfaces a specific diff for explicit confirmation before
+ * it is written (mirrors the Editor's own agent-changeset review, ADR-0125 D1 "workspace-contained"
+ * high risk): the headless bridge (`useCodingWorkbenchEditorBridge`) only reaches this state when
+ * the run's mode requires review, so it must never auto-resolve on its own.
+ */
+function ChangesetReviewPanel({
+  review,
+  onApprove,
+  onDeny,
+  onRetry,
+}: {
+  readonly review: CodingWorkbenchChangesetReview | null;
+  readonly onApprove: () => void;
+  readonly onDeny: () => void;
+  readonly onRetry: () => void;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (review === null) return null;
+  const labels = diffLabels(t);
+  return (
+    <section
+      className={cx(styles.card, styles.permission)}
+      aria-labelledby="changeset-review-title"
+    >
+      <PanelTitle
+        eyebrow={t("codingWorkbench.changesetReview.eyebrow")}
+        id="changeset-review-title"
+      >
+        {t("codingWorkbench.changesetReview.title")}
+      </PanelTitle>
+      <p className={styles.helpText}>{t("codingWorkbench.changesetReview.help")}</p>
+      {review.deliveryFailed ? (
+        <p className={styles.alert} role="alert">
+          <span aria-hidden="true">!</span> {t("codingWorkbench.changesetReview.deliveryFailed")}
+        </p>
+      ) : null}
+      <div className="rv-body">
+        {review.diff.files.length === 0 ? (
+          <p className={styles.helpText}>{t("codingWorkbench.changesetReview.empty")}</p>
+        ) : (
+          review.diff.files.map((file, index) => (
+            <DiffFileSection
+              key={`${file.path}:${String(index)}`}
+              file={file}
+              index={index}
+              idPrefix="coding-workbench-changeset-review-file"
+              sectionRef={() => undefined}
+              labels={labels}
+            />
+          ))
+        )}
+      </div>
+      <div className={styles.controls}>
+        {review.deliveryFailed ? (
+          <button
+            className={cx(styles.button, styles.buttonPrimary)}
+            type="button"
+            disabled={review.deciding}
+            onClick={onRetry}
+          >
+            {t("codingWorkbench.changesetReview.retry")}
+          </button>
+        ) : (
+          <button
+            className={cx(styles.button, styles.buttonPrimary)}
+            type="button"
+            disabled={review.deciding}
+            onClick={onApprove}
+          >
+            {t("codingWorkbench.changesetReview.approve")}
+          </button>
+        )}
+        <button className={styles.button} type="button" disabled={review.deciding} onClick={onDeny}>
+          {t("codingWorkbench.changesetReview.deny")}
         </button>
       </div>
     </section>

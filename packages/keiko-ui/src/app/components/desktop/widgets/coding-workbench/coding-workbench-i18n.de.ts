@@ -242,6 +242,16 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
   "codingWorkbench.approval.approve": "Einmal genehmigen",
   "codingWorkbench.approval.deny": "Ablehnen",
+  "codingWorkbench.changesetReview.eyebrow": "Änderungsprüfung",
+  "codingWorkbench.changesetReview.title": "Vorgeschlagene Dateiänderung prüfen",
+  "codingWorkbench.changesetReview.help":
+    "Der Task ist pausiert, damit Sie diese genaue Änderung vor dem Schreiben bestätigen können.",
+  "codingWorkbench.changesetReview.empty": "Es wurde keine überprüfbare Änderung erzeugt.",
+  "codingWorkbench.changesetReview.approve": "Änderung übernehmen",
+  "codingWorkbench.changesetReview.deny": "Änderung ablehnen",
+  "codingWorkbench.changesetReview.retry": "Erneut versuchen",
+  "codingWorkbench.changesetReview.deliveryFailed":
+    "Diese Entscheidung konnte dem Task nicht bestätigt werden. Bitte erneut versuchen.",
   "codingWorkbench.recovery.eyebrow": "Wiederherstellung erforderlich",
   "codingWorkbench.recovery.title": "Vor erneutem Versuch abgleichen",
   "codingWorkbench.recovery.summary":
