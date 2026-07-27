@@ -93,6 +93,15 @@ function partition(
   };
 }
 
+function entriesWithThrowingLength(error: Error): readonly UsearchVectorEntry[] {
+  return new Proxy([] as UsearchVectorEntry[], {
+    get: (target, property, receiver): unknown => {
+      if (property === "length") throw error;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
 function exactTop(
   entries: readonly UsearchVectorEntry[],
   query: Float32Array,
@@ -314,6 +323,32 @@ describe("USearch ANN index", () => {
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }
+  });
+
+  it("releases the build queue after propagating a rejected operation", async () => {
+    const corpus = clusteredCorpus(1, IDENTITY);
+    const queryVector = corpus.entries[0]?.vector;
+    if (queryVector === undefined) throw new Error("test corpus must contain a query vector");
+    const failure = new Error("synthetic queue failure");
+
+    await expect(
+      searchUsearchAnnIndex({
+        partition: {
+          ...partition(corpus.entries, "rejected-build"),
+          loadEntries: () => entriesWithThrowingLength(failure),
+        },
+        queryVector,
+        candidateLimit: 1,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(
+      await searchUsearchAnnIndex({
+        partition: partition(corpus.entries, "recovered-build"),
+        queryVector,
+        candidateLimit: 1,
+      }),
+    ).toMatchObject({ ok: true, mode: "exact" });
   });
 
   it("keeps the event loop responsive while the worker builds an ANN index", async () => {

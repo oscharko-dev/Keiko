@@ -122,6 +122,11 @@ interface CachedIndex {
   readonly index: SearchIndex;
 }
 
+interface QueuedOperation<T> {
+  readonly result: Promise<T>;
+  readonly tail: Promise<void>;
+}
+
 const HNSW_CONNECTIVITY = 32;
 const HNSW_EXPANSION_ADD = 256;
 const HNSW_EXPANSION_SEARCH = 768;
@@ -144,6 +149,23 @@ const QUERY_TIMEOUT_MS = 30_000;
 const INDEX_CACHE = new Map<string, CachedIndex>();
 let cachedIndexBytes = 0;
 let indexBuildQueue = Promise.resolve();
+
+function queuedOperation<T>(tail: Promise<void>, operation: () => Promise<T>): QueuedOperation<T> {
+  let releaseTail: (() => void) | undefined;
+  const nextTail = new Promise<void>((resolveTail) => {
+    releaseTail = resolveTail;
+  });
+  const release = releaseTail;
+  if (release === undefined) throw new TypeError("queue tail was not initialized");
+  const result = tail.then(async () => {
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  });
+  return { result, tail: nextTail };
+}
 
 function compareIds(left: string, right: string): number {
   if (left === right) return 0;
@@ -582,15 +604,12 @@ function enqueueIndexBuild(
   exact: boolean,
   maxBytes: number,
 ): Promise<SearchIndex | UsearchAnnSearchResult> {
-  const operation = indexBuildQueue.then(async () => {
+  const queued = queuedOperation(indexBuildQueue, async () => {
     const existing = cachedIndex(request, maxBytes);
     return existing ?? (await buildSearchIndex(request, exact, maxBytes));
   });
-  indexBuildQueue = operation.then(
-    () => undefined,
-    () => undefined,
-  );
-  return operation;
+  indexBuildQueue = queued.tail;
+  return queued.result;
 }
 
 async function resolvedIndex(
@@ -715,12 +734,12 @@ function annSearch(
   request: UsearchAnnSearchRequest,
   index: AnnIndex,
 ): Promise<UsearchAnnSearchResult> {
-  const operation = index.queryQueue.then(async () => await annSearchExclusive(request, index));
-  index.queryQueue = operation.then(
-    () => undefined,
-    () => undefined,
+  const queued = queuedOperation(
+    index.queryQueue,
+    async () => await annSearchExclusive(request, index),
   );
-  return operation;
+  index.queryQueue = queued.tail;
+  return queued.result;
 }
 
 function validPartitionKey(value: unknown): value is string {
