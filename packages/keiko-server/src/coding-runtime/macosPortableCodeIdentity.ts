@@ -2,8 +2,12 @@ const TEAM_IDENTIFIER = /^[A-Z0-9]{10}$/u;
 const TEAM_IDENTIFIER_LINE = /^TeamIdentifier=([A-Z0-9]{10})$/gmu;
 const MACOS_RELEASE_TEAM_IDENTIFIER = "__KEIKO_APPLE_TEAM_ID__";
 
+export function isMacosTeamIdentifier(value: string): boolean {
+  return TEAM_IDENTIFIER.test(value);
+}
+
 export function macosReleaseTeamIdentifier(): string | undefined {
-  return TEAM_IDENTIFIER.test(MACOS_RELEASE_TEAM_IDENTIFIER)
+  return isMacosTeamIdentifier(MACOS_RELEASE_TEAM_IDENTIFIER)
     ? MACOS_RELEASE_TEAM_IDENTIFIER
     : undefined;
 }
@@ -12,14 +16,14 @@ export function macosTeamIdentifierFromOutput(output: string): string | undefine
   const matches = [...output.matchAll(TEAM_IDENTIFIER_LINE)];
   if (matches.length !== 1) return undefined;
   const identifier = matches[0]?.[1];
-  return identifier !== undefined && TEAM_IDENTIFIER.test(identifier) ? identifier : undefined;
+  return identifier !== undefined && isMacosTeamIdentifier(identifier) ? identifier : undefined;
 }
 
 export function macosDeveloperIdRequirement(
   teamIdentifier: string,
   bundleIdentifier?: string,
 ): string {
-  if (!TEAM_IDENTIFIER.test(teamIdentifier)) {
+  if (!isMacosTeamIdentifier(teamIdentifier)) {
     throw new TypeError("macOS team identifier is invalid");
   }
   const identifier = bundleIdentifier === undefined ? "" : ` and identifier "${bundleIdentifier}"`;

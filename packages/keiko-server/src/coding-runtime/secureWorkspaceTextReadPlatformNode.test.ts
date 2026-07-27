@@ -116,6 +116,21 @@ describe("node portable secure workspace-read inspection", () => {
     );
   });
 
+  it("fails closed when the fixed platform verifier rejects packaged helper bytes", async () => {
+    const { executable, resourceRoot } = fixture();
+    writeFileSync(join(resourceRoot, "Keiko.exe"), "not signed");
+    const macosInspection = createNodePortableSecureWorkspaceReadInspection({
+      resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+      macosExpectedTeamIdentifier: "AB12CD34EF",
+    });
+    const windowsInspection = createNodePortableSecureWorkspaceReadInspection({ resourceRoot });
+
+    await expect(
+      macosInspection.verifySignature("/definitely/missing/keiko-helper", "darwin-arm64"),
+    ).resolves.toBe(false);
+    await expect(windowsInspection.verifySignature(executable, "win32-x64")).resolves.toBe(false);
+  });
+
   it("rechecks the macOS app resource seal without repeating full runtime discovery", async () => {
     const calls: { readonly args: readonly string[]; readonly command: string }[] = [];
     const run = vi.fn((command: string, args: readonly string[]) => {
@@ -208,6 +223,54 @@ describe("node portable secure workspace-read inspection", () => {
 
     await expect(
       inspection.verifySignature("/Applications/Keiko/helper", "darwin-arm64"),
+    ).resolves.toBe(false);
+  });
+
+  it.each(["", "invalid"] as const)(
+    "rejects the malformed macOS team identifier %j without invoking codesign",
+    async (teamIdentifier) => {
+      const run = vi.fn(() => Promise.resolve(true));
+      const inspection = createNodePortableSecureWorkspaceReadInspection({
+        resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+        macosRunCommand: run,
+        macosExpectedTeamIdentifier: teamIdentifier,
+      });
+
+      await expect(
+        inspection.verifySignature("/Applications/Keiko/helper", "darwin-arm64"),
+      ).resolves.toBe(false);
+      await expect(
+        provePortableImmutableResourceTree(
+          "/Applications/Keiko.app/Contents/Resources",
+          "darwin-arm64",
+          run,
+          teamIdentifier,
+        ),
+      ).resolves.toBe(false);
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a mismatched macOS team in both admission paths", async () => {
+    const run = vi.fn((_command: string, args: readonly string[]) =>
+      Promise.resolve(args.some((arg) => arg.includes("AB12CD34EF"))),
+    );
+    const inspection = createNodePortableSecureWorkspaceReadInspection({
+      resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+      macosRunCommand: run,
+      macosExpectedTeamIdentifier: "ZZ98YX76WV",
+    });
+
+    await expect(
+      inspection.verifySignature("/Applications/Keiko/helper", "darwin-arm64"),
+    ).resolves.toBe(false);
+    await expect(
+      provePortableImmutableResourceTree(
+        "/Applications/Keiko.app/Contents/Resources",
+        "darwin-arm64",
+        run,
+        "ZZ98YX76WV",
+      ),
     ).resolves.toBe(false);
   });
 

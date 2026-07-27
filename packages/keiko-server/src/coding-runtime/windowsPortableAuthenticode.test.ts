@@ -75,6 +75,22 @@ describe("Windows portable Authenticode identity", () => {
     ).resolves.toBe(false);
   });
 
+  it.each([
+    { status: 1, stderr: "", stdout: "A".repeat(40) },
+    { status: 0, stderr: "failure", stdout: "A".repeat(40) },
+    { status: 0, stderr: "", stdout: "" },
+    { status: 0, stderr: "", stdout: "not-a-thumbprint" },
+  ])("rejects invalid helper output through the nonblocking command port %#", async (result) => {
+    const results = [{ status: 0, stderr: "", stdout: "A".repeat(40) }, result];
+    let index = 0;
+
+    await expect(
+      windowsPublisherIdentityMatchesAsync("Keiko.exe", "helper.exe", () =>
+        Promise.resolve(results[index++] ?? result),
+      ),
+    ).resolves.toBe(false);
+  });
+
   it("rejects a nonblocking helper signed by a different publisher", async () => {
     const results = ["A".repeat(40), "B".repeat(40)];
     let index = 0;

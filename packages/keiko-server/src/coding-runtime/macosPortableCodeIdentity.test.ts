@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isMacosTeamIdentifier,
   macosDeveloperIdRequirement,
   macosReleaseTeamIdentifier,
   macosTeamIdentifierFromOutput,
 } from "./macosPortableCodeIdentity.js";
 
 describe("macOS portable code identity", () => {
+  it("accepts only closed ten-character Apple team identifiers", () => {
+    expect(isMacosTeamIdentifier("AB12CD34EF")).toBe(true);
+    expect(isMacosTeamIdentifier("")).toBe(false);
+    expect(isMacosTeamIdentifier("ab12cd34ef")).toBe(false);
+    expect(isMacosTeamIdentifier('AB12CD34E"')).toBe(false);
+  });
+
   it("extracts exactly one closed Apple team identifier", () => {
     expect(
       macosTeamIdentifierFromOutput("Authority=Developer ID\nTeamIdentifier=AB12CD34EF\n"),
@@ -14,6 +22,7 @@ describe("macOS portable code identity", () => {
     expect(
       macosTeamIdentifierFromOutput("TeamIdentifier=AB12CD34EF\nTeamIdentifier=ZZ98YX76WV\n"),
     ).toBeUndefined();
+    expect(macosTeamIdentifierFromOutput("")).toBeUndefined();
     expect(macosTeamIdentifierFromOutput("TeamIdentifier=not set\n")).toBeUndefined();
   });
 

@@ -5,6 +5,7 @@ import { lstat, open } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 
 import {
+  isMacosTeamIdentifier,
   macosDeveloperIdRequirement,
   macosReleaseTeamIdentifier,
 } from "./macosPortableCodeIdentity.js";
@@ -159,7 +160,9 @@ function verifyMacosCode(
 ): Promise<boolean> {
   if (options.resourceRoot === undefined) return Promise.resolve(false);
   const teamIdentifier = options.macosExpectedTeamIdentifier ?? macosReleaseTeamIdentifier();
-  if (teamIdentifier === undefined) return Promise.resolve(false);
+  if (teamIdentifier === undefined || !isMacosTeamIdentifier(teamIdentifier)) {
+    return Promise.resolve(false);
+  }
   const run = options.macosRunCommand ?? runMacosCodeCommand;
   return run("/usr/bin/codesign", [
     "--verify",
@@ -180,7 +183,9 @@ export function provePortableImmutableResourceTree(
   if (target === "win32-x64") return Promise.resolve(true);
   const manifestTarget = target === "darwin-arm64" ? "macos-arm64" : "macos-x64";
   const appRoot = dirname(dirname(resourceRoot));
-  if (expectedTeamIdentifier === undefined) return Promise.resolve(false);
+  if (expectedTeamIdentifier === undefined || !isMacosTeamIdentifier(expectedTeamIdentifier)) {
+    return Promise.resolve(false);
+  }
   const bundleIdentifier = `dev.oscharko.keiko.${manifestTarget}`;
   return run("/usr/bin/codesign", [
     "--verify",
