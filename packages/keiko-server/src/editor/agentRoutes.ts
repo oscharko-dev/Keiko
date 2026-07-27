@@ -14,11 +14,10 @@
 //
 // No raw source content (snapshot text, text edits, patch bodies) is logged anywhere in this path.
 
-import type { ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { Readable } from "node:stream";
-import type { IncomingMessage } from "node:http";
 import {
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES,
   EDITOR_AGENT_ACTION_APPROVAL_RISK,
