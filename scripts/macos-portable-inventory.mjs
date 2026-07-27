@@ -23,7 +23,7 @@ const MAX_CODE_OBJECTS = 4_096;
 const MACH_O_MAGICS = new Set([
   0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca,
 ]);
-const BUNDLE_PATTERN = /\.(?:app|appex|bundle|framework|xpc)$/iu;
+const BUNDLE_PATTERN = /\.(?:app|appex|bundle|framework|systemextension|xpc)$/iu;
 
 export class BoundedMacSigningError extends Error {}
 
@@ -65,6 +65,16 @@ function isMachO(path) {
 
 function roleFor(path) {
   if (path === "Keiko.app/Contents/Resources/runtime/node/bin/node") return "node-runtime";
+  if (path === "Keiko.app/Contents/MacOS/KeikoSystemExtensionManager") {
+    return "system-extension-manager";
+  }
+  if (
+    path.startsWith(
+      "Keiko.app/Contents/Library/SystemExtensions/com.oscharko.keiko.runtime-monitor.systemextension/",
+    )
+  ) {
+    return "endpoint-security-extension";
+  }
   if (path.startsWith("Keiko.app/Contents/Resources/runtime/sidecars/")) return "sidecar-runtime";
   return "default";
 }
@@ -131,6 +141,18 @@ function requirePrimaryCode(codeObjects) {
     boundedMacSigningFail("primary macOS launcher is missing");
   if (!paths.has("Keiko.app/Contents/Resources/runtime/node/bin/node"))
     boundedMacSigningFail("bundled Node executable is missing");
+  if (!paths.has("Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read"))
+    boundedMacSigningFail("secure workspace read helper is missing");
+  if (!paths.has("Keiko.app/Contents/Resources/runtime/native/keiko-runtime-supervisor"))
+    boundedMacSigningFail("runtime supervisor is missing");
+  if (!paths.has("Keiko.app/Contents/MacOS/KeikoSystemExtensionManager"))
+    boundedMacSigningFail("system extension manager is missing");
+  if (
+    !paths.has(
+      "Keiko.app/Contents/Library/SystemExtensions/com.oscharko.keiko.runtime-monitor.systemextension/Contents/MacOS/KeikoRuntimeMonitor",
+    )
+  )
+    boundedMacSigningFail("Endpoint Security system extension is missing");
 }
 
 function hasExactKeys(value, keys) {

@@ -37,6 +37,7 @@ const GUID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
 const ARTIFACT_SIGNING_HOST_PATTERN =
   /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.codesigning\.azure\.net$/u;
 const WINDOWS_TARGET = "windows-x64";
+const RUNTIME_ATTESTATION_PATH = "runtime/native/keiko-runtime-attestation.exe";
 
 export class BoundedWindowsSigningError extends Error {}
 
@@ -160,6 +161,9 @@ export function inventoryWindowsPortablePeFiles(payloadRoot) {
   if (!paths.has("runtime/native/keiko-secure-workspace-read.exe")) {
     fail("secure workspace read helper is missing from the PE inventory");
   }
+  if (!paths.has("runtime/native/keiko-runtime-supervisor.exe")) {
+    fail("runtime supervisor is missing from the PE inventory");
+  }
   return { schemaVersion: 1, target: WINDOWS_TARGET, files: state.peFiles };
 }
 
@@ -217,6 +221,17 @@ export function inventoryPathsMatch(expected, actual) {
   );
 }
 
+export function inventoryAddsOnlyRuntimeAttestation(expected, actual) {
+  const expectedPaths = expected.files.map((file) => file.relativePath);
+  const actualPaths = actual.files.map((file) => file.relativePath);
+  return (
+    actualPaths.includes(RUNTIME_ATTESTATION_PATH) &&
+    actualPaths.length === expectedPaths.length + 1 &&
+    expectedPaths.every((path) => actualPaths.includes(path)) &&
+    actualPaths.every((path) => path === RUNTIME_ATTESTATION_PATH || expectedPaths.includes(path))
+  );
+}
+
 export function catalogForInventory(inventory) {
   return `${inventory.files.map((file) => `payload/Keiko/${file.relativePath}`).join("\n")}\n`;
 }
@@ -262,6 +277,14 @@ function comparePathsCommand(options) {
   if (!inventoryPathsMatch(expected, actual)) fail("PE inventory changed during signing");
 }
 
+function compareWithAttestationCommand(options) {
+  const expected = readInventory(required(options, "expected-inventory"));
+  const actual = readInventory(required(options, "actual-inventory"));
+  if (!inventoryAddsOnlyRuntimeAttestation(expected, actual)) {
+    fail("PE inventory changed outside the runtime attestation carrier");
+  }
+}
+
 function run(command, args, cwd, { surfaceOutputOnFailure = false } = {}) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8" });
   if (result.error !== undefined || result.status !== 0) {
@@ -298,20 +321,129 @@ export async function rebindPortableSignedArchive(
   });
 }
 
-function markNativeHelperVerified(manifest) {
-  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 1) {
-    fail("manifest must contain exactly one native helper");
+function markNativeHelpersVerified(manifest) {
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 2) {
+    fail("manifest must contain the complete native helper set");
   }
-  manifest.nativeHelpers[0].signing = {
+  for (const helper of manifest.nativeHelpers) {
+    helper.signing = {
+      signatureKind: "authenticode",
+      verificationStatus: "verified-production",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+    };
+  }
+  manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
+    manifest.nativeHelpers,
+  );
+}
+
+function applyWindowsProductionState(manifest, input) {
+  const state = {
+    verificationPolicy: "production",
+    verificationStatus: "verified-production",
+    verificationReasonCodes: [],
+    signatureKind: "authenticode",
+    signatureVerified: true,
+    notarizationRequired: false,
+    notarizationVerified: false,
+  };
+  manifest.security = {
+    ...manifest.security,
+    ...state,
+    verificationChecks: globalThis.structuredClone(input.verificationChecks),
+  };
+  const inputsByName = new Map(input.sidecarRuntimes.map((entry) => [entry.name, entry]));
+  manifest.sidecarRuntimes = (manifest.sidecarRuntimes ?? []).map((sidecar) => {
+    const sidecarInput = inputsByName.get(sidecar.name);
+    if (sidecarInput === undefined) fail("sidecar verification input is incomplete");
+    return {
+      ...sidecar,
+      signing: {
+        ...sidecar.signing,
+        ...state,
+        verificationChecks: globalThis.structuredClone(sidecarInput.verificationChecks),
+      },
+    };
+  });
+  manifest.releaseImpact.reviewedBinding = {
+    ...manifest.releaseImpact.reviewedBinding,
+    ...state,
+    platformSignatureLocallyVerified: true,
+    verificationChecks: globalThis.structuredClone(input.verificationChecks),
+    sidecarRuntimes: globalThis.structuredClone(manifest.sidecarRuntimes),
+  };
+  manifest.updateEligibility.requiredPredicates.platformSignatureLocallyVerified = true;
+}
+
+function prepareQualifiedPayloadCommand(options) {
+  const stageRoot = resolve(required(options, "stage-root"));
+  verifyInventoryCommand(options);
+  const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const input = assertWindowsProductionVerificationInput(
+    resolve(required(options, "verification-input")),
+    manifest,
+  );
+  applyWindowsProductionState(manifest, input);
+  markNativeHelpersVerified(manifest);
+  rebindSignedPayload(stageRoot, manifest, WINDOWS_TARGET);
+  manifest.runtimeActivation.trustAnchor = "authenticode-attestor";
+  manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
+    manifest.nativeHelpers,
+  );
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function bindRuntimeAttestation(stageRoot, manifest) {
+  const attestation = manifest.runtimeAttestation;
+  if (
+    attestation?.carrierKind !== "authenticode-executable" ||
+    attestation.executablePath !== "runtime/native/keiko-runtime-attestation.exe"
+  ) {
+    fail("runtime attestation carrier is missing");
+  }
+  const path = join(stageRoot, "payload", "Keiko", ...attestation.executablePath.split("/"));
+  const entry = lstatSync(path);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("runtime attestation carrier is invalid");
+  }
+  attestation.shippedSha256 = sha256Bytes(readFileSync(path));
+  attestation.sizeBytes = entry.size;
+  attestation.signing = {
     signatureKind: "authenticode",
     verificationStatus: "verified-production",
     signatureVerified: true,
     notarizationRequired: false,
     notarizationVerified: false,
   };
-  manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
-    manifest.nativeHelpers,
-  );
+  bindRuntimeAttestationSbom(stageRoot, manifest, attestation);
+  manifest.releaseImpact.reviewedBinding.runtimeAttestation =
+    globalThis.structuredClone(attestation);
+}
+
+function bindRuntimeAttestationSbom(stageRoot, manifest, attestation) {
+  const path = join(stageRoot, "evidence", "sbom.cdx.json");
+  const sbom = JSON.parse(readFileSync(path, "utf8"));
+  const bomRef = `pkg:generic/keiko-runtime-attestation@${manifest.product.packageVersion}?platform=windows-x64`;
+  const components = Array.isArray(sbom.components) ? sbom.components : [];
+  sbom.components = [
+    ...components.filter((component) => component?.["bom-ref"] !== bomRef),
+    {
+      type: "application",
+      "bom-ref": bomRef,
+      name: "keiko-runtime-attestation",
+      version: manifest.product.packageVersion,
+      licenses: [{ license: { id: "Apache-2.0" } }],
+      hashes: [{ alg: "SHA-256", content: attestation.shippedSha256 }],
+      properties: [
+        { name: "keiko:platform-target", value: "windows-x64" },
+        { name: "keiko:executable-path", value: attestation.executablePath },
+      ],
+    },
+  ];
+  writeFileSync(path, `${JSON.stringify(sbom, null, 2)}\n`);
 }
 
 async function finalizeCommand(options) {
@@ -322,9 +454,12 @@ async function finalizeCommand(options) {
   if (manifest.artifact?.platformTarget !== WINDOWS_TARGET)
     fail("manifest target is not Windows x64");
   const verificationInputPath = resolve(required(options, "verification-input"));
-  assertWindowsProductionVerificationInput(verificationInputPath, manifest);
-  markNativeHelperVerified(manifest);
+  const input = assertWindowsProductionVerificationInput(verificationInputPath, manifest);
+  applyWindowsProductionState(manifest, input);
+  markNativeHelpersVerified(manifest);
+  bindRuntimeAttestation(stageRoot, manifest);
   await rebindPortableSignedArchive(stageRoot, manifest);
+  manifest.runtimeActivation.trustAnchor = "authenticode-attestor";
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   run(
     process.execPath,
@@ -360,10 +495,12 @@ export async function main(argv = process.argv.slice(2)) {
   else if (command === "inventory") inventoryCommand(options);
   else if (command === "verify-inventory") verifyInventoryCommand(options);
   else if (command === "compare-paths") comparePathsCommand(options);
+  else if (command === "compare-with-attestation") compareWithAttestationCommand(options);
+  else if (command === "prepare-qualified-payload") prepareQualifiedPayloadCommand(options);
   else if (command === "finalize") await finalizeCommand(options);
   else
     fail(
-      "command must be validate-config, inventory, compare-paths, verify-inventory, or finalize",
+      "command must be validate-config, inventory, compare-paths, compare-with-attestation, verify-inventory, prepare-qualified-payload, or finalize",
     );
 }
 

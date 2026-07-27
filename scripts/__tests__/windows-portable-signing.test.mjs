@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   catalogForInventory,
   inventoriesMatch,
+  inventoryAddsOnlyRuntimeAttestation,
   inventoryPathsMatch,
   inventoryWindowsPortablePeFiles,
   main,
@@ -24,6 +25,7 @@ import {
 } from "../windows-portable-signing.mjs";
 import { assertWindowsProductionVerificationInput } from "../windows-portable-verification-input.mjs";
 import { hashDirectoryTree } from "../portable-runtime.mjs";
+import { qualificationReceiptFor } from "../qualify-windows-runtime-release.mjs";
 
 const roots = [];
 
@@ -59,6 +61,7 @@ function validPayload() {
     join(payload, "runtime", "native", "keiko-secure-workspace-read.exe"),
     portableExecutable(5),
   );
+  write(join(payload, "runtime", "native", "keiko-runtime-supervisor.exe"), portableExecutable(6));
   write(join(payload, "runtime", "sidecars", "worker", "worker.node"), portableExecutable(3));
   write(join(payload, "app", "native-addon.bin"), portableExecutable(4));
   write(join(payload, "app", "README.md"), Buffer.from("not executable"));
@@ -70,12 +73,87 @@ afterEach(() => {
 });
 
 describe("Windows portable PE signing inventory", () => {
+  it("binds qualification to the exact activation, helpers, OpenCode payload, and source", () => {
+    const resourceRoot = root();
+    const supervisorBytes = portableExecutable(6);
+    const secureReadBytes = portableExecutable(7);
+    const supervisorPath = join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe");
+    const secureReadPath = join(
+      resourceRoot,
+      "runtime",
+      "native",
+      "keiko-secure-workspace-read.exe",
+    );
+    write(supervisorPath, supervisorBytes);
+    write(secureReadPath, secureReadBytes);
+    const sourceCommitSha = "a".repeat(40);
+    const activationPath = join(resourceRoot, ".portable", "runtime-activation.json");
+    write(
+      activationPath,
+      Buffer.from(
+        JSON.stringify({
+          schemaVersion: 1,
+          suiteVersion: "runtime-tree-qualification-v1",
+          product: {},
+          sourceCommitSha,
+          platformTarget: "windows-x64",
+          artifact: { platformTarget: "windows-x64" },
+          runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+          security: { verificationStatus: "verified-production" },
+          nativeHelpers: [
+            {
+              name: "keiko-runtime-supervisor",
+              platformTarget: "windows-x64",
+              executablePath: "runtime/native/keiko-runtime-supervisor.exe",
+              sizeBytes: supervisorBytes.length,
+              shippedSha256: sha256(supervisorBytes),
+            },
+            {
+              name: "keiko-secure-workspace-read",
+              platformTarget: "windows-x64",
+              executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+              sizeBytes: secureReadBytes.length,
+              shippedSha256: sha256(secureReadBytes),
+            },
+          ],
+          sidecarRuntimes: [{ name: "opencode-compatible", payloadSha256: "b".repeat(64) }],
+          releaseImpact: {},
+        }),
+      ),
+    );
+
+    expect(
+      qualificationReceiptFor({ activationPath, resourceRoot, sourceCommitSha }),
+    ).toMatchObject({
+      platformTarget: "windows-x64",
+      sourceCommitSha,
+      supervisorSha256: sha256(supervisorBytes),
+      secureReadSha256: sha256(secureReadBytes),
+      sidecars: [{ name: "opencode-compatible", sha256: "b".repeat(64) }],
+      backend: "windows-job-object",
+      result: "passed",
+    });
+    write(supervisorPath, portableExecutable(8));
+    expect(() =>
+      qualificationReceiptFor({ activationPath, resourceRoot, sourceCommitSha }),
+    ).toThrow(/helper bytes are invalid/u);
+  });
+
+  it("requalifies the extracted supervisor and executes the signed attestor on a fresh runner", () => {
+    const verifier = readFileSync("scripts/verify-fresh-windows-portable-artifact.ps1", "utf8");
+    expect(verifier).toContain("qualify-windows-runtime-release.mjs");
+    expect(verifier).toContain("keiko-runtime-attestation.exe");
+    expect(verifier).toContain("--emit");
+    expect(verifier).toContain("runtime attestation binding mismatch");
+  });
+
   it("finds every PE by content, including non-exe runtime files, in deterministic order", () => {
     const inventory = inventoryWindowsPortablePeFiles(validPayload());
 
     expect(inventory.files.map((file) => file.relativePath)).toEqual([
       "app/native-addon.bin",
       "Keiko.exe",
+      "runtime/native/keiko-runtime-supervisor.exe",
       "runtime/native/keiko-secure-workspace-read.exe",
       "runtime/node/node.exe",
       "runtime/sidecars/worker/worker.node",
@@ -85,6 +163,7 @@ describe("Windows portable PE signing inventory", () => {
       [
         "payload/Keiko/app/native-addon.bin",
         "payload/Keiko/Keiko.exe",
+        "payload/Keiko/runtime/native/keiko-runtime-supervisor.exe",
         "payload/Keiko/runtime/native/keiko-secure-workspace-read.exe",
         "payload/Keiko/runtime/node/node.exe",
         "payload/Keiko/runtime/sidecars/worker/worker.node",
@@ -124,6 +203,23 @@ describe("Windows portable PE signing inventory", () => {
     expect(inventoriesMatch(before, after)).toBe(false);
     after.files.pop();
     expect(inventoryPathsMatch(before, after)).toBe(false);
+  });
+
+  it("allows exactly one bounded runtime attestation carrier after core qualification", () => {
+    const before = inventoryWindowsPortablePeFiles(validPayload());
+    const after = JSON.parse(JSON.stringify(before));
+    after.files.push({
+      relativePath: "runtime/native/keiko-runtime-attestation.exe",
+      sha256: "f".repeat(64),
+    });
+    after.files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+
+    expect(inventoryAddsOnlyRuntimeAttestation(before, after)).toBe(true);
+    after.files.push({
+      relativePath: "runtime/native/unreviewed.exe",
+      sha256: "e".repeat(64),
+    });
+    expect(inventoryAddsOnlyRuntimeAttestation(before, after)).toBe(false);
   });
 
   it("rebinds the signed archive, provenance, application tree, and checksum", async () => {
@@ -357,6 +453,10 @@ describe("Windows portable PE signing inventory", () => {
     write(
       join(payload, "runtime", "native", "keiko-secure-workspace-read.exe"),
       portableExecutable(3),
+    );
+    write(
+      join(payload, "runtime", "native", "keiko-runtime-supervisor.exe"),
+      portableExecutable(4),
     );
     const manifestPath = join(stage, "manifest", "portable-manifest.json");
     const archivePath = join(stage, "Keiko-windows-x64.zip");

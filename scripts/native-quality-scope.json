@@ -36,6 +36,66 @@
       "language": "c",
       "platforms": ["windows"],
       "gates": ["compiler-warnings-as-errors", "native-static-analysis", "job-object-behavior"]
+    },
+    {
+      "path": "native/runtime-attestation/windows/keiko_runtime_attestation.c",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "attestation-carrier-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_monitor_protocol.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "endpoint-security-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_supervisor.c",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "endpoint-security-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/qualification_fixture.c",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "endpoint-security-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/system-extension/keiko_runtime_monitor.m",
+      "language": "objective-c",
+      "platforms": ["macos"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "endpoint-security-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/system-extension/keiko_system_extension_manager.m",
+      "language": "objective-c",
+      "platforms": ["macos"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "system-extension-boundary"
+      ]
     }
   ]
 }

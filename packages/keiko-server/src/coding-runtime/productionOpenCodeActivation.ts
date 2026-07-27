@@ -20,6 +20,7 @@ import {
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
 import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
 import type { ResolvedPortableOpenCodeRuntime } from "./productionOpenCodeBackend.js";
+import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorkspaceTextRead.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
@@ -40,12 +41,7 @@ export interface ProductionOpenCodeActivationInput {
     OpenCodeGatewayReadinessRegistry,
     "waitForObservedRequest" | "clear"
   >;
-  /**
-   * Point-of-use verified secure read port for the packaged install. The packaged platform
-   * inspection (signature and immutable-tree proof) is a separately owned deliverable; until a
-   * deployment supplies this port, packaged activation fails closed. The macOS dev lane
-   * constructs its own digest-pinned port from the staged dev-lane binding (ADR-0140).
-   */
+  /** Explicit test/composition override; packaged production constructs its own verified port. */
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   /** Live active-task-workspace root resolution for the dev-lane secure-read port. */
   readonly resolveWorkspaceRoot?:
@@ -152,12 +148,20 @@ function resolveSecureRead(
   portable: ResolvedPortableOpenCodeRuntime,
 ): SecureWorkspaceTextReadPort | undefined {
   if (input.secureWorkspaceTextRead !== undefined) return input.secureWorkspaceTextRead;
-  if (!isDevLaneRuntime(portable) || input.resolveWorkspaceRoot === undefined) return undefined;
+  if (input.resolveWorkspaceRoot === undefined) return undefined;
   try {
     const safeCwd = join(input.runtimeStateDir, "coding-runtime", "secure-read");
     mkdirSync(safeCwd, { recursive: true, mode: 0o700 });
-    return createDevLaneSecureWorkspaceTextReadPort({
-      binding: portable.secureRead,
+    if (isDevLaneRuntime(portable)) {
+      return createDevLaneSecureWorkspaceTextReadPort({
+        binding: portable.secureRead,
+        resolveWorkspaceRoot: input.resolveWorkspaceRoot,
+        safeCwd,
+      });
+    }
+    if ("evidenceClass" in portable) return undefined;
+    return createPackagedSecureWorkspaceTextReadPort({
+      runtime: portable,
       resolveWorkspaceRoot: input.resolveWorkspaceRoot,
       safeCwd,
     });

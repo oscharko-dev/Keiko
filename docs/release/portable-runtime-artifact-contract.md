@@ -17,8 +17,8 @@ Governing decisions:
 
 Portable v1 is an archive-first delivery path for stable public releases. The promoted user journey
 is: download the platform ZIP, extract it, double-click `Keiko.exe` or `Keiko.app`, complete
-first-run setup into a user-owned Keiko-managed install location, and launch Keiko afterward from
-the same native app surface or OS search entry.
+first-run setup into Keiko's target-specific managed install location, and launch Keiko afterward
+from the same native app surface or OS search entry.
 
 Users must not need system Node.js, npm, Yarn, a package manager, build tools, or shell commands on
 the primary install/start path. Shell launchers may exist only for support and automated diagnostics.
@@ -180,7 +180,7 @@ Layout rules:
 
 ## Managed Install Layout
 
-First-run setup promotes the bootstrap payload into a user-owned managed install root before Keiko
+First-run setup promotes the bootstrap payload into a target-specific managed install root before Keiko
 enters the normal app/update lifecycle.
 
 Default managed roots:
@@ -188,12 +188,12 @@ Default managed roots:
 | Platform target | Managed root                      | Native registration owned by #1950                             |
 | --------------- | --------------------------------- | -------------------------------------------------------------- |
 | `windows-x64`   | `%LOCALAPPDATA%\\Programs\\Keiko` | User-local Start Menu shortcut pointing to managed `Keiko.exe` |
-| `macos-arm64`   | `~/Applications/Keiko.app`        | User-local app bundle registration for Spotlight/Finder launch |
-| `macos-x64`     | `~/Applications/Keiko.app`        | User-local app bundle registration for Spotlight/Finder launch |
+| `macos-arm64`   | `/Applications/Keiko.app`         | Canonical app bundle registration for Spotlight/Finder launch  |
+| `macos-x64`     | `/Applications/Keiko.app`         | Canonical app bundle registration for Spotlight/Finder launch  |
 
-Setup may offer a simple user-selected location, but the final realpath must classify as a dedicated
-Keiko-owned user-writable root. It must not be `.keiko`, a customer repository, a temporary
-directory, a shared or network root, a system-managed location, or an admin-required location.
+The final realpath must classify as a dedicated Keiko-owned root. It must not be `.keiko`, a
+customer repository, a temporary directory, a shared or network root, or a system-managed location
+other than the exact `/Applications/Keiko.app` exception accepted by ADR-0163.
 
 The bootstrap extraction directory is not self-update eligible. Only an attested managed root is
 portable-update eligible. Staging roots must be siblings of the active managed root on the same
@@ -315,6 +315,84 @@ required contract vocabulary.
     "nodeDistribution": "official-nodejs-dist",
     "nodeArchiveSha256": "64-hex-node-runtime-digest"
   },
+  "runtimeActivation": {
+    "schemaVersion": 1,
+    "path": ".portable/runtime-activation.json",
+    "sha256": "64-hex-runtime-activation-digest",
+    "trustAnchor": "authenticode-attestor"
+  },
+  "runtimeAttestation": {
+    "schemaVersion": 1,
+    "carrierKind": "authenticode-executable",
+    "executablePath": "runtime/native/keiko-runtime-attestation.exe",
+    "shippedSha256": "64-hex-runtime-attestation-digest",
+    "sizeBytes": 12288,
+    "signing": {
+      "signatureKind": "authenticode",
+      "verificationStatus": "verified-production",
+      "signatureVerified": true,
+      "notarizationRequired": false,
+      "notarizationVerified": false
+    }
+  },
+  "nativeHelpers": [
+    {
+      "name": "keiko-secure-workspace-read",
+      "kind": "secure-workspace-text-read",
+      "platformTarget": "windows-x64",
+      "architecture": "x64",
+      "executablePath": "runtime/native/keiko-secure-workspace-read.exe",
+      "protocol": {
+        "schemaVersion": 1,
+        "requestMagic": "KSR1",
+        "responseMagic": "KSS1"
+      },
+      "source": {
+        "commitSha": "40-hex-reviewed-release-commit",
+        "path": "native/secure-workspace-read",
+        "treeSha256": "64-hex-secure-read-source-tree-digest"
+      },
+      "unsignedSha256": "64-hex-secure-read-unsigned-digest",
+      "shippedSha256": "64-hex-secure-read-shipped-digest",
+      "sizeBytes": 4096,
+      "sbomBomRef": "pkg:generic/keiko-secure-workspace-read@0.2.11?platform=windows-x64",
+      "signing": {
+        "signatureKind": "authenticode",
+        "verificationStatus": "verified-production",
+        "signatureVerified": true,
+        "notarizationRequired": false,
+        "notarizationVerified": false
+      }
+    },
+    {
+      "name": "keiko-runtime-supervisor",
+      "kind": "runtime-process-supervisor",
+      "platformTarget": "windows-x64",
+      "architecture": "x64",
+      "executablePath": "runtime/native/keiko-runtime-supervisor.exe",
+      "protocol": {
+        "schemaVersion": 1,
+        "requestMagic": "KRP1",
+        "responseMagic": "KRS1"
+      },
+      "source": {
+        "commitSha": "40-hex-reviewed-release-commit",
+        "path": "native/runtime-supervisor/windows",
+        "treeSha256": "64-hex-supervisor-source-tree-digest"
+      },
+      "unsignedSha256": "64-hex-supervisor-unsigned-digest",
+      "shippedSha256": "64-hex-supervisor-shipped-digest",
+      "sizeBytes": 8192,
+      "sbomBomRef": "pkg:generic/keiko-runtime-supervisor@0.2.11?platform=windows-x64",
+      "signing": {
+        "signatureKind": "authenticode",
+        "verificationStatus": "verified-production",
+        "signatureVerified": true,
+        "notarizationRequired": false,
+        "notarizationVerified": false
+      }
+    }
+  ],
   "sidecarRuntimes": [
     {
       "name": "opencode-compatible",
@@ -470,6 +548,78 @@ required contract vocabulary.
       "verificationChecks": {
         "publisherChainVerified": true,
         "timestampVerified": true
+      },
+      "nativeHelpers": [
+        {
+          "name": "keiko-secure-workspace-read",
+          "kind": "secure-workspace-text-read",
+          "platformTarget": "windows-x64",
+          "architecture": "x64",
+          "executablePath": "runtime/native/keiko-secure-workspace-read.exe",
+          "protocol": {
+            "schemaVersion": 1,
+            "requestMagic": "KSR1",
+            "responseMagic": "KSS1"
+          },
+          "source": {
+            "commitSha": "40-hex-reviewed-release-commit",
+            "path": "native/secure-workspace-read",
+            "treeSha256": "64-hex-secure-read-source-tree-digest"
+          },
+          "unsignedSha256": "64-hex-secure-read-unsigned-digest",
+          "shippedSha256": "64-hex-secure-read-shipped-digest",
+          "sizeBytes": 4096,
+          "sbomBomRef": "pkg:generic/keiko-secure-workspace-read@0.2.11?platform=windows-x64",
+          "signing": {
+            "signatureKind": "authenticode",
+            "verificationStatus": "verified-production",
+            "signatureVerified": true,
+            "notarizationRequired": false,
+            "notarizationVerified": false
+          }
+        },
+        {
+          "name": "keiko-runtime-supervisor",
+          "kind": "runtime-process-supervisor",
+          "platformTarget": "windows-x64",
+          "architecture": "x64",
+          "executablePath": "runtime/native/keiko-runtime-supervisor.exe",
+          "protocol": {
+            "schemaVersion": 1,
+            "requestMagic": "KRP1",
+            "responseMagic": "KRS1"
+          },
+          "source": {
+            "commitSha": "40-hex-reviewed-release-commit",
+            "path": "native/runtime-supervisor/windows",
+            "treeSha256": "64-hex-supervisor-source-tree-digest"
+          },
+          "unsignedSha256": "64-hex-supervisor-unsigned-digest",
+          "shippedSha256": "64-hex-supervisor-shipped-digest",
+          "sizeBytes": 8192,
+          "sbomBomRef": "pkg:generic/keiko-runtime-supervisor@0.2.11?platform=windows-x64",
+          "signing": {
+            "signatureKind": "authenticode",
+            "verificationStatus": "verified-production",
+            "signatureVerified": true,
+            "notarizationRequired": false,
+            "notarizationVerified": false
+          }
+        }
+      ],
+      "runtimeAttestation": {
+        "schemaVersion": 1,
+        "carrierKind": "authenticode-executable",
+        "executablePath": "runtime/native/keiko-runtime-attestation.exe",
+        "shippedSha256": "64-hex-runtime-attestation-digest",
+        "sizeBytes": 12288,
+        "signing": {
+          "signatureKind": "authenticode",
+          "verificationStatus": "verified-production",
+          "signatureVerified": true,
+          "notarizationRequired": false,
+          "notarizationVerified": false
+        }
       },
       "sidecarRuntimes": [
         {
@@ -661,7 +811,7 @@ This contract intentionally leaves implementation to the remaining portable runt
 
 - #1948 implements portable staging, Node acquisition, archive assembly, and manifest validation.
 - #1949 implements thin native launchers and first-run managed setup.
-- #1950 implements user-local app registration and reversible content-free install records.
+- #1950 implements native app registration and reversible content-free install records.
 - #1951 implements signing, notarization, checksum, provenance, and artifact verification gates.
 - #1983 implements optional product-owned coding sidecar payload staging and manifest validation.
 - #1952 attaches all three portable assets and reviewed evidence to GitHub Releases.

@@ -236,6 +236,10 @@ function finalizerSuccess(options) {
   writeResult(input, result);
 }
 
+function credentialsCleared() {
+  assertSigningCredentialsCleared(process.env);
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
   if (command === "credentials-success") credentialsSuccess(options);
@@ -244,6 +248,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (command === "cleanup-success") cleanupSuccess(options);
   else if (command === "verification-input") writeVerificationInput(options);
   else if (command === "finalizer-success") finalizerSuccess(options);
+  else if (command === "credentials-cleared") credentialsCleared();
   else fail("unsupported command");
 }
 

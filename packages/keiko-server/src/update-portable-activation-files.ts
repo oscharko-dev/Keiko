@@ -303,7 +303,7 @@ function defaultManagedRoot(target: UpdatePortableTarget, env: EnvSource, home: 
   if (target === "windows-x64") {
     return join(env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "Programs", "Keiko");
   }
-  return join(home, "Applications", "Keiko.app");
+  return "/Applications/Keiko.app";
 }
 
 function managedRootLocator(

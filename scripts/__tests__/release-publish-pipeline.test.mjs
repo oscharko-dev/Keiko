@@ -107,7 +107,10 @@ function portableManifest(target, archivePath, assetId) {
   const archiveBytes = readFileSync(archivePath);
   const archiveSha256 = digestFor(archiveBytes);
   const archiveSize = statSync(archivePath).size;
-  const nativeHelpers = [portableNativeHelper(target)];
+  const nativeHelpers = [
+    portableNativeHelper(target, "keiko-secure-workspace-read"),
+    portableNativeHelper(target, "keiko-runtime-supervisor"),
+  ];
   const provenanceText = `${JSON.stringify({
     artifact: target.assetName,
     buildWorkflowAttempt: 1,
@@ -148,6 +151,11 @@ function portableManifestObject(
 ) {
   const releaseTag = `v${RELEASE_VERSION}`;
   const security = portableSecurity(target, notarizationRequired, verificationChecks);
+  const runtimeActivation = portableRuntimeActivation(target);
+  const runtimeAttestation =
+    target.nodePlatform === "win32" ? portableRuntimeAttestation(target) : undefined;
+  const runtimeQualification =
+    target.nodePlatform === "darwin" ? portableRuntimeQualification() : undefined;
   return {
     schemaVersion: 1,
     product: portableProduct(),
@@ -155,6 +163,9 @@ function portableManifestObject(
     artifact: portableArtifact(target, assetId, archiveSize, archiveSha256),
     provenance: portableProvenance(provenanceSha256),
     runtime: portableRuntime(target),
+    runtimeActivation,
+    ...(runtimeAttestation === undefined ? {} : { runtimeAttestation }),
+    ...(runtimeQualification === undefined ? {} : { runtimeQualification }),
     nativeHelpers,
     packageSurface: portablePackageSurface(),
     entrypoints: {
@@ -173,43 +184,53 @@ function portableManifestObject(
       provenanceSha256,
       security,
       nativeHelpers,
+      runtimeActivation,
+      runtimeAttestation,
+      runtimeQualification,
     ),
     updateEligibility: portableUpdateEligibility(),
   };
 }
 
-function nativeHelperBytes(target) {
+function nativeHelperBytes(target, name) {
   return Buffer.from(
     target.nodePlatform === "win32"
-      ? "release-pipeline-signed-secure-read-pe-fixture\n"
-      : "#!/bin/sh\n# release-pipeline-signed-secure-read-fixture\n",
+      ? `release-pipeline-signed-${name}-pe-fixture\n`
+      : `#!/bin/sh\n# release-pipeline-signed-${name}-fixture\n`,
   );
 }
 
-function nativeHelperExecutablePath(target) {
-  return `runtime/native/keiko-secure-workspace-read${target.nodePlatform === "win32" ? ".exe" : ""}`;
+function nativeHelperExecutablePath(target, name) {
+  return `runtime/native/${name}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
-function portableNativeHelper(target) {
-  const bytes = nativeHelperBytes(target);
+function portableNativeHelper(target, name) {
+  const bytes = nativeHelperBytes(target, name);
   const digest = digestFor(bytes);
   const notarizationRequired = target.nodePlatform === "darwin";
+  const supervisor = name === "keiko-runtime-supervisor";
   return {
-    name: "keiko-secure-workspace-read",
-    kind: "secure-workspace-text-read",
+    name,
+    kind: supervisor ? "runtime-process-supervisor" : "secure-workspace-text-read",
     platformTarget: target.platformTarget,
     architecture: target.nodeArchitecture,
-    executablePath: nativeHelperExecutablePath(target),
-    protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+    executablePath: nativeHelperExecutablePath(target, name),
+    protocol: {
+      schemaVersion: 1,
+      requestMagic: supervisor ? "KRP1" : "KSR1",
+      responseMagic: supervisor ? "KRS1" : "KSS1",
+    },
     source: {
       commitSha: HEAD_SHA,
-      path: "native/secure-workspace-read",
-      treeSha256: digestFor("native/secure-workspace-read\n"),
+      path: supervisor
+        ? `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`
+        : "native/secure-workspace-read",
+      treeSha256: digestFor(`${name}\n`),
     },
     unsignedSha256: digest,
     shippedSha256: digest,
     sizeBytes: bytes.length,
-    sbomBomRef: `pkg:generic/keiko-secure-workspace-read@${RELEASE_VERSION}?platform=${target.platformTarget}`,
+    sbomBomRef: `pkg:generic/${name}@${RELEASE_VERSION}?platform=${target.platformTarget}`,
     signing: {
       signatureKind: target.signatureKind,
       verificationStatus: "verified-production",
@@ -217,6 +238,43 @@ function portableNativeHelper(target) {
       notarizationRequired,
       notarizationVerified: notarizationRequired,
     },
+  };
+}
+
+function portableRuntimeActivation(target) {
+  return {
+    schemaVersion: 1,
+    path: ".portable/runtime-activation.json",
+    sha256: "d".repeat(64),
+    trustAnchor:
+      target.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal",
+  };
+}
+
+function portableRuntimeAttestation(target) {
+  const bytes = Buffer.from("release-pipeline-runtime-attestation-fixture\n");
+  return {
+    schemaVersion: 1,
+    carrierKind: "authenticode-executable",
+    executablePath: "runtime/native/keiko-runtime-attestation.exe",
+    shippedSha256: digestFor(bytes),
+    sizeBytes: bytes.length,
+    signing: {
+      signatureKind: target.signatureKind,
+      verificationStatus: "verified-production",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+    },
+  };
+}
+
+function portableRuntimeQualification() {
+  return {
+    schemaVersion: 1,
+    path: ".portable/runtime-qualification.json",
+    sha256: "e".repeat(64),
+    backend: "macos-endpoint-security",
   };
 }
 
@@ -315,6 +373,16 @@ function portableSecurity(target, notarizationRequired, verificationChecks) {
   };
 }
 
+function portableSidecarSigning(target) {
+  const signing = portableSecurity(
+    target,
+    target.nodePlatform === "darwin",
+    targetVerificationChecks(target),
+  );
+  delete signing.verificationSummaryPath;
+  return signing;
+}
+
 function portableEvidence() {
   return {
     checksumsPath: "evidence/SHA256SUMS.txt",
@@ -331,6 +399,9 @@ function portableReleaseImpact(
   provenanceSha256,
   security,
   nativeHelpers,
+  runtimeActivation,
+  runtimeAttestation,
+  runtimeQualification,
 ) {
   return {
     catalogPath: "app/release-impact.catalog.json",
@@ -345,6 +416,9 @@ function portableReleaseImpact(
       provenanceSha256,
       security,
       nativeHelpers,
+      runtimeActivation,
+      runtimeAttestation,
+      runtimeQualification,
     ),
   };
 }
@@ -357,6 +431,9 @@ function portableReviewedBinding(
   provenanceSha256,
   security,
   nativeHelpers,
+  runtimeActivation,
+  runtimeAttestation,
+  runtimeQualification,
 ) {
   return {
     releaseId: 0,
@@ -382,6 +459,9 @@ function portableReviewedBinding(
     notarizationVerified: security.notarizationVerified,
     verificationChecks: security.verificationChecks,
     nativeHelpers,
+    runtimeActivation,
+    ...(runtimeAttestation === undefined ? {} : { runtimeAttestation }),
+    ...(runtimeQualification === undefined ? {} : { runtimeQualification }),
   };
 }
 
@@ -433,7 +513,7 @@ function ghStubBody() {
     "const sub = argv[0];",
     'if (sub === "api") {',
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
-    "    process.stdout.write(JSON.stringify({ id: 987654321, assets: state().uploadedAssets || [] }));",
+    "    writeFileSync(1, JSON.stringify({ id: 987654321, assets: state().uploadedAssets || [] }));",
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
@@ -529,9 +609,12 @@ function writePortableAssetsFixture(root, options = {}) {
     writeFileSync(archivePath, `portable archive for ${target.platformTarget}\n`);
     const { manifest, provenanceText } = portableManifest(target, archivePath, 0);
     writeNativeHelperFixture(targetRoot, target);
-    if (options.sidecarEvidenceKind !== undefined && index === 0) {
-      addPortableSidecarFixture(targetRoot, manifest, target, options.sidecarEvidenceKind);
-    }
+    addPortableSidecarFixture(
+      targetRoot,
+      manifest,
+      target,
+      index === 0 ? (options.sidecarEvidenceKind ?? "safe") : "safe",
+    );
     writePortableEvidence(targetRoot, manifest, provenanceText);
     options.mutateManifest?.(manifest, target, index, targetRoot);
     options.mutateEvidence?.(targetRoot, manifest, target, index);
@@ -555,40 +638,91 @@ function writeNativeHelperFixture(targetRoot, target) {
     target.nodePlatform === "darwin"
       ? join(targetRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
       : join(targetRoot, "payload", "Keiko");
-  const path = join(resourceRoot, nativeHelperExecutablePath(target));
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, nativeHelperBytes(target));
+  for (const name of ["keiko-secure-workspace-read", "keiko-runtime-supervisor"]) {
+    const path = join(resourceRoot, nativeHelperExecutablePath(target, name));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, nativeHelperBytes(target, name));
+  }
 }
 
 function addPortableSidecarFixture(targetRoot, manifest, target, unsafeKind) {
   const name = "opencode-compatible";
   const payloadRootPath = `runtime/sidecars/${name}`;
-  const resourceRoot = join(targetRoot, "payload", "Keiko");
+  const resourceRoot =
+    target.nodePlatform === "darwin"
+      ? join(targetRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
+      : join(targetRoot, "payload", "Keiko");
   const sidecarRoot = join(resourceRoot, payloadRootPath);
   mkdirSync(join(sidecarRoot, "evidence"), { recursive: true });
-  const executablePath = `${payloadRootPath}/opencode.cmd`;
-  writeFileSync(join(resourceRoot, executablePath), "sidecar executable\n");
+  const executablePath = `${payloadRootPath}/bin/opencode${target.nodePlatform === "win32" ? ".exe" : ""}`;
+  const executableBytes = Buffer.from(`sidecar executable for ${target.platformTarget}\n`);
+  mkdirSync(dirname(join(resourceRoot, executablePath)), { recursive: true });
+  writeFileSync(join(resourceRoot, executablePath), executableBytes);
   const licensePath = join(sidecarRoot, "LICENSE.txt");
   const sbomPath = join(sidecarRoot, "evidence", "sbom.cdx.json");
-  writeFileSync(
-    licensePath,
+  const licenseBytes = Buffer.from(
     unsafeKind === "license" ? "token=forbidden-secret\n" : "Sidecar license.\n",
   );
-  writeFileSync(
-    sbomPath,
+  const sbomBytes = Buffer.from(
     unsafeKind === "sbom"
       ? '{"bomFormat":"CycloneDX","rawOutput":"secret"}\n'
       : '{"bomFormat":"CycloneDX"}\n',
   );
+  writeFileSync(licensePath, licenseBytes);
+  writeFileSync(sbomPath, sbomBytes);
+  const executableSha256 = digestFor(executableBytes);
+  const executableRelative = executablePath.slice(payloadRootPath.length + 1);
+  const executableTreeSha256 = digestFor(`${executableRelative}\0${executableSha256}\0`);
   const sidecar = {
     name,
     kind: "coding-runtime",
-    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    approvalSchemaVersion: 2,
+    upstream: {
+      owner: "anomalyco",
+      repository: "opencode",
+      name: "opencode",
+      version: "1.17.17",
+      tag: "v1.17.17",
+      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+    },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "1",
-      protocolVersion: "coding-sidecar-v1",
+      transport: "http-sse",
     },
+    protocolSchema: {
+      path: "packages/sdk/openapi.json",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
+      sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+      hashAlgorithm: "sha256",
+      hashEncoding: "lowercase-hex",
+      digestInput: "upstream-raw-bytes",
+      transport: "http-sse",
+    },
+    releaseApproval: {
+      redistribution: {
+        status: "approved",
+        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+      },
+      subscriptionAuth: {
+        status: "not-applicable",
+        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+      },
+    },
+    license: {
+      spdxId: "MIT",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      sha256: digestFor(licenseBytes),
+    },
+    archive: {
+      platformTarget: target.platformTarget,
+      url: `https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-${target.platformTarget}.zip`,
+      sizeBytes: executableBytes.length,
+      sha256: "a".repeat(64),
+    },
+    executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    executableTreeSha256,
+    executableSha256,
     platformTarget: target.platformTarget,
     payloadRootPath,
     executablePath,
@@ -599,13 +733,18 @@ function addPortableSidecarFixture(targetRoot, manifest, target, unsafeKind) {
       statSync(sbomPath).size,
     licenseEvidence: {
       path: `${payloadRootPath}/LICENSE.txt`,
-      sha256: digestFor(readFileSync(licensePath)),
+      sha256: digestFor(licenseBytes),
     },
     sbomEvidence: {
       path: `${payloadRootPath}/evidence/sbom.cdx.json`,
-      sha256: digestFor(readFileSync(sbomPath)),
+      sha256: digestFor(sbomBytes),
     },
-    signing: portableSecurity(target, false, targetVerificationChecks(target)),
+    signing: {
+      ...portableSidecarSigning(target),
+      shippedExecutableSha256: executableSha256,
+      shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+      shippedExecutableTreeSha256: executableTreeSha256,
+    },
   };
   manifest.sidecarRuntimes = [sidecar];
   manifest.releaseImpact.reviewedBinding.sidecarRuntimes = JSON.parse(JSON.stringify([sidecar]));
@@ -1117,7 +1256,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
 
-      expect(lastRun.status).toBe(0);
+      expect(lastRun.status, lastRun.stderr).toBe(0);
       expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
       expect(lastRun.stdout).toContain("portable assets uploaded and verified");
       expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);

@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createNativeRuntimeProcessBackend,
   createNativeRuntimeRecoveryPort,
-  loadInstalledNativeRuntimeQualification,
   type NativeRuntimeHelperProcess,
   type NativeRuntimeHelperSpawn,
 } from "./nativeRuntimeProcessBackend.js";
@@ -224,42 +222,6 @@ describe("native runtime process backend", () => {
     await expect(recovery.reconcile("../unsafe", 50)).rejects.toThrow(
       "native-runtime-request-invalid",
     );
-  });
-
-  it("loads only an installed receipt matching current helper and activation bytes", () => {
-    const paths = fixture();
-    const installRoot = paths.workspace;
-    const helper = join(installRoot, "runtime", "native", "keiko-runtime-supervisor.exe");
-    const receiptPath = join(installRoot, ".portable", "runtime-supervisor-qualification.json");
-    mkdirSync(join(installRoot, "runtime", "native"), { recursive: true });
-    mkdirSync(join(installRoot, ".portable"), { recursive: true });
-    writeFileSync(helper, "signed helper");
-    const receipt = {
-      schemaVersion: 1,
-      suiteVersion: "runtime-tree-qualification-v1",
-      platformTarget: "windows-x64",
-      sourceCommitSha: "d".repeat(40),
-      artifactSha256: "e".repeat(64),
-      helperSha256: createHash("sha256").update("signed helper").digest("hex"),
-      sidecars: [],
-      backend: "windows-job-object",
-      result: "passed",
-    };
-    const options = {
-      installRoot,
-      sourceCommitSha: receipt.sourceCommitSha,
-      artifactSha256: receipt.artifactSha256,
-      sidecars: [],
-    };
-
-    expect(loadInstalledNativeRuntimeQualification(options)).toBeUndefined();
-    writeFileSync(receiptPath, JSON.stringify(receipt));
-    expect(loadInstalledNativeRuntimeQualification(options)).toMatchObject({
-      platform: "win32",
-      backend: "windows-job-object",
-    });
-    writeFileSync(helper, "tampered helper");
-    expect(loadInstalledNativeRuntimeQualification(options)).toBeUndefined();
   });
 });
 

@@ -5,23 +5,25 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { verifyPortableManifestSidecars } from "../update-portable-sidecar-verification.js";
+import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-sandbox";
+
+import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
-import { loadInstalledNativeRuntimeQualification } from "./nativeRuntimeProcessBackend.js";
 import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
 
 const TARGET = "windows-x64";
 const COMMIT = "c".repeat(40);
-const ARTIFACT = "a".repeat(64);
 const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
+const SUPERVISOR = "qualified native supervisor";
+const SECURE_READ = "qualified secure read";
 
 describe("production portable OpenCode discovery", () => {
-  it("discovers only a disk-verified sidecar with an exact native qualification receipt", () => {
+  it("discovers only a disk-verified sidecar with a signed exact-byte attestation", () => {
     const root = portableInstall();
-    const manifest = JSON.parse(
-      readFileSync(join(root, ".portable", "update-portable-manifest.json"), "utf8"),
+    const activation = JSON.parse(
+      readFileSync(join(root, ".portable", "runtime-activation.json"), "utf8"),
     ) as Record<string, unknown>;
-    const sidecar = verifyPortableManifestSidecars(manifest, TARGET).sidecars[0];
+    const sidecar = verifyPortableAttestedSidecars(activation, TARGET).sidecars[0];
     expect(sidecar).toBeDefined();
     if (sidecar === undefined) return;
     expect(inspectStagedSidecarPayload(root, sidecar)).toEqual({
@@ -29,38 +31,38 @@ describe("production portable OpenCode discovery", () => {
       archiveDigestVerified: true,
       executableTreeDigestVerified: true,
     });
-    expect(
-      loadInstalledNativeRuntimeQualification({
-        installRoot: root,
-        sourceCommitSha: COMMIT,
-        artifactSha256: ARTIFACT,
-        sidecars: [{ name: sidecar.summary.name, sha256: sidecar.summary.payloadSha256 }],
-      }),
-    ).toBeDefined();
     expect(discover(root)).toMatchObject({
       installRoot: realpathSync(root),
       target: TARGET,
       sidecar: { summary: { name: "opencode-compatible" } },
+      qualification: { backend: "windows-job-object" },
     });
   });
 
-  it.each(["stale-receipt", "sidecar-drift", "unsupported-host"] as const)(
+  it.each(["stale-attestation", "sidecar-drift", "helper-drift", "unsupported-host"] as const)(
     "fails closed for %s",
     (scenario) => {
       const root = portableInstall();
-      if (scenario === "stale-receipt") mutateReceipt(root);
       if (scenario === "sidecar-drift") {
         writeFileSync(join(root, SIDECAR_ROOT, "opencode.cmd"), "drifted", "utf8");
+      }
+      if (scenario === "helper-drift") {
+        writeFileSync(
+          join(root, "runtime", "native", "keiko-runtime-supervisor.exe"),
+          "drifted",
+          "utf8",
+        );
       }
       const result =
         scenario === "unsupported-host"
           ? discoverQualifiedPortableOpenCode({
               env: {},
               installRoot: root,
-              platform: "darwin",
-              arch: "arm64",
+              platform: "linux",
+              arch: "x64",
+              attestation: attestation(root),
             })
-          : discover(root);
+          : discover(root, scenario === "stale-attestation");
       expect(result).toBeUndefined();
     },
   );
@@ -76,29 +78,58 @@ describe("production portable OpenCode discovery", () => {
   });
 });
 
-function discover(root: string): ReturnType<typeof discoverQualifiedPortableOpenCode> {
+function discover(
+  root: string,
+  stale = false,
+): ReturnType<typeof discoverQualifiedPortableOpenCode> {
   return discoverQualifiedPortableOpenCode({
     env: {},
     installRoot: root,
     platform: "win32",
     arch: "x64",
+    attestation: attestation(root, stale),
   });
+}
+
+function attestation(
+  root: string,
+  stale = false,
+): NonNullable<Parameters<typeof discoverQualifiedPortableOpenCode>[0]["attestation"]> {
+  return {
+    readReceipt: (): RuntimeQualificationReceipt => {
+      const activationPath = join(root, ".portable", "runtime-activation.json");
+      const activation = JSON.parse(readFileSync(activationPath, "utf8")) as {
+        sidecarRuntimes: readonly { name: string; payloadSha256: string }[];
+      };
+      return {
+        schemaVersion: 1,
+        suiteVersion: "runtime-tree-qualification-v1",
+        platformTarget: TARGET,
+        sourceCommitSha: stale ? "e".repeat(40) : COMMIT,
+        activationManifestSha256: sha256(readFileSync(activationPath)),
+        supervisorSha256: sha256(SUPERVISOR),
+        secureReadSha256: sha256(SECURE_READ),
+        sidecars: activation.sidecarRuntimes.map((sidecar) => ({
+          name: sidecar.name,
+          sha256: sidecar.payloadSha256,
+        })),
+        backend: "windows-job-object",
+        result: "passed",
+      };
+    },
+  };
 }
 
 function portableInstall(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-"));
-  const helper = "qualified native supervisor";
   const sidecar = sidecarFixture();
   mkdirSync(join(root, ".portable"), { recursive: true });
   mkdirSync(join(root, "runtime", "native"), { recursive: true });
-  writeFileSync(join(root, "runtime", "native", "keiko-runtime-supervisor.exe"), helper);
+  writeFileSync(join(root, "runtime", "native", "keiko-runtime-supervisor.exe"), SUPERVISOR);
+  writeFileSync(join(root, "runtime", "native", "keiko-secure-workspace-read.exe"), SECURE_READ);
   writeFileSync(
     join(root, ".portable", "setup-manifest.json"),
     JSON.stringify({ platformTarget: TARGET, stable: true }),
-  );
-  writeFileSync(
-    join(root, ".portable", "update-portable-manifest.json"),
-    JSON.stringify(portableManifest(sidecar.runtime)),
   );
   for (const [path, bytes] of Object.entries(sidecar.files)) {
     const destination = join(root, SIDECAR_ROOT, path);
@@ -106,18 +137,8 @@ function portableInstall(): string {
     writeFileSync(destination, bytes);
   }
   writeFileSync(
-    join(root, ".portable", "runtime-supervisor-qualification.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      suiteVersion: "runtime-tree-qualification-v1",
-      platformTarget: TARGET,
-      sourceCommitSha: COMMIT,
-      artifactSha256: ARTIFACT,
-      helperSha256: sha256(helper),
-      sidecars: [{ name: "opencode-compatible", sha256: sidecar.payloadSha256 }],
-      backend: "windows-job-object",
-      result: "passed",
-    }),
+    join(root, ".portable", "runtime-activation.json"),
+    JSON.stringify(runtimeActivation(sidecar.runtime)),
   );
   return root;
 }
@@ -133,8 +154,6 @@ function sidecarFixture(): {
     "opencode.cmd": "@echo off\r\n",
   } as const;
   const payload = createHash("sha256");
-  // The staged-payload inspector orders files with localeCompare; the fixture digest must use the
-  // same comparator or ICU hosts order "evidence/…" before "LICENSE.txt" and the digest drifts.
   for (const [path, bytes] of Object.entries(files).sort(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -204,22 +223,32 @@ function sidecarFixture(): {
   };
 }
 
-function portableManifest(runtime: Record<string, unknown>): Record<string, unknown> {
+function runtimeActivation(runtime: Record<string, unknown>): Record<string, unknown> {
   return {
-    release: { commitSha: COMMIT },
-    artifact: { platformTarget: TARGET, sha256: ARTIFACT },
-    releaseImpact: { reviewedBinding: { sidecarRuntimes: [runtime] } },
+    schemaVersion: 1,
+    suiteVersion: "runtime-tree-qualification-v1",
+    product: { packageName: "@oscharko-dev/keiko", packageVersion: "0.2.15" },
+    sourceCommitSha: COMMIT,
+    platformTarget: TARGET,
+    runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    nativeHelpers: [
+      nativeHelper("keiko-secure-workspace-read", SECURE_READ),
+      nativeHelper("keiko-runtime-supervisor", SUPERVISOR),
+    ],
     sidecarRuntimes: [runtime],
   };
 }
 
-function mutateReceipt(root: string): void {
-  const path = join(root, ".portable", "runtime-supervisor-qualification.json");
-  const receipt = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-  receipt.sourceCommitSha = "e".repeat(40);
-  writeFileSync(path, JSON.stringify(receipt));
+function nativeHelper(name: string, bytes: string): Record<string, unknown> {
+  return {
+    name,
+    platformTarget: TARGET,
+    executablePath: `runtime/native/${name}.exe`,
+    shippedSha256: sha256(bytes),
+    sizeBytes: Buffer.byteLength(bytes),
+  };
 }
 
-function sha256(value: string): string {
+function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }

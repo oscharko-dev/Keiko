@@ -34,6 +34,7 @@ import {
   verifySha256File,
 } from "./portable-runtime.mjs";
 import { writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
+import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -61,6 +62,8 @@ const WINDOWS_LAUNCHER_RESOURCE_SOURCE = join(
 );
 const SECURE_READ_SOURCE_ROOT = join(repoRoot, "native", "secure-workspace-read");
 const SECURE_READ_NAME = "keiko-secure-workspace-read";
+const RUNTIME_SUPERVISOR_NAME = "keiko-runtime-supervisor";
+const MACOS_SYSTEM_EXTENSION_ID = "com.oscharko.keiko.runtime-monitor.systemextension";
 const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "package.json",
   "dist/index.js",
@@ -1334,7 +1337,7 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
             { name: "keiko:source-commit", value: helper.source.commitSha },
             { name: "keiko:source-tree-sha256", value: helper.source.treeSha256 },
             { name: "keiko:unsigned-sha256", value: helper.unsignedSha256 },
-            { name: "keiko:build-script", value: "scripts/build-secure-workspace-read.mjs" },
+            { name: "keiko:build-script", value: nativeHelperBuildScript(helper.name) },
             { name: "keiko:executable-path", value: helper.executablePath },
             { name: "keiko:protocol-request-magic", value: helper.protocol.requestMagic },
             { name: "keiko:protocol-response-magic", value: helper.protocol.responseMagic },
@@ -1356,6 +1359,12 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
     JSON.stringify(portableVerificationSummaryForManifest(manifest), null, 2) + "\n",
   );
   writeFileSync(join(evidenceRoot, "provenance.intoto.jsonl"), provenanceStatement);
+}
+
+function nativeHelperBuildScript(name) {
+  return name === SECURE_READ_NAME
+    ? "scripts/build-secure-workspace-read.mjs"
+    : "scripts/build-runtime-supervisor.mjs";
 }
 
 function writeManifest(stageRoot, manifest) {
@@ -1438,37 +1447,131 @@ function stageSecureReadHelper(target, resourceRoot, options, hooks) {
   }
   chmodLauncher(destination);
   const unsignedSha256 = createHash("sha256").update(readFileSync(destination)).digest("hex");
-  return [
-    {
-      name: SECURE_READ_NAME,
-      kind: "secure-workspace-text-read",
-      platformTarget: target.platformTarget,
-      architecture: target.nodeArchitecture,
-      executablePath,
-      protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
-      source: {
-        commitSha: options.commitSha,
-        path: "native/secure-workspace-read",
-        treeSha256: hashDirectoryTree(SECURE_READ_SOURCE_ROOT),
-      },
-      unsignedSha256,
-      shippedSha256: unsignedSha256,
-      sizeBytes: entry.size,
-      sbomBomRef: `pkg:generic/${SECURE_READ_NAME}@${rootPackage.version}?platform=${target.platformTarget}`,
-      signing: {
-        signatureKind: target.signatureKind,
-        verificationStatus: "unverified-staging",
-        signatureVerified: false,
-        notarizationRequired: target.nodePlatform === "darwin",
-        notarizationVerified: false,
-      },
-    },
-  ];
+  return nativeHelperMetadata({
+    executablePath,
+    kind: "secure-workspace-text-read",
+    name: SECURE_READ_NAME,
+    options,
+    protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+    sourcePath: "native/secure-workspace-read",
+    sourceRoot: SECURE_READ_SOURCE_ROOT,
+    target,
+    unsignedSha256,
+    sizeBytes: entry.size,
+  });
 }
 
 function buildSecureReadHelper(target, destination) {
   run(process.execPath, [
     join(repoRoot, "scripts", "build-secure-workspace-read.mjs"),
+    target.platformTarget,
+    destination,
+  ]);
+}
+
+function runtimeSupervisorSource(target) {
+  const platform = target.nodePlatform === "win32" ? "windows" : "macos";
+  return {
+    path: `native/runtime-supervisor/${platform}`,
+    root: join(repoRoot, "native", "runtime-supervisor", platform),
+  };
+}
+
+function runtimeSupervisorExecutablePath(target) {
+  return `runtime/native/${RUNTIME_SUPERVISOR_NAME}${target.nodePlatform === "win32" ? ".exe" : ""}`;
+}
+
+function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
+  const executablePath = runtimeSupervisorExecutablePath(target);
+  const destination = join(resourceRoot, ...executablePath.split("/"));
+  mkdirSync(dirname(destination), { recursive: true });
+  (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
+  const entry = existsSync(destination) ? lstatSync(destination) : undefined;
+  if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("runtime supervisor build did not produce the fixed executable");
+  }
+  chmodLauncher(destination);
+  if (target.nodePlatform === "darwin") validateMacosRuntimeSupervisorSurface(destination);
+  const unsignedSha256 = createHash("sha256").update(readFileSync(destination)).digest("hex");
+  const source = runtimeSupervisorSource(target);
+  return nativeHelperMetadata({
+    executablePath,
+    kind: "runtime-process-supervisor",
+    name: RUNTIME_SUPERVISOR_NAME,
+    options,
+    protocol: { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
+    sourcePath: source.path,
+    sourceRoot: source.root,
+    target,
+    unsignedSha256,
+    sizeBytes: entry.size,
+  });
+}
+
+function validateMacosRuntimeSupervisorSurface(supervisor) {
+  const appRoot = resolve(dirname(supervisor), "../../../..");
+  const required = [
+    join(appRoot, "Contents", "MacOS", "KeikoSystemExtensionManager"),
+    join(
+      appRoot,
+      "Contents",
+      "Library",
+      "SystemExtensions",
+      MACOS_SYSTEM_EXTENSION_ID,
+      "Contents",
+      "MacOS",
+      "KeikoRuntimeMonitor",
+    ),
+    join(
+      appRoot,
+      "Contents",
+      "Library",
+      "SystemExtensions",
+      MACOS_SYSTEM_EXTENSION_ID,
+      "Contents",
+      "Info.plist",
+    ),
+  ];
+  for (const path of required) {
+    const entry = existsSync(path) ? lstatSync(path) : undefined;
+    if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+      fail("macOS Endpoint Security runtime surface is incomplete");
+    }
+  }
+  chmodLauncher(required[0]);
+  chmodLauncher(required[1]);
+}
+
+function nativeHelperMetadata(input) {
+  return {
+    name: input.name,
+    kind: input.kind,
+    platformTarget: input.target.platformTarget,
+    architecture: input.target.nodeArchitecture,
+    executablePath: input.executablePath,
+    protocol: input.protocol,
+    source: {
+      commitSha: input.options.commitSha,
+      path: input.sourcePath,
+      treeSha256: hashDirectoryTree(input.sourceRoot),
+    },
+    unsignedSha256: input.unsignedSha256,
+    shippedSha256: input.unsignedSha256,
+    sizeBytes: input.sizeBytes,
+    sbomBomRef: `pkg:generic/${input.name}@${rootPackage.version}?platform=${input.target.platformTarget}`,
+    signing: {
+      signatureKind: input.target.signatureKind,
+      verificationStatus: "unverified-staging",
+      signatureVerified: false,
+      notarizationRequired: input.target.nodePlatform === "darwin",
+      notarizationVerified: false,
+    },
+  };
+}
+
+function buildRuntimeSupervisor(target, destination) {
+  run(process.execPath, [
+    join(repoRoot, "scripts", "build-runtime-supervisor.mjs"),
     target.platformTarget,
     destination,
   ]);
@@ -1642,10 +1745,18 @@ function macInfoPlist(target) {
     `  <string>dev.oscharko.keiko.${target.platformTarget}</string>`,
     "  <key>CFBundleIconFile</key>",
     `  <string>${MAC_APP_ICON_FILE}</string>`,
+    "  <key>CFBundleInfoDictionaryVersion</key>",
+    "  <string>6.0</string>",
     "  <key>CFBundleName</key>",
     "  <string>Keiko</string>",
     "  <key>CFBundlePackageType</key>",
     "  <string>APPL</string>",
+    "  <key>CFBundleShortVersionString</key>",
+    `  <string>${rootPackage.version}</string>`,
+    "  <key>CFBundleVersion</key>",
+    `  <string>${rootPackage.version}</string>`,
+    "  <key>NSSystemExtensionUsageDescription</key>",
+    "  <string>Keiko uses its runtime monitor to contain Coding Workbench processes and stop their descendants safely.</string>",
     "</dict>",
     "</plist>",
     "",
@@ -1959,13 +2070,20 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
   const tarball = packRoot(dirname(paths.extractRoot));
   stagePackedPackage(tarball, paths.extractRoot, paths.resourceRoot);
   stageLauncher(target, paths.payloadRoot, paths.resourceRoot, options, hooks);
-  const nativeHelpers = stageSecureReadHelper(target, paths.resourceRoot, options, hooks);
+  const nativeHelpers = [
+    stageSecureReadHelper(target, paths.resourceRoot, options, hooks),
+    stageRuntimeSupervisor(target, paths.resourceRoot, options, hooks),
+  ];
   const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
-  const manifestInput = await manifestInputFor(options, target, paths, tarball, {
+  const staged = {
     nodeArchiveSha256,
     sidecarRuntimes,
     nativeHelpers,
-  });
+  };
+  const firstPass = await manifestInputFor(options, target, paths, tarball, staged);
+  writeRuntimeActivationManifest(paths.resourceRoot, firstPass.manifest);
+  const manifestInput = await manifestInputFor(options, target, paths, tarball, staged);
+  writeRuntimeActivationManifest(paths.resourceRoot, manifestInput.manifest);
   writeEvidence(paths.stageRoot, manifestInput.manifest, manifestInput.provenanceStatement);
   writeManifest(paths.stageRoot, manifestInput.manifest);
   validateGeneratedManifest(manifestInput.manifest);

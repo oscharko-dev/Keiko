@@ -289,6 +289,7 @@ async function runFixtureManualUpgradeClick(
     second.io,
     env,
     {
+      activateMacosRuntimeFn: () => Promise.resolve(true),
       arch: () => target.nodeArchitecture,
       homedir: () => home,
       lifecycleFn: (command) => {
@@ -327,6 +328,7 @@ async function runFixtureRelaunch(
     second.io,
     env,
     {
+      activateMacosRuntimeFn: () => Promise.resolve(true),
       arch: () => target.nodeArchitecture,
       homedir: () => home,
       lifecycleFn: (_command, _args, _io, _env, deps) => {
@@ -482,8 +484,10 @@ function stagedArtifactEvidence(options) {
 }
 
 function writeEvidenceFile(options, evidence) {
-  if (options.evidence !== undefined)
+  if (options.evidence !== undefined) {
+    mkdirSync(dirname(options.evidence), { recursive: true });
     writeFileSync(options.evidence, `${JSON.stringify(evidence, null, 2)}\n`);
+  }
 }
 
 async function smokeEvidence(options, tempRoot, deps, now) {

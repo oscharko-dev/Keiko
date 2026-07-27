@@ -40,8 +40,8 @@ const validProperties = [
   "sonar.sourceEncoding=UTF-8",
   "sonar.plsql.file.suffixes=-",
   "sonar.test.inclusions=tests/**",
-  "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
-  "sonar.exclusions=tests/**,native/portable-launcher/**,scripts/native-quality/**,scripts/windows-portable-rfc3161.cs,native/launcher.c,scripts/helper.cs,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
+  "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.m,**/*.mm,**/*.cs",
+  "sonar.exclusions=tests/**,native/portable-launcher/**,scripts/native-quality/**,scripts/windows-portable-rfc3161.cs,native/launcher.c,scripts/helper.cs,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.m,**/*.mm,**/*.cs",
   "sonar.cpd.exclusions=packages/keiko-ui/src/lib/i18n-messages.*.ts,packages/keiko-ui/src/**/*-i18n.ts,packages/keiko-ui/src/**/*-i18n.de.ts,packages/keiko-ui/src/**/*-i18n.en.ts,scripts/__tests__/windows-rfc3161-fixtures.ps1,scripts/__tests__/windows-native-policy-fixtures.ps1",
 ].join("\n");
 
@@ -68,6 +68,7 @@ describe("Sonar analysis scope", () => {
     expect(isGeneratedOrBinaryPath("scripts/native-quality/Keiko.NativeQuality.csproj")).toBe(true);
     expect(classifyAnalysisPath("native/launcher.c", nativeSources)).toBe("native-compensated");
     expect(classifyAnalysisPath("native/new.c", nativeSources)).toBe("unclassified-native");
+    expect(classifyAnalysisPath("native/new.m", nativeSources)).toBe("unclassified-native");
     expect(classifyAnalysisPath("scripts/__tests__/fixture.cs", nativeSources)).toBe("test");
     expect(
       classifyAnalysisPath("scripts/native-quality/Keiko.NativeQuality.csproj", nativeSources),
@@ -221,6 +222,19 @@ describe("Sonar analysis scope", () => {
         properties: withoutTestCSharp,
       }),
     ).toContain("sonar.test.exclusions is missing native exclusion **/*.cs");
+
+    const withoutSourceObjectiveC = removePropertyPattern(
+      validProperties,
+      "sonar.exclusions",
+      "**/*.m",
+    );
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: withoutSourceObjectiveC,
+      }),
+    ).toContain("sonar.exclusions is missing native exclusion **/*.m");
   });
 
   it("fails on unsupported native manifest languages and malformed entry fields", () => {

@@ -171,6 +171,33 @@ describe("portable secure workspace-read binding", () => {
     ).toBe(platform.os === "win32" ? "win32-x64" : `darwin-${platform.arch}`);
   });
 
+  it("selects the secure-read helper from the exact release helper set", () => {
+    const value = manifest();
+    const supervisor = {
+      ...structuredClone(value.nativeHelpers[0]!),
+      name: "keiko-runtime-supervisor",
+      kind: "runtime-process-supervisor",
+      executablePath: "runtime/native/keiko-runtime-supervisor",
+      protocol: { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
+      source: {
+        commitSha: COMMIT,
+        path: "native/runtime-supervisor/macos",
+        treeSha256: "e".repeat(64),
+      },
+      sbomBomRef: "pkg:generic/keiko-runtime-supervisor@0.2.15?platform=macos-arm64",
+    };
+    value.nativeHelpers.push(supervisor);
+    value.releaseImpact.reviewedBinding.nativeHelpers.push(structuredClone(supervisor));
+
+    expect(
+      resolvePortableSecureWorkspaceReadBinding({
+        manifest: value,
+        platform: { os: "darwin", arch: "arm64" },
+        resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+      }),
+    ).toBeDefined();
+  });
+
   it("rejects Linux before parsing or touching point-of-use dependencies", async () => {
     const malformed = new Proxy(
       {},
