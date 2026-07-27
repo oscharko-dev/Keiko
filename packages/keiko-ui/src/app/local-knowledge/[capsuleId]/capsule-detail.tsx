@@ -150,6 +150,15 @@ function compatibilityLabel(status: EmbeddingCompatibility["status"], t: I18nTra
   return t("localKnowledge.detail.compatibility.incompatible");
 }
 
+function overviewVectorCompatibleLabel(
+  status: EmbeddingCompatibility["status"],
+  t: I18nTranslate,
+): string {
+  if (status === "compatible") return t("localKnowledge.detail.compatibility.compatible");
+  if (status === "unknown") return t("localKnowledge.detail.overview.vectorUnknown");
+  return t("localKnowledge.detail.overview.vectorIncompatible");
+}
+
 type ContextualTone = "neutral" | "ok" | "warn" | "danger";
 
 function contextualTone(status: ContextualRetrievalHealth["status"] | undefined): ContextualTone {
@@ -168,6 +177,12 @@ function contextualStatusLabel(
   if (status === "degraded") return t("localKnowledge.detail.context.status.degraded");
   if (status === "unavailable") return t("localKnowledge.detail.context.status.unavailable");
   return t("localKnowledge.detail.context.status.disabled");
+}
+
+function staleChunksTone(health: ContextualRetrievalHealth): "ok" | "warn" {
+  if (health.rebuildRequired) return "warn";
+  if (health.degradedChunkCount > 0) return "warn";
+  return "ok";
 }
 
 // ---------------------------------------------------------------------------
@@ -632,13 +647,7 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
         <OverviewRow
           label={t("localKnowledge.detail.overview.vectorCompatible")}
           help={t("localKnowledge.detail.help.overviewVectorCompatible")}
-          value={
-            status === "compatible"
-              ? t("localKnowledge.detail.compatibility.compatible")
-              : status === "unknown"
-                ? t("localKnowledge.detail.overview.vectorUnknown")
-                : t("localKnowledge.detail.overview.vectorIncompatible")
-          }
+          value={overviewVectorCompatibleLabel(status, t)}
         />
         {health.staleReasons.length > 0 ? (
           <OverviewRow
@@ -822,7 +831,7 @@ function ContextualRetrievalSection({
             meta={t("localKnowledge.detail.context.degradedChunks", {
               count: health.degradedChunkCount,
             })}
-            tone={health.rebuildRequired ? "warn" : health.degradedChunkCount > 0 ? "warn" : "ok"}
+            tone={staleChunksTone(health)}
           />
         </div>
       ) : null}
@@ -1362,6 +1371,14 @@ interface LargeDocumentSectionProps {
   readonly resumeImpl?: typeof resumeCapsuleLargeDocuments;
 }
 
+function resumeButtonLabel(busy: boolean, resumableCount: number, t: I18nTranslate): string {
+  if (busy) return t("localKnowledge.detail.large.resuming");
+  if (resumableCount === 1) {
+    return t("localKnowledge.detail.large.resume.one", { count: resumableCount });
+  }
+  return t("localKnowledge.detail.large.resume.many", { count: resumableCount });
+}
+
 function LargeDocumentSection({
   capsuleId,
   health,
@@ -1441,14 +1458,7 @@ function LargeDocumentSection({
           title={t("localKnowledge.detail.help.largeResume")}
           className="lk-action-button"
         >
-          {busy
-            ? t("localKnowledge.detail.large.resuming")
-            : t(
-                health.resumableDocuments.length === 1
-                  ? "localKnowledge.detail.large.resume.one"
-                  : "localKnowledge.detail.large.resume.many",
-                { count: health.resumableDocuments.length },
-              )}
+          {resumeButtonLabel(busy, health.resumableDocuments.length, t)}
         </button>
       ) : null}
       {error !== null ? (

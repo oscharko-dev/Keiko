@@ -2,6 +2,7 @@ import { dirname, join, resolve, win32 } from "node:path";
 import {
   UPDATE_SESSION_SCHEMA_VERSION,
   type UpdateInstallMode,
+  type UpdateInstallModeKind,
   type UpdatePortableInstallSummary,
   type UpdatePortableManagedRootKind,
   type UpdatePortableTarget,
@@ -229,19 +230,28 @@ function manualInstructions(reason: UpdateInstallMode["reason"]): string {
   return "Portable update eligibility could not be attested. Download the latest Keiko package.";
 }
 
+function resolvePortableUnsupportedInstallKind(
+  reason: UpdateInstallMode["reason"],
+  portable: UpdatePortableInstallSummary,
+): UpdateInstallModeKind {
+  if (reason === "portable-setup-failed") {
+    return "portable-setup-failed";
+  }
+  if (reason === "portable-it-managed") {
+    return "portable-it-managed";
+  }
+  if (reason === "portable-non-stable" && portable.status === "managed") {
+    return "portable-managed";
+  }
+  return "portable-bootstrap";
+}
+
 function portableUnsupportedMode(
   packageName: string,
   reason: UpdateInstallMode["reason"],
   portable: UpdatePortableInstallSummary,
 ): UpdateInstallMode {
-  const installKind =
-    reason === "portable-setup-failed"
-      ? "portable-setup-failed"
-      : reason === "portable-it-managed"
-        ? "portable-it-managed"
-        : reason === "portable-non-stable" && portable.status === "managed"
-          ? "portable-managed"
-          : "portable-bootstrap";
+  const installKind = resolvePortableUnsupportedInstallKind(reason, portable);
   return {
     schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
     status: "unsupported",

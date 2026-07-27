@@ -100,6 +100,19 @@ function sensitivityLabel(
   }
 }
 
+// Announcement text for the completed action — extracted as a switch instead
+// of a nested ternary chain (mirrors typeLabel/scopeLabel/statusLabel above).
+function actionStatusMessage(action: ReviewAction, t: I18nTranslate): string {
+  switch (action) {
+    case "accept":
+      return t("memoria.memoryApproved");
+    case "archive":
+      return t("memoria.memoryArchived");
+    case "reject":
+      return t("memoria.memoryRejected");
+  }
+}
+
 interface ReviewRowProps {
   readonly record: MemoryRecord;
   readonly busyAction: ReviewAction | null;
@@ -508,13 +521,7 @@ export function ReviewQueue({
           );
         }
         removeRecord(id);
-        setActionStatus(
-          action === "accept"
-            ? t("memoria.memoryApproved")
-            : action === "archive"
-              ? t("memoria.memoryArchived")
-              : t("memoria.memoryRejected"),
-        );
+        setActionStatus(actionStatusMessage(action, t));
       } catch (err) {
         setRowErrorsById((prev) => ({ ...prev, [id]: formatError(err) }));
         setBusyById((prev) => {
@@ -526,6 +533,82 @@ export function ReviewQueue({
     },
     [acceptImpl, archiveImpl, rejectImpl, removeRecord, t],
   );
+
+  // The section content is one of four mutually exclusive states — loading,
+  // error, empty, or populated. Extracted as early returns instead of a
+  // nested ternary chain (mirrors MemoryListBody in MemoryList.tsx).
+  function renderReviewSection(): ReactNode {
+    if (loading) {
+      return (
+        <p role="status" aria-live="polite" className="lk-loading">
+          {t("memoria.loadingReviewQueue")}
+        </p>
+      );
+    }
+    if (error !== null) {
+      return (
+        <div role="alert" aria-live="assertive" className="lk-alert">
+          {error}
+          <button
+            type="button"
+            className="lk-alert-retry"
+            onClick={() => {
+              void load();
+            }}
+          >
+            {t("memoria.retry")}
+          </button>
+        </div>
+      );
+    }
+    if (records.length === 0) {
+      return (
+        <div data-testid="review-queue-empty" className="lk-empty">
+          {/* wrapper div mirrors MemoryList's empty state so the title/body
+              gap matches (the flex gap + title margin added up to ~20px
+              without it — uiux-fix F035) */}
+          <div>
+            <p className="lk-empty-title">{t("memoria.queueClearTitle")}</p>
+            <p className="lk-empty-body">{t("memoria.queueClearBody")}</p>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <ul
+        ref={listRef}
+        aria-label={t("memoria.reviewQueue")}
+        style={{
+          listStyle: "none",
+          padding: 0,
+          margin: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {records.map((record) => (
+          <ReviewRow
+            key={record.id}
+            record={record}
+            busyAction={busyById[record.id] ?? null}
+            rowError={rowErrorsById[record.id] ?? null}
+            onAccept={(row) => {
+              void runRowAction(row, "accept");
+            }}
+            onReject={(row) => {
+              void runRowAction(row, "reject");
+            }}
+            onArchive={(row) => {
+              void runRowAction(row, "archive");
+            }}
+            onOpenDetail={onOpenDetail}
+            t={t}
+          />
+        ))}
+      </ul>
+    );
+  }
 
   return (
     <>
@@ -569,67 +652,7 @@ export function ReviewQueue({
         aria-busy={loading}
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
-        {loading ? (
-          <p role="status" aria-live="polite" className="lk-loading">
-            {t("memoria.loadingReviewQueue")}
-          </p>
-        ) : error !== null ? (
-          <div role="alert" aria-live="assertive" className="lk-alert">
-            {error}
-            <button
-              type="button"
-              className="lk-alert-retry"
-              onClick={() => {
-                void load();
-              }}
-            >
-              {t("memoria.retry")}
-            </button>
-          </div>
-        ) : records.length === 0 ? (
-          <div data-testid="review-queue-empty" className="lk-empty">
-            {/* wrapper div mirrors MemoryList's empty state so the title/body
-                gap matches (the flex gap + title margin added up to ~20px
-                without it — uiux-fix F035) */}
-            <div>
-              <p className="lk-empty-title">{t("memoria.queueClearTitle")}</p>
-              <p className="lk-empty-body">{t("memoria.queueClearBody")}</p>
-            </div>
-          </div>
-        ) : (
-          <ul
-            ref={listRef}
-            aria-label={t("memoria.reviewQueue")}
-            style={{
-              listStyle: "none",
-              padding: 0,
-              margin: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            {records.map((record) => (
-              <ReviewRow
-                key={record.id}
-                record={record}
-                busyAction={busyById[record.id] ?? null}
-                rowError={rowErrorsById[record.id] ?? null}
-                onAccept={(row) => {
-                  void runRowAction(row, "accept");
-                }}
-                onReject={(row) => {
-                  void runRowAction(row, "reject");
-                }}
-                onArchive={(row) => {
-                  void runRowAction(row, "archive");
-                }}
-                onOpenDetail={onOpenDetail}
-                t={t}
-              />
-            ))}
-          </ul>
-        )}
+        {renderReviewSection()}
       </section>
     </>
   );

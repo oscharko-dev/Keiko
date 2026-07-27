@@ -275,9 +275,12 @@ function validateReplaceEdit(value: unknown, reasons: string[]): void {
     return;
   }
   const range = value.range;
-  if (!isPositiveInteger(range.startLine) || !isPositiveInteger(range.startColumn)) {
-    reasons.push("edit range invalid");
-  } else if (!isPositiveInteger(range.endLine) || !isPositiveInteger(range.endColumn)) {
+  if (
+    !isPositiveInteger(range.startLine) ||
+    !isPositiveInteger(range.startColumn) ||
+    !isPositiveInteger(range.endLine) ||
+    !isPositiveInteger(range.endColumn)
+  ) {
     reasons.push("edit range invalid");
   }
   if (typeof value.originalText !== "string" || typeof value.newText !== "string") {

@@ -420,6 +420,16 @@ interface TokenShapeStats {
   readonly nonWhitespaceChars: number;
 }
 
+// Per-code-point UTF-8 byte width for the manual encoder fallback: 1 byte through U+007F, 2
+// through U+07FF, 3 through U+FFFF (the BMP ceiling), else 4 (astral code points, which
+// `codePointAt` already combines from a surrogate pair).
+function utf8ByteWidth(codePoint: number): number {
+  if (codePoint <= 0x7f) return 1;
+  if (codePoint <= 0x7ff) return 2;
+  if (codePoint <= 0xffff) return 3;
+  return 4;
+}
+
 // Uses TextEncoder when available, with a manual UTF-8 byte counter for any legacy harness
 // without it. Never throws.
 function utf8ByteLength(text: string): number {
@@ -429,7 +439,7 @@ function utf8ByteLength(text: string): number {
   let bytes = 0;
   for (const char of text) {
     const codePoint = char.codePointAt(0) ?? 0;
-    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    bytes += utf8ByteWidth(codePoint);
   }
   return bytes;
 }

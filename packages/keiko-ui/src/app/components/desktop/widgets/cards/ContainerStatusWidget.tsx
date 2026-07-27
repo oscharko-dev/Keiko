@@ -86,6 +86,20 @@ function engineStateTone(state: ContainerEngineState): "ok" | "warn" | "danger" 
   }
 }
 
+// Maps a status tone to its CSS custom property.
+function toneCssVar(tone: "ok" | "warn" | "danger" | "faint"): string {
+  switch (tone) {
+    case "ok":
+      return "var(--ok)";
+    case "warn":
+      return "var(--warn)";
+    case "danger":
+      return "var(--danger)";
+    case "faint":
+      return "var(--fg-faint)";
+  }
+}
+
 function errorFromUnknown(value: unknown, t: OptionalWidgetTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
@@ -166,14 +180,7 @@ function EngineStatusList({
     <ul className="tm-events" aria-label={t("containerStatusWidget.engines.ariaLabel")}>
       {engines.map((engine) => {
         const tone = engineStateTone(engine.state);
-        const toneVar =
-          tone === "ok"
-            ? "var(--ok)"
-            : tone === "warn"
-              ? "var(--warn)"
-              : tone === "danger"
-                ? "var(--danger)"
-                : "var(--fg-faint)";
+        const toneVar = toneCssVar(tone);
         return (
           <li key={engine.engine} className="tm-event">
             <span className="tm-event-kind">

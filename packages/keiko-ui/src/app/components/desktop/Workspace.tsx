@@ -412,6 +412,20 @@ function resolveConnectionSource(
   return visibleWins.find((w) => w.id === connecting.from) ?? null;
 }
 
+// S3358 — the source window is always "source"; every other window is "valid" or "invalid"
+// depending on whether it can bind to the in-progress connection's source type.
+function connStateFor(win: AppWindow, connFrom: AppWindow): ConnState {
+  if (win.id === connFrom.id) return "source";
+  return canConnect(connFrom.type, win.type) ? "valid" : "invalid";
+}
+
+// S3358 — the endpoint of `conn` that is NOT `windowId`, or null when `conn` doesn't touch it.
+function otherConnectionEndpoint(conn: Connection, windowId: string): string | null {
+  if (conn.a === windowId) return conn.b;
+  if (conn.b === windowId) return conn.a;
+  return null;
+}
+
 function tryHandleWorkspaceEscapeShortcut(
   event: ReactKeyboardEvent<HTMLElement>,
   selection: UseWorkspaceResult["selection"],
@@ -680,14 +694,7 @@ export function Workspace({
     const stateById = new Map<string, ConnState>();
     if (connFrom === null || visibleWins === null) return stateById;
     for (const win of visibleWins) {
-      stateById.set(
-        win.id,
-        win.id === connFrom.id
-          ? "source"
-          : canConnect(connFrom.type, win.type)
-            ? "valid"
-            : "invalid",
-      );
+      stateById.set(win.id, connStateFor(win, connFrom));
     }
     return stateById;
   }, [connFrom, visibleWins]);
@@ -931,8 +938,7 @@ export function Workspace({
       const byId = new Map(wins.map((win) => [win.id, win]));
       const result: { connId: string; qualityId: string }[] = [];
       for (const conn of conns) {
-        const otherId =
-          conn.a === sourceWindowId ? conn.b : conn.b === sourceWindowId ? conn.a : null;
+        const otherId = otherConnectionEndpoint(conn, sourceWindowId);
         if (otherId === null) continue;
         const other = byId.get(otherId);
         if (other?.type !== "quality") continue;

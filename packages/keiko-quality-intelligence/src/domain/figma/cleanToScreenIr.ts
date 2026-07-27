@@ -34,6 +34,16 @@ const buildReduction = (inputNodeCount: number, keptNodeCount: number): Reductio
   };
 };
 
+const compareById = (a: { readonly id: string }, b: { readonly id: string }): number => {
+  if (a.id < b.id) {
+    return -1;
+  }
+  if (a.id > b.id) {
+    return 1;
+  }
+  return 0;
+};
+
 const emptyResult = (inputNodeCount: number): ScreenIrResult => ({
   screens: [],
   tokens: EMPTY_TOKENS,
@@ -56,7 +66,7 @@ export const cleanScopedNodesToScreenIr = (rawRoot: unknown): ScreenIrResult => 
       const ir = normalizeScreenRoot(screenRoot);
       return { id: ir.id, name: ir.name, root: ir };
     })
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    .sort(compareById);
 
   // keptNodeCount counts only IR nodes under detected screens, so surviving scope containers
   // (CANVAS/SECTION) that are not themselves screens count toward removal. removedRatio is therefore

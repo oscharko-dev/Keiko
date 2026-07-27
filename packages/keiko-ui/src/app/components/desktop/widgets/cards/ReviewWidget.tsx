@@ -131,6 +131,38 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
   );
 }
 
+interface ApplyControlProps {
+  readonly report: RunReport;
+  readonly applying: boolean;
+  readonly confirmApply: boolean;
+  readonly diffFileCount: number;
+  readonly onApplyClick: () => void;
+  readonly t: I18nTranslate;
+}
+
+function ApplyControl({
+  report,
+  applying,
+  confirmApply,
+  diffFileCount,
+  onApplyClick,
+  t,
+}: ApplyControlProps): ReactNode {
+  if (report.appliedAt !== undefined) {
+    return <span className="rv-final mono">{t("reviewWidget.applied")}</span>;
+  }
+  if (canApplyReport(report)) {
+    // uiux-fix F018 C124/C258: aria-disabled keeps focus on the button while
+    // applying; the confirm step names the blast radius before writing.
+    return (
+      <button type="button" className="arun-btn" aria-disabled={applying} onClick={onApplyClick}>
+        {applyButtonLabel({ applying, confirmApply, diffFileCount, t })}
+      </button>
+    );
+  }
+  return null;
+}
+
 interface ReviewFetchErrorProps {
   readonly loading: boolean;
   readonly error: ErrorState | null;
@@ -465,20 +497,14 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
                 {applyError.message}
               </span>
             )}
-            {report.appliedAt !== undefined ? (
-              <span className="rv-final mono">{t("reviewWidget.applied")}</span>
-            ) : canApplyReport(report) ? (
-              // uiux-fix F018 C124/C258: aria-disabled keeps focus on the button while
-              // applying; the confirm step names the blast radius before writing.
-              <button
-                type="button"
-                className="arun-btn"
-                aria-disabled={applying}
-                onClick={onApplyClick}
-              >
-                {applyButtonLabel({ applying, confirmApply, diffFileCount, t })}
-              </button>
-            ) : null}
+            <ApplyControl
+              report={report}
+              applying={applying}
+              confirmApply={confirmApply}
+              diffFileCount={diffFileCount}
+              onApplyClick={onApplyClick}
+              t={t}
+            />
           </div>
         </>
       )}

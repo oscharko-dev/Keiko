@@ -526,7 +526,6 @@ function pushEventFallbackRanges(ranges, eventName, baseRef) {
   if (eventName === "push" && !baseRef) {
     pushRange(ranges, "origin/dev...HEAD");
     pushRange(ranges, "HEAD^1..HEAD");
-    return;
   }
 }
 

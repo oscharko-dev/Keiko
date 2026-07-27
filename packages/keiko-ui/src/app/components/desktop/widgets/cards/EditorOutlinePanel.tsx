@@ -85,6 +85,12 @@ function kindLabel(kind: EditorDocumentSymbol["kind"]): string {
   return kind.replace(/[A-Z]/gu, (letter) => ` ${letter.toLowerCase()}`);
 }
 
+function outlineEmptyText(snapshot: EditorOutlineSnapshot | undefined): string {
+  if (snapshot?.loading === true) return "Loading symbols.";
+  if (snapshot?.enabled === false) return "Outline is unavailable for this file.";
+  return "No symbols found in this file.";
+}
+
 export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
   const snapshot = props.snapshot;
   const tree = useMemo(() => buildEditorOutlineTree(snapshot?.symbols ?? []), [snapshot?.symbols]);
@@ -151,12 +157,7 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
   );
 
   const hasSymbols = tree.length > 0;
-  const emptyText =
-    snapshot?.loading === true
-      ? "Loading symbols."
-      : snapshot?.enabled === false
-        ? "Outline is unavailable for this file."
-        : "No symbols found in this file.";
+  const emptyText = outlineEmptyText(snapshot);
 
   return (
     <section className={styles.outline} aria-label="Workspace outline">

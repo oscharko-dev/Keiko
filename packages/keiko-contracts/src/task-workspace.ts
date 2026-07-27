@@ -1605,6 +1605,12 @@ export interface WorkspaceActiveRestoration {
   readonly ambiguousWorkspaceIds?: readonly string[];
 }
 
+function compareStrings(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 // Pure: decide how (and whether) to restore the active workspace after restart, given the persisted
 // pointer target (or undefined for unbound mode) and the reconciliation entries. Deterministic and
 // conservative — it never auto-selects among ambiguous active workspaces.
@@ -1616,7 +1622,7 @@ export function resolveActiveRestoration(
     const activeIds = entries
       .filter((entry) => entry.lifecycleState === "active")
       .map((entry) => entry.workspaceId)
-      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      .sort(compareStrings);
     if (activeIds.length >= 2) return { kind: "ambiguous", ambiguousWorkspaceIds: activeIds };
     return { kind: "none" };
   }

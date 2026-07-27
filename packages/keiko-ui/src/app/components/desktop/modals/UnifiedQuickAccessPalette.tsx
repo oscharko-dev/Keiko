@@ -338,6 +338,55 @@ export function UnifiedQuickAccessPalette({
   const emptyText = quickAccessEmptyText(t, mode, root, query);
   const resultKey = itemCount === 1 ? "quickAccess.result.singular" : "quickAccess.result.plural";
 
+  function renderResultsList(): ReactNode {
+    if (itemCount === 0) return <div className="cmdk-empty">{emptyText}</div>;
+    if (mode === "commands") {
+      return commandResults.map((command, index) => (
+        <button
+          key={command.id}
+          type="button"
+          id={optionId(index)}
+          role="option"
+          aria-selected={index === selected}
+          className="cmdk-row"
+          data-sel={index === selected}
+          tabIndex={-1}
+          onPointerEnter={() => setSelected(index)}
+          onClick={() => activate(index)}
+        >
+          <span className="cmdk-label">{command.label}</span>
+          <span className="spacer" />
+          {command.shortcut !== undefined ? <span className="kbd">{command.shortcut}</span> : null}
+          <span className="cmdk-group mono">{command.group}</span>
+        </button>
+      ));
+    }
+    return searchResults.map((result, index) => (
+      <button
+        key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
+        type="button"
+        id={optionId(index)}
+        role="option"
+        aria-selected={index === selected}
+        className="cmdk-row"
+        data-sel={index === selected}
+        tabIndex={-1}
+        onPointerEnter={() => setSelected(index)}
+        onClick={() => activate(index)}
+      >
+        <span className="cmdk-ico">
+          <FileIcon name={result.path} />
+        </span>
+        <span className="cmdk-label">{result.kind === "symbol" ? result.symbol : result.path}</span>
+        <span className="spacer" />
+        <span className="cmdk-group mono">
+          {multiRoot ? `${result.rootLabel} · ` : ""}
+          {result.path}:{String(result.line)}
+        </span>
+      </button>
+    ));
+  }
+
   return (
     <div className="cmdk-overlay" onPointerDown={onClose}>
       <div
@@ -388,58 +437,7 @@ export function UnifiedQuickAccessPalette({
           </div>
         ) : null}
         <div id={listId} role="listbox" className="cmdk-list">
-          {itemCount === 0 ? (
-            <div className="cmdk-empty">{emptyText}</div>
-          ) : mode === "commands" ? (
-            commandResults.map((command, index) => (
-              <button
-                key={command.id}
-                type="button"
-                id={optionId(index)}
-                role="option"
-                aria-selected={index === selected}
-                className="cmdk-row"
-                data-sel={index === selected}
-                tabIndex={-1}
-                onPointerEnter={() => setSelected(index)}
-                onClick={() => activate(index)}
-              >
-                <span className="cmdk-label">{command.label}</span>
-                <span className="spacer" />
-                {command.shortcut !== undefined ? (
-                  <span className="kbd">{command.shortcut}</span>
-                ) : null}
-                <span className="cmdk-group mono">{command.group}</span>
-              </button>
-            ))
-          ) : (
-            searchResults.map((result, index) => (
-              <button
-                key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
-                type="button"
-                id={optionId(index)}
-                role="option"
-                aria-selected={index === selected}
-                className="cmdk-row"
-                data-sel={index === selected}
-                tabIndex={-1}
-                onPointerEnter={() => setSelected(index)}
-                onClick={() => activate(index)}
-              >
-                <span className="cmdk-ico">
-                  <FileIcon name={result.path} />
-                </span>
-                <span className="cmdk-label">
-                  {result.kind === "symbol" ? result.symbol : result.path}
-                </span>
-                <span className="spacer" />
-                <span className="cmdk-group mono">
-                  {multiRoot ? `${result.rootLabel} · ` : ""}
-                  {result.path}:{String(result.line)}
-                </span>
-              </button>
-            ))
-          )}
+          {renderResultsList()}
         </div>
       </div>
     </div>

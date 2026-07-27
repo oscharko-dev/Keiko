@@ -130,6 +130,14 @@ function connectorScopesSignature(scopes: readonly ChatLocalKnowledgeScope[]): s
   return scopes.map((scope) => scopeKey(scope)).join(" ");
 }
 
+// S3358 — the "removed" and "updated" announcements are two distinct sentences, not a
+// shared template varying by one word; keep the zero-count branch as its own return.
+function connectorScopesAnnouncement(count: number): string {
+  if (count === 0) return "Connected Knowledge Pod removed.";
+  const noun = count === 1 ? "source" : "sources";
+  return `Connected Knowledge Pods updated: ${String(count)} ${noun}.`;
+}
+
 export function ConnectorScopePill({
   chat,
   onDisconnect,
@@ -148,11 +156,7 @@ export function ConnectorScopePill({
   useEffect(() => {
     if (prevSignatureRef.current !== signature) {
       prevSignatureRef.current = signature;
-      setAnnouncement(
-        scopes.length === 0
-          ? "Connected Knowledge Pod removed."
-          : `Connected Knowledge Pods updated: ${String(scopes.length)} ${scopes.length === 1 ? "source" : "sources"}.`,
-      );
+      setAnnouncement(connectorScopesAnnouncement(scopes.length));
     }
   }, [signature, scopes.length]);
 

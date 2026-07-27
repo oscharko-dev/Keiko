@@ -94,6 +94,14 @@ function PolicyTab({
   );
 }
 
+// #2723 (S3358): the eval row icon was a nested ternary (!run ? … : r.pass ? … : …);
+// extracted to a named render function with early returns.
+function evalRowIcon(run: boolean, pass: boolean): ReactNode {
+  if (!run) return <span className="evl-dot" />;
+  if (pass) return <Icons.check size={13} />;
+  return <Icons.close size={13} />;
+}
+
 function EvalTab({ decide }: { decide: (kind: GateKind, risk: Risk) => Decision }): ReactNode {
   const [run, setRun] = useState(false);
   const results = EVAL_SCENARIOS.map((s) => {
@@ -116,15 +124,7 @@ function EvalTab({ decide }: { decide: (kind: GateKind, risk: Risk) => Decision 
       <div className="evl-hint">Mock scenarios against your policy before going autonomous.</div>
       {results.map((r) => (
         <div className="evl-row" key={r.id} data-state={!run ? "idle" : r.pass ? "pass" : "fail"}>
-          <span className="evl-ico">
-            {!run ? (
-              <span className="evl-dot" />
-            ) : r.pass ? (
-              <Icons.check size={13} />
-            ) : (
-              <Icons.close size={13} />
-            )}
-          </span>
+          <span className="evl-ico">{evalRowIcon(run, r.pass)}</span>
           <span className="evl-label">{r.label}</span>
           {run && (
             <span className="evl-res mono" style={{ color: DEC_META[r.actual][1] }}>

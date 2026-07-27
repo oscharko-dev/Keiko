@@ -31,6 +31,11 @@ function normalizeScopePath(scopePath: string): string {
   return scopePath.replaceAll("\\", "/");
 }
 
+function compareStrings(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
 function readDirSorted(fs: WorkspaceFs, absoluteDir: string): readonly WorkspaceDirEntry[] {
   try {
     return [...fs.readDir(absoluteDir)].sort((a, b) => (a.name < b.name ? -1 : 1));
@@ -166,7 +171,7 @@ export function collectFromEntries(
   }
   return {
     files: out.slice(0, limits.maxFilesScanned),
-    directories: [...new Set(walk.directories)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    directories: [...new Set(walk.directories)].sort(compareStrings),
     filesDiscovered: out.length,
     truncated: walk.truncated,
     depthPruned: walk.depthPruned,

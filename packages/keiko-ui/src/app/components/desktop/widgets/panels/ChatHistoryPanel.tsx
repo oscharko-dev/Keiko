@@ -40,6 +40,14 @@ function sourceCount(chat: Chat): number {
   return effectiveScopes(chat).length + effectiveLocalKnowledgeScopes(chat).length;
 }
 
+// #2723 (S3358): the roving-tablist "from" index used a nested ternary
+// (current < 0 ? (view === "active" ? 0 : 1) : current); extracted to a plain if/else chain.
+function initialTabIndex(view: HistoryView, current: number): number {
+  if (current >= 0) return current;
+  if (view === "active") return 0;
+  return 1;
+}
+
 function chatMatches(chat: Chat, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (q.length === 0) return true;
@@ -106,7 +114,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>("button[role='tab']"));
     if (tabs.length === 0) return;
     const current = tabs.findIndex((tab) => tab === document.activeElement);
-    const from = current < 0 ? (view === "active" ? 0 : 1) : current;
+    const from = initialTabIndex(view, current);
     event.preventDefault();
     let next = from;
     if (key === "ArrowRight") next = (from + 1) % tabs.length;
@@ -188,6 +196,116 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     } finally {
       setBusyId(null);
     }
+  };
+
+  // #2723 (S3358): the row-actions block was a four-way nested ternary chain
+  // (editing ? … : confirmingDelete ? … : deleted ? … : …); extracted to a named render
+  // function with early returns. Closes over the row action handlers above (a closure over
+  // per-row state passed as params, not the whole component) so each call site stays flat.
+  const renderRowActions = ({
+    chat,
+    editing,
+    confirmingDelete,
+    deleted,
+    busy,
+  }: {
+    readonly chat: Chat;
+    readonly editing: boolean;
+    readonly confirmingDelete: boolean;
+    readonly deleted: boolean;
+    readonly busy: boolean;
+  }): ReactNode => {
+    if (editing) {
+      return (
+        <>
+          <button
+            type="button"
+            className="lk-btn lk-btn-primary"
+            disabled={busy}
+            onClick={() => void commitRename(chat)}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            disabled={busy}
+            onClick={() => {
+              setEditingId(null);
+              setRenameError(null);
+            }}
+          >
+            Cancel
+          </button>
+        </>
+      );
+    }
+    if (confirmingDelete) {
+      // GEN-UI-FOCUS-016: Escape on either confirm button cancels the
+      // destructive confirmation and returns to the row's default actions.
+      return (
+        <>
+          <button
+            ref={confirmDeleteRef}
+            type="button"
+            className="lk-btn lk-btn-danger"
+            disabled={busy}
+            onClick={() => void moveToTrash(chat)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setDeleteConfirmId(null);
+            }}
+          >
+            Delete
+          </button>
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            disabled={busy}
+            onClick={() => setDeleteConfirmId(null)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setDeleteConfirmId(null);
+            }}
+          >
+            Cancel
+          </button>
+        </>
+      );
+    }
+    if (deleted) {
+      return (
+        <>
+          <button
+            type="button"
+            className="lk-btn lk-btn-primary"
+            disabled={busy}
+            onClick={() => void restoreChat(chat)}
+          >
+            <Icons.restore size={14} />
+            Restore
+          </button>
+          <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
+            Rename
+          </button>
+        </>
+      );
+    }
+    return (
+      <>
+        <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
+          Rename
+        </button>
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          onClick={() => {
+            setDeleteConfirmId(chat.id);
+            setEditingId(null);
+          }}
+        >
+          Delete
+        </button>
+      </>
+    );
   };
 
   return (
@@ -325,96 +443,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
                   )}
                 </div>
                 <div className="chat-history-actions">
-                  {editing ? (
-                    <>
-                      <button
-                        type="button"
-                        className="lk-btn lk-btn-primary"
-                        disabled={busy}
-                        onClick={() => void commitRename(chat)}
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        className="lk-btn lk-btn-ghost"
-                        disabled={busy}
-                        onClick={() => {
-                          setEditingId(null);
-                          setRenameError(null);
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : confirmingDelete ? (
-                    // GEN-UI-FOCUS-016: Escape on either confirm button cancels the
-                    // destructive confirmation and returns to the row's default actions.
-                    <>
-                      <button
-                        ref={confirmDeleteRef}
-                        type="button"
-                        className="lk-btn lk-btn-danger"
-                        disabled={busy}
-                        onClick={() => void moveToTrash(chat)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") setDeleteConfirmId(null);
-                        }}
-                      >
-                        Delete
-                      </button>
-                      <button
-                        type="button"
-                        className="lk-btn lk-btn-ghost"
-                        disabled={busy}
-                        onClick={() => setDeleteConfirmId(null)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") setDeleteConfirmId(null);
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : deleted ? (
-                    <>
-                      <button
-                        type="button"
-                        className="lk-btn lk-btn-primary"
-                        disabled={busy}
-                        onClick={() => void restoreChat(chat)}
-                      >
-                        <Icons.restore size={14} />
-                        Restore
-                      </button>
-                      <button
-                        type="button"
-                        className="lk-btn lk-btn-ghost"
-                        onClick={() => startRename(chat)}
-                      >
-                        Rename
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="lk-btn lk-btn-ghost"
-                        onClick={() => startRename(chat)}
-                      >
-                        Rename
-                      </button>
-                      <button
-                        type="button"
-                        className="lk-btn lk-btn-ghost"
-                        onClick={() => {
-                          setDeleteConfirmId(chat.id);
-                          setEditingId(null);
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  )}
+                  {renderRowActions({ chat, editing, confirmingDelete, deleted, busy })}
                 </div>
               </article>
             );

@@ -30,9 +30,19 @@ function fixtureLine(fixture: PromptEnhancerFixtureResult): string {
   return `- ${fixture.fixtureName} [${fixture.category}] ${verdict} ${dims}`.trimEnd();
 }
 
+function dimensionVerdict(failCount: number, passCount: number): string {
+  if (failCount > 0) {
+    return "FAIL";
+  }
+  if (passCount > 0) {
+    return "PASS";
+  }
+  return "n/a";
+}
+
 function dimensionLine(entry: PromptQualityScorecardEntry): string {
   const rate = entry.passRate === null ? "n/a" : `${(entry.passRate * 100).toFixed(0)}%`;
-  const verdict = entry.failCount > 0 ? "FAIL" : entry.passCount > 0 ? "PASS" : "n/a";
+  const verdict = dimensionVerdict(entry.failCount, entry.passCount);
   return `  ${entry.dimension.padEnd(18)} ${verdict.padEnd(5)} pass=${String(entry.passCount)} fail=${String(entry.failCount)} n/a=${String(entry.notApplicableCount)} rate=${rate}`;
 }
 

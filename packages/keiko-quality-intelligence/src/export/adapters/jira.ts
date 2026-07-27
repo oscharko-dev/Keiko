@@ -48,6 +48,12 @@ const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): stri
   return sections.join("\n\n");
 };
 
+const byIdAsc = (a: string, b: string): number => {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
+
 const mapPriority = (priority: QualityIntelligenceTestCaseCandidate["priority"]): string => {
   // Jira default priorities: Highest / High / Medium / Low / Lowest.
   switch (priority) {
@@ -74,7 +80,7 @@ export function adaptToJiraIssues(
   const sortedIds = bundle.contents
     .map((entry) => entry.candidateId)
     .slice()
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort(byIdAsc);
   let body = encodeSpreadsheetSafeRow(JIRA_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

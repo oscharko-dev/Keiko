@@ -361,10 +361,11 @@ function buildReductionHint(
   if (skippedCount === 0) {
     return `${screenCount.toString()} screen${screenCount !== 1 ? "s" : ""} from ${total.toString()} detected`;
   }
+  const skippedRenderSuffix = skippedCount !== 1 ? "s" : "";
   const structuralClause =
     structuralOnlyCount > 0
       ? `${structuralOnlyCount.toString()} structural-only`
-      : `${skippedCount.toString()} render${skippedCount !== 1 ? "s" : ""} skipped`;
+      : `${skippedCount.toString()} render${skippedRenderSuffix} skipped`;
   const missingIrCount = Math.max(0, skippedCount - structuralOnlyCount);
   const missingClause =
     structuralOnlyCount > 0 && missingIrCount > 0
@@ -1117,6 +1118,15 @@ function readSnapshotFetchedAt(qiDir: string, fileName: string): string | undefi
   }
 }
 
+function compareByFetchedAtDescending(
+  a: { readonly fetchedAt: string },
+  b: { readonly fetchedAt: string },
+): number {
+  if (a.fetchedAt > b.fetchedAt) return -1;
+  if (a.fetchedAt < b.fetchedAt) return 1;
+  return 0;
+}
+
 function listRecentSnapshotRunIds(evidenceDir: string, limit: number): readonly string[] {
   const qiDir = join(evidenceDir, FIGMA_EVIDENCE_SUBDIR);
   const stat = lstatSync(qiDir, { throwIfNoEntry: false });
@@ -1128,7 +1138,7 @@ function listRecentSnapshotRunIds(evidenceDir: string, limit: number): readonly 
     const fetchedAt = readSnapshotFetchedAt(qiDir, entry.name);
     if (fetchedAt !== undefined) records.push({ runId, fetchedAt });
   }
-  records.sort((a, b) => (a.fetchedAt > b.fetchedAt ? -1 : a.fetchedAt < b.fetchedAt ? 1 : 0));
+  records.sort(compareByFetchedAtDescending);
   return records.slice(0, limit).map((record) => record.runId);
 }
 

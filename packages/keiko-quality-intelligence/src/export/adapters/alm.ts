@@ -43,6 +43,12 @@ const buildSubject = (candidate: QualityIntelligenceTestCaseCandidate): string =
 const buildLabels = (candidate: QualityIntelligenceTestCaseCandidate): string =>
   [candidate.riskClass, ...candidate.tags].join(" ");
 
+const byIdAsc = (a: string, b: string): number => {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
+
 // Build the ALM rows for a single candidate. One row per (step, expected) pair — the row count is
 // the longer of `steps`/`expectedResults` so a trailing expected result is never dropped (Issue
 // #283); a candidate with neither yields one empty-step row.
@@ -86,7 +92,7 @@ export function adaptToAlm(
   const sortedIds = bundle.contents
     .map((entry) => entry.candidateId)
     .slice()
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort(byIdAsc);
   let body = encodeSpreadsheetSafeRow(ALM_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

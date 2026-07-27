@@ -918,6 +918,17 @@ export interface AppendEditAuditInput {
 }
 
 /**
+ * The effective state an inline edit reopens from: the candidate's own state if it is terminal,
+ * else the run's state if that is terminal (a terminal run approval counts as an effective
+ * approval of every candidate), else the candidate's own (non-terminal) state.
+ */
+function resolveEditAuditState(candidateState: ReviewState, runState: ReviewState): ReviewState {
+  if (QualityIntelligence.isTerminalReviewState(candidateState)) return candidateState;
+  if (QualityIntelligence.isTerminalReviewState(runState)) return runState;
+  return candidateState;
+}
+
+/**
  * Append an append-only `edit` audit entry for an inline candidate edit. Display labels are redacted
  * before persist (FIX M1). Edits to terminal candidates reopen review by moving the candidate to
  * `changes-requested` with visible revalidation/rejudge flags. Persists and returns the updated
@@ -931,11 +942,7 @@ export const appendEditAudit = (input: AppendEditAuditInput): QiReviewStateArtif
     const actor = resolvedActor(input);
     const candidateState = candidateReviewStateOf(current, input.candidateId);
     const runState = runReviewStateOf(current);
-    const state = QualityIntelligence.isTerminalReviewState(candidateState)
-      ? candidateState
-      : QualityIntelligence.isTerminalReviewState(runState)
-        ? runState
-        : candidateState;
+    const state = resolveEditAuditState(candidateState, runState);
     const terminalEdit = QualityIntelligence.isTerminalReviewState(state);
     const toState: ReviewState = terminalEdit ? "changes-requested" : state;
     const audit: QiReviewAuditEntry = {

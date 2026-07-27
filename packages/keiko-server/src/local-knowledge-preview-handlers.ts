@@ -272,6 +272,15 @@ function invalidRangeContentLength(contentLength: number): boolean {
   );
 }
 
+function previewRangeStatus(
+  rangeRequested: boolean,
+  boundedEnd: number,
+  totalBytes: number,
+): 200 | 206 {
+  if (rangeRequested) return 206;
+  return boundedEnd === totalBytes - 1 ? 200 : 206;
+}
+
 function validatedRange(
   start: number,
   end: number,
@@ -290,7 +299,7 @@ function validatedRange(
     start,
     end: boundedEnd,
     rangeRequested,
-    status: rangeRequested ? 206 : boundedEnd === totalBytes - 1 ? 200 : 206,
+    status: previewRangeStatus(rangeRequested, boundedEnd, totalBytes),
   };
 }
 
@@ -853,16 +862,10 @@ export async function handleClosePdfCitationPreviewSession(
     const expectedExpiresAt = expectedSessionExpiresAt(await readJsonObject(ctx.req));
     const manager = previewSessionManagerFor(deps);
     const lookup = manager.lookupSession(sessionHandle);
-    if (lookup.kind === "open" && lookup.session.expiresAt === expectedExpiresAt) {
-      const access = verifyPdfCitationPreviewDocumentAccess(
-        deps,
-        lookup.session.context,
-        lookup.session.authority,
-      );
-      if (access.kind === "ok") {
-        manager.closeSession(sessionHandle);
-      }
-    } else if (lookup.kind === "open" && expectedExpiresAt === undefined) {
+    if (
+      lookup.kind === "open" &&
+      (lookup.session.expiresAt === expectedExpiresAt || expectedExpiresAt === undefined)
+    ) {
       const access = verifyPdfCitationPreviewDocumentAccess(
         deps,
         lookup.session.context,

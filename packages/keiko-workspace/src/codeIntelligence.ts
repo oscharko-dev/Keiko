@@ -1748,6 +1748,16 @@ function openApiSchemaFields(schema: unknown): readonly string[] {
   return Object.keys(schema.properties);
 }
 
+function openApiComponentSchemas(parsed: unknown): unknown {
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+  if (!isRecord(parsed.components)) {
+    return undefined;
+  }
+  return parsed.components.schemas;
+}
+
 function collectOpenApiJsonSchemaSymbols(file: SourceFile): readonly CodeSymbol[] {
   let parsed: unknown;
   try {
@@ -1755,11 +1765,7 @@ function collectOpenApiJsonSchemaSymbols(file: SourceFile): readonly CodeSymbol[
   } catch {
     return [];
   }
-  const schemas = isRecord(parsed)
-    ? isRecord(parsed.components)
-      ? parsed.components.schemas
-      : undefined
-    : undefined;
+  const schemas = openApiComponentSchemas(parsed);
   if (!isRecord(schemas)) {
     return [];
   }
@@ -2155,12 +2161,14 @@ function collectSymbols(file: SourceFile): readonly CodeSymbol[] {
         continue;
       }
       const recordFieldText = match?.[2];
-      const recordFields =
-        kind === "record" || symbolLineHasConstructorFields(kind, line)
-          ? collectRecordFields(lines, index)
-          : recordFieldText === undefined
-            ? []
-            : parseFieldList(recordFieldText);
+      let recordFields: readonly string[];
+      if (kind === "record" || symbolLineHasConstructorFields(kind, line)) {
+        recordFields = collectRecordFields(lines, index);
+      } else if (recordFieldText === undefined) {
+        recordFields = [];
+      } else {
+        recordFields = parseFieldList(recordFieldText);
+      }
       symbols.push({
         name,
         kind,
@@ -4526,7 +4534,10 @@ function importEdgeScore(query: RetrievalQuery, item: CodeImportEdge): number {
     (query.caseSensitive
       ? item.specifier === query.text
       : item.specifier.toLowerCase() === query.text.toLowerCase());
-  return exactMatch ? 1.0 : item.confidence === "resolved" ? 0.95 : 0.7;
+  if (exactMatch) {
+    return 1.0;
+  }
+  return item.confidence === "resolved" ? 0.95 : 0.7;
 }
 
 function importEdgeAtom(

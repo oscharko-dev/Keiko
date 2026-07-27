@@ -60,6 +60,16 @@ export function classifyAtomCoverage(
   };
 }
 
+const compareString = (left: string, right: string): number => {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+};
+
 /**
  * Classify every atom in `atoms` against the supplied coverage map. Atoms with no
  * mapping are classified as "uncovered". The result is sorted by atomId ascending.
@@ -75,9 +85,7 @@ export function buildAtomCoverageStatuses(
   const statuses: AtomCoverageStatus[] = atoms.map((atom) =>
     classifyAtomCoverage(atom, byAtomId.get(String(atom.id))),
   );
-  statuses.sort((a, b) =>
-    String(a.atomId) < String(b.atomId) ? -1 : String(a.atomId) > String(b.atomId) ? 1 : 0,
-  );
+  statuses.sort((a, b) => compareString(String(a.atomId), String(b.atomId)));
   return Object.freeze(statuses);
 }
 
@@ -103,9 +111,6 @@ export interface BuildCoverageMapInput {
   readonly atomTextById?:
     ReadonlyMap<string, string> | Readonly<Record<string, string | undefined>>;
 }
-
-const compareString = (left: string, right: string): number =>
-  left < right ? -1 : left > right ? 1 : 0;
 
 /**
  * A citing test counts as a *focused* cover of an atom when it derives from at most this many

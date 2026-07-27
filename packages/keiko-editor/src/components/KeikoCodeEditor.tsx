@@ -322,6 +322,31 @@ function ReadyEditorSurface(props: {
   );
 }
 
+/** Renders the ready editor, the load error box, or the loading placeholder, matching the
+ * current `loadState`. */
+function EditorLoadStateSurface(props: {
+  readonly editorProps: KeikoCodeEditorProps;
+  readonly monacoLanguage: string;
+  readonly options: ReturnType<typeof buildEditorOptions>;
+  readonly handlers: EditorHandlers;
+}): ReactElement {
+  const loadState = props.editorProps.loadState;
+  if (loadState.status === "ready") {
+    return (
+      <ReadyEditorSurface
+        editorProps={props.editorProps}
+        monacoLanguage={props.monacoLanguage}
+        options={props.options}
+        handlers={props.handlers}
+      />
+    );
+  }
+  if (loadState.status === "error") {
+    return <EditorRuntimeErrorBox message={loadState.message} />;
+  }
+  return <EditorLoadingBox />;
+}
+
 function EditorBody(props: {
   readonly editorProps: KeikoCodeEditorProps;
   readonly monacoLanguage: string;
@@ -330,21 +355,14 @@ function EditorBody(props: {
   readonly overviewMarkers: readonly DiagnosticOverviewMarker[];
   readonly lineCount: number;
 }): ReactElement {
-  const loadState = props.editorProps.loadState;
   return (
     <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}>
-      {loadState.status === "ready" ? (
-        <ReadyEditorSurface
-          editorProps={props.editorProps}
-          monacoLanguage={props.monacoLanguage}
-          options={props.options}
-          handlers={props.handlers}
-        />
-      ) : loadState.status === "error" ? (
-        <EditorRuntimeErrorBox message={loadState.message} />
-      ) : (
-        <EditorLoadingBox />
-      )}
+      <EditorLoadStateSurface
+        editorProps={props.editorProps}
+        monacoLanguage={props.monacoLanguage}
+        options={props.options}
+        handlers={props.handlers}
+      />
       <EditorDiagnosticOverview
         markers={props.overviewMarkers}
         lineCount={props.lineCount}

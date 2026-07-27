@@ -186,15 +186,16 @@ function createPane(
   };
 }
 
+function normalizedActiveFile(value: Record<string, unknown>): string {
+  if (typeof value.activeFile === "string") return value.activeFile;
+  if (typeof value.file === "string") return value.file;
+  return "";
+}
+
 function normalizePane(value: unknown, fallbackId: string): EditorPaneStateV2 | null {
   if (!isRecord(value)) return null;
   const id = typeof value.id === "string" && value.id.length > 0 ? value.id : fallbackId;
-  const activeFile =
-    typeof value.activeFile === "string"
-      ? value.activeFile
-      : typeof value.file === "string"
-        ? value.file
-        : "";
+  const activeFile = normalizedActiveFile(value);
   const openFiles = stringArray(value.openFiles);
   const tabOrder = stringArray(value.tabOrder);
   const pane = createPane(id, activeFile, orderedFiles(activeFile, openFiles, tabOrder));

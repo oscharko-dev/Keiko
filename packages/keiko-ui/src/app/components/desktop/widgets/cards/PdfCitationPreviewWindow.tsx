@@ -246,6 +246,19 @@ function citationContextLabel(args: {
     : `${args.marker} ${args.source} · ${args.label}`;
 }
 
+// Trailing " · <page>" meta suffix for the header, or "" when neither a page label nor a page
+// number is known.
+function pageMetaSuffix(
+  display: Pick<PdfCitationPreviewSafeWindowCfg, "pageLabel" | "pageNumber">,
+  t: I18nTranslate,
+): string {
+  if (display.pageLabel !== undefined) return ` · ${display.pageLabel}`;
+  if (display.pageNumber !== undefined) {
+    return ` · ${t("pdfCitationPreviewWindow.page", { pageNumber: display.pageNumber })}`;
+  }
+  return "";
+}
+
 function citationContextPageLabel(
   display: Pick<PdfCitationPreviewSafeWindowCfg, "anchorQuality" | "pageLabel" | "pageNumber">,
   t: I18nTranslate,
@@ -508,6 +521,14 @@ function PdfCanvasPage({
       aria-label={t("pdfCitationPreviewWindow.page", { pageNumber })}
     />
   );
+}
+
+// The label for the failure panel's single action button, matching the failure's action kind.
+// A failure with no actionable recovery (e.g. "changed") renders no button, hence the empty string.
+function failureActionLabel(failure: PreviewFailure | null, t: I18nTranslate): string {
+  if (failure?.action === "reopen") return t("pdfCitationPreviewWindow.action.reopenPreview");
+  if (failure?.action === "retry") return t("pdfCitationPreviewWindow.action.retryPreview");
+  return "";
 }
 
 export function PdfCitationPreviewWindow({
@@ -944,12 +965,7 @@ export function PdfCitationPreviewWindow({
     };
   }, [currentPage, estimatedPageOffset, numPages]);
   const showToolbar = doc !== null && failure === null;
-  const failureActionLabel =
-    failure?.action === "reopen"
-      ? t("pdfCitationPreviewWindow.action.reopenPreview")
-      : failure?.action === "retry"
-        ? t("pdfCitationPreviewWindow.action.retryPreview")
-        : "";
+  const failureActionButtonLabel = failureActionLabel(failure, t);
   const handlePageRenderError = useCallback(
     (page: number, error: unknown): void => {
       setPageRenderFailures((previous) => ({
@@ -1195,7 +1211,9 @@ export function PdfCitationPreviewWindow({
             setRetryToken((value) => value + 1);
           }}
         >
-          {reopening ? t("pdfCitationPreviewWindow.action.openingPreview") : failureActionLabel}
+          {reopening
+            ? t("pdfCitationPreviewWindow.action.openingPreview")
+            : failureActionButtonLabel}
         </button>
       ) : null}
     </div>
@@ -1253,11 +1271,7 @@ export function PdfCitationPreviewWindow({
           <h2 className="pdfv-title">{display.documentLabel}</h2>
           <p className="pdfv-meta">
             {display.sourceLabel ?? t("pdfCitationPreviewWindow.sourceLabelFallback")}
-            {display.pageLabel === undefined
-              ? display.pageNumber === undefined
-                ? ""
-                : ` · ${t("pdfCitationPreviewWindow.page", { pageNumber: display.pageNumber })}`
-              : ` · ${display.pageLabel}`}
+            {pageMetaSuffix(display, t)}
           </p>
         </div>
         <span className="pdfv-chip">{anchorQualityLabel(display.anchorQuality, t)}</span>

@@ -55,7 +55,9 @@ function keyTier(key: string): number {
 function compareKeys(a: string, b: string): number {
   const tierDelta = keyTier(a) - keyTier(b);
   if (tierDelta !== 0) return tierDelta;
-  return a < b ? -1 : a > b ? 1 : 0;
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
 }
 
 export function createWorkspaceMutexRegistry(): WorkspaceMutexRegistry {

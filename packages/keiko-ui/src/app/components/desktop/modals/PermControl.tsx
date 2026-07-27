@@ -16,15 +16,19 @@ const LEGACY_OPTIONS: readonly (readonly [AccessMode, string])[] = [
   ["full", "Full access"],
 ];
 
+function resolveAccessNote(keiko: boolean, access: AccessMode): string {
+  if (keiko) {
+    return "No rights by default. You approve while manual; Keiko governs per policy when autonomous.";
+  }
+  if (access === "full") return "Legacy: agent acts without prompts.";
+  return "Legacy: you approve each privileged action.";
+}
+
 export function PermControl({ cfg, set }: PermControlProps): ReactNode {
   const keiko = cfg["keikoMode"] !== false;
   const rawAccess = cfg["access"];
   const access: AccessMode = rawAccess === "full" ? "full" : "ask";
-  const note = keiko
-    ? "No rights by default. You approve while manual; Keiko governs per policy when autonomous."
-    : access === "full"
-      ? "Legacy: agent acts without prompts."
-      : "Legacy: you approve each privileged action.";
+  const note = resolveAccessNote(keiko, access);
   return (
     <div className="permctl">
       <button

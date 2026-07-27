@@ -200,7 +200,7 @@ export function discoverWithStats(
   const walk = runWalk(workspace, opts, fs);
   return {
     files: walk.out,
-    directories: [...new Set(walk.directories)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    directories: [...new Set(walk.directories)].sort(compareStrings),
     stats: {
       discovered: walk.out.length,
       denied: walk.denied,
@@ -209,6 +209,11 @@ export function discoverWithStats(
       maxFilesPruned: walk.maxFilesPruned,
     },
   };
+}
+
+function compareStrings(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }
 
 function describe(error: unknown): string {

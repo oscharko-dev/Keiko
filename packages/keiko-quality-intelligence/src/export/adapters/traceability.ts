@@ -67,9 +67,17 @@ const ABSENT = "—";
 const byAtomIdAsc = (
   a: QualityIntelligenceTraceabilityRow,
   b: QualityIntelligenceTraceabilityRow,
-): number => (a.atomId < b.atomId ? -1 : a.atomId > b.atomId ? 1 : 0);
+): number => {
+  if (a.atomId < b.atomId) return -1;
+  if (a.atomId > b.atomId) return 1;
+  return 0;
+};
 
-const ascending = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const ascending = (a: string, b: string): number => {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
 
 const fixed2 = (value: number): string => value.toFixed(2);
 

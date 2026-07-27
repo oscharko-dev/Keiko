@@ -250,9 +250,14 @@ function activityEventType(value: string | undefined): boolean {
   );
 }
 
+function millisFromValue(value: unknown): number {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") return Date.parse(value);
+  return Number.NaN;
+}
+
 function instantFrom(value: unknown): string | undefined {
-  const millis =
-    typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : Number.NaN;
+  const millis = millisFromValue(value);
   if (!Number.isFinite(millis) || millis < 0) return undefined;
   try {
     return new Date(millis).toISOString();

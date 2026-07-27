@@ -545,9 +545,15 @@ function cacheExcerptWindow(window: ExcerptWindow): object {
   };
 }
 
+function compareEntryKeys(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 function cacheExcerpts(excerpts: ReadonlyMap<string, ExcerptSource>): readonly object[] {
   return [...excerpts.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(([a], [b]) => compareEntryKeys(a, b))
     .map(([scopePath, source]) => ({
       scopePath,
       windows: normalizeExcerptWindows(source).map(cacheExcerptWindow),

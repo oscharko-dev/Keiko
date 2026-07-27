@@ -276,6 +276,28 @@ function computeFinalSubscores(
 // score scales (Jaccard ~[0,0.3] vs cosine [0,1]) need no normalization, and agreement across signals
 // compounds. The fused value is normalized to [0,1] (best possible = rank 1 in every signal) to
 // honour the documented score range; ordering uses the shared (score desc, updatedAt desc, id asc) sort.
+function buildRankBySignal(
+  memories: readonly MemoryRecord[],
+  subscoresById: ReadonlyMap<MemoryId, IncludedSubscores>,
+  signals: readonly (keyof IncludedSubscores)[],
+): ReadonlyMap<keyof IncludedSubscores, ReadonlyMap<MemoryId, number>> {
+  const rankBySignal = new Map<keyof IncludedSubscores, ReadonlyMap<MemoryId, number>>();
+  for (const sig of signals) {
+    const ordered = [...memories].sort((a, b) => {
+      const av = requireEntry(subscoresById, a.id)[sig];
+      const bv = requireEntry(subscoresById, b.id)[sig];
+      if (av !== bv) return bv - av;
+      if (a.id < b.id) return -1;
+      if (a.id > b.id) return 1;
+      return 0;
+    });
+    const ranks = new Map<MemoryId, number>();
+    ordered.forEach((m, i) => ranks.set(m.id, i + 1));
+    rankBySignal.set(sig, ranks);
+  }
+  return rankBySignal;
+}
+
 function rrfRank(
   memories: readonly MemoryRecord[],
   subscoresById: ReadonlyMap<MemoryId, IncludedSubscores>,
@@ -290,18 +312,7 @@ function rrfRank(
       recordById,
     );
   }
-  const rankBySignal = new Map<keyof IncludedSubscores, ReadonlyMap<MemoryId, number>>();
-  for (const sig of signals) {
-    const ordered = [...memories].sort((a, b) => {
-      const av = requireEntry(subscoresById, a.id)[sig];
-      const bv = requireEntry(subscoresById, b.id)[sig];
-      if (av !== bv) return bv - av;
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-    });
-    const ranks = new Map<MemoryId, number>();
-    ordered.forEach((m, i) => ranks.set(m.id, i + 1));
-    rankBySignal.set(sig, ranks);
-  }
+  const rankBySignal = buildRankBySignal(memories, subscoresById, signals);
   const maxFused = signals.reduce((sum, sig) => sum + weights[sig] / (RRF_K + 1), 0);
   const entries = memories.map((m): IncludedMemory => {
     let fused = 0;

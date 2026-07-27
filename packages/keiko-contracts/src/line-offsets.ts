@@ -28,9 +28,7 @@ export function computeLineStarts(text: string): readonly number[] {
   const starts: number[] = [0];
   for (let index = 0; index < text.length; index += 1) {
     const code = text.codePointAt(index) ?? 0;
-    if (code === LF) {
-      starts.push(index + 1);
-    } else if (code === CR && (text.codePointAt(index + 1) ?? 0) !== LF) {
+    if (code === LF || (code === CR && (text.codePointAt(index + 1) ?? 0) !== LF)) {
       starts.push(index + 1);
     }
   }

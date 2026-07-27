@@ -35,6 +35,86 @@ interface ConnectPanelProps {
   readonly onClone: () => void;
 }
 
+interface RecentRepositoriesProps {
+  readonly repositories: readonly ProjectWithAvailability[];
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly onSelect: (path: string) => void;
+}
+
+function RecentRepositories({
+  repositories,
+  loading,
+  error,
+  onSelect,
+}: RecentRepositoriesProps): ReactNode {
+  if (error !== null) {
+    return (
+      <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
+        {error}
+      </p>
+    );
+  }
+  if (loading && repositories.length === 0) {
+    return (
+      <output style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
+        Loading repositories…
+      </output>
+    );
+  }
+  if (repositories.length === 0) {
+    return (
+      <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
+        No repositories yet. Connect or clone one to get started.
+      </p>
+    );
+  }
+  return (
+    <ul
+      style={{
+        listStyle: "none",
+        margin: 0,
+        padding: 0,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      {repositories.map((repo) => (
+        <li key={repo.path}>
+          <button
+            type="button"
+            style={recentRowStyle(false)}
+            title={repo.path}
+            onClick={() => onSelect(repo.path)}
+          >
+            <span aria-hidden="true" style={RECENT_MEDALLION_STYLE}>
+              <Icons.folder size={16} />
+            </span>
+            <span
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                minWidth: 0,
+                flex: 1,
+              }}
+            >
+              <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--fg)" }}>
+                {repo.name}
+              </span>
+              <span style={MONO_PATH_STYLE}>{repo.path}</span>
+            </span>
+            <span aria-hidden="true" style={{ color: "var(--fg-faint)" }}>
+              <Icons.chevronR size={15} />
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function ConnectPanel({
   repositories,
   loading,
@@ -66,62 +146,12 @@ export function ConnectPanel({
 
         <div style={{ width: "100%", marginTop: 34, textAlign: "left" }}>
           <div style={RECENT_LABEL_STYLE}>Recent</div>
-          {error !== null ? (
-            <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
-              {error}
-            </p>
-          ) : loading && repositories.length === 0 ? (
-            <output style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
-              Loading repositories…
-            </output>
-          ) : repositories.length === 0 ? (
-            <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
-              No repositories yet. Connect or clone one to get started.
-            </p>
-          ) : (
-            <ul
-              style={{
-                listStyle: "none",
-                margin: 0,
-                padding: 0,
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-              }}
-            >
-              {repositories.map((repo) => (
-                <li key={repo.path}>
-                  <button
-                    type="button"
-                    style={recentRowStyle(false)}
-                    title={repo.path}
-                    onClick={() => onSelect(repo.path)}
-                  >
-                    <span aria-hidden="true" style={RECENT_MEDALLION_STYLE}>
-                      <Icons.folder size={16} />
-                    </span>
-                    <span
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 2,
-                        minWidth: 0,
-                        flex: 1,
-                      }}
-                    >
-                      <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--fg)" }}>
-                        {repo.name}
-                      </span>
-                      <span style={MONO_PATH_STYLE}>{repo.path}</span>
-                    </span>
-                    <span aria-hidden="true" style={{ color: "var(--fg-faint)" }}>
-                      <Icons.chevronR size={15} />
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+          <RecentRepositories
+            repositories={repositories}
+            loading={loading}
+            error={error}
+            onSelect={onSelect}
+          />
         </div>
 
         <div style={AGENT_HINT_STYLE}>

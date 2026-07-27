@@ -65,8 +65,12 @@ const DOMAIN_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
   ["wrong", ["incorrect", "bug", "failure", "error", "regression"]],
 ]);
 
-function normalizeCase(term: string, caseSensitive: boolean): string {
-  return caseSensitive ? term : term.toLowerCase();
+function toCaseSensitive(term: string): string {
+  return term;
+}
+
+function toCaseInsensitive(term: string): string {
+  return term.toLowerCase();
 }
 
 function addTerm(
@@ -83,7 +87,7 @@ function addTerm(
   if (trimmed.length < minLength || !/[\p{L}\p{N}]/u.test(trimmed)) {
     return;
   }
-  const normalized = normalizeCase(trimmed, caseSensitive);
+  const normalized = caseSensitive ? toCaseSensitive(trimmed) : toCaseInsensitive(trimmed);
   if (seen.has(normalized)) {
     return;
   }

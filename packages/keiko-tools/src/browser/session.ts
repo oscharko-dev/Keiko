@@ -203,8 +203,14 @@ function assertWsUrlTrusted(ws: string, expectedPort: number): void {
     parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
       ? parsed.hostname.slice(1, -1)
       : parsed.hostname;
-  const port =
-    parsed.port === "" ? (parsed.protocol === "wss:" ? 443 : 80) : Number.parseInt(parsed.port, 10);
+  let port: number;
+  if (parsed.port !== "") {
+    port = Number.parseInt(parsed.port, 10);
+  } else if (parsed.protocol === "wss:") {
+    port = 443;
+  } else {
+    port = 80;
+  }
   if (!isLoopbackHost(host) || port !== expectedPort) {
     throw new BrowserToolError(
       "CDP_TRANSPORT_REFUSED",

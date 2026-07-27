@@ -301,6 +301,13 @@ function clusterPartition(
   return { clusters: finalizeClusters(ordered, uf, evidenceByRoot), canceled };
 }
 
+// Stable cluster ordering: by canonical id (the oldest member's id is unique per cluster).
+function compareByCanonicalId(a: DuplicateCluster, b: DuplicateCluster): number {
+  if (a.canonicalId < b.canonicalId) return -1;
+  if (a.canonicalId > b.canonicalId) return 1;
+  return 0;
+}
+
 // Public entry point. Returns clusters of size >= 2 only; singletons are filtered out.
 // Output is deterministic for any permutation of `records`.
 export function scanDuplicateClusters(
@@ -328,11 +335,8 @@ export function scanDuplicateClusters(
     }
     if (canceled) break;
   }
-  // Stable cluster ordering: by canonical id (the oldest member's id is unique per cluster).
   return {
-    clusters: clusters.sort((a, b) =>
-      a.canonicalId < b.canonicalId ? -1 : a.canonicalId > b.canonicalId ? 1 : 0,
-    ),
+    clusters: clusters.sort(compareByCanonicalId),
     canceled,
   };
 }

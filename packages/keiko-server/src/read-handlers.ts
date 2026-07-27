@@ -197,14 +197,21 @@ function parsePositiveBudget(value: string | null): number | undefined {
   return parsed;
 }
 
+function workspaceErrorStatus(code: WorkspaceCode): number {
+  if (code === WORKSPACE_CODES.NOT_FOUND) {
+    return 404;
+  }
+  if (code === WORKSPACE_CODES.FILE_TOO_LARGE || code === WORKSPACE_CODES.READ_FAILED) {
+    return 422;
+  }
+  return 400;
+}
+
 function workspaceErrorResult(error: WorkspaceError): RouteResult {
-  const status =
-    error.code === WORKSPACE_CODES.NOT_FOUND
-      ? 404
-      : error.code === WORKSPACE_CODES.FILE_TOO_LARGE || error.code === WORKSPACE_CODES.READ_FAILED
-        ? 422
-        : 400;
-  return { status, body: errorBody(error.code, workspaceErrorMessage(error.code)) };
+  return {
+    status: workspaceErrorStatus(error.code),
+    body: errorBody(error.code, workspaceErrorMessage(error.code)),
+  };
 }
 
 const WORKSPACE_ERROR_MESSAGES: Record<WorkspaceCode, string> = {

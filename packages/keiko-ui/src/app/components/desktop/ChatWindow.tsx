@@ -1906,6 +1906,43 @@ function VoiceDialogMicMuteButton({
   );
 }
 
+// Extracted from ComposerContextControls (SonarCloud S3358) — the compact model-select tip label.
+function composerModelCompactTip(
+  loading: boolean,
+  noEligibleModels: boolean,
+  t: I18nTranslate,
+): string {
+  if (loading) return t("chat.model.loading");
+  if (noEligibleModels) return t("chat.model.noEligible");
+  return t("chat.model.change");
+}
+
+// Extracted from ComposerContextControls (SonarCloud S3358) — the model-select placeholder text.
+function composerModelPlaceholder(
+  loading: boolean,
+  noEligibleModels: boolean,
+  t: I18nTranslate,
+): string {
+  if (loading) return t("chat.model.loading");
+  if (noEligibleModels) return t("chat.model.noEligible");
+  return t("chat.model.menuTitle");
+}
+
+// Extracted from ComposerContextControls (SonarCloud S3358) — the model-select option list: a
+// single disabled placeholder option while loading or with no eligible models, else the real list.
+function composerModelOptions(
+  loading: boolean,
+  noEligibleModels: boolean,
+  models: readonly ModelCapability[],
+  t: I18nTranslate,
+): readonly { readonly value: string; readonly label: string; readonly disabled?: boolean }[] {
+  if (loading) return [{ value: "", label: t("chat.model.loading"), disabled: true }];
+  if (noEligibleModels) {
+    return [{ value: "", label: t("chat.model.noEligible"), disabled: true }];
+  }
+  return modelList(models).map((model) => ({ value: model.id, label: model.id }));
+}
+
 function ComposerContextControls({
   session,
   selectedModelCapability,
@@ -1916,11 +1953,7 @@ function ComposerContextControls({
   const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
   const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
   const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
-  const compactModelTip = loading
-    ? t("chat.model.loading")
-    : noEligibleModels
-      ? t("chat.model.noEligible")
-      : t("chat.model.change");
+  const compactModelTip = composerModelCompactTip(loading, noEligibleModels, t);
 
   return (
     <div className="cmp-bar-model">
@@ -1941,13 +1974,7 @@ function ComposerContextControls({
           ariaLabel={t("chat.model.menuTitle")}
           ariaDescribedBy={selectDescribedBy}
           disabled={loading}
-          placeholder={
-            loading
-              ? t("chat.model.loading")
-              : noEligibleModels
-                ? t("chat.model.noEligible")
-                : t("chat.model.menuTitle")
-          }
+          placeholder={composerModelPlaceholder(loading, noEligibleModels, t)}
           leadingVisual={
             <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
           }
@@ -1957,14 +1984,7 @@ function ComposerContextControls({
           mono
           sections={[
             {
-              options: loading
-                ? [{ value: "", label: t("chat.model.loading"), disabled: true }]
-                : noEligibleModels
-                  ? [{ value: "", label: t("chat.model.noEligible"), disabled: true }]
-                  : modelList(models).map((model) => ({
-                      value: model.id,
-                      label: model.id,
-                    })),
+              options: composerModelOptions(loading, noEligibleModels, models, t),
             },
           ]}
           onValueChange={(next) => {
@@ -2230,22 +2250,30 @@ export function sendStatusLabel(status: SendStatus): string {
   }
 }
 
+// Extracted from SendLifecycleStatus (SonarCloud S3358) — the per-status live-region label.
+// idle/completed/failed fall through to "" (the error string carries its own role="alert").
+function sendLifecycleStatusLabel(status: SendStatus, t: I18nTranslate): string {
+  switch (status) {
+    case "queued":
+      return t("chat.send.statusQueued");
+    case "contacting":
+      return t("chat.send.statusContacting");
+    case "streaming":
+      return t("chat.send.statusStreaming");
+    case "cancelled":
+      return t("chat.send.statusCancelled");
+    default:
+      return "";
+  }
+}
+
 // Issue #152 / AC#1 + AC#4 — assistive announcement of the send lifecycle.
 // role="status" + aria-live="polite" so screen-reader users hear transitions
 // without interruption. Hidden when there is nothing to say (idle/completed/
 // failed — the error string carries its own role="alert").
 function SendLifecycleStatus({ status }: { readonly status: SendStatus }): ReactNode {
   const t = useTranslate();
-  const label =
-    status === "queued"
-      ? t("chat.send.statusQueued")
-      : status === "contacting"
-        ? t("chat.send.statusContacting")
-        : status === "streaming"
-          ? t("chat.send.statusStreaming")
-          : status === "cancelled"
-            ? t("chat.send.statusCancelled")
-            : "";
+  const label = sendLifecycleStatusLabel(status, t);
   // uiux-fix F041 (C170, WCAG 4.1.3) — the live region stays permanently mounted
   // and only its CONTENT changes: a role="status" region inserted into the DOM
   // together with its first message is unreliably announced (VoiceOver/Safari,
@@ -3310,24 +3338,28 @@ function NoChatState(): ReactNode {
   );
 }
 
+// Extracted from activeGroundingSourceCount (SonarCloud S3358) — the folder-scope count: the
+// list length when present, else 1 for the legacy single-scope field, else 0.
+function groundingFolderCount(chat: Chat): number {
+  if (chat.connectedScopes !== undefined) return chat.connectedScopes.length;
+  if (chat.connectedScope !== undefined) return 1;
+  return 0;
+}
+
+// Extracted from activeGroundingSourceCount (SonarCloud S3358) — the connector-scope count,
+// mirroring groundingFolderCount for the local-knowledge (connector) scope fields.
+function groundingConnectorCount(chat: Chat): number {
+  if (chat.localKnowledgeScopes !== undefined) return chat.localKnowledgeScopes.length;
+  if (chat.localKnowledgeScope !== undefined) return 1;
+  return 0;
+}
+
 // #28 — When multiple grounding sources are active (multiple connectors, or a
 // connector plus folder scopes), we cannot represent them as a single select
 // value. Return the dedicated sentinel "multi" so the select shows a read-only
 // "Multiple sources" summary label instead of silently showing only the first.
 function activeGroundingSourceCount(chat: Chat): number {
-  const folderCount =
-    chat.connectedScopes !== undefined
-      ? chat.connectedScopes.length
-      : chat.connectedScope !== undefined
-        ? 1
-        : 0;
-  const connectorCount =
-    chat.localKnowledgeScopes !== undefined
-      ? chat.localKnowledgeScopes.length
-      : chat.localKnowledgeScope !== undefined
-        ? 1
-        : 0;
-  return folderCount + connectorCount;
+  return groundingFolderCount(chat) + groundingConnectorCount(chat);
 }
 
 function groundedModeValue(chat: Chat): string {
@@ -3925,6 +3957,80 @@ function MemoryActionUpdateCard({
   );
 }
 
+// Extracted from MemoryActionForgetCard (SonarCloud S3358) — the three action-button states
+// (plain forget / review-then-confirm / confirm-or-cancel), previously a nested ternary chain
+// picking between three JSX blocks in the card body.
+function MemoryActionForgetButtons({
+  action,
+  busy,
+  confirmForget,
+  forgetConfirmText,
+  executeForget,
+  clearError,
+  setConfirmForget,
+  setForgetConfirmText,
+}: {
+  readonly action: Extract<ConversationMemoryActionWire, { readonly kind: "forget" }>;
+  readonly busy: boolean;
+  readonly confirmForget: boolean;
+  readonly forgetConfirmText: string;
+  readonly executeForget: () => void;
+  readonly clearError: () => void;
+  readonly setConfirmForget: Dispatch<SetStateAction<boolean>>;
+  readonly setForgetConfirmText: Dispatch<SetStateAction<string>>;
+}): ReactNode {
+  const t = useTranslate();
+  if (!action.requiresConfirmation) {
+    return (
+      <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
+        {t("chat.memory.forget")}
+      </button>
+    );
+  }
+  if (!confirmForget) {
+    return (
+      <button
+        type="button"
+        aria-disabled={busy}
+        aria-busy={busy}
+        onClick={() => {
+          if (busy) return;
+          clearError();
+          setConfirmForget(true);
+          setForgetConfirmText("");
+        }}
+      >
+        {t("chat.memory.reviewForget")}
+      </button>
+    );
+  }
+  return (
+    <>
+      <button
+        type="button"
+        aria-disabled={busy || forgetConfirmText !== "FORGET"}
+        aria-busy={busy}
+        onClick={executeForget}
+      >
+        {t("chat.memory.forgetPermanently")}
+      </button>
+      <button
+        type="button"
+        aria-disabled={busy}
+        aria-busy={busy}
+        onClick={() => {
+          if (busy) return;
+          clearError();
+          setConfirmForget(false);
+          setForgetConfirmText("");
+        }}
+      >
+        {t("common.cancel")}
+      </button>
+    </>
+  );
+}
+
 // Extracted from MemoryActionCard (SonarCloud S3776) — the "forget" kind's card. `confirmForget`
 // and `forgetConfirmText` were previously parent state used only by this branch; they move down
 // with it (each action instance keeps a stable React key, so this is not a behavior change — see
@@ -3984,49 +4090,16 @@ function MemoryActionForgetCard({
         </label>
       ) : null}
       <div className="chat-memory-action-buttons">
-        {!action.requiresConfirmation ? (
-          <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
-            {t("chat.memory.forget")}
-          </button>
-        ) : !confirmForget ? (
-          <button
-            type="button"
-            aria-disabled={busy}
-            aria-busy={busy}
-            onClick={() => {
-              if (busy) return;
-              clearError();
-              setConfirmForget(true);
-              setForgetConfirmText("");
-            }}
-          >
-            {t("chat.memory.reviewForget")}
-          </button>
-        ) : (
-          <>
-            <button
-              type="button"
-              aria-disabled={busy || forgetConfirmText !== "FORGET"}
-              aria-busy={busy}
-              onClick={executeForget}
-            >
-              {t("chat.memory.forgetPermanently")}
-            </button>
-            <button
-              type="button"
-              aria-disabled={busy}
-              aria-busy={busy}
-              onClick={() => {
-                if (busy) return;
-                clearError();
-                setConfirmForget(false);
-                setForgetConfirmText("");
-              }}
-            >
-              {t("common.cancel")}
-            </button>
-          </>
-        )}
+        <MemoryActionForgetButtons
+          action={action}
+          busy={busy}
+          confirmForget={confirmForget}
+          forgetConfirmText={forgetConfirmText}
+          executeForget={executeForget}
+          clearError={clearError}
+          setConfirmForget={setConfirmForget}
+          setForgetConfirmText={setForgetConfirmText}
+        />
       </div>
       {error !== undefined ? (
         <ErrorNoticeFromError
@@ -4231,6 +4304,29 @@ function MemoryDisclosureButton({
   );
 }
 
+// Extracted from MemoryPanelImpl (SonarCloud S3358) — the memory-disclosure summary line: pending
+// while no result has arrived yet, else the token-budget copy, else "memory disabled".
+function memorySummaryLabel(
+  latestMemory: ConversationMemoryResultWire | undefined,
+  t: I18nTranslate,
+): string {
+  if (latestMemory === undefined) return t("chat.memory.disclosurePending");
+  if (latestMemory.context.enabled) {
+    return t("chat.memory.usedTokens", {
+      used: latestMemory.context.budget.used,
+      tokens: latestMemory.context.budget.tokens,
+    });
+  }
+  return t("chat.memory.disabledLast");
+}
+
+// Extracted from MemoryPanelImpl (SonarCloud S3358) — the stable React key per memory action kind.
+function memoryActionKey(action: ConversationMemoryActionWire): string {
+  if (action.kind === "candidate") return action.proposalId;
+  if (action.kind === "rejected") return action.reason;
+  return action.memoryId;
+}
+
 function MemoryPanelImpl({
   latestMemory,
   acceptCandidate,
@@ -4250,16 +4346,7 @@ function MemoryPanelImpl({
   return (
     <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
       <div id={disclosure.disclosureId} className="chat-memory-disclosure">
-        <p className="chat-memory-summary">
-          {latestMemory === undefined
-            ? t("chat.memory.disclosurePending")
-            : latestMemory.context.enabled
-              ? t("chat.memory.usedTokens", {
-                  used: latestMemory.context.budget.used,
-                  tokens: latestMemory.context.budget.tokens,
-                })
-              : t("chat.memory.disabledLast")}
-        </p>
+        <p className="chat-memory-summary">{memorySummaryLabel(latestMemory, t)}</p>
         {latestMemory?.context.memories.map((memory) => (
           <article key={memory.memoryId} className="chat-memory-item">
             <div className="chat-memory-item-head">
@@ -4299,13 +4386,7 @@ function MemoryPanelImpl({
         ))}
         {latestMemory?.actions.map((action) => (
           <MemoryActionCard
-            key={
-              action.kind === "candidate"
-                ? action.proposalId
-                : action.kind === "rejected"
-                  ? action.reason
-                  : action.memoryId
-            }
+            key={memoryActionKey(action)}
             action={action}
             acceptCandidate={acceptCandidate}
             rejectCandidate={rejectCandidate}
@@ -4476,6 +4557,19 @@ function ChatWindowStatusHeader({
   );
 }
 
+// Extracted from ChatWindowLog (SonarCloud S3358) — which empty state to show when there is
+// nothing to render yet: the composer's empty state when a chat is open, else "no chat selected".
+function EmptyOrNoChatState({
+  activeChat,
+  effectiveMinimal,
+}: {
+  readonly activeChat: Chat | undefined;
+  readonly effectiveMinimal: boolean;
+}): ReactNode {
+  if (activeChat !== undefined) return <EmptyComposerState minimal={effectiveMinimal} />;
+  return <NoChatState />;
+}
+
 // Extracted from ChatWindow (SonarCloud S3776) — the scrollable conversation log: empty state
 // (per whether a chat is open) vs. the question map + conversation thread + grounded panel +
 // sent-documents note.
@@ -4556,11 +4650,7 @@ function ChatWindowLog({
       }}
     >
       {visible.length === 0 && !hasLiveStreamingAssistant ? (
-        activeChat !== undefined ? (
-          <EmptyComposerState minimal={effectiveMinimal} />
-        ) : (
-          <NoChatState />
-        )
+        <EmptyOrNoChatState activeChat={activeChat} effectiveMinimal={effectiveMinimal} />
       ) : (
         <div className={`chatw-log-shell${showQuestionMap ? " chatw-log-shell-with-map" : ""}`}>
           {showQuestionMap ? (

@@ -177,6 +177,12 @@ function findTagEnd(text: string, from: number): number {
   return text.indexOf(">", from);
 }
 
+function resolveTagKind(isClose: boolean, selfClosing: boolean): TagKind {
+  if (isClose) return "close";
+  if (selfClosing) return "self-closing";
+  return "open";
+}
+
 function readTagAt(text: string, lt: number): Tag | null {
   const after = lt + 1;
   const isClose = text.codePointAt(after) === 0x2f; /* / */
@@ -186,7 +192,7 @@ function readTagAt(text: string, lt: number): Tag | null {
   const gt = findTagEnd(text, afterName);
   if (gt === -1) return null;
   const selfClosing = !isClose && text.codePointAt(gt - 1) === 0x2f;
-  const kind: TagKind = isClose ? "close" : selfClosing ? "self-closing" : "open";
+  const kind = resolveTagKind(isClose, selfClosing);
   return { name, kind, start: lt, end: gt + 1, raw: text.slice(lt, gt + 1) };
 }
 
@@ -738,13 +744,21 @@ function hasUnsafeScheme(value: string): boolean {
 // literal `://`) carries a host exactly like `scheme://host/path` does and must have it stripped
 // the same way — it has neither an unsafe scheme nor a `://` substring, so both of those checks
 // alone would fall through and forward the host verbatim.
+// Where the host substring begins: right after `://` when present, right after a leading `//`
+// for a protocol-relative target, or -1 when neither applies (no host to strip).
+function resolveHostStart(trimmed: string, schemeAt: number): number {
+  if (schemeAt >= 0) return schemeAt + 3;
+  if (trimmed.startsWith("//")) return 2;
+  return -1;
+}
+
 function redactFrameTarget(src: string): string | undefined {
   const base = src.split(/[?#]/u)[0] ?? "";
   const trimmed = base.trim();
   if (trimmed.length === 0 || trimmed.length > 256 || trimmed.includes("\0")) return undefined;
   if (hasUnsafeScheme(trimmed)) return undefined;
   const schemeAt = trimmed.indexOf("://");
-  const hostStart = schemeAt >= 0 ? schemeAt + 3 : trimmed.startsWith("//") ? 2 : -1;
+  const hostStart = resolveHostStart(trimmed, schemeAt);
   if (hostStart < 0) return trimmed;
   const afterHost = trimmed.slice(hostStart);
   const slash = afterHost.indexOf("/");

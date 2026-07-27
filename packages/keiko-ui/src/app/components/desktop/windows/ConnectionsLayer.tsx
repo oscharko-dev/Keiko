@@ -402,6 +402,19 @@ interface ConnectionBadgeProps {
   readonly onConfirmRemove: (id: string) => void;
 }
 
+function connectionBadgeAriaLabel(
+  item: ResolvedConn,
+  active: boolean,
+  armed: boolean,
+  intensity: FlowIntensity,
+): string {
+  if (armed) return `Confirm removal of connection: ${item.label}. Activate again to remove.`;
+  if (active) {
+    return `${item.label} — ${intensity} data exchange in progress. Activate to remove connection.`;
+  }
+  return `Remove connection: ${item.label}`;
+}
+
 // GEN-PERF-WORKSPACE-006 — memoized badge; same identity contract as ConnectionEdge
 // (the arm/disarm/remove callbacks are referentially stable in the parent).
 const ConnectionBadge = memo(function ConnectionBadge({
@@ -435,13 +448,7 @@ const ConnectionBadge = memo(function ConnectionBadge({
           ? `Click again to remove: ${item.label}\n\n${metadataLabel}`
           : `${metadataLabel}\n\nClick once to arm removal.`
       }
-      aria-label={
-        armed
-          ? `Confirm removal of connection: ${item.label}. Activate again to remove.`
-          : active
-            ? `${item.label} — ${intensity} data exchange in progress. Activate to remove connection.`
-            : `Remove connection: ${item.label}`
-      }
+      aria-label={connectionBadgeAriaLabel(item, active, armed, intensity)}
     >
       <Icons.git size={11} /> <span>{armed ? "Remove?" : item.label}</span>
       {active && !armed ? (

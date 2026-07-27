@@ -9,6 +9,12 @@
 
 import { createHash } from "node:crypto";
 
+function compareKeys(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 // Canonical JSON: object keys sorted recursively, array order preserved, undefined values omitted
 // (matching JSON.stringify semantics). Two structurally equal inputs serialise to byte-identical
 // strings regardless of key insertion order, so SHA-256 over the canonical form is order-stable.
@@ -24,7 +30,7 @@ export function canonicalise(value: unknown): string {
   }
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(([a], [b]) => compareKeys(a, b))
     .map(([key, v]) => `${JSON.stringify(key)}:${canonicalise(v)}`);
   return `{${entries.join(",")}}`;
 }

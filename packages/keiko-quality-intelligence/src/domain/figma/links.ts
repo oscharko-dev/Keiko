@@ -110,6 +110,14 @@ export const extractInterScreenLinks = (
 
   const byKey = new Map<string, InterScreenLink>();
   for (const link of collected) byKey.set(linkKey(link), link);
-  const byCode = (x: string, y: string): number => (x < y ? -1 : x > y ? 1 : 0);
+  const byCode = (x: string, y: string): number => {
+    if (x < y) {
+      return -1;
+    }
+    if (x > y) {
+      return 1;
+    }
+    return 0;
+  };
   return [...byKey.values()].sort((a, b) => byCode(linkKey(a), linkKey(b)));
 };

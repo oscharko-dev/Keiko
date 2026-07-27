@@ -152,6 +152,14 @@ function networkEnforcedFromReport(results: readonly VerificationResult[]): bool
   );
 }
 
+function outcomeFor(
+  denied: boolean,
+  report: VerificationReport,
+): EditorPatchVerificationSummary["outcome"] {
+  if (denied) return "denied";
+  return report.overallStatus === "passed" ? "passed" : "failed";
+}
+
 // Maps the orchestrator report onto the content-free verification summary. A `denied` step (egress could
 // not be enforced) is surfaced distinctly from a `failed` step (the applied test did not pass).
 function toSummary(
@@ -162,7 +170,7 @@ function toSummary(
   const denied = results.some((result) => result.status === "denied");
   const passed = results.filter((result) => result.status === "passed").length;
   const failed = results.filter((result) => FAILED_STATUSES.has(result.status)).length;
-  const outcome = denied ? "denied" : report.overallStatus === "passed" ? "passed" : "failed";
+  const outcome = outcomeFor(denied, report);
   return {
     outcome,
     networkEnforced: !denied && networkEnforcedFromReport(results),

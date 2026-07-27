@@ -289,6 +289,12 @@ interface DirectoryBrowseControl {
   readonly open: (key: string, value: string) => void;
 }
 
+function resolveFieldValue(raw: CfgValue): string {
+  if (typeof raw === "string") return raw;
+  if (raw === undefined) return "";
+  return String(raw);
+}
+
 function renderField(
   f: ConfigField,
   cfg: Cfg,
@@ -298,7 +304,7 @@ function renderField(
 ): ReactNode {
   if (f.type === "perm") return <PermControl cfg={cfg} set={set} />;
   const raw = cfg[f.key];
-  const value = typeof raw === "string" ? raw : raw === undefined ? "" : String(raw);
+  const value = resolveFieldValue(raw);
   if (f.type === "select") {
     const options = f.options ?? [];
     return (

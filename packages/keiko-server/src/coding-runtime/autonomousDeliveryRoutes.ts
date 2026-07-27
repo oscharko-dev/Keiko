@@ -563,6 +563,14 @@ function commandOutcome(result: RouteResult): "passed" | "failed" {
   return parsed.value.failureReason === "none" ? "passed" : "failed";
 }
 
+function stepOperation(
+  step: AutonomousDeliveryStep,
+): GitRepositoryAgentOperationKind | "command-task" | "connector-operation" {
+  if (step.kind === "repository-operation") return step.request.operation;
+  if (step.kind === "command-task") return "command-task";
+  return "connector-operation";
+}
+
 function deniedStep(
   step: AutonomousDeliveryStep,
   denialReason: AutonomousDeliveryDenialReason,
@@ -570,12 +578,7 @@ function deniedStep(
 ): AutonomousDeliveryStepResult {
   return {
     stepId: step.stepId,
-    operation:
-      step.kind === "repository-operation"
-        ? step.request.operation
-        : step.kind === "command-task"
-          ? "command-task"
-          : "connector-operation",
+    operation: stepOperation(step),
     status: "denied",
     denialReason,
     evidence,

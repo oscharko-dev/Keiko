@@ -148,6 +148,13 @@ export function formatUserError(error: unknown, fallback: string): string {
   return fallback;
 }
 
+// S3358 — a caught value may be a plain string, an Error, or anything else (unknown throw).
+function rawErrorMessage(error: unknown): string {
+  if (typeof error === "string") return error.trim();
+  if (error instanceof Error) return error.message.trim();
+  return "";
+}
+
 export function toUserErrorNotice(error: unknown, fallback: string): UserErrorNotice {
   if (error instanceof ApiError) {
     const message = friendlyMessageForCode(
@@ -162,8 +169,7 @@ export function toUserErrorNotice(error: unknown, fallback: string): UserErrorNo
       remediation: remediationForError(message, error.code),
     };
   }
-  const rawMessage =
-    typeof error === "string" ? error.trim() : error instanceof Error ? error.message.trim() : "";
+  const rawMessage = rawErrorMessage(error);
   const formatted = parseFormattedMessage(sanitizeMessage(rawMessage || fallback));
   return {
     title: titleForError(formatted.message, formatted.code),

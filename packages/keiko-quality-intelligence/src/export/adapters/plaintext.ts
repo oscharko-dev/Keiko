@@ -13,8 +13,11 @@ import type {
 import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
 import { inlineField, inlineFields } from "../textSafety.js";
 
-const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number =>
-  a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0;
+const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number => {
+  if (a.candidateId < b.candidateId) return -1;
+  if (a.candidateId > b.candidateId) return 1;
+  return 0;
+};
 
 const RULE = "=".repeat(60);
 const DIVIDER = "-".repeat(40);

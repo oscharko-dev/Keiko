@@ -124,12 +124,25 @@ function filesScopeLabel(cfg: Record<string, unknown> | undefined, root: string)
   return `${root.split(/[/\\]/u).filter(Boolean).pop() ?? root}/`;
 }
 
+// The window in the pair whose type matches, or null when neither does.
+function resolveSideOfType(a: WinSnapshot, b: WinSnapshot, type: WindowType): WinSnapshot | null {
+  if (a.type === type) return a;
+  if (b.type === type) return b;
+  return null;
+}
+
+// The other window in the pair once `side` has been identified as one of the two.
+function otherSideOf(side: WinSnapshot | null, a: WinSnapshot, b: WinSnapshot): WinSnapshot | null {
+  if (side === null) return null;
+  return side === a ? b : a;
+}
+
 // Files-context edge: one side is a Files window whose bound partner (chat, agents, quality,
 // editor, promptEnhancer) consumes its folder scope. Returns null when the pair isn't a
 // files-context edge so relLabel can fall through to the generic pair classifier below.
 function filesRelLabel(a: WinSnapshot, b: WinSnapshot): string | null {
-  const filesSide: WinSnapshot | null = a.type === "files" ? a : b.type === "files" ? b : null;
-  const other = filesSide === null ? null : filesSide === a ? b : a;
+  const filesSide = resolveSideOfType(a, b, "files");
+  const other = otherSideOf(filesSide, a, b);
   if (filesSide === null || other === null || !receivesFilesContext(other.type)) return null;
   const root = configRoot(filesSide.cfg);
   // Honest empty state: nothing is bound yet, so the badge must not claim a folder.
@@ -143,7 +156,7 @@ function filesRelLabel(a: WinSnapshot, b: WinSnapshot): string | null {
 // unless a specific screen was selected on the Figma Snapshot window, in which case the edge
 // reads as "uses view".
 function figmaRelLabel(a: WinSnapshot, b: WinSnapshot): string {
-  const figmaSide = a.type === "figma" ? a : b.type === "figma" ? b : null;
+  const figmaSide = resolveSideOfType(a, b, "figma");
   const selectedScreenName = figmaSide?.cfg?.["selectedScreenName"];
   return typeof selectedScreenName === "string" && selectedScreenName.trim().length > 0
     ? "uses view"

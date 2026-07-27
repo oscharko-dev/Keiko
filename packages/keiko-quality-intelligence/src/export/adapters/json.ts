@@ -49,7 +49,11 @@ interface JsonExportEnvelope {
 const byCandidateIdAsc = (
   a: QualityIntelligenceExportBundleEntry,
   b: QualityIntelligenceExportBundleEntry,
-): number => (a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0);
+): number => {
+  if (a.candidateId < b.candidateId) return -1;
+  if (a.candidateId > b.candidateId) return 1;
+  return 0;
+};
 
 export function adaptToJson(
   bundle: QualityIntelligenceExportBundle,

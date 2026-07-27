@@ -6,6 +6,7 @@ import type {
   UpdateRemediationStatusReport,
   UpdateRemediationStatusRequest,
   UpdateRemediationStatus as RuntimeRemediationStatus,
+  UpdateRuntimeEventType,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_REMEDIATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import type { LocalKnowledgeRemediationPort } from "./local-knowledge-remediation.js";
@@ -265,26 +266,29 @@ function findDraftOrThrow(drafts: readonly ActionDraft[], actionIdValue: string)
   );
 }
 
+function remediationAuditEventType(status: RuntimeRemediationStatus): UpdateRuntimeEventType {
+  if (status === "deferred") {
+    return "remediation-deferred";
+  }
+  if (status === "completed") {
+    return "remediation-completed";
+  }
+  return "remediation-failed";
+}
+
 function recordRemediationAudit(
   options: UpdateRemediationManagerOptions,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
   status: RuntimeRemediationStatus,
 ): void {
-  options.localState.recordAuditEvent(
-    status === "deferred"
-      ? "remediation-deferred"
-      : status === "completed"
-        ? "remediation-completed"
-        : "remediation-failed",
-    {
-      targetVersion: request.targetVersion,
-      store: draft.store,
-      remediation: draft.remediation,
-      status,
-      ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
-    },
-  );
+  options.localState.recordAuditEvent(remediationAuditEventType(status), {
+    targetVersion: request.targetVersion,
+    store: draft.store,
+    remediation: draft.remediation,
+    status,
+    ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
+  });
 }
 
 function deferDraft(

@@ -39,6 +39,12 @@ const mapPriority = (priority: QualityIntelligenceTestCaseCandidate["priority"])
   return priority;
 };
 
+const byIdAsc = (a: string, b: string): number => {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
+
 // Build the qTest rows for a single candidate. One row per (step, expected) pair — the row count is
 // the longer of `steps`/`expectedResults` so a trailing expected result is never dropped (Issue
 // #283); a candidate with neither yields one empty-step row.
@@ -79,7 +85,7 @@ export function adaptToQtest(
   const sortedIds = bundle.contents
     .map((entry) => entry.candidateId)
     .slice()
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort(byIdAsc);
   let body = encodeSpreadsheetSafeRow(QTEST_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

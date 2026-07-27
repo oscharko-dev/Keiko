@@ -219,6 +219,17 @@ function patchNotesReportFor(
   return report;
 }
 
+function copyFeedbackLabel(
+  copyState: ManualCopyState,
+  buttonLabel: string,
+  t: I18nTranslate,
+): string {
+  if (copyState === "copied") return t("updates.manual.copyCopied");
+  if (copyState === "selected") return t("updates.manual.copySelectedShort");
+  if (copyState === "failed") return t("updates.manual.copyFailedShort");
+  return buttonLabel;
+}
+
 function ManualInstructionCopyFrame({
   text,
   command,
@@ -238,14 +249,7 @@ function ManualInstructionCopyFrame({
     (command ? t("updates.manual.copyCommandLabel") : t("updates.manual.copyInstructionLabel"));
   const buttonLabel =
     copyLabel ?? (command ? t("updates.manual.copyCommand") : t("updates.manual.copyInstructions"));
-  const buttonFeedbackLabel =
-    copyState === "copied"
-      ? t("updates.manual.copyCopied")
-      : copyState === "selected"
-        ? t("updates.manual.copySelectedShort")
-        : copyState === "failed"
-          ? t("updates.manual.copyFailedShort")
-          : buttonLabel;
+  const buttonFeedbackLabel = copyFeedbackLabel(copyState, buttonLabel, t);
   const copyStatusLabel =
     copyState === "copied" || copyState === "selected" || copyState === "failed"
       ? buttonFeedbackLabel
@@ -434,6 +438,23 @@ function manualReviewRisk(feature: UpdateRemediationAffectedFeature, t: I18nTran
     : t("updates.manualReview.featureRisk", { feature: feature.label });
 }
 
+function summaryTitleText(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+  visibleSession: ReturnType<typeof sessionForDisplay>,
+  manualInstallState: ManualInstallDisplayState,
+  t: I18nTranslate,
+): string {
+  if (manualInstallState === "verified") return t("updates.status.success");
+  if (isPortableExternallyManaged(report, session)) {
+    return t("updates.status.portableExternallyManaged");
+  }
+  if (isPortableBootstrapSetupRequired(report, session)) {
+    return t("updates.status.portableSetupRequired");
+  }
+  return statusTitle(report, visibleSession, t);
+}
+
 function SummaryCard({
   report,
   session,
@@ -458,13 +479,7 @@ function SummaryCard({
       <div>
         <p className="upd-kicker">{t("updates.window.kicker")}</p>
         <h2 id="updates-window-title" ref={titleRef} tabIndex={-1} className="upd-title">
-          {manualInstallState === "verified"
-            ? t("updates.status.success")
-            : isPortableExternallyManaged(report, session)
-              ? t("updates.status.portableExternallyManaged")
-              : isPortableBootstrapSetupRequired(report, session)
-                ? t("updates.status.portableSetupRequired")
-                : statusTitle(report, visibleSession, t)}
+          {summaryTitleText(report, session, visibleSession, manualInstallState, t)}
         </h2>
         <p className="upd-body">
           {versionText(report, t, manualInstallState, session, visibleSession)}

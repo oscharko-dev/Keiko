@@ -80,13 +80,22 @@ export const hashStructuralScreen = (screenId: string, ir: ScreenIr): string =>
  * per-screen hashes sorted by screenId. EXCLUDES `fetchedAt` so the hash is drift-stable across
  * re-fetches of the same unchanged design.
  */
+const compareByScreenId = (
+  a: { readonly screenId: string },
+  b: { readonly screenId: string },
+): number => {
+  if (a.screenId < b.screenId) return -1;
+  if (a.screenId > b.screenId) return 1;
+  return 0;
+};
+
 export const hashSnapshot = (
   snapshotSchemaVersion: number,
   version: string | undefined,
   perScreen: readonly { readonly screenId: string; readonly integrityHash: string }[],
 ): string => {
   const screens = [...perScreen]
-    .sort((a, b) => (a.screenId < b.screenId ? -1 : a.screenId > b.screenId ? 1 : 0))
+    .sort(compareByScreenId)
     .map((s) => ({ integrityHash: s.integrityHash, screenId: s.screenId }));
   return sha256Hex(canonical({ screens, snapshotSchemaVersion, version: version ?? null }));
 };

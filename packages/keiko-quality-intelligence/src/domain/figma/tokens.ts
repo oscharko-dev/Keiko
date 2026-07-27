@@ -105,6 +105,16 @@ const toColorTokens = (values: ReadonlySet<string>): readonly ColorToken[] =>
 const compareTokenNumbersLexically = (a: number, b: number): number =>
   String(a).localeCompare(String(b));
 
+const compareById = (a: { readonly id: string }, b: { readonly id: string }): number => {
+  if (a.id < b.id) {
+    return -1;
+  }
+  if (a.id > b.id) {
+    return 1;
+  }
+  return 0;
+};
+
 const toSpacingTokens = (values: ReadonlySet<number>): readonly SpacingToken[] =>
   [...values]
     .sort(compareTokenNumbersLexically)
@@ -127,9 +137,7 @@ export const extractDesignTokens = (screens: readonly PrunedNode[]): DesignToken
 
   return {
     colors: toColorTokens(acc.colors),
-    typography: [...acc.typography.values()].sort((a, b) =>
-      a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-    ),
+    typography: [...acc.typography.values()].sort(compareById),
     spacing: toSpacingTokens(acc.spacing),
     radius: toRadiusTokens(acc.radius),
   };

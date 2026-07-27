@@ -52,6 +52,12 @@ const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): stri
 const buildTags = (candidate: QualityIntelligenceTestCaseCandidate): string =>
   [candidate.riskClass, ...candidate.tags].join(" ");
 
+const byIdAsc = (a: string, b: string): number => {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
+
 export function adaptToPolarion(
   bundle: QualityIntelligenceExportBundle,
   candidates: readonly QualityIntelligenceTestCaseCandidate[],
@@ -64,7 +70,7 @@ export function adaptToPolarion(
   const sortedIds = bundle.contents
     .map((entry) => entry.candidateId)
     .slice()
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort(byIdAsc);
   let body = encodeSpreadsheetSafeRow(POLARION_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

@@ -73,7 +73,7 @@ import {
 } from "./quickAccessRegistry";
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
-import type { AppWindow } from "./windows/types";
+import type { AppWindow, Connection } from "./windows/types";
 import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 import { workspaceRootTargets } from "./workspaceRootTargets";
@@ -318,6 +318,15 @@ function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
   ].join("\u0000");
 }
 
+// S3358 — prefer the bind-time snapshot on the Connection; fall back to whichever
+// endpoint is the chat window. Mirrors connectionChatWindowId in useWorkspace.ts.
+function chatWindowIdOf(conn: Connection, a: AppWindow, b: AppWindow): string | null {
+  if (conn.boundChatWindowId !== undefined) return conn.boundChatWindowId;
+  if (a.type === "chat") return a.id;
+  if (b.type === "chat") return b.id;
+  return null;
+}
+
 function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   if (win?.type !== "chat") return undefined;
   const value = win.cfg["chatId"];
@@ -512,6 +521,13 @@ export function buildAppShellCommands(
     },
   ];
   return [...createCommands, ...toolCommands, openEditorSettingsCommand, ...staticCommands];
+}
+
+// S3358 — the two deep-linked tool routes each map to a fixed singleton window type.
+function deepLinkToolFor(path: string): "relationships" | "localKnowledge" | null {
+  if (path === "/relationships") return "relationships";
+  if (path === "/local-knowledge") return "localKnowledge";
+  return null;
 }
 
 function AppShellInner(): ReactNode {
@@ -772,8 +788,7 @@ function AppShellInner(): ReactNode {
       const a = ws.winsById.get(conn.a);
       const b = ws.winsById.get(conn.b);
       if (a === undefined || b === undefined) continue;
-      const chatWindowId =
-        conn.boundChatWindowId ?? (a.type === "chat" ? a.id : b.type === "chat" ? b.id : null);
+      const chatWindowId = chatWindowIdOf(conn, a, b);
       if (chatWindowId === null) continue;
       const nextScope = filesChatBindScope(a, b, Date.now());
       if (nextScope === null) continue;
@@ -938,12 +953,7 @@ function AppShellInner(): ReactNode {
     if (deepLinkHandled.current || ws.wins === null) return;
     deepLinkHandled.current = true;
     const path = window.location.pathname.replace(/\/+$/u, "");
-    const deepLinkTool =
-      path === "/relationships"
-        ? "relationships"
-        : path === "/local-knowledge"
-          ? "localKnowledge"
-          : null;
+    const deepLinkTool = deepLinkToolFor(path);
     if (deepLinkTool === null) return;
     if (!ws.wins.some((w) => w.type === deepLinkTool)) onTool(deepLinkTool);
     window.history.replaceState(null, "", "/");

@@ -3940,10 +3940,11 @@ function EditorRuntimeWidget({
       return;
     }
     const controller = new AbortController();
+    symbolSeqRef.current += 1;
     const request: EditorRequestIdentity = {
       requestId: createEditorRequestId(),
       streamId: "editor-outline",
-      sequence: (symbolSeqRef.current += 1),
+      sequence: symbolSeqRef.current,
     };
     setOutlineLoading(true);
     void resolveEditorSymbols(

@@ -36,6 +36,12 @@ const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): stri
 const buildLabels = (candidate: QualityIntelligenceTestCaseCandidate): string =>
   [candidate.riskClass, ...candidate.tags].join(" ");
 
+const byIdAsc = (a: string, b: string): number => {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
+
 // eslint-disable-next-line max-lines-per-function
 export function adaptToXray(
   bundle: QualityIntelligenceExportBundle,
@@ -49,7 +55,7 @@ export function adaptToXray(
   const sortedIds = bundle.contents
     .map((entry) => entry.candidateId)
     .slice()
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort(byIdAsc);
   let body = encodeSpreadsheetSafeRow(XRAY_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);

@@ -501,6 +501,11 @@ function candidateSetDiscoverySnapshot(
   };
 }
 
+function compareStrings(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
 function directoryFingerprint(
   entries: readonly {
     readonly name: string;
@@ -517,7 +522,7 @@ function directoryFingerprint(
             isDirectory: entry.isDirectory,
             isFile: entry.isFile,
           }))
-          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+          .sort((a, b) => compareStrings(a.name, b.name)),
       ),
     )
     .digest("hex");
@@ -584,7 +589,7 @@ function buildWorkspaceIndexDirectories(
   addSelectedWorkspaceIndexDirectories(directories, workspaceRoot, fs, relativePaths);
   addIndexedWorkspaceIndexAncestors(directories, discoveryByPath);
   const snapshots: WorkspaceIndexDirectorySnapshot[] = [];
-  for (const scopePath of [...directories].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+  for (const scopePath of [...directories].sort(compareStrings)) {
     const absolutePath =
       scopePath.length === 0 ? workspaceRoot : resolveWithinWorkspace(workspaceRoot, scopePath);
     try {
@@ -716,9 +721,7 @@ function seedWorkspaceIndexCaches(
 function sortedDiscoveryFiles(
   discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
 ): readonly WorkspaceIndexDiscoveredFile[] {
-  return [...discoveryByPath.values()].sort((a, b) =>
-    a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0,
-  );
+  return [...discoveryByPath.values()].sort((a, b) => compareStrings(a.scopePath, b.scopePath));
 }
 
 function preparedFromSessionState(
@@ -730,9 +733,7 @@ function preparedFromSessionState(
   return {
     valid: true,
     dirty: false,
-    entries: [...preparedEntries.values()].sort((a, b) =>
-      a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0,
-    ),
+    entries: [...preparedEntries.values()].sort((a, b) => compareStrings(a.scopePath, b.scopePath)),
     discovery: {
       ...discovery,
       files: sortedDiscoveryFiles(discoveryByPath),

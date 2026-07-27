@@ -154,6 +154,19 @@ function recordWorkflowUsedAudit(
   );
 }
 
+function describeWorkflowWriteCandidateSummary(
+  proposedMemoryIdsCount: number,
+  source: string,
+): string {
+  if (proposedMemoryIdsCount === 0) {
+    return `Workflow produced a memory write candidate that was not eligible for review (${source}).`;
+  }
+  if (proposedMemoryIdsCount === 1) {
+    return `Workflow produced 1 governed memory write candidate (${source}).`;
+  }
+  return `Workflow produced ${String(proposedMemoryIdsCount)} governed memory write candidates (${source}).`;
+}
+
 function recordWorkflowWriteCandidateAudit(
   options: WorkflowMemoryPortOptions,
   now: () => number,
@@ -166,12 +179,7 @@ function recordWorkflowWriteCandidateAudit(
     eventId: randomUUID(),
     occurredAt: now(),
     initiatorSurface: "workflow",
-    summary:
-      proposedMemoryIds.length === 0
-        ? `Workflow produced a memory write candidate that was not eligible for review (${event.source}).`
-        : proposedMemoryIds.length === 1
-          ? `Workflow produced 1 governed memory write candidate (${event.source}).`
-          : `Workflow produced ${String(proposedMemoryIds.length)} governed memory write candidates (${event.source}).`,
+    summary: describeWorkflowWriteCandidateSummary(proposedMemoryIds.length, event.source),
     workflowRunId: options.runId,
     source: event.source,
     scope: event.scope,

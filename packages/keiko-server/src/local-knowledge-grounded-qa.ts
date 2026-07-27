@@ -2279,12 +2279,18 @@ function stateFailureRoute(
   return { status: 200, body: answer };
 }
 
+function gatewayErrorStatus(error: GatewayError): number {
+  if (error.code === "GATEWAY_AUTHENTICATION") return 401;
+  if (error.retryable) return 503;
+  return 502;
+}
+
 function mapGroundedAskError(error: unknown, deps: UiHandlerDeps): RouteResult {
   if (error instanceof CancelledError) {
     return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
   }
   if (error instanceof GatewayError) {
-    const status = error.code === "GATEWAY_AUTHENTICATION" ? 401 : error.retryable ? 503 : 502;
+    const status = gatewayErrorStatus(error);
     const message = redact(error.message, currentRedactionSecrets(deps));
     return { status, body: errorBody(error.code, message) };
   }

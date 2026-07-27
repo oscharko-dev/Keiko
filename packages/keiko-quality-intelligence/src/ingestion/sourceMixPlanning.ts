@@ -62,7 +62,13 @@ const compareEntries = (a: SourceMixPlanEntry, b: SourceMixPlanEntry): number =>
   if (a.priority !== b.priority) return a.priority - b.priority;
   const ka = `${a.kind}\u0000${a.envelopeId}`;
   const kb = `${b.kind}\u0000${b.envelopeId}`;
-  return ka < kb ? -1 : ka > kb ? 1 : 0;
+  if (ka < kb) {
+    return -1;
+  }
+  if (ka > kb) {
+    return 1;
+  }
+  return 0;
 };
 
 /**

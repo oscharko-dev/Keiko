@@ -30,6 +30,12 @@ export const CSV_HEADERS: readonly string[] = Object.freeze([
 
 const joinSemicolon = (values: readonly string[]): string => values.join(" ; ");
 
+const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number => {
+  if (a.candidateId < b.candidateId) return -1;
+  if (a.candidateId > b.candidateId) return 1;
+  return 0;
+};
+
 export function adaptToCsv(
   bundle: QualityIntelligenceExportBundle,
   candidates: readonly QualityIntelligenceTestCaseCandidate[],
@@ -39,9 +45,7 @@ export function adaptToCsv(
   for (const candidate of candidates) {
     byId.set(candidate.id, candidate);
   }
-  const sortedEntries = [...bundle.contents].sort((a, b) =>
-    a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0,
-  );
+  const sortedEntries = [...bundle.contents].sort(byCandidateIdAsc);
   let body = encodeSpreadsheetSafeRow(CSV_HEADERS);
   for (const entry of sortedEntries) {
     const candidate = byId.get(entry.candidateId);
