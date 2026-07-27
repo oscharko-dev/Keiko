@@ -163,6 +163,31 @@ describe("portable USearch staging", () => {
     ).toThrow("shipped native addon digest mismatch");
   });
 
+  it("rejects jointly tampered staging payload, manifest, and SBOM evidence", () => {
+    const fixture = portableSmokeFixture();
+    const loadRuntime = vi.fn();
+    writeFixture(fixture.binary, "jointly tampered native addon");
+    const tamperedSha256 = sha256(fixture.binary);
+    fixture.manifest.nativeAddons[0].shippedSha256 = tamperedSha256;
+    writeJson(fixture.manifestPath, fixture.manifest);
+    writeJson(join(fixture.stageRoot, "evidence", "sbom.cdx.json"), {
+      components: [
+        {
+          "bom-ref": fixture.addon.sbomBomRef,
+          hashes: [{ alg: "SHA-256", content: tamperedSha256 }],
+        },
+      ],
+    });
+
+    expect(() =>
+      smokePortableUsearch(fixture.stageRoot, fixture.target.platformTarget, {
+        loadRuntime,
+        runtimeManifest: fixture.runtimeManifest,
+      }),
+    ).toThrow("staged native addon digest is not approved");
+    expect(loadRuntime).not.toHaveBeenCalled();
+  });
+
   it("fails closed when SBOM evidence does not bind the staged runtime", () => {
     const fixture = portableSmokeFixture();
     writeJson(join(fixture.stageRoot, "evidence", "sbom.cdx.json"), { components: [] });

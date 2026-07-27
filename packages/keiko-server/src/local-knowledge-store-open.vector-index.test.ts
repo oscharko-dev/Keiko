@@ -69,7 +69,13 @@ describe("localKnowledgeVectorIndexOptions", () => {
         },
       },
     });
-    const failure = new Error("secret query content");
+    const secret = "secret query content";
+    const failure = new Error(secret);
+    Object.defineProperty(failure, "message", {
+      get: (): never => {
+        throw new Error("The diagnostic path must not read foreign error text.");
+      },
+    });
 
     resolved.onUnexpectedFailure?.({
       correlationId: "vector-index-correlation",
@@ -86,6 +92,6 @@ describe("localKnowledgeVectorIndexOptions", () => {
       errorClass: "Error",
       message: "Local knowledge vector-index search failed.",
     });
-    expect(JSON.stringify(records)).not.toContain(failure.message);
+    expect(JSON.stringify(records)).not.toContain(secret);
   });
 });

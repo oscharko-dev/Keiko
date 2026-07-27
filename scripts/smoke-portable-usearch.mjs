@@ -146,6 +146,15 @@ function requireTarget(targetName) {
   return target;
 }
 
+function hasVerifiedProductionSignature(manifest, addon) {
+  return (
+    manifest.security?.verificationStatus === "verified-production" &&
+    manifest.security?.signatureVerified === true &&
+    addon.signing?.verificationStatus === "verified-production" &&
+    addon.signing?.signatureVerified === true
+  );
+}
+
 function requireApprovedAddon(manifest, target, targetName, runtimeManifest) {
   if (manifest.artifact?.platformTarget !== targetName) fail("manifest target mismatch");
   const addon = addonFrom(manifest, targetName, runtimeManifest);
@@ -154,10 +163,18 @@ function requireApprovedAddon(manifest, target, targetName, runtimeManifest) {
   if (approved === undefined || addon.unsignedSha256 !== approved.binarySha256) {
     fail("manifest upstream digest is not approved");
   }
-  return addon;
+  const signedProduction = hasVerifiedProductionSignature(manifest, addon);
+  return { addon, approvedBinarySha256: approved.binarySha256, signedProduction };
 }
 
-function assertShippedRuntime(stageRoot, target, addon, runtimeManifest) {
+function assertShippedRuntime(
+  stageRoot,
+  target,
+  addon,
+  runtimeManifest,
+  approvedBinarySha256,
+  signedProduction,
+) {
   const root = resourceRoot(stageRoot, target);
   const binary = containedDigest(
     stageRoot,
@@ -173,6 +190,12 @@ function assertShippedRuntime(stageRoot, target, addon, runtimeManifest) {
   );
   if (binary.sha256 !== addon.shippedSha256) {
     fail("shipped native addon digest mismatch");
+  }
+  // Platform signing changes Mach-O/PE bytes. Before that boundary, bind the bytes directly to the
+  // immutable target digest. After it, the preceding platform verifier and verified-production
+  // manifest state become the trust anchor while shippedSha256 continues to bind the loaded file.
+  if (!signedProduction && binary.sha256 !== approvedBinarySha256) {
+    fail("staged native addon digest is not approved");
   }
   if (license.sha256 !== runtimeManifest.licenseSha256) {
     fail("shipped USearch license digest mismatch");
@@ -192,8 +215,16 @@ export function smokePortableUsearch(stageRootValue, targetName, options = {}) {
       "portable manifest",
     ),
   );
-  const addon = requireApprovedAddon(manifest, target, targetName, runtimeManifest);
-  const binaryPath = assertShippedRuntime(stageRoot, target, addon, runtimeManifest);
+  const approved = requireApprovedAddon(manifest, target, targetName, runtimeManifest);
+  const { addon } = approved;
+  const binaryPath = assertShippedRuntime(
+    stageRoot,
+    target,
+    addon,
+    runtimeManifest,
+    approved.approvedBinarySha256,
+    approved.signedProduction,
+  );
   assertEvidence(stageRoot, addon, runtimeManifest);
   loadRuntime(binaryPath, runtimeManifest.version);
 }
