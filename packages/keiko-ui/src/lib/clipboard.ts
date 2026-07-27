@@ -67,11 +67,11 @@ export async function copyTextToClipboard(
     try {
       await writeText.call(navigator.clipboard, text);
       return;
-    } catch (caught) {
+    } catch (error_) {
       // Restricted/insecure clipboard contexts routinely reject the async API; fall
       // through to the selection-backed copy below, but keep the reason in case that
       // fallback fails too (`copyViaHiddenTextarea` attaches it as `cause`).
-      writeTextFailure = caught;
+      writeTextFailure = error_;
     }
   }
 
