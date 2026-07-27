@@ -62,7 +62,7 @@ const star4 = (cx, cy, rO, rI) => {
   );
 };
 // toothed cog — one Lift seam centred on the top tooth
-const gearPath = (cx, cy, rOut, rIn, teeth, half, slope, gapHalf) => {
+const gearPath = ({ cx, cy, rOut, rIn, teeth, half, slope, gapHalf }) => {
   const start = 270 + gapHalf,
     end = 270 + 360 - gapHalf;
   let nodes = [];
@@ -193,7 +193,18 @@ const LIFT = {
   // — system —
   settings: (
     <>
-      <path d={gearPath(12, 12, 8.7, 6.4, 8, 8, 7, 6.7)} />
+      <path
+        d={gearPath({
+          cx: 12,
+          cy: 12,
+          rOut: 8.7,
+          rIn: 6.4,
+          teeth: 8,
+          half: 8,
+          slope: 7,
+          gapHalf: 6.7,
+        })}
+      />
       <circle cx="12" cy="12" r="2.7" />
     </>
   ),
