@@ -335,8 +335,9 @@ export function scanDuplicateClusters(
     }
     if (canceled) break;
   }
+  clusters.sort(compareByCanonicalId);
   return {
-    clusters: clusters.sort(compareByCanonicalId),
+    clusters,
     canceled,
   };
 }
