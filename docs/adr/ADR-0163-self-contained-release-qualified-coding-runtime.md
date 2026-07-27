@@ -125,6 +125,12 @@ a descendant, proves both exit after supervisor termination, proves control-chan
 closed, and binds the passing result into the signed activation attestation. Source-only or
 separately compiled fixture success cannot activate a customer install.
 
+At point of use, Windows invokes only the fixed system PowerShell path with a closed environment,
+validates both `Keiko.exe` and the attestation carrier through Authenticode, and requires their
+verified leaf signer identities to match before the carrier may emit a receipt. This same-release
+comparison preserves Azure's short-lived certificate rotation model: it does not pin a leaf
+thumbprint, public key, or subject in repository content.
+
 ### D4 — macOS uses an entitled Endpoint Security System Extension
 
 Each macOS app contains one target-architecture system extension under the canonical app-bundle
@@ -162,7 +168,8 @@ opens it without following links or reparse points, verifies stable file identit
 and verifies its platform signature at every admitted read. On macOS, the verified app resource
 seal proves the containing immutable resource tree. On Windows, the signed attestation's exact
 helper digest plus independent Authenticode verification supplies the equivalent point-of-use
-binding.
+binding. The helper's verified signer identity must match the independently verified primary
+`Keiko.exe` launcher identity on every admitted read.
 
 The process port uses the fixed helper path, empty environment, no shell, no caller-controlled
 arguments, and a server-owned safe working directory. Failure to construct this port keeps the

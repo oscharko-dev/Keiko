@@ -797,7 +797,9 @@ Validation rules:
 - `entrypoints.primaryLauncher` must be `Keiko.exe` for `windows-x64` and `Keiko.app` for both macOS
   targets.
 - macOS targets require Developer ID signature and notarization verification. Windows requires
-  Authenticode publisher-chain verification.
+  Authenticode publisher-chain verification. Windows point-of-use admission additionally invokes
+  the fixed system verifier with a closed environment and requires every runtime attestation carrier
+  and privileged helper to have the same verified leaf signer identity as `Keiko.exe`.
 - The release-impact entry must bind the full reviewed ADR-0121 tuple for the same artifact:
   release id/tag, asset id/name/size, package version, runtime identity, archive digest, build
   provenance, SBOM/license/checksum evidence, platform target, signing/notarization status, and any

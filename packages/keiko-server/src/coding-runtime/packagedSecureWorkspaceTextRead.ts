@@ -37,7 +37,9 @@ export function createPackagedSecureWorkspaceTextReadPort(
     artifactVerifier: createPortableSecureWorkspaceReadVerifier(binding, {
       proveImmutableResourceTree: () =>
         Promise.resolve(verifyQualifiedPortableRuntimeAtPointOfUse(input.runtime)),
-      platform: createNodePortableSecureWorkspaceReadInspection(),
+      platform: createNodePortableSecureWorkspaceReadInspection({
+        resourceRoot: input.runtime.installRoot,
+      }),
     }),
     processFactory: createNodeSecureWorkspaceReadProcessFactory({
       binding,

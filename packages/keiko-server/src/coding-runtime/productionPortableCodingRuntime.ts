@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, join, win32 } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import {
@@ -18,6 +18,10 @@ import {
 } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
 import { safeRealFile } from "./nativeRuntimeProcessPaths.js";
+import {
+  windowsPublisherIdentityMatches,
+  windowsSystemEnvironment,
+} from "./windowsPortableAuthenticode.js";
 
 const ACTIVATION_PATH = ".portable/runtime-activation.json";
 const MACOS_RECEIPT_PATH = ".portable/runtime-qualification.json";
@@ -193,15 +197,13 @@ export function readWindowsAttestation(
   resourceRoot: string,
   run: PortableRuntimeCommandRunner = runPortableRuntimeCommand,
 ): unknown {
-  const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
   const executable = safeRealFile(
     join(resourceRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
   );
-  verifyWindowsSignature(executable, run);
+  const launcher = safeRealFile(join(resourceRoot, "Keiko.exe"));
+  verifyWindowsSignature(launcher, executable, run);
   const result = run(executable, ["--emit"], {
-    env: {
-      SystemRoot: systemRoot,
-    },
+    env: windowsSystemEnvironment(),
     windowsHide: true,
     timeout: 10_000,
     maxBuffer: MAX_ATTESTATION_BYTES,
@@ -212,30 +214,14 @@ export function readWindowsAttestation(
   return JSON.parse(result.stdout);
 }
 
-function verifyWindowsSignature(executable: string, run: PortableRuntimeCommandRunner): void {
-  const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
-  const powershell = win32.join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-  const script =
-    "$s=Get-AuthenticodeSignature -LiteralPath $args[0];" +
-    "if($s.Status -ne 'Valid' -or $null -eq $s.TimeStamperCertificate){exit 1}";
-  const result = run(
-    powershell,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, executable],
-    {
-      env: {
-        SystemRoot: systemRoot,
-      },
-      windowsHide: true,
-      timeout: 10_000,
-    },
-  );
-  if (result.status !== 0) throw new Error("runtime-attestation-signature-invalid");
+function verifyWindowsSignature(
+  launcher: string,
+  executable: string,
+  run: PortableRuntimeCommandRunner,
+): void {
+  if (!windowsPublisherIdentityMatches(launcher, executable, run)) {
+    throw new Error("runtime-attestation-signature-invalid");
+  }
 }
 
 export function readMacosAttestation(

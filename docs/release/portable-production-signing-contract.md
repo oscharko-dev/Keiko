@@ -384,6 +384,13 @@ Microsoft SmartScreen reputation or warning-free first launch for every new file
 requires the approved verified publisher, SHA-256 signature, RFC 3161 timestamp, and local verification;
 SmartScreen reputation is observed but is not asserted as a Keiko-controlled outcome.
 
+Runtime point-of-use checks invoke the fixed Windows system PowerShell path with a closed environment
+and compare each attestation carrier or privileged helper's verified leaf signer identity with the
+independently verified `Keiko.exe` signer identity from the same qualified release. This is an
+ephemeral same-release comparison, not a committed thumbprint, public-key, or subject pin, so it
+preserves the approved Azure leaf-rotation contract while rejecting a valid binary from another
+publisher.
+
 ## Child implementation interfaces
 
 - **#2200 (Windows):** implements the protected native Windows signing job, exact Azure trust/RBAC

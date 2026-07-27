@@ -105,4 +105,22 @@ describe("node portable secure workspace-read inspection", () => {
       false,
     );
   });
+
+  it("accepts a Windows helper only when it matches the fixed launcher's signer", async () => {
+    const { executable, resourceRoot } = fixture();
+    writeFileSync(join(resourceRoot, "Keiko.exe"), "signed launcher");
+    const identities = ["A".repeat(40), "A".repeat(40), "A".repeat(40), "B".repeat(40)];
+    let index = 0;
+    const inspection = createNodePortableSecureWorkspaceReadInspection({
+      resourceRoot,
+      windowsRunCommand: () => ({
+        status: 0,
+        stderr: "",
+        stdout: identities[index++] ?? "",
+      }),
+    });
+
+    await expect(inspection.verifySignature(executable, "win32-x64")).resolves.toBe(true);
+    await expect(inspection.verifySignature(executable, "win32-x64")).resolves.toBe(false);
+  });
 });

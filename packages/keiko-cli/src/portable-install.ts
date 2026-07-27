@@ -389,15 +389,24 @@ export function attestedExistingPortableInstall(
   stateDir: string,
 ): ValidatedPortableRoot | undefined {
   for (const target of PORTABLE_TARGETS) {
-    try {
-      assertManagedRootAllowed(managedRoot, stateDir, target);
-      const attested = attestedPortableRootForTarget(target, managedRoot);
-      if (attested !== undefined) return attested;
-    } catch {
-      continue;
-    }
+    if (!managedRootAllowedForTarget(managedRoot, stateDir, target)) continue;
+    const attested = attestedPortableRootForTarget(target, managedRoot);
+    if (attested !== undefined) return attested;
   }
   return undefined;
+}
+
+function managedRootAllowedForTarget(
+  managedRoot: string,
+  stateDir: string,
+  target: PortableTarget,
+): boolean {
+  try {
+    assertManagedRootAllowed(managedRoot, stateDir, target);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function attestedPortableRootForTarget(

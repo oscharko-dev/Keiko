@@ -2,21 +2,36 @@ import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { relative, resolve, sep, win32 } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
+import { safeRealFile } from "./nativeRuntimeProcessPaths.js";
 import type {
   PortableSecureWorkspaceReadMetadata,
   PortableSecureWorkspaceReadPathEntry,
   PortableSecureWorkspaceReadPlatformInspection,
 } from "./secureWorkspaceTextReadPortable.js";
+import {
+  windowsPublisherIdentityMatches,
+  type WindowsAuthenticodeCommandRunner,
+} from "./windowsPortableAuthenticode.js";
 
 const MAX_SIGNATURE_CHECK_MS = 10_000;
 
-export function createNodePortableSecureWorkspaceReadInspection(): PortableSecureWorkspaceReadPlatformInspection {
+export interface NodePortableSecureWorkspaceReadInspectionOptions {
+  readonly resourceRoot?: string | undefined;
+  readonly windowsRunCommand?: WindowsAuthenticodeCommandRunner | undefined;
+}
+
+export function createNodePortableSecureWorkspaceReadInspection(
+  options: NodePortableSecureWorkspaceReadInspectionOptions = {},
+): PortableSecureWorkspaceReadPlatformInspection {
   return Object.freeze({
     inspectPath: inspectPathEntries,
     openReadSameIdentity,
-    verifySignature,
+    verifySignature: (
+      executable: string,
+      target: "win32-x64" | "darwin-arm64" | "darwin-x64",
+    ): Promise<boolean> => verifySignature(executable, target, options),
   });
 }
 
@@ -88,39 +103,33 @@ function metadata(stat: BigIntStats): PortableSecureWorkspaceReadMetadata {
 function verifySignature(
   executable: string,
   target: "win32-x64" | "darwin-arm64" | "darwin-x64",
+  options: NodePortableSecureWorkspaceReadInspectionOptions,
 ): Promise<boolean> {
   return Promise.resolve(
-    target === "win32-x64" ? verifyWindowsAuthenticode(executable) : verifyMacosCode(executable),
+    target === "win32-x64"
+      ? verifyWindowsAuthenticode(executable, options)
+      : verifyMacosCode(executable),
   );
 }
 
-function verifyWindowsAuthenticode(executable: string): boolean {
-  const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
-  const powershell = win32.join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-  const script =
-    "$s=Get-AuthenticodeSignature -LiteralPath $args[0];" +
-    "if($s.Status -ne 'Valid' -or $null -eq $s.TimeStamperCertificate){exit 1}";
+function verifyWindowsAuthenticode(
+  executable: string,
+  options: NodePortableSecureWorkspaceReadInspectionOptions,
+): boolean {
+  const launcher = windowsLauncher(options.resourceRoot);
   return (
-    spawnSync(
-      powershell,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, executable],
-      {
-        encoding: "utf8",
-        env: {
-          SystemRoot: systemRoot,
-        },
-        shell: false,
-        windowsHide: true,
-        timeout: MAX_SIGNATURE_CHECK_MS,
-      },
-    ).status === 0
+    launcher !== undefined &&
+    windowsPublisherIdentityMatches(launcher, executable, options.windowsRunCommand)
   );
+}
+
+function windowsLauncher(resourceRoot: string | undefined): string | undefined {
+  if (resourceRoot === undefined) return undefined;
+  try {
+    return safeRealFile(join(resourceRoot, "Keiko.exe"));
+  } catch {
+    return undefined;
+  }
 }
 
 function verifyMacosCode(executable: string): boolean {

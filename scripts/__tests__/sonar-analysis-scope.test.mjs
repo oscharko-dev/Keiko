@@ -23,6 +23,10 @@ const localSonarGate = readFileSync(
   resolve(import.meta.dirname, "..", "..", "docker", "gates", "run-sonar.sh"),
   "utf8",
 );
+const repositorySonarProperties = readFileSync(
+  resolve(import.meta.dirname, "..", "..", "sonar-project.properties"),
+  "utf8",
+);
 
 const nativeEntries = [
   {
@@ -62,12 +66,18 @@ function removePropertyPattern(properties, key, pattern) {
     .join("\n");
 }
 
+function propertyPatterns(properties, key) {
+  const line = properties.split("\n").find((candidate) => candidate.startsWith(`${key}=`));
+  return new Set(line?.slice(key.length + 1).split(",") ?? []);
+}
+
 describe("Sonar analysis scope", () => {
   it("classifies tests, generated artifacts, native sources, and product sources disjointly", () => {
     expect(isTestPath("tests/support/tool.ts")).toBe(true);
     expect(isTestPath("packages/a/src/a.test.ts")).toBe(true);
     expect(isTestPath("packages/a/src/testing/fake.ts")).toBe(true);
     expect(isTestPath("packages/a/src/test-support.ts")).toBe(true);
+    expect(isTestPath("native/runtime-supervisor/macos/test-protocol.mjs")).toBe(true);
     expect(isGeneratedOrBinaryPath("docs/design-system/evidence/run/capture.mjs")).toBe(true);
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.png")).toBe(true);
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.svg")).toBe(true);
@@ -80,6 +90,9 @@ describe("Sonar analysis scope", () => {
     expect(classifyAnalysisPath("native/new.m", nativeSources)).toBe("unclassified-native");
     expect(classifyAnalysisPath("scripts/__tests__/fixture.cs", nativeSources)).toBe("test");
     expect(
+      classifyAnalysisPath("native/runtime-supervisor/macos/test-protocol.mjs", nativeSources),
+    ).toBe("test");
+    expect(
       classifyAnalysisPath("scripts/native-quality/Keiko.NativeQuality.csproj", nativeSources),
     ).toBe("excluded");
     expect(classifyAnalysisPath("coverage/report.json", nativeSources)).toBe("excluded");
@@ -88,6 +101,17 @@ describe("Sonar analysis scope", () => {
     expect(classifyAnalysisPath("scripts/check.ps1", nativeSources)).toBe("source");
     expect(classifyAnalysisPath("infrastructure/worker.toml", nativeSources)).toBe("source");
     expect(classifyAnalysisPath("LICENSE", nativeSources)).toBe("ignored");
+  });
+
+  it("keeps the macOS runtime protocol harness in the Sonar test lane", () => {
+    const protocolHarness = "native/runtime-supervisor/macos/test-protocol.mjs";
+
+    expect(propertyPatterns(repositorySonarProperties, "sonar.test.inclusions")).toContain(
+      protocolHarness,
+    );
+    expect(propertyPatterns(repositorySonarProperties, "sonar.exclusions")).toContain(
+      protocolHarness,
+    );
   });
 
   it("keeps local Keiko task workspaces outside the local Sonar TypeScript graph", () => {
