@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   USEARCH_RUNTIME_MANIFEST,
@@ -9,12 +10,65 @@ import {
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { portableTargetByName } from "./portable-runtime.mjs";
 
+const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
+const MAX_NATIVE_BINARY_BYTES = 128 * 1024 * 1024;
+const USEARCH_BINARY_PATH = "runtime/native/usearch.node";
+const USEARCH_LICENSE_PATH = "runtime/licenses/usearch/LICENSE";
+
 function fail(message) {
   throw new Error(`portable-usearch-smoke: ${message}`);
 }
 
-function sha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+export function requiredStageRoot(value) {
+  const root = resolve(value);
+  let entry;
+  try {
+    entry = lstatSync(root);
+  } catch {
+    fail("stage root is missing");
+  }
+  if (!entry.isDirectory() || entry.isSymbolicLink()) fail("stage root is unsafe");
+  return realpathSync(root);
+}
+
+function assertContained(stageRoot, candidate, label) {
+  const stageRelative = relative(stageRoot, candidate);
+  if (stageRelative === ".." || stageRelative.startsWith(`..${sep}`) || isAbsolute(stageRelative)) {
+    fail(`unsafe ${label}`);
+  }
+}
+
+function requiredRegularFile(path, label, maxBytes) {
+  let entry;
+  try {
+    entry = lstatSync(path);
+  } catch {
+    fail(`missing ${label}`);
+  }
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) fail(`unsafe ${label}`);
+  if (entry.size <= 0 || entry.size > maxBytes) fail(`${label} has an invalid bounded size`);
+}
+
+export function requiredContainedFile(stageRoot, candidate, label, maxBytes) {
+  const absoluteCandidate = resolve(candidate);
+  assertContained(stageRoot, absoluteCandidate, label);
+  requiredRegularFile(absoluteCandidate, label, maxBytes);
+  const canonicalCandidate = realpathSync(absoluteCandidate);
+  assertContained(stageRoot, canonicalCandidate, label);
+  return canonicalCandidate;
+}
+
+export function readContainedText(stageRoot, candidate, label) {
+  const path = requiredContainedFile(stageRoot, candidate, label, MAX_EVIDENCE_BYTES);
+  return readFileSync(path, "utf8");
+}
+
+export function containedDigest(stageRoot, candidate, label, maxBytes) {
+  const path = requiredContainedFile(stageRoot, candidate, label, maxBytes);
+  return {
+    path,
+    sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+  };
 }
 
 function requireArgument(index, name) {
@@ -23,17 +77,17 @@ function requireArgument(index, name) {
   return value;
 }
 
-function addonFrom(manifest, targetName) {
+function addonFrom(manifest, targetName, runtimeManifest) {
   if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
     fail("manifest must bind exactly one native addon");
   }
   const addon = manifest.nativeAddons[0];
   if (
     addon.name !== "usearch" ||
-    addon.version !== USEARCH_RUNTIME_MANIFEST.version ||
+    addon.version !== runtimeManifest.version ||
     addon.platformTarget !== targetName ||
-    addon.executablePath !== "runtime/native/usearch.node" ||
-    addon.licensePath !== "runtime/licenses/usearch/LICENSE"
+    addon.executablePath !== USEARCH_BINARY_PATH ||
+    addon.licensePath !== USEARCH_LICENSE_PATH
   ) {
     fail("manifest native addon identity is invalid");
   }
@@ -47,8 +101,14 @@ function resourceRoot(stageRoot, target) {
     : payload;
 }
 
-function assertEvidence(stageRoot, addon) {
-  const sbom = JSON.parse(readFileSync(join(stageRoot, "evidence", "sbom.cdx.json"), "utf8"));
+function assertEvidence(stageRoot, addon, runtimeManifest) {
+  const sbom = JSON.parse(
+    readContainedText(
+      stageRoot,
+      join(stageRoot, "evidence", "sbom.cdx.json"),
+      "portable SBOM evidence",
+    ),
+  );
   const matches = (sbom.components ?? []).filter(
     (component) => component?.["bom-ref"] === addon.sbomBomRef,
   );
@@ -60,16 +120,20 @@ function assertEvidence(stageRoot, addon) {
   ) {
     fail("SBOM does not bind the shipped native addon");
   }
-  const notices = readFileSync(join(stageRoot, "evidence", "third-party-notices.txt"), "utf8");
-  if (!notices.includes(`USearch ${USEARCH_RUNTIME_MANIFEST.version}`)) {
+  const notices = readContainedText(
+    stageRoot,
+    join(stageRoot, "evidence", "third-party-notices.txt"),
+    "portable third-party notices",
+  );
+  if (!notices.includes(`USearch ${runtimeManifest.version}`)) {
     fail("third-party notice does not identify USearch");
   }
 }
 
-function loadAndSearch(binaryPath) {
+function loadAndSearch(binaryPath, runtimeVersion) {
   const require = createRequire(import.meta.url);
   const runtime = require(binaryPath);
-  if (runtime.version !== USEARCH_RUNTIME_MANIFEST.version) fail("runtime version mismatch");
+  if (runtime.version !== runtimeVersion) fail("runtime version mismatch");
   const index = new runtime.CompiledIndex(2, "cos", "f32", 8, 32, 64, false);
   index.add(new BigUint64Array([0n, 1n]), new Float32Array([1, 0, 0, 1]), 1);
   const [keys, , counts] = index.search(new Float32Array([1, 0]), 1, 1);
@@ -82,43 +146,64 @@ function requireTarget(targetName) {
   return target;
 }
 
-function requireApprovedAddon(manifest, target, targetName) {
+function requireApprovedAddon(manifest, target, targetName, runtimeManifest) {
   if (manifest.artifact?.platformTarget !== targetName) fail("manifest target mismatch");
-  const addon = addonFrom(manifest, targetName);
+  const addon = addonFrom(manifest, targetName, runtimeManifest);
   const targetKey = usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
-  const approved =
-    targetKey === undefined ? undefined : USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  const approved = targetKey === undefined ? undefined : runtimeManifest.targets[targetKey];
   if (approved === undefined || addon.unsignedSha256 !== approved.binarySha256) {
     fail("manifest upstream digest is not approved");
   }
   return addon;
 }
 
-function assertShippedRuntime(stageRoot, target, addon) {
+function assertShippedRuntime(stageRoot, target, addon, runtimeManifest) {
   const root = resourceRoot(stageRoot, target);
-  const binaryPath = join(root, ...addon.executablePath.split("/"));
-  const licensePath = join(root, ...addon.licensePath.split("/"));
-  if (!existsSync(binaryPath) || sha256(binaryPath) !== addon.shippedSha256) {
+  const binary = containedDigest(
+    stageRoot,
+    join(root, ...USEARCH_BINARY_PATH.split("/")),
+    "shipped native addon",
+    MAX_NATIVE_BINARY_BYTES,
+  );
+  const license = containedDigest(
+    stageRoot,
+    join(root, ...USEARCH_LICENSE_PATH.split("/")),
+    "shipped USearch license",
+    MAX_EVIDENCE_BYTES,
+  );
+  if (binary.sha256 !== addon.shippedSha256) {
     fail("shipped native addon digest mismatch");
   }
-  if (!existsSync(licensePath) || sha256(licensePath) !== USEARCH_RUNTIME_MANIFEST.licenseSha256) {
+  if (license.sha256 !== runtimeManifest.licenseSha256) {
     fail("shipped USearch license digest mismatch");
   }
-  return binaryPath;
+  return binary.path;
+}
+
+export function smokePortableUsearch(stageRootValue, targetName, options = {}) {
+  const runtimeManifest = options.runtimeManifest ?? USEARCH_RUNTIME_MANIFEST;
+  const loadRuntime = options.loadRuntime ?? loadAndSearch;
+  const stageRoot = requiredStageRoot(stageRootValue);
+  const target = requireTarget(targetName);
+  const manifest = JSON.parse(
+    readContainedText(
+      stageRoot,
+      join(stageRoot, "manifest", "portable-manifest.json"),
+      "portable manifest",
+    ),
+  );
+  const addon = requireApprovedAddon(manifest, target, targetName, runtimeManifest);
+  const binaryPath = assertShippedRuntime(stageRoot, target, addon, runtimeManifest);
+  assertEvidence(stageRoot, addon, runtimeManifest);
+  loadRuntime(binaryPath, runtimeManifest.version);
 }
 
 function main() {
-  const stageRoot = resolve(requireArgument(2, "stage root"));
   const targetName = requireArgument(3, "platform target");
-  const target = requireTarget(targetName);
-  const manifest = JSON.parse(
-    readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"),
-  );
-  const addon = requireApprovedAddon(manifest, target, targetName);
-  const binaryPath = assertShippedRuntime(stageRoot, target, addon);
-  assertEvidence(stageRoot, addon);
-  loadAndSearch(binaryPath);
+  smokePortableUsearch(requireArgument(2, "stage root"), targetName);
   console.log(`portable-usearch-smoke: PASS ${targetName}`);
 }
 
-main();
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
