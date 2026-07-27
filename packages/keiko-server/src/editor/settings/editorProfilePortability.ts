@@ -154,6 +154,14 @@ function pathLike(value: string): boolean {
   );
 }
 
+// The single-string counterpart of `portabilityReason` below, which classifies array values.
+function displayNamePortabilityReason(
+  value: string,
+): "NON_PORTABLE_PATH" | "SECRET_LIKE" | undefined {
+  if (pathLike(value)) return "NON_PORTABLE_PATH";
+  return containsRedactableSecret(value) ? "SECRET_LIKE" : undefined;
+}
+
 function portabilityReason(value: unknown): "NON_PORTABLE_PATH" | "SECRET_LIKE" | undefined {
   if (!Array.isArray(value)) return undefined;
   for (const entry of value) {
@@ -338,11 +346,7 @@ function sanitizeDisplayName(profile: WorkspaceProfileManifest): {
   readonly redactions: readonly WorkspaceProfileExportRedaction[];
 } {
   const name = profile.displayName;
-  const reason = pathLike(name)
-    ? ("NON_PORTABLE_PATH" as const)
-    : containsRedactableSecret(name)
-      ? ("SECRET_LIKE" as const)
-      : undefined;
+  const reason = displayNamePortabilityReason(name);
   if (reason === undefined) return { displayName: name, redactions: [] };
   return {
     displayName: `Profile ${String(profile.revision)}`,

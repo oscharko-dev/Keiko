@@ -1674,9 +1674,16 @@ export function FilesWidget({
 
   // Nested levels render into role="group" so the treeitem hierarchy stays exposed (audit C143).
   // group has no required children, so a nested directory keeps its chrome inline.
+  //
+  // S6819 asks for a native element instead of role="group". None exists for this position: the
+  // ARIA tree pattern requires a nested level to be exactly role="group" so its treeitems stay
+  // owned by the tree, and <details>/<fieldset>/<optgroup>/<address> would each introduce semantics
+  // a tree level must not have. Removing the role flattens the hierarchy and puts this level's
+  // notices back under role="tree" — the #2605 defect this file just repaired.
   const renderDirectory = (path: string, depth: number, state = directories[path]): ReactNode => {
     const { notices, rows, trailer } = directorySections(path, depth, state);
     return (
+      // NOSONAR typescript:S6819 — required ARIA tree level, see the note above.
       <div className="tr-dir" role="group">
         {notices}
         {rows}
@@ -1884,14 +1891,18 @@ export function FilesWidget({
   // is what axe reported as a critical aria-required-children violation on a populated root (#2605).
   const renderRootTree = (): ReactNode => {
     const { notices, rows, trailer } = directorySections(currentDirectoryPath ?? "", 0);
+    // `tr files-tree` stays on THIS element: it is the flex item that owns `overflow: auto`, and
+    // the C203 rule `.files .files-tree { min-height: 0 }` is what lets it shrink below its content
+    // so scrolling engages instead of the tree growing the window body. globals.css is SHA-locked,
+    // so the class pair has to stay where the rule expects it.
     return (
-      <div className="tr">
+      <div className="tr files-tree">
         {notices}
-        {/* The keyboard host moves with the role: arrow traversal is a tree behaviour, every row it
-            navigates is inside this element, and a bare scroll container carrying a key handler is
-            a non-native interactive element. */}
+        {/* Only the rows carry role="tree" — a tree may own nothing but treeitem and group, and the
+            root level's notices, error block, inline editor and load-more button are none of those
+            (#2605). The keyboard host moves with the role: arrow traversal is a tree behaviour and
+            every row it navigates is inside this element. */}
         <div
-          className="files-tree"
           role="tree"
           aria-label={t("filesWidget.tree.label")}
           tabIndex={-1}

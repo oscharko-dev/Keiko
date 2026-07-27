@@ -19,8 +19,6 @@ const useWorkspaceManifestMock = vi.mocked(useWorkspaceManifest);
 
 type RootDescriptor = WorkspaceManifest["roots"][number];
 
-const unreadable: WorkspaceManifestAvailability = { status: "unavailable", reason: "failed" };
-
 function loaded(manifest: WorkspaceManifest): WorkspaceManifestAvailability {
   return { status: "loaded", manifest };
 }
@@ -224,7 +222,7 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
   it("denies execution while the workspace membership is unknown, and still binds read-only", () => {
     expect(
       resolveExplicitWindowRoot(
-        { status: "unavailable" },
+        { status: "unavailable", reason: "failed" },
         undefined,
         "/repo/a",
         false,
@@ -233,7 +231,7 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
     ).toEqual({ status: "denied", reason: "root-binding-required" });
     expect(
       resolveExplicitWindowRoot(
-        { status: "unavailable" },
+        { status: "unavailable", reason: "failed" },
         "/repo/a",
         "/repo/a",
         false,
@@ -242,7 +240,7 @@ describe("root identity is explicit for execution surfaces (#2619)", () => {
     ).toEqual({ status: "denied", reason: "root-binding-required" });
     expect(
       resolveExplicitWindowRoot(
-        { status: "unavailable" },
+        { status: "unavailable", reason: "failed" },
         undefined,
         "/repo/a",
         false,

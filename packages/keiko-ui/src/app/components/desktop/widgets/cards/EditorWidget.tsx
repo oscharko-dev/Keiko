@@ -30,6 +30,7 @@ import {
   type EditorPaneStateV2,
   type EditorSplitDirection,
   type EditorSplitDropZone,
+  type WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
@@ -405,6 +406,26 @@ function resolveTrustSettledAttribute(
     verification.catalog?.workspaceTrust.trust === "restricted" &&
     promptedTrustRoot !== workspaceRoot;
   return initialPromptPending ? "false" : "true";
+}
+
+/**
+ * Whether this binding still owes the human the one-per-binding "opening on an untrusted root"
+ * question, and whether answering it means raising the prompt.
+ *
+ * The latch is consumed on the FIRST resolved trust state whatever it says. Consuming it only for
+ * `restricted` left it unspent when the editor opened on a trusted root, so a later explicit
+ * revocation re-raised the first-open prompt and asked the human to grant back what they had just
+ * revoked. Lives outside the component, like `resolveTrustSettledAttribute` above, so the widget's
+ * cognitive complexity is unaffected.
+ */
+function initialTrustLatchDecision(
+  status: WorkspaceTrustStatus | undefined,
+  promptedTrustRoot: string | null,
+  workspaceRoot: string,
+): "skip" | "latch" | "latch-and-prompt" {
+  if (workspaceRoot.length === 0 || status === undefined) return "skip";
+  if (promptedTrustRoot === workspaceRoot) return "skip";
+  return status.trust === "restricted" ? "latch-and-prompt" : "latch";
 }
 
 // Issue #2747 — a line reveal is addressed to the file cfg named alongside it, and every pane below
@@ -1455,11 +1476,14 @@ export function EditorWidget({
   // latch on the first resolved state whatever it says keeps the prompt for a genuine untrusted
   // open and keeps a revoke a revoke.
   useEffect(() => {
-    const status = verification.catalog?.workspaceTrust;
-    if (workspaceRoot.length === 0 || status === undefined) return;
-    if (promptedTrustRoot === workspaceRoot) return;
+    const decision = initialTrustLatchDecision(
+      verification.catalog?.workspaceTrust,
+      promptedTrustRoot,
+      workspaceRoot,
+    );
+    if (decision === "skip") return;
     setPromptedTrustRoot(workspaceRoot);
-    if (status.trust === "restricted") {
+    if (decision === "latch-and-prompt") {
       setTrustDecision({ action: "grant", initialPrompt: true, root: workspaceRoot });
     }
   }, [promptedTrustRoot, verification.catalog?.workspaceTrust, workspaceRoot]);

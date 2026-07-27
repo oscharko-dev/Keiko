@@ -110,6 +110,17 @@ function RootGroup({
     },
     [focused, onActiveFileChange],
   );
+  // Gating the writer alone leaves the binding stale in one case: FilesWidget's "root resolved"
+  // report fires during its initial directory load, so a group that finished loading while it was
+  // NOT focused has already spent that report — and switching focus to it later produces no new
+  // one, leaving cfg.resolvedRoot on the previously focused root. Becoming focused is itself the
+  // event that rebinds the window, so announce the root then. Path and directory are deliberately
+  // cleared: the newly focused root has no selection in this window yet, and carrying the previous
+  // root's file path across would name a file that does not exist under this root.
+  useEffect(() => {
+    if (!focused) return;
+    onActiveFileChange(null, root.canonicalRoot, null);
+  }, [focused, onActiveFileChange, root.canonicalRoot]);
   const move = (offset: -1 | 1): void => {
     void workspace.reorderRoots(root.rootRef, rootOrderAfterMove(manifest.roots, index, offset));
   };
