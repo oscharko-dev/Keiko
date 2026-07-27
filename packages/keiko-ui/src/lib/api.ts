@@ -763,7 +763,8 @@ export async function fetchEvidenceList(
     }
   }
   const qs = params.toString();
-  return fetchJson(`/api/evidence${qs ? `?${qs}` : ""}`);
+  const path = qs.length > 0 ? `/api/evidence?${qs}` : "/api/evidence";
+  return fetchJson(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -798,7 +799,8 @@ export async function fetchWorkspaceSummary(
     params.set("budget", String(filters.budget));
   }
   const qs = params.toString();
-  return fetchJson(`/api/workspace${qs ? `?${qs}` : ""}`);
+  const path = qs.length > 0 ? `/api/workspace?${qs}` : "/api/workspace";
+  return fetchJson(path);
 }
 
 // ---------------------------------------------------------------------------
