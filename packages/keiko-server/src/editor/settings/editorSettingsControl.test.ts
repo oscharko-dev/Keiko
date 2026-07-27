@@ -13,7 +13,10 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
-import type { ManagedLspControlService } from "../lsp/managedLspControl.js";
+import type {
+  ManagedLspControlService,
+  ManagedLspControlSnapshot,
+} from "../lsp/managedLspControl.js";
 import type {
   DebugActivationControlService,
   DebugActivationSynchronization,
@@ -59,6 +62,31 @@ function replaceDirectory(path: string): void {
   mkdirSync(staged);
   rmSync(path, { recursive: true, force: true });
   renameSync(staged, path);
+}
+
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value): void => {
+      resolvePromise?.(value);
+    },
+  };
+}
+
+function managedLanguageSnapshot(): ManagedLspControlSnapshot {
+  return {
+    storeState: "ready",
+    revision: 7,
+    etag: '"lspcfg-7-managed"',
+    evidenceCount: 0,
+    languages: [],
+    settings: [],
+    configurations: [],
+  };
 }
 
 /**
@@ -737,6 +765,137 @@ describe("editor settings control service", () => {
     expect(a.managedLanguages?.rootRef).toBe(a.rootRef);
     expect(b.managedLanguages?.rootRef).toBe(b.rootRef);
     expect(a.rootRef).not.toBe(b.rootRef);
+  });
+
+  it("drops pre-await root-bound layers when managed-language loading races replacement", async () => {
+    const stateDir = temporaryDirectory("editor-settings-snapshot-race-state");
+    const parent = temporaryDirectory("editor-settings-snapshot-race-root");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const store = createEditorSettingsStore({ stateDir });
+    const base = createEditorSettingsControlService({
+      store,
+      mutex: createWorkspaceMutexRegistry(),
+      profileRefFactory: () => profileRef("profile-race"),
+    });
+    await base.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "snapshot-race-user",
+      scope: "user",
+      values: { minimap: true },
+    });
+    await mutateProfile(base, {
+      action: "create",
+      displayName: "Race Profile",
+      expectedRevision: 0,
+      idempotencyKey: "snapshot-race-profile-create",
+    });
+    await mutateProfile(base, {
+      action: "set",
+      expectedRevision: 1,
+      idempotencyKey: "snapshot-race-profile-set",
+      profileRef: profileRef("profile-race"),
+      values: { keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"] },
+    });
+    await mutateProfile(base, {
+      action: "switch",
+      expectedRevision: 2,
+      idempotencyKey: "snapshot-race-profile-switch",
+      profileRef: profileRef("profile-race"),
+    });
+    await base.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "snapshot-race-workspace",
+      realRoot: root,
+      scope: "workspace",
+      values: { debuggingEnabled: true, patchApply: true },
+    });
+    await base.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "snapshot-race-root",
+      realRoot: root,
+      scope: "root",
+      values: { fontSize: 22 },
+    });
+
+    const lspReadStarted = deferred<boolean>();
+    const lspRead = deferred<ManagedLspControlSnapshot>();
+    const debugActivations: string[] = [];
+    const aiPatchApply: { readonly source: string; readonly value: unknown }[] = [];
+    const managedLspControl: ManagedLspControlService = {
+      stateDir,
+      read: () => {
+        lspReadStarted.resolve(true);
+        return lspRead.promise;
+      },
+      readConfiguration: () => Promise.resolve(undefined),
+      mutate: () => Promise.resolve({ kind: "invalid", code: "INVALID_REQUEST" }),
+      restrict: () => Promise.resolve(),
+    };
+    const debugActivation: DebugActivationControlService = {
+      isCurrent: () => true,
+      resolve: (context) => {
+        debugActivations.push(context.workspaceActivation);
+        return {
+          ok: true,
+          schemaVersion: "1",
+          adapterId: "node-typescript",
+          revision: context.revision,
+          state: "disabled",
+          reasonCode: "WORKSPACE_ACTIVATION_UNSET",
+          policyResult: "allowed",
+        };
+      },
+      synchronize: () =>
+        Promise.resolve({
+          ok: true,
+          schemaVersion: "1",
+          adapterId: "node-typescript",
+          revision: 0,
+          state: "disabled",
+          reasonCode: "WORKSPACE_ACTIVATION_UNSET",
+          policyResult: "allowed",
+        }),
+      dispose: () => undefined,
+    };
+    const control = createEditorSettingsControlService({
+      store,
+      mutex: createWorkspaceMutexRegistry(),
+      managedLspControl,
+      debugActivation,
+      aiAssistance: ({ revision, settings }) => {
+        const patchApply = settingRow(settings, "patchApply");
+        aiPatchApply.push({ source: patchApply.source, value: patchApply.value });
+        return { revision, statuses: [] };
+      },
+    });
+
+    const pending = control.read(root);
+    await lspReadStarted.promise;
+    replaceDirectory(root);
+    lspRead.resolve(managedLanguageSnapshot());
+    const snapshot = await pending;
+
+    expect(snapshot.managedLanguages).toBeUndefined();
+    expect(snapshot.workspaceRevision).toBe(0);
+    expect(snapshot.rootRevision).toBe(0);
+    expect(settingRow(snapshot.settings, "debuggingEnabled")).toMatchObject({
+      source: "builtInDefault",
+      value: false,
+    });
+    expect(settingRow(snapshot.settings, "fontSize")).toMatchObject({
+      source: "builtInDefault",
+      value: 13,
+    });
+    expect(settingRow(snapshot.settings, "minimap")).toMatchObject({ source: "user", value: true });
+    expect(settingRow(snapshot.settings, "keybindingOverrides")).toMatchObject({
+      source: "profile",
+    });
+    expect(debugActivations).toEqual(["unset"]);
+    expect(aiPatchApply).toEqual([{ source: "builtInDefault", value: false }]);
   });
 
   it("projects debugging from the derived D7 gate and synchronizes the canonical workspace mutation", async () => {

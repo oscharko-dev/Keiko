@@ -828,6 +828,7 @@ describe("stateless debug launch Layer-2 planning", () => {
     const identities: readonly DebugLaunchRuntimeContext["workspaceIdentity"][] = [
       { ...context.workspaceIdentity, realPath: context.runtimeRoot },
       { ...context.workspaceIdentity, identityDigest: "0".repeat(64) },
+      { ...context.workspaceIdentity, objectIdentityDigest: "0".repeat(64) },
       { ...context.workspaceIdentity, device: context.workspaceIdentity.device + 1 },
       { ...context.workspaceIdentity, inode: context.workspaceIdentity.inode + 1 },
       { ...context.workspaceIdentity, mode: context.workspaceIdentity.mode ^ 1 },

@@ -271,6 +271,10 @@ describe("production debug launch context resolution", () => {
     const runtimeStat = lstatSync(runtime);
     const workspace = realpathSync(current.workspace);
     const workspaceStat = lstatSync(workspace);
+    const workspaceIdentity = inspectWorkspaceRootIdentity(workspace);
+    if (workspaceIdentity.objectIdentityDigest === undefined) {
+      throw new Error("fixture filesystem has no object identity");
+    }
     expect(context).toMatchObject({
       workspaceRoot: current.workspace,
       canonicalWorkspaceRoot: workspace,
@@ -294,7 +298,8 @@ describe("production debug launch context resolution", () => {
       // validator drift onto two different digests without a single test noticing.
       workspaceIdentity: {
         realPath: workspace,
-        identityDigest: inspectWorkspaceRootIdentity(workspace).identityDigest,
+        identityDigest: workspaceIdentity.identityDigest,
+        objectIdentityDigest: workspaceIdentity.objectIdentityDigest,
         device: workspaceStat.dev,
         inode: workspaceStat.ino,
         mode: workspaceStat.mode,

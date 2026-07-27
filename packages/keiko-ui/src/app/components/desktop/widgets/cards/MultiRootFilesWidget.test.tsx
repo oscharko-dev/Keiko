@@ -309,6 +309,12 @@ describe("MultiRootFilesWidget", () => {
     );
   });
 
+  it("allows the root toolbar to shrink inside a narrow explorer", (): void => {
+    expect(rootGroupCss).toContain(
+      ".cmpToolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0;",
+    );
+  });
+
   it.each([
     {
       state: "empty",

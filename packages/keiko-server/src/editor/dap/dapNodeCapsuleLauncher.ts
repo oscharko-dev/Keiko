@@ -14,7 +14,7 @@ import {
 } from "./debugCapsulePlan.js";
 import { DapProcessManagerError, type DebugCapsuleLauncher } from "./dapProcessManager.js";
 import type { QualifiedDebugCapsuleHandle } from "./dapCapsuleSupervisor.js";
-import { workspaceRootIdentityDigestFor } from "../../workspace-root-identity.js";
+import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 
 export interface DebugCapsuleLauncherDeps {
   readonly now: () => number;
@@ -138,26 +138,16 @@ function runtimeUnchanged(envelope: DebugSpawnEnvelope, endpoint: PosixDebugEndp
 function workspaceUnchanged(envelope: DebugSpawnEnvelope): boolean {
   try {
     const identity = envelope.workspaceIdentity;
-    const realPath = realpathSync(identity.realPath);
-    const stat = lstatSync(realPath);
-    // Producer (`inspectDebugWorkspaceIdentity` -> `inspectWorkspaceRootIdentity`) derives
-    // `identityDigest` via the shared framed digest since #2520. Re-derive with the same helper
-    // instead of the pre-#2520 JSON-stringify hash so a re-observed unchanged directory verifies
-    // as unchanged on Linux.
-    const digest = workspaceRootIdentityDigestFor(realPath, {
-      dev: stat.dev,
-      ino: stat.ino,
-      mode: stat.mode,
-      uid: stat.uid,
-    });
+    const inspected = inspectWorkspaceRootIdentity(identity.realPath);
     return [
-      realPath === identity.realPath,
-      stat.isDirectory(),
-      stat.dev === identity.device,
-      stat.ino === identity.inode,
-      stat.mode === identity.mode,
-      stat.uid === identity.ownerUid,
-      digest === identity.identityDigest,
+      inspected.canonicalRoot === identity.realPath,
+      inspected.device === identity.device,
+      inspected.inode === identity.inode,
+      inspected.mode === identity.mode,
+      inspected.ownerUid === identity.ownerUid,
+      inspected.identityDigest === identity.identityDigest,
+      inspected.objectIdentityDigest !== undefined,
+      inspected.objectIdentityDigest === identity.objectIdentityDigest,
     ].every(Boolean);
   } catch {
     return false;

@@ -77,7 +77,6 @@ function handleEditorAgentActions(
   deps?: Parameters<typeof handleEditorAgentActionsRoute>[1],
 ): ReturnType<typeof handleEditorAgentActionsRoute> {
   const base = {
-    store: createInMemoryUiStore(),
     redactor: buildRedactor({}),
     env: {},
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
@@ -529,7 +528,7 @@ async function postActionResult(
 function runtimeMutationDeps(
   runtimeMutationLease: NonNullable<UiHandlerDeps["runtimeMutationLease"]>,
 ): Parameters<typeof handleEditorAgentActions>[1] {
-  return { runtimeMutationLease, store: {} } as Parameters<typeof handleEditorAgentActions>[1];
+  return { runtimeMutationLease };
 }
 
 function lastEmittedAction(frames: string): EditorAgentAction {
@@ -587,7 +586,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
   it("denies both repository-read actions when authority is missing", async () => {
     await registerLiveSnapshot();
     const store = createInMemoryUiStore();
-    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const deps = { redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
     const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
     try {
       for (const proposed of [
@@ -627,7 +626,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     agentAuthorityRef = registered.authorityRef;
     vi.setSystemTime(new Date("2030-01-01T00:00:02.000Z"));
     const store = createInMemoryUiStore();
-    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const deps = { redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
     const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
     try {
       const response = await handleEditorAgentActions(context(searchWorkspaceAction()), deps);
@@ -650,7 +649,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
   it("rejects a repository read from a retained snapshot without a live bridge", async () => {
     await registerSnapshotOnly();
     const store = createInMemoryUiStore();
-    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const deps = { redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
     const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
     try {
       const response = await handleEditorAgentActions(context(searchWorkspaceAction()), deps);
@@ -715,7 +714,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     agentAuthorityRef = registered.authorityRef;
     vi.setSystemTime(new Date("2030-01-01T00:00:01.001Z"));
     const store = createInMemoryUiStore();
-    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const deps = { redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
     const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
     try {
       const response = await handleEditorAgentActions(context(searchWorkspaceAction()), deps);
@@ -825,6 +824,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     mkdirSync(join(root, "src"), { recursive: true });
     const text = "const target = 1;\ntarget;\n";
     writeFileSync(join(root, "src", "a.ts"), text, "utf8");
+    store.createProject(root, "fixture");
     await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     let languageClockReads = 0;
     const deps = {
@@ -890,6 +890,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     const store = createInMemoryUiStore();
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src", "a.ts"), "export function parseConfig(): void {}\n", "utf8");
+    store.createProject(root, "fixture");
     await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
     try {
@@ -926,6 +927,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     mkdirSync(join(root, "outside"), { recursive: true });
     writeFileSync(join(root, "inside", "match.ts"), "export const scopedNeedle = 1;\n", "utf8");
     writeFileSync(join(root, "outside", "match.ts"), "export const scopedNeedle = 2;\n", "utf8");
+    store.createProject(root, "fixture");
     await registerLiveSnapshot({ workspaceRoot: root, activeFile: "inside/match.ts" });
     const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
     try {
@@ -961,6 +963,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
   it("rejects sensitive server-resolved targets before invoking a handler", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-agent-containment-"));
     const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
     await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
     try {

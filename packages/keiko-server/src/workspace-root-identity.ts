@@ -10,6 +10,12 @@ const REFERENCE_HEX_CHARS = 40;
 export interface WorkspaceRootIdentity {
   readonly canonicalRoot: string;
   readonly identityDigest: WorkspaceRootIdentityDigest;
+  /**
+   * Server-private identity for the filesystem object itself. Unlike `identityDigest`, this does
+   * not contain a path and retains exact bigint stat fields. `undefined` means the filesystem
+   * cannot provide a durable creation identity, so persisted authority must fail closed.
+   */
+  readonly objectIdentityDigest: string | undefined;
   readonly rootRef: WorkspaceRootRef;
   readonly device: number;
   readonly inode: number;
@@ -52,6 +58,19 @@ export function workspaceRootIdentityDigestFor(
   ]) as WorkspaceRootIdentityDigest;
 }
 
+export function workspaceRootObjectIdentityDigestFor(stat: {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly birthtimeNs: bigint;
+}): string | undefined {
+  if (stat.birthtimeNs <= 0n) return undefined;
+  return framedDigest("keiko.m11.root-object.fs.v1", [
+    String(stat.dev),
+    String(stat.ino),
+    String(stat.birthtimeNs),
+  ]);
+}
+
 export function inspectWorkspaceRootIdentity(path: string): WorkspaceRootIdentity {
   const supplied = lstatSync(path);
   if (supplied.isSymbolicLink()) throw new Error("WORKSPACE_ROOT_ALIAS_DENIED");
@@ -60,20 +79,27 @@ export function inspectWorkspaceRootIdentity(path: string): WorkspaceRootIdentit
   // `/Users/Alice/proj` and `/users/alice/proj` produces distinct identity digests and root
   // references — two independent trust states over one filesystem object.
   const canonicalRoot = realpathSync.native(path);
-  const stat = lstatSync(canonicalRoot);
+  const stat = lstatSync(canonicalRoot, { bigint: true });
   if (!stat.isDirectory()) throw new Error("WORKSPACE_ROOT_INVALID");
+  const legacyStat = {
+    dev: Number(stat.dev),
+    ino: Number(stat.ino),
+    mode: Number(stat.mode),
+    uid: Number(stat.uid),
+  };
   // Through the exported helper, not a second inline copy of the same framed digest. The producer
   // and the debug-launch validator drifting onto two formulas is exactly what broke every Linux
   // debug launch in #2643; two derivations of one digest in one file is the same latent defect,
   // one edit away.
-  const identityDigest = workspaceRootIdentityDigestFor(canonicalRoot, stat);
+  const identityDigest = workspaceRootIdentityDigestFor(canonicalRoot, legacyStat);
   return Object.freeze({
     canonicalRoot,
     identityDigest,
+    objectIdentityDigest: workspaceRootObjectIdentityDigestFor(stat),
     rootRef: rootReference(canonicalRoot),
-    device: stat.dev,
-    inode: stat.ino,
-    mode: stat.mode,
-    ownerUid: stat.uid,
+    device: legacyStat.dev,
+    inode: legacyStat.ino,
+    mode: legacyStat.mode,
+    ownerUid: legacyStat.uid,
   });
 }
