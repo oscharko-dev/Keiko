@@ -49,6 +49,30 @@ describe("codeParser", () => {
     });
   });
 
+  // Local Knowledge's own file-selection contract (LOCAL_KNOWLEDGE_SCRIPT_FILE_EXTENSIONS /
+  // LOCAL_KNOWLEDGE_SOURCE_CODE_FILE_EXTENSIONS) already advertised rb/php/swift/c/cc/cpp/h/hpp as
+  // supported source-code formats while CODE_LANGUAGE_BY_EXTENSION omitted them — the same
+  // .mts/.cts routing gap fixed above, still open for eight more mainstream extensions (release
+  // audit of epic #2554 M2).
+  it.each([
+    ["rb", "def load; nil; end", "function load"],
+    ["php", "function load() {}", "function load"],
+    ["swift", "func load() {}", "function load"],
+    ["c", "int load() {}", "function load"],
+    ["cc", "int load() {}", "function load"],
+    ["cpp", "int load() {}", "function load"],
+    ["h", "int load();", "function load"],
+    ["hpp", "int load();", "function load"],
+  ])("routes the %s extension to the code parser, not the text adapter", (extension) => {
+    const resolution = createDefaultParserRegistry().resolve(
+      selectionFromText("int value = 1;", { extension }),
+    );
+    expect(resolution).toMatchObject({
+      kind: "matched",
+      adapter: { capability: { parserId: "code-text" } },
+    });
+  });
+
   it.each([
     ["ts", "export function load(): void {}", "function load"],
     ["mts", "export function load(): void {}", "function load"],
@@ -58,6 +82,14 @@ describe("codeParser", () => {
     ["rs", "pub fn load() {}", "function load"],
     ["kt", "data class Record(val id: String)", "type Record"],
     ["java", "public final class Record {}", "type Record"],
+    ["rb", "def load()\n  nil\nend", "function load"],
+    ["php", "function load() {}", "function load"],
+    ["swift", "func load() {}", "function load"],
+    ["c", "int load() {\n  return 0;\n}", "function load"],
+    ["cc", "int load() {\n  return 0;\n}", "function load"],
+    ["cpp", "int load() {\n  return 0;\n}", "function load"],
+    ["h", "int load();", "function load"],
+    ["hpp", "int load();", "function load"],
   ])("emits a symbol-anchored section for %s", (extension, text, label) => {
     const sections = sectionsFor(text, extension);
     expect(sections).toHaveLength(1);

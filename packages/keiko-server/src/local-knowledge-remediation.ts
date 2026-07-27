@@ -33,6 +33,7 @@ import {
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
+import { latestRunningJobId } from "./local-knowledge-handlers.js";
 import {
   inspectRemediationStore,
   openRemediationStore,
@@ -218,24 +219,6 @@ function assertSourcesAllowed(store: KnowledgeStore, capsule: KnowledgeCapsule):
       throw new Error("A Local Knowledge source path is in a denied location.");
     }
   }
-}
-
-function latestRunningJobId(
-  store: KnowledgeStore,
-  capsuleId: KnowledgeCapsuleId,
-): string | undefined {
-  const row = store._internal.db
-    .prepare(
-      [
-        "SELECT id",
-        "FROM indexing_jobs",
-        "WHERE capsule_id = :c AND status = 'running'",
-        "ORDER BY started_at DESC, id DESC",
-        "LIMIT 1",
-      ].join(" "),
-    )
-    .get({ c: capsuleId }) as { readonly id: string } | undefined;
-  return row?.id;
 }
 
 async function reindexCapsule(
