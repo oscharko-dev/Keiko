@@ -209,4 +209,25 @@ describe("editor M11 quality closeout evidence (#2533)", () => {
     expect(docs).toContain("Linux-authoritative");
     expect(docs).not.toMatch(/unresolved (critical|high)/iu);
   });
+
+  // The assertions above check that the demo SAYS certain things; none of them can notice that the
+  // ref it tells a reader to check out no longer exists. It did not: the reproduction pointed at
+  // `feat/epic-built-in-editor-2285-M11` long after that branch was squash-merged and deleted, so
+  // the one command sequence the epic names as closure evidence failed at `git fetch`. A milestone
+  // branch is deleted on merge by design, so any reproduction that names one rots the same way —
+  // pin the reproduction to a branch the repository actually maintains.
+  it("reproduces from a branch that still exists, not a merged milestone branch", () => {
+    const demo = readFileSync(CLOSEOUT_DOCS[0], "utf8");
+    const block = /```bash\n(?<script>[\s\S]*?)```/u.exec(demo)?.groups?.script ?? "";
+    expect(block, "the demo must carry an executable reproduction block").toContain("git clone");
+
+    const refs = [...block.matchAll(/git (?:checkout|fetch|switch)[^\n]*/gu)].map((m) => m[0]);
+    expect(refs.length, "the reproduction must select a revision explicitly").toBeGreaterThan(0);
+    for (const ref of refs) {
+      expect(ref, "reproduction checks out a branch that merge deletes").not.toMatch(
+        /feat\/|epic\/|release\//u,
+      );
+    }
+    expect(block).toMatch(/git (?:checkout|switch) dev\b/u);
+  });
 });

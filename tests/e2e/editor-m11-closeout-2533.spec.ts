@@ -20,7 +20,6 @@ import {
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./support/file-history-2531.js";
 
 const FILE = "src/app.ts";
-const MULTI_ROOT_ARIA_FINDING = 2605;
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const SETTINGS_WINDOW = '.window[data-window-id="issue-2533-settings"]';
 const INITIAL_VERSION = 'export const historyValue = "initial";\n';
@@ -339,17 +338,10 @@ async function expectAxeGreen(page: Page, selector: string): Promise<void> {
   expect(violations, formatViolations(violations)).toEqual([]);
 }
 
-async function expectKnownMultiRootAxeFinding(page: Page): Promise<void> {
-  const violations = seriousOrCritical(await runAxe(page, "[data-multi-root-explorer]"));
-  const finding = violations[0];
-  expect(
-    finding === undefined
-      ? undefined
-      : { id: finding.id, impact: finding.impact, nodeCount: finding.nodes.length },
-    `Follow-up #${String(MULTI_ROOT_ARIA_FINDING)} owns the exact M11 Explorer finding.`,
-  ).toEqual({ id: "aria-required-children", impact: "critical", nodeCount: 2 });
-  expect(violations).toHaveLength(1);
-}
+// Until #2605 this surface had a tolerated critical finding: the scan asserted the exact known
+// violation on exactly two nodes. The defect is fixed — the tree role now owns only treeitem rows —
+// so the Explorer is held to the same zero-violation bar as Settings and history. This is
+// deliberately a strengthening: the previous form would have FAILED once the surface became clean.
 
 test.afterAll(() => {
   cleanupEditorWorkspaces();
@@ -397,14 +389,13 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   expect(storage.includes("session-sink-reachable"), "sessionStorage arm read no state").toBe(true);
   // `historyValue` is the one identifier every saved version shares, so any leaked body carries it.
   expect(storage.includes("historyValue"), "a checkpoint body reached browser storage").toBe(false);
-  await expectKnownMultiRootAxeFinding(journeyPage);
+  await expectAxeGreen(journeyPage, "[data-multi-root-explorer]");
   await openProfileSettingsSurface(journeyPage);
   await expectAxeGreen(journeyPage, SETTINGS_WINDOW);
   await expectAxeGreen(journeyPage, "aside[aria-label='File history']");
   const metrics = {
     profileSwitchMs: switched.durationMs,
     historyRestoreMs,
-    knownA11yFinding: MULTI_ROOT_ARIA_FINDING,
   };
   await testInfo.attach("editor-m11-closeout-metrics.json", {
     body: Buffer.from(`${JSON.stringify(metrics, null, 2)}\n`, "utf8"),

@@ -14,7 +14,12 @@ describe("editor M11 browser closeout source contract (#2533)", () => {
     expect(spec).toContain("Open file history");
     expect(spec).toContain("Restore version");
     expect(spec).toContain("runAxe");
-    expect(spec).toContain("MULTI_ROOT_ARIA_FINDING = 2605");
+    // #2605 is fixed, so the Explorer is held to the same zero-violation bar as the other two
+    // surfaces. The guard pins the green assertion AND forbids the shapes that would quietly
+    // re-admit a violation: a tolerated "known finding" or a disabled/excluded rule.
+    expect(spec).toContain('await expectAxeGreen(journeyPage, "[data-multi-root-explorer]");');
+    expect(spec).not.toContain("expectKnownMultiRootAxeFinding");
+    expect(spec).not.toContain("aria-required-children");
     expect(spec).toContain("editor-m11-closeout.png");
     expect(spec).toContain("FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET");
   });

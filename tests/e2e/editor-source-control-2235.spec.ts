@@ -250,15 +250,15 @@ test("Files reflects conflict, folder, ignored, and post-save status", async ({ 
   await expect(files).toBeVisible();
   const src = files.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src"]`);
   await expect(src.getByLabel(/conflict/u)).toBeVisible();
-  await files.getByRole("button", { name: "Expand folder: src" }).click();
+  await files.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   const merge = files.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src/merge"]`);
   await expect(merge.getByLabel(/conflict/u)).toBeVisible();
   const nested = files.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src/nested"]`);
   await expect(nested.getByLabel(/Git change/u)).toBeVisible();
-  await files.getByRole("button", { name: "Expand folder: merge" }).click();
+  await files.locator('button.tr-caret-btn[aria-label="Expand folder: merge"]').click();
   await expect(files.getByLabel(`Git conflict: ${fixture.conflictPath}`)).toBeVisible();
 
-  await files.getByRole("button", { name: "Expand folder: tmp" }).click();
+  await files.locator('button.tr-caret-btn[aria-label="Expand folder: tmp"]').click();
   await expect(
     files.getByRole("treeitem", { name: /ignored\.log, Ignored by Git/u }),
   ).toBeVisible();

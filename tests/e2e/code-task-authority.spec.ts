@@ -244,7 +244,7 @@ async function openRealBinaryEditorBridge(page: Page): Promise<void> {
   const editorWindow = page.locator('section[data-window-id="editor"]');
   await editorWindow.focus();
   await expect(editorWindow).toHaveAttribute("data-top", "true");
-  await workspace.getByRole("button", { name: "Expand folder: src" }).click();
+  await workspace.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   await openTreeFile(workspace, AUTHORITY_TARGET_RELATIVE_PATH);
   await expect.poll(() => hasEditorSession(page, root)).toBe(true);
   const codingWindow = page.locator('section[data-window-id="coding"]');

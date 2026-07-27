@@ -231,6 +231,16 @@ function renderWithSession(ui: ReactElement, session = makeSession()): ChatSessi
   return session;
 }
 
+// The caret is a pointer-only affordance and is aria-hidden since #2605, so it is deliberately
+// absent from the accessibility tree and getByRole cannot reach it. Pointer-level tests address it
+// through the DOM instead — which is exactly the distinction the fix draws.
+function caretButton(folderName: string): HTMLButtonElement {
+  const selector = `button.tr-caret-btn[aria-label="Expand folder: ${folderName}"]`;
+  const caret = document.querySelector<HTMLButtonElement>(selector);
+  if (caret === null) throw new Error(`No caret button rendered for folder "${folderName}".`);
+  return caret;
+}
+
 describe("FilesWidget", () => {
   beforeEach(() => {
     vi.mocked(fetchGitStatus).mockResolvedValue({
@@ -429,7 +439,8 @@ describe("FilesWidget", () => {
 
     render(<FilesWidget root="/repo" />);
 
-    await userEvent.click(await screen.findByRole("button", { name: /expand folder: src/i }));
+    await screen.findByRole("treeitem", { name: /^src$/u });
+    await userEvent.click(caretButton("src"));
     expect(await screen.findByRole("treeitem", { name: /app\.ts/i })).toBeInTheDocument();
     await waitFor(() => expect(workspaceWatchEventSources()).toHaveLength(1));
 
@@ -1071,7 +1082,7 @@ describe("FilesWidget", () => {
       expect(onActiveFileChange).toHaveBeenCalledWith(null, "/resolved-repo", null);
     });
     onActiveFileChange.mockClear();
-    await userEvent.click(screen.getByRole("button", { name: "Expand folder: src" }));
+    await userEvent.click(caretButton("src"));
 
     expect(await screen.findByRole("treeitem", { name: /inside\.ts/i })).toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: /package\.json/i })).toBeInTheDocument();
@@ -1280,7 +1291,7 @@ describe("FilesWidget", () => {
     render(<FilesWidget root="/repo" />);
 
     const folderRow = await screen.findByRole("treeitem", { name: /^src$/i });
-    const caret = screen.getByRole("button", { name: "Expand folder: src" });
+    const caret = caretButton("src");
     const fileRow = screen.getByRole("treeitem", { name: /package-lock\.json/i });
     const unreadableRow = screen.getByRole("treeitem", { name: /linked-secret/i });
 
@@ -1900,23 +1911,24 @@ describe("FilesWidget file operations", () => {
   });
 
   // GEN-UI-TEST-GAP-006 (#16) — the file tree plus an open delete dialog must be axe-clean.
-  // The tree exposes a separate caret toggle button alongside each treeitem, which axe's
-  // aria-required-children rule flags as a not-allowed child of role="tree"; that pre-existing
-  // structural item is tracked independently of these focus findings, so it is disabled here.
+  // aria-required-children was disabled here until #2605, because the caret toggle button was an
+  // assistive-technology-visible child of role="tree" and that rule forbids any owned child that is
+  // not a treeitem or group. The caret is aria-hidden now (it is a pointer-only duplicate of the
+  // row's own aria-expanded), so every rule stays enabled: this scan is what would catch the defect
+  // coming back, and disabling the rule again would re-blind it.
   it("has no axe violations for the tree and the open delete dialog", async () => {
-    const axeOptions = { rules: { "aria-required-children": { enabled: false } } } as const;
     const { container } = render(<FilesWidget root="/repo" />);
 
     const row = await screen.findByRole("treeitem", { name: /app\.ts/i });
-    expect(await axe(container, axeOptions)).toHaveNoViolations();
+    expect(await axe(container)).toHaveNoViolations();
 
     row.focus();
     fireEvent.keyDown(row, { key: "Delete" });
     const dialog = await screen.findByRole("dialog", { name: /delete file\?/i });
     // The delete dialog itself (the surface these findings hardened) is axe-clean under all rules.
     expect(await axe(dialog)).toHaveNoViolations();
-    // The full container (tree + dialog) is clean aside from the tracked tree-structure item.
-    expect(await axe(container, axeOptions)).toHaveNoViolations();
+    // The full container (tree + dialog) is clean under the full rule set.
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("keeps the inline editor open and shows the error when a create fails", async () => {
