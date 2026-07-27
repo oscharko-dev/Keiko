@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { WorkspaceProfileExportRedaction } from "./workspace-profile.js";
 import { isWorkspaceProfileRef } from "./workspace-contract-primitives.js";
 import type { WorkspaceProfileRef } from "./workspace-contract-primitives.js";
 import { EDITOR_M11_SETTINGS_SCHEMA_VERSION } from "./editor-m11-settings.js";
@@ -103,5 +104,21 @@ describe("workspace profile manifest and export", () => {
     });
     expect(() => validateWorkspaceProfileManifest(hostile)).not.toThrow();
     expect(validateWorkspaceProfileManifest(hostile).ok).toBe(false);
+  });
+});
+
+describe("public entrypoint surface", () => {
+  // The display-name field rides in the export manifest and is reported as a redaction when it is
+  // scrubbed, so its literal value is part of the wire contract that keiko-server and the UI both
+  // read. Importing it from the package entrypoint locks the export against silent drift.
+  it("exports the profile display-name redaction field from the package entrypoint", async () => {
+    const entrypoint = await import("./index.js");
+    expect(entrypoint.WORKSPACE_PROFILE_DISPLAY_NAME_FIELD).toBe("profileDisplayName");
+    const redaction: WorkspaceProfileExportRedaction = {
+      settingId: entrypoint.WORKSPACE_PROFILE_DISPLAY_NAME_FIELD,
+      reasonCode: "NON_PORTABLE_PATH",
+      rejectedCount: 1,
+    };
+    expect(redaction.settingId).toBe("profileDisplayName");
   });
 });

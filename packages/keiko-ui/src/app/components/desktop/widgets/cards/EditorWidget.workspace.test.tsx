@@ -21,6 +21,7 @@ import {
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import { EditorWidget } from "./EditorWidget";
 import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
+import { WORKSPACE_TRUST_CHANGED_EVENT } from "../../../../../lib/workspace-trust-api";
 import { EditorQuickAccessTriggerProvider } from "../../EditorQuickAccessTriggerContext";
 
 const probeState = vi.hoisted(() => ({
@@ -2204,6 +2205,56 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
         await Promise.resolve();
       });
       expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("does not re-raise the initial prompt after the human revokes trust", async () => {
+    // The initial prompt answers "this binding is opening on an untrusted root", once per binding.
+    // The latch was only consumed when the FIRST resolved state was `restricted`, so opening on a
+    // TRUSTED root left it unconsumed — and an explicit revocation then moved trust to `restricted`
+    // and re-raised the first-open prompt, asking the human to grant back what they had just
+    // deliberately revoked, flagged `initialPrompt`.
+    let outcome: CatalogOutcome = "trusted";
+    let catalogRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (!url.startsWith(CATALOG_URL)) return Promise.resolve(jsonResponse(false, {}));
+        catalogRequests += 1;
+        return Promise.resolve(catalogResponse(requestedProjectId(url), outcome));
+      }),
+    );
+    try {
+      const { container } = render(<EditorWidget root="/repo" file="src/a.ts" />);
+      const workspace = workspaceRootOf(container);
+      await waitFor(() => {
+        expect(workspace).toHaveAttribute("data-trust-settled", "true");
+      });
+      // Opening on a trusted root raises nothing, which is what leaves the latch unconsumed.
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+
+      // The human revokes: the catalog now reports restricted, exactly as the real revoke path
+      // announces it.
+      const requestsBeforeRevoke = catalogRequests;
+      outcome = "restricted";
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent(WORKSPACE_TRUST_CHANGED_EVENT, { detail: { projectId: "/repo" } }),
+        );
+        await Promise.resolve();
+      });
+
+      // Positive control: without a second catalog read the assertion below would hold vacuously.
+      await waitFor(() => {
+        expect(catalogRequests).toBeGreaterThan(requestsBeforeRevoke);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByRole("alertdialog", { name: /Trust this workspace/iu })).toBeNull();
     } finally {
       vi.unstubAllGlobals();
       resetEditorVerificationRunStateForTests();

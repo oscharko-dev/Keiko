@@ -17,6 +17,14 @@ function confirmButtonLabel(
   return action === "grant" ? t("workspaceTrust.dialog.trust") : t("workspaceTrust.dialog.revoke");
 }
 
+function bannerTitle(
+  t: ReturnType<typeof useTranslate>,
+  state: { readonly unavailable: boolean; readonly trusted: boolean },
+): string {
+  if (state.unavailable) return t("workspaceTrust.unavailable");
+  return state.trusted ? t("workspaceTrust.trustedMode") : t("workspaceTrust.restrictedMode");
+}
+
 export type WorkspaceTrustSurface = "editor" | "commands" | "languages";
 export type WorkspaceTrustDecision = "grant" | "revoke";
 type WorkspaceTrustIssue = "load" | "update";
@@ -114,9 +122,14 @@ export function WorkspaceTrustBanner({
   readonly editor?: boolean | undefined;
 }): ReactNode {
   const t = useTranslate();
-  if (status?.trust === "trusted" && issue !== "load") return null;
+  const trusted = status?.trust === "trusted";
+  // A trusted workspace renders nothing — unless a transition was refused. The guard used to send
+  // every trusted state home before the `issue === "update"` alert below could run, which made a
+  // failed REVOKE completely silent: the human asked to withdraw trust, the server refused, and the
+  // UI showed a still-trusted workspace with no indication the request had not been applied.
+  if (trusted && issue === undefined) return null;
   const unavailable = issue === "load";
-  const title = unavailable ? t("workspaceTrust.unavailable") : t("workspaceTrust.restrictedMode");
+  const title = bannerTitle(t, { unavailable, trusted });
   const reason =
     status === undefined
       ? t("workspaceTrust.reason.stateUnavailable")
@@ -138,7 +151,9 @@ export function WorkspaceTrustBanner({
         <p className={styles.cmpBannerReason}>{t(SURFACE_KEYS[surface])}</p>
         {issue === "update" ? (
           <p className={styles.cmpBannerReason} role="alert">
-            {t("workspaceTrust.updateFailed")}
+            {/* Direction-aware: the shared copy asserts the workspace "remains restricted", which is
+                false for a refused revoke and would tell the human the opposite of what happened. */}
+            {t(trusted ? "workspaceTrust.updateFailedTrusted" : "workspaceTrust.updateFailed")}
           </p>
         ) : null}
         <WorkspaceTrustFailureDetails failure={failure} />

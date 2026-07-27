@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import type { EditorAgentActionDenyReason, WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
-import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
+import { useWorkspaceManifest, type WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets, type WorkspaceRootTarget } from "../workspaceRootTargets";
 import styles from "./BoundRootTarget.module.css";
 
@@ -87,6 +87,21 @@ interface BoundRootTargetProps {
 }
 
 /**
+ * Whether this window knows what its workspace is.
+ *
+ * `absent` and `unavailable` were both spelled `null` before, which made "this workspace has no V2
+ * manifest" indistinguishable from "the manifest could not be read right now". Only the first may
+ * keep the legacy fallback chain; the second must fail closed for execution, because the fallback
+ * root is exactly the implicit choice #2619 removed.
+ */
+export type WorkspaceManifestAvailability =
+  | { readonly status: "loaded"; readonly manifest: WorkspaceManifest }
+  | { readonly status: "absent" }
+  // `reason` never changes the decision — both deny execution — it only decides whether the window
+  // shows a refusal. A first load in flight is not a refusal worth announcing; a failed read is.
+  | { readonly status: "unavailable"; readonly reason: "loading" | "failed" };
+
+/**
  * Resolve the one root this window acts on.
  *
  * An active task-workspace binding (V1, single-root) and a legacy or single-root workspace keep the
@@ -94,15 +109,27 @@ interface BoundRootTargetProps {
  * manifest changes: there the root must be an explicitly configured current member, otherwise an
  * execution surface is denied. ADR-0147 supersedes the `cfg`/`linkedRoot` fallback for every V2
  * mutating or executing dispatch, which is why `fallbackRoot` is not consulted in that branch.
+ *
+ * An `unavailable` manifest denies execution for the same reason: a workspace whose membership
+ * cannot be read cannot prove that `fallbackRoot` is a member a human named, and one unreadable or
+ * future-schema manifest anywhere in the store makes the whole list throw. Read-only surfaces keep
+ * the fallback — they act on nothing.
  */
 export function resolveExplicitWindowRoot(
-  manifest: WorkspaceManifest | null,
+  availability: WorkspaceManifestAvailability,
   configuredRoot: string | undefined,
   fallbackRoot: string | undefined,
   lockedToActiveRoot: boolean,
   surfaceClass: BoundRootSurfaceClass,
 ): BoundRootDecision {
-  if (lockedToActiveRoot || manifest === null || manifest.roots.length < 2) {
+  if (lockedToActiveRoot) return { status: "bound", root: fallbackRoot };
+  if (availability.status === "unavailable") {
+    if (surfaceClass === "execution") return { status: "denied", reason: "root-binding-required" };
+    return { status: "bound", root: fallbackRoot };
+  }
+  if (availability.status === "absent") return { status: "bound", root: fallbackRoot };
+  const manifest = availability.manifest;
+  if (manifest.roots.length < 2) {
     return { status: "bound", root: fallbackRoot };
   }
   const configured = manifest.roots.find((root) => root.canonicalRoot === configuredRoot);
@@ -114,6 +141,21 @@ export function resolveExplicitWindowRoot(
 
 function boundRoot(decision: BoundRootDecision): string | undefined {
   return decision.status === "bound" ? decision.root : undefined;
+}
+
+/**
+ * `useWorkspaceManifest` reports `manifest: null` for three different things: the first load is
+ * still in flight, the fetch failed (and the catch wipes any previously known manifest), or the
+ * workspace genuinely has no V2 manifest. Only the last is `absent`; the other two are states in
+ * which this window does not know its own membership.
+ */
+export function workspaceManifestAvailability(
+  workspace: Pick<WorkspaceManifestView, "manifest" | "loading" | "issue">,
+): WorkspaceManifestAvailability {
+  if (workspace.manifest !== null) return { status: "loaded", manifest: workspace.manifest };
+  if (workspace.issue === "load") return { status: "unavailable", reason: "failed" };
+  if (workspace.loading) return { status: "unavailable", reason: "loading" };
+  return { status: "absent" };
 }
 
 // Content-free by construction: a closed reason and two catalog strings. No root path, display name,
@@ -190,15 +232,32 @@ export function BoundRootTarget({
 }: BoundRootTargetProps): ReactNode {
   const { labelKey, surfaceClass } = BOUND_ROOT_SURFACES[surface];
   const workspace = useWorkspaceManifest(fallbackRoot ?? configuredRoot);
-  const manifest = lockedToActiveRoot ? null : workspace.manifest;
+  const availability = workspaceManifestAvailability(workspace);
   const decision = resolveExplicitWindowRoot(
-    manifest,
+    availability,
     configuredRoot,
     fallbackRoot,
     lockedToActiveRoot,
     surfaceClass,
   );
-  if (manifest === null || manifest.roots.length < 2) return children(boundRoot(decision));
+  if (availability.status !== "loaded") {
+    // No membership to enumerate, so a picker here would offer roots this window cannot prove. What
+    // must NOT happen is returning children(): that runs the execution surface against the implicit
+    // fallback root, which is the fail-open this branch exists to close. While the first read is
+    // still in flight the window therefore renders nothing rather than a refusal — the child stays
+    // unmounted either way, and a transient load is not something to announce as a denial.
+    if (decision.status === "denied") {
+      if (availability.status === "unavailable" && availability.reason === "loading") return null;
+      return (
+        <section className={styles.cmpHost} data-bound-root-target={surface}>
+          <BoundRootDenied surface={surface} reason={decision.reason} />
+        </section>
+      );
+    }
+    return children(boundRoot(decision));
+  }
+  const manifest = availability.manifest;
+  if (manifest.roots.length < 2) return children(boundRoot(decision));
   return (
     <section className={styles.cmpHost} data-bound-root-target={surface}>
       <BoundRootPicker
