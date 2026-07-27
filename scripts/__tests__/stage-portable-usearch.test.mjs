@@ -258,6 +258,19 @@ describe("portable USearch staging", () => {
     );
   });
 
+  it("rejects CLI stage roots outside the governed portable staging tree", () => {
+    const root = temporaryRoot();
+    const result = spawnSync(
+      process.execPath,
+      [resolve("scripts/smoke-portable-usearch.mjs"), root, hostPortableTarget().platformTarget],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("stage root argument does not match the governed target");
+    expect(result.stderr).not.toContain("missing portable manifest");
+  });
+
   it("canonicalizes a regular stage root and reads only bounded regular files", () => {
     const root = temporaryRoot();
     const canonicalRoot = requiredStageRoot(root);
@@ -350,19 +363,9 @@ describe("portable USearch staging", () => {
       writeFileSync(outsideManifest, '{"artifact":{"platformTarget":"wrong"}}\n');
       symlinkSync(outsideManifest, join(stageRoot, "manifest", "portable-manifest.json"));
 
-      const result = spawnSync(
-        process.execPath,
-        [
-          resolve("scripts/smoke-portable-usearch.mjs"),
-          stageRoot,
-          hostPortableTarget().platformTarget,
-        ],
-        { encoding: "utf8" },
+      expect(() => smokePortableUsearch(stageRoot, hostPortableTarget().platformTarget)).toThrow(
+        "unsafe portable manifest",
       );
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("unsafe portable manifest");
-      expect(result.stderr).not.toContain("manifest target mismatch");
     },
   );
 

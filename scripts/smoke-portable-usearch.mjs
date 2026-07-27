@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 
 import {
   USEARCH_RUNTIME_MANIFEST,
@@ -14,6 +14,7 @@ const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_NATIVE_BINARY_BYTES = 128 * 1024 * 1024;
 const USEARCH_BINARY_PATH = "runtime/native/usearch.node";
 const USEARCH_LICENSE_PATH = "runtime/licenses/usearch/LICENSE";
+const REPOSITORY_ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 function fail(message) {
   throw new Error(`portable-usearch-smoke: ${message}`);
@@ -75,6 +76,27 @@ function requireArgument(index, name) {
   const value = process.argv[index];
   if (value === undefined || value.length === 0) fail(`${name} is required`);
   return value;
+}
+
+function governedStageRoot(targetName) {
+  switch (targetName) {
+    case "windows-x64":
+      return join(REPOSITORY_ROOT, ".portable-runtime", "staging", "windows-x64");
+    case "macos-arm64":
+      return join(REPOSITORY_ROOT, ".portable-runtime", "staging", "macos-arm64");
+    case "macos-x64":
+      return join(REPOSITORY_ROOT, ".portable-runtime", "staging", "macos-x64");
+    default:
+      fail("platform target is unsupported");
+  }
+}
+
+function requiredCliStageRoot(value, targetName) {
+  const expected = governedStageRoot(targetName);
+  if (resolve(value) !== expected) {
+    fail("stage root argument does not match the governed target");
+  }
+  return expected;
 }
 
 function addonFrom(manifest, targetName, runtimeManifest) {
@@ -231,7 +253,8 @@ export function smokePortableUsearch(stageRootValue, targetName, options = {}) {
 
 function main() {
   const targetName = requireArgument(3, "platform target");
-  smokePortableUsearch(requireArgument(2, "stage root"), targetName);
+  const stageRoot = requiredCliStageRoot(requireArgument(2, "stage root"), targetName);
+  smokePortableUsearch(stageRoot, targetName);
   console.log(`portable-usearch-smoke: PASS ${targetName}`);
 }
 
