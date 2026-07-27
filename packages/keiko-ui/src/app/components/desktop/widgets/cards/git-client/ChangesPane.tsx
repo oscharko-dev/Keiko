@@ -34,6 +34,13 @@ import {
   tabUnderlineStyle,
 } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const GitIcon = Icons.git;
+const BranchIcon = Icons.branch;
+const InfoIcon = Icons.info;
+const CheckIcon = Icons.check;
+const ResetIcon = Icons.reset;
+
 export type ChangesTab = "changes" | "history";
 
 // Single-char status glyph, reused vocabulary from FilesWidget gitChangeLabel (contract §2 extend).
@@ -279,7 +286,7 @@ function ChangesList({
   if (status === null) {
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
-        <Icons.git size={20} />
+        <GitIcon size={20} />
         <p style={SUBTLE_TEXT_STYLE}>Select a repository to view its changes.</p>
       </div>
     );
@@ -287,7 +294,7 @@ function ChangesList({
   if (!status.available) {
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
-        <Icons.git size={20} />
+        <GitIcon size={20} />
         <p style={SUBTLE_TEXT_STYLE}>{status.message ?? "This folder is not a Git repository."}</p>
       </div>
     );
@@ -295,7 +302,7 @@ function ChangesList({
   if (status.detached) {
     return (
       <div style={EMPTY_STATE_STYLE} role="alert" aria-live="assertive">
-        <Icons.branch size={20} />
+        <BranchIcon size={20} />
         <p style={SUBTLE_TEXT_STYLE}>
           Detached HEAD. Switch to an existing branch or create a branch before committing or
           syncing.
@@ -325,7 +332,7 @@ function ChangesList({
             font: "400 13px var(--font-ui)",
           }}
         >
-          <Icons.info size={14} />
+          <InfoIcon size={14} />
           Resolve conflicted files before committing or syncing.
         </div>
       ) : null}
@@ -333,7 +340,7 @@ function ChangesList({
       {hasChanges ? (
         <div style={SUMMARY_STRIP_STYLE}>
           <span aria-hidden="true" style={SUMMARY_CHECK_STYLE}>
-            <Icons.check size={11} />
+            <CheckIcon size={11} />
           </span>
           <span style={{ fontSize: 12, fontWeight: 600, color: "var(--fg-muted)" }}>
             {status.stagedCount} of {status.changes.length} files staged
@@ -350,7 +357,7 @@ function ChangesList({
             disabled={bulkActionsBlocked || !hasUnstaged}
             onClick={onStageAll}
           >
-            <Icons.check size={11} /> Stage all
+            <CheckIcon size={11} /> Stage all
           </button>
           <button
             type="button"
@@ -358,7 +365,7 @@ function ChangesList({
             disabled={bulkActionsBlocked || !hasStaged}
             onClick={onUnstageAll}
           >
-            <Icons.reset size={11} /> Unstage all
+            <ResetIcon size={11} /> Unstage all
           </button>
         </div>
       ) : null}
@@ -479,7 +486,7 @@ function ChangeRow({
             data-focus-visible={stageFocused ? "true" : undefined}
             style={focusedBoxStyle}
           >
-            {change.staged ? <Icons.check size={11} /> : null}
+            {change.staged ? <CheckIcon size={11} /> : null}
           </span>
         </label>
         <button

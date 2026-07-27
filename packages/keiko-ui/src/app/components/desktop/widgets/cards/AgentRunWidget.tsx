@@ -29,6 +29,11 @@ import type {
 } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const ResetIcon = Icons.reset;
+const SparkIcon = Icons.spark;
+const FilesIcon = Icons.files;
+
 interface AgentRunCfg {
   workflow?: string;
   model?: string;
@@ -41,9 +46,9 @@ interface AgentRunCfg {
 }
 
 interface AgentRunWidgetProps {
-  cfg?: AgentRunCfg;
-  linkedRoot?: string | null;
-  linkedFilePath: string | undefined;
+  readonly cfg?: AgentRunCfg;
+  readonly linkedRoot?: string | null;
+  readonly linkedFilePath: string | undefined;
 }
 
 interface UsageTotals {
@@ -611,7 +616,7 @@ function AgentRunLog({
     sse.status === "error" ? null : (
       <div className="arun-log-row">
         <span className="arun-log-ico">
-          <Icons.reset size={12} />
+          <ResetIcon size={12} />
         </span>
         <span className="arun-log-text">
           {sse.status === "connecting"
@@ -631,7 +636,7 @@ function AgentRunLog({
       {sse.status === "error" && sse.error !== null ? (
         <div className="arun-log-row">
           <span className="arun-log-ico">
-            <Icons.reset size={12} />
+            <ResetIcon size={12} />
           </span>
           <span className="arun-log-text">{sse.error}</span>
         </div>
@@ -641,7 +646,7 @@ function AgentRunLog({
         : events.map((event) => (
             <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
               <span className="arun-log-ico">
-                <Icons.spark size={12} />
+                <SparkIcon size={12} />
               </span>
               <span className="arun-log-text">{eventLabel(event, t)}</span>
               <span className="arun-log-t mono">{eventTime(event)}</span>
@@ -958,14 +963,14 @@ export function AgentRunWidget({
           data-on={linkedRoot !== null}
           title={linkedRoot ?? cfg.workspaceRoot ?? undefined}
         >
-          <Icons.files size={11} />
+          <FilesIcon size={11} />
           <span className="arun-perm-path">
             {linkedRoot ?? cfg.workspaceRoot ?? t("agentRunWidget.perm.noWorkspace")}
           </span>
         </span>
         {linkedFilePath !== undefined ? (
           <span className="arun-perm" data-on={true} title={linkedFilePath}>
-            <Icons.files size={11} />
+            <FilesIcon size={11} />
             <span className="arun-perm-path">{linkedFilePath}</span>
           </span>
         ) : null}

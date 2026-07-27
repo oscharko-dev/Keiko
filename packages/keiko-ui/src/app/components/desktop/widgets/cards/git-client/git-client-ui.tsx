@@ -14,6 +14,10 @@ import { STATUS_LABEL, violationLabel } from "./git-client-seam";
 import type { GitMutationOutcome } from "./git-client-seam";
 import { PREVIEW_STYLE, SUBTLE_TEXT_STYLE } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const InfoIcon = Icons.info;
+const CheckIcon = Icons.check;
+
 export type PillTone = "neutral" | "accent" | "success" | "warning" | "danger" | "info";
 
 function toneColor(tone: PillTone): string {
@@ -95,7 +99,7 @@ export function CodeList({
       <ul style={{ margin: 0, paddingLeft: 18, font: "400 12px var(--font-ui)" }}>
         {items.map((item) => (
           <li key={item.key} style={{ color: "var(--fg)", lineHeight: 1.5 }}>
-            <Icons.info size={11} /> {item.text}
+            <InfoIcon size={11} /> {item.text}
           </li>
         ))}
       </ul>
@@ -151,7 +155,7 @@ export function MutationOutcome({
         }}
       >
         <StatusPill tone="danger">
-          <Icons.info size={11} /> Error
+          <InfoIcon size={11} /> Error
         </StatusPill>
         <p style={{ ...SUBTLE_TEXT_STYLE, color: "var(--fg)" }}>{error}</p>
       </div>
@@ -179,7 +183,7 @@ export function MutationOutcome({
       style={{ ...PREVIEW_STYLE, boxShadow: `inset 0 0 0 1px ${ringColor}` }}
     >
       <StatusPill tone={tone}>
-        <Icons.check size={11} /> {STATUS_LABEL[outcome.status]}
+        <CheckIcon size={11} /> {STATUS_LABEL[outcome.status]}
       </StatusPill>
       <output
         data-testid={`${testid}-headline`}

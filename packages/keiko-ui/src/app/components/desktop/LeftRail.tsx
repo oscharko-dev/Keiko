@@ -6,6 +6,20 @@ import { useTranslate } from "@/lib/i18n";
 import { Icons, type IconName } from "./Icons";
 import type { Theme } from "./hooks/useTheme";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const NewChatIcon = Icons.newChat;
+const BrainIcon = Icons.brain;
+const CheckIcon = Icons.check;
+const SparkIcon = Icons.spark;
+const CodeIcon = Icons.code;
+const GitIcon = Icons.git;
+const EditorIcon = Icons.editor;
+const LocalKnowledgeIcon = Icons.localKnowledge;
+const LayersIcon = Icons.layers;
+const MoonIcon = Icons.moon;
+const SunIcon = Icons.sun;
+const SettingsIcon = Icons.settings;
+
 interface RailTool {
   readonly id: string;
   readonly icon: IconName;
@@ -73,7 +87,7 @@ function LeftRailImpl({
         aria-label={t("rail.newChat")}
         data-tip={t("rail.newChat")}
       >
-        <Icons.newChat size={18} />
+        <NewChatIcon size={18} />
       </button>
       <div className="rail-div" />
       <div className="rail-group">
@@ -99,7 +113,7 @@ function LeftRailImpl({
           data-tip={t("rail.memoria")}
           onClick={() => onTool("memoria")}
         >
-          <Icons.brain size={19} />
+          <BrainIcon size={19} />
         </button>
         {/* Epic #270 — Quality Intelligence opens as a singleton Workspace window (not a page route). */}
         <button
@@ -112,7 +126,7 @@ function LeftRailImpl({
           data-tip={t("rail.quality")}
           onClick={() => onTool("quality")}
         >
-          <Icons.check size={19} />
+          <CheckIcon size={19} />
         </button>
         {/* Epic #1307, Issue #1314 — Prompt Enhancer opens as a singleton Workspace tool window. */}
         <button
@@ -125,7 +139,7 @@ function LeftRailImpl({
           data-tip={t("rail.promptEnhancer")}
           onClick={() => onTool("promptEnhancer")}
         >
-          <Icons.spark size={19} />
+          <SparkIcon size={19} />
         </button>
         <button
           type="button"
@@ -137,7 +151,7 @@ function LeftRailImpl({
           data-tip={t("rail.coding")}
           onClick={() => onTool("coding")}
         >
-          <Icons.code size={19} />
+          <CodeIcon size={19} />
         </button>
         <button
           type="button"
@@ -149,7 +163,7 @@ function LeftRailImpl({
           data-tip="Git"
           onClick={() => onTool("governedGit")}
         >
-          <Icons.git size={19} />
+          <GitIcon size={19} />
         </button>
         <button
           type="button"
@@ -161,7 +175,7 @@ function LeftRailImpl({
           data-tip={t("rail.editor")}
           onClick={() => onTool("editor")}
         >
-          <Icons.editor size={19} />
+          <EditorIcon size={19} />
         </button>
         <button
           type="button"
@@ -173,7 +187,7 @@ function LeftRailImpl({
           data-tip={t("rail.localKnowledge")}
           onClick={() => onTool("localKnowledge")}
         >
-          <Icons.localKnowledge size={19} />
+          <LocalKnowledgeIcon size={19} />
         </button>
         <button
           type="button"
@@ -185,7 +199,7 @@ function LeftRailImpl({
           data-tip={t("rail.figma")}
           onClick={() => onTool("figma")}
         >
-          <Icons.layers size={19} />
+          <LayersIcon size={19} />
         </button>
       </div>
       <div className="rail-div" />
@@ -201,7 +215,7 @@ function LeftRailImpl({
         data-tip={themeLabel}
         onClick={onToggleTheme}
       >
-        {theme === "light" ? <Icons.moon size={19} /> : <Icons.sun size={19} />}
+        {theme === "light" ? <MoonIcon size={19} /> : <SunIcon size={19} />}
       </button>
       <button
         type="button"
@@ -213,7 +227,7 @@ function LeftRailImpl({
         data-tip={t("rail.settings")}
         onClick={() => onTool("settings")}
       >
-        <Icons.settings size={19} />
+        <SettingsIcon size={19} />
       </button>
     </nav>
   );

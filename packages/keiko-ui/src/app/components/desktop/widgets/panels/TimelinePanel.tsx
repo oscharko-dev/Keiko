@@ -37,8 +37,8 @@ export function TimelinePanel(): ReactNode {
           Start an agent to see its actions stream here.
         </div>
       )}
-      {items.map((e, i) => (
-        <div className="tl-row" key={i}>
+      {items.map((e) => (
+        <div className="tl-row" key={`${String(e.time)}-${e.text}`}>
           <span
             className="tl-dot"
             aria-hidden="true"

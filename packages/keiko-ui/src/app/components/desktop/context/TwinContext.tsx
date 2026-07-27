@@ -137,7 +137,7 @@ function removeLegacyKey(key: string): void {
   }
 }
 
-export function TwinProvider({ children }: { children: ReactNode }): ReactNode {
+export function TwinProvider({ children }: { readonly children: ReactNode }): ReactNode {
   // Start from static defaults so the build-time prerender and the client's first
   // render agree; adopt persisted values right after mount. Reading localStorage in
   // the initializers would diverge from the static export and trip React #418

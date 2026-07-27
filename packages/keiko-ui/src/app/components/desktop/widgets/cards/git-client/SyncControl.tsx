@@ -11,6 +11,9 @@ import {
   disabledStyle,
 } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const ResetIcon = Icons.reset;
+
 type GitSyncUiAction = "fetch" | "pull" | "push" | "publish-upstream" | "blocked";
 
 export interface GitSyncView {
@@ -169,7 +172,7 @@ export function SyncControl({
         aria-describedby={descriptionId}
         onClick={onRun}
       >
-        <Icons.reset size={12} /> {busy ? "Syncing" : view.label}
+        <ResetIcon size={12} /> {busy ? "Syncing" : view.label}
       </button>
       {/* GEN-UI-A11Y-017: role=status derives no accessible name from its own text, and a
           static aria-label duplicating the announced content is the fragile pattern the finding

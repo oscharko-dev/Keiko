@@ -140,6 +140,16 @@ import type {
   VoiceCapabilityResolution,
 } from "@/lib/types";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CopyIcon = Icons.copy;
+const ChevronIcon = Icons.chevron;
+const CloseIcon = Icons.close;
+const MicIcon = Icons.mic;
+const CubeIcon = Icons.cube;
+const ArrowUpIcon = Icons.arrowUp;
+const SparkIcon = Icons.spark;
+const BrainIcon = Icons.brain;
+
 type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
@@ -496,7 +506,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
         data-failed={failed ? "true" : "false"}
         onClick={handleCopy}
       >
-        <Icons.copy size={20} aria-hidden="true" />
+        <CopyIcon size={20} aria-hidden="true" />
       </button>
       <output className="chat-msg-copy-status">{status}</output>
     </div>
@@ -704,7 +714,7 @@ function ChatBubbleFooterActions({
           aria-expanded={!collapsed}
           onClick={onToggleCollapsed}
         >
-          <Icons.chevron size={12} aria-hidden="true" />
+          <ChevronIcon size={12} aria-hidden="true" />
           <span>{collapsed ? t("chat.answer.expand") : t("chat.answer.collapse")}</span>
         </button>
       ) : null}
@@ -1399,7 +1409,7 @@ function repositoryMentionAtCursor(value: string, cursor: number): RepositoryMen
   const atIndex = prefix.lastIndexOf("@");
   if (atIndex < 0) return null;
   const before = atIndex === 0 ? "" : (prefix[atIndex - 1] ?? "");
-  if (before.length > 0 && !/\s|[(\[{]/u.test(before)) return null;
+  if (before.length > 0 && !/\s|[([{]/u.test(before)) return null;
   const query = prefix.slice(atIndex + 1);
   if (query.includes("@") || /\s/u.test(query)) return null;
   return { start: atIndex, end: boundedCursor, query };
@@ -1688,7 +1698,7 @@ function RepositoryFilePickerPanel({
           aria-label={t("chat.repository.closePicker")}
           onClick={onClose}
         >
-          <Icons.close size={13} />
+          <CloseIcon size={13} />
         </button>
       </div>
       {roots.length > 1 ? (
@@ -1815,7 +1825,7 @@ function RepositoryReferenceStrip({
             aria-label={t("chat.repository.removeReference", { path: reference.path })}
             onClick={() => onRemove(reference.id)}
           >
-            <Icons.close size={12} />
+            <CloseIcon size={12} />
           </button>
         </li>
       ))}
@@ -1896,7 +1906,7 @@ function VoiceDialogMicMuteButton({
       onClick={onToggle}
     >
       <span className="cmp-voice-dialog-mic-glyph" aria-hidden="true">
-        <Icons.mic size={16} />
+        <MicIcon size={16} />
         {muted ? <span className="cmp-voice-dialog-mic-slash" /> : null}
       </span>
       <span id={hintId} className="sr-only">
@@ -1976,7 +1986,7 @@ function ComposerContextControls({
           disabled={loading}
           placeholder={composerModelPlaceholder(loading, noEligibleModels, t)}
           leadingVisual={
-            <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
+            <CubeIcon size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
           }
           menuTitle={t("chat.model.menuTitle")}
           menuClassName="cmp-model-menu"
@@ -2080,7 +2090,7 @@ function ComposerSendButton({
         data-tip={t("chat.send.cancel")}
         onClick={cancelSend}
       >
-        <Icons.close size={16} />
+        <CloseIcon size={16} />
       </button>
     );
   }
@@ -2094,7 +2104,7 @@ function ComposerSendButton({
       aria-describedby={sendDescribedBy}
       aria-label={t("chat.send.label")}
     >
-      <Icons.arrowUp size={16} />
+      <ArrowUpIcon size={16} />
     </button>
   );
 }
@@ -3330,7 +3340,7 @@ function NoChatState(): ReactNode {
   return (
     <div className="chatw-empty-no-chat">
       <div className="chatw-empty-no-chat-icon" aria-hidden="true">
-        <Icons.spark size={20} />
+        <SparkIcon size={20} />
       </div>
       <p className="chatw-empty-no-chat-label">{t("chat.empty.noChat.title")}</p>
       <p className="chatw-empty-no-chat-hint">{t("chat.empty.noChat.hint")}</p>
@@ -4301,7 +4311,7 @@ function MemoryDisclosureButton({
       data-tip={disclosure.memoryDisclosureLabel}
       onClick={disclosure.toggleDisclosure}
     >
-      <Icons.brain size={16} />
+      <BrainIcon size={16} />
       {disclosure.memoryCount > 0 ? (
         <span className="chat-memory-count" aria-hidden="true">
           {disclosure.memoryCountLabel}

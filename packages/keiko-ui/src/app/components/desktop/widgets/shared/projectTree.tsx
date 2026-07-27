@@ -3,6 +3,9 @@
 import type { ReactNode } from "react";
 import { Icons } from "../../Icons";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const FileGlyphIcon = Icons.file;
+
 interface FileIconRule {
   test: (n: string) => boolean;
   key: string;
@@ -54,7 +57,13 @@ function fileIconKey(name: string): string | null {
   return rule ? rule.key : null;
 }
 
-export function FileIcon({ name, icon }: { name: string; icon?: string | undefined }): ReactNode {
+export function FileIcon({
+  name,
+  icon,
+}: {
+  readonly name: string;
+  readonly icon?: string | undefined;
+}): ReactNode {
   const key = icon ?? fileIconKey(name);
   if (key !== null) {
     return (
@@ -64,7 +73,7 @@ export function FileIcon({ name, icon }: { name: string; icon?: string | undefin
   }
   return (
     <span className="fi-fallback">
-      <Icons.file size={14} />
+      <FileGlyphIcon size={14} />
     </span>
   );
 }

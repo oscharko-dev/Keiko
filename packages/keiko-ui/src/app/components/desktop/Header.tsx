@@ -5,6 +5,12 @@ import { memo } from "react";
 import { useTranslate } from "@/lib/i18n";
 import { Icons } from "./Icons";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const SearchIcon = Icons.search;
+const TileIcon = Icons.tile;
+const SplitIcon = Icons.split;
+const CascadeIcon = Icons.cascade;
+
 export type HeaderStatusTone = "ok" | "warn" | "danger";
 
 interface HeaderProps {
@@ -49,7 +55,7 @@ function HeaderImpl({
           data-tip={t("header.quickAccess")}
           aria-label={t("header.openQuickAccess")}
         >
-          <Icons.search size={16} />
+          <SearchIcon size={16} />
         </button>
         <button
           type="button"
@@ -58,7 +64,7 @@ function HeaderImpl({
           data-tip={t("header.tileAll")}
           aria-label={t("header.tileAll")}
         >
-          <Icons.tile size={16} />
+          <TileIcon size={16} />
         </button>
         {/* uiux-fix F039 C401 — same wording as the CommandPalette command ("Split front
             windows") so the action is recognizable across tooltip and palette. */}
@@ -69,7 +75,7 @@ function HeaderImpl({
           data-tip={t("header.splitFront")}
           aria-label={t("header.splitFront")}
         >
-          <Icons.split size={16} />
+          <SplitIcon size={16} />
         </button>
         <button
           type="button"
@@ -78,7 +84,7 @@ function HeaderImpl({
           data-tip={t("header.cascade")}
           aria-label={t("header.cascade")}
         >
-          <Icons.cascade size={16} />
+          <CascadeIcon size={16} />
         </button>
       </div>
     </header>

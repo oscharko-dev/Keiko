@@ -23,6 +23,10 @@ import type {
 } from "./hooks/useRealtimeVoice";
 import type { ConversationMemoryActionWire } from "@/lib/types";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CloseIcon = Icons.close;
+const MicIcon = Icons.mic;
+
 // Stable id for the local-only privacy disclosure on the realtime button.
 const REALTIME_PRIVACY_HINT_ID = "cmp-voice-rt-privacy-hint";
 
@@ -88,10 +92,10 @@ export function VoiceRealtimeButton({
       {connected || negotiating ? (
         <span className="cmp-voice-recording" aria-hidden="true">
           <span className="cmp-voice-dot" />
-          <Icons.close size={14} />
+          <CloseIcon size={14} />
         </span>
       ) : (
-        <Icons.mic size={16} />
+        <MicIcon size={16} />
       )}
       <span id={REALTIME_PRIVACY_HINT_ID} className="sr-only">
         {t("voice.realtime.privacy")}

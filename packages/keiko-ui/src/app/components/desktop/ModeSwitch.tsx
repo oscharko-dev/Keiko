@@ -5,8 +5,8 @@ import { useTranslate } from "@/lib/i18n";
 import type { TwinMode } from "./hooks/useTwinMode";
 
 interface ModeSwitchProps {
-  mode: TwinMode;
-  onChange: (next: TwinMode) => void;
+  readonly mode: TwinMode;
+  readonly onChange: (next: TwinMode) => void;
 }
 
 export function ModeSwitch({ mode, onChange }: ModeSwitchProps): ReactNode {

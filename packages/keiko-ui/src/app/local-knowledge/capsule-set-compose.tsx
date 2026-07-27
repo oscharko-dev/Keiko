@@ -97,10 +97,10 @@ function MemberCheckbox({
   disabled,
   onToggle,
 }: {
-  capsule: CapsuleListEntry;
-  checked: boolean;
-  disabled: boolean;
-  onToggle: (id: KnowledgeCapsuleId) => void;
+  readonly capsule: CapsuleListEntry;
+  readonly checked: boolean;
+  readonly disabled: boolean;
+  readonly onToggle: (id: KnowledgeCapsuleId) => void;
 }): ReactNode {
   const guidance = capsule.knowledgePod?.guidance;
   const guidanceId = useId();

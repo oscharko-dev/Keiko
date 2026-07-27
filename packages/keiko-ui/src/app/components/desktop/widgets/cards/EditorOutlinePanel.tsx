@@ -21,6 +21,9 @@ import {
 } from "./editorOutlineModel";
 import styles from "./EditorOutline.module.css";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const ChevronRIcon = Icons.chevronR;
+
 const TREE_NAV_KEYS = new Set(["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Home", "End"]);
 
 interface TreeNavResult {
@@ -179,7 +182,7 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
           onClick={props.onToggleVisible}
         >
           <span className={styles.outlineToggleIcon} data-open={props.visible} aria-hidden="true">
-            <Icons.chevronR size={14} />
+            <ChevronRIcon size={14} />
           </span>
         </button>
       </div>
@@ -214,7 +217,7 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
                       data-open={expandable && expandedIds.has(node.id)}
                       aria-hidden="true"
                     >
-                      {expandable ? <Icons.chevronR size={11} /> : null}
+                      {expandable ? <ChevronRIcon size={11} /> : null}
                     </span>
                     <span className={styles.outlineName}>{node.symbol.name}</span>
                     <span className={styles.outlineKind}>{rowKind}</span>

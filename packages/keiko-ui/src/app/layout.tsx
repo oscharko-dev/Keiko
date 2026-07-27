@@ -41,7 +41,7 @@ export const LOCALE_BOOTSTRAP = `try{var l=localStorage.getItem("keiko.locale");
 // workspace never mounted. The counter is cleared after a successful AppShell mount.
 export const APP_BOOT_RECOVERY_BOOTSTRAP = `try{var k="keiko.app-boot-recovery-reload-count";setTimeout(function(){try{if(document.querySelector("main.workspace"))return;if(!document.querySelector(".app[aria-hidden='true'] .app-boot"))return;var n=parseInt(sessionStorage.getItem(k)||"0",10);if(!isFinite(n)||n<0)n=0;if(n>=2)return;sessionStorage.setItem(k,String(n+1));location.reload()}catch(e){}},8000)}catch(e){}`;
 
-export default function RootLayout({ children }: { children: ReactNode }): ReactNode {
+export default function RootLayout({ children }: { readonly children: ReactNode }): ReactNode {
   return (
     <html lang="en" data-theme="dark" suppressHydrationWarning>
       <head>

@@ -25,6 +25,11 @@ import {
 } from "@/lib/api";
 import { Icons } from "../../Icons";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const GitIcon = Icons.git;
+const InfoIcon = Icons.info;
+const CheckIcon = Icons.check;
+
 // ─── Injected client (DI seam for tests) ────────────────────────────────────────────────────────
 
 export interface GovernedPullRequestClient {
@@ -256,7 +261,7 @@ function PrTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
   return (
     <div style={ROW_STYLE}>
       <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        Repository (owner/repo)
+        Repository (owner/repo){" "}
         <input
           style={FIELD_STYLE}
           value={form.ownerAndRepo}
@@ -265,7 +270,7 @@ function PrTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
         />
       </label>
       <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        Base branch
+        Base branch{" "}
         <input
           style={FIELD_STYLE}
           value={form.baseBranchName}
@@ -285,7 +290,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
   return (
     <section style={SECTION_STYLE} aria-label="Pull Request metadata">
       <h3 style={HEADING_STYLE}>
-        <Icons.git size={12} /> Metadata
+        <GitIcon size={12} /> Metadata
       </h3>
       <fieldset
         style={{
@@ -321,7 +326,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
       {form.kind === "pr-update" ? (
         <div style={ROW_STYLE}>
           <label style={{ ...LABEL_STYLE, flex: 1 }}>
-            Pull Request number
+            Pull Request number{" "}
             <input
               style={FIELD_STYLE}
               inputMode="numeric"
@@ -343,7 +348,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
             ) : null}
           </label>
           <label style={{ ...LABEL_STYLE, flex: 1 }}>
-            Draft state
+            Draft state{" "}
             <select
               style={FIELD_STYLE}
               value={form.draftTransition}
@@ -361,7 +366,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
         </div>
       ) : null}
       <label style={LABEL_STYLE}>
-        Head branch
+        Head branch{" "}
         <input
           style={FIELD_STYLE}
           value={form.headBranchName}
@@ -372,7 +377,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
       </label>
       <PrTargetFields form={form} busy={busy} onChange={onChange} />
       <label style={LABEL_STYLE}>
-        Title
+        Title{" "}
         <input
           style={FIELD_STYLE}
           value={form.title}
@@ -382,7 +387,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
         />
       </label>
       <label style={LABEL_STYLE}>
-        Body
+        Body{" "}
         <textarea
           style={{ ...FIELD_STYLE, minHeight: 100, resize: "vertical" }}
           value={form.body}
@@ -415,7 +420,7 @@ function PrReadinessPanel({
   return (
     <section style={SECTION_STYLE} aria-label="Readiness" data-testid="gpr-readiness">
       <h3 style={HEADING_STYLE}>
-        <Icons.info size={12} /> Readiness
+        <InfoIcon size={12} /> Readiness
       </h3>
       <p style={KV_LABEL} data-field="objectExists">
         Remote PR object: {preview.readiness.objectExists ? "exists" : "not created yet"}
@@ -483,7 +488,7 @@ function PrOutcome({
   if (error !== null) {
     return (
       <p role="alert" style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}>
-        <Icons.info size={12} /> {error}
+        <InfoIcon size={12} /> {error}
       </p>
     );
   }
@@ -495,7 +500,7 @@ function PrOutcome({
       style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}
     >
       <p style={{ font: "var(--text-body-sm)", color: "var(--text-body)", margin: 0 }}>
-        <Icons.check size={12} /> {outcome.actionKind}: {outcome.status}
+        <CheckIcon size={12} /> {outcome.actionKind}: {outcome.status}
       </p>
       {codes.length > 0 ? (
         <ul style={{ margin: 0, paddingLeft: "var(--space-4)", font: "var(--text-caption)" }}>
@@ -594,7 +599,7 @@ function GovernedPullRequestBody({
       aria-labelledby={titleId}
     >
       <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
-        <Icons.git size={14} /> Pull Request
+        <GitIcon size={14} /> Pull Request
       </h2>
       <p
         id={liveId}
@@ -671,7 +676,7 @@ export function GovernedPullRequestCard({
         style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
       >
         <p>
-          <Icons.git size={13} /> Select a project to open a pull request.
+          <GitIcon size={13} /> Select a project to open a pull request.
         </p>
       </div>
     );

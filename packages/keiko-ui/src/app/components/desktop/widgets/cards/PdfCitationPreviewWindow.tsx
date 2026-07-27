@@ -41,6 +41,14 @@ import {
   type PdfCitationPreviewZoomMode,
 } from "./pdf-citation-preview-session";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const InfoIcon = Icons.info;
+const BackIcon = Icons.back;
+const ChevronIcon = Icons.chevron;
+const FwdIcon = Icons.fwd;
+const ZoomOutIcon = Icons.zoomOut;
+const ZoomInIcon = Icons.zoomIn;
+
 const MAX_SCALE = 2;
 const MIN_SCALE = 0.5;
 const PAGE_FRAME_PX = 32;
@@ -1064,7 +1072,7 @@ export function PdfCitationPreviewWindow({
           {pageFailure !== undefined ? (
             <div className="lk-empty pdfv-page-error" role="alert">
               <div className="lk-empty-icon">
-                <Icons.info size={18} />
+                <InfoIcon size={18} />
               </div>
               <p className="lk-empty-title">{pageFailure.title}</p>
               <p className="lk-empty-body">{pageFailure.message}</p>
@@ -1134,7 +1142,7 @@ export function PdfCitationPreviewWindow({
                 activatePdfCitationPreviewBackToChat(windowId, { focusWindow, restoreWindow });
               }}
             >
-              <Icons.back size={14} />
+              <BackIcon size={14} />
               <span>{t("pdfCitationPreviewWindow.backToChat.label")}</span>
             </button>
             {backToChat.reason === undefined ? null : (
@@ -1149,7 +1157,7 @@ export function PdfCitationPreviewWindow({
             <summary className="pdfv-context-summary">
               <span>{t("pdfCitationPreviewWindow.sameAnswerCitations")}</span>
               <span className="pdfv-context-count">{citationContextCitations.length}</span>
-              <Icons.chevron size={13} />
+              <ChevronIcon size={13} />
             </summary>
             <ul
               className="grounded-citations pdfv-context-list"
@@ -1196,7 +1204,7 @@ export function PdfCitationPreviewWindow({
   const renderFailureState = (failureState: PreviewFailure): ReactNode => (
     <div className="lk-empty pdfv-status" role="alert" aria-describedby={failureDescriptionId}>
       <div className="lk-empty-icon">
-        <Icons.info size={20} />
+        <InfoIcon size={20} />
       </div>
       <p className="lk-empty-title">{failureState.title}</p>
       <p id={failureDescriptionId} className="lk-empty-body">
@@ -1294,7 +1302,7 @@ export function PdfCitationPreviewWindow({
               disabled={currentPage <= 1}
               onClick={() => goToPage(currentPage - 1)}
             >
-              <Icons.back size={14} />
+              <BackIcon size={14} />
               <span>{t("pdfCitationPreviewWindow.toolbar.previous")}</span>
             </button>
             <label className="pdfv-page-field">
@@ -1333,7 +1341,7 @@ export function PdfCitationPreviewWindow({
               onClick={() => goToPage(currentPage + 1)}
             >
               <span>{t("pdfCitationPreviewWindow.toolbar.next")}</span>
-              <Icons.fwd size={14} />
+              <FwdIcon size={14} />
             </button>
           </div>
 
@@ -1351,7 +1359,7 @@ export function PdfCitationPreviewWindow({
                 })
               }
             >
-              <Icons.zoomOut size={14} />
+              <ZoomOutIcon size={14} />
               <span>{t("pdfCitationPreviewWindow.toolbar.zoomOut")}</span>
             </button>
             <button
@@ -1367,7 +1375,7 @@ export function PdfCitationPreviewWindow({
                 })
               }
             >
-              <Icons.zoomIn size={14} />
+              <ZoomInIcon size={14} />
               <span>{t("pdfCitationPreviewWindow.toolbar.zoomIn")}</span>
             </button>
             <button

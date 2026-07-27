@@ -11,6 +11,13 @@ import { FileIcon } from "../shared/projectTree";
 import { highlightLines, langOf, type Token } from "./shared/syntaxHighlight";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const BackIcon = Icons.back;
+const CopyIcon = Icons.copy;
+const ResetIcon = Icons.reset;
+const EditorIcon = Icons.editor;
+const CloseIcon = Icons.close;
+
 interface FilePreviewProps {
   readonly root: string;
   readonly path: string;
@@ -538,7 +545,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           title={t("filePreview.backToFiles")}
           aria-label={t("filePreview.backToFiles")}
         >
-          <Icons.back size={15} />
+          <BackIcon size={15} />
         </button>
         <FileIcon name={denied || preview === null ? "" : preview.name} />
         <span className="fpv-name" title={headerTitle}>
@@ -553,7 +560,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
               title={t("filePreview.copyFileName")}
               aria-label={t("filePreview.copyFileName")}
             >
-              <Icons.copy size={13} />
+              <CopyIcon size={13} />
             </button>
             <button
               className="fpv-back fpv-copy"
@@ -562,7 +569,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
               title={t("filePreview.copyFilePath")}
               aria-label={t("filePreview.copyFilePath")}
             >
-              <Icons.copy size={13} />
+              <CopyIcon size={13} />
             </button>
           </>
         ) : null}
@@ -578,7 +585,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           title={loading ? t("filePreview.refreshing") : t("filePreview.refresh")}
           aria-label={loading ? t("filePreview.refreshing") : t("filePreview.refresh")}
         >
-          <Icons.reset size={14} />
+          <ResetIcon size={14} />
         </button>
         {refreshStatusText.length > 0 ? (
           <output className="fpv-status mono" data-state={refreshStatus} aria-live="polite">
@@ -593,7 +600,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
             title={t("filePreview.openInEditor")}
             aria-label={t("filePreview.openInEditor")}
           >
-            <Icons.editor size={15} />
+            <EditorIcon size={15} />
           </button>
         ) : null}
         <button
@@ -603,7 +610,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           title={t("filePreview.closePreview")}
           aria-label={t("filePreview.closePreview")}
         >
-          <Icons.close size={15} />
+          <CloseIcon size={15} />
         </button>
       </div>
 

@@ -25,6 +25,10 @@ import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const FilesIcon = Icons.files;
+const CloseIcon = Icons.close;
+
 interface NewWindowDialogProps {
   readonly type: WindowType;
   readonly types: typeof WinTypes;
@@ -630,7 +634,7 @@ function renderCurrentFileButton(
       onClick={onUseCurrentFile}
       title={currentFile}
     >
-      <Icons.files size={13} /> Use current file <span className="mono">{currentFile}</span>
+      <FilesIcon size={13} /> Use current file <span className="mono">{currentFile}</span>
     </button>
   );
 }
@@ -1135,7 +1139,7 @@ export function NewWindowDialog({
             aria-label={translate("common.cancel")}
             title={translate("common.cancel")}
           >
-            <Icons.close size={16} />
+            <CloseIcon size={16} />
           </button>
         </div>
         <div className="dlg-body">

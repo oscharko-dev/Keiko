@@ -58,6 +58,12 @@ import { isWorkspaceWindowSelectable } from "./hooks/workspaceActions";
 import { syncPdfCitationPreviewWindowRegistry } from "./widgets/cards/pdf-citation-preview-session";
 import selectionStyles from "./WorkspaceSelection.module.css";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const ZoomOutIcon = Icons.zoomOut;
+const ExpandIcon = Icons.expand;
+const ZoomInIcon = Icons.zoomIn;
+const AddIcon = Icons.add;
+
 const WorkspaceShader = dynamic(
   () => import("./WorkspaceShader").then((mod) => mod.WorkspaceShader),
   {
@@ -1242,7 +1248,7 @@ export function Workspace({
           aria-label={t("workspace.zoomOut")}
           data-tip={t("workspace.zoomOut")}
         >
-          <Icons.zoomOut size={15} />
+          <ZoomOutIcon size={15} />
         </button>
         <button
           type="button"
@@ -1252,7 +1258,7 @@ export function Workspace({
           aria-label={t("workspace.fitToWindows")}
           data-tip={t("workspace.fitToWindows")}
         >
-          <Icons.expand size={15} />
+          <ExpandIcon size={15} />
         </button>
         <button
           type="button"
@@ -1271,7 +1277,7 @@ export function Workspace({
           aria-label={t("workspace.zoomIn")}
           data-tip={t("workspace.zoomIn")}
         >
-          <Icons.zoomIn size={15} />
+          <ZoomInIcon size={15} />
         </button>
       </div>
 
@@ -1283,7 +1289,7 @@ export function Workspace({
         aria-label={t("workspace.newWindow")}
         data-tip={t("workspace.newWindow")}
       >
-        <Icons.add size={20} />
+        <AddIcon size={20} />
       </button>
 
       {resolvePaletteOverlay(hasMaximizedWindow, palette)}

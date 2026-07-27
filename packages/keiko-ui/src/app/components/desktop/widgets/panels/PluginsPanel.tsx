@@ -5,6 +5,10 @@ import type { ReactNode } from "react";
 import { Icons } from "../../Icons";
 import type { IconName } from "../../Icons";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CheckIcon = Icons.check;
+const PlusIcon = Icons.plus;
+
 interface McpEntry {
   name: string;
   img?: string;
@@ -39,9 +43,9 @@ const CONNECTORS: ConnEntry[] = [
 ];
 
 interface PlugIconProps {
-  img?: string | undefined;
-  icon?: IconName | undefined;
-  glyph?: string | undefined;
+  readonly img?: string | undefined;
+  readonly icon?: IconName | undefined;
+  readonly glyph?: string | undefined;
 }
 
 function PlugIcon({ img, icon, glyph }: PlugIconProps): ReactNode {
@@ -122,11 +126,11 @@ export function PluginsPanel(): ReactNode {
           </span>
           {c.on ? (
             <span className="integ-on">
-              <Icons.check size={13} />
+              <CheckIcon size={13} />
             </span>
           ) : (
             <span className="integ-add">
-              <Icons.plus size={14} />
+              <PlusIcon size={14} />
             </span>
           )}
         </div>

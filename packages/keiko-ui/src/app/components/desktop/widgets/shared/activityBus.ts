@@ -30,9 +30,7 @@ declare global {
 export function logActivity(evt: Omit<ActivityEvent, "time">): void {
   if (typeof window === "undefined") return;
   const item: ActivityEvent = { ...evt, time: Date.now() };
-  if (window[STORE_KEY] === undefined) {
-    window[STORE_KEY] = [];
-  }
+  window[STORE_KEY] ??= [];
   const store = window[STORE_KEY];
   if (store !== undefined) {
     store.unshift(item);
@@ -47,10 +45,10 @@ export function getActivity(): readonly ActivityEvent[] {
 }
 
 export function useActivitySubscription(): readonly ActivityEvent[] {
-  const [, force] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     const h = (): void => {
-      force((n) => n + 1);
+      setTick((n) => n + 1);
     };
     window.addEventListener(EVENT_NAME, h);
     return () => {

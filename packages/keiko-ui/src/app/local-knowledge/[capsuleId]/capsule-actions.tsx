@@ -673,9 +673,9 @@ function ActionProgress({
   progress,
   t,
 }: {
-  kind: ProgressActionKind;
-  progress: ProgressState;
-  t: I18nTranslate;
+  readonly kind: ProgressActionKind;
+  readonly progress: ProgressState;
+  readonly t: I18nTranslate;
 }): ReactNode {
   const detail = progress.detail;
   const latestJob = detail?.indexingJobs[0];
@@ -743,7 +743,13 @@ function ActionProgress({
   );
 }
 
-function ProgressBar({ value, label }: { value: number; label: string }): ReactNode {
+function ProgressBar({
+  value,
+  label,
+}: {
+  readonly value: number;
+  readonly label: string;
+}): ReactNode {
   return (
     <div className="lkd-progress" role="img" aria-label={`${label}: ${formatPercent(value)}`}>
       <span className="lkd-progress-fill" data-tone="ok" style={progressStyle(value)} />

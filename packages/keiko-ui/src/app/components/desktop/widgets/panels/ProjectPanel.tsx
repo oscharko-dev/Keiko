@@ -6,6 +6,10 @@ import type { Chat, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const ChevronRIcon = Icons.chevronR;
+const FolderIcon = Icons.folder;
+
 interface ProjectRowProps {
   readonly project: ProjectWithAvailability;
   readonly activeProjectPath: string | undefined;
@@ -144,9 +148,9 @@ function ProjectHeadButton({
       }}
     >
       <span className="proj-caret" data-open={expanded} aria-hidden="true">
-        <Icons.chevronR size={13} />
+        <ChevronRIcon size={13} />
       </span>
-      <Icons.folder size={15} aria-hidden="true" />
+      <FolderIcon size={15} aria-hidden="true" />
       <span className="proj-name">{project.name}</span>
       <span className="chat-time">{availabilityLabel}</span>
     </button>

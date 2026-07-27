@@ -86,6 +86,12 @@ import {
 import { JsonSyntaxBlock, jsonTextByteLength } from "./JsonSyntaxBlock";
 import { NATIVE_BLOCK_STYLE, NATIVE_LIST_STYLE } from "../../native-element-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const LayersIcon = Icons.layers;
+const EditIcon = Icons.edit;
+const InfoIcon = Icons.info;
+const TrashIcon = Icons.trash;
+
 type CurrentRef<T> = { current: T };
 type FormSubmitEvent = { preventDefault: () => void };
 
@@ -605,7 +611,7 @@ function ScreenCard({
         aria-label={t("figmaSnapshotWindow.screenCard.structuralDataOnlyAlt", { name })}
         role="img"
       >
-        <Icons.layers className="figma-snapshot-screen-frame-icon" aria-hidden="true" />
+        <LayersIcon className="figma-snapshot-screen-frame-icon" aria-hidden="true" />
         <span className="figma-snapshot-screen-placeholder-label">
           {t("figmaSnapshotWindow.screenCard.irBadge")}
         </span>
@@ -827,7 +833,7 @@ function FigmaViewSourceCard({
         aria-label={t("figmaSnapshotWindow.screenCard.structuralDataOnlyAlt", { name })}
         role="img"
       >
-        <Icons.layers className="figma-view-preview-icon" aria-hidden="true" />
+        <LayersIcon className="figma-view-preview-icon" aria-hidden="true" />
         <span>{t("figmaSnapshotWindow.viewSource.structuralIrLabel")}</span>
       </div>
     );
@@ -1956,7 +1962,7 @@ export function FigmaSnapshotWindow({
                     aria-label={t("figmaSnapshotWindow.dashboard.renameSnapshotAria", { title })}
                     title={t("figmaSnapshotWindow.dashboard.renameTitle")}
                   >
-                    <Icons.edit aria-hidden="true" />
+                    <EditIcon aria-hidden="true" />
                   </button>
                   <button
                     type="button"
@@ -1970,7 +1976,7 @@ export function FigmaSnapshotWindow({
                     }
                     title={t("figmaSnapshotWindow.dashboard.metadataTitle")}
                   >
-                    <Icons.info aria-hidden="true" />
+                    <InfoIcon aria-hidden="true" />
                   </button>
                   <button
                     type="button"
@@ -1980,7 +1986,7 @@ export function FigmaSnapshotWindow({
                     aria-label={t("figmaSnapshotWindow.dashboard.deleteSnapshotAria", { title })}
                     title={t("common.delete")}
                   >
-                    <Icons.trash aria-hidden="true" />
+                    <TrashIcon aria-hidden="true" />
                   </button>
                 </div>
               </div>

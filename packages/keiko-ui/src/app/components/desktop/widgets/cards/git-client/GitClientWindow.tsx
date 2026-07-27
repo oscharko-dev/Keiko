@@ -1084,7 +1084,6 @@ export function GitClientWindow({
         branches={activeBranches}
         branchesLoading={branchesLoading}
         status={activeStatus}
-        statusLoading={statusLoading}
         branchBusy={branchActions.flow.busy}
         syncView={syncViewForDisplay(syncView, summaryError, t)}
         syncBusy={syncBusy}

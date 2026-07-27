@@ -55,6 +55,12 @@ import { formatCodedError, formatError } from "./qiShared";
 import { buildConnectedRunSources } from "./connectedSources";
 import type { ConnectedRunSource } from "./connectedSources";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const ReviewIcon = Icons.review;
+const FolderIcon = Icons.folder;
+const FileIcon = Icons.file;
+const LayersIcon = Icons.layers;
+
 const PROFILES: ReadonlyArray<{ id: string; label: string }> = [
   { id: "regression-default", label: "Regression (default)" },
   { id: "banking-default", label: "Banking" },
@@ -80,10 +86,10 @@ const SOURCE_KIND_OPTIONS: ReadonlyArray<{ id: ManualSourceKind; label: string; 
 ];
 
 function SourceKindIcon({ kind }: { readonly kind: ManualSourceKind }): ReactNode {
-  if (kind === "requirements") return <Icons.review size={15} />;
-  if (kind === "workspace") return <Icons.folder size={15} />;
-  if (kind === "file") return <Icons.file size={15} />;
-  if (kind === "capsule-set") return <Icons.layers size={15} />;
+  if (kind === "requirements") return <ReviewIcon size={15} />;
+  if (kind === "workspace") return <FolderIcon size={15} />;
+  if (kind === "file") return <FileIcon size={15} />;
+  if (kind === "capsule-set") return <LayersIcon size={15} />;
 
   return (
     <svg aria-hidden="true" className="qi-source-kind-icon-svg" viewBox="0 0 24 24">

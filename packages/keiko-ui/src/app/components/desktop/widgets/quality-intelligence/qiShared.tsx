@@ -253,8 +253,8 @@ function SkeletonBlock({
   height = 20,
   width = "100%",
 }: {
-  height?: number;
-  width?: string | number;
+  readonly height?: number;
+  readonly width?: string | number;
 }): ReactNode {
   return <div aria-hidden="true" className="qi-skeleton" style={{ height, width }} />;
 }

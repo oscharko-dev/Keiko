@@ -24,6 +24,11 @@ import {
 } from "@/lib/api";
 import { Icons } from "../../Icons";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const GitIcon = Icons.git;
+const InfoIcon = Icons.info;
+const CheckIcon = Icons.check;
+
 // ─── Injected client (DI seam for tests) ────────────────────────────────────────────────────────
 
 export interface GovernedMergeClient {
@@ -255,7 +260,7 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
   return (
     <section style={SECTION_STYLE} aria-label="Merge target">
       <h3 style={HEADING_STYLE}>
-        <Icons.git size={12} /> Merge target
+        <GitIcon size={12} /> Merge target
       </h3>
       <div style={ROW_STYLE}>
         <label style={{ ...LABEL_STYLE, flex: 1 }}>
@@ -334,7 +339,7 @@ function StrategySelector({
   return (
     <section style={SECTION_STYLE} aria-label="Merge strategy">
       <h3 style={HEADING_STYLE}>
-        <Icons.git size={12} /> Strategy
+        <GitIcon size={12} /> Strategy
       </h3>
       <label style={LABEL_STYLE}>
         Merge strategy{" "}
@@ -394,7 +399,7 @@ function MergeReadinessPanel({
       data-testid="gm-readiness"
     >
       <h3 style={HEADING_STYLE}>
-        <Icons.info size={12} /> Readiness
+        <InfoIcon size={12} /> Readiness
       </h3>
       <p style={KV_LABEL} data-field="mergeable">
         Mergeable: {preview.readiness.mergeable ? "yes" : "no"}
@@ -444,7 +449,7 @@ function MergeApprovalGate({
       data-testid="gm-approval"
     >
       <h3 style={HEADING_STYLE}>
-        <Icons.info size={12} /> High-risk confirmation
+        <InfoIcon size={12} /> High-risk confirmation
       </h3>
       <p style={KV_LABEL}>
         This merge is policy-gated as high risk. Confirm explicitly before merging; the server still
@@ -500,7 +505,7 @@ function MergeOutcome({
   if (error !== null) {
     return (
       <p role="alert" style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}>
-        <Icons.info size={12} /> {error}
+        <InfoIcon size={12} /> {error}
       </p>
     );
   }
@@ -512,7 +517,7 @@ function MergeOutcome({
       style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}
     >
       <p style={{ font: "var(--text-body-sm)", color: "var(--text-body)", margin: 0 }}>
-        <Icons.check size={12} /> {outcome.actionKind}: {outcome.status}
+        <CheckIcon size={12} /> {outcome.actionKind}: {outcome.status}
       </p>
       {codes.length > 0 ? (
         <ul style={{ margin: 0, paddingLeft: "var(--space-4)", font: "var(--text-caption)" }}>
@@ -629,7 +634,7 @@ function GovernedMergeBody({
       aria-labelledby={titleId}
     >
       <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
-        <Icons.git size={14} /> Merge
+        <GitIcon size={14} /> Merge
       </h2>
       <p
         id={liveId}
@@ -713,7 +718,7 @@ export function GovernedMergeCard({
         style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
       >
         <p>
-          <Icons.git size={13} /> Select a project to open a merge.
+          <GitIcon size={13} /> Select a project to open a merge.
         </p>
       </div>
     );

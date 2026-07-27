@@ -141,10 +141,10 @@ function ActivityIcon({
   animated,
   highContrast,
 }: {
-  shape: ActivityVisual["iconShape"];
-  color: string;
-  animated: boolean;
-  highContrast: boolean;
+  readonly shape: ActivityVisual["iconShape"];
+  readonly color: string;
+  readonly animated: boolean;
+  readonly highContrast: boolean;
 }): ReactNode {
   const iconClassName = [
     "rb-edge-badge-icon",
@@ -278,7 +278,7 @@ function ActivityIcon({
 
 // ─── Lifecycle chip icon (inspector-spec.md §4) ────────────────────────────────
 
-function LifecycleIcon({ state }: { state: RelationshipLifecycleState }): ReactNode {
+function LifecycleIcon({ state }: { readonly state: RelationshipLifecycleState }): ReactNode {
   const svgProps = {
     width: 10,
     height: 10,

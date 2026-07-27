@@ -8,6 +8,9 @@ import type { AppWindow, Connection, ConnectingState } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { useOptionalChatSessionActivity } from "../context/ChatSessionContext";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const GitIcon = Icons.git;
+
 interface ConnectionsLayerProps {
   readonly wins: readonly AppWindow[];
   readonly conns: readonly Connection[];
@@ -329,8 +332,8 @@ function FlowParticles({
   pathId,
   intensity,
 }: {
-  pathId: string;
-  intensity: FlowIntensity;
+  readonly pathId: string;
+  readonly intensity: FlowIntensity;
 }): ReactNode {
   const count = intensity === "heavy" ? 3 : 1;
   const dur = intensity === "heavy" ? 1.1 : 2.2;
@@ -454,7 +457,7 @@ const ConnectionBadge = memo(function ConnectionBadge({
       }
       aria-label={connectionBadgeAriaLabel(item, active, armed, intensity)}
     >
-      <Icons.git size={11} /> <span>{armed ? "Remove?" : item.label}</span>
+      <GitIcon size={11} /> <span>{armed ? "Remove?" : item.label}</span>
       {active && !armed ? (
         <span className="conn-flow-tag" aria-hidden="true">
           {intensity === "heavy" ? "⇶" : "→"}

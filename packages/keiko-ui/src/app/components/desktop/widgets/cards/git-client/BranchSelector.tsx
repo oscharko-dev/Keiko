@@ -16,6 +16,10 @@ import {
   disabledStyle,
 } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const BranchIcon = Icons.branch;
+const PlusIcon = Icons.plus;
+
 interface BranchSelectorProps {
   readonly branches: readonly GitBranchListEntry[];
   readonly currentBranch: string;
@@ -153,7 +157,7 @@ export function BranchSelector({
         style={{ ...SECONDARY_BTN, minWidth: 168, ...disabledStyle(disabled || loading) }}
         onClick={toggleOpen}
       >
-        <Icons.branch size={12} />
+        <BranchIcon size={12} />
         <span className="mono" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
           {triggerLabel}
         </span>
@@ -165,7 +169,7 @@ export function BranchSelector({
         style={{ ...COMPACT_BTN, ...disabledStyle(disabled || loading || busy) }}
         onClick={onCreateBranch}
       >
-        <Icons.plus size={11} /> New
+        <PlusIcon size={11} /> New
       </button>
       {open ? (
         <div style={MENU_STYLE}>

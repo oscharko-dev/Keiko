@@ -227,8 +227,6 @@ export interface RelationshipListPanelProps {
   readonly onSelect: (id: string) => void;
   /** Called when filter params change — parent updates URL. */
   readonly onFilterChange: (newParams: Partial<RelationshipFilters>) => void;
-  /** Working directory / workspace scope for bounded queries. */
-  readonly workspaceId?: string | undefined;
   /** Current transient activity state keyed by relationship id. */
   readonly activityMap?: ReadonlyMap<string, RelationshipActivityState>;
   /** Throughput counts for high-throughput badges. */

@@ -15,6 +15,11 @@ import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
 import { effectiveLocalKnowledgeScopes, effectiveScopes } from "../../hooks/workspaceActions";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const RestoreIcon = Icons.restore;
+const NewChatIcon = Icons.newChat;
+const SearchIcon = Icons.search;
+
 interface ChatHistoryPanelProps {
   readonly openChatWindow: (chat: Chat) => void;
 }
@@ -267,7 +272,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         disabled={busy}
         onClick={() => void restoreChat(chat)}
       >
-        <Icons.restore size={14} />
+        <RestoreIcon size={14} />
         Restore
       </button>
       <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
@@ -321,12 +326,12 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           <h2>Chat History</h2>
         </div>
         <button type="button" className="lk-btn lk-btn-primary" onClick={() => void createNew()}>
-          <Icons.newChat size={15} />
+          <NewChatIcon size={15} />
           New
         </button>
       </div>
       <label className="chat-history-search">
-        <Icons.search size={15} />
+        <SearchIcon size={15} />
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}

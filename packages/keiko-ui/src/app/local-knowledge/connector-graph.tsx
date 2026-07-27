@@ -64,6 +64,9 @@ import setCountsStyles from "./set-counts.module.css";
 import detailStyles from "./capsule-detail.module.css";
 import { NATIVE_BLOCK_STYLE } from "../components/desktop/native-element-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const InfoIcon = Icons.info;
+
 // ---------------------------------------------------------------------------
 // AlertBanner
 // ---------------------------------------------------------------------------
@@ -73,9 +76,9 @@ function AlertBanner({
   onRetry,
   onDismiss,
 }: {
-  message: string;
-  onRetry?: () => void;
-  onDismiss?: () => void;
+  readonly message: string;
+  readonly onRetry?: () => void;
+  readonly onDismiss?: () => void;
 }): ReactNode {
   const t = useTranslate();
   return (
@@ -233,7 +236,7 @@ function CreateAccessHelp({ tooltipId }: { readonly tooltipId: string }): ReactN
           setPinnedOpen(false);
         }}
       >
-        <Icons.info size={14} />
+        <InfoIcon size={14} />
       </button>
       <CreateAccessTooltip id={tooltipId} open={open} position={tooltipPosition}>
         {t("localKnowledge.create.access.help")}
@@ -761,7 +764,7 @@ function DeleteCapsuleSetConfirmDialog({
 // StatusBadge
 // ---------------------------------------------------------------------------
 
-function StatusBadge({ state }: { state: CapsuleLifecycleState }): ReactNode {
+function StatusBadge({ state }: { readonly state: CapsuleLifecycleState }): ReactNode {
   // Static text on purpose: a per-row role="status" live region (inside the
   // formerly aria-live section) made screen readers re-announce the whole list
   // on every reload — the page-level summary line announces changes instead
@@ -1414,8 +1417,8 @@ function EmptyState({
   creating,
   onCreateCapsule,
 }: {
-  creating: boolean;
-  onCreateCapsule: () => void;
+  readonly creating: boolean;
+  readonly onCreateCapsule: () => void;
 }): ReactNode {
   const t = useTranslate();
   return (

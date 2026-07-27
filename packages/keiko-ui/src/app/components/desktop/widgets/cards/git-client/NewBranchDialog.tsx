@@ -14,6 +14,9 @@ import {
   disabledStyle,
 } from "./git-client-styles";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const BranchIcon = Icons.branch;
+
 interface NewBranchDialogProps {
   readonly branches: readonly GitBranchListEntry[];
   readonly currentBranch: string;
@@ -105,7 +108,7 @@ export function NewBranchDialog({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-          <Icons.branch size={16} />
+          <BranchIcon size={16} />
           <h2 style={{ margin: 0, font: "var(--weight-semibold) var(--text-body) var(--font-ui)" }}>
             New branch
           </h2>
@@ -142,7 +145,7 @@ export function NewBranchDialog({
             value={baseBranchName}
             ariaLabel="Base branch"
             menuTitle="Base branch"
-            leadingVisual={<Icons.branch size={12} />}
+            leadingVisual={<BranchIcon size={12} />}
             mono
             sections={[
               {

@@ -43,12 +43,27 @@ import {
 import { useWorkspaceWatch } from "./useWorkspaceWatch";
 import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationDetail } from "./workspace-file-events";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const FolderIcon = Icons.folder;
+const ChevronRIcon = Icons.chevronR;
+const DiffIcon = Icons.diff;
+const BackIcon = Icons.back;
+const CloseIcon = Icons.close;
+const ArrowUpIcon = Icons.arrowUp;
+const GitIcon = Icons.git;
+const BranchIcon = Icons.branch;
+const FileGlyphIcon = Icons.file;
+const ResetIcon = Icons.reset;
+const EditIcon = Icons.edit;
+const CopyIcon = Icons.copy;
+const TrashIcon = Icons.trash;
+
 interface FilesWidgetProps {
-  root?: string;
-  activeFilePath?: string | undefined;
-  openFilesDirectly?: boolean | undefined;
-  watchActive?: boolean | undefined;
-  onActiveFileChange?: (
+  readonly root?: string;
+  readonly activeFilePath?: string | undefined;
+  readonly openFilesDirectly?: boolean | undefined;
+  readonly watchActive?: boolean | undefined;
+  readonly onActiveFileChange?: (
     path: string | null,
     root: string | null,
     activeDirectoryPath?: string | null,
@@ -56,12 +71,12 @@ interface FilesWidgetProps {
   // Called when the user opens a different machine path from the root bar. The window host
   // persists it into cfg.root so the new root survives reload (widgets/index.tsx). When omitted,
   // the root bar is hidden (the widget is then locked to its configured/fallback root).
-  onRootChange?: (root: string) => void;
-  onOpenFile?: ((root: string, path: string) => void) | undefined;
-  onOpenGitDelivery?: ((root: string) => void) | undefined;
+  readonly onRootChange?: (root: string) => void;
+  readonly onOpenFile?: ((root: string, path: string) => void) | undefined;
+  readonly onOpenGitDelivery?: ((root: string) => void) | undefined;
   // Notified after a successful create/rename/delete so the host can re-home open editor tabs (rename)
   // or close them (delete). Omitted in read-only contexts; its presence does not gate the affordances.
-  onFilesMutated?: ((event: FilesMutationEvent) => void) | undefined;
+  readonly onFilesMutated?: ((event: FilesMutationEvent) => void) | undefined;
 }
 
 export interface FilesMutationEvent {
@@ -168,7 +183,7 @@ function pendingEntryDraftIcon(kind: PendingEntry["kind"], entryDraft: string): 
   if (kind === "new-folder") {
     return (
       <span className="fi-fallback" style={{ color: "var(--accent)" }}>
-        <Icons.folder size={14} />
+        <FolderIcon size={14} />
       </span>
     );
   }
@@ -1339,7 +1354,7 @@ export function FilesWidget({
     <div className="tr-row-wrap" key="__files-inline-editor__">
       <div className="tr-dir-line" style={{ paddingLeft: treeIndent(depth) }}>
         <span className="tr-caret tr-caret-ghost" aria-hidden="true">
-          <Icons.chevronR size={11} />
+          <ChevronRIcon size={11} />
         </span>
         {icon}
         <input
@@ -1417,7 +1432,7 @@ export function FilesWidget({
             onClick={() => toggleDirectory(entry)}
           >
             <span className="tr-caret" data-open={open}>
-              <Icons.chevronR size={11} />
+              <ChevronRIcon size={11} />
             </span>
           </button>
           <button
@@ -1459,7 +1474,7 @@ export function FilesWidget({
             }}
           >
             <span className="fi-fallback" style={{ color: "var(--accent)" }}>
-              <Icons.folder size={14} />
+              <FolderIcon size={14} />
             </span>
             <span className="tr-name tr-folder">{entry.name}</span>
             {entry.symlink ? (
@@ -1526,7 +1541,7 @@ export function FilesWidget({
           onClick={() => openFileEntry(entry)}
         >
           <span className="tr-caret tr-caret-ghost" aria-hidden="true">
-            <Icons.chevronR size={11} />
+            <ChevronRIcon size={11} />
           </span>
           <FileIcon name={entry.name} />
           <span className="tr-name">{entry.name}</span>
@@ -1557,7 +1572,7 @@ export function FilesWidget({
             onClick={() => openDiff(entry.path)}
             aria-label={t("filesWidget.tree.viewGitDiff", { path: entry.path })}
           >
-            <Icons.diff size={13} />
+            <DiffIcon size={13} />
           </button>
         ) : null}
       </div>
@@ -1569,7 +1584,7 @@ export function FilesWidget({
       const icon =
         entry.kind === "directory" ? (
           <span className="fi-fallback" style={{ color: "var(--accent)" }}>
-            <Icons.folder size={14} />
+            <FolderIcon size={14} />
           </span>
         ) : (
           <FileIcon name={entryDraft.length > 0 ? entryDraft : entry.name} />
@@ -1724,9 +1739,9 @@ export function FilesWidget({
             title={t("filesWidget.diff.backToFiles")}
             aria-label={t("filesWidget.diff.backToFiles")}
           >
-            <Icons.back size={15} />
+            <BackIcon size={15} />
           </button>
-          <Icons.diff size={15} />
+          <DiffIcon size={15} />
           <span className="fpv-name" title={state.path}>
             {state.path}
           </span>
@@ -1742,7 +1757,7 @@ export function FilesWidget({
             title={t("filesWidget.diff.close")}
             aria-label={t("filesWidget.diff.close")}
           >
-            <Icons.close size={15} />
+            <CloseIcon size={15} />
           </button>
         </div>
         {state.loading ? (
@@ -1826,7 +1841,7 @@ export function FilesWidget({
           title={t("filesWidget.rootBar.openParent")}
           aria-label={t("filesWidget.rootBar.openParent")}
         >
-          <Icons.arrowUp size={13} />
+          <ArrowUpIcon size={13} />
         </button>
         <input
           type="text"
@@ -1854,7 +1869,7 @@ export function FilesWidget({
       gitStatusState.status?.state ?? (gitStatusState.error === null ? "loading" : "error");
     return (
       <output className="files-git-status" data-state={state}>
-        <Icons.git size={13} />
+        <GitIcon size={13} />
         <span>{gitSummary}</span>
         {canOpenGitDelivery ? (
           <button
@@ -1865,7 +1880,7 @@ export function FilesWidget({
             title={t("filesWidget.gitDelivery.open")}
             aria-label={t("filesWidget.gitDelivery.open")}
           >
-            <Icons.branch size={13} />
+            <BranchIcon size={13} />
           </button>
         ) : null}
       </output>
@@ -1884,7 +1899,7 @@ export function FilesWidget({
           title={t("filesWidget.newFile")}
           aria-label={t("filesWidget.newFile")}
         >
-          <Icons.file size={13} />
+          <FileGlyphIcon size={13} />
         </button>
         <button
           className="files-refresh"
@@ -1894,7 +1909,7 @@ export function FilesWidget({
           title={t("filesWidget.newFolder")}
           aria-label={t("filesWidget.newFolder")}
         >
-          <Icons.folder size={13} />
+          <FolderIcon size={13} />
         </button>
       </>
     );
@@ -1950,7 +1965,7 @@ export function FilesWidget({
         title={t("filesWidget.refresh")}
         aria-label={t("filesWidget.refresh")}
       >
-        <Icons.reset size={13} />
+        <ResetIcon size={13} />
       </button>
       {renderMutationButtons()}
       <span id={unreadableReasonId} className="visually-hidden">
@@ -2001,7 +2016,7 @@ export function FilesWidget({
                       role="menuitem"
                       onClick={() => startRename(target)}
                     >
-                      <Icons.edit size={14} />
+                      <EditIcon size={14} />
                       <span>{t("filesWidget.menu.rename")}</span>
                     </button>
                     <button
@@ -2010,7 +2025,7 @@ export function FilesWidget({
                       role="menuitem"
                       onClick={() => void duplicateEntry(target)}
                     >
-                      <Icons.copy size={14} />
+                      <CopyIcon size={14} />
                       <span>{t("filesWidget.menu.duplicate")}</span>
                     </button>
                     <button
@@ -2026,7 +2041,7 @@ export function FilesWidget({
                         setConfirmDelete(target);
                       }}
                     >
-                      <Icons.trash size={14} />
+                      <TrashIcon size={14} />
                       <span>{t("filesWidget.menu.delete")}</span>
                     </button>
                   </>
@@ -2037,7 +2052,7 @@ export function FilesWidget({
                   role="menuitem"
                   onClick={() => startNewEntry("new-file", parent)}
                 >
-                  <Icons.file size={14} />
+                  <FileGlyphIcon size={14} />
                   <span>{t("filesWidget.menu.newFile")}</span>
                 </button>
                 <button
@@ -2046,7 +2061,7 @@ export function FilesWidget({
                   role="menuitem"
                   onClick={() => startNewEntry("new-folder", parent)}
                 >
-                  <Icons.folder size={14} />
+                  <FolderIcon size={14} />
                   <span>{t("filesWidget.menu.newFolder")}</span>
                 </button>
               </>

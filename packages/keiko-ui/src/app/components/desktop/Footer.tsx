@@ -10,6 +10,9 @@ import { WIN_TYPES } from "./windows/WindowsRegistry";
 import { subText } from "./windows/connectionUtils";
 import type { AppWindow } from "./windows/types";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const TileIcon = Icons.tile;
+
 // S3358 — the window-palette card's state label has three distinct states.
 function windowStateLabel(win: AppWindow, t: I18nTranslate): string {
   if (win.minimized === true) return t("footer.minimized");
@@ -142,7 +145,7 @@ function FooterImpl({
           disabled={winCount === 0}
           onClick={onToggleWindowPalette}
         >
-          <Icons.tile size={13} /> {windowLabel}
+          <TileIcon size={13} /> {windowLabel}
         </button>
         {windowPaletteOpen && winCount > 0 ? (
           <div

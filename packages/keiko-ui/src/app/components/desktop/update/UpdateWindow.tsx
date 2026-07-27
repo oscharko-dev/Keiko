@@ -55,6 +55,12 @@ import {
 } from "./update-copy";
 import styles from "./UpdateWindow.module.css";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const CopyIcon = Icons.copy;
+const CheckIcon = Icons.check;
+const InfoIcon = Icons.info;
+const ExternalIcon = Icons.external;
+
 export interface UpdateWindowApi {
   readonly fetchPreflight: () => Promise<UpdatePreflightReport>;
   readonly checkPreflight: () => Promise<UpdatePreflightReport>;
@@ -289,7 +295,7 @@ function ManualInstructionCopyFrame({
           title={buttonFeedbackLabel}
           onClick={handleCopy}
         >
-          <Icons.copy size={14} aria-hidden="true" />
+          <CopyIcon size={14} aria-hidden="true" />
           <span className="sr-only">{buttonLabel}</span>
         </button>
         <span className="sr-only" role="status" aria-live="polite">
@@ -474,7 +480,7 @@ function SummaryCard({
   return (
     <div className="upd-summary" data-tone={tone}>
       <span className="upd-summary-icon" aria-hidden="true">
-        {tone === "success" ? <Icons.check size={18} /> : <Icons.info size={18} />}
+        {tone === "success" ? <CheckIcon size={18} /> : <InfoIcon size={18} />}
       </span>
       <div>
         <p className="upd-kicker">{t("updates.window.kicker")}</p>
@@ -1101,7 +1107,7 @@ function ManualPath({
       {releaseUrl !== undefined ? (
         <a className="upd-link" href={releaseUrl} target="_blank" rel="noopener noreferrer">
           {t("updates.manual.releaseLink")}
-          <Icons.external size={13} aria-hidden="true" />
+          <ExternalIcon size={13} aria-hidden="true" />
         </a>
       ) : null}
     </section>
@@ -1238,7 +1244,7 @@ function PortableManualPath({
       {releaseUrl !== undefined ? (
         <a className="upd-link" href={releaseUrl} target="_blank" rel="noopener noreferrer">
           {t("updates.portableManual.releaseLink")}
-          <Icons.external size={13} aria-hidden="true" />
+          <ExternalIcon size={13} aria-hidden="true" />
         </a>
       ) : null}
     </section>

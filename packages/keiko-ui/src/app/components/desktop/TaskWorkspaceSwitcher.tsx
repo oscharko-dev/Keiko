@@ -30,6 +30,9 @@ import { useActiveWorkspace, type ActiveWorkspaceApi } from "./context/ActiveWor
 import { useOptionalChatSessionCatalog } from "./context/ChatSessionContext";
 import { Icons } from "./Icons";
 
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const BranchIcon = Icons.branch;
+
 type FormSubmitEvent = { preventDefault: () => void };
 
 type Tone = "success" | "warning" | "danger" | "info" | "muted";
@@ -276,7 +279,7 @@ function TriggerButton(props: {
       onClick={props.onToggle}
       data-active={props.active !== null ? "true" : "false"}
     >
-      <Icons.branch size={14} />
+      <BranchIcon size={14} />
       <span className="tw-switcher-trigger-label">
         {props.active === null ? props.t("taskWorkspace.title") : props.active.taskId}
       </span>
@@ -336,7 +339,7 @@ function EmptyWorkspaceState(props: {
   return (
     <div className="tw-switcher-empty">
       <span className="tw-switcher-empty-icon" aria-hidden="true">
-        <Icons.branch size={16} />
+        <BranchIcon size={16} />
       </span>
       <div>
         <strong>{props.t("taskWorkspace.empty.title")}</strong>

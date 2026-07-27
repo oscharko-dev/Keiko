@@ -14,6 +14,10 @@ import {
 } from "../../context/TwinContext";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const SparkIcon = Icons.spark;
+const CheckIcon = Icons.check;
+
+// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const EvalPassIcon = Icons.check;
 const EvalFailIcon = Icons.close;
 
@@ -64,8 +68,8 @@ function PolicyTab({
   policy,
   setPolicy,
 }: {
-  policy: readonly PolicyRow[];
-  setPolicy: (next: (prev: readonly PolicyRow[]) => readonly PolicyRow[]) => void;
+  readonly policy: readonly PolicyRow[];
+  readonly setPolicy: (next: (prev: readonly PolicyRow[]) => readonly PolicyRow[]) => void;
 }): ReactNode {
   const cycle = (id: string): void =>
     setPolicy((p) => p.map((r) => (r.id === id ? { ...r, decision: DEC_CYCLE[r.decision] } : r)));
@@ -98,7 +102,11 @@ function PolicyTab({
   );
 }
 
-function EvalTab({ decide }: { decide: (kind: GateKind, risk: Risk) => Decision }): ReactNode {
+function EvalTab({
+  decide,
+}: {
+  readonly decide: (kind: GateKind, risk: Risk) => Decision;
+}): ReactNode {
   const [run, setRun] = useState(false);
   const results = EVAL_SCENARIOS.map((s) => {
     const actual = decide(s.kind, s.risk);
@@ -109,7 +117,7 @@ function EvalTab({ decide }: { decide: (kind: GateKind, risk: Risk) => Decision 
     <div className="evl">
       <div className="evl-head">
         <button type="button" className="evl-run" onClick={() => setRun(true)}>
-          <Icons.spark size={13} /> Run evaluation
+          <SparkIcon size={13} /> Run evaluation
         </button>
         {run && (
           <span className={"evl-score" + (passed === results.length ? " ok" : "")}>
@@ -141,8 +149,8 @@ function BridgesTab({
   bridges,
   setBridges,
 }: {
-  bridges: Bridges;
-  setBridges: (next: (prev: Bridges) => Bridges) => void;
+  readonly bridges: Bridges;
+  readonly setBridges: (next: (prev: Bridges) => Bridges) => void;
 }): ReactNode {
   return (
     <div className="brg">
@@ -177,8 +185,8 @@ function PersonaTab({
   persona,
   setPersona,
 }: {
-  persona: Persona;
-  setPersona: (next: Persona) => void;
+  readonly persona: Persona;
+  readonly setPersona: (next: Persona) => void;
 }): ReactNode {
   return (
     <div className="prs">
@@ -197,7 +205,7 @@ function PersonaTab({
             <span className="prs-name">{p}</span>
             <span className="prs-desc">{d}</span>
           </span>
-          {persona === p && <Icons.check size={14} style={{ color: "var(--accent)" }} />}
+          {persona === p && <CheckIcon size={14} style={{ color: "var(--accent)" }} />}
         </button>
       ))}
     </div>
