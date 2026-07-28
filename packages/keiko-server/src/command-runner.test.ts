@@ -19,6 +19,7 @@ import {
   createCommandRunnerManager,
   type CommandRunnerManager,
   type CommandRunnerManagerOptions,
+  type CommandRunnerWorkspaceTrustDecider,
 } from "./command-runner.js";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -229,6 +230,27 @@ describe("CommandRunnerManager — execution", () => {
     ).rejects.toMatchObject({ code: "TASK_REQUIRES_TRUST", status: 403 });
     expect(spawn).not.toHaveBeenCalled();
     expect(events).toEqual([]);
+  });
+
+  it("revalidates workspace trust after task derivation and denies drift before spawn", async () => {
+    const spawn = vi.fn<SpawnFn>(makeSpawn({ stdout: "should not run", exitCode: 0 }));
+    const trust = vi
+      .fn<CommandRunnerWorkspaceTrustDecider>()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    const manager = makeManager(spawn, {
+      isWorkspaceTrustedForPackageScripts: trust,
+    });
+    const events = collect(manager);
+
+    await expect(
+      manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" }),
+    ).rejects.toMatchObject({ code: "TASK_REQUIRES_TRUST", status: 403 });
+
+    expect(trust).toHaveBeenCalledTimes(2);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(manager.inFlightCount()).toBe(0);
   });
 
   it("runs an allowlisted task and reports a clean exit", async () => {

@@ -465,7 +465,7 @@ async function seedEditorWindow(
 }
 
 async function openTreePath(container: Locator, path: string): Promise<void> {
-  const row = container.locator(`button.tr-row[data-path="${path}"]`);
+  const row = container.locator(`[role="treeitem"].tr-row[data-path="${path}"]`);
   await expect(row).toBeVisible();
   await row.click();
 }
@@ -612,7 +612,7 @@ async function openEmbeddedPath(editorWindow: Locator, path: string): Promise<vo
   let current = "";
   for (const part of path.split("/")) {
     current = current.length === 0 ? part : `${current}/${part}`;
-    const row = editorWindow.locator(`button.tr-row[data-path="${current}"]`);
+    const row = editorWindow.locator(`[role="treeitem"].tr-row[data-path="${current}"]`);
     await expect(row).toBeVisible();
     await row.click();
   }

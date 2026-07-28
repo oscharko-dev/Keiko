@@ -130,10 +130,17 @@ function rootForSnapshot(
   return manifest.roots.find((root): boolean => root.canonicalRoot === canonical);
 }
 
-function identityMatches(root: WorkspaceRootDescriptor): boolean {
+function identityMatches(root: WorkspaceRootDescriptor, row: WorkspaceManifestRecordRow): boolean {
   try {
     const inspected = inspectWorkspaceRootIdentity(root.canonicalRoot);
-    return inspected.rootRef === root.rootRef && inspected.identityDigest === root.identityDigest;
+    return (
+      inspected.rootRef === root.rootRef &&
+      inspected.identityDigest === root.identityDigest &&
+      inspected.objectIdentityDigest !== undefined &&
+      inspected.objectIdentityDigest ===
+        row.rootProjects.find((candidate): boolean => candidate.rootRef === root.rootRef)
+          ?.objectIdentityDigest
+    );
   } catch {
     return false;
   }
@@ -168,12 +175,6 @@ function legacySessionRoot(snapshot: EditorAgentSessionSnapshot): EditorAgentRoo
   };
 }
 
-function missingManifestRoot(snapshot: EditorAgentSessionSnapshot): EditorAgentRootResolution {
-  return snapshot.rootBinding === undefined
-    ? legacySessionRoot(snapshot)
-    : { ok: false, reason: "root-binding-invalid" };
-}
-
 function storedWorkspaceRoot(
   snapshot: EditorAgentSessionSnapshot,
   manifest: WorkspaceManifest,
@@ -188,11 +189,11 @@ function storedSessionRoot(
   store: UiStore,
 ): EditorAgentRootResolution {
   const row = manifestRow(store, snapshot.workspaceRoot);
-  if (row === undefined) return missingManifestRoot(snapshot);
+  if (row === undefined) return { ok: false, reason: "root-binding-invalid" };
   const manifest = parsedManifest(row);
   if (manifest === null) return { ok: false, reason: "root-binding-invalid" };
   const descriptor = rootForSnapshot(snapshot, manifest);
-  if (descriptor === undefined || !identityMatches(descriptor)) {
+  if (descriptor === undefined || !identityMatches(descriptor, row)) {
     return { ok: false, reason: "root-binding-invalid" };
   }
   const binding = canonicalBinding(manifest, descriptor);

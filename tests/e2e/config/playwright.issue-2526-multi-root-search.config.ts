@@ -1,8 +1,28 @@
 import { defineConfig } from "@playwright/test";
 
+import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "../support/file-history-2531.js";
 import baseConfig from "./playwright.config.js";
 
-export default defineConfig(baseConfig, {
+const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32183");
+const baseWebServer = baseConfig.webServer;
+if (!Array.isArray(baseWebServer)) throw new Error("Issue #2526 requires the shared web servers.");
+
+const webServer = baseWebServer.map((server, index) =>
+  index === baseWebServer.length - 1
+    ? {
+        ...server,
+        env: {
+          ...server.env,
+          KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET,
+        },
+      }
+    : server,
+);
+
+export default defineConfig({
+  ...baseConfig,
   testMatch: ["multi-root-search-2526.spec.ts"],
   timeout: 120_000,
+  use: { ...baseConfig.use, baseURL: `http://localhost:${String(publicPort)}` },
+  webServer,
 });

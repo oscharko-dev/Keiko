@@ -3,9 +3,12 @@
 // runner applies migrations whose 1-based index > current user_version.
 
 import type { DatabaseSync } from "node:sqlite";
-import { migrateLegacyProjectManifests } from "./workspaceManifests.js";
+import {
+  migrateLegacyProjectManifests,
+  migrateWorkspaceRootObjectIdentities,
+} from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 interface Migration {
   readonly version: number;
@@ -466,6 +469,19 @@ ALTER TABLE memory_autonomy_policy
   ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0);
 `;
 
+// V17 (issue #2772, epic #2285) — bind persisted authority to the filesystem object rather than a
+// path-bearing, Number-coerced compatibility digest. The private digest is never projected through
+// a contract or evidence surface. NULL is an explicit fail-closed state for filesystems without a
+// durable birth identity. Every pre-v17 trust row is revoked once because it predates this binding.
+const V17_SQL = `
+ALTER TABLE workspace_manifest_roots
+  ADD COLUMN object_identity_digest TEXT
+  CHECK (object_identity_digest IS NULL OR length(object_identity_digest) = 64);
+CREATE UNIQUE INDEX uniq_workspace_manifest_root_object_identity
+  ON workspace_manifest_roots(object_identity_digest)
+  WHERE object_identity_digest IS NOT NULL;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -483,6 +499,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 14, sql: V14_SQL },
   { version: 15, sql: V15_SQL, apply: migrateLegacyProjectManifests },
   { version: 16, sql: V16_SQL },
+  { version: 17, sql: V17_SQL, apply: migrateWorkspaceRootObjectIdentities },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

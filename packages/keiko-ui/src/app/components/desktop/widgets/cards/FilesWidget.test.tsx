@@ -628,14 +628,14 @@ describe("FilesWidget", () => {
     const { container } = render(<FilesWidget root="/repo" />);
 
     expect(await screen.findByRole("treeitem", { name: /file-000\.ts/i })).toBeInTheDocument();
-    expect(container.querySelectorAll("button.tr-row")).toHaveLength(
+    expect(container.querySelectorAll('[role="treeitem"].tr-row')).toHaveLength(
       filesWidgetTestInternals.DIRECTORY_RENDER_BATCH_SIZE,
     );
     expect(container.querySelector('[data-path="file-200.ts"]')).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Show 1 more entries" }));
 
-    expect(container.querySelectorAll("button.tr-row")).toHaveLength(entries.length);
+    expect(container.querySelectorAll('[role="treeitem"].tr-row')).toHaveLength(entries.length);
     expect(screen.getByRole("treeitem", { name: /file-200\.ts/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /show more entries/i })).toBeNull();
   });
@@ -697,16 +697,49 @@ describe("FilesWidget", () => {
     });
 
     const onOpenGitDelivery = vi.fn();
-    render(<FilesWidget root="/repo space" onOpenGitDelivery={onOpenGitDelivery} />);
+    const onOpenFile = vi.fn();
+    render(
+      <FilesWidget
+        root="/repo space"
+        openFilesDirectly
+        onOpenFile={onOpenFile}
+        onOpenGitDelivery={onOpenGitDelivery}
+      />,
+    );
 
     expect(await screen.findByText(/Git main 1 changed file/i)).toBeInTheDocument();
     expect(screen.getByText("M")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Open Git" }));
     expect(onOpenGitDelivery).toHaveBeenCalledWith("/repo space");
 
-    await userEvent.click(screen.getByRole("button", { name: "View Git diff for package.json" }));
+    const diffButton = screen.getByRole("button", {
+      name: "View Git diff for package.json",
+    });
+    const fileItem = screen.getByRole("treeitem", {
+      name: "package.json Git modified: package.json 18 B",
+    });
+    expect(diffButton.closest('[role="treeitem"]')).toBe(fileItem);
+    expect(fileItem).toHaveAttribute("tabindex", "0");
+    fileItem.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
+
+    fileItem.focus();
+    await userEvent.keyboard(" ");
+    expect(onOpenFile).toHaveBeenCalledTimes(2);
+
+    diffButton.focus();
+    expect(diffButton).toHaveFocus();
+    fireEvent.keyDown(diffButton, { key: "ArrowDown" });
+    fireEvent.keyDown(diffButton, { key: "F2" });
+    fireEvent.keyDown(diffButton, { key: "Delete" });
+    expect(diffButton).toHaveFocus();
+    expect(screen.queryByLabelText("Rename package.json")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Delete file?" })).not.toBeInTheDocument();
+    await userEvent.keyboard("{Enter}");
 
     expect(fetchGitDiff).toHaveBeenCalledWith({ root: "/repo space", path: "package.json" });
+    expect(onOpenFile).toHaveBeenCalledTimes(2);
     expect(await screen.findByRole("region", { name: "Git diff: package.json" })).toHaveTextContent(
       "+new",
     );
@@ -803,8 +836,8 @@ describe("FilesWidget", () => {
 
     const row = await screen.findByRole("treeitem", { name: /ordinary\.ts/iu });
     expect(row).not.toHaveAttribute("aria-label");
-    expect(row.closest(".tr-file-wrap")).not.toHaveAttribute("data-git-ignored");
-    expect(row.closest(".tr-file-wrap")).not.toHaveAttribute("style");
+    expect(row).not.toHaveAttribute("data-git-ignored");
+    expect(row).not.toHaveStyle({ opacity: "0.55" });
   });
 
   it("renders an honest incomplete affordance for truncated Git status", async () => {

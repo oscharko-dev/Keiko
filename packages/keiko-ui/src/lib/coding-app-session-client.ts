@@ -80,10 +80,11 @@ export function redeemCodingAppSessionPairingOnBoot(): Promise<boolean> {
 }
 
 /**
- * Resolves once the boot pairing attempt has settled — immediately when no attempt was started.
- * The questions surface awaits this before its first list so a freshly opened window can never
- * race its own redemption into a stale `unpaired` state; no timers or retries are involved.
+ * Starts the shared boot pairing attempt when a child read effect reaches this before the desktop
+ * parent's effect, then resolves once that same attempt has settled. Protected data surfaces await
+ * this before their first read so a freshly opened window cannot race its own redemption into a
+ * stale `unpaired` state; no timers, retries, or second session state are involved.
  */
 export function codingAppSessionPairingSettled(): Promise<boolean> {
-  return bootRedemption ?? Promise.resolve(false);
+  return redeemCodingAppSessionPairingOnBoot();
 }

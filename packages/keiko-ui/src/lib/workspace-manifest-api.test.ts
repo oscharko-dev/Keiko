@@ -12,6 +12,12 @@ import {
   WORKSPACE_MANIFEST_CHANGED_EVENT,
 } from "./workspace-manifest-api";
 
+const pairingSettled = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
+
+vi.mock("./coding-app-session-client", () => ({
+  codingAppSessionPairingSettled: pairingSettled,
+}));
+
 function root(rootRef: string, canonicalRoot: string): WorkspaceRootDescriptor {
   return {
     rootRef: rootRef as WorkspaceRootRef,
@@ -41,6 +47,27 @@ function manifest(revision = 1): WorkspaceManifest {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("workspace manifest API", () => {
+  it("waits for launcher pairing before requesting canonical workspace paths", async () => {
+    let releasePairing = (): void => undefined;
+    pairingSettled.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        releasePairing = (): void => resolve(true);
+      }),
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ manifests: [manifest()] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const request = fetchWorkspaceManifests();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    releasePairing();
+    await expect(request).resolves.toEqual([manifest()]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("preserves the server error code and correlation id on a rejected workspace request", async () => {
     const correlationId = "workspace-request-2625";
     vi.stubGlobal(

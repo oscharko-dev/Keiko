@@ -154,18 +154,23 @@ function historyInput(root, scope, content, nowMs) {
   };
 }
 
-async function prepareHistoryRoots(root) {
+async function prepareHistoryRoots(root, inspectRoot, historyWorkspaceIdFor) {
   const roots = [];
   for (let index = 0; index < HISTORY_ROOT_COUNT; index += 1) {
     const path = join(root, `root-${String(index)}`);
     await mkdir(join(path, "src"), { recursive: true });
     await writeFile(join(path, "src", "app.ts"), "initial\n", "utf8");
+    const identity = inspectRoot(path);
+    if (identity.objectIdentityDigest === undefined) {
+      throw new Error("M11 history measurement root has no durable object identity.");
+    }
     roots.push({
       path,
       scope: {
-        workspaceId: "workspace-m11-history",
-        rootRef: `root-m11-history-${String(index)}`,
-        rootIdentityDigest: digest(`history-root-${String(index)}`),
+        workspaceId: historyWorkspaceIdFor(identity.rootRef),
+        rootRef: identity.rootRef,
+        rootIdentityDigest: identity.identityDigest,
+        objectIdentityDigest: identity.objectIdentityDigest,
       },
     });
   }
@@ -231,6 +236,15 @@ export function shouldFailBudget(disposition, controlled) {
   return deterministicFailed || (controlled && Object.values(disposition).some((value) => !value));
 }
 
+async function loadMeasurementDependencies(samples) {
+  const [historyStore, rootIdentity] = await Promise.all([
+    import("../packages/keiko-server/dist/editor/localHistory/localHistoryStore.js"),
+    import("../packages/keiko-server/dist/workspace-root-identity.js"),
+  ]);
+  const multiRoot = await measureMultiRootUi(samples);
+  return { historyStore, rootIdentity, multiRoot };
+}
+
 export async function runEditorM11CloseoutMeasurement(options = {}) {
   const controlled = options.controlled ?? process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1";
   const gcSettled = gcSettlingAvailable();
@@ -247,12 +261,17 @@ export async function runEditorM11CloseoutMeasurement(options = {}) {
   );
   const stateDir = join(root, "state");
   try {
-    const [{ createEditorLocalHistoryStore }, multiRoot] = await Promise.all([
-      import("../packages/keiko-server/dist/editor/localHistory/localHistoryStore.js"),
-      measureMultiRootUi(samples),
-    ]);
-    const roots = await prepareHistoryRoots(root);
-    const history = await measureHistory(stateDir, roots, createEditorLocalHistoryStore);
+    const { historyStore, rootIdentity, multiRoot } = await loadMeasurementDependencies(samples);
+    const roots = await prepareHistoryRoots(
+      root,
+      rootIdentity.inspectWorkspaceRootIdentity,
+      historyStore.editorLocalHistoryWorkspaceId,
+    );
+    const history = await measureHistory(
+      stateDir,
+      roots,
+      historyStore.createEditorLocalHistoryStore,
+    );
     const measurement = { ...multiRoot, ...history };
     const disposition = budgetDisposition(measurement);
     return {

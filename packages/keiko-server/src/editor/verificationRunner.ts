@@ -198,6 +198,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const workspace = this.resolveWorkspace(input.projectId);
     const plan = this.buildPlan(workspace, input);
     this.assertRunnable(plan);
+    this.assertWorkspaceTrustAtEffect(input, workspace);
     const runId = randomUUID();
     const controller = new AbortController();
     this.runs.set(runId, {
@@ -233,6 +234,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const workspace = this.resolveWorkspace(input.projectId);
     const plan = this.buildPlan(workspace, input);
     this.assertRunnable(plan);
+    this.assertWorkspaceTrustAtEffect(input, workspace);
     const runId = randomUUID();
     const controller = new AbortController();
     const forwardAbort = (): void => {
@@ -302,17 +304,35 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   private buildPlan(workspace: WorkspaceInfo, input: VerificationRunInput): VerificationPlan {
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
-    if (scriptKinds.length > 0 && !this.trustedForScripts(input.projectId, workspace)) {
-      throw new VerificationRunnerError(
-        "WORKSPACE_TRUST_REQUIRED",
-        "Repository package scripts require server-side workspace trust before execution.",
-      );
-    }
+    this.assertWorkspaceTrustForScriptKinds(input.projectId, workspace, scriptKinds);
     const steps = [
       ...this.scriptSteps(workspace, scriptKinds),
       ...this.targetedSteps(workspace, input),
     ];
     return { workspaceRoot: workspace.root, steps };
+  }
+
+  private assertWorkspaceTrustAtEffect(
+    input: VerificationRunInput,
+    workspace: WorkspaceInfo,
+  ): void {
+    this.assertWorkspaceTrustForScriptKinds(
+      input.projectId,
+      workspace,
+      input.kinds.filter(isScriptBackedKind),
+    );
+  }
+
+  private assertWorkspaceTrustForScriptKinds(
+    projectId: string,
+    workspace: WorkspaceInfo,
+    scriptKinds: readonly VerificationKind[],
+  ): void {
+    if (scriptKinds.length === 0 || this.trustedForScripts(projectId, workspace)) return;
+    throw new VerificationRunnerError(
+      "WORKSPACE_TRUST_REQUIRED",
+      "Repository package scripts require server-side workspace trust before execution.",
+    );
   }
 
   private scriptSteps(

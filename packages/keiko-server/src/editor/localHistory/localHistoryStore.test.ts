@@ -4,8 +4,10 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +21,7 @@ import type { EditorLocalHistoryOrigin } from "@oscharko-dev/keiko-contracts";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 import {
   createEditorLocalHistoryStore,
+  EDITOR_LOCAL_HISTORY_INDEX_MAX_BYTES,
   type EditorLocalHistoryCaptureInput,
   type EditorLocalHistoryRootScope,
 } from "./localHistoryStore.js";
@@ -53,6 +56,32 @@ function indexJson(stateDir: string): string {
   return readFileSync(join(workspaceStateDir(stateDir), "index.json"), "utf8");
 }
 
+function indexPath(stateDir: string): string {
+  return join(workspaceStateDir(stateDir), "index.json");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function removePrivateIndexBinding(stateDir: string): void {
+  const path = indexPath(stateDir);
+  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+  const legacy = isRecord(parsed) && isRecord(parsed.index) ? parsed.index : parsed;
+  if (!isRecord(legacy)) throw new Error("fixture index is not an object");
+  writeFileSync(path, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+}
+
+function encryptedBodyBytes(stateDir: string): readonly string[] {
+  const bodiesDir = join(workspaceStateDir(stateDir), "checkpoints");
+  return bodyFiles(stateDir).map((file) => readFileSync(join(bodiesDir, file), "utf8"));
+}
+
+function changedDigest(digest: string): string {
+  const first = digest.at(0) === "f" ? "e" : "f";
+  return `${first}${digest.slice(1)}`;
+}
+
 function tempDir(prefix: string): string {
   const dir = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), prefix)));
   tmpDirs.push(dir);
@@ -69,6 +98,9 @@ function fixture(): {
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "app.ts"), "initial\n", "utf8");
   const identity = inspectWorkspaceRootIdentity(root);
+  if (identity.objectIdentityDigest === undefined) {
+    throw new Error("fixture filesystem has no durable object identity");
+  }
   return {
     root,
     stateDir,
@@ -76,6 +108,7 @@ function fixture(): {
       workspaceId: "workspace-local-history-test",
       rootRef: identity.rootRef,
       rootIdentityDigest: identity.identityDigest,
+      objectIdentityDigest: identity.objectIdentityDigest,
     },
   };
 }
@@ -425,6 +458,151 @@ describe("editor local-history store", () => {
       expect.objectContaining({ code: "INDEX_UNAVAILABLE" }),
     );
   });
+
+  it("rejects symlinked and non-regular index files before reading them", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore(storeOptions(fx));
+    store.capture(captureInput(fx, "persisted\n", "user-save", 1_000));
+    const path = indexPath(fx.stateDir);
+    const target = join(workspaceStateDir(fx.stateDir), "index-target.json");
+    renameSync(path, target);
+    symlinkSync(target, path);
+
+    const symlinked = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(() => symlinked.list(fx.scope, undefined, 1_001)).toThrow(
+      expect.objectContaining({
+        code: "INDEX_UNAVAILABLE",
+        detail: "INDEX_FILE_INVALID",
+      }),
+    );
+
+    rmSync(path);
+    mkdirSync(path);
+    const nonRegular = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(() => nonRegular.list(fx.scope, undefined, 1_002)).toThrow(
+      expect.objectContaining({
+        code: "INDEX_UNAVAILABLE",
+        detail: "INDEX_FILE_INVALID",
+      }),
+    );
+  });
+
+  it("rejects an oversized index from metadata before reading or parsing its bytes", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore(storeOptions(fx));
+    store.capture(captureInput(fx, "persisted\n", "user-save", 1_000));
+    const path = indexPath(fx.stateDir);
+    truncateSync(path, EDITOR_LOCAL_HISTORY_INDEX_MAX_BYTES + 1);
+
+    const reopened = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(() => reopened.list(fx.scope, undefined, 1_001)).toThrow(
+      expect.objectContaining({
+        code: "INDEX_UNAVAILABLE",
+        detail: "INDEX_TOO_LARGE",
+      }),
+    );
+  });
+
+  it("adopts a matching legacy index without resealing its encrypted payloads", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore(storeOptions(fx));
+    const entry = store.capture(captureInput(fx, "legacy payload\n", "user-save", 1_000)).entry;
+    removePrivateIndexBinding(fx.stateDir);
+    const bodiesBefore = encryptedBodyBytes(fx.stateDir);
+
+    const reopened = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(reopened.list(fx.scope, undefined, 1_001)).toEqual([
+      expect.objectContaining({ entryRef: entry.entryRef }),
+    ]);
+    const adopted: unknown = JSON.parse(indexJson(fx.stateDir));
+    expect(adopted).toMatchObject({
+      objectIdentityDigest: fx.scope.objectIdentityDigest,
+      index: { entries: [{ entryRef: entry.entryRef }] },
+    });
+    expect(JSON.stringify((adopted as { readonly index?: unknown }).index)).not.toContain(
+      fx.scope.objectIdentityDigest,
+    );
+    expect(encryptedBodyBytes(fx.stateDir)).toEqual(bodiesBefore);
+    expect(reopened.read(fx.scope, entry.entryRef, 1_002).content).toBe("legacy payload\n");
+  });
+
+  it("refuses to adopt a legacy index when its public root identity no longer matches", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore(storeOptions(fx));
+    store.capture(captureInput(fx, "legacy payload\n", "user-save", 1_000));
+    removePrivateIndexBinding(fx.stateDir);
+    const mismatchedScope = {
+      ...fx.scope,
+      rootIdentityDigest: changedDigest(
+        fx.scope.rootIdentityDigest,
+      ) as typeof fx.scope.rootIdentityDigest,
+    };
+
+    const reopened = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(() => reopened.list(mismatchedScope, undefined, 1_001)).toThrow(
+      expect.objectContaining({
+        code: "INDEX_UNAVAILABLE",
+        detail: "LEGACY_ROOT_IDENTITY_MISMATCH",
+      }),
+    );
+  });
+
+  it.each(["read", "pin", "delete"] as const)(
+    "quarantines the prior object's history before %s and admits fresh replacement history",
+    (operation) => {
+      const fx = fixture();
+      const store = createEditorLocalHistoryStore(storeOptions(fx));
+      const entry = store.capture(captureInput(fx, "legacy payload\n", "user-save", 1_000)).entry;
+      rmSync(fx.root, { recursive: true });
+      mkdirSync(join(fx.root, "src"), { recursive: true });
+      const replacementIdentity = inspectWorkspaceRootIdentity(fx.root);
+      if (replacementIdentity.objectIdentityDigest === undefined) {
+        throw new Error("replacement filesystem has no durable object identity");
+      }
+      const changedScope: EditorLocalHistoryRootScope = {
+        workspaceId: fx.scope.workspaceId,
+        rootRef: replacementIdentity.rootRef,
+        rootIdentityDigest: replacementIdentity.identityDigest,
+        objectIdentityDigest: replacementIdentity.objectIdentityDigest,
+      };
+      const replacementFx = { ...fx, scope: changedScope };
+
+      const effect = (): void => {
+        if (operation === "read") {
+          store.read(changedScope, entry.entryRef, 1_002);
+        } else if (operation === "pin") {
+          store.setPinned(changedScope, entry.entryRef, true, 1_002);
+        } else {
+          store.delete(changedScope, entry.entryRef);
+        }
+      };
+      expect(effect).toThrow(
+        expect.objectContaining({
+          code: "ENTRY_NOT_FOUND",
+        }),
+      );
+      expect(store.list(changedScope, undefined, 1_002)).toEqual([]);
+
+      const replacement = store.capture(
+        captureInput(replacementFx, "replacement payload\n", "user-save", 1_003),
+      ).entry;
+      expect(store.list(changedScope, undefined, 1_004)).toEqual([
+        expect.objectContaining({ entryRef: replacement.entryRef }),
+      ]);
+      expect(replacement.entryRef).not.toBe(entry.entryRef);
+      const historyRoot = join(fx.stateDir, "editor-local-history");
+      expect(readdirSync(historyRoot)).toHaveLength(2);
+      expect(readAllFiles(historyRoot).join("")).not.toContain("legacy payload\n");
+
+      const reopened = createEditorLocalHistoryStore(storeOptions(replacementFx));
+      expect(reopened.list(changedScope, undefined, 1_005)).toEqual([
+        expect.objectContaining({ entryRef: replacement.entryRef }),
+      ]);
+      expect(() => reopened.entry(changedScope, entry.entryRef, 1_005)).toThrow(
+        expect.objectContaining({ code: "ENTRY_NOT_FOUND" }),
+      );
+    },
+  );
 
   it("guards pinned capacity: pinning beyond the byte budget and capture blocked by pins", () => {
     const fx = fixture();
