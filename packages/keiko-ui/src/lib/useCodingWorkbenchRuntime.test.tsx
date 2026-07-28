@@ -257,7 +257,7 @@ describe("useCodingWorkbenchRuntime", () => {
     view.unmount();
   });
 
-  it("retains SSE terminal truth when the first post-settlement status is idle", async (): Promise<void> => {
+  it("retains SSE terminal truth when post-settlement status is idle", async (): Promise<void> => {
     const running = snapshot({ state: "running", pendingPermission: undefined });
     const terminal = snapshot({ state: "succeeded", revision: 5, pendingPermission: undefined });
     const idle = snapshot({
@@ -268,22 +268,24 @@ describe("useCodingWorkbenchRuntime", () => {
     });
     installBootstrap(running, idle);
     const activeWorkspace = workspace();
-    const view = renderHook(() => useCodingWorkbenchRuntime({ workspace: activeWorkspace }));
+    const view = renderHook((): ReturnType<typeof useCodingWorkbenchRuntime> =>
+      useCodingWorkbenchRuntime({ workspace: activeWorkspace }),
+    );
 
-    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-    act(() => {
+    await waitFor((): void => expect(FakeEventSource.instances).toHaveLength(1));
+    act((): void => {
       FakeEventSource.instances[0]?.dispatch(
         "status",
         JSON.stringify({ ...event(1), state: "succeeded", revision: 5 }),
       );
     });
-    await waitFor(() =>
+    await waitFor((): void => {
       expect(view.result.current.state.run).toEqual({
         status: "ready",
         value: terminal,
         error: null,
-      }),
-    );
+      });
+    });
     const terminalEvents = view.result.current.state.events;
     expect(terminalEvents).toHaveLength(1);
     expect(view.result.current.state.events).toEqual(terminalEvents);

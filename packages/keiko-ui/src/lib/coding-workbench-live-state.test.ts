@@ -246,6 +246,26 @@ describe("Coding Workbench live state", () => {
     },
   );
 
+  it("removes recovery acknowledgement when an SSE event settles the run", (): void => {
+    let state = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "recovery-required",
+        revision: 6,
+        recoveryAcknowledged: true,
+        pendingPermission: undefined,
+      }),
+    });
+
+    state = codingWorkbenchRuntimeReducer(state, {
+      kind: "events-received",
+      events: [statusEvent(1, "cancelled", 7)],
+    });
+
+    expect(state.run.value).toMatchObject({ state: "cancelled", revision: 7 });
+    expect(state.run.value).not.toHaveProperty("recoveryAcknowledged");
+  });
+
   it("enables recovery Retry only after a server-confirmed acknowledgement", () => {
     const unacknowledged = codingWorkbenchRuntimeReducer(readyState(), {
       kind: "run-set",

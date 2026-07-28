@@ -315,7 +315,7 @@ function terminalSnapshotFromEvents(
     if (latest === undefined || event.revision >= latest.revision) latest = event;
   }
   if (latest === undefined) return null;
-  return {
+  const terminal = {
     ...current,
     state: latest.state,
     revision: latest.revision,
@@ -324,6 +324,8 @@ function terminalSnapshotFromEvents(
     failureCode: latest.failureCode,
     pendingPermission: undefined,
   };
+  delete terminal.recoveryAcknowledged;
+  return terminal;
 }
 
 function acceptEvents(
@@ -381,7 +383,8 @@ const runtimeActionHandlers = {
       ...state,
       mutation: { ...state.mutation, status: "error", error: action.error },
     }),
-  "events-received": (state, action) => acceptEvents(state, action.events),
+  "events-received": (state, action): CodingWorkbenchRuntimeState =>
+    acceptEvents(state, action.events),
   "events-reset": (state) => ({ ...state, events: [], stream: emptyResource() }),
 } satisfies RuntimeActionHandlers;
 
