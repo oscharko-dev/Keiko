@@ -3203,23 +3203,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   margin-left: auto;
   flex: 0 0 auto;
 }
-/* Active resting layout: the cluster sits as a balanced, vertically-centred control pair
-   inside the composer rather than pinned to the bottom edge. The footer grows by the same
-   amount the transparent input area shrinks, so the box height stays stable (no reflow)
-   while the cluster moves toward the optical centre of the aura. */
-.cmp-box-voice-dialog .cmp-footer-row {
-  justify-content: center;
-  align-items: center;
-  flex-direction: row;
-  min-height: 64px;
-  padding-top: 0;
-  border-top: none;
-  transition:
-    min-height 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    justify-content 360ms ease,
-    padding-top 260ms ease,
-    border-color 220ms ease;
-}
 .cmp-bar-voice-dialog {
   flex: 1 1 auto;
   justify-content: center;

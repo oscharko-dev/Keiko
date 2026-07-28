@@ -1,18 +1,33 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "postCssSha256": "715f9e6019b53e74752849b959849fefe9ce262cbc43ff3d310e29fa22a25d6a",
-  "renderedCssBundleSha256": "def4d140303091fa8847d547a44563502d7ee027de550e70ae23ac13e87234bc",
+  "postCssSha256": "416783ba19cc77a3f5754d62093cffd250724211fe126d8785faa7466d3af68d",
+  "renderedCssBundleSha256": "863f64c78859512959f38065be7369ab575a8bc4164d9c9f6257c51a049296bd",
   "appPath": "packages/keiko-ui/out",
   "route": "/",
   "shotCount": 108,
-  "modes": ["dark", "light", "dark-hc", "light-hc", "reduced-motion", "forced-colors"],
-  "viewports": ["desktop", "tablet", "mobile"],
+  "modes": [
+    "dark",
+    "light",
+    "dark-hc",
+    "light-hc",
+    "reduced-motion",
+    "forced-colors"
+  ],
+  "viewports": [
+    "desktop",
+    "tablet",
+    "mobile"
+  ],
   "scenarios": [
     {
       "id": "shell",
       "description": "empty workspace shell",
-      "requiredSelectors": [".header", ".workspace", ".stage"]
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ]
     },
     {
       "id": "workspace-chat-quality",
@@ -79,7 +94,11 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "dark",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -224,7 +243,11 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "light",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
@@ -369,7 +392,11 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "dark-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -514,7 +541,11 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "light-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
@@ -659,7 +690,11 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "reduced-motion",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -804,7 +839,11 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "forced-colors",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -949,7 +988,11 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "dark",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -1094,7 +1137,11 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "light",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
@@ -1239,7 +1286,11 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "dark-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -1384,7 +1435,11 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "light-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
@@ -1529,7 +1584,11 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "reduced-motion",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -1674,7 +1733,11 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "forced-colors",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -1819,7 +1882,11 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "dark",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -1964,7 +2031,11 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "light",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
@@ -2109,7 +2180,11 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "dark-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -2254,7 +2329,11 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "light-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
@@ -2399,7 +2478,11 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "reduced-motion",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
@@ -2544,7 +2627,11 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "forced-colors",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,

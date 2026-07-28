@@ -2522,7 +2522,7 @@ describe("Issue #1292 — new Tier-1 primitives across every mode", () => {
 });
 
 describe("Issue #1292 — full [data-hc] hook (previously editor-only)", () => {
-  it("steps the complete product and editor palette in one in-app [data-hc] rule", () => {
+  it("steps the complete product and editor palette in one in-app [data-hc] rule", (): void => {
     const block = cssRule('[data-hc="more"] {');
     expect(block).toContain("--bg: oklch(0.11 0.004 160)");
     expect(block).toContain("--line: oklch(0.62 0.006 160)");
@@ -2544,7 +2544,7 @@ describe("Issue #1292 — full [data-hc] hook (previously editor-only)", () => {
     expect(block).toContain("--ed-fg: #000000");
   });
 
-  it("keeps each product-wide theme selector in one canonical top-level rule", () => {
+  it("keeps each product-wide theme selector in one canonical top-level rule", (): void => {
     expect(css.match(/^:root \{$/gm)).toHaveLength(1);
     expect(css.match(/^\[data-theme="light"\] \{$/gm)).toHaveLength(1);
     expect(css.match(/^\[data-hc="more"\] \{$/gm)).toHaveLength(1);
@@ -2678,7 +2678,7 @@ describe("Issue #1292 — design-system token drift gate", () => {
 });
 
 describe("Issue #2798 — consolidated selector behavior", () => {
-  it("keeps the CTA border-color transition out of the later generic tool override", () => {
+  it("keeps the CTA border-color transition out of the later generic tool override", (): void => {
     const cta = cssBlock(".hd-tool-cta {");
     expect(cta).toContain("border-color var(--dur-fast)");
     expect(css).toContain(".hd-tool:not(.hd-tool-cta),");
@@ -3211,7 +3211,7 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
     expect(markdownRoot).toContain("overflow-wrap: anywhere");
   });
 
-  it("uses the standards-based emergency-wrap pair on every long-content surface", () => {
+  it("uses the standards-based emergency-wrap pair on every long-content surface", (): void => {
     for (const selector of [
       ".chat-msg-bubble",
       ".mc-meta-value",

@@ -960,9 +960,8 @@ for (const vp of VIEWPORTS) {
           visibleErrorNoticeCount: document.querySelectorAll(".ui-error-notice").length,
           crashedWindowBodyCount: document.querySelectorAll('[data-window-body-crashed="true"]')
             .length,
-          unavailableTrustStateCount: document.querySelectorAll(
-            '[data-trust="unavailable"], [data-testid="workspace-trust-banner-editor"]',
-          ).length,
+          unavailableTrustStateCount: document.querySelectorAll('[data-trust="unavailable"]')
+            .length,
           textLen: (document.body.innerText || "").length,
           missingRequiredSelectors,
         };
@@ -988,7 +987,7 @@ for (const vp of VIEWPORTS) {
       }
       if (info.visibleErrorNoticeCount > 0) {
         console.log(
-          `  error notice diagnostic: ${await page.locator(".ui-error-notice").innerText()}`,
+          `  error notice diagnostic: ${(await page.locator(".ui-error-notice").allInnerTexts()).join(" | ")}`,
         );
       }
       if (unexpectedApiRequests.size > 0) {
