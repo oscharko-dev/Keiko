@@ -73,6 +73,14 @@ describe("collectImportSpecifiers", () => {
     ]);
   });
 
+  it("reports the export keyword line after leading blank lines", () => {
+    const hits = collectImportSpecifiers('\n\nexport * from "./feature";');
+
+    expect(hits.map((hit) => [hit.kind, hit.specifier, hit.line])).toEqual([
+      ["re-export", "./feature", 3],
+    ]);
+  });
+
   it("rejects a long blank-line run in linear time (S8786 re-export regression)", () => {
     const adversarial = "\n".repeat(80_000);
     const startedAtMs = Date.now();

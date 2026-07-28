@@ -348,6 +348,21 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     expect(result.ingestedAtoms[0]?.canonicalText.includes("IBAN muss geprüft")).toBe(true);
   });
 
+  it("rejects a runtime-null document extractor result with a controlled error", () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "spec.pdf", "%PDF-1.7 binary-ish");
+    try {
+      ingest({
+        ...input([fileSource("PDF", path)]),
+        documentTextExtractor: () => null as unknown as string,
+      });
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiIngestionError);
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+    }
+  });
+
   it("awaits an async PDF extractor and passes parser budgets", async () => {
     const dir = makeDir();
     const path = writeFile(dir, "spec.pdf", "%PDF-1.7 binary-ish");

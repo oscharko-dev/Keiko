@@ -670,7 +670,7 @@ function extractedSingleFileText(
 ): string {
   if (!BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile)) return decodedText;
   if (extractor === undefined) throw unsupportedDocumentTextError(absFile, label);
-  const extracted = extractor({
+  const extracted: unknown = extractor({
     path: absFile,
     label,
     format: documentFormatKind(absFile),
@@ -679,7 +679,7 @@ function extractedSingleFileText(
     maxExtractedBytes: byteBudget,
     ...(signal === undefined ? {} : { signal }),
   });
-  if (typeof extracted === "object" && "then" in extracted) {
+  if (typeof extracted === "object" && extracted !== null && "then" in extracted) {
     throw unsupportedDocumentTextError(absFile, label);
   }
   const safeText = redact(stripUnsafeFormatChars(typeof extracted === "string" ? extracted : ""));

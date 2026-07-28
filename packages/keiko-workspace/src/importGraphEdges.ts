@@ -225,14 +225,6 @@ function lineNumberOf(text: string, charIndex: number): number {
   return line;
 }
 
-function reexportMatchStart(text: string, exportLineStart: number): number {
-  let cursor = exportLineStart - 1;
-  while (cursor >= 0 && /\s/u.test(text.charAt(cursor))) cursor -= 1;
-  if (cursor < 0) return 0;
-  const nextLineStart = text.indexOf("\n", cursor + 1);
-  return nextLineStart === -1 ? exportLineStart : nextLineStart + 1;
-}
-
 function collectEsmStaticImports(text: string, hits: ImportSpecifierHit[]): void {
   ESM_IMPORT_KEYWORD.lastIndex = 0;
   let match: RegExpExecArray | null = ESM_IMPORT_KEYWORD.exec(text);
@@ -262,7 +254,7 @@ function collectEsmReexports(text: string, hits: ImportSpecifierHit[]): void {
       hits.push({
         specifier,
         kind: "re-export",
-        line: lineNumberOf(text, reexportMatchStart(text, match.index)),
+        line: lineNumberOf(text, match.index),
         ordinal: hits.length,
       });
     }
