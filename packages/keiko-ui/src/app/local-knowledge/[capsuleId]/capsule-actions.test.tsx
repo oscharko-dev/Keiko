@@ -176,6 +176,30 @@ describe("CapsuleActions — connect source", () => {
     expect(onActionComplete).toHaveBeenCalledOnce();
   });
 
+  it("sends an optional explicit source display name", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
+
+    await user.type(screen.getByLabelText(/source path/i), "/docs/manuals");
+    await user.type(
+      screen.getByLabelText(/display name \(optional\)/i),
+      "Engineering Manuals{enter}",
+    );
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(
+        DEFAULT_ID,
+        {
+          kind: "folder",
+          rootPath: "/docs/manuals",
+          recursive: true,
+        },
+        "Engineering Manuals",
+      );
+    });
+  });
+
   it("builds a file-list source when relative document paths are provided", async () => {
     const user = userEvent.setup();
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);

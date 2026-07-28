@@ -133,6 +133,8 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.detail.connect.filter.sourceCode": "Source code",
   "localKnowledge.detail.connect.filter.configuration": "Configuration files",
   "localKnowledge.detail.connect.sourcePath": "Source path",
+  "localKnowledge.detail.connect.displayName": "Display name (optional)",
+  "localKnowledge.detail.connect.displayNamePlaceholder": "Derived safely from the selected source",
   "localKnowledge.detail.connect.specificFiles": "Index only specific documents",
   "localKnowledge.detail.connect.relativeFiles": "Relative document paths",
   "localKnowledge.detail.connect.selectedSource": "Selected source: {path}",
@@ -149,6 +151,8 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
     "A Knowledge source is the material Keiko may search for this Knowledge Pod. Connect a folder for a collection or documents for targeted additions.",
   "localKnowledge.detail.help.sourcePath":
     "This path tells Keiko where the selected source is stored on this device. Keiko indexes only the connected source.",
+  "localKnowledge.detail.help.sourceDisplayName":
+    "Optionally choose a name shown for this source. If left empty, Keiko derives a safe name from the selected source.",
   "localKnowledge.detail.help.specificFiles":
     "Use this when only certain documents inside a folder should belong to the Knowledge Pod. Each line is one document below the source path.",
   "localKnowledge.detail.help.repositoryMode":
@@ -597,6 +601,9 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.connect.filter.sourceCode": "Quellcode",
   "localKnowledge.detail.connect.filter.configuration": "Konfigurationsdateien",
   "localKnowledge.detail.connect.sourcePath": "Quellpfad",
+  "localKnowledge.detail.connect.displayName": "Anzeigename (optional)",
+  "localKnowledge.detail.connect.displayNamePlaceholder":
+    "Wird sicher aus der ausgewählten Quelle abgeleitet",
   "localKnowledge.detail.connect.specificFiles": "Nur bestimmte Dokumente indexieren",
   "localKnowledge.detail.connect.relativeFiles": "Relative Dokumentpfade",
   "localKnowledge.detail.connect.selectedSource": "Ausgewählte Knowledgequelle: {path}",
@@ -613,6 +620,8 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Eine Knowledgequelle ist das Material, das Keiko für diesen Knowledge Pod durchsuchen darf. Verbinde einen Ordner für eine Sammlung oder einzelne Dokumente für gezielte Ergänzungen.",
   "localKnowledge.detail.help.sourcePath":
     "Dieser Pfad zeigt Keiko, wo die ausgewählte Quelle auf diesem Gerät liegt. Keiko indexiert nur die verbundene Quelle.",
+  "localKnowledge.detail.help.sourceDisplayName":
+    "Lege optional einen Namen für diese Quelle fest. Ohne Eingabe leitet Keiko einen sicheren Namen aus der ausgewählten Quelle ab.",
   "localKnowledge.detail.help.specificFiles":
     "Nutze das, wenn aus einem Ordner nur bestimmte Dokumente in den Knowledge Pod sollen. Jede Zeile steht für ein Dokument unterhalb des Quellpfads.",
   "localKnowledge.detail.help.repositoryMode":

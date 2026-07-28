@@ -326,6 +326,7 @@ function ConnectSourceForm({
   const t = useTranslate();
   const locale = useLocale();
   const [rootPath, setRootPath] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [filesInput, setFilesInput] = useState("");
   const [specificFilesExpanded, setSpecificFilesExpanded] = useState(false);
   const [repositoryMode, setRepositoryMode] = useState(false);
@@ -402,8 +403,14 @@ function ConnectSourceForm({
     setBusy(true);
     setConnectError(null);
     try {
-      await connectImpl(capsuleId, scope);
+      const explicitDisplayName = displayName.trim();
+      if (explicitDisplayName === "") {
+        await connectImpl(capsuleId, scope);
+      } else {
+        await connectImpl(capsuleId, scope, explicitDisplayName);
+      }
       setRootPath("");
+      setDisplayName("");
       setFilesInput("");
       setSpecificFilesExpanded(false);
       setRepositoryMode(false);
@@ -500,6 +507,26 @@ function ConnectSourceForm({
               : t("localKnowledge.detail.connect.connect")}
           </button>
         </div>
+      </div>
+      <div className="lkd-connect-row">
+        <label htmlFor="lkd-connect-display-name-input" className="dlg-label">
+          <Explainable description={t("localKnowledge.detail.help.sourceDisplayName")}>
+            {t("localKnowledge.detail.connect.displayName")}
+          </Explainable>
+        </label>
+        <input
+          id="lkd-connect-display-name-input"
+          type="text"
+          className="dlg-input lkd-connect-input"
+          value={displayName}
+          disabled={busy}
+          placeholder={t("localKnowledge.detail.connect.displayNamePlaceholder")}
+          autoComplete="off"
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setDisplayName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void handleConnect();
+          }}
+        />
       </div>
       <div className="lkd-connect-row">
         <label htmlFor="lkd-connect-repository-toggle" className="dlg-label">

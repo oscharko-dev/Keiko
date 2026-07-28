@@ -70,6 +70,7 @@ import {
   isKnowledgePodEvidenceSafeText,
   isSafeQualityWarning,
   standardPodModelUsePolicy,
+  stripUnsafeFormatChars,
   validateCapsuleContextualRetrievalSettings,
   validateCapsuleReindexRequest,
   validateKnowledgePodModelUsePolicy,
@@ -2693,6 +2694,24 @@ function connectScopeRootPath(scope: KnowledgeSourceScope): string {
   return scope.kind === "folder" || scope.kind === "files" ? scope.rootPath : scope.repositoryRoot;
 }
 
+const DERIVED_SOURCE_DISPLAY_NAME_MAX_CHARS = 100;
+const DERIVED_SOURCE_DISPLAY_NAME_FALLBACK = "Knowledge Source";
+
+function boundDerivedSourceDisplayName(value: string): string {
+  return Array.from(value).slice(0, DERIVED_SOURCE_DISPLAY_NAME_MAX_CHARS).join("").trim();
+}
+
+function derivedSourceDisplayName(scope: KnowledgeSourceScope): string {
+  const raw = basename(connectScopeRootPath(scope)).normalize("NFKC");
+  if (stripUnsafeFormatChars(raw) !== raw) return DERIVED_SOURCE_DISPLAY_NAME_FALLBACK;
+  const normalized = raw.replaceAll(".", " ").replace(/\s+/gu, " ").trim();
+  if (!isKnowledgePodEvidenceSafeText(normalized)) {
+    return DERIVED_SOURCE_DISPLAY_NAME_FALLBACK;
+  }
+  const bounded = boundDerivedSourceDisplayName(normalized);
+  return isKnowledgePodEvidenceSafeText(bounded) ? bounded : DERIVED_SOURCE_DISPLAY_NAME_FALLBACK;
+}
+
 function parseConnectSourceInput(body: Record<string, unknown>): {
   readonly scope: KnowledgeSourceScope;
   readonly displayName: string;
@@ -2703,15 +2722,11 @@ function parseConnectSourceInput(body: Record<string, unknown>): {
   }
   const scope = scopeRaw as KnowledgeSourceScope;
   assertScopeShape(scope);
-  const displayNameRaw = body.displayName;
-  const displayName =
-    typeof displayNameRaw === "string" && displayNameRaw.trim().length > 0
-      ? requireSafeDisplayText("displayName", displayNameRaw)
-      : basename(connectScopeRootPath(scope));
-  if (!isKnowledgePodEvidenceSafeText(displayName)) {
-    throw new InvalidRequest('Field "displayName" must be evidence-safe when provided.');
-  }
-  return { scope, displayName };
+  const explicitDisplayName = safeOptionalDisplayText("displayName", body.displayName);
+  return {
+    scope,
+    displayName: explicitDisplayName ?? derivedSourceDisplayName(scope),
+  };
 }
 
 function parseRebindSourceInput(body: Record<string, unknown>): string {
