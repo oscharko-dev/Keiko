@@ -43,6 +43,10 @@ describe("Workspace Trust governance surfaces", () => {
     );
 
     expect(screen.getByText("Workspace Trust unavailable")).toBeVisible();
+    expect(screen.getByTestId("workspace-trust-banner-commands")).toHaveAttribute(
+      "data-trust",
+      "unavailable",
+    );
     expect(screen.getByTestId("workspace-trust-banner-commands")).toHaveTextContent(
       "Workspace Trust could not be read safely.",
     );
@@ -79,6 +83,7 @@ describe("Workspace Trust governance surfaces", () => {
     );
 
     const banner = screen.getByTestId("workspace-trust-banner-editor");
+    expect(banner).toHaveAttribute("data-trust", "trusted");
     expect(banner).toHaveTextContent("This workspace remains trusted.");
     expect(banner).not.toHaveTextContent("This workspace remains restricted.");
     expect(screen.getByRole("alert")).toBeVisible();
@@ -140,6 +145,10 @@ describe("Workspace Trust governance surfaces", () => {
     );
 
     expect(screen.getByText("Trust expired because the workspace manifest changed.")).toBeVisible();
+    expect(screen.getByTestId("workspace-trust-banner-editor")).toHaveAttribute(
+      "data-trust",
+      "restricted",
+    );
     await user.click(screen.getByRole("button", { name: "Manage Workspace Trust" }));
     expect(onManage).toHaveBeenCalledOnce();
     expect(await axe(container)).toHaveNoViolations();

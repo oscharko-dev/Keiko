@@ -91,9 +91,8 @@
   --font-ui:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
 
-/* ============================================================
+  /* ============================================================
    DESIGN-SYSTEM TOKEN TIERS 2–4 (#1292) — scales · semantic · component
    ------------------------------------------------------------
    SOURCE OF TRUTH: this file (globals.css) is the single emitted stylesheet
@@ -115,7 +114,6 @@
    against design-system/keiko-semantic-tokens.css as a drift gate; adding a
    second :root token source (a parallel namespace) is forbidden by the epic
    reuse gate. ============================================================ */
-:root {
   /* ── SCALE · SPACING — 2-based rhythm, mode-independent ── */
   --space-0: 0;
   --space-1: 2px;
@@ -434,6 +432,147 @@
   --viz-seq-5: oklch(0.78 0.13 160);
   --viz-grid: var(--border-subtle);
   --viz-axis: var(--text-faint);
+
+  /* Single-source HC palettes — the OS media query and explicit in-app attribute
+   below both promote these same primitives, matching the design-system mirror. */
+  --hc-d-bg: oklch(0.11 0.004 160);
+  --hc-d-surface: oklch(0.145 0.004 160);
+  --hc-d-card: oklch(0.185 0.004 160);
+  --hc-d-card-2: oklch(0.225 0.004 160);
+  --hc-d-inset: oklch(0.09 0.004 160);
+  --hc-d-line: oklch(0.62 0.006 160);
+  --hc-d-line-soft: oklch(0.5 0.005 160);
+  --hc-d-line-strong: oklch(0.74 0.006 160);
+  --hc-d-grid-dot: oklch(0.52 0.006 160);
+  --hc-d-fg: oklch(1 0 0);
+  --hc-d-fg-muted: oklch(0.88 0.004 160);
+  --hc-d-fg-dim: oklch(0.84 0.004 160);
+  --hc-d-fg-faint: oklch(0.82 0.004 160);
+  --hc-d-accent-bright: oklch(0.88 0.15 160);
+  --hc-d-accent-text: oklch(0.86 0.16 160);
+  --hc-d-accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
+  --hc-d-accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
+  --hc-d-accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
+  --hc-d-warn: oklch(0.88 0.14 80);
+  --hc-d-danger: oklch(0.78 0.17 25);
+  --hc-d-ok: oklch(0.82 0.15 146);
+  --hc-d-info: oklch(0.84 0.12 240);
+  --hc-d-shadow-card: 0 0 0 1px var(--hc-d-line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  --hc-d-shadow-pop: 0 0 0 1px var(--hc-d-line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
+
+  --hc-l-bg: oklch(1 0 0);
+  --hc-l-surface: oklch(0.99 0.002 160);
+  --hc-l-card: oklch(1 0 0);
+  --hc-l-card-2: oklch(0.965 0.004 160);
+  --hc-l-inset: oklch(0.95 0.004 160);
+  --hc-l-line: oklch(0.45 0.008 160);
+  --hc-l-line-soft: oklch(0.6 0.006 160);
+  --hc-l-line-strong: oklch(0.35 0.01 160);
+  --hc-l-grid-dot: oklch(0.6 0.01 160);
+  --hc-l-fg: oklch(0.13 0.01 160);
+  --hc-l-fg-muted: oklch(0.3 0.012 160);
+  --hc-l-fg-dim: oklch(0.34 0.012 160);
+  --hc-l-fg-faint: oklch(0.36 0.012 160);
+  --hc-l-accent-text: oklch(0.42 0.14 160);
+  --hc-l-accent-bright: oklch(0.42 0.14 160);
+  --hc-l-accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
+  --hc-l-accent-line: color-mix(in oklch, var(--hc-l-accent-text) 78%, transparent);
+  --hc-l-accent-glow: color-mix(in oklch, var(--hc-l-accent-text) 32%, transparent);
+  --hc-l-danger: oklch(0.42 0.19 25);
+  --hc-l-warn: oklch(0.38 0.14 75);
+  --hc-l-info: oklch(0.4 0.16 240);
+  --hc-l-ok: oklch(0.4 0.14 146);
+  --hc-l-shadow-card: 0 0 0 1px var(--hc-l-line-strong);
+  --hc-l-shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--hc-l-line-strong);
+
+  /* ============================================================
+   Editor theme tokens (#1212) — consumed by the Keiko Editor Monaco runtime (#1193).
+   Lifted from design/keiko-editor-tokens.css; EXTENDS the base palette (does not fork it):
+   editor chrome reuses --bg/--fg/--danger/--warn/--info, and only the syntax palette plus the
+   editor-specific chrome/diff/ghost-text are net-new. Surfaced here so the --ed-* / --ed-syn-*
+   custom properties resolve at runtime when the editor mounts (host integration, #1194); the
+   Monaco theme reads them via getComputedStyle and embeds no colour literals. Dark is the default;
+   the light and high-contrast variants follow the source. High contrast is exposed both through
+   prefers-contrast and [data-hc="more"], matching the design-system source.
+   ============================================================ */
+  /* editor surface (reuses the inset tone as the code well) */
+  --ed-bg: oklch(0.16 0.004 160);
+  --ed-bg-gutter: oklch(0.16 0.004 160);
+  --ed-fg: #c5cdd9;
+  /* syntax palette — TS/JS first, semantic types reused by all languages */
+  --ed-syn-comment: #7d8ba5;
+  --ed-syn-string: #c3e88d;
+  --ed-syn-number: #f78c6c;
+  --ed-syn-constant: #f78c6c;
+  --ed-syn-keyword: #c792ea;
+  --ed-syn-type: #ffcb6b;
+  --ed-syn-function: #82aaff;
+  --ed-syn-property: #80cbc4;
+  --ed-syn-variable: #c5cdd9;
+  --ed-syn-operator: #89ddff;
+  --ed-syn-punct: #89ddff;
+  --ed-syn-regexp: #e9a3a3;
+  /* editor chrome */
+  --ed-gutter-fg: color-mix(in oklch, var(--fg) 38%, transparent);
+  --ed-gutter-fg-active: var(--fg-muted);
+  --ed-line-active: color-mix(in oklch, var(--fg) 5%, transparent);
+  --ed-cursor: var(--fg);
+  --ed-selection: color-mix(in oklch, var(--accent) 26%, transparent);
+  --ed-selection-blur: color-mix(in oklch, var(--fg) 13%, transparent);
+  --ed-find-match: color-mix(in oklch, var(--warn) 34%, transparent);
+  --ed-find-match-active: color-mix(in oklch, var(--warn) 60%, transparent);
+  --ed-bracket-match: var(--accent-line);
+  --ed-indent-guide: var(--line-soft);
+  --ed-indent-guide-active: var(--line-strong);
+  --ed-whitespace: color-mix(in oklch, var(--fg) 22%, transparent);
+  /* focus ring / keyboard-visible chrome — two-tone ring (#1212 final, #1232) */
+  --ed-focus: var(--accent-text);
+  --ed-focus-inner: var(--ed-bg);
+  /* diff (patch-review surface) */
+  --ed-diff-ins-line: color-mix(in oklch, oklch(0.72 0.16 150) 15%, transparent);
+  --ed-diff-ins-text: color-mix(in oklch, oklch(0.72 0.16 150) 30%, transparent);
+  --ed-diff-rem-line: color-mix(in oklch, var(--danger) 15%, transparent);
+  --ed-diff-rem-text: color-mix(in oklch, var(--danger) 30%, transparent);
+  --ed-diff-ins-gutter: oklch(0.72 0.13 150);
+  --ed-diff-rem-gutter: var(--danger);
+  /* changed / word-diff middle state — info hue, distinct from ins/rem (#1232) */
+  --ed-diff-chg-line: color-mix(in oklch, var(--info) 13%, transparent);
+  --ed-diff-chg-text: color-mix(in oklch, var(--info) 26%, transparent);
+  --ed-diff-chg-gutter: var(--info);
+  /* diagnostics (map straight onto the status palette) */
+  --ed-error: var(--danger);
+  --ed-warn: var(--warn);
+  --ed-info: var(--info);
+  --ed-hint: var(--fg-faint);
+  --ed-error-bg: color-mix(in oklch, var(--danger) 12%, transparent);
+  --ed-warn-bg: color-mix(in oklch, var(--warn) 12%, transparent);
+  /* inline ghost text / AI suggestion + suggest widget */
+  --ed-ghost: var(--fg-dim);
+  --ed-suggest-bg: var(--card);
+  --ed-suggest-sel: var(--accent-dim);
+  --ed-suggest-match: var(--accent-text);
+  /* agent-in-editor surfaces (editor-agent.html) */
+  --ed-agent-line: color-mix(in oklch, var(--accent) 12%, transparent);
+  --ed-agent-gutter: var(--accent-text);
+  --ed-agent-ghost: var(--ed-ghost);
+  --ed-agent-accept: var(--ed-diff-ins-gutter);
+  --ed-agent-reject: var(--danger);
+  --ed-agent-chip-bg: var(--accent-dim);
+  --ed-agent-chip-line: var(--accent-line);
+  /* editor card: tabs, status bar, minimap */
+  --ed-tab-bg: var(--surface);
+  --ed-tab-active-bg: var(--ed-bg);
+  --ed-tab-active-fg: var(--fg);
+  --ed-tab-inactive-fg: var(--fg-faint);
+  --ed-tab-accent: var(--accent);
+  --ed-statusbar-bg: var(--surface);
+  --ed-statusbar-fg: var(--fg-muted);
+  --ed-statusbar-accent: var(--accent-text);
+  --ed-minimap-bg: var(--ed-bg);
+  --ed-minimap-slider: color-mix(in oklch, var(--fg) 10%, transparent);
+  --ed-scrollbar-track: transparent;
+  --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 30%, transparent);
+  --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 44%, transparent);
 }
 
 [data-density="compact"] {
@@ -1028,217 +1167,6 @@ button {
   --viz-seq-3: oklch(0.68 0.11 160);
   --viz-seq-4: oklch(0.56 0.12 160);
   --viz-seq-5: oklch(0.46 0.13 160);
-}
-
-/* Single-source HC palettes — the OS media query and explicit in-app attribute
-   below both promote these same primitives, matching the design-system mirror. */
-:root {
-  --hc-d-bg: oklch(0.11 0.004 160);
-  --hc-d-surface: oklch(0.145 0.004 160);
-  --hc-d-card: oklch(0.185 0.004 160);
-  --hc-d-card-2: oklch(0.225 0.004 160);
-  --hc-d-inset: oklch(0.09 0.004 160);
-  --hc-d-line: oklch(0.62 0.006 160);
-  --hc-d-line-soft: oklch(0.5 0.005 160);
-  --hc-d-line-strong: oklch(0.74 0.006 160);
-  --hc-d-grid-dot: oklch(0.52 0.006 160);
-  --hc-d-fg: oklch(1 0 0);
-  --hc-d-fg-muted: oklch(0.88 0.004 160);
-  --hc-d-fg-dim: oklch(0.84 0.004 160);
-  --hc-d-fg-faint: oklch(0.82 0.004 160);
-  --hc-d-accent-bright: oklch(0.88 0.15 160);
-  --hc-d-accent-text: oklch(0.86 0.16 160);
-  --hc-d-accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
-  --hc-d-accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
-  --hc-d-accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
-  --hc-d-warn: oklch(0.88 0.14 80);
-  --hc-d-danger: oklch(0.78 0.17 25);
-  --hc-d-ok: oklch(0.82 0.15 146);
-  --hc-d-info: oklch(0.84 0.12 240);
-  --hc-d-shadow-card: 0 0 0 1px var(--hc-d-line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
-  --hc-d-shadow-pop: 0 0 0 1px var(--hc-d-line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
-
-  --hc-l-bg: oklch(1 0 0);
-  --hc-l-surface: oklch(0.99 0.002 160);
-  --hc-l-card: oklch(1 0 0);
-  --hc-l-card-2: oklch(0.965 0.004 160);
-  --hc-l-inset: oklch(0.95 0.004 160);
-  --hc-l-line: oklch(0.45 0.008 160);
-  --hc-l-line-soft: oklch(0.6 0.006 160);
-  --hc-l-line-strong: oklch(0.35 0.01 160);
-  --hc-l-grid-dot: oklch(0.6 0.01 160);
-  --hc-l-fg: oklch(0.13 0.01 160);
-  --hc-l-fg-muted: oklch(0.3 0.012 160);
-  --hc-l-fg-dim: oklch(0.34 0.012 160);
-  --hc-l-fg-faint: oklch(0.36 0.012 160);
-  --hc-l-accent-text: oklch(0.42 0.14 160);
-  --hc-l-accent-bright: oklch(0.42 0.14 160);
-  --hc-l-accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
-  --hc-l-accent-line: color-mix(in oklch, var(--hc-l-accent-text) 78%, transparent);
-  --hc-l-accent-glow: color-mix(in oklch, var(--hc-l-accent-text) 32%, transparent);
-  --hc-l-danger: oklch(0.42 0.19 25);
-  --hc-l-warn: oklch(0.38 0.14 75);
-  --hc-l-info: oklch(0.4 0.16 240);
-  --hc-l-ok: oklch(0.4 0.14 146);
-  --hc-l-shadow-card: 0 0 0 1px var(--hc-l-line-strong);
-  --hc-l-shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--hc-l-line-strong);
-}
-
-/* prefers-contrast: more — first-class High Contrast. Mirrors the full
-   design-system primitive palette so surfaces, text hierarchy, focus, shadows,
-   selection, and status colours inherit the governed HC values from one token
-   path. */
-/* prettier-ignore */
-@media (prefers-contrast: more) {
-  :root {
-    color-scheme: dark;
-    /* Raw HC smoke values: --bg: oklch(0.11 0.004 160); --fg: oklch(1 0 0); --accent-text: oklch(0.86 0.16 160); --shadow-card: 0 0 0 1px var(--line); --grid-dot: oklch(0.52 0.006 160). */
-    --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
-    --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
-    --focus-w: 3px;
-    --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
-    --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
-    --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
-    --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
-    --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
-  }
-  [data-theme="light"] {
-    color-scheme: light;
-    /* Raw light HC smoke values: --fg-faint: oklch(0.36 0.012 160); --grid-dot: oklch(0.6 0.01 160). */
-    --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
-    --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
-    --focus-w: 3px;
-    --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
-    --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
-    --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
-    --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
-    --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
-  }
-}
-
-/* Explicit in-app high-contrast override (#1292) — identical palettes, higher
-   specificity so a future in-app "High contrast" choice raises contrast even
-   when the OS has not asked. Today no in-app control sets [data-hc] on the
-   document (useTheme is light|dark only), so this remains inert at runtime
-   until a later issue wires the selector. */
-/* prettier-ignore */
-[data-hc="more"] {
-  color-scheme: dark;
-  /* Raw dark HC values: --bg: oklch(0.11 0.004 160); --line: oklch(0.62 0.006 160); --fg-faint: oklch(0.82 0.004 160); --warn: oklch(0.88 0.14 80); --grid-dot: oklch(0.52 0.006 160). */
-  --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
-  --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
-  --focus-w: 3px;
-  --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
-  --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
-  --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
-  --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
-  --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
-}
-/* prettier-ignore */
-[data-hc="more"][data-theme="light"] {
-  color-scheme: light;
-  /* Raw light HC values: --bg: oklch(1 0 0); --line: oklch(0.45 0.008 160); --fg-faint: oklch(0.36 0.012 160); --warn: oklch(0.38 0.14 75); --grid-dot: oklch(0.6 0.01 160). */
-  --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
-  --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
-  --focus-w: 3px;
-  --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
-  --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
-  --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
-  --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
-  --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
-}
-
-/* ============================================================
-   Editor theme tokens (#1212) — consumed by the Keiko Editor Monaco runtime (#1193).
-   Lifted from design/keiko-editor-tokens.css; EXTENDS the base palette (does not fork it):
-   editor chrome reuses --bg/--fg/--danger/--warn/--info, and only the syntax palette plus the
-   editor-specific chrome/diff/ghost-text are net-new. Surfaced here so the --ed-* / --ed-syn-*
-   custom properties resolve at runtime when the editor mounts (host integration, #1194); the
-   Monaco theme reads them via getComputedStyle and embeds no colour literals. Dark is the default;
-   the light and high-contrast variants follow the source. High contrast is exposed both through
-   prefers-contrast and [data-hc="more"], matching the design-system source.
-   ============================================================ */
-:root {
-  /* editor surface (reuses the inset tone as the code well) */
-  --ed-bg: oklch(0.16 0.004 160);
-  --ed-bg-gutter: oklch(0.16 0.004 160);
-  --ed-fg: #c5cdd9;
-  /* syntax palette — TS/JS first, semantic types reused by all languages */
-  --ed-syn-comment: #7d8ba5;
-  --ed-syn-string: #c3e88d;
-  --ed-syn-number: #f78c6c;
-  --ed-syn-constant: #f78c6c;
-  --ed-syn-keyword: #c792ea;
-  --ed-syn-type: #ffcb6b;
-  --ed-syn-function: #82aaff;
-  --ed-syn-property: #80cbc4;
-  --ed-syn-variable: #c5cdd9;
-  --ed-syn-operator: #89ddff;
-  --ed-syn-punct: #89ddff;
-  --ed-syn-regexp: #e9a3a3;
-  /* editor chrome */
-  --ed-gutter-fg: color-mix(in oklch, var(--fg) 38%, transparent);
-  --ed-gutter-fg-active: var(--fg-muted);
-  --ed-line-active: color-mix(in oklch, var(--fg) 5%, transparent);
-  --ed-cursor: var(--fg);
-  --ed-selection: color-mix(in oklch, var(--accent) 26%, transparent);
-  --ed-selection-blur: color-mix(in oklch, var(--fg) 13%, transparent);
-  --ed-find-match: color-mix(in oklch, var(--warn) 34%, transparent);
-  --ed-find-match-active: color-mix(in oklch, var(--warn) 60%, transparent);
-  --ed-bracket-match: var(--accent-line);
-  --ed-indent-guide: var(--line-soft);
-  --ed-indent-guide-active: var(--line-strong);
-  --ed-whitespace: color-mix(in oklch, var(--fg) 22%, transparent);
-  /* focus ring / keyboard-visible chrome — two-tone ring (#1212 final, #1232) */
-  --ed-focus: var(--accent-text);
-  --ed-focus-inner: var(--ed-bg);
-  /* diff (patch-review surface) */
-  --ed-diff-ins-line: color-mix(in oklch, oklch(0.72 0.16 150) 15%, transparent);
-  --ed-diff-ins-text: color-mix(in oklch, oklch(0.72 0.16 150) 30%, transparent);
-  --ed-diff-rem-line: color-mix(in oklch, var(--danger) 15%, transparent);
-  --ed-diff-rem-text: color-mix(in oklch, var(--danger) 30%, transparent);
-  --ed-diff-ins-gutter: oklch(0.72 0.13 150);
-  --ed-diff-rem-gutter: var(--danger);
-  /* changed / word-diff middle state — info hue, distinct from ins/rem (#1232) */
-  --ed-diff-chg-line: color-mix(in oklch, var(--info) 13%, transparent);
-  --ed-diff-chg-text: color-mix(in oklch, var(--info) 26%, transparent);
-  --ed-diff-chg-gutter: var(--info);
-  /* diagnostics (map straight onto the status palette) */
-  --ed-error: var(--danger);
-  --ed-warn: var(--warn);
-  --ed-info: var(--info);
-  --ed-hint: var(--fg-faint);
-  --ed-error-bg: color-mix(in oklch, var(--danger) 12%, transparent);
-  --ed-warn-bg: color-mix(in oklch, var(--warn) 12%, transparent);
-  /* inline ghost text / AI suggestion + suggest widget */
-  --ed-ghost: var(--fg-dim);
-  --ed-suggest-bg: var(--card);
-  --ed-suggest-sel: var(--accent-dim);
-  --ed-suggest-match: var(--accent-text);
-  /* agent-in-editor surfaces (editor-agent.html) */
-  --ed-agent-line: color-mix(in oklch, var(--accent) 12%, transparent);
-  --ed-agent-gutter: var(--accent-text);
-  --ed-agent-ghost: var(--ed-ghost);
-  --ed-agent-accept: var(--ed-diff-ins-gutter);
-  --ed-agent-reject: var(--danger);
-  --ed-agent-chip-bg: var(--accent-dim);
-  --ed-agent-chip-line: var(--accent-line);
-  /* editor card: tabs, status bar, minimap */
-  --ed-tab-bg: var(--surface);
-  --ed-tab-active-bg: var(--ed-bg);
-  --ed-tab-active-fg: var(--fg);
-  --ed-tab-inactive-fg: var(--fg-faint);
-  --ed-tab-accent: var(--accent);
-  --ed-statusbar-bg: var(--surface);
-  --ed-statusbar-fg: var(--fg-muted);
-  --ed-statusbar-accent: var(--accent-text);
-  --ed-minimap-bg: var(--ed-bg);
-  --ed-minimap-slider: color-mix(in oklch, var(--fg) 10%, transparent);
-  --ed-scrollbar-track: transparent;
-  --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 30%, transparent);
-  --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 44%, transparent);
-}
-[data-theme="light"] {
   --ed-bg: oklch(0.985 0.003 160);
   --ed-bg-gutter: oklch(0.985 0.003 160);
   --ed-fg: #2b3440;
@@ -1268,8 +1196,24 @@ button {
   /* darkened so ghost text clears the 4.5:1 floor on the near-white well (#1232) */
   --ed-ghost: oklch(0.55 0.02 160);
 }
+
+/* prefers-contrast: more — first-class High Contrast. Mirrors the full
+   design-system primitive palette so surfaces, text hierarchy, focus, shadows,
+   selection, and status colours inherit the governed HC values from one token
+   path. */
+/* prettier-ignore */
 @media (prefers-contrast: more) {
   :root {
+    color-scheme: dark;
+    /* Raw HC smoke values: --bg: oklch(0.11 0.004 160); --fg: oklch(1 0 0); --accent-text: oklch(0.86 0.16 160); --shadow-card: 0 0 0 1px var(--line); --grid-dot: oklch(0.52 0.006 160). */
+    --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
+    --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
+    --focus-w: 3px;
+    --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
+    --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
+    --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
+    --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
+    --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
     --ed-bg: oklch(0.07 0.004 160);
     --ed-bg-gutter: oklch(0.07 0.004 160);
     --ed-fg: #ffffff;
@@ -1294,6 +1238,16 @@ button {
     --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 68%, transparent);
   }
   [data-theme="light"] {
+    color-scheme: light;
+    /* Raw light HC smoke values: --fg-faint: oklch(0.36 0.012 160); --grid-dot: oklch(0.6 0.01 160). */
+    --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
+    --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
+    --focus-w: 3px;
+    --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
+    --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
+    --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
+    --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
+    --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
     --ed-bg: oklch(1 0 0);
     --ed-bg-gutter: oklch(1 0 0);
     --ed-fg: #000000;
@@ -1314,8 +1268,33 @@ button {
     --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 48%, transparent);
     --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 62%, transparent);
   }
+  .rb-edge-badge-btn,
+  .rb-edge-badge-static {
+    background: var(--button-secondary-surface) !important;
+  }
+  .rb-edge-badge-icon {
+    transform: scale(1.1);
+    transform-origin: center;
+  }
 }
+
+/* Explicit in-app high-contrast override (#1292) — identical palettes, higher
+   specificity so a future in-app "High contrast" choice raises contrast even
+   when the OS has not asked. Today no in-app control sets [data-hc] on the
+   document (useTheme is light|dark only), so this remains inert at runtime
+   until a later issue wires the selector. */
+/* prettier-ignore */
 [data-hc="more"] {
+  color-scheme: dark;
+  /* Raw dark HC values: --bg: oklch(0.11 0.004 160); --line: oklch(0.62 0.006 160); --fg-faint: oklch(0.82 0.004 160); --warn: oklch(0.88 0.14 80); --grid-dot: oklch(0.52 0.006 160). */
+  --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
+  --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
+  --focus-w: 3px;
+  --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
+  --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
+  --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
+  --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
+  --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
   --ed-bg: oklch(0.07 0.004 160);
   --ed-bg-gutter: oklch(0.07 0.004 160);
   --ed-fg: #ffffff;
@@ -1339,7 +1318,18 @@ button {
   --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 52%, transparent);
   --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 68%, transparent);
 }
+/* prettier-ignore */
 [data-hc="more"][data-theme="light"] {
+  color-scheme: light;
+  /* Raw light HC values: --bg: oklch(1 0 0); --line: oklch(0.45 0.008 160); --fg-faint: oklch(0.36 0.012 160); --warn: oklch(0.38 0.14 75); --grid-dot: oklch(0.6 0.01 160). */
+  --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
+  --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
+  --focus-w: 3px;
+  --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
+  --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
+  --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
+  --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
+  --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
   --ed-bg: oklch(1 0 0);
   --ed-bg-gutter: oklch(1 0 0);
   --ed-fg: #000000;
@@ -1792,6 +1782,7 @@ button {
   align-items: center;
   gap: var(--space-2);
   margin-left: var(--space-1);
+  min-width: 0;
 }
 .tb-tab {
   display: flex;
@@ -1802,6 +1793,8 @@ button {
   font-size: var(--text-body-sm);
   color: var(--text-secondary);
   border: 1px solid transparent;
+  min-width: 0;
+  white-space: nowrap;
 }
 .tb-tab[data-active="true"] {
   background: var(--surface-primary);
@@ -1860,6 +1853,10 @@ button {
   box-shadow:
     inset 0 1px 0 oklch(1 0 0 / 0.04),
     0 10px 24px -18px rgb(var(--shadow-ink-rgb) / 0.75);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast),
+    border-color var(--dur-fast);
 }
 .hd-tool-cta:hover {
   border-color: var(--accent-line);
@@ -2649,6 +2646,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: var(--inset);
   border: 1px solid var(--line-soft);
   color: var(--fg-faint);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .srch-box input {
   flex: 1;
@@ -3203,22 +3203,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   margin-left: auto;
   flex: 0 0 auto;
 }
-/* Active resting layout: the cluster sits as a balanced, vertically-centred control pair
-   inside the composer rather than pinned to the bottom edge. The footer grows by the same
-   amount the transparent input area shrinks, so the box height stays stable (no reflow)
-   while the cluster moves toward the optical centre of the aura. */
-.cmp-box-voice-dialog .cmp-footer-row {
-  justify-content: center;
-  align-items: center;
-  min-height: 64px;
-  padding-top: 0;
-  border-top: none;
-  transition:
-    min-height 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    justify-content 360ms ease,
-    padding-top 260ms ease,
-    border-color 220ms ease;
-}
 .cmp-bar-voice-dialog {
   flex: 1 1 auto;
   justify-content: center;
@@ -3233,11 +3217,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
      edge — the exact "icons stuck at the right" defect. Reset it so the cluster centres. */
   margin-inline: 0;
 }
-/* The compact composer drops the footer to a column at ≤560px (container query). Keep the
-   voice cluster on its own centred row so the two controls read as a deliberate pair. */
-.cmp-box-voice-dialog .cmp-footer-row {
-  flex-direction: row;
-}
+/* The compact composer drops the footer to a column at ≤560px (container query). The
+   voice cluster stays on its own centred row so the two controls read as a deliberate pair. */
 /* The two real voice controls resolve into their centred resting place with a calm
    rise + settle. The 80ms delay lets the outgoing normal controls clear focus first,
    so the eye sees a deliberate hand-off rather than two clusters crossing at once. */
@@ -3539,6 +3520,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   color: var(--background-primary);
   background: var(--border-strong);
   box-shadow: none;
+  flex: none;
 }
 .cmp-send[data-on="true"] {
   background: var(--accent);
@@ -3681,9 +3663,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmp-icon,
 .cmp-send {
   position: relative;
-}
-.cmp-send {
-  flex: none;
 }
 .cmp-mode[data-tip]:hover::after,
 .cmp-mode[data-tip]:focus-visible::after,
@@ -5362,9 +5341,13 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   place-items: center;
 }
 .win-title {
+  min-width: 0;
   font-size: 13.5px;
   font-weight: var(--weight-strong);
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .win-sub {
   display: inline-flex;
@@ -5418,7 +5401,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border: 0;
   border-radius: 7px;
   background: transparent;
+  color: var(--text-faint);
   cursor: pointer;
+  transition: color var(--dur-fast);
 }
 .window[data-max="true"] .win-traffic-btn {
   width: 30px;
@@ -5429,10 +5414,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
    Monochrome at rest; the meaning only whispers on hover: the glyph brightens, full
    screen tints accent and close tints danger, and the lift "ring halo" chip fades in.
    No permanent colour, no fill. */
-.win-traffic-btn {
-  color: var(--text-faint);
-  transition: color var(--dur-fast);
-}
 .win-traffic-btn > svg {
   position: relative;
   z-index: 1;
@@ -5478,10 +5459,15 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: flex;
   align-items: center;
   gap: 1px;
-  opacity: 0;
+  flex: 0 1 86px;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0.72;
+  pointer-events: auto;
 }
 .win-head:hover .win-zoom,
 .win-zoom:focus-within {
+  overflow: visible;
   opacity: 1;
 }
 .win-zbtn {
@@ -5846,6 +5832,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   padding: 3px 7px;
+  max-width: 100%;
+  min-width: 0;
 }
 .arun-perm[data-on="true"] {
   color: var(--text-accent);
@@ -6682,6 +6670,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .fpv-line {
   display: flex;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 21.25px;
 }
 .fpv-num {
   /* F044 C351 — FilePreview sets --fpv-gutter-w from the file's line count so
@@ -7550,6 +7540,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  border-radius: 0 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px);
 }
 .win-body[data-mode="mini"],
 .win-body[data-mode="tiny"] {
@@ -7621,6 +7612,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   min-height: 0;
   padding: 0;
   overflow: hidden;
+  display: block;
+  container-type: normal;
 }
 .cmp-box-fill .cmp-input {
   width: 100%;
@@ -7634,10 +7627,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   position: absolute;
   right: 11px;
   bottom: 11px;
-}
-.cmp-box-fill {
-  display: block;
-  container-type: normal;
 }
 
 /* 8-way resize handles */
@@ -8651,6 +8640,9 @@ select.dlg-input {
 .ed-tablist {
   position: relative;
   flex: 1 1 160px;
+  display: flex;
+  gap: 2px;
+  align-items: center;
   min-width: min(160px, 100%);
   overflow: visible;
 }
@@ -9004,13 +8996,6 @@ select.dlg-input {
   color: var(--text-tertiary);
 }
 /* Issue #1205: the document tab strip is a tablist; the tabs stay left, actions stay right. */
-.ed-tablist {
-  display: flex;
-  gap: 2px;
-  align-items: center;
-  min-width: min(160px, 100%);
-  overflow: visible;
-}
 .ed-tab-hit[role="tab"] {
   cursor: default;
 }
@@ -9811,7 +9796,7 @@ select.dlg-input {
   font-size: 14px;
   line-height: 1.55;
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: normal;
   overflow-wrap: anywhere;
   cursor: text;
   user-select: text;
@@ -10214,16 +10199,6 @@ select.dlg-input {
 }
 
 /* prefers-contrast: more — drop color-mix backgrounds; use card + state-color border */
-@media (prefers-contrast: more) {
-  .rb-edge-badge-btn,
-  .rb-edge-badge-static {
-    background: var(--button-secondary-surface) !important;
-  }
-  .rb-edge-badge-icon {
-    transform: scale(1.1);
-    transform-origin: center;
-  }
-}
 
 /* ---------- EMPTY COMPOSER STATE (Issue #146 Deliverable) ---------- */
 .chatw-empty {
@@ -11454,6 +11429,7 @@ html[data-keiko-gateway-setup-open="true"] {
   font-family: var(--font-mono);
   font-size: 11px;
   cursor: default;
+  max-width: 100%;
 }
 /* Epic #177 audit: citation score, uncertainty, and meta lines all read meaningful values
    (score number, uncertainty claim, omitted-count). --fg-faint = 2.34:1 and --ink-muted =
@@ -15799,7 +15775,8 @@ html[data-keiko-gateway-setup-open="true"] {
 
 .mc-meta-value {
   color: var(--text-primary);
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: anywhere;
   margin: 0;
 }
 
@@ -15813,7 +15790,8 @@ html[data-keiko-gateway-setup-open="true"] {
   line-height: 1.6;
   color: var(--text-primary);
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: anywhere;
   margin: 0;
   background: var(--surface-inset);
   border-radius: var(--radius-sm);
@@ -15913,18 +15891,21 @@ html[data-keiko-gateway-setup-open="true"] {
   display: grid;
   place-items: center;
   z-index: 9000;
+  backdrop-filter: blur(2px);
 }
 
 .mc-dialog {
   width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
   background: var(--surface-overlay);
   border: 1px solid var(--modal-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   padding: 24px;
   display: flex;
   flex-direction: column;
   gap: 16px;
   box-shadow: var(--modal-shadow);
+  overflow-y: auto;
 }
 
 .mc-dialog-title {
@@ -16036,7 +16017,7 @@ html[data-keiko-gateway-setup-open="true"] {
   min-width: 0;
   max-width: 100%;
   white-space: normal;
-  word-break: break-word;
+  word-break: normal;
   overflow-wrap: anywhere;
   color: var(--text-primary);
   font-size: inherit;
@@ -16168,7 +16149,7 @@ html[data-keiko-gateway-setup-open="true"] {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-width: 24px;
+  min-width: 58px;
   min-height: 24px;
   padding: 2px 8px;
   font-size: 11px;
@@ -16192,13 +16173,13 @@ html[data-keiko-gateway-setup-open="true"] {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
-.sm-code-copy[data-copied="true"] {
-  color: var(--feedback-success);
-  border-color: color-mix(in oklch, var(--feedback-success) 60%, var(--border-subtle));
-}
 .sm-code-copy[data-failed="true"] {
   color: var(--feedback-danger);
   border-color: color-mix(in oklch, var(--feedback-danger) 60%, var(--border-subtle));
+}
+.sm-code-copy[data-copied="true"] {
+  color: var(--feedback-success);
+  border-color: var(--feedback-success);
 }
 .sm-code-copy-status {
   min-height: 16px;
@@ -16328,7 +16309,7 @@ html[data-keiko-gateway-setup-open="true"] {
   text-decoration: underline;
   text-underline-offset: 2px;
   overflow-wrap: anywhere;
-  word-break: break-word;
+  word-break: normal;
   cursor: pointer;
   user-select: text;
   -webkit-user-select: text;
@@ -16841,7 +16822,7 @@ html[data-keiko-gateway-setup-open="true"] {
   justify-content: space-between;
   gap: 8px;
 }
-/* stale: --warn text on a warn tint (same pairing as .qi-sev-high; AA in both themes). */
+/* The stale-state warning foreground matches .qi-sev-high and remains AA in both themes. */
 .qi-drift-stale {
   display: flex;
   align-items: center;
@@ -17338,6 +17319,7 @@ html[data-keiko-gateway-setup-open="true"] {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px;
+  min-width: min(100%, 440px);
   padding: 3px;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
@@ -17357,10 +17339,17 @@ html[data-keiko-gateway-setup-open="true"] {
   padding: 0 10px;
   border: 1px solid transparent;
   border-radius: 7px;
+  background: transparent;
   color: var(--text-secondary);
-  text-align: left;
+  font: inherit;
   font-size: 12px;
   line-height: 1;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s,
+    color 0.12s;
 }
 .qi-source-kind-label {
   min-width: 0;
@@ -17368,8 +17357,6 @@ html[data-keiko-gateway-setup-open="true"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.qi-source-kind-label {
   color: currentColor;
   font-weight: 650;
 }
@@ -17380,6 +17367,7 @@ html[data-keiko-gateway-setup-open="true"] {
 }
 .qi-source-kind-icon svg {
   display: block;
+  stroke-width: 3.1;
 }
 .qi-source-kind-icon-svg {
   width: 15px;
@@ -17391,9 +17379,6 @@ html[data-keiko-gateway-setup-open="true"] {
   stroke-linejoin: round;
 }
 
-.qi-source-kind-icon svg {
-  stroke-width: 3.1;
-}
 .qi-source-kind-option:hover:not(:disabled) {
   background: transparent;
   border-color: transparent;
@@ -17419,6 +17404,10 @@ html[data-keiko-gateway-setup-open="true"] {
 }
 :root[data-input-modality="keyboard"] .qi-source-kind-option:focus-visible {
   outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline-offset: 2px;
+}
+.qi-source-kind-option:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .qi-input,
@@ -17485,58 +17474,6 @@ select.qi-select {
 .qi-select option {
   background: var(--combobox-surface);
   color: var(--input-text);
-}
-.qi-source-kind-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 2px;
-  min-width: min(100%, 440px);
-  height: 34px;
-  padding: 3px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  background: var(--surface-primary);
-  box-sizing: border-box;
-}
-.qi-source-kind-option {
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  text-align: center;
-  cursor: pointer;
-  transition:
-    border-color 0.12s,
-    box-shadow 0.12s,
-    color 0.12s;
-}
-.qi-source-kind-option:hover:not(:disabled) {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
-}
-.qi-source-kind-option:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 2px;
-}
-.qi-source-kind-option[aria-checked="true"] {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
-  color: var(--text-primary);
-}
-.qi-source-kind-option:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
 }
 .qi-source-kind-option > span:first-child {
   overflow: hidden;
@@ -18319,7 +18256,7 @@ select.qi-select {
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 0;
+  min-height: 160px;
 }
 
 /* Run result card */
@@ -20462,13 +20399,7 @@ button.figma-view-preview {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
-/* C137 — a single over-long path/label chip (deep repo paths, long capsule labels)
-   must not force a horizontal scrollbar on the whole chat log (.chatw-scroll is
-   overflow: auto). The title attribute already carries the full value, so middle
-   content truncates losslessly; the score span stays untouched. */
-.grounded-citation {
-  max-width: 100%;
-}
+/* C137 — the full citation remains available via its title while the visible range truncates. */
 .grounded-citation-range {
   min-width: 0;
   max-width: 32ch;
@@ -20704,18 +20635,7 @@ button.figma-view-preview {
     display: none;
   }
 }
-/* C157/C225 — the project tab rendered user content (folder names, arbitrarily
-   long) with no truncation: long names pushed the right-hand header controls out
-   of the clipped viewport at desktop widths and wrapped onto 2-3 lines at narrow
-   ones, growing the pill to full header height. Cap + ellipsize the label; the
-   full name stays reachable via the tab's title attribute (Header.tsx). */
-.tb-tabs {
-  min-width: 0;
-}
-.tb-tab {
-  min-width: 0;
-  white-space: nowrap;
-}
+/* C157/C225 — cap the project label; the full name remains in Header.tsx's title. */
 .tb-tab > span {
   display: block;
   max-width: 220px;
@@ -20751,18 +20671,6 @@ button.figma-view-preview {
    newline of the degraded message into one unstructured text blob. */
 .sm-fallback {
   white-space: pre-wrap;
-}
-
-/* ==== uiux-fix F014: code-copy button states (C135/C166) ==== */
-/* Width-stable across the Copy→Copied label swap — min-width:24px let the button
-   change width and jitter the code-block header on every use. */
-.sm-code-copy {
-  min-width: 58px;
-}
-/* Success cue beyond the label swap — --ok is AA-adjusted per theme. */
-.sm-code-copy[data-copied="true"] {
-  color: var(--feedback-success);
-  border-color: var(--feedback-success);
 }
 
 /* ==== uiux-fix F028: settings panel focus/hover/error states ==== */
@@ -20856,14 +20764,7 @@ button.figma-view-preview {
 }
 
 /* ==== uiux-fix F027: missing focus indicators (search box, wallpaper slider) ==== */
-/* C017 — WCAG 2.4.7: .srch-box input sets outline:none with no replacement.
-   Restore visibility on the container, same pattern as .cmp-box:focus-within
-   (accent border + glow). */
-.srch-box {
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
-}
+/* C017 — WCAG 2.4.7: restore focus visibility on the search container. */
 .srch-box:focus-within {
   border-color: var(--accent-line);
   box-shadow: 0 0 0 3px var(--accent-glow);
@@ -20900,16 +20801,7 @@ button.figma-view-preview {
   }
 }
 
-/* C243 — EditMemoryDialog/ForgetConfirmDialog parity with the desktop .dlg
-   pattern: max-height + scroll so the edit form survives short viewports,
-   radius-lg, and a motion-safe entry animation (the mc dialogs mount without an
-   .in class toggle, so keyframes stand in for the .dlg transition). The former
-   light-theme scrim override is now provided centrally by --overlay-scrim (#1295 C3). */
-.mc-dialog {
-  max-height: calc(100vh - 48px);
-  overflow-y: auto;
-  border-radius: var(--radius-lg);
-}
+/* C243 — motion-safe entry for MemoriaViva dialogs; base geometry lives with .mc-dialog. */
 @media (prefers-reduced-motion: no-preference) {
   .mc-dialog-backdrop {
     animation: mc-dialog-fade 0.16s ease;
@@ -21019,41 +20911,43 @@ button.figma-view-preview {
 /* C087 — files tree async states had no CSS: notes were unstyled, the error Retry button
    inherited the global button reset (bare text, <24px target, no affordance). */
 .files-note {
-  padding: 4px 8px;
+  padding: 6px 8px;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .files-warning {
   border-left: 2px solid var(--feedback-warning);
+  color: var(--feedback-warning);
 }
 .files-error {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  margin: 4px 8px;
+  gap: 10px;
+  margin: 6px 8px; /* left side is overridden inline with the tree depth */
   padding: 8px 10px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-primary);
   background: color-mix(in oklch, var(--feedback-danger) 14%, var(--surface-inset));
   border: 1px solid color-mix(in oklch, var(--feedback-danger) 55%, var(--border-subtle));
-  border-radius: 9px;
+  border-radius: 8px;
 }
 .files-retry {
   flex: none;
   min-height: 24px;
   min-width: 24px;
-  padding: 2px 10px;
-  border-radius: 7px;
-  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
   color: var(--fg);
-  background: var(--card-2);
-  border: 1px solid var(--line-strong);
+  background: var(--card);
+  border: 1px solid var(--line);
+  transition: background 0.15s ease;
 }
 .files-retry:hover {
-  background: var(--card);
+  background: var(--card-2);
   border-color: var(--line);
 }
 .files-retry:focus-visible {
@@ -21063,19 +20957,24 @@ button.figma-view-preview {
 /* C087 — symlink badge + size column in the tree rows were unstyled UA spans. */
 .tr-badge {
   flex: none;
-  font-size: 9.5px;
+  padding: 2px 5px;
+  font-size: 10px;
+  line-height: 1;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--fg-muted);
-  background: var(--inset);
-  border: 1px solid var(--line-strong);
+  letter-spacing: 0;
+  font-weight: 650;
   border-radius: 5px;
-  padding: 0 5px;
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
 }
 .tr-meta {
   flex: none;
-  font-size: 10.5px;
+  font-size: 11.5px;
+  font-weight: 500;
   color: var(--fg-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 /* C123 — remaining controls without the app-standard focus ring (UA default ring only).
    Full-width list rows take the inset ring (like .rv-filerow); freestanding controls the
@@ -21124,46 +21023,9 @@ button.figma-view-preview {
 }
 
 /* ==== uiux-fix F022: files tree states, badges, indentation, disabled rows ==== */
-/* C021 — .files-note/.files-error/.files-warning had no rules at all: tree status
-   text rendered at UA-default 16px in full --fg, and the Retry button (stripped by
-   the global button reset) was indistinguishable from the error text. Error box
-   mirrors .fpv-error for consistency; tokens only, so both themes are covered. */
-.files-note {
-  padding: 6px 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.files-warning {
-  color: var(--feedback-warning);
-}
-.files-error {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 6px 8px; /* left side is overridden inline with the tree depth */
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  color: var(--text-primary);
-  background: color-mix(in oklch, var(--feedback-danger) 14%, var(--surface-inset));
-  border: 1px solid color-mix(in oklch, var(--feedback-danger) 55%, var(--border-subtle));
-}
 .files-error > span {
   flex: 1;
   min-width: 0;
-}
-.files-retry {
-  flex: none;
-  padding: 2px 8px;
-  font-size: 11.5px;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--fg);
-  transition: background 0.15s ease;
-}
-.files-retry:hover {
-  background: var(--card-2);
 }
 .files-load-more {
   display: inline-flex;
@@ -21201,27 +21063,6 @@ button.figma-view-preview {
 }
 /* C130 — symlink badge + size column: chip pattern analog .file-mut/.fpv-lang so the
    badge reads as a status, and the size column recedes behind the file name. */
-.tr-badge {
-  flex: none;
-  padding: 2px 5px;
-  font-size: 10px;
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0;
-  font-weight: 650;
-  border-radius: 5px;
-  color: var(--text-secondary);
-  background: var(--surface-inset);
-  border: 1px solid var(--border-subtle);
-}
-.tr-meta {
-  flex: none;
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
 .tr-file-wrap {
   display: flex;
   align-items: stretch;
@@ -21277,13 +21118,7 @@ button.figma-view-preview {
 
 /* ==== uiux-fix F031: window chrome — port hit-targets, header truncation (C062/C063/C122) ==== */
 
-/* C063 — .window is overflow:visible now (the old overflow:hidden cut the outer
-   half of every 13px edge port and resize strip and halved their hit areas).
-   The inner .win-frame-clip owns frame clipping; the body radius keeps direct
-   widget backgrounds congruent with the bottom corners inside that clip. */
-.win-body {
-  border-radius: 0 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px);
-}
+/* C063 — maximized windows drop the body radius retained by the base .win-body rule. */
 .window[data-max="true"] .win-body {
   border-radius: 0;
 }
@@ -21298,33 +21133,11 @@ button.figma-view-preview {
   border-radius: 50%;
 }
 
-/* C062 — narrow windows (DEFAULT_MIN w:150) pushed Maximize/Close out of the
-   frame: the title had no truncation. Title ellipsizes like .win-sub, icon/buttons
-   never shrink, and the zoom cluster may shrink to zero when space is tight.
-   At normal widths it keeps a stable visible slot so rapid content-zoom clicks
-   cannot shift underneath the pointer and hit Maximize instead. */
-.win-title {
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* C062 — title truncation lives in the base .win-title rule; controls never shrink. */
 .win-ico,
 .win-btn,
 .win-traffic {
   flex: none;
-}
-.win-zoom {
-  flex: 0 1 86px;
-  min-width: 0;
-  overflow: hidden;
-  opacity: 0.72;
-  pointer-events: auto;
-}
-.win-head:hover .win-zoom,
-.win-zoom:focus-within {
-  overflow: visible;
-  opacity: 1;
 }
 
 /* ==== uiux-fix F035: memoriaviva review-queue body clamp + detail link (C024) ==== */
@@ -21381,10 +21194,6 @@ button.figma-view-preview {
    ~32ms layout per scroll step). content-visibility lets the engine skip layout/
    paint for off-screen lines. 21.25px = the fixed line box: 12.5px font-size *
    1.7 line-height (no vertical padding on .fpv-line). */
-.fpv-line {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 21.25px;
-}
 /* C348 — Retry action inside the preview error state; mirrors .lk-alert-retry /
    .gw-error-retry incl. the >=24px hit target and focus ring. */
 .fpv-retry {
@@ -21511,12 +21320,7 @@ button.figma-view-preview {
 .lk-capsule-info .lk-badge {
   margin-top: 3px;
 }
-/* Visual parity with .dlg-overlay: same blur. The light-theme scrim that lived
-   here (C036) is now centralised in --overlay-scrim (#1295 C3); only the blur
-   parity declaration remains. */
-.mc-dialog-backdrop {
-  backdrop-filter: blur(2px);
-}
+/* The light-theme dialog scrim remains centralised in --overlay-scrim (#1295 C3). */
 /* Capsule-detail source tools (C065/C104): CapsuleActions no longer renders
    into the .lk-header flex row; it lives in this block below the header. The
    lkd-connect-* classes were referenced by capsule-actions.tsx but never
@@ -21712,13 +21516,7 @@ button.figma-view-preview {
 .arun-status .dot[data-status="fix-applied"] {
   background: var(--feedback-success);
 }
-/* C266: absolute paths are single unbreakable words — the chip caps at the row
-   width and the inner span ellipsises (cf. .rv-filerow-path); the full path stays
-   reachable via the title attribute. */
-.arun-perm {
-  max-width: 100%;
-  min-width: 0;
-}
+/* C266: absolute paths truncate within the base .arun-perm width cap. */
 .arun-perm-path {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -21792,13 +21590,7 @@ button.figma-view-preview {
 }
 
 /* ==== uiux-fix F030: QI hub & run card — run-list height, sr-only, truncation ==== */
-/* C096 — at the default quality window size (h:580 -> 540px win-body) the launcher
-   took ~483px and squashed the Runs section to a 17px scroll strip: the "No runs
-   yet" empty state and the entire run history were invisible. A usable floor lets
-   the win-body (overflow: auto) scroll instead of crushing the list. */
-.qi-hub-runs {
-  min-height: 160px;
-}
+/* C096 — the base .qi-hub-runs floor keeps the run history usable at default height. */
 /* C069 — QiRunCard's gap radar renders a .qi-sr-only span per row as the
    screen-reader text behind the aria-hidden status badge; the class was referenced
    but never defined, so the label rendered twice ("Uncovered Uncovered"). Same
@@ -22389,19 +22181,13 @@ button.figma-view-preview {
 /* C404 — shell buttons (header tools, tab strip, rails, model menu) swapped
    background/color hard while the rest of the app eases 0.12s (.nav-item,
    rail tooltips); aligns the surfaces the cursor crosses most. */
-.hd-tool,
+.hd-tool:not(.hd-tool-cta),
 .tb-btn,
 .rail-btn,
 .edm-item {
   transition:
     background 0.12s,
     color 0.12s;
-}
-.hd-tool-cta {
-  transition:
-    background var(--dur-fast),
-    color var(--dur-fast),
-    border-color var(--dur-fast);
 }
 /* C415 — .ws-fab keeps a hardcoded 50%-black drop shadow in light theme where the
    shadow tokens use 0.22/0.26 ink alpha; same geometry, theme-consistent density. */

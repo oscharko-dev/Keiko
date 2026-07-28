@@ -122,13 +122,14 @@ export function WorkspaceTrustBanner({
   readonly editor?: boolean | undefined;
 }): ReactNode {
   const t = useTranslate();
-  const trusted = status?.trust === "trusted";
+  const trust = workspaceTrustBadgeState(status, issue);
+  const trusted = trust === "trusted";
   // A trusted workspace renders nothing — unless a transition was refused. The guard used to send
   // every trusted state home before the `issue === "update"` alert below could run, which made a
   // failed REVOKE completely silent: the human asked to withdraw trust, the server refused, and the
   // UI showed a still-trusted workspace with no indication the request had not been applied.
   if (trusted && issue === undefined) return null;
-  const unavailable = issue === "load";
+  const unavailable = trust === "unavailable";
   const title = bannerTitle(t, { unavailable, trusted });
   const reason =
     status === undefined
@@ -139,6 +140,7 @@ export function WorkspaceTrustBanner({
       role="note"
       className={`${styles.cmpBanner} ${editor ? styles.cmpEditorBanner : ""}`}
       aria-label={title}
+      data-trust={trust}
       data-testid={`workspace-trust-banner-${surface}`}
     >
       <div className={styles.cmpBannerCopy}>

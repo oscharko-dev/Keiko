@@ -50,7 +50,9 @@ evidence, and CI gates established by ADR-0049, ADR-0050, and the upstream archi
    tablet, and mobile widths. They cover both the empty shell and deterministic seeded `keiko.workspace.v4`
    high-traffic workspaces (chat / Quality Intelligence / Local Knowledge, MemoriaViva / Relationships, and
    Files / Editor). Light Mode is mandatory in every screenshot matrix and acceptance checklist; evidence that
-   omits Light Mode, records page errors, or misses required selectors is rejected.
+   omits Light Mode, records page errors, or misses required selectors is rejected. The browser manifest records
+   the LF-normalized capture-source SHA-256, and CI independently recomputes it from the checked-in harness;
+   any mismatch rejects the bundle.
 
 3. **A dedicated editor matrix is required.** Editor token-tier fidelity
    (`evidence/1300/editor/capture.mjs`) gates the `--ed-*` tokens the product defines to **0-diff in Dark and
