@@ -4587,6 +4587,7 @@ interface Issue1300A11yProof {
   >;
 }
 interface Issue1300BrowserManifest {
+  readonly captureSha256: string;
   readonly postCssSha256: string;
   readonly renderedCssBundleSha256: string;
   readonly shotCount: number;
@@ -4651,6 +4652,9 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     readFileSync(resolve(evidenceDir, "browser/manifest.json"), "utf8"),
   ) as unknown as Issue1300BrowserManifest;
   const browserCaptureSource = readFileSync(resolve(evidenceDir, "browser/capture.mjs"), "utf8");
+  const currentBrowserCaptureSha256 = createHash("sha256")
+    .update(browserCaptureSource.replace(/\r\n?/g, "\n"))
+    .digest("hex");
   const visualRegressionMd = readFileSync(
     resolve(here, "../../../..", "docs/design-system/visual-regression.md"),
     "utf8",
@@ -4789,6 +4793,10 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
   });
 
   it("the running-app browser bundle covers shell plus seeded high-traffic workspace windows", () => {
+    expect(
+      browserManifest.captureSha256,
+      "running-app captures must pin the current browser harness",
+    ).toBe(currentBrowserCaptureSha256);
     expect(
       browserManifest.postCssSha256,
       "running-app captures must pin the current globals.css",

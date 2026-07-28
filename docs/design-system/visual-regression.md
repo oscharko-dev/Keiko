@@ -55,12 +55,14 @@ with, and supersedes for the consolidated gate, the pixel-ratio note in
 / `file://` (no server timing for the fidelity gates), fixed viewport + `deviceScaleFactor`, fixed seed data,
 canvas-normalised colour, and emulated `prefers-reduced-motion` so animation never enters a capture. The
 running-app harness builds its own static export and records the emitted CSS bundle digest, so its screenshots
-cannot be attributed to a newer source stylesheet while rendering a stale build.
+cannot be attributed to a newer source stylesheet while rendering a stale build. The manifest also records
+the LF-normalized capture-source digest, which CI independently recomputes from the checked-in harness and
+rejects on mismatch.
 
 **Retention.** Artifacts are retained **in-repo** under `docs/design-system/evidence/1300/` (PNG + JSON), so
 the baseline travels with the source it proves and any future contributor reruns the harness to regenerate and
-diff. The CI-enforced `Issue #1300` vitest block pins the proof JSON + this register against the product CSS so
-drift fails `ci`/`ui` without needing the browser.
+diff. The CI-enforced `Issue #1300` vitest block pins the proof JSON + this register against the product CSS
+and browser harness so drift fails `ci`/`ui` without needing the browser.
 
 ---
 
@@ -91,7 +93,8 @@ From the repo root, after `npm ci` + `npx playwright install chromium`:
 - **Running-app bundle:** 108 captures (**6 scenarios × 6 modes × 3 viewports**) with the shell present,
   required selectors present, and **0 page errors, visible error notices, crashed window bodies, unexpected
   API requests, or unavailable workspace-trust states**. The manifest pins both the source CSS and the
-  emitted CSS bundle. Scenarios cover the empty shell, chat / Quality Intelligence / Local Knowledge,
+  emitted CSS bundle, plus the SHA-256 of the capture harness that generated it. Scenarios cover the empty
+  shell, chat / Quality Intelligence / Local Knowledge,
   MemoriaViva / Relationships, Files / Editor, and the Git client at desktop and constrained window sizes.
 
 ---

@@ -30,8 +30,9 @@ stale CSS hashes, a non-scrollable bounded-row smoke, scroll-position failure, o
 browser harness rebuilds the static export, records a digest of its emitted CSS, serves it through a
 realpath-confined loopback server, blocks non-loopback outbound requests, and fails on page errors, missing
 required selectors, visible error notices, crashed window bodies, unexpected API requests, or unavailable
-workspace trust in any scenario. The editor harness fails unless all 14 expected reference-page captures are
-present and error-free. The running editor (Monaco registration, tabs/splits, diagnostics, find/replace,
+workspace trust in any scenario. Its manifest records the SHA-256 of the capture harness itself so committed
+artifacts cannot be reused after the generator changes. The editor harness fails unless all 14 expected
+reference-page captures are present and error-free. The running editor (Monaco registration, tabs/splits, diagnostics, find/replace,
 ghost text, agent prompts) is proven by
 `npm run test:e2e:editor-fidelity-1295` and `-1296`, whose captures are committed under
 [`../1295/editor/`](../1295/editor/) and [`../1296/editor/`](../1296/editor/).
@@ -49,7 +50,8 @@ ghost text, agent prompts) is proven by
 - **Tolerance:** computed-value fidelity, colours canonicalised to sRGB via an in-page `<canvas>`, **≤ 1 LSB
   per channel**. 0-diff gated in Dark + Light; HC / forced-colors / reduced-motion / accent-derived recorded.
 - **Retention:** all PNG + JSON artifacts are committed in-repo here, so the baseline travels with the source
-  it proves; the `Issue #1300` vitest block pins the proofs against the product CSS for CI enforcement.
+  it proves; the `Issue #1300` vitest block pins the proofs against the product CSS and independently rejects
+  a browser manifest whose LF-normalized capture-source digest differs from the checked-in harness.
 
 ## Artifact index
 

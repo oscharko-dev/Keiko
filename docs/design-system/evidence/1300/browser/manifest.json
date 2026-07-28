@@ -1,6 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
+  "captureSha256": "18d489cdf20e6bb422f886a0dcef6efcc1d14435c82495d4bd63de6e17194696",
   "postCssSha256": "416783ba19cc77a3f5754d62093cffd250724211fe126d8785faa7466d3af68d",
   "renderedCssBundleSha256": "863f64c78859512959f38065be7369ab575a8bc4164d9c9f6257c51a049296bd",
   "appPath": "packages/keiko-ui/out",

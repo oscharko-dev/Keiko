@@ -18,11 +18,15 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, extname, resolve, dirname, normalize, sep, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const CAPTURE_PATH = fileURLToPath(import.meta.url);
+const HERE = dirname(CAPTURE_PATH);
 const REPO = resolve(HERE, "../../../../..");
 const ROOT = resolve(REPO, "packages/keiko-ui/out");
 const OUT_DIR = resolve(REPO, "docs/design-system/evidence/1300/browser");
 const CSS_PATH = resolve(REPO, "packages/keiko-ui/src/app/globals.css");
+const CAPTURE_SHA256 = createHash("sha256")
+  .update(readFileSync(CAPTURE_PATH, "utf8").replace(/\r\n?/g, "\n"))
+  .digest("hex");
 const POST_CSS_SHA256 = createHash("sha256")
   .update(readFileSync(CSS_PATH, "utf8").replace(/\r\n?/g, "\n"))
   .digest("hex");
@@ -1037,6 +1041,7 @@ writeFileSync(
     {
       issue: 1300,
       epic: 1290,
+      captureSha256: CAPTURE_SHA256,
       postCssSha256: POST_CSS_SHA256,
       renderedCssBundleSha256: RENDERED_CSS_BUNDLE_SHA256,
       appPath: "packages/keiko-ui/out",
