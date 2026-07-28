@@ -82,4 +82,22 @@ describe("SafeMarkdown — render stability (GEN-PERF-CHAT-010)", () => {
     rerender(<SafeMarkdown source={"```ts\nconst z = 9;\n```\n"} />);
     expect(highlightSpy.mock.calls).toHaveLength(2);
   });
+
+  it("renders streaming code fences without tokenising them", () => {
+    const highlightSpy = vi.mocked(highlightLines);
+    highlightSpy.mockClear();
+
+    render(
+      <SafeMarkdown
+        source={CODE_SOURCE}
+        streaming
+        trailing={<span className="ai-stream-cursor" aria-hidden="true" />}
+      />,
+    );
+
+    expect(highlightSpy).not.toHaveBeenCalled();
+    expect(document.querySelector(".sm-code-block-header")).toBeNull();
+    expect(document.querySelector(".sm-pre")?.textContent).toContain("const c = a + b;");
+    expect(document.querySelector(".sm-pre .ai-stream-cursor")).not.toBeNull();
+  });
 });

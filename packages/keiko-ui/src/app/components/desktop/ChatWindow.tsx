@@ -605,14 +605,13 @@ function ChatBubbleContentArea({
       data-collapsed={!isUser && collapsed ? "true" : "false"}
       data-collapsible={canCollapse ? "true" : "false"}
     >
-      {isUser || streaming ? (
+      {isUser ? (
         message.content
       ) : (
         // AC #1 / #2: assistant responses render as safe markdown.
         // User messages remain plain text — no markdown interpretation.
-        // The live streaming assistant turn also stays plain text until the
-        // canonical message arrives, avoiding full Markdown parse/highlight
-        // work on every token while retaining React's escaping guarantees.
+        // Streaming assistant turns use the same safe renderer as persisted
+        // answers; parser failures fall back to plain-text raw source for this bubble.
         // SM-1: wrapped in a per-message boundary so a parser/render defect
         // degrades this one bubble to plain text instead of crashing the view.
         <SafeMarkdownBoundary
@@ -622,12 +621,12 @@ function ChatBubbleContentArea({
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
           onApplyCodeBlock={onApplyCodeBlock}
+          streaming={streaming}
+          trailing={
+            streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined
+          }
         />
       )}
-      {/* Issue #1296 — DS 0.4.0 streaming caret at the live edge of the growing
-          assistant turn. Decorative (the lifecycle status announces "Receiving
-          response…" politely), so it is hidden from assistive tech. */}
-      {streaming && !isUser ? <span className="ai-stream-cursor" aria-hidden="true" /> : null}
     </div>
   );
 }

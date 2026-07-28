@@ -1932,6 +1932,8 @@ export const EN_MESSAGES = {
   "gitClientWindow.history.commitDetailsAria": "Commit details",
   "runtimeHubWidget.auditMetadataAria": "Runtime audit metadata",
   "installBanner.regionAria": "Install Keiko",
+  "markdown.codeBlock.regionAria": "{language} code block",
+  "markdown.codeBlock.languageText": "text",
   "manualPod.progress.crawl": "{accepted} pages indexed, {denied} links skipped",
   "manualPod.progress.index": "{processed} of {total} documents processed",
   "manualPodCreate.button": "Add HTML manual",

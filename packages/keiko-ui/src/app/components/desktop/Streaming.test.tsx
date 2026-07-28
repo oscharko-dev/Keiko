@@ -361,7 +361,7 @@ describe("ChatWindow streaming typing indicator (Issue #152)", () => {
     ).not.toBeNull();
   });
 
-  it("keeps the live streaming assistant turn as escaped plain text until settled", () => {
+  it("renders the live streaming assistant turn as safe markdown while tokens stream", (): void => {
     const liveView = renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -372,9 +372,12 @@ describe("ChatWindow streaming typing indicator (Issue #152)", () => {
       }),
     );
     const liveAssistant = document.querySelector('article[data-role="assistant"]');
-    expect(liveAssistant).toHaveTextContent("**bold** `code`");
-    expect(liveAssistant?.querySelector("strong")).toBeNull();
-    expect(liveAssistant?.querySelector("code")).toBeNull();
+    expect(liveAssistant).not.toHaveTextContent("**bold**");
+    expect(liveAssistant?.querySelector("strong")).toHaveTextContent("bold");
+    expect(liveAssistant?.querySelector("code")).toHaveTextContent("code");
+    const cursor = liveAssistant?.querySelector(".ai-stream-cursor");
+    expect(cursor).not.toBeNull();
+    expect(cursor?.closest(".sm-inline-code")).toHaveTextContent("code");
     liveView.unmount();
 
     renderWindow(
