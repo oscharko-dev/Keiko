@@ -463,6 +463,61 @@ describe("CodingToolFacade", () => {
     expect(JSON.stringify(result)).not.toContain("SENTINEL_");
   });
 
+  it("forwards a closed-vocabulary edit reasonCode to the model instead of a bare failed status", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "CONTENT_HASH_MISMATCH" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "CONTENT_HASH_MISMATCH" }],
+    });
+  });
+
+  it("drops an edit reasonCode outside the closed vocabulary instead of forwarding it verbatim", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "SENTINEL_UNVETTED_CODE" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "failed" }],
+    });
+    expect(JSON.stringify(result)).not.toContain("SENTINEL_");
+  });
+
+  it("never forwards a reasonCode for a non-edit action's failure", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "TIMED_OUT" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "command", commandId: "test" }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "failed" }],
+    });
+  });
+
   it("fails closed for blocked, denied, and malformed delegate outcomes", async () => {
     const ports = facade();
     const subject = createCodingToolFacade(ports);

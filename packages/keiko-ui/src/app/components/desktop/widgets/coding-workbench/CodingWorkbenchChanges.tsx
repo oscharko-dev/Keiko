@@ -233,7 +233,7 @@ function changedFileState(file: GitChangedFile, t: CodingWorkbenchTranslate): st
   return t("codingWorkbench.changes.fileState.unstaged");
 }
 
-function diffLabels(t: CodingWorkbenchTranslate): DiffViewLabels {
+export function diffLabels(t: CodingWorkbenchTranslate): DiffViewLabels {
   return {
     addedLine: t("codingWorkbench.changes.diff.addedLine"),
     deletedLine: t("codingWorkbench.changes.diff.deletedLine"),

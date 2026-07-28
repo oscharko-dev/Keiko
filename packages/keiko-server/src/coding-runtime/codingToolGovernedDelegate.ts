@@ -27,7 +27,9 @@ type GovernedCodingToolResult =
       readonly read?: GovernedCodingToolRead | undefined;
       readonly auxiliary?: AuxiliaryCapabilityOutcomeV1 | undefined;
     }
-  | { readonly status: "failed" };
+  // `reasonCode` is a closed-vocabulary marker (see codingToolReadEditPorts.ts's `EditOutcome`),
+  // populated only by the editor-changeset port; every other port's failure carries none.
+  | { readonly status: "failed"; readonly reasonCode?: string | undefined };
 
 export interface CodingToolGovernedPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
@@ -74,6 +76,9 @@ function governedOutcome(
   action: CodingToolActionRequest["action"],
   result: GovernedCodingToolResult,
 ): unknown {
+  if (result.status === "failed" && result.reasonCode !== undefined) {
+    return { outcome: "failed", reasonCode: result.reasonCode };
+  }
   if (result.status !== "completed") return { outcome: result.status };
   if (READ_BEARING_ACTIONS.has(action) && result.read !== undefined) {
     return { outcome: "completed", read: result.read };

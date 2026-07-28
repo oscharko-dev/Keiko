@@ -145,4 +145,34 @@ describe("CodingToolGovernedDelegate", () => {
     ).resolves.toEqual({ outcome: "failed" });
     expect(checks).toBe(2);
   });
+
+  it("carries an editor-changeset port's reasonCode through to the outcome", async () => {
+    const ports: CodingToolGovernedPorts = {
+      ...governedPorts(),
+      editorChangeset: {
+        execute: vi.fn(() =>
+          Promise.resolve({ status: "failed" as const, reasonCode: "CONTENT_HASH_MISMATCH" }),
+        ),
+      },
+    };
+    const delegate = createCodingToolGovernedDelegate(ports);
+
+    await expect(
+      delegate.execute({ ...identity, action: "edit", changeset }, undefined, liveGuard),
+    ).resolves.toEqual({ outcome: "failed", reasonCode: "CONTENT_HASH_MISMATCH" });
+  });
+
+  it("omits reasonCode for a failure that did not carry one", async () => {
+    const ports: CodingToolGovernedPorts = {
+      ...governedPorts(),
+      commandRunner: {
+        execute: vi.fn(() => Promise.resolve({ status: "failed" as const })),
+      },
+    };
+    const delegate = createCodingToolGovernedDelegate(ports);
+
+    await expect(
+      delegate.execute({ ...identity, action: "command", commandId: "test" }, undefined, liveGuard),
+    ).resolves.toEqual({ outcome: "failed" });
+  });
 });

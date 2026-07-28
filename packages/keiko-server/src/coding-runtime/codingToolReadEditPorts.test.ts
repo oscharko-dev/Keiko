@@ -643,7 +643,10 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       );
       await vi.advanceTimersByTimeAsync(11_750);
 
-      await expect(outcome).resolves.toEqual({ status: "failed" });
+      await expect(outcome).resolves.toEqual({
+        status: "failed",
+        reasonCode: "NO_ACTIVE_SESSION",
+      });
       expect(listSessions).toHaveBeenCalledTimes(7);
       expect(action).not.toHaveBeenCalled();
     } finally {
@@ -676,7 +679,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed" });
+    ).resolves.toEqual({ status: "failed", reasonCode: "NO_ACTIVE_SESSION" });
 
     const controller = new AbortController();
     const emptyList = vi.fn(() => Promise.resolve({ ok: true as const, value: { sessions: [] } }));
@@ -700,7 +703,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     });
     controller.abort();
 
-    await expect(aborted).resolves.toEqual({ status: "failed" });
+    await expect(aborted).resolves.toEqual({ status: "failed", reasonCode: "NO_ACTIVE_SESSION" });
     expect(failedList).toHaveBeenCalledOnce();
     expect(action).not.toHaveBeenCalled();
   });
@@ -859,7 +862,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       { check: (): true => true },
     );
 
-    expect(result).toEqual({ status: "failed" });
+    expect(result).toEqual({ status: "failed", reasonCode: "TIMED_OUT" });
     expect(JSON.stringify(result)).not.toContain(SENTINEL);
     expect(adapterSignal).toBeInstanceOf(AbortSignal);
     expect(adapterSignal?.aborted).toBe(true);

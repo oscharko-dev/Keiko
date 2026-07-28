@@ -233,6 +233,16 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
   "codingWorkbench.approval.approve": "Approve once",
   "codingWorkbench.approval.deny": "Deny",
+  "codingWorkbench.changesetReview.eyebrow": "Change review",
+  "codingWorkbench.changesetReview.title": "Review the proposed file change",
+  "codingWorkbench.changesetReview.help":
+    "The task paused so you can confirm this exact change before it is written.",
+  "codingWorkbench.changesetReview.empty": "No reviewable change was produced.",
+  "codingWorkbench.changesetReview.approve": "Apply change",
+  "codingWorkbench.changesetReview.deny": "Reject change",
+  "codingWorkbench.changesetReview.retry": "Try again",
+  "codingWorkbench.changesetReview.deliveryFailed":
+    "Could not confirm this decision with the run. Try again.",
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":

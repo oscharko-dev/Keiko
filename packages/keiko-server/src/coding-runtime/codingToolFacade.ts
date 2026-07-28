@@ -19,6 +19,36 @@ import {
 } from "./codingToolIpc.js";
 
 const READ_DIGEST = /^[a-f0-9]{64}$/u;
+
+// The closed vocabulary an edit failure's `reasonCode` may carry (EditorAgentConflictCode +
+// EditorAgentFailureCode + this port's own transport/no-session/route markers). Content-free by
+// construction — never raw command output, unlike the delegate evidence every other governed
+// action strips — so forwarding one of these to the model, instead of the bare "failed" status,
+// is safe. An unrecognized value (a defensive floor, not an expected path) falls back to "failed"
+// rather than forwarding an unvetted string.
+const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
+  "DIRTY",
+  "VERSION_MISMATCH",
+  "CONTENT_HASH_MISMATCH",
+  "NO_ACTIVE_SESSION",
+  "NO_ACTIVE_BRIDGE",
+  "INVALID_EDITS",
+  "OUT_OF_SCOPE",
+  "DECOMPOSE_PER_ROOT",
+  "PRECONDITION_REQUIRED",
+  "POLICY_DENIED",
+  "APPROVAL_REQUIRED",
+  "TIMED_OUT",
+  "QUEUE_FULL",
+  "CANCELLED",
+  "PROVIDER_UNAVAILABLE",
+  "UNSUPPORTED_OPERATION",
+  "LIMIT_EXCEEDED",
+  "RESPONSE_TOO_LARGE",
+  "TRANSPORT_FAILURE",
+  "REDIRECT_BLOCKED",
+  "EDIT_TRANSPORT_ERROR",
+]);
 import type {
   CodingToolAdmission,
   CodingToolFacade,
@@ -166,9 +196,20 @@ function wipeAndReturn<T extends CodingToolResult>(payload: Buffer, result: T): 
   return result;
 }
 
-function project(request: CodingToolActionRequest, value: unknown): CodingToolResult {
-  if (!isRecord(value) || (value.outcome !== "completed" && value.outcome !== "failed"))
-    return projected("failed");
+function outcomeRecord(
+  value: unknown,
+): (Record<string, unknown> & { readonly outcome: "completed" | "failed" }) | undefined {
+  if (!isRecord(value)) return undefined;
+  return value.outcome === "completed" || value.outcome === "failed"
+    ? (value as Record<string, unknown> & { readonly outcome: "completed" | "failed" })
+    : undefined;
+}
+
+function project(request: CodingToolActionRequest, input: unknown): CodingToolResult {
+  const value = outcomeRecord(input);
+  if (value === undefined) return projected("failed");
+  const editFailure = projectEditFailure(request, value);
+  if (editFailure !== undefined) return editFailure;
   const auxiliary =
     value.outcome === "completed" ? projectAuxiliary(request, value.auxiliary) : undefined;
   if (auxiliary !== undefined) {
@@ -183,6 +224,20 @@ function project(request: CodingToolActionRequest, value: unknown): CodingToolRe
   return read === undefined
     ? projected(value.outcome)
     : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
+}
+
+function projectEditFailure(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action !== "edit" || value.outcome !== "failed") return undefined;
+  const reasonCode = value.reasonCode;
+  return projected(
+    "failed",
+    typeof reasonCode === "string" && EDIT_FAILURE_REASON_CODES.has(reasonCode)
+      ? reasonCode
+      : undefined,
+  );
 }
 
 function projectAuxiliary(
@@ -252,8 +307,8 @@ function projectEgressRead(value: unknown): CodingToolEgressReadResult | undefin
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function projected(status: "completed" | "failed"): CodingToolResult {
-  return { status, evidence: [{ kind: "governed-delegate", code: status }] };
+function projected(status: "completed" | "failed", code: string = status): CodingToolResult {
+  return { status, evidence: [{ kind: "governed-delegate", code }] };
 }
 function hasOrigin(headers: CodingToolFacadeInput["headers"]): boolean {
   return (

@@ -30,6 +30,14 @@ type RepositoryReadRequest = CodingToolActionOf<"read">;
 type RepositoryDiscoverRequest = CodingToolActionOf<"discover">;
 type EditorChangesetRequest = CodingToolActionOf<"edit">;
 
+// A rejected edit's reason code is a closed, content-free vocabulary (EditorAgentConflictCode /
+// EditorAgentFailureCode, plus this port's own transport/no-session markers) — never raw command
+// output — so, unlike the other governed ports, it is safe for `codingToolFacade.ts` to forward
+// verbatim instead of collapsing it to the bare status.
+type EditOutcome =
+  | { readonly status: "completed" }
+  | { readonly status: "failed"; readonly reasonCode?: string | undefined };
+
 type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action"> &
   Partial<Pick<EditorAgentHttpClient, "listSessions">>;
 
@@ -348,7 +356,7 @@ async function executeEdit(
   request: EditorChangesetRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): Promise<{ readonly status: "completed" | "failed" }> {
+): Promise<EditOutcome> {
   const prepared = prepareEdit(deps, request, signal, mutationGuard);
   if (prepared === undefined) return { status: "failed" };
   try {
@@ -360,16 +368,45 @@ async function executeEdit(
     );
     if (action === undefined) {
       discardMutationLease(deps, prepared.leaseRequest);
-      return { status: "failed" };
+      return { status: "failed", reasonCode: "NO_ACTIVE_SESSION" };
     }
     const result = await deps.editorAgentClient.action(action, prepared.signal);
     const completed = result.ok && editorStatusCompleted(result.value.result.status);
-    if (!completed) discardMutationLease(deps, prepared.leaseRequest);
-    return editOutcome(completed);
-  } catch {
+    if (completed) return { status: "completed" };
     discardMutationLease(deps, prepared.leaseRequest);
-    return { status: "failed" };
+    return { status: "failed", reasonCode: editFailureReasonCode(result) };
+  } catch (error) {
+    discardMutationLease(deps, prepared.leaseRequest);
+    emitEditFailureDiagnostic(deps.diagnostics, prepared.action.actionId, error);
+    return { status: "failed", reasonCode: "EDIT_TRANSPORT_ERROR" };
   }
+}
+
+// The closed vocabulary a rejected edit can name (EditorAgentConflictCode/EditorAgentFailureCode
+// plus this port's own transport/no-session markers) is content-free by construction — a fixed
+// enum of machine reason codes, never raw command output — so it is safe to forward to the model
+// unlike the command/verification/git ports' delegate evidence (codingToolFacade.ts strips theirs).
+function editFailureReasonCode(
+  result: Awaited<ReturnType<EditorAgentActionClient["action"]>>,
+): string | undefined {
+  if (!result.ok) return result.error.code;
+  const outcome = result.value.result;
+  return outcome.conflict?.code ?? outcome.failure?.code;
+}
+
+function emitEditFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  actionId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: SAFE_DISCOVERY_CORRELATION_ID.test(actionId) ? actionId : "coding-edit-failure",
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.editor-changeset",
+    source: "coding-tool-read-edit-ports.edit",
+    errorClass: contentFreeErrorClass(error),
+    message: "edit-transport-failed",
+  });
 }
 
 async function bindLiveEditorSession(
@@ -461,10 +498,6 @@ function normalizeRawSingleFilePatch(
 
 function editorStatusCompleted(status: string): boolean {
   return status === "queued" || status === "succeeded";
-}
-
-function editOutcome(completed: boolean): { readonly status: "completed" | "failed" } {
-  return { status: completed ? "completed" : "failed" };
 }
 
 function discardMutationLease(
