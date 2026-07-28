@@ -257,10 +257,16 @@ describe("useCodingWorkbenchRuntime", () => {
     view.unmount();
   });
 
-  it("retains terminal run truth and activity after global status becomes idle", async () => {
+  it("retains SSE terminal truth when the first post-settlement status is idle", async (): Promise<void> => {
     const running = snapshot({ state: "running", pendingPermission: undefined });
     const terminal = snapshot({ state: "succeeded", revision: 5, pendingPermission: undefined });
-    installBootstrap(running, terminal);
+    const idle = snapshot({
+      state: "idle",
+      revision: 0,
+      runId: undefined,
+      pendingPermission: undefined,
+    });
+    installBootstrap(running, idle);
     const activeWorkspace = workspace();
     const view = renderHook(() => useCodingWorkbenchRuntime({ workspace: activeWorkspace }));
 
@@ -274,16 +280,6 @@ describe("useCodingWorkbenchRuntime", () => {
     await waitFor(() => expect(view.result.current.state.run.value).toEqual(terminal));
     const terminalEvents = view.result.current.state.events;
     expect(terminalEvents).toHaveLength(1);
-
-    vi.mocked(getCodingWorkbenchRuntimeStatus).mockResolvedValue(
-      snapshot({
-        state: "idle",
-        revision: 0,
-        runId: undefined,
-        pendingPermission: undefined,
-      }),
-    );
-    await act(async () => view.result.current.actions.refreshRun());
 
     expect(view.result.current.state.run).toEqual({
       status: "ready",

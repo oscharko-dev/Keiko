@@ -50,6 +50,23 @@ function event(sequence: number): CodingWorkbenchRuntimeSseEvent {
   };
 }
 
+function statusEvent(
+  sequence: number,
+  state: CodingWorkbenchRuntimeSnapshot["state"],
+  revision: number,
+): CodingWorkbenchRuntimeSseEvent {
+  return {
+    schemaVersion: "1",
+    cursor: `cursor-${String(sequence)}`,
+    sequence,
+    occurredAt: UPDATED_AT,
+    kind: "status",
+    runId: "run-1",
+    state,
+    revision,
+  };
+}
+
 function readiness(): CodingWorkbenchRuntimeReadiness {
   return {
     schemaVersion: "1",
@@ -179,19 +196,20 @@ describe("Coding Workbench live state", () => {
   });
 
   it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
-    "retains a concrete %s run when global runtime status returns to idle",
-    (terminalState) => {
+    "retains an SSE-observed %s run when global runtime status returns to idle",
+    (terminalState): void => {
       let state = codingWorkbenchRuntimeReducer(readyState(), {
         kind: "run-set",
         snapshot: snapshot({
-          state: terminalState,
+          state: "running",
           pendingPermission: undefined,
         }),
       });
       state = codingWorkbenchRuntimeReducer(state, {
         kind: "events-received",
-        events: [event(1)],
+        events: [statusEvent(1, terminalState, 5)],
       });
+      expect(state.run.value).toMatchObject({ state: terminalState, revision: 5 });
       state = codingWorkbenchRuntimeReducer(state, {
         kind: "resource-loading",
         resource: "run",
@@ -209,9 +227,9 @@ describe("Coding Workbench live state", () => {
 
       expect(next.run).toMatchObject({
         status: "ready",
-        value: { runId: "run-1", state: terminalState, revision: 4 },
+        value: { runId: "run-1", state: terminalState, revision: 5 },
       });
-      expect(next.events).toEqual([event(1)]);
+      expect(next.events).toEqual([statusEvent(1, terminalState, 5)]);
       expect(next.canStart).toBe(true);
 
       const replaced = codingWorkbenchRuntimeReducer(next, {

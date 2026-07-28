@@ -186,12 +186,12 @@ const STARTABLE_RUN_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new S
   "taken-over",
 ]);
 
+function isConcreteTerminalState(state: CodingWorkbenchRuntimeStateName): boolean {
+  return state !== "idle" && STARTABLE_RUN_STATES.has(state);
+}
+
 function isConcreteTerminalRun(snapshot: CodingWorkbenchRuntimeSnapshot): boolean {
-  return (
-    snapshot.runId !== undefined &&
-    snapshot.state !== "idle" &&
-    STARTABLE_RUN_STATES.has(snapshot.state)
-  );
+  return snapshot.runId !== undefined && isConcreteTerminalState(snapshot.state);
 }
 
 function isUnboundIdle(snapshot: CodingWorkbenchRuntimeSnapshot): boolean {
@@ -303,6 +303,40 @@ function acceptSnapshot(
   });
 }
 
+function terminalSnapshotFromEvents(
+  current: CodingWorkbenchRuntimeSnapshot | null,
+  events: readonly CodingWorkbenchRuntimeSseEvent[],
+): CodingWorkbenchRuntimeSnapshot | null {
+  if (current?.runId === undefined) return null;
+  let latest: Extract<CodingWorkbenchRuntimeSseEvent, { readonly kind: "status" }> | undefined;
+  for (const event of events) {
+    if (event.kind !== "status" || event.runId !== current.runId) continue;
+    if (!isConcreteTerminalState(event.state) || event.revision < current.revision) continue;
+    if (latest === undefined || event.revision >= latest.revision) latest = event;
+  }
+  if (latest === undefined) return null;
+  return {
+    ...current,
+    state: latest.state,
+    revision: latest.revision,
+    updatedAt: latest.occurredAt,
+    runId: latest.runId,
+    failureCode: latest.failureCode,
+    pendingPermission: undefined,
+  };
+}
+
+function acceptEvents(
+  state: CodingWorkbenchRuntimeState,
+  incoming: readonly CodingWorkbenchRuntimeSseEvent[],
+): CodingWorkbenchRuntimeState {
+  const events = retainCodingWorkbenchRuntimeEvents(state.events, incoming);
+  const terminal = terminalSnapshotFromEvents(state.run.value, incoming);
+  return terminal === null
+    ? { ...state, events }
+    : projectReadiness({ ...state, run: ready(terminal), events });
+}
+
 type RuntimeActionHandlers = {
   readonly [Kind in CodingWorkbenchRuntimeStateAction["kind"]]: (
     state: CodingWorkbenchRuntimeState,
@@ -347,10 +381,7 @@ const runtimeActionHandlers = {
       ...state,
       mutation: { ...state.mutation, status: "error", error: action.error },
     }),
-  "events-received": (state, action) => ({
-    ...state,
-    events: retainCodingWorkbenchRuntimeEvents(state.events, action.events),
-  }),
+  "events-received": (state, action) => acceptEvents(state, action.events),
   "events-reset": (state) => ({ ...state, events: [], stream: emptyResource() }),
 } satisfies RuntimeActionHandlers;
 
