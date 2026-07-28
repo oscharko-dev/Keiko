@@ -543,6 +543,33 @@ describe("activate", () => {
     expect(activated.binding.activeRoot).toBe(provisioned.instance.managedWorktreePath);
   });
 
+  it("rejects activation from an archived lifecycle state", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-archived",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...provisioned.instance,
+      lifecycleState: "archived",
+      health: "healthy",
+      lock: null,
+    });
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId: provisioned.instance.workspaceId,
+          taskId: "act-archived",
+          requestedBy: "u",
+          acquireLock: false,
+        }),
+      "ILLEGAL_TRANSITION",
+    );
+  });
+
   it("rejects activation when the persisted managed path escapes the managed root", async () => {
     const service = makeService();
     const provisioned = await service.provision({

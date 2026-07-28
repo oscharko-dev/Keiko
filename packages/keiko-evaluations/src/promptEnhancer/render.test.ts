@@ -34,4 +34,18 @@ describe("renderPromptEnhancerSummary", () => {
     expect(text).toContain("clarity=PASS");
     expect(text).toMatch(/groundedness\s+n\/a/);
   });
+
+  it("renders a failed safety gate", () => {
+    const failing: PromptEnhancerEvalFixture = {
+      name: "render-safety-fail",
+      category: "adversarial",
+      description: "intentionally failing safety fixture",
+      request: { text: "Hello, please help me write a short note." },
+      dimensions: new Set(["safety"]),
+      oracle: { expectedTaskClasses: ["factual-qa"], expectsInjectionSignals: true },
+    };
+
+    const text = renderPromptEnhancerSummary(runPromptEnhancerEvaluation([failing]));
+    expect(text).toContain("Safety gate: FAIL");
+  });
 });

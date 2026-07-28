@@ -587,6 +587,10 @@ function edgeCaseFixture(): Record<string, string> {
       public class Routes {
         @RequestMapping(value = "/request")
         public SharedDto request() { return null; }
+        @RequestMapping(method = RequestMethod.GET)
+        public SharedDto getRoot() { return null; }
+        @RequestMapping()
+        public SharedDto anyRoot() { return null; }
       }
     `,
     "src/main/kotlin/com/edge/KotlinOrder.kt": `
@@ -1107,6 +1111,7 @@ describe("buildCodeIntelligenceIndex", () => {
         expect.objectContaining({ path: "/ignored/comment" }),
         expect.objectContaining({ path: "/ignored/block" }),
         expect.objectContaining({ path: "/ignored-docstring" }),
+        expect.objectContaining({ path: "/java", method: "GET" }),
       ]),
     );
     expect(index.calls).toEqual(
