@@ -154,7 +154,7 @@ function defaultJudgeCapability(
   deps: UiHandlerDeps,
   avoidModelId?: string,
 ): ModelCapability | undefined {
-  const candidates = chatCapabilities(deps).filter((entry) =>
+  const candidates = chatCapabilities(deps).filter((entry): boolean =>
     isQualityIntelligenceJudgeEligible(entry.capability),
   );
   const differentModelCandidates =

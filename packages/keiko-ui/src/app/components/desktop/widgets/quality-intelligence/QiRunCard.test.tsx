@@ -519,7 +519,7 @@ describe("QiRunCard", () => {
     expect(badge.className).toContain("qi-quality-mid");
   });
 
-  it("renders a visible unavailable quality badge when qualityScore is null", async () => {
+  it("renders a visible unavailable quality badge when qualityScore is null", async (): Promise<void> => {
     const detail = makeDetail("qi-run-q2", [], [], 0, null);
     render(<QiRunCard runId="qi-run-q2" fetchDetailImpl={fetchOk(detail)} />);
     const badge = await screen.findByTestId("qi-quality-badge");
