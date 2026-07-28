@@ -221,7 +221,17 @@ vi.mock("./modals/GatewaySetupDialog", () => {
 });
 
 vi.mock("./modals/NewWindowDialog", () => ({
-  NewWindowDialog: () => <div role="dialog" aria-label="New window" />,
+  NewWindowDialog: ({
+    onConfirm,
+  }: {
+    readonly onConfirm: (cfg: Record<string, string>) => void;
+  }) => (
+    <div role="dialog" aria-label="New window">
+      <button type="button" onClick={() => onConfirm({ title: "Release grounding review" })}>
+        Confirm new chat
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./modals/Palette", () => ({
@@ -427,6 +437,32 @@ describe("AppShell grounding connections", () => {
     } finally {
       window.history.replaceState(null, "", previousUrl);
     }
+  });
+
+  it("clears the existing singleton binding when the user confirms a new chat", async () => {
+    const add = vi.fn<WorkspaceApi["add"]>(() => "chat-window");
+    const api = workspaceApi({ add });
+    mocks.state.workspaceResult = workspaceResult(
+      [win("chat", { chatId: "chat-1", title: "Release chat" }, "chat-window")],
+      [],
+      api,
+    );
+    const user = userEvent.setup();
+    await renderMounted();
+
+    await user.click(screen.getByTestId("left-rail"));
+    await user.click(screen.getByRole("button", { name: "Confirm new chat" }));
+
+    expect(add).toHaveBeenCalledOnce();
+    expect(add.mock.calls[0]?.[0]).toBe("chat");
+    const newChatCfg = add.mock.calls[0]?.[1];
+    expect(newChatCfg).toStrictEqual({
+      title: "Release grounding review",
+      chatId: undefined,
+      selectionHandoffId: undefined,
+    });
+    expect(Object.hasOwn(newChatCfg ?? {}, "chatId")).toBe(true);
+    expect(Object.hasOwn(newChatCfg ?? {}, "selectionHandoffId")).toBe(true);
   });
 
   it("tracks pointer and keyboard modality for focus ring policy", async () => {

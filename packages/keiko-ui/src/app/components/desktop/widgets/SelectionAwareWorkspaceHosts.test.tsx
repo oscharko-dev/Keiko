@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -56,6 +56,10 @@ const chatSessionState = vi.hoisted(() => ({
 
 vi.mock("../context/ChatSessionContext", () => ({
   useChatSessionContext: () => chatSessionState,
+}));
+
+vi.mock("../ChatWindow", () => ({
+  ChatWindow: () => <div data-testid="chat-window" />,
 }));
 
 // Records the root identity and the reveal triple each mounted editor was handed, so a test can see
@@ -504,6 +508,60 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
 });
 
 describe("ChatWindowSessionHost target missing", () => {
+  it("creates and binds one canonical chat while the singleton target is cleared", async () => {
+    const existing = {
+      id: "chat-existing",
+      projectPath: "/repo",
+      title: "Existing chat",
+      selectedModel: "example-chat-model",
+      branchLabel: undefined,
+      status: undefined,
+      connectedScope: undefined,
+      localKnowledgeScope: undefined,
+      createdAt: 1,
+      updatedAt: 1,
+    } satisfies Chat;
+    const created = {
+      ...existing,
+      id: "chat-created",
+      title: "Release grounding review",
+      createdAt: 2,
+      updatedAt: 2,
+    };
+    let resolveCreation: ((chat: Chat) => void) | undefined;
+    const creation = new Promise<Chat>((resolve) => {
+      resolveCreation = resolve;
+    });
+    chatSessionState.activeChat = existing;
+    chatSessionState.chats = [existing];
+    chatSessionState.openNewChat.mockReturnValueOnce(creation);
+    const ctx = context();
+    const view = render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ title: created.title }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    await waitFor(() =>
+      expect(chatSessionState.openNewChat).toHaveBeenCalledWith(undefined, created.title),
+    );
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ title: created.title }} ctx={ctx} />
+      </I18nProvider>,
+    );
+    expect(chatSessionState.openNewChat).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      resolveCreation?.(created);
+      await creation;
+    });
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: created.id,
+      title: created.title,
+    });
+  });
+
   it("renders a not-found message when the configured chat has no live match", async () => {
     // targetMissing requires: no selectionHandoffId, a configured chatId, session not loading,
     // the active chat not already that id, and no open (non-closed) chat with that id either.

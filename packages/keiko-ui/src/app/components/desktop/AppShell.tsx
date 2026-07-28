@@ -890,7 +890,11 @@ function AppShellInner(): ReactNode {
       if (current === null) return;
       const normalizedCfg = current === "editor" ? normalizeEditorWindowCfg(cfg) : cfg;
       const { __connectFilesId, ...windowCfg } = normalizedCfg;
-      const createdId = ws.api.add(current, windowCfg);
+      const targetWindowCfg =
+        current === "chat"
+          ? { ...windowCfg, chatId: undefined, selectionHandoffId: undefined }
+          : windowCfg;
+      const createdId = ws.api.add(current, targetWindowCfg);
       if (
         current === "agents" &&
         createdId !== null &&
@@ -900,7 +904,7 @@ function AppShellInner(): ReactNode {
         ws.api.connect(createdId, __connectFilesId);
       }
       // Chat windows create and persist their own conversation id inside the window renderer.
-      // Keeping creation scoped there is what makes N+1 chat windows independent.
+      // Clearing the prior binding above makes the existing singleton enter that canonical path.
       // uiux-fix F008 C053 — focus handoff: once the dialog unmounts, move focus into the freshly
       // created window (chat composer / first focusable control) instead of stranding it on
       // <body>. The dialog's unmount cleanup restores the trigger synchronously before this rAF
