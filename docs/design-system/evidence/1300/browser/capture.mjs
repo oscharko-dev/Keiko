@@ -758,6 +758,53 @@ function filesContentBody(pathname) {
   };
 }
 
+function gitRemotesBody(searchParams) {
+  return {
+    schemaVersion: "1",
+    root: searchParams.get("root") ?? "",
+    repositoryRoot: DEMO_ROOT,
+    state: "available",
+    available: true,
+    remotes: [],
+    truncated: false,
+  };
+}
+
+function gitDiffBody(searchParams) {
+  return {
+    schemaVersion: "1",
+    scope: searchParams.get("scope") ?? "unstaged",
+    files: [],
+    truncated: false,
+    totalFiles: 0,
+    totalBytes: 0,
+    maxBytes: 524288,
+    maxFiles: 400,
+  };
+}
+
+function editorVerificationCatalogBody(searchParams) {
+  const projectId = searchParams.get("projectId") ?? "";
+  return {
+    schemaVersion: "1",
+    projectId,
+    workspaceTrust: {
+      kind: "workspace-trust-status",
+      schemaVersion: 1,
+      projectId,
+      trust: "trusted",
+      decidedBy: "server",
+      reason: "human-grant",
+      revision: 1,
+    },
+    kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
+      kind,
+      available: true,
+      trustState: "trusted",
+    })),
+  };
+}
+
 function apiBody(url) {
   const pathname = typeof url === "string" ? url : url.pathname;
   const searchParams = typeof url === "string" ? new URLSearchParams() : url.searchParams;
@@ -769,49 +816,10 @@ function apiBody(url) {
   if (pathname === "/api/files/preview" || pathname === "/api/files/content") {
     return filesContentBody(pathname);
   }
-  if (pathname === "/api/git/remotes") {
-    return {
-      schemaVersion: "1",
-      root: searchParams.get("root") ?? "",
-      repositoryRoot: DEMO_ROOT,
-      state: "available",
-      available: true,
-      remotes: [],
-      truncated: false,
-    };
-  }
-  if (pathname === "/api/git/diff/structured") {
-    return {
-      schemaVersion: "1",
-      scope: searchParams.get("scope") ?? "unstaged",
-      files: [],
-      truncated: false,
-      totalFiles: 0,
-      totalBytes: 0,
-      maxBytes: 524288,
-      maxFiles: 400,
-    };
-  }
+  if (pathname === "/api/git/remotes") return gitRemotesBody(searchParams);
+  if (pathname === "/api/git/diff/structured") return gitDiffBody(searchParams);
   if (pathname === "/api/editor/verification/catalog") {
-    const projectId = searchParams.get("projectId") ?? "";
-    return {
-      schemaVersion: "1",
-      projectId,
-      workspaceTrust: {
-        kind: "workspace-trust-status",
-        schemaVersion: 1,
-        projectId,
-        trust: "trusted",
-        decidedBy: "server",
-        reason: "human-grant",
-        revision: 1,
-      },
-      kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
-        kind,
-        available: true,
-        trustState: "trusted",
-      })),
-    };
+    return editorVerificationCatalogBody(searchParams);
   }
   return undefined;
 }
