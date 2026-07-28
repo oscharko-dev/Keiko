@@ -24,7 +24,7 @@
     "@oscharko-dev/keiko-contracts": "0.2.15",
     "@oscharko-dev/keiko-editor": "0.2.15",
     "diff": "9.0.0",
-    "monaco-editor": "0.55.1",
+    "monaco-editor": "0.56.0",
     "next": "16.2.11",
     "react": "19.2.7",
     "react-dom": "19.2.7"

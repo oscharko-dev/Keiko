@@ -27,7 +27,7 @@
   "dependencies": {
     "@monaco-editor/react": "4.7.0",
     "@oscharko-dev/keiko-contracts": "0.2.15",
-    "monaco-editor": "0.55.1"
+    "monaco-editor": "0.56.0"
   },
   "devDependencies": {
     "@testing-library/dom": "10.4.1",
