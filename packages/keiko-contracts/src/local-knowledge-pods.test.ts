@@ -487,7 +487,7 @@ describe("validateKnowledgePodSummary", () => {
     expect(invalidErrors(result)).toContain("governance.locationKind is invalid");
   });
 
-  it("rejects unknown governance, compatibility, and source-kind values", () => {
+  it("rejects unknown governance, compatibility, and source-kind values", (): void => {
     const result = validateKnowledgePodSummary({
       ...happySummary(),
       sourceKinds: ["unsupported-source"],

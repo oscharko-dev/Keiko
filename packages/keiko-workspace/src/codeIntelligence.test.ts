@@ -1112,6 +1112,7 @@ describe("buildCodeIntelligenceIndex", () => {
         expect.objectContaining({ path: "/ignored/block" }),
         expect.objectContaining({ path: "/ignored-docstring" }),
         expect.objectContaining({ path: "/java", method: "GET" }),
+        expect.objectContaining({ path: "/java", method: "ANY" }),
       ]),
     );
     expect(index.calls).toEqual(

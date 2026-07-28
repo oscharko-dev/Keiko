@@ -28,7 +28,7 @@ import type { WorkspaceInfo, WorkspaceInstance } from "@oscharko-dev/keiko-contr
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
-import type { WorkspaceProvisioningService } from "./types.js";
+import type { WorkspaceActivateResult, WorkspaceProvisioningService } from "./types.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import {
   deriveManagedWorktreePath,
@@ -543,7 +543,7 @@ describe("activate", () => {
     expect(activated.binding.activeRoot).toBe(provisioned.instance.managedWorktreePath);
   });
 
-  it("rejects activation from an archived lifecycle state", async () => {
+  it("rejects activation from an archived lifecycle state", async (): Promise<void> => {
     const service = makeService();
     const provisioned = await service.provision({
       repositoryRequestPath: repoRoot,
@@ -559,7 +559,7 @@ describe("activate", () => {
     });
 
     await rejectsWithCode(
-      () =>
+      (): Promise<WorkspaceActivateResult> =>
         service.activate({
           workspaceId: provisioned.instance.workspaceId,
           taskId: "act-archived",

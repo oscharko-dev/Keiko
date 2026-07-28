@@ -35,7 +35,7 @@ describe("renderPromptEnhancerSummary", () => {
     expect(text).toMatch(/groundedness\s+n\/a/);
   });
 
-  it("renders a failed safety gate", () => {
+  it("renders a failed safety gate", (): void => {
     const failing: PromptEnhancerEvalFixture = {
       name: "render-safety-fail",
       category: "adversarial",
