@@ -1013,28 +1013,26 @@ describe("PATCH /api/chats", () => {
     expect(groundedContextIndexRegistry.size()).toBe(0);
   });
 
-  it("rejects connectedScope with a traversal path", async () => {
+  it.each([
+    {
+      title: "rejects connectedScope with a traversal path",
+      connectedScope: { kind: "files", relativePaths: ["../escape"], connectedAtMs: 1 },
+    },
+    {
+      title: "rejects connectedScope with an absolute path",
+      connectedScope: { kind: "files", relativePaths: ["/etc/passwd"], connectedAtMs: 1 },
+    },
+    {
+      title: "rejects a non-integer connectedScope.connectedAtMs",
+      connectedScope: { kind: "files", relativePaths: ["src/x"], connectedAtMs: 1.5 },
+    },
+  ])("$title", async ({ connectedScope }) => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
     const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
       method: "PATCH",
       headers: PATCH_HEADERS,
-      body: JSON.stringify({
-        connectedScope: { kind: "files", relativePaths: ["../escape"], connectedAtMs: 1 },
-      }),
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it("rejects connectedScope with an absolute path", async () => {
-    store.createProject(projDir);
-    const c = store.createChat(projDir, "t", "m");
-    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
-      method: "PATCH",
-      headers: PATCH_HEADERS,
-      body: JSON.stringify({
-        connectedScope: { kind: "files", relativePaths: ["/etc/passwd"], connectedAtMs: 1 },
-      }),
+      body: JSON.stringify({ connectedScope }),
     });
     expect(res.status).toBe(400);
   });
@@ -1129,19 +1127,6 @@ describe("PATCH /api/chats", () => {
       headers: PATCH_HEADERS,
       body: JSON.stringify({
         connectedScope: { kind: "files", relativePaths: tooMany, connectedAtMs: 1 },
-      }),
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it("rejects a non-integer connectedScope.connectedAtMs", async () => {
-    store.createProject(projDir);
-    const c = store.createChat(projDir, "t", "m");
-    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
-      method: "PATCH",
-      headers: PATCH_HEADERS,
-      body: JSON.stringify({
-        connectedScope: { kind: "files", relativePaths: ["src/x"], connectedAtMs: 1.5 },
       }),
     });
     expect(res.status).toBe(400);

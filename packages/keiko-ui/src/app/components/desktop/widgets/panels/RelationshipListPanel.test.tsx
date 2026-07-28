@@ -197,40 +197,20 @@ describe("RelationshipListPanel", () => {
   });
 
   describe("density caps", () => {
-    it("Minimal density: API called with limit ≤ 5", async () => {
+    it.each([
+      { title: "Minimal density: API called with limit ≤ 5", density: "minimal", limit: 5 },
+      { title: "Standard density: API called with limit ≤ 25", density: "standard", limit: 25 },
+      { title: "Dense density: API called with limit ≤ 512", density: "dense", limit: 512 },
+    ] as const)("$title", async ({ density, limit }) => {
       mockListRelationships.mockResolvedValue({
         entries: [],
         truncated: false,
         nextCursor: null,
       });
-      renderPanel({ filters: { relDensity: "minimal" } });
+      renderPanel({ filters: { relDensity: density } });
       await waitFor(() => expect(mockListRelationships).toHaveBeenCalled());
       const call = mockListRelationships.mock.calls[0];
-      expect(call?.[0]?.limit ?? 0).toBeLessThanOrEqual(5);
-    });
-
-    it("Standard density: API called with limit ≤ 25", async () => {
-      mockListRelationships.mockResolvedValue({
-        entries: [],
-        truncated: false,
-        nextCursor: null,
-      });
-      renderPanel({ filters: { relDensity: "standard" } });
-      await waitFor(() => expect(mockListRelationships).toHaveBeenCalled());
-      const call = mockListRelationships.mock.calls[0];
-      expect(call?.[0]?.limit ?? 0).toBeLessThanOrEqual(25);
-    });
-
-    it("Dense density: API called with limit ≤ 512", async () => {
-      mockListRelationships.mockResolvedValue({
-        entries: [],
-        truncated: false,
-        nextCursor: null,
-      });
-      renderPanel({ filters: { relDensity: "dense" } });
-      await waitFor(() => expect(mockListRelationships).toHaveBeenCalled());
-      const call = mockListRelationships.mock.calls[0];
-      expect(call?.[0]?.limit ?? 0).toBeLessThanOrEqual(512);
+      expect(call?.[0]?.limit ?? 0).toBeLessThanOrEqual(limit);
     });
   });
 

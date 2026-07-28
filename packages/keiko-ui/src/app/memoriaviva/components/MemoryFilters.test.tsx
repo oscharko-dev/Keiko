@@ -27,24 +27,17 @@ describe("MemoryFilters — landmark groups", () => {
     expect(groups).toHaveLength(4);
   });
 
-  it('scope group has aria-label "Filter by Scope"', () => {
+  it.each([
+    { title: 'scope group has aria-label "Filter by Scope"', name: "Filter by Scope" },
+    { title: 'type group has aria-label "Filter by Type"', name: "Filter by Type" },
+    { title: 'status group has aria-label "Filter by Status"', name: "Filter by Status" },
+    {
+      title: 'sensitivity group has aria-label "Filter by Sensitivity"',
+      name: "Filter by Sensitivity",
+    },
+  ])("$title", ({ name }) => {
     renderFilters();
-    expect(screen.getByRole("group", { name: "Filter by Scope" })).toBeInTheDocument();
-  });
-
-  it('type group has aria-label "Filter by Type"', () => {
-    renderFilters();
-    expect(screen.getByRole("group", { name: "Filter by Type" })).toBeInTheDocument();
-  });
-
-  it('status group has aria-label "Filter by Status"', () => {
-    renderFilters();
-    expect(screen.getByRole("group", { name: "Filter by Status" })).toBeInTheDocument();
-  });
-
-  it('sensitivity group has aria-label "Filter by Sensitivity"', () => {
-    renderFilters();
-    expect(screen.getByRole("group", { name: "Filter by Sensitivity" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name })).toBeInTheDocument();
   });
 
   it("renders filter labels in German when the locale is German", async () => {
@@ -145,21 +138,22 @@ describe("MemoryFilters — query debounce (GEN-PERF-WIDGET-003)", () => {
 // ---------------------------------------------------------------------------
 
 describe("MemoryFilters — inactive chip state", () => {
-  it('status chip "Proposed" has aria-pressed=false when status filter is empty', () => {
+  it.each([
+    {
+      title: 'status chip "Proposed" has aria-pressed=false when status filter is empty',
+      name: "Proposed",
+    },
+    {
+      title: 'scope chip "User" has aria-pressed=false when scope filter is empty',
+      name: "User",
+    },
+    {
+      title: 'sensitivity chip "Public" has aria-pressed=false when sensitivity filter is empty',
+      name: "Public",
+    },
+  ])("$title", ({ name }) => {
     renderFilters();
-    const btn = screen.getByRole("button", { name: "Proposed" });
-    expect(btn).toHaveAttribute("aria-pressed", "false");
-  });
-
-  it('scope chip "User" has aria-pressed=false when scope filter is empty', () => {
-    renderFilters();
-    const btn = screen.getByRole("button", { name: "User" });
-    expect(btn).toHaveAttribute("aria-pressed", "false");
-  });
-
-  it('sensitivity chip "Public" has aria-pressed=false when sensitivity filter is empty', () => {
-    renderFilters();
-    const btn = screen.getByRole("button", { name: "Public" });
+    const btn = screen.getByRole("button", { name });
     expect(btn).toHaveAttribute("aria-pressed", "false");
   });
 });

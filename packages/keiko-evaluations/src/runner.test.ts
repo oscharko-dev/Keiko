@@ -199,34 +199,28 @@ describe("unit-tests/happy-path fixture", () => {
     expect(successTerminals).toContain(fr.report.status);
   });
 
-  it("task-completion scores pass", async () => {
+  it.each([
+    { title: "task-completion scores pass", dimension: "task-completion" },
+    {
+      title: "patch-correctness scores pass (proposedDiff present)",
+      dimension: "patch-correctness",
+    },
+    {
+      title: "audit-completeness scores pass (manifest produced and valid)",
+      dimension: "audit-completeness",
+    },
+    {
+      title: "test-pass-rate scores pass (apply mode with fake-spawn exit 0)",
+      dimension: "test-pass-rate",
+    },
+    {
+      title: "verification-completeness scores pass (verificationSummary present)",
+      dimension: "verification-completeness",
+    },
+    { title: "patch-size scores pass (within the oracle limits)", dimension: "patch-size" },
+  ] as const)("$title", async ({ dimension }) => {
     const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "task-completion")).toBe("pass");
-  });
-
-  it("patch-correctness scores pass (proposedDiff present)", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "patch-correctness")).toBe("pass");
-  });
-
-  it("audit-completeness scores pass (manifest produced and valid)", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "audit-completeness")).toBe("pass");
-  });
-
-  it("test-pass-rate scores pass (apply mode with fake-spawn exit 0)", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "test-pass-rate")).toBe("pass");
-  });
-
-  it("verification-completeness scores pass (verificationSummary present)", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "verification-completeness")).toBe("pass");
-  });
-
-  it("patch-size scores pass (within the oracle limits)", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "patch-size")).toBe("pass");
+    expect(outcomeOf(sc, "happy-path", dimension)).toBe("pass");
   });
 });
 
@@ -280,19 +274,16 @@ describe("unit-tests/retry-then-accept fixture", () => {
     expect(fr.report.status).toBe("dry-run");
   });
 
-  it("task-completion scores pass", async () => {
+  it.each([
+    { title: "task-completion scores pass", dimension: "task-completion" },
+    {
+      title: "patch-correctness scores pass (valid diff produced)",
+      dimension: "patch-correctness",
+    },
+    { title: "audit-completeness scores pass", dimension: "audit-completeness" },
+  ] as const)("$title", async ({ dimension }) => {
     const sc = await run();
-    expect(outcomeOf(sc, "retry-then-accept", "task-completion")).toBe("pass");
-  });
-
-  it("patch-correctness scores pass (valid diff produced)", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "retry-then-accept", "patch-correctness")).toBe("pass");
-  });
-
-  it("audit-completeness scores pass", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "retry-then-accept", "audit-completeness")).toBe("pass");
+    expect(outcomeOf(sc, "retry-then-accept", dimension)).toBe("pass");
   });
 });
 
@@ -311,29 +302,18 @@ describe("bug-investigation/happy-path fixture", () => {
     expect(successTerminals).toContain(fr.report.status);
   });
 
-  it("task-completion scores pass", async () => {
+  it.each([
+    { title: "task-completion scores pass", dimension: "task-completion" },
+    { title: "patch-correctness scores pass (fix diff present)", dimension: "patch-correctness" },
+    { title: "audit-completeness scores pass", dimension: "audit-completeness" },
+    {
+      title: "test-pass-rate scores pass (apply mode with fake spawn)",
+      dimension: "test-pass-rate",
+    },
+    { title: "verification-completeness scores pass", dimension: "verification-completeness" },
+  ] as const)("$title", async ({ dimension }) => {
     const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "task-completion")).toBe("pass");
-  });
-
-  it("patch-correctness scores pass (fix diff present)", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "patch-correctness")).toBe("pass");
-  });
-
-  it("audit-completeness scores pass", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "audit-completeness")).toBe("pass");
-  });
-
-  it("test-pass-rate scores pass (apply mode with fake spawn)", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "test-pass-rate")).toBe("pass");
-  });
-
-  it("verification-completeness scores pass", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "happy-path", "verification-completeness")).toBe("pass");
+    expect(outcomeOf(sc, "happy-path", dimension)).toBe("pass");
   });
 });
 
@@ -388,19 +368,19 @@ describe("bug-investigation/investigation-only fixture", () => {
     expect(fr.report.status).toBe("investigation-only");
   });
 
-  it("task-completion scores pass (investigation-only is a success terminal)", async () => {
+  it.each([
+    {
+      title: "task-completion scores pass (investigation-only is a success terminal)",
+      dimension: "task-completion",
+    },
+    {
+      title: "patch-correctness scores pass (expectPatch=false and no diff produced)",
+      dimension: "patch-correctness",
+    },
+    { title: "audit-completeness scores pass", dimension: "audit-completeness" },
+  ] as const)("$title", async ({ dimension }) => {
     const sc = await run();
-    expect(outcomeOf(sc, "investigation-only", "task-completion")).toBe("pass");
-  });
-
-  it("patch-correctness scores pass (expectPatch=false and no diff produced)", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "investigation-only", "patch-correctness")).toBe("pass");
-  });
-
-  it("audit-completeness scores pass", async () => {
-    const sc = await run();
-    expect(outcomeOf(sc, "investigation-only", "audit-completeness")).toBe("pass");
+    expect(outcomeOf(sc, "investigation-only", dimension)).toBe("pass");
   });
 });
 

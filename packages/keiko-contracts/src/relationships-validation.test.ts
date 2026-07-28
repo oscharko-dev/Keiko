@@ -547,34 +547,18 @@ describe("validateRelationship — lifecycle transition (ctx-gated)", () => {
     expect(codesFrom(r)).toContain("denied/lifecycle-illegal-transition");
   });
 
-  it("accepts draft → active", () => {
+  it.each([
+    { title: "accepts draft → active", previousLifecycleState: "draft" },
+    { title: "accepts blocked → active", previousLifecycleState: "blocked" },
+    { title: "accepts stale → active", previousLifecycleState: "stale" },
+    {
+      title: "self-transition active → active is admitted (no-op)",
+      previousLifecycleState: "active",
+    },
+  ] as const)("$title", ({ previousLifecycleState }) => {
     const r = validateRelationship(
       happy("reads-context", endpoint("workflow-run", "r1"), endpoint("memory", "m1"), "active"),
-      { previousLifecycleState: "draft" },
-    );
-    expect(r.ok).toBe(true);
-  });
-
-  it("accepts blocked → active", () => {
-    const r = validateRelationship(
-      happy("reads-context", endpoint("workflow-run", "r1"), endpoint("memory", "m1"), "active"),
-      { previousLifecycleState: "blocked" },
-    );
-    expect(r.ok).toBe(true);
-  });
-
-  it("accepts stale → active", () => {
-    const r = validateRelationship(
-      happy("reads-context", endpoint("workflow-run", "r1"), endpoint("memory", "m1"), "active"),
-      { previousLifecycleState: "stale" },
-    );
-    expect(r.ok).toBe(true);
-  });
-
-  it("self-transition active → active is admitted (no-op)", () => {
-    const r = validateRelationship(
-      happy("reads-context", endpoint("workflow-run", "r1"), endpoint("memory", "m1"), "active"),
-      { previousLifecycleState: "active" },
+      { previousLifecycleState },
     );
     expect(r.ok).toBe(true);
   });

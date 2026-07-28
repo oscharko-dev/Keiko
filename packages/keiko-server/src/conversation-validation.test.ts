@@ -110,35 +110,27 @@ describe("validateConversationPayload", () => {
     }
   });
 
-  it("rejects image/svg+xml with CONVERSATION_UNSUPPORTED_FILE_TYPE even when the model is image-capable", () => {
+  it.each([
+    {
+      title:
+        "rejects image/svg+xml with CONVERSATION_UNSUPPORTED_FILE_TYPE even when the model is image-capable",
+      mimeType: "image/svg+xml",
+    },
+    {
+      title:
+        "rejects image/svg with CONVERSATION_UNSUPPORTED_FILE_TYPE even when the model is image-capable",
+      mimeType: "image/svg",
+    },
+    {
+      title:
+        "rejects an image attachment whose mime is not image/* even when the model is image-capable",
+      mimeType: "application/pdf",
+    },
+  ])("$title", ({ mimeType }) => {
     const result = validateConversationPayload({
       modelId: "test-chat",
       modelCapabilities: registry(baseCapability({ supportsImageInput: true })),
-      attachments: [{ kind: "image", mimeType: "image/svg+xml", sizeBytes: 1024 }],
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe("CONVERSATION_UNSUPPORTED_FILE_TYPE");
-    }
-  });
-
-  it("rejects image/svg with CONVERSATION_UNSUPPORTED_FILE_TYPE even when the model is image-capable", () => {
-    const result = validateConversationPayload({
-      modelId: "test-chat",
-      modelCapabilities: registry(baseCapability({ supportsImageInput: true })),
-      attachments: [{ kind: "image", mimeType: "image/svg", sizeBytes: 1024 }],
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe("CONVERSATION_UNSUPPORTED_FILE_TYPE");
-    }
-  });
-
-  it("rejects an image attachment whose mime is not image/* even when the model is image-capable", () => {
-    const result = validateConversationPayload({
-      modelId: "test-chat",
-      modelCapabilities: registry(baseCapability({ supportsImageInput: true })),
-      attachments: [{ kind: "image", mimeType: "application/pdf", sizeBytes: 1024 }],
+      attachments: [{ kind: "image", mimeType, sizeBytes: 1024 }],
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {

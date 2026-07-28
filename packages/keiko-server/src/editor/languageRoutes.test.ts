@@ -896,38 +896,22 @@ describe("POST /api/editor/language", () => {
     expect(result.body).toMatchObject({ error: { code: "UNSUPPORTED_LANGUAGE" } });
   });
 
-  it("denies an overlay path that escapes the workspace root", async () => {
+  it.each([
+    {
+      title: "denies an overlay path that escapes the workspace root",
+      path: "../escape.ts",
+    },
+    { title: "denies an absolute overlay path", path: "/etc/passwd" },
+    {
+      title: "denies an overlay path with a deny-listed segment inside the root",
+      path: ".git/config.ts",
+    },
+  ])("$title", async ({ path }) => {
     const result = await handleEditorLanguage(
       postContext({
         operation: "diagnostics",
         root,
-        document: { path: "../escape.ts", languageId: "typescript", text: "const x = 1;\n" },
-      }),
-      deps(),
-    );
-    expect(result.status).toBe(403);
-    expect(result.body).toMatchObject({ error: { code: "DENIED" } });
-  });
-
-  it("denies an absolute overlay path", async () => {
-    const result = await handleEditorLanguage(
-      postContext({
-        operation: "diagnostics",
-        root,
-        document: { path: "/etc/passwd", languageId: "typescript", text: "const x = 1;\n" },
-      }),
-      deps(),
-    );
-    expect(result.status).toBe(403);
-    expect(result.body).toMatchObject({ error: { code: "DENIED" } });
-  });
-
-  it("denies an overlay path with a deny-listed segment inside the root", async () => {
-    const result = await handleEditorLanguage(
-      postContext({
-        operation: "diagnostics",
-        root,
-        document: { path: ".git/config.ts", languageId: "typescript", text: "const x = 1;\n" },
+        document: { path, languageId: "typescript", text: "const x = 1;\n" },
       }),
       deps(),
     );

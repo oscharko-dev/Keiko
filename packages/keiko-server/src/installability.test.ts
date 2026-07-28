@@ -161,22 +161,17 @@ describe("Gate 3 — CSP wire headers include worker-src, manifest-src, and medi
     expect(res.headers.get("content-security-policy")).not.toBeNull();
   });
 
-  it("CSP contains worker-src 'self'", async () => {
+  it.each([
+    { title: "CSP contains worker-src 'self'", directive: "worker-src 'self'" },
+    { title: "CSP contains manifest-src 'self'", directive: "manifest-src 'self'" },
+    {
+      title: "CSP contains media-src 'self' blob: for generated voice playback",
+      directive: "media-src 'self' blob:",
+    },
+  ])("$title", async ({ directive }) => {
     const res = await fetch(url("/"));
     const csp = res.headers.get("content-security-policy") ?? "";
-    expect(csp).toContain("worker-src 'self'");
-  });
-
-  it("CSP contains manifest-src 'self'", async () => {
-    const res = await fetch(url("/"));
-    const csp = res.headers.get("content-security-policy") ?? "";
-    expect(csp).toContain("manifest-src 'self'");
-  });
-
-  it("CSP contains media-src 'self' blob: for generated voice playback", async () => {
-    const res = await fetch(url("/"));
-    const csp = res.headers.get("content-security-policy") ?? "";
-    expect(csp).toContain("media-src 'self' blob:");
+    expect(csp).toContain(directive);
   });
 });
 
@@ -237,20 +232,18 @@ describe("Gate 5 — /api/* responses carry Cache-Control: no-store (headers.ts 
 // ─── Gate 6: static assets are cacheable (no no-store on manifest) ────────────
 
 describe("Gate 6 — static assets have no Cache-Control: no-store (SW can populate cache)", () => {
-  it("GET /manifest.webmanifest does NOT set Cache-Control: no-store", async () => {
-    const res = await fetch(url("/manifest.webmanifest"));
-    const cc = res.headers.get("cache-control") ?? "";
-    expect(cc.toLowerCase()).not.toContain("no-store");
-  });
-
-  it("GET /sw.js does NOT set Cache-Control: no-store", async () => {
-    const res = await fetch(url("/sw.js"));
-    const cc = res.headers.get("cache-control") ?? "";
-    expect(cc.toLowerCase()).not.toContain("no-store");
-  });
-
-  it("GET /icon-192.png does NOT set Cache-Control: no-store", async () => {
-    const res = await fetch(url("/icon-192.png"));
+  it.each([
+    {
+      title: "GET /manifest.webmanifest does NOT set Cache-Control: no-store",
+      path: "/manifest.webmanifest",
+    },
+    { title: "GET /sw.js does NOT set Cache-Control: no-store", path: "/sw.js" },
+    {
+      title: "GET /icon-192.png does NOT set Cache-Control: no-store",
+      path: "/icon-192.png",
+    },
+  ])("$title", async ({ path }) => {
+    const res = await fetch(url(path));
     const cc = res.headers.get("cache-control") ?? "";
     expect(cc.toLowerCase()).not.toContain("no-store");
   });

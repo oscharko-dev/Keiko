@@ -44,18 +44,19 @@ describe("stripUnsafeFormatChars — bidi overrides", () => {
     expect(result).not.toContain(cp(0x202e));
   });
 
-  it("strips LRE U+202A (kills: swap range boundary to 0x202B)", () => {
-    const dirty = `a${cp(0x202a)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
-
-  it("strips PDF U+202C (kills: off-by-one on range end)", () => {
-    const dirty = `a${cp(0x202c)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
-
-  it("strips LRO U+202D (kills: narrow range to 202A–202C only)", () => {
-    const dirty = `a${cp(0x202d)}b`;
+  it.each([
+    {
+      title: "strips LRE U+202A (kills: swap range boundary to 0x202B)",
+      codePoint: 0x202a,
+    },
+    { title: "strips PDF U+202C (kills: off-by-one on range end)", codePoint: 0x202c },
+    {
+      title: "strips LRO U+202D (kills: narrow range to 202A–202C only)",
+      codePoint: 0x202d,
+    },
+    { title: "strips Arabic letter mark U+061C (kills: omit ALM check)", codePoint: 0x061c },
+  ])("$title", ({ codePoint }) => {
+    const dirty = `a${cp(codePoint)}b`;
     expect(stripUnsafeFormatChars(dirty)).toBe("ab");
   });
 
@@ -71,28 +72,20 @@ describe("stripUnsafeFormatChars — bidi overrides", () => {
     expect(stripUnsafeFormatChars(`a${cp(0x200e)}b`)).toBe("ab");
     expect(stripUnsafeFormatChars(`a${cp(0x200f)}b`)).toBe("ab");
   });
-
-  it("strips Arabic letter mark U+061C (kills: omit ALM check)", () => {
-    const dirty = `a${cp(0x061c)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
 });
 
 // ─── stripUnsafeFormatChars — zero-width and BOM ─────────────────────────────
 
 describe("stripUnsafeFormatChars — zero-width and BOM", () => {
-  it("strips ZWSP U+200B (kills: omit 0x200B-0x200D range)", () => {
-    const dirty = `a${cp(0x200b)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
-
-  it("strips ZWNJ U+200C (kills: narrow range to 200B only)", () => {
-    const dirty = `a${cp(0x200c)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
-
-  it("strips ZWJ U+200D (kills: narrow range to 200B–200C only)", () => {
-    const dirty = `a${cp(0x200d)}b`;
+  it.each([
+    { title: "strips ZWSP U+200B (kills: omit 0x200B-0x200D range)", codePoint: 0x200b },
+    { title: "strips ZWNJ U+200C (kills: narrow range to 200B only)", codePoint: 0x200c },
+    {
+      title: "strips ZWJ U+200D (kills: narrow range to 200B–200C only)",
+      codePoint: 0x200d,
+    },
+  ])("$title", ({ codePoint }) => {
+    const dirty = `a${cp(codePoint)}b`;
     expect(stripUnsafeFormatChars(dirty)).toBe("ab");
   });
 
@@ -105,33 +98,24 @@ describe("stripUnsafeFormatChars — zero-width and BOM", () => {
 // ─── stripUnsafeFormatChars — C0/C1/DEL controls ─────────────────────────────
 
 describe("stripUnsafeFormatChars — C0/C1/DEL controls", () => {
-  it("strips NUL U+0000 (kills: omit C0 range entirely)", () => {
-    const dirty = `a${cp(0x0000)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
-
-  it("strips BEL U+0007 (kills: C0 check starts at 0x0008)", () => {
-    const dirty = `a${cp(0x0007)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
-
-  it("strips DEL U+007F (kills: omit DEL check)", () => {
-    const dirty = `a${cp(0x007f)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
-
-  it("strips a C1 control U+0085 (NEL) (kills: omit C1 range)", () => {
-    const dirty = `a${cp(0x0085)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
-
-  it("strips first C1 control U+0080 (kills: C1 range starts at 0x0081)", () => {
-    const dirty = `a${cp(0x0080)}b`;
-    expect(stripUnsafeFormatChars(dirty)).toBe("ab");
-  });
-
-  it("strips last C1 control U+009F (kills: C1 range ends at 0x009E)", () => {
-    const dirty = `a${cp(0x009f)}b`;
+  it.each([
+    { title: "strips NUL U+0000 (kills: omit C0 range entirely)", codePoint: 0x0000 },
+    { title: "strips BEL U+0007 (kills: C0 check starts at 0x0008)", codePoint: 0x0007 },
+    { title: "strips DEL U+007F (kills: omit DEL check)", codePoint: 0x007f },
+    {
+      title: "strips a C1 control U+0085 (NEL) (kills: omit C1 range)",
+      codePoint: 0x0085,
+    },
+    {
+      title: "strips first C1 control U+0080 (kills: C1 range starts at 0x0081)",
+      codePoint: 0x0080,
+    },
+    {
+      title: "strips last C1 control U+009F (kills: C1 range ends at 0x009E)",
+      codePoint: 0x009f,
+    },
+  ])("$title", ({ codePoint }) => {
+    const dirty = `a${cp(codePoint)}b`;
     expect(stripUnsafeFormatChars(dirty)).toBe("ab");
   });
 });

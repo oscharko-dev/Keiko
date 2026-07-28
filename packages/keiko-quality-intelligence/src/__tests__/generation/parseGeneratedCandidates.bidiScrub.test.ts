@@ -187,28 +187,29 @@ function exportBundle(
 describe("serializeExportBundle — no unsafe code point survives into any format (Issue #724)", () => {
   const candidate = parsedDirtyCandidate();
 
-  it("csv body contains no unsafe code point (kills: strip removed from csv path)", () => {
-    const bundle = exportBundle("csv", candidate, false);
+  it.each([
+    {
+      title: "csv body contains no unsafe code point (kills: strip removed from csv path)",
+      format: "csv",
+    },
+    {
+      title: "json body contains no unsafe code point (kills: strip removed from json path)",
+      format: "json",
+    },
+    {
+      title:
+        "markdown body contains no unsafe code point (kills: strip removed from markdown path)",
+      format: "markdown",
+    },
+    {
+      title:
+        "plain-text body contains no unsafe code point (kills: strip removed from plain-text path)",
+      format: "plain-text",
+    },
+  ] as const)("$title", ({ format }) => {
+    const bundle = exportBundle(format, candidate, false);
     const { body } = serializeExportBundle(bundle, [candidate]);
-    expect(hasNoUnsafeChar(body), "csv body").toBe(true);
-  });
-
-  it("json body contains no unsafe code point (kills: strip removed from json path)", () => {
-    const bundle = exportBundle("json", candidate, false);
-    const { body } = serializeExportBundle(bundle, [candidate]);
-    expect(hasNoUnsafeChar(body), "json body").toBe(true);
-  });
-
-  it("markdown body contains no unsafe code point (kills: strip removed from markdown path)", () => {
-    const bundle = exportBundle("markdown", candidate, false);
-    const { body } = serializeExportBundle(bundle, [candidate]);
-    expect(hasNoUnsafeChar(body), "markdown body").toBe(true);
-  });
-
-  it("plain-text body contains no unsafe code point (kills: strip removed from plain-text path)", () => {
-    const bundle = exportBundle("plain-text", candidate, false);
-    const { body } = serializeExportBundle(bundle, [candidate]);
-    expect(hasNoUnsafeChar(body), "plain-text body").toBe(true);
+    expect(hasNoUnsafeChar(body), `${format} body`).toBe(true);
   });
 
   it("quality-center body contains no unsafe code point (kills: strip removed from quality-center path)", () => {

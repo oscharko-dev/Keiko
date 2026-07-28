@@ -168,62 +168,42 @@ describe("verifyEmbeddingCapability", () => {
     }
   });
 
-  it("maps wrong-header adapter outcomes to wrong-header without leaking", async () => {
-    const result = await verifyEmbeddingCapability(
-      adapterReturning({ ok: false, kind: "wrong-header" }),
-      PROBE,
-    );
+  it.each([
+    {
+      title: "maps wrong-header adapter outcomes to wrong-header without leaking",
+      kind: "wrong-header",
+      expectedReason: "wrong-header",
+    },
+    {
+      title: "maps rate-limited adapter outcomes to rate-limited",
+      kind: "rate-limited",
+      expectedReason: "rate-limited",
+    },
+    {
+      title: "maps unsupported-model adapter outcomes to unsupported-model",
+      kind: "unsupported-model",
+      expectedReason: "unsupported-model",
+    },
+    {
+      title: "maps timeout adapter outcomes to timeout",
+      kind: "timeout",
+      expectedReason: "timeout",
+    },
+    {
+      title: "maps transport adapter outcomes to unavailable",
+      kind: "transport",
+      expectedReason: "unavailable",
+    },
+    {
+      title: "maps invalid-response adapter outcomes to invalid-response",
+      kind: "invalid-response",
+      expectedReason: "invalid-response",
+    },
+  ] as const)("$title", async ({ kind, expectedReason }) => {
+    const result = await verifyEmbeddingCapability(adapterReturning({ ok: false, kind }), PROBE);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reason).toBe("wrong-header");
-      assertSafeMessage(result.safeMessage);
-    }
-  });
-
-  it("maps rate-limited adapter outcomes to rate-limited", async () => {
-    const result = await verifyEmbeddingCapability(
-      adapterReturning({ ok: false, kind: "rate-limited" }),
-      PROBE,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("rate-limited");
-      assertSafeMessage(result.safeMessage);
-    }
-  });
-
-  it("maps unsupported-model adapter outcomes to unsupported-model", async () => {
-    const result = await verifyEmbeddingCapability(
-      adapterReturning({ ok: false, kind: "unsupported-model" }),
-      PROBE,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("unsupported-model");
-      assertSafeMessage(result.safeMessage);
-    }
-  });
-
-  it("maps timeout adapter outcomes to timeout", async () => {
-    const result = await verifyEmbeddingCapability(
-      adapterReturning({ ok: false, kind: "timeout" }),
-      PROBE,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("timeout");
-      assertSafeMessage(result.safeMessage);
-    }
-  });
-
-  it("maps transport adapter outcomes to unavailable", async () => {
-    const result = await verifyEmbeddingCapability(
-      adapterReturning({ ok: false, kind: "transport" }),
-      PROBE,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("unavailable");
+      expect(result.reason).toBe(expectedReason);
       assertSafeMessage(result.safeMessage);
     }
   });
@@ -237,18 +217,6 @@ describe("verifyEmbeddingCapability", () => {
     if (!result.ok) {
       expect(result.reason).toBe("proxy-blocked-by-policy");
       expect(result.safeMessage).toContain("proxy");
-      assertSafeMessage(result.safeMessage);
-    }
-  });
-
-  it("maps invalid-response adapter outcomes to invalid-response", async () => {
-    const result = await verifyEmbeddingCapability(
-      adapterReturning({ ok: false, kind: "invalid-response" }),
-      PROBE,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("invalid-response");
       assertSafeMessage(result.safeMessage);
     }
   });

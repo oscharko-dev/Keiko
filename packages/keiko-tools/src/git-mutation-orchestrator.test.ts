@@ -249,22 +249,26 @@ describe("orchestrator — adapter failure", () => {
     expect(gitMutationOutcomeFailureCategory(result.outcome)).toBe("execution-failure");
   });
 
-  it("classifies a provider rejection as provider-failure", async () => {
-    const fake = fakeAdapter(exec("failed", "provider-rejected"));
+  it.each([
+    {
+      title: "classifies a provider rejection as provider-failure",
+      reason: "provider-rejected",
+      expected: "provider-failure",
+    },
+    {
+      title: "classifies a network failure as provider-failure",
+      reason: "network-failure",
+      expected: "provider-failure",
+    },
+    {
+      title: "classifies a timeout as execution-failure",
+      reason: "timeout",
+      expected: "execution-failure",
+    },
+  ] as const)("$title", async ({ reason, expected }) => {
+    const fake = fakeAdapter(exec("failed", reason));
     const result = await runGitMutation(request(), deps(fake.adapter));
-    expect(gitMutationOutcomeFailureCategory(result.outcome)).toBe("provider-failure");
-  });
-
-  it("classifies a network failure as provider-failure", async () => {
-    const fake = fakeAdapter(exec("failed", "network-failure"));
-    const result = await runGitMutation(request(), deps(fake.adapter));
-    expect(gitMutationOutcomeFailureCategory(result.outcome)).toBe("provider-failure");
-  });
-
-  it("classifies a timeout as execution-failure", async () => {
-    const fake = fakeAdapter(exec("failed", "timeout"));
-    const result = await runGitMutation(request(), deps(fake.adapter));
-    expect(gitMutationOutcomeFailureCategory(result.outcome)).toBe("execution-failure");
+    expect(gitMutationOutcomeFailureCategory(result.outcome)).toBe(expected);
   });
 
   it("contains a thrown adapter as a structured internal-error result", async () => {

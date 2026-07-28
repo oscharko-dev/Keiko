@@ -121,24 +121,26 @@ describe("deriveBufferBoundednessMetric", () => {
 
 // ─── deriveInterruptionMetric ─────────────────────────────────────────────────
 describe("deriveInterruptionMetric", () => {
-  it("returns interruptAllowed=true for full-realtime (interrupt-capable profile)", () => {
-    const metric = deriveInterruptionMetric("full-realtime");
-    // Mutation guard: if voicePlaybackInterruptAllowedForProfile always returns false, this fails.
-    expect(metric.interruptAllowed).toBe(true);
-    // The speaking→interrupted transition exists in the contract; this is a structural constant.
-    expect(metric.interruptedPhaseReachable).toBe(true);
-  });
-
-  it("returns interruptAllowed=true for speech-output (playback-capable profile)", () => {
-    const metric = deriveInterruptionMetric("speech-output");
-    expect(metric.interruptAllowed).toBe(true);
-    expect(metric.interruptedPhaseReachable).toBe(true);
-  });
-
-  it("returns interruptAllowed=false for none (dormant — no interrupt allowed)", () => {
-    const metric = deriveInterruptionMetric("none");
-    // Mutation guard: if voicePlaybackInterruptAllowedForProfile ignores the profile, this fails.
-    expect(metric.interruptAllowed).toBe(false);
+  // The true/false rows jointly kill a constant return from voicePlaybackInterruptAllowedForProfile.
+  it.each([
+    {
+      title: "returns interruptAllowed=true for full-realtime (interrupt-capable profile)",
+      profile: "full-realtime",
+      expected: true,
+    },
+    {
+      title: "returns interruptAllowed=true for speech-output (playback-capable profile)",
+      profile: "speech-output",
+      expected: true,
+    },
+    {
+      title: "returns interruptAllowed=false for none (dormant — no interrupt allowed)",
+      profile: "none",
+      expected: false,
+    },
+  ] as const)("$title", ({ profile, expected }) => {
+    const metric = deriveInterruptionMetric(profile);
+    expect(metric.interruptAllowed).toBe(expected);
     // The transition table is profile-independent; speaking→interrupted still exists structurally.
     expect(metric.interruptedPhaseReachable).toBe(true);
   });

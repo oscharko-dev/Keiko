@@ -142,24 +142,14 @@ describe("emitMemoryWriteCandidate", () => {
     }).not.toThrow();
   });
 
-  it("is a no-op when status is 'failed'", () => {
+  it.each([
+    { title: "is a no-op when status is 'failed'", status: "failed" },
+    { title: "is a no-op when status is 'cancelled'", status: "cancelled" },
+    { title: "is a no-op when status is 'rejected'", status: "rejected" },
+  ] as const)("$title", ({ status }) => {
     const onMemoryWriteCandidate = vi.fn<(event: MemoryWriteCandidateEvent) => void>();
     const port = makePort({ onMemoryWriteCandidate });
-    emitMemoryWriteCandidate(port, makeReport({ status: "failed" }), WORKSPACE_ROOT);
-    expect(onMemoryWriteCandidate).not.toHaveBeenCalled();
-  });
-
-  it("is a no-op when status is 'cancelled'", () => {
-    const onMemoryWriteCandidate = vi.fn<(event: MemoryWriteCandidateEvent) => void>();
-    const port = makePort({ onMemoryWriteCandidate });
-    emitMemoryWriteCandidate(port, makeReport({ status: "cancelled" }), WORKSPACE_ROOT);
-    expect(onMemoryWriteCandidate).not.toHaveBeenCalled();
-  });
-
-  it("is a no-op when status is 'rejected'", () => {
-    const onMemoryWriteCandidate = vi.fn<(event: MemoryWriteCandidateEvent) => void>();
-    const port = makePort({ onMemoryWriteCandidate });
-    emitMemoryWriteCandidate(port, makeReport({ status: "rejected" }), WORKSPACE_ROOT);
+    emitMemoryWriteCandidate(port, makeReport({ status }), WORKSPACE_ROOT);
     expect(onMemoryWriteCandidate).not.toHaveBeenCalled();
   });
 

@@ -345,7 +345,40 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(ids.has("open-relationships")).toBe(true);
   });
 
-  it("does not expose the hidden Plugins surface through commands", () => {
+  it.each([
+    {
+      title: "does not expose the hidden Plugins surface through commands",
+      commandId: "open-plugins",
+    },
+    {
+      title: "does not expose the hidden Search surface through commands",
+      commandId: "open-search",
+    },
+    {
+      title: "does not expose the hidden Project surface through commands",
+      commandId: "open-project",
+    },
+    {
+      title: "does not expose the hidden Keiko Digital Twin surface through commands",
+      commandId: "open-keiko",
+    },
+    {
+      title: "does not expose the hidden Integrations surface through create commands",
+      commandId: "new-integ",
+    },
+    {
+      title: "does not expose the hidden Browser surface through create commands",
+      commandId: "new-browser",
+    },
+    {
+      title: "does not expose the hidden Terminal surface through create commands",
+      commandId: "new-terminal",
+    },
+    {
+      title: "does not expose the hidden Review surface through create commands",
+      commandId: "new-review",
+    },
+  ])("$title", ({ commandId }) => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -354,31 +387,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       vi.fn(),
       fakeUndoStack(),
     );
-    expect(commands.find((c) => c.id === "open-plugins")).toBeUndefined();
-  });
-
-  it("does not expose the hidden Search surface through commands", () => {
-    const commands = buildAppShellCommands(
-      fakeApi(),
-      vi.fn(),
-      vi.fn(),
-      "dark",
-      vi.fn(),
-      fakeUndoStack(),
-    );
-    expect(commands.find((c) => c.id === "open-search")).toBeUndefined();
-  });
-
-  it("does not expose the hidden Project surface through commands", () => {
-    const commands = buildAppShellCommands(
-      fakeApi(),
-      vi.fn(),
-      vi.fn(),
-      "dark",
-      vi.fn(),
-      fakeUndoStack(),
-    );
-    expect(commands.find((c) => c.id === "open-project")).toBeUndefined();
+    expect(commands.find((c) => c.id === commandId)).toBeUndefined();
   });
 
   it("does not expose the governed Updates surface through global commands", () => {
@@ -394,18 +403,6 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(commands.find((c) => c.id === "new-updates")).toBeUndefined();
   });
 
-  it("does not expose the hidden Keiko Digital Twin surface through commands", () => {
-    const commands = buildAppShellCommands(
-      fakeApi(),
-      vi.fn(),
-      vi.fn(),
-      "dark",
-      vi.fn(),
-      fakeUndoStack(),
-    );
-    expect(commands.find((c) => c.id === "open-keiko")).toBeUndefined();
-  });
-
   it("exposes Agents through create commands", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
@@ -419,54 +416,6 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       label: "New Agents",
       group: "Create",
     });
-  });
-
-  it("does not expose the hidden Integrations surface through create commands", () => {
-    const commands = buildAppShellCommands(
-      fakeApi(),
-      vi.fn(),
-      vi.fn(),
-      "dark",
-      vi.fn(),
-      fakeUndoStack(),
-    );
-    expect(commands.find((c) => c.id === "new-integ")).toBeUndefined();
-  });
-
-  it("does not expose the hidden Browser surface through create commands", () => {
-    const commands = buildAppShellCommands(
-      fakeApi(),
-      vi.fn(),
-      vi.fn(),
-      "dark",
-      vi.fn(),
-      fakeUndoStack(),
-    );
-    expect(commands.find((c) => c.id === "new-browser")).toBeUndefined();
-  });
-
-  it("does not expose the hidden Terminal surface through create commands", () => {
-    const commands = buildAppShellCommands(
-      fakeApi(),
-      vi.fn(),
-      vi.fn(),
-      "dark",
-      vi.fn(),
-      fakeUndoStack(),
-    );
-    expect(commands.find((c) => c.id === "new-terminal")).toBeUndefined();
-  });
-
-  it("does not expose the hidden Review surface through create commands", () => {
-    const commands = buildAppShellCommands(
-      fakeApi(),
-      vi.fn(),
-      vi.fn(),
-      "dark",
-      vi.fn(),
-      fakeUndoStack(),
-    );
-    expect(commands.find((c) => c.id === "new-review")).toBeUndefined();
   });
 
   // uiux-fix F008 C141 — shortcut discoverability: the undo/redo rows surface their chords.

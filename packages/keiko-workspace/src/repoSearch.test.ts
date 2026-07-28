@@ -761,24 +761,20 @@ describe("searchText (memFs)", () => {
     }
   });
 
-  it("rejects an invalid regex with RepoSearchInvalidQueryError", async () => {
+  it.each([
+    { title: "rejects an invalid regex with RepoSearchInvalidQueryError", pattern: "(" },
+    {
+      title: "rejects a regex with group-then-quantifier as a ReDoS guard",
+      pattern: "(a+)+",
+    },
+    {
+      title: "rejects a regex with character-class-then-quantifier as a ReDoS guard",
+      pattern: "[abc]+{2,}",
+    },
+  ])("$title", async ({ pattern }) => {
     const { scope, fs } = memScope({ "src/a.ts": "anything\n" });
     await expect(
-      searchText(scope, rxq("("), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
-    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
-  });
-
-  it("rejects a regex with group-then-quantifier as a ReDoS guard", async () => {
-    const { scope, fs } = memScope({ "src/a.ts": "anything\n" });
-    await expect(
-      searchText(scope, rxq("(a+)+"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
-    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
-  });
-
-  it("rejects a regex with character-class-then-quantifier as a ReDoS guard", async () => {
-    const { scope, fs } = memScope({ "src/a.ts": "anything\n" });
-    await expect(
-      searchText(scope, rxq("[abc]+{2,}"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+      searchText(scope, rxq(pattern), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
     ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
   });
 
@@ -1663,34 +1659,16 @@ describe("readExcerpt (memFs)", () => {
     expect(new TextEncoder().encode(r.content).length).toBeLessThanOrEqual(5);
   });
 
-  it("rejects an absolute scopePath", async () => {
+  it.each([
+    { title: "rejects an absolute scopePath", scopePath: "/etc/passwd" },
+    { title: "rejects a scopePath containing ..", scopePath: "../etc/passwd" },
+    { title: "rejects a Windows-drive-prefixed scopePath", scopePath: "C:/etc/passwd" },
+  ])("$title", async ({ scopePath }) => {
     const { scope, fs } = memScope({ "src/a.ts": "x\n" });
     await expect(
       readExcerpt(
         scope,
-        { scopePath: "/etc/passwd", startLine: 1, endLine: 1, maxBytes: 16 },
-        { fs, nowMs: FIXED_NOW },
-      ),
-    ).rejects.toBeInstanceOf(RepoSearchInvalidRangeError);
-  });
-
-  it("rejects a scopePath containing ..", async () => {
-    const { scope, fs } = memScope({ "src/a.ts": "x\n" });
-    await expect(
-      readExcerpt(
-        scope,
-        { scopePath: "../etc/passwd", startLine: 1, endLine: 1, maxBytes: 16 },
-        { fs, nowMs: FIXED_NOW },
-      ),
-    ).rejects.toBeInstanceOf(RepoSearchInvalidRangeError);
-  });
-
-  it("rejects a Windows-drive-prefixed scopePath", async () => {
-    const { scope, fs } = memScope({ "src/a.ts": "x\n" });
-    await expect(
-      readExcerpt(
-        scope,
-        { scopePath: "C:/etc/passwd", startLine: 1, endLine: 1, maxBytes: 16 },
+        { scopePath, startLine: 1, endLine: 1, maxBytes: 16 },
         { fs, nowMs: FIXED_NOW },
       ),
     ).rejects.toBeInstanceOf(RepoSearchInvalidRangeError);

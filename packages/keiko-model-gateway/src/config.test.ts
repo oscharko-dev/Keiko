@@ -1004,18 +1004,25 @@ describe("parseGatewayConfig", () => {
       expect(() => parseGatewayConfig(raw)).toThrow(/https/);
     });
 
-    it("accepts a plaintext loopback baseUrl for local development", () => {
-      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "http://127.0.0.1:8000/v1" }));
-      expect(() => parseGatewayConfig(raw)).not.toThrow();
-    });
-
-    it("accepts a plaintext IPv6 loopback baseUrl for local development", () => {
-      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "http://[::1]:8000/v1" }));
-      expect(() => parseGatewayConfig(raw)).not.toThrow();
-    });
-
-    it("accepts a standard https baseUrl", () => {
-      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "https://api.example.com/v1" }));
+    it.each([
+      {
+        title: "accepts a plaintext loopback baseUrl for local development",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      },
+      {
+        title: "accepts a plaintext IPv6 loopback baseUrl for local development",
+        baseUrl: "http://[::1]:8000/v1",
+      },
+      {
+        title: "accepts a standard https baseUrl",
+        baseUrl: "https://api.example.com/v1",
+      },
+      {
+        title: "accepts an https public DNS name without DNS resolution at parse time",
+        baseUrl: "https://127.evil.com/v1",
+      },
+    ])("$title", ({ baseUrl }) => {
+      const raw = rawWithProvider((p) => ({ ...p, baseUrl }));
       expect(() => parseGatewayConfig(raw)).not.toThrow();
     });
 
@@ -1024,11 +1031,6 @@ describe("parseGatewayConfig", () => {
         const raw = rawWithProvider((p) => ({ ...p, baseUrl: `http://${host}/v1` }));
         expect(() => parseGatewayConfig(raw)).toThrow(/https/);
       }
-    });
-
-    it("accepts an https public DNS name without DNS resolution at parse time", () => {
-      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "https://127.evil.com/v1" }));
-      expect(() => parseGatewayConfig(raw)).not.toThrow();
     });
 
     it("rejects metadata, link-local, and private literal baseUrls by default", () => {

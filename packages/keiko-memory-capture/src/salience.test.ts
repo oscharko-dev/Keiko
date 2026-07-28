@@ -576,21 +576,24 @@ describe("extractSalientMemories", () => {
 });
 
 describe("parseSalienceItems", () => {
-  it("locates the first balanced array embedded in prose", () => {
-    const raw =
-      'Here you go: [{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}] done.';
-    expect(parseSalienceItems(raw)).toHaveLength(1);
-  });
-
-  it("ignores brackets inside string values", () => {
-    const raw =
-      '[{"body":"uses arr[0] syntax","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]';
-    expect(parseSalienceItems(raw)).toHaveLength(1);
-  });
-
-  it("filters out elements with the wrong shape", () => {
-    const raw =
-      '[{"body":"ok","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]},{"body":123}]';
+  it.each([
+    {
+      title: "locates the first balanced array embedded in prose",
+      raw: 'Here you go: [{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}] done.',
+    },
+    {
+      title: "ignores brackets inside string values",
+      raw: '[{"body":"uses arr[0] syntax","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]',
+    },
+    {
+      title: "filters out elements with the wrong shape",
+      raw: '[{"body":"ok","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]},{"body":123}]',
+    },
+    {
+      title: "filters out non-object array elements",
+      raw: '[42, null, "string", {"body":"kept","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]',
+    },
+  ])("$title", ({ raw }) => {
     expect(parseSalienceItems(raw)).toHaveLength(1);
   });
 
@@ -613,13 +616,6 @@ describe("parseSalienceItems", () => {
   // Covers the "unbalanced brackets" branch: an open [ without a matching ].
   it("returns [] when the array is unterminated (missing closing bracket)", () => {
     expect(parseSalienceItems('[{"body":"x"')).toEqual([]);
-  });
-
-  // Covers the non-object element rejection branch in isRawSalienceItem.
-  it("filters out non-object array elements", () => {
-    const raw =
-      '[42, null, "string", {"body":"kept","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]';
-    expect(parseSalienceItems(raw)).toHaveLength(1);
   });
 
   // Covers the "tag element is not a string" rejection branch.

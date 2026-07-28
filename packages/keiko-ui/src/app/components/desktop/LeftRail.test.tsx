@@ -28,53 +28,101 @@ describe("LeftRail — workspace tool buttons", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not expose Plugins in the left rail while the product surface is hidden", () => {
+  it.each([
+    {
+      title: "does not expose Plugins in the left rail while the product surface is hidden",
+      name: "Plugins",
+    },
+    {
+      title: "does not expose Search in the left rail while the product surface is hidden",
+      name: "Search",
+    },
+    {
+      title: "does not expose Project in the left rail while the product surface is hidden",
+      name: "Project",
+    },
+    {
+      title:
+        "does not expose Keiko Digital Twin in the left rail while the product surface is hidden",
+      name: "Keiko",
+    },
+    {
+      title: "does not expose Automations in the left rail while the product surface is hidden",
+      name: "Automations",
+    },
+    {
+      title: "does not expose Keiko Mobile in the left rail while the product surface is hidden",
+      name: "Keiko Mobile",
+    },
+    {
+      title: "does not expose Relationships in the left rail while the product surface is hidden",
+      name: "Relationships",
+    },
+    { title: "does not expose the Account user icon in the left rail", name: "Account" },
+  ])("$title", ({ name }) => {
     renderRail();
-    expect(screen.queryByRole("button", { name: "Plugins" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
   });
 
-  it("does not expose Search in the left rail while the product surface is hidden", () => {
+  it.each([
+    {
+      title: "renders MemoriaViva as a tool button instead of a page-route link",
+      name: "MemoriaViva",
+    },
+    {
+      title: "renders Quality Intelligence as a tool button (not a page-route link)",
+      name: "Quality Intelligence",
+    },
+    {
+      title: "renders Coding Workbench as a tool button (not a page-route link)",
+      name: "Coding Workbench",
+    },
+    {
+      title: "renders Local Knowledge as a tool button (not a page-route link)",
+      name: "Local Knowledge",
+    },
+    {
+      title: "renders Figma Snapshot as a tool button (not a page-route link)",
+      name: "Figma Snapshot",
+    },
+  ])("$title", ({ name }) => {
     renderRail();
-    expect(screen.queryByRole("button", { name: "Search" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name })).not.toBeInTheDocument();
   });
 
-  it("does not expose Project in the left rail while the product surface is hidden", () => {
-    renderRail();
-    expect(screen.queryByRole("button", { name: "Project" })).not.toBeInTheDocument();
-  });
-
-  it("does not expose Keiko Digital Twin in the left rail while the product surface is hidden", () => {
-    renderRail();
-    expect(screen.queryByRole("button", { name: "Keiko" })).not.toBeInTheDocument();
-  });
-
-  it("does not expose Automations in the left rail while the product surface is hidden", () => {
-    renderRail();
-    expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
-  });
-
-  it("does not expose Keiko Mobile in the left rail while the product surface is hidden", () => {
-    renderRail();
-    expect(screen.queryByRole("button", { name: "Keiko Mobile" })).not.toBeInTheDocument();
-  });
-
-  it("does not expose Relationships in the left rail while the product surface is hidden", () => {
-    renderRail();
-    expect(screen.queryByRole("button", { name: "Relationships" })).not.toBeInTheDocument();
-  });
-
-  it("does not expose the Account user icon in the left rail", () => {
-    renderRail();
-    expect(screen.queryByRole("button", { name: "Account" })).not.toBeInTheDocument();
-  });
-
-  it("renders MemoriaViva as a tool button instead of a page-route link", () => {
-    renderRail();
-    expect(screen.getByRole("button", { name: "MemoriaViva" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "MemoriaViva" })).not.toBeInTheDocument();
-  });
-
-  it("opens the MemoriaViva window via onTool('memoria') when clicked", async () => {
+  it.each([
+    {
+      title: "opens the MemoriaViva window via onTool('memoria') when clicked",
+      name: "MemoriaViva",
+      tool: "memoria",
+    },
+    {
+      title: "opens the Quality Intelligence hub via onTool('quality') when clicked",
+      name: "Quality Intelligence",
+      tool: "quality",
+    },
+    {
+      title: "opens the Coding Workbench via onTool('coding') when clicked",
+      name: "Coding Workbench",
+      tool: "coding",
+    },
+    {
+      title: "opens the Git window via onTool('governedGit') when clicked",
+      name: "Git",
+      tool: "governedGit",
+    },
+    {
+      title: "opens the Local Knowledge window via onTool('localKnowledge') when clicked",
+      name: "Local Knowledge",
+      tool: "localKnowledge",
+    },
+    {
+      title: "opens the Figma Snapshot manager via onTool('figma') when clicked",
+      name: "Figma Snapshot",
+      tool: "figma",
+    },
+  ] as const)("$title", async ({ name, tool }) => {
     const onTool = vi.fn();
     const user = userEvent.setup();
     render(
@@ -86,8 +134,8 @@ describe("LeftRail — workspace tool buttons", () => {
         onToggleTheme={vi.fn()}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "MemoriaViva" }));
-    expect(onTool).toHaveBeenCalledWith("memoria");
+    await user.click(screen.getByRole("button", { name }));
+    expect(onTool).toHaveBeenCalledWith(tool);
   });
 
   it("marks the MemoriaViva button pressed when its window is open", () => {
@@ -98,56 +146,12 @@ describe("LeftRail — workspace tool buttons", () => {
     );
   });
 
-  it("renders Quality Intelligence as a tool button (not a page-route link)", () => {
-    renderRail();
-    expect(screen.getByRole("button", { name: "Quality Intelligence" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Quality Intelligence" })).not.toBeInTheDocument();
-  });
-
-  it("opens the Quality Intelligence hub via onTool('quality') when clicked", async () => {
-    const onTool = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <LeftRail
-        openTools={new Set()}
-        onTool={onTool}
-        onNewChat={vi.fn()}
-        theme="dark"
-        onToggleTheme={vi.fn()}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Quality Intelligence" }));
-    expect(onTool).toHaveBeenCalledWith("quality");
-  });
-
   it("marks the Quality Intelligence button pressed when its window is open", () => {
     renderRail(new Set(["quality"]));
     expect(screen.getByRole("button", { name: "Quality Intelligence" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-  });
-
-  it("renders Coding Workbench as a tool button (not a page-route link)", () => {
-    renderRail();
-    expect(screen.getByRole("button", { name: "Coding Workbench" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Coding Workbench" })).not.toBeInTheDocument();
-  });
-
-  it("opens the Coding Workbench via onTool('coding') when clicked", async () => {
-    const onTool = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <LeftRail
-        openTools={new Set()}
-        onTool={onTool}
-        onNewChat={vi.fn()}
-        theme="dark"
-        onToggleTheme={vi.fn()}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Coding Workbench" }));
-    expect(onTool).toHaveBeenCalledWith("coding");
   });
 
   it("marks the Coding Workbench button pressed when its window is open", () => {
@@ -158,47 +162,9 @@ describe("LeftRail — workspace tool buttons", () => {
     );
   });
 
-  it("opens the Git window via onTool('governedGit') when clicked", async () => {
-    const onTool = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <LeftRail
-        openTools={new Set()}
-        onTool={onTool}
-        onNewChat={vi.fn()}
-        theme="dark"
-        onToggleTheme={vi.fn()}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Git" }));
-    expect(onTool).toHaveBeenCalledWith("governedGit");
-  });
-
   it("marks the Git button pressed when its window is open", () => {
     renderRail(new Set(["governedGit"]));
     expect(screen.getByRole("button", { name: "Git" })).toHaveAttribute("aria-pressed", "true");
-  });
-
-  it("renders Local Knowledge as a tool button (not a page-route link)", () => {
-    renderRail();
-    expect(screen.getByRole("button", { name: "Local Knowledge" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Local Knowledge" })).not.toBeInTheDocument();
-  });
-
-  it("opens the Local Knowledge window via onTool('localKnowledge') when clicked", async () => {
-    const onTool = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <LeftRail
-        openTools={new Set()}
-        onTool={onTool}
-        onNewChat={vi.fn()}
-        theme="dark"
-        onToggleTheme={vi.fn()}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Local Knowledge" }));
-    expect(onTool).toHaveBeenCalledWith("localKnowledge");
   });
 
   it("marks the Local Knowledge button pressed when its window is open", () => {
@@ -207,28 +173,6 @@ describe("LeftRail — workspace tool buttons", () => {
       "aria-pressed",
       "true",
     );
-  });
-
-  it("renders Figma Snapshot as a tool button (not a page-route link)", () => {
-    renderRail();
-    expect(screen.getByRole("button", { name: "Figma Snapshot" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Figma Snapshot" })).not.toBeInTheDocument();
-  });
-
-  it("opens the Figma Snapshot manager via onTool('figma') when clicked", async () => {
-    const onTool = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <LeftRail
-        openTools={new Set()}
-        onTool={onTool}
-        onNewChat={vi.fn()}
-        theme="dark"
-        onToggleTheme={vi.fn()}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Figma Snapshot" }));
-    expect(onTool).toHaveBeenCalledWith("figma");
   });
 
   it("marks the Figma Snapshot button pressed when its window is open", () => {

@@ -1260,26 +1260,34 @@ describe("checkTelemetryStrings", () => {
     expect(hits[0]?.needle).toBe("@sentry/");
   });
 
-  it("detects @opentelemetry/* in a workspace manifest (M4 fix)", () => {
+  it.each([
+    {
+      title: "detects @opentelemetry/* in a workspace manifest (M4 fix)",
+      dependency: "@opentelemetry/api",
+      version: "^1.0.0",
+      needle: "@opentelemetry/",
+    },
+    {
+      title: "detects posthog in a workspace manifest (M4 fix)",
+      dependency: "posthog-node",
+      version: "^2.0.0",
+      needle: "posthog",
+    },
+    {
+      title: "detects a dep whose name contains 'analytics' in a workspace manifest (M4 fix)",
+      dependency: "analytics-node",
+      version: "^4.0.0",
+      needle: "analytics",
+    },
+  ])("$title", ({ dependency, version, needle }) => {
     writeJson(root, "package.json", { name: "synthetic-root", version: "0.0.0" });
     writeJson(root, "packages/keiko-contracts/package.json", {
       name: "@oscharko-dev/keiko-contracts",
       version: "0.0.0",
-      dependencies: { "@opentelemetry/api": "^1.0.0" },
+      dependencies: { [dependency]: version },
     });
     const hits = checkTelemetryStrings(join(root, "package.json"), join(root, "packages"));
-    expect(hits.some((h) => h.needle === "@opentelemetry/")).toBe(true);
-  });
-
-  it("detects posthog in a workspace manifest (M4 fix)", () => {
-    writeJson(root, "package.json", { name: "synthetic-root", version: "0.0.0" });
-    writeJson(root, "packages/keiko-contracts/package.json", {
-      name: "@oscharko-dev/keiko-contracts",
-      version: "0.0.0",
-      dependencies: { "posthog-node": "^2.0.0" },
-    });
-    const hits = checkTelemetryStrings(join(root, "package.json"), join(root, "packages"));
-    expect(hits.some((h) => h.needle === "posthog")).toBe(true);
+    expect(hits.some((hit) => hit.needle === needle)).toBe(true);
   });
 
   it("detects mixpanel in a workspace manifest (M4 fix)", () => {
@@ -1291,17 +1299,6 @@ describe("checkTelemetryStrings", () => {
     });
     const hits = checkTelemetryStrings(join(root, "package.json"), join(root, "packages"));
     expect(hits.some((h) => h.needle === "mixpanel")).toBe(true);
-  });
-
-  it("detects a dep whose name contains 'analytics' in a workspace manifest (M4 fix)", () => {
-    writeJson(root, "package.json", { name: "synthetic-root", version: "0.0.0" });
-    writeJson(root, "packages/keiko-contracts/package.json", {
-      name: "@oscharko-dev/keiko-contracts",
-      version: "0.0.0",
-      dependencies: { "analytics-node": "^4.0.0" },
-    });
-    const hits = checkTelemetryStrings(join(root, "package.json"), join(root, "packages"));
-    expect(hits.some((h) => h.needle === "analytics")).toBe(true);
   });
 
   it("detects @sentry/* in the root manifest as well", () => {

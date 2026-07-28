@@ -26,7 +26,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import type { IncomingMessage, Server } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,7 +33,8 @@ import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
 import { createRunRegistry } from "../runs.js";
-import { createUiServer, UI_HOST } from "../server.js";
+import { UI_HOST } from "../server.js";
+import { closeUiTestServer, startUiTestServer } from "../ui-test-server/_support.js";
 import {
   EXPECTED_FIGMA_SCOPES,
   FigmaConnectorError,
@@ -69,36 +69,16 @@ let port: number;
 let evidenceDir: string;
 const REAL_TMPDIR = realpathSync(tmpdir());
 
-async function listen(srv: Server): Promise<number> {
-  await new Promise<void>((resolve) => {
-    srv.listen(0, UI_HOST, resolve);
-  });
-  return (srv.address() as AddressInfo).port;
+function closeServer(srv: Server = server): Promise<void> {
+  return closeUiTestServer(srv);
 }
 
-async function closeServer(srv: Server = server): Promise<void> {
-  await new Promise<void>((resolve) => {
-    srv.close(() => {
-      resolve();
-    });
-  });
-}
-
-// Claim a free port, close the probe, re-open pinned so the host-check accepts the loopback Host.
 async function buildServer(handlerDeps: UiHandlerDeps): Promise<{ server: Server; port: number }> {
-  const probe = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps });
-  const chosenPort = await listen(probe);
-  await closeServer(probe);
-  const next = createUiServer({
+  return startUiTestServer({
     staticRoot,
     csp: buildCspHeader([]),
-    port: chosenPort,
     handlerDeps,
   });
-  await new Promise<void>((resolve) => {
-    next.listen(chosenPort, UI_HOST, resolve);
-  });
-  return { server: next, port: chosenPort };
 }
 
 function baseUrl(): string {
@@ -288,33 +268,24 @@ describe("POST /api/figma/snapshots — FIGMA_BAD_LINK validation", () => {
     expect(body.error.code).toBe("FIGMA_BAD_LINK");
   });
 
-  it("400 on boardLink without node-id", async () => {
+  it.each([
+    {
+      title: "400 on boardLink without node-id",
+      boardLink: "https://www.figma.com/design/KEY123/Board",
+    },
+    {
+      title: "400 on non-figma domain",
+      boardLink: "https://notfigma.com/design/X/B?node-id=0-1",
+    },
+    {
+      title: "400 on evilfigma.com host (suffix-only match guard)",
+      boardLink: "https://evilfigma.com/design/X/B?node-id=0-1",
+    },
+  ])("$title", async ({ boardLink }) => {
     const res = await fetch(`${baseUrl()}/api/figma/snapshots`, {
       method: "POST",
       headers: csrfHeaders(),
-      body: JSON.stringify({ boardLink: "https://www.figma.com/design/KEY123/Board" }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("FIGMA_BAD_LINK");
-  });
-
-  it("400 on non-figma domain", async () => {
-    const res = await fetch(`${baseUrl()}/api/figma/snapshots`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ boardLink: "https://notfigma.com/design/X/B?node-id=0-1" }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("FIGMA_BAD_LINK");
-  });
-
-  it("400 on evilfigma.com host (suffix-only match guard)", async () => {
-    const res = await fetch(`${baseUrl()}/api/figma/snapshots`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ boardLink: "https://evilfigma.com/design/X/B?node-id=0-1" }),
+      body: JSON.stringify({ boardLink }),
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };

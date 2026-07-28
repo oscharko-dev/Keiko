@@ -23,24 +23,18 @@ describe("looksBinary", () => {
     expect(looksBinary(new TextEncoder().encode("hello world\nsecond line\n"))).toBe(false);
   });
 
-  it("returns false when a single embedded NUL appears in otherwise textual content", () => {
-    const bytes = new Uint8Array(64);
+  it.each([
+    {
+      title: "returns false when a single embedded NUL appears in otherwise textual content",
+      length: 64,
+      nulIndex: 3,
+    },
+    { title: "does not classify a sparse NUL at byte 511 as binary", length: 512, nulIndex: 511 },
+    { title: "does not classify a sparse NUL at byte 600 as binary", length: 800, nulIndex: 600 },
+  ])("$title", ({ length, nulIndex }) => {
+    const bytes = new Uint8Array(length);
     bytes.fill(0x41);
-    bytes[3] = 0;
-    expect(looksBinary(bytes)).toBe(false);
-  });
-
-  it("does not classify a sparse NUL at byte 511 as binary", () => {
-    const bytes = new Uint8Array(512);
-    bytes.fill(0x41);
-    bytes[511] = 0;
-    expect(looksBinary(bytes)).toBe(false);
-  });
-
-  it("does not classify a sparse NUL at byte 600 as binary", () => {
-    const bytes = new Uint8Array(800);
-    bytes.fill(0x41);
-    bytes[600] = 0;
+    bytes[nulIndex] = 0;
     expect(looksBinary(bytes)).toBe(false);
   });
 

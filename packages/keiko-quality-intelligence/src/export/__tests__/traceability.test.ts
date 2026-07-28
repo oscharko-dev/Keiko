@@ -144,19 +144,22 @@ describe("adaptToTraceabilityCsv", () => {
 // ---------------------------------------------------------------------------
 
 describe("adaptToTraceabilityMarkdown", () => {
-  it("emits the document title '# Requirement to test traceability matrix'", () => {
+  it.each([
+    {
+      title: "emits the document title '# Requirement to test traceability matrix'",
+      expected: "# Requirement to test traceability matrix",
+    },
+    {
+      title: "emits '## Requirements → Tests' heading",
+      expected: "## Requirements → Tests",
+    },
+    {
+      title: "emits '## Tests → Requirements' heading",
+      expected: "## Tests → Requirements",
+    },
+  ])("$title", ({ expected }) => {
     const out = adaptToTraceabilityMarkdown([row("atom-1", ["tc-1"])]);
-    expect(out).toContain("# Requirement to test traceability matrix");
-  });
-
-  it("emits '## Requirements → Tests' heading", () => {
-    const out = adaptToTraceabilityMarkdown([row("atom-1", ["tc-1"])]);
-    expect(out).toContain("## Requirements → Tests");
-  });
-
-  it("emits '## Tests → Requirements' heading", () => {
-    const out = adaptToTraceabilityMarkdown([row("atom-1", ["tc-1"])]);
-    expect(out).toContain("## Tests → Requirements");
+    expect(out).toContain(expected);
   });
 
   it("Requirements→Tests heading appears before Tests→Requirements heading", () => {
