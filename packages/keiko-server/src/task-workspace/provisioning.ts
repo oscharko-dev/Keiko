@@ -63,11 +63,11 @@ import type {
 } from "./types.js";
 
 const MAX_FIELD_LENGTH = 512;
-const RESUMABLE_STATES: readonly TaskWorkspaceLifecycleState[] = [
+const RESUMABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
   "active",
   "paused",
   "handoff-ready",
-];
+]);
 const COMPLETABLE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
   "provisioning",
   "failed",
@@ -512,7 +512,7 @@ function reuseExistingOrUndefined(
   nowMs: number,
 ): WorkspaceProvisionResult | undefined {
   if (existing === undefined) return undefined;
-  if (RESUMABLE_STATES.includes(existing.lifecycleState)) {
+  if (RESUMABLE_STATES.has(existing.lifecycleState)) {
     return managedTargetExists(repo.worktreePath)
       ? resumeExisting(ctx, repo, existing, nowMs)
       : flagResumableDrift(ctx, existing, nowMs);
@@ -658,7 +658,7 @@ function assertActivatable(
   ) {
     throw new TaskWorkspaceError("LOCK_CONTENTION", "workspace is locked by another actor");
   }
-  if (!RESUMABLE_STATES.includes(instance.lifecycleState)) {
+  if (!RESUMABLE_STATES.has(instance.lifecycleState)) {
     throw new TaskWorkspaceError(
       "ILLEGAL_TRANSITION",
       `cannot activate from ${instance.lifecycleState}`,
