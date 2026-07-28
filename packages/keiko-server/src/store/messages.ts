@@ -85,6 +85,7 @@ function rowToMessage(row: MessageRow): ChatMessage {
     role: row.role as ChatRole,
     content: row.content,
     timestamp: row.timestamp,
+    canonicalTurnRef: row.client_turn_id ?? undefined,
     runId: row.run_id ?? undefined,
     workflowId: row.workflow_id ?? undefined,
     workflowStatus: (row.workflow_status ?? undefined) as WorkflowStatus | undefined,
@@ -108,6 +109,20 @@ FROM (
   LIMIT ?
 )
 ORDER BY timestamp ASC, __rowid ASC`;
+const GATEWAY_SCAN_PAGE_SIZE = 128;
+const SQL_LIST_GATEWAY_PAGE = `
+SELECT rowid AS __rowid, ${COLUMNS}
+FROM chat_messages
+WHERE chat_id = ?
+ORDER BY timestamp DESC, rowid DESC
+LIMIT ?`;
+const SQL_LIST_GATEWAY_PAGE_BEFORE = `
+SELECT rowid AS __rowid, ${COLUMNS}
+FROM chat_messages
+WHERE chat_id = ?
+  AND (timestamp < ? OR (timestamp = ? AND rowid < ?))
+ORDER BY timestamp DESC, rowid DESC
+LIMIT ?`;
 const SQL_LIST_PREFIX_LIMITED = `${SQL_LIST} LIMIT ?`;
 const SQL_COUNT = "SELECT COUNT(*) AS count FROM chat_messages WHERE chat_id = ?";
 const SQL_LATEST_MESSAGE_ID = `
@@ -395,67 +410,196 @@ export function markClientTurnState(
   return result.changes === 1;
 }
 
-interface CanonicalGatewayTurnRows {
-  user?: MessageRow | undefined;
-  assistant?: MessageRow | undefined;
+interface GatewayMessageRow extends MessageRow {
+  readonly __rowid: number;
 }
 
-function addCanonicalGatewayRow(
-  turn: CanonicalGatewayTurnRows,
-  row: MessageRow,
-): CanonicalGatewayTurnRows {
-  if (row.role === "user") return { ...turn, user: row };
-  if (row.role === "assistant") return { ...turn, assistant: row };
-  return turn;
+interface GatewayScanCursor {
+  readonly timestamp: number;
+  readonly rowid: number;
 }
 
-function collectCanonicalGatewayTurns(
-  rows: readonly MessageRow[],
-): ReadonlyMap<string, CanonicalGatewayTurnRows> {
-  const turns = new Map<string, CanonicalGatewayTurnRows>();
-  for (const row of rows) {
-    if (row.client_turn_id === null) continue;
-    const turn = turns.get(row.client_turn_id) ?? {};
-    turns.set(row.client_turn_id, addCanonicalGatewayRow(turn, row));
+interface GatewayScanState {
+  readonly eligibleUnits: GatewayMessageRow[][];
+  eligibleCount: number;
+  currentFound: boolean;
+  readonly canonicalUsers: Map<string, GatewayMessageRow>;
+  readonly canonicalAssistants: Map<string, GatewayMessageRow>;
+  legacyAssistant: GatewayMessageRow | undefined;
+}
+
+function listGatewayScanPage(
+  db: DatabaseSync,
+  chatId: string,
+  cursor: GatewayScanCursor | undefined,
+): readonly GatewayMessageRow[] {
+  if (cursor === undefined) {
+    return db
+      .prepare(SQL_LIST_GATEWAY_PAGE)
+      .all(chatId, GATEWAY_SCAN_PAGE_SIZE) as unknown as GatewayMessageRow[];
   }
-  return turns;
+  return db
+    .prepare(SQL_LIST_GATEWAY_PAGE_BEFORE)
+    .all(
+      chatId,
+      cursor.timestamp,
+      cursor.timestamp,
+      cursor.rowid,
+      GATEWAY_SCAN_PAGE_SIZE,
+    ) as unknown as GatewayMessageRow[];
 }
 
-function canonicalGatewayMessageIds(
-  rows: readonly MessageRow[],
+function appendGatewayUnit(
+  state: GatewayScanState,
+  rows: readonly GatewayMessageRow[],
   currentUserMessageId: string,
-): ReadonlySet<string> {
-  const eligible = new Set<string>();
-  for (const turn of collectCanonicalGatewayTurns(rows).values()) {
-    if (turn.user?.id === currentUserMessageId) eligible.add(turn.user.id);
-    if (turn.user?.client_turn_state === "completed" && turn.assistant !== undefined) {
-      eligible.add(turn.user.id);
-      eligible.add(turn.assistant.id);
-    }
-  }
-  return eligible;
+): void {
+  state.eligibleUnits.push([...rows]);
+  state.eligibleCount += rows.length;
+  if (rows.some((row): boolean => row.id === currentUserMessageId)) state.currentFound = true;
 }
 
-function legacyGatewayMessageIds(
-  rows: readonly MessageRow[],
+function scanCanonicalGatewayRow(
+  state: GatewayScanState,
+  row: GatewayMessageRow,
   currentUserMessageId: string,
-): ReadonlySet<string> {
-  const eligible = new Set<string>();
-  let pendingUser: MessageRow | undefined;
-  for (const row of rows) {
-    if (row.client_turn_id !== null) continue;
-    if (row.role === "system") {
-      eligible.add(row.id);
-    } else if (row.role === "user") {
-      pendingUser = row;
-    } else if (row.role === "assistant" && pendingUser !== undefined) {
-      eligible.add(pendingUser.id);
-      eligible.add(row.id);
-      pendingUser = undefined;
+): void {
+  const turnId = row.client_turn_id;
+  if (turnId === null) return;
+  if (row.role === "assistant") {
+    const user = state.canonicalUsers.get(turnId);
+    if (user !== undefined) {
+      state.canonicalUsers.delete(turnId);
+      appendGatewayUnit(state, [user, row], currentUserMessageId);
+      return;
     }
+    state.canonicalAssistants.set(turnId, row);
+    return;
   }
-  if (pendingUser?.id === currentUserMessageId) eligible.add(pendingUser.id);
-  return eligible;
+  if (row.role !== "user") return;
+  const assistant = state.canonicalAssistants.get(turnId);
+  state.canonicalAssistants.delete(turnId);
+  if (row.client_turn_state === "completed" && assistant !== undefined) {
+    appendGatewayUnit(state, [row, assistant], currentUserMessageId);
+    return;
+  }
+  if (row.client_turn_state === "completed") {
+    state.canonicalUsers.set(turnId, row);
+  } else if (row.id === currentUserMessageId) {
+    appendGatewayUnit(state, [row], currentUserMessageId);
+  }
+}
+
+function scanLegacyGatewayRow(
+  state: GatewayScanState,
+  row: GatewayMessageRow,
+  currentUserMessageId: string,
+): void {
+  if (row.role === "system") {
+    appendGatewayUnit(state, [row], currentUserMessageId);
+    return;
+  }
+  if (row.role === "assistant") {
+    state.legacyAssistant = row;
+    return;
+  }
+  if (row.role !== "user") return;
+  const assistant = state.legacyAssistant;
+  state.legacyAssistant = undefined;
+  if (assistant !== undefined) {
+    appendGatewayUnit(state, [row, assistant], currentUserMessageId);
+  } else if (row.id === currentUserMessageId) {
+    appendGatewayUnit(state, [row], currentUserMessageId);
+  }
+}
+
+function gatewayScanCanStop(
+  state: GatewayScanState,
+  currentUserMessageId: string,
+  limit: number,
+): boolean {
+  const currentSatisfied = currentUserMessageId.length === 0 || state.currentFound;
+  return state.eligibleCount >= limit && state.canonicalUsers.size === 0 && currentSatisfied;
+}
+
+function scanGatewayPage(
+  state: GatewayScanState,
+  page: readonly GatewayMessageRow[],
+  currentUserMessageId: string,
+  limit: number,
+): boolean {
+  for (const row of page) {
+    if (row.client_turn_id === null) {
+      scanLegacyGatewayRow(state, row, currentUserMessageId);
+    } else {
+      scanCanonicalGatewayRow(state, row, currentUserMessageId);
+    }
+    if (gatewayScanCanStop(state, currentUserMessageId, limit)) return false;
+  }
+  return true;
+}
+
+function compareGatewayRows(left: GatewayMessageRow, right: GatewayMessageRow): number {
+  return left.timestamp - right.timestamp || left.__rowid - right.__rowid;
+}
+
+function compareGatewayUnits(
+  left: readonly GatewayMessageRow[],
+  right: readonly GatewayMessageRow[],
+): number {
+  const leftAnchor = left.at(0);
+  const rightAnchor = right.at(0);
+  if (leftAnchor === undefined || rightAnchor === undefined) return left.length - right.length;
+  return compareGatewayRows(leftAnchor, rightAnchor);
+}
+
+function selectGatewayUnits(
+  units: readonly (readonly GatewayMessageRow[])[],
+  limit: number,
+  currentUserMessageId: string,
+): readonly GatewayMessageRow[] {
+  const newestFirst = [...units].sort((left, right): number => compareGatewayUnits(right, left));
+  const selected: GatewayMessageRow[][] = [];
+  const mandatory = newestFirst.find((unit): boolean =>
+    unit.some((row): boolean => row.id === currentUserMessageId),
+  );
+  let selectedCount = mandatory?.length ?? 0;
+  if (mandatory !== undefined && selectedCount <= limit) selected.push([...mandatory]);
+  for (const unit of newestFirst) {
+    if (unit === mandatory) continue;
+    if (unit.length > limit - selectedCount) break;
+    selected.push([...unit]);
+    selectedCount += unit.length;
+    if (selectedCount === limit) break;
+  }
+  return selected.sort(compareGatewayUnits).flat();
+}
+
+function collectGatewayRows(
+  db: DatabaseSync,
+  chatId: string,
+  currentUserMessageId: string,
+  limit: number,
+): readonly GatewayMessageRow[] {
+  const state: GatewayScanState = {
+    eligibleUnits: [],
+    eligibleCount: 0,
+    currentFound: false,
+    canonicalUsers: new Map(),
+    canonicalAssistants: new Map(),
+    legacyAssistant: undefined,
+  };
+  let cursor: GatewayScanCursor | undefined;
+  while (!gatewayScanCanStop(state, currentUserMessageId, limit)) {
+    const page = listGatewayScanPage(db, chatId, cursor);
+    if (page.length === 0) break;
+    if (!scanGatewayPage(state, page, currentUserMessageId, limit)) break;
+    if (page.length < GATEWAY_SCAN_PAGE_SIZE) break;
+    const oldest = page.at(-1);
+    if (oldest === undefined) break;
+    cursor = { timestamp: oldest.timestamp, rowid: oldest.__rowid };
+  }
+  return selectGatewayUnits(state.eligibleUnits, limit, currentUserMessageId);
 }
 
 export function listGatewayMessagesLimited(
@@ -467,10 +611,7 @@ export function listGatewayMessagesLimited(
   if (!Number.isInteger(limit) || limit <= 0) {
     throw invalidRequest("limit must be a positive integer.");
   }
-  const rows = db.prepare(SQL_LIST_LIMITED).all(chatId, limit) as unknown as MessageRow[];
-  const canonical = canonicalGatewayMessageIds(rows, currentUserMessageId);
-  const legacy = legacyGatewayMessageIds(rows, currentUserMessageId);
-  return rows.filter((row) => canonical.has(row.id) || legacy.has(row.id)).map(rowToMessage);
+  return collectGatewayRows(db, chatId, currentUserMessageId, limit).map(rowToMessage);
 }
 
 export function recoverInterruptedClientTurns(db: DatabaseSync): void {

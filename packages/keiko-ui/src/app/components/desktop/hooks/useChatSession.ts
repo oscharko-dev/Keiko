@@ -15,6 +15,7 @@ import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
+  canonicalDesktopChatTurnReferenceSeed,
   isGroundingScopeIdentity,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -1538,48 +1539,60 @@ function settledSendMessageOutcome(input: {
   return settled.status === "completed" ? settled : { status: "failed" };
 }
 
-function isNewCanonicalUserMessage(
-  message: ChatMessage,
-  messageIdsBeforeSend: ReadonlySet<string>,
-  content: string,
-  admissionStartedAt: number,
+export async function canonicalTurnReferenceForClient(
+  chatId: string,
+  clientTurnId: string,
+): Promise<string> {
+  const runtime = await import("./canonical-voice-hasher-runtime");
+  return runtime.sha256Hex(canonicalDesktopChatTurnReferenceSeed(chatId, clientTurnId));
+}
+
+function isExactCanonicalUserMessage(message: ChatMessage, canonicalTurnRef: string): boolean {
+  return message.role === "user" && message.canonicalTurnRef === canonicalTurnRef;
+}
+
+function hasExactCanonicalUserMessage(
+  messages: readonly ChatMessage[],
+  canonicalTurnRef: string,
 ): boolean {
-  return (
-    message.role === "user" &&
-    message.content === content &&
-    message.timestamp >= admissionStartedAt &&
-    !messageIdsBeforeSend.has(message.id)
+  return messages.some((message): boolean =>
+    isExactCanonicalUserMessage(message, canonicalTurnRef),
   );
 }
 
-function hasNewCanonicalUserMessage(
+function exactCanonicalAssistant(
   messages: readonly ChatMessage[],
-  messageIdsBeforeSend: ReadonlySet<string>,
-  content: string,
-  admissionStartedAt: number,
-): boolean {
-  return messages.some((message) =>
-    isNewCanonicalUserMessage(message, messageIdsBeforeSend, content, admissionStartedAt),
+  canonicalTurnRef: string,
+): ChatMessage | undefined {
+  return messages.find(
+    (message): boolean =>
+      message.role === "assistant" && message.canonicalTurnRef === canonicalTurnRef,
   );
 }
 
-function visibleMessagesAfterFailedSend(
+function canonicalTurnPresentation(
   messages: readonly ChatMessage[],
-  messageIdsBeforeSend: ReadonlySet<string>,
-  optimistic: ChatMessage,
-  preserveUser: boolean,
+  canonicalTurnRef: string,
+  canonicalUser: FailedSendPresentation["canonicalUser"],
 ): readonly ChatMessage[] {
-  return preserveUser
-    ? messages
-    : messages.filter(
-        (message) =>
-          !isNewCanonicalUserMessage(
-            message,
-            messageIdsBeforeSend,
-            optimistic.content,
-            optimistic.timestamp,
-          ),
-      );
+  const hasUser = hasExactCanonicalUserMessage(messages, canonicalTurnRef);
+  const hasAssistant = exactCanonicalAssistant(messages, canonicalTurnRef) !== undefined;
+  if (hasUser && hasAssistant) return messages;
+  return messages.filter(
+    (message): boolean =>
+      message.canonicalTurnRef !== canonicalTurnRef ||
+      (message.role === "user" && canonicalUser === "preserve"),
+  );
+}
+
+interface FailedSendPresentation {
+  readonly canonicalUser: "hide" | "preserve";
+  readonly missingOptimistic: "hide" | "preserve";
+}
+
+interface CanonicalTurnReconciliation {
+  readonly persistence: UserPersistenceProof;
+  readonly completedAssistantMessageId?: string;
 }
 
 export interface UseChatSessionOptions {
@@ -1937,52 +1950,52 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       chatId: string,
       projectPath: string,
       optimistic: ChatMessage,
-      messageIdsBeforeSend: ReadonlySet<string>,
-      preserveCanonicalUser: boolean,
-      preserveOptimisticOnMissing: boolean,
+      clientTurnId: string,
+      presentation: FailedSendPresentation,
       signal: AbortSignal,
-    ): Promise<UserPersistenceProof> => {
+    ): Promise<CanonicalTurnReconciliation> => {
       const controller = new AbortController();
       const timer = setTimeout(() => {
         controller.abort();
       }, CANONICAL_USER_RECONCILIATION_TIMEOUT_MS);
       reconciliationControllersRef.current.set(controller, timer);
       try {
+        const canonicalTurnRef = await canonicalTurnReferenceForClient(chatId, clientTurnId);
         const payload = await raceUiAbort(
           fetchChatMessages(chatId, projectPath, controller.signal),
           controller.signal,
         );
-        const proof = hasNewCanonicalUserMessage(
-          payload.messages,
-          messageIdsBeforeSend,
-          optimistic.content,
-          optimistic.timestamp,
-        )
+        const persistence = hasExactCanonicalUserMessage(payload.messages, canonicalTurnRef)
           ? "persisted"
           : "missing";
+        const assistant = exactCanonicalAssistant(payload.messages, canonicalTurnRef);
         if (
           mountedRef.current &&
           activeChatIdRef.current === chatId &&
           latestSendSignalRef.current === signal
         ) {
-          const visibleMessages = visibleMessagesAfterFailedSend(
+          const visibleMessages = canonicalTurnPresentation(
             payload.messages,
-            messageIdsBeforeSend,
-            optimistic,
-            preserveCanonicalUser,
+            canonicalTurnRef,
+            presentation.canonicalUser,
           );
           setState((previous) => ({
             ...previous,
             messages: [
               ...visibleMessages,
-              ...(proof === "missing" && preserveOptimisticOnMissing ? [optimistic] : []),
+              ...(persistence === "missing" && presentation.missingOptimistic === "preserve"
+                ? [optimistic]
+                : []),
               ...previous.messages.filter(
                 (message) => message.id.startsWith("local-") && message.id !== optimistic.id,
               ),
             ],
           }));
         }
-        return proof;
+        return {
+          persistence,
+          ...(assistant === undefined ? {} : { completedAssistantMessageId: assistant.id }),
+        };
       } catch {
         // A failed reconciliation cannot prove that the request was rejected. Keep the reviewed user
         // text visible and report an uncertain outcome; silently removing it would lose a final voice
@@ -1998,7 +2011,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               : { ...previous, messages: [...previous.messages, optimistic] },
           );
         }
-        return "unknown";
+        return { persistence: "unknown" };
       } finally {
         clearTimeout(timer);
         reconciliationControllersRef.current.delete(controller);
@@ -2857,8 +2870,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
       const { canonicalTarget, chat, project, content, modelId } = admission;
       const clientTurnId = options?.clientTurnId ?? crypto.randomUUID();
-      const currentMessages = sessionStateRef.current.messages;
-      const messageIdsBeforeSend = new Set(currentMessages.map((message) => message.id));
       const optimistic =
         options?.optimisticMessage ?? canonicalVoiceOptimisticMessage(chat.id, content);
       // Synchronously commit to "queued" so a re-entrant call in the same tick
@@ -2901,7 +2912,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           forceBuffered: options?.forceBuffered === true,
           clientTurnId,
         });
-        const settled: SendAttemptOutcome = controller.signal.aborted
+        let settled: SendAttemptOutcome = controller.signal.aborted
           ? { status: "cancelled" }
           : terminal;
         const exactTurnInProgress =
@@ -2912,21 +2923,53 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             chat.id,
             project.path,
             optimistic,
-            messageIdsBeforeSend,
-            exactTurnInProgress ||
-              settled.status === "cancelled" ||
-              options?.clientTurnId !== undefined,
-            !exactTurnInProgress &&
-              (settled.status === "cancelled" || options?.clientTurnId !== undefined),
+            clientTurnId,
+            {
+              canonicalUser:
+                exactTurnInProgress ||
+                settled.status === "cancelled" ||
+                options?.clientTurnId !== undefined
+                  ? "preserve"
+                  : "hide",
+              missingOptimistic:
+                !exactTurnInProgress &&
+                (settled.status === "cancelled" || options?.clientTurnId !== undefined)
+                  ? "preserve"
+                  : "hide",
+            },
             controller.signal,
           );
-          if (!exactTurnInProgress) persistence = reconciliation;
+          if (!exactTurnInProgress) persistence = reconciliation.persistence;
+          if (
+            reconciliation.persistence === "persisted" &&
+            reconciliation.completedAssistantMessageId !== undefined
+          ) {
+            settled = {
+              status: "completed",
+              assistantMessageId: reconciliation.completedAssistantMessageId,
+            };
+            if (
+              mountedRef.current &&
+              activeChatIdRef.current === chat.id &&
+              latestSendSignalRef.current === controller.signal
+            ) {
+              setError(undefined);
+            }
+          }
         }
         // Only the latest attempt owns the shared lifecycle. cancelSend leaves this attempt's signal
         // as owner until settlement; an immediate replacement installs a different signal and cannot
         // be clobbered by this continuation.
         updateOwnedSendStatus(controller.signal, settled.status);
-        if (terminal.status === "completed" && canonicalTarget === undefined) {
+        const ownsCurrentPresentation =
+          mountedRef.current &&
+          activeChatIdRef.current === chat.id &&
+          latestSendSignalRef.current === controller.signal;
+        if (
+          settled.status === "completed" &&
+          canonicalTarget === undefined &&
+          ownsCurrentPresentation
+        ) {
           // AC #3 (#147): clear pending attachments after a successful send.
           clearPendingAttachments();
           // Issue #148 — record which documents contributed context so the UI can disclose them.

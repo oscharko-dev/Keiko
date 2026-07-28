@@ -1343,7 +1343,9 @@ export interface GatewayTurnSnapshot {
 }
 
 export function gatewayHistoryPrefix(snapshot: GatewayTurnSnapshot): readonly ChatMessage[] {
-  return snapshot.history.filter((message) => message.id !== snapshot.currentUserMessageId);
+  return snapshot.history.filter(
+    (message): boolean => message.id !== snapshot.currentUserMessageId,
+  );
 }
 
 export function captureGatewayTurnSnapshot(

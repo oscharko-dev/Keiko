@@ -2,6 +2,7 @@
 // Asserts perms 0o700/0o600 on the dir/file (Unix), and that the DB file is NOT inside process.cwd().
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   mkdtempSync,
@@ -15,7 +16,10 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
-import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
+  canonicalDesktopChatTurnReferenceSeed,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   createInMemoryUiStore,
   createNodeUiStore,
@@ -232,7 +236,7 @@ describe("createInMemoryUiStore", () => {
     store.close();
   });
 
-  it("keeps visible incomplete turns out of gateway history", () => {
+  it("keeps visible incomplete turns out of gateway history", (): void => {
     const projectDir = mkdtempSync(join(tmpDir, "gateway-history-project-"));
     const store = createInMemoryUiStore();
     store.createProject(projectDir);
@@ -274,7 +278,7 @@ describe("createInMemoryUiStore", () => {
     expect(
       store
         .listGatewayMessages(chat.id, current.userMessage.id, 50)
-        .map((message) => message.content),
+        .map((message): string => message.content),
     ).toEqual([
       "legacy answered",
       "legacy answer",
@@ -282,6 +286,167 @@ describe("createInMemoryUiStore", () => {
       "canonical answer",
       "current question",
     ]);
+    expect(
+      store
+        .listGatewayMessages(chat.id, current.userMessage.id, 1)
+        .map((message): string => message.content),
+    ).toEqual(["current question"]);
+    store.close();
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    "rejects an invalid gateway history limit of %s",
+    (limit): void => {
+      const store = createInMemoryUiStore();
+      expect((): unknown => store.listGatewayMessages("missing-chat", "", limit)).toThrow(
+        "limit must be a positive integer.",
+      );
+      store.close();
+    },
+  );
+
+  it("fills the gateway limit across ineligible pages without splitting turns", (): void => {
+    const projectDir = mkdtempSync(join(tmpDir, "gateway-pagination-project-"));
+    const store = createInMemoryUiStore();
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Paginated history", "example-chat-model");
+    const draft = (
+      role: "user" | "assistant",
+      content: string,
+      timestamp: number,
+    ): NewChatMessage => ({
+      chatId: chat.id,
+      role,
+      content,
+      timestamp,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const legacyUser = store.createMessage(draft("user", "legacy user", 1));
+    store.createTurnAssistant(legacyUser.id, draft("assistant", "legacy assistant", 2));
+    const completed = store.admitChatTurn("completed-page-turn", draft("user", "done user", 3));
+    if (completed.kind !== "admitted") throw new Error("expected canonical admission");
+    const completedAssistant = store.createTurnAssistant(
+      completed.userMessage.id,
+      draft("assistant", "done assistant", 4),
+    );
+    store.completeChatTurn(chat.id, "completed-page-turn", "done user", completedAssistant.id);
+    for (let index = 0; index < 124; index += 1) {
+      store.createMessage(draft("user", `orphan ${String(index)}`, 5 + index));
+    }
+    const failed = store.admitChatTurn("failed-page-turn", draft("user", "failed user", 129));
+    if (failed.kind !== "admitted") throw new Error("expected failed admission");
+    store.failChatTurn(chat.id, "failed-page-turn");
+    const pending = store.admitChatTurn("pending-page-turn", draft("user", "pending user", 130));
+    if (pending.kind !== "admitted") throw new Error("expected pending admission");
+    const current = store.admitChatTurn("current-page-turn", draft("user", "current user", 131));
+    if (current.kind !== "admitted") throw new Error("expected current admission");
+
+    const contents = (limit: number): readonly string[] =>
+      store
+        .listGatewayMessages(chat.id, current.userMessage.id, limit)
+        .map((message): string => message.content);
+    expect(contents(5)).toEqual([
+      "legacy user",
+      "legacy assistant",
+      "done user",
+      "done assistant",
+      "current user",
+    ]);
+    expect(contents(4)).toEqual(["done user", "done assistant", "current user"]);
+    store.close();
+  });
+
+  it("keeps canonical pairs complete when the assistant clock moves backwards", (): void => {
+    const projectDir = mkdtempSync(join(tmpDir, "gateway-clock-skew-project-"));
+    const store = createInMemoryUiStore();
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Clock skew history", "example-chat-model");
+    const draft = (
+      role: "user" | "assistant" | "system",
+      content: string,
+      timestamp: number,
+    ): NewChatMessage => ({
+      chatId: chat.id,
+      role,
+      content,
+      timestamp,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const completed = store.admitChatTurn(
+      "clock-skew-completed-turn",
+      draft("user", "clock-skew user", 300),
+    );
+    if (completed.kind !== "admitted") throw new Error("expected canonical admission");
+    for (let index = 0; index < 127; index += 1) {
+      store.createMessage(draft("system", `intervening system ${String(index)}`, 299 - index));
+    }
+    const assistant = store.createTurnAssistant(
+      completed.userMessage.id,
+      draft("assistant", "clock-skew assistant", 1),
+    );
+    store.completeChatTurn(chat.id, "clock-skew-completed-turn", "clock-skew user", assistant.id);
+
+    expect(
+      store
+        .listGatewayMessages(chat.id, "", 2)
+        .map((message): readonly [string, string] => [message.role, message.content]),
+    ).toEqual([
+      ["user", "clock-skew user"],
+      ["assistant", "clock-skew assistant"],
+    ]);
+    expect(
+      store
+        .listGatewayMessages(chat.id, completed.userMessage.id, 2)
+        .map((message): readonly [string, string] => [message.role, message.content]),
+    ).toEqual([
+      ["user", "clock-skew user"],
+      ["assistant", "clock-skew assistant"],
+    ]);
+    store.close();
+  });
+
+  it("reserves the admitted current turn behind future-timestamp history", (): void => {
+    const projectDir = mkdtempSync(join(tmpDir, "gateway-current-skew-project-"));
+    const store = createInMemoryUiStore();
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Current clock skew", "example-chat-model");
+    for (let index = 0; index < 50; index += 1) {
+      store.createMessage({
+        chatId: chat.id,
+        role: "system",
+        content: `future system ${String(index)}`,
+        timestamp: 200 + index,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+    const current = store.admitChatTurn("current-skew-turn", {
+      chatId: chat.id,
+      role: "user",
+      content: "current request",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (current.kind !== "admitted") throw new Error("expected current admission");
+
+    const history = store.listGatewayMessages(chat.id, current.userMessage.id, 4);
+    expect(history).toHaveLength(4);
+    expect(history.some((message): boolean => message.id === current.userMessage.id)).toBe(true);
     store.close();
   });
 });
@@ -374,7 +539,11 @@ describe("createNodeUiStore — on-disk file", () => {
       client_turn_content_digest: string;
     };
     inspector.close();
-    expect(stored.client_turn_id).toMatch(/^[0-9a-f]{64}$/);
+    const expectedTurnReference = createHash("sha256")
+      .update(canonicalDesktopChatTurnReferenceSeed(chat.id, opaqueTurnId), "utf8")
+      .digest("hex");
+    expect(stored.client_turn_id).toBe(expectedTurnReference);
+    expect(firstAdmission.userMessage.canonicalTurnRef).toBe(expectedTurnReference);
     expect(stored.client_turn_id).not.toBe(opaqueTurnId);
     expect(stored.client_turn_state).toBe("pending");
     expect(stored.client_turn_content_digest).toMatch(/^[0-9a-f]{64}$/);
