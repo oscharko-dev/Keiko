@@ -541,8 +541,8 @@ describe("RunLauncher — initial render", () => {
   });
 });
 
-describe("RunLauncher — Quality Intelligence capability truth (#2804)", () => {
-  it("does not present a structured-only model as an available judge", async () => {
+describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): void => {
+  it("does not present a structured-only model as an available judge", async (): Promise<void> => {
     const generationOnly = chatCapability("generation-only", {
       supportsResponseFormat: false,
     });
@@ -564,7 +564,7 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", () => 
     );
   });
 
-  it("keeps generation available while surfacing an unavailable judge-stage preflight", async () => {
+  it("keeps generation available while surfacing an unavailable judge-stage preflight", async (): Promise<void> => {
     const user = userEvent.setup();
     const judge = chatCapability("judge-ready", { supportsResponseFormat: true });
     const response = modelPolicyResponse([judge], {

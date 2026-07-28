@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  isQualityIntelligenceJudgeEligible,
   QUALITY_INTELLIGENCE_RUN_STATUSES,
   type QualityIntelligenceRunStatus,
 } from "../bffWire.js";
+import { isQualityIntelligenceJudgeEligible } from "../../index.js";
 import type { ModelCapability } from "../../gateway.js";
 
 function chatCapability(overrides: Partial<ModelCapability> = {}): ModelCapability {
@@ -38,8 +38,8 @@ describe("Quality Intelligence run-status union (GEN-DUP-SEMANTIC-010)", () => {
   });
 });
 
-describe("Quality Intelligence judge eligibility (#2804)", () => {
-  it("requires a chat model with structured output enforced by response_format", () => {
+describe("Quality Intelligence judge eligibility (#2804)", (): void => {
+  it("requires a chat model with structured output enforced by response_format", (): void => {
     expect(
       isQualityIntelligenceJudgeEligible(chatCapability({ supportsResponseFormat: true })),
     ).toBe(true);
