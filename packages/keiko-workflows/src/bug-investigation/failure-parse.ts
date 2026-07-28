@@ -19,7 +19,7 @@ export const MAX_FRAMES = 25;
 const MAX_MESSAGES = 10;
 const MAX_MESSAGE_LENGTH = 200;
 
-const ALL_DIGITS = /^[0-9]+$/;
+const ALL_DIGITS = /^\d+$/;
 const FILE_URL_PREFIX = "file://";
 const MESSAGE_MARKERS: readonly string[] = [
   "assertionerror",

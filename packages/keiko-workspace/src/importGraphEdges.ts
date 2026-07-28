@@ -176,9 +176,42 @@ function matchEsmStaticImportSpecifier(
   if (afterFromWhitespace === afterFrom) return undefined;
   return readQuotedSpecifier(text, afterFromWhitespace);
 }
-const ESM_REEXPORT = /^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm;
+const ESM_REEXPORT_KEYWORD = /^[ \t]*export\b/gmu;
 const CJS_REQUIRE = /\brequire\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
 const DYNAMIC_IMPORT = /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
+
+function readReexportSpecifier(text: string, at: number): string | undefined {
+  const quote = text.charAt(at);
+  if (quote !== '"' && quote !== "'") return undefined;
+  for (let index = at + 1; index < text.length; index += 1) {
+    const char = text.charAt(index);
+    if (char === "\n") return undefined;
+    if (char === '"' || char === "'") {
+      return index === at + 1 ? undefined : text.slice(at + 1, index);
+    }
+  }
+  return undefined;
+}
+
+function matchEsmReexportSpecifier(text: string, afterKeyword: number): string | undefined {
+  if (afterKeyword >= text.length || !/\s/u.test(text.charAt(afterKeyword))) return undefined;
+  let index = skipWhitespaceRun(text, afterKeyword);
+  if (text.charAt(index) === "*") {
+    index += 1;
+  } else if (text.charAt(index) === "{") {
+    const closeIndex = text.indexOf("}", index + 1);
+    if (closeIndex === -1) return undefined;
+    index = closeIndex + 1;
+  } else {
+    return undefined;
+  }
+  if (!/\s/u.test(text.charAt(index))) return undefined;
+  index = skipWhitespaceRun(text, index);
+  if (!text.startsWith("from", index)) return undefined;
+  index += "from".length;
+  if (!/\s/u.test(text.charAt(index))) return undefined;
+  return readReexportSpecifier(text, skipWhitespaceRun(text, index));
+}
 
 function normalizeScopePath(scopePath: string): string {
   return path.normalize(scopePath.replaceAll("\\", "/")).replace(/^\.\//u, "");
@@ -190,6 +223,14 @@ function lineNumberOf(text: string, charIndex: number): number {
     if (text.codePointAt(i) === 10) line += 1;
   }
   return line;
+}
+
+function reexportMatchStart(text: string, exportLineStart: number): number {
+  let cursor = exportLineStart - 1;
+  while (cursor >= 0 && /\s/u.test(text.charAt(cursor))) cursor -= 1;
+  if (cursor < 0) return 0;
+  const nextLineStart = text.indexOf("\n", cursor + 1);
+  return nextLineStart === -1 ? exportLineStart : nextLineStart + 1;
 }
 
 function collectEsmStaticImports(text: string, hits: ImportSpecifierHit[]): void {
@@ -208,6 +249,25 @@ function collectEsmStaticImports(text: string, hits: ImportSpecifierHit[]): void
     }
     ESM_IMPORT_KEYWORD.lastIndex = afterKeyword;
     match = ESM_IMPORT_KEYWORD.exec(text);
+  }
+}
+
+function collectEsmReexports(text: string, hits: ImportSpecifierHit[]): void {
+  ESM_REEXPORT_KEYWORD.lastIndex = 0;
+  let match: RegExpExecArray | null = ESM_REEXPORT_KEYWORD.exec(text);
+  while (match !== null) {
+    const afterKeyword = match.index + match[0].length;
+    const specifier = matchEsmReexportSpecifier(text, afterKeyword);
+    if (specifier !== undefined) {
+      hits.push({
+        specifier,
+        kind: "re-export",
+        line: lineNumberOf(text, reexportMatchStart(text, match.index)),
+        ordinal: hits.length,
+      });
+    }
+    ESM_REEXPORT_KEYWORD.lastIndex = afterKeyword;
+    match = ESM_REEXPORT_KEYWORD.exec(text);
   }
 }
 
@@ -236,7 +296,7 @@ function collectWithRegex(
 export function collectImportSpecifiers(text: string): readonly ImportSpecifierHit[] {
   const hits: ImportSpecifierHit[] = [];
   collectEsmStaticImports(text, hits);
-  collectWithRegex(text, ESM_REEXPORT, "re-export", hits);
+  collectEsmReexports(text, hits);
   collectWithRegex(text, CJS_REQUIRE, "commonjs-require", hits);
   collectWithRegex(text, DYNAMIC_IMPORT, "dynamic-import", hits);
   return hits.sort((a, b) => a.line - b.line || a.ordinal - b.ordinal);

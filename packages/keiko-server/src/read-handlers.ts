@@ -187,7 +187,7 @@ function parsePositiveBudget(value: string | null): number | undefined {
   if (value === null) {
     return undefined;
   }
-  if (!/^[1-9][0-9]*$/u.test(value)) {
+  if (!/^[1-9]\d*$/u.test(value)) {
     throw new Error("invalid budget");
   }
   const parsed = Number.parseInt(value, 10);

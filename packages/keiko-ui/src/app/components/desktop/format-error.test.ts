@@ -94,6 +94,11 @@ describe("formatUserError", () => {
     expect(formatUserError(raw, "Retry")).toBe("Gateway failed with [REDACTED]");
   });
 
+  it("redacts the full ASCII credential alphabet used by bearer and GitHub tokens", () => {
+    const raw = new Error("Bearer Az09._~+/=-Az09; gho_Az09_Az09_Az09; ghp_09Za_09Za_09Za");
+    expect(formatUserError(raw, "Retry")).toBe("[REDACTED]; [REDACTED]; [REDACTED]");
+  });
+
   it("captures a plain Error's message when it is not wrapped in ApiError", () => {
     expect(toUserErrorNotice(new Error("boom"), "Retry")).toEqual({
       title: "Something went wrong",

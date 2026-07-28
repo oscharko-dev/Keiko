@@ -9,8 +9,60 @@ interface JsonToken {
   readonly text: string;
 }
 
-const JSON_TOKEN_RE =
-  /"(?:\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|[^"\\])*"\s*:?|[-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b|[{}[\],:]/gu;
+const JSON_STRING_TOKEN_RE = /"(?:\\["\\/bfnrt]|\\u[0-9a-fA-F]{4}|[^"\\])*"\s*:?/uy;
+const JSON_NUMBER_TOKEN_RE = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/uy;
+
+function isAsciiWordCode(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    code === 95 ||
+    (code >= 97 && code <= 122)
+  );
+}
+
+function keywordAt(text: string, index: number): string | null {
+  if (index > 0 && isAsciiWordCode(text.charCodeAt(index - 1))) return null;
+  const keyword = text.startsWith("true", index)
+    ? "true"
+    : text.startsWith("false", index)
+      ? "false"
+      : text.startsWith("null", index)
+        ? "null"
+        : null;
+  if (keyword === null) return null;
+  const nextIndex = index + keyword.length;
+  return nextIndex < text.length && isAsciiWordCode(text.charCodeAt(nextIndex)) ? null : keyword;
+}
+
+function punctuationAt(text: string, index: number): string | null {
+  const character = text.charAt(index);
+  if (
+    character === "{" ||
+    character === "}" ||
+    character === "[" ||
+    character === "]" ||
+    character === "," ||
+    character === ":"
+  ) {
+    return character;
+  }
+  return null;
+}
+
+function regexTokenAt(pattern: RegExp, text: string, index: number): string | null {
+  pattern.lastIndex = index;
+  return pattern.exec(text)?.[0] ?? null;
+}
+
+function tokenAt(text: string, index: number): string | null {
+  return (
+    regexTokenAt(JSON_STRING_TOKEN_RE, text, index) ??
+    regexTokenAt(JSON_NUMBER_TOKEN_RE, text, index) ??
+    keywordAt(text, index) ??
+    punctuationAt(text, index)
+  );
+}
 
 function tokenKind(token: string): JsonTokenKind {
   if (token.startsWith('"')) return token.endsWith(":") ? "key" : "string";
@@ -23,14 +75,19 @@ function tokenKind(token: string): JsonTokenKind {
 function tokenizeJson(text: string): readonly (JsonToken | string)[] {
   const parts: (JsonToken | string)[] = [];
   let cursor = 0;
-  for (const match of text.matchAll(JSON_TOKEN_RE)) {
-    const token = match[0];
-    const index = match.index;
-    if (index > cursor) parts.push(text.slice(cursor, index));
+  let rawStart = 0;
+  while (cursor < text.length) {
+    const token = tokenAt(text, cursor);
+    if (token === null) {
+      cursor += 1;
+      continue;
+    }
+    if (cursor > rawStart) parts.push(text.slice(rawStart, cursor));
     parts.push({ kind: tokenKind(token), text: token });
-    cursor = index + token.length;
+    cursor += token.length;
+    rawStart = cursor;
   }
-  if (cursor < text.length) parts.push(text.slice(cursor));
+  if (rawStart < text.length) parts.push(text.slice(rawStart));
   return parts;
 }
 

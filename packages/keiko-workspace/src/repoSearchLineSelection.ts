@@ -177,7 +177,7 @@ function includeLeadingDecorators(lines: readonly string[], startIndex: number):
 function looksLikeDecoratorLine(trimmedLine: string): boolean {
   return (
     trimmedLine.startsWith("@") ||
-    /^\[[A-Za-z_][\w]*(?:Attribute)?(?:\([^;\n]*\))?\]$/u.test(trimmedLine)
+    /^\[[A-Za-z_]\w*(?:Attribute)?(?:\([^;\n]*\))?\]$/u.test(trimmedLine)
   );
 }
 

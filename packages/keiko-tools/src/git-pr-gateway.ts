@@ -168,7 +168,7 @@ const TITLE_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
 const BODY_CONTROL_CHAR = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
-const PR_NUMBER_RE = /^[1-9][0-9]{0,9}$/;
+const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
 
 function assertRef(value: string, label: string): string {
   if (value.length === 0) {

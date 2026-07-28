@@ -15,6 +15,25 @@ describe("JsonSyntaxBlock size cutoff (GEN-PERF-WIDGET-002)", () => {
     expect(container.querySelector('[data-highlight-disabled="true"]')).toBeNull();
   });
 
+  it("classifies escaped strings, signed exponents, literals, and punctuation", () => {
+    const text =
+      '{"escaped":"line\\n\\/\\u0041","number":-12.5e+2,"yes":true,"no":false,"nil":null}';
+    const { container } = render(<JsonSyntaxBlock text={text} className="json" />);
+    const tokenText = (kind: string): string[] =>
+      Array.from(
+        container.querySelectorAll(`.json-token-${kind}`),
+        (node) => node.textContent ?? "",
+      );
+
+    expect(tokenText("key")).toEqual(['"escaped":', '"number":', '"yes":', '"no":', '"nil":']);
+    expect(tokenText("string")).toEqual(['"line\\n\\/\\u0041"']);
+    expect(tokenText("number")).toEqual(["-12.5e+2"]);
+    expect(tokenText("boolean")).toEqual(["true", "false"]);
+    expect(tokenText("null")).toEqual(["null"]);
+    expect(tokenText("punctuation")).toEqual(["{", ",", ",", ",", ",", "}"]);
+    expect(container.textContent).toBe(text);
+  });
+
   it("falls back to a plain text node above the byte cutoff (no span explosion)", () => {
     // Build a payload comfortably above the cap whose highlighted form would be
     // hundreds of thousands of spans.

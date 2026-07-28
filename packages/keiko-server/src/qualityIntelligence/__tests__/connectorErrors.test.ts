@@ -60,6 +60,7 @@ describe("containsForbiddenSecretShape", () => {
     "the api_key here",
     "AKIA1234567890ABCDEF",
     "ghp_1234567890abcdefghijklmnop",
+    ["github", "_pat_", "AbCdEfGhIj_KlMnOpQrStUv"].join(""),
     "sk-1234567890abcdefghijklmnop",
   ])("detects %s", (value) => {
     expect(containsForbiddenSecretShape(value)).toBe(true);

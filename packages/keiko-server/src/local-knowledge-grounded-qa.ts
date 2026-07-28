@@ -959,11 +959,15 @@ const REFUSAL_PATTERNS: readonly RegExp[] = [
   /\bkeine\s+(?:belege|hinweise)\b/iu,
   /\bnicht\s+genug\s+(?:evidenz|belege|hinweise)\b/iu,
 ];
-const GERMAN_QUERY_PATTERN =
-  /[äöüß]|\b(?:bitte|was|wie|warum|welche|welcher|welches|wieviel|wieso|erkläre|erklaere|zeige|gibt|ist|sind|der|die|das|den|dem|des|und|oder|nicht|keine|kein|evidenz|belege|hinweise)\b/iu;
+const GERMAN_QUERY_PATTERNS: readonly RegExp[] = [
+  /[äöüß]/iu,
+  /\b(?:bitte|was|wie|warum|welche|welcher|welches|wieviel|wieso)\b/iu,
+  /\b(?:erkläre|erklaere|zeige|gibt|ist|sind|der|die|das|den|dem|des)\b/iu,
+  /\b(?:und|oder|nicht|keine|kein|evidenz|belege|hinweise)\b/iu,
+];
 
 function shouldUseGermanForSystemAnswer(question: string | undefined): boolean {
-  return question !== undefined && GERMAN_QUERY_PATTERN.test(question);
+  return question !== undefined && GERMAN_QUERY_PATTERNS.some((pattern) => pattern.test(question));
 }
 
 function isNoEvidenceAnswer(answer: string): boolean {

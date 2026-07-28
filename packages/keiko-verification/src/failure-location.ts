@@ -36,12 +36,10 @@ const WINDOWS_QUALIFIED = /^(?:[A-Za-z]:|\\{2}|\/{2})/u;
 const TSC_DIAGNOSTIC =
   /^(?<file>[^()]+?)\((?<line>\d+),(?<col>\d+)\): (?:error|warning) (?<rule>TS\d+): (?<msg>.*)$/u;
 // ESLint stylish row under a bare file-path header line: "  12:34  error  message  rule-id".
-// The message and rule-id captures are bounded (not `+`/unbounded `{2,}`) rather than left as a
-// lazy quantifier directly adjacent to an optional quantified group — that adjacency is what
-// SonarCloud's S8786 flags as a superlinear-backtracking shape. The 4096 bound mirrors
-// MAX_LINE_LENGTH below, so no line that reaches this regex (already capped) can ever hit it.
-const ESLINT_ROW =
-  /^\s+(?<line>\d+):(?<col>\d+)\s+(?:error|warning)\s+(?<msg>.{1,4096}?)(?:\s{2,4096}(?<rule>[\w@/.-]{1,4096}))?\s*$/u;
+// Only the unambiguous coordinate/severity prefix is parsed with a regex. The optional trailing
+// rule id is scanned from right to left so message whitespace and the optional rule cannot create
+// the super-linear backtracking shape that SonarCloud S8786 rejects.
+const ESLINT_ROW_PREFIX = /^\s+(\d+):(\d+)\s+(?:error|warning)\s+(?=.)/u;
 // A bare file-path line preceding ESLint rows (absolute or workspace-relative, no leading space).
 const ESLINT_FILE = /^(?<file>[^\s].*\.[cm]?[jt]sx?)$/u;
 // vitest default failure stack frame: "❯ src/a.test.ts:12:34" or "at src/a.test.ts:12:34".
@@ -92,15 +90,49 @@ function matchEslintFile(line: string): string | undefined {
   return ESLINT_FILE.exec(line)?.groups?.file?.trim();
 }
 
+function isEslintRuleChar(char: string | undefined): boolean {
+  if (char === undefined) return false;
+  return /[\w@/.-]/u.test(char);
+}
+
+function isWhitespace(char: string | undefined): boolean {
+  return char !== undefined && /\s/u.test(char);
+}
+
+interface EslintMessageParts {
+  readonly message: string;
+  readonly ruleId?: string | undefined;
+}
+
+function eslintMessageParts(body: string): EslintMessageParts | undefined {
+  if (body.length === 0) return undefined;
+  let end = body.length;
+  while (isWhitespace(body[end - 1])) end -= 1;
+  let ruleStart = end;
+  while (isEslintRuleChar(body[ruleStart - 1])) ruleStart -= 1;
+  let separatorStart = ruleStart;
+  while (isWhitespace(body[separatorStart - 1])) separatorStart -= 1;
+  if (ruleStart < end && ruleStart - separatorStart >= 2 && separatorStart > 0) {
+    return {
+      message: body.slice(0, separatorStart).trim(),
+      ruleId: body.slice(ruleStart, end),
+    };
+  }
+  return { message: body.trim() };
+}
+
 function matchEslintRow(line: string, file: string): VerificationFailureLocation | undefined {
-  const groups = ESLINT_ROW.exec(line)?.groups;
-  if (groups?.line === undefined) return undefined;
+  const match = ESLINT_ROW_PREFIX.exec(line);
+  const lineNumber = match?.[1];
+  if (match === null || lineNumber === undefined) return undefined;
+  const parts = eslintMessageParts(line.slice(match[0].length));
+  if (parts === undefined) return undefined;
   return {
     file,
-    line: toInt(groups.line),
-    column: toInt(groups.col ?? "0"),
-    message: cap((groups.msg ?? "").trim()),
-    ...(groups.rule === undefined ? {} : { ruleId: groups.rule }),
+    line: toInt(lineNumber),
+    column: toInt(match[2] ?? "0"),
+    message: cap(parts.message),
+    ...(parts.ruleId === undefined ? {} : { ruleId: parts.ruleId }),
   };
 }
 

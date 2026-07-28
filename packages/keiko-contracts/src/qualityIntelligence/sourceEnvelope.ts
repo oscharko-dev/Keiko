@@ -136,7 +136,7 @@ const fieldLooksUnsafe = (value: string): boolean => {
   if (/[a-z][a-z0-9+.-]{0,63}:\/\//iu.test(value)) return true;
   // (b) credential shapes
   if (/AKIA[0-9A-Z]{12,}/u.test(value)) return true;
-  if (/(?:ghp_|gho_|github_pat_)[A-Za-z0-9_]{20,}/u.test(value)) return true;
+  if (/(?:ghp_|gho_|github_pat_)\w{20,}/u.test(value)) return true;
   if (/xox[baprs]-[A-Za-z0-9-]{10,}/u.test(value)) return true;
   if (/sk-[A-Za-z0-9]{16,}/u.test(value)) return true;
   if (/\bBearer\s+\S/u.test(value)) return true;

@@ -120,8 +120,13 @@ export function listCapabilities(): readonly ModelCapability[] {
 // dot, or start/end of string). Also matches `ada-002` which is OpenAI's legacy
 // embedding model name that predates the `text-embedding-*` convention.
 // ReDoS-safe: no nested quantifiers, linear worst-case.
-export const EMBEDDING_ID_PATTERN =
-  /(?:^|[-_/. ])(?:(?:text-)?embed(?:ding)?s?|bge|e5|gte|nomic|mxbai|jina|instructor)(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
+const EMBEDDING_ID_BOUNDARY_SOURCE = "[-_/. ]";
+const EMBEDDING_ID_TOKEN_SOURCE =
+  "(?:text-)?embed(?:ding)?s?|bge|e5|gte|nomic|mxbai|jina|instructor";
+export const EMBEDDING_ID_PATTERN = new RegExp(
+  `(?:^|${EMBEDDING_ID_BOUNDARY_SOURCE})(?:${EMBEDDING_ID_TOKEN_SOURCE})(?:${EMBEDDING_ID_BOUNDARY_SOURCE}|$)|ada-002(?:$|${EMBEDDING_ID_BOUNDARY_SOURCE})`,
+  "i",
+);
 
 export function isLikelyEmbeddingModelId(id: string): boolean {
   return EMBEDDING_ID_PATTERN.test(id);

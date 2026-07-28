@@ -236,6 +236,33 @@ describe("CodeContextConnector", () => {
         objectId: "1989",
       }),
     ).toThrow("ownerAndRepo must match");
+    expect(() =>
+      buildGitHubCodeContextArgv({
+        source: "github",
+        objectKind: "issue",
+        ownerAndRepo: "oscharko-dev/Keiko",
+        objectId: "１２",
+      }),
+    ).toThrow("objectId must be a positive number");
+  });
+
+  it("keeps Jira issue numbers ASCII-only and bounded", () => {
+    expect(
+      buildJiraCodeContextRequest({
+        source: "jira",
+        objectKind: "issue",
+        projectKey: "KEIKO",
+        objectId: "9999999999",
+      }).path,
+    ).toBe("/rest/api/3/issue/KEIKO-9999999999");
+    expect(() =>
+      buildJiraCodeContextRequest({
+        source: "jira",
+        objectKind: "issue",
+        projectKey: "KEIKO",
+        objectId: "１２",
+      }),
+    ).toThrow("objectId must be a positive Jira issue number");
   });
 
   it("keeps GitHub context reads on a dedicated read-only gh api command allowlist", () => {

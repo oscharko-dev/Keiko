@@ -187,6 +187,43 @@ describe("xlsxParser", () => {
     expect(normalizedText).not.toContain("45292");
   });
 
+  it("formats custom date serials after ignoring bracketed number-format sections", async () => {
+    const result = await xlsxParser.parseAsync(
+      selectionFromBytes(
+        workbookZip([
+          {
+            name: "xl/styles.xml",
+            content: [
+              "<styleSheet>",
+              '<numFmts count="1"><numFmt numFmtId="164" formatCode="[Red]yyyy-mm-dd"/></numFmts>',
+              '<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs>',
+              "</styleSheet>",
+            ].join(""),
+          },
+          {
+            name: "xl/sharedStrings.xml",
+            content: "<sst><si><t>Name</t></si><si><t>Due</t></si><si><t>Renewal</t></si></sst>",
+          },
+          {
+            name: "xl/worksheets/sheet1.xml",
+            content: [
+              "<worksheet><sheetData>",
+              '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>',
+              '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" s="1"><v>45292</v></c></row>',
+              "</sheetData></worksheet>",
+            ].join(""),
+          },
+        ]),
+        { extension: "xlsx" },
+      ),
+      buildParserOptions(),
+    );
+
+    const normalizedText = "normalizedText" in result ? result.normalizedText : "";
+    expect(normalizedText).toContain("Name=Renewal | Due=2024-01-01");
+    expect(normalizedText).not.toContain("45292");
+  });
+
   it("drops incomplete raw XML tags from shared-string fallback text", async () => {
     const result = await xlsxParser.parseAsync(
       selectionFromBytes(

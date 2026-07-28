@@ -308,7 +308,7 @@ function humaniseBranchSlug(headBranch: string): string {
   let start = 0;
   while (start < tokens.length) {
     const token = (tokens[start] ?? "").toLowerCase();
-    if (token === "issue" || /^[0-9]+$/.test(token)) {
+    if (token === "issue" || /^\d+$/.test(token)) {
       start += 1;
     } else {
       break;

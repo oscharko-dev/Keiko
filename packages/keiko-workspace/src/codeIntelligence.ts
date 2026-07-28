@@ -1029,6 +1029,45 @@ function resolveImportTarget(
   }
 }
 
+function quotedImportSpecifier(text: string, quoteIndex: number): string | undefined {
+  const quote = text.charAt(quoteIndex);
+  if (quote !== '"' && quote !== "'") return undefined;
+  for (let index = quoteIndex + 1; index < text.length; index += 1) {
+    const char = text.charAt(index);
+    if (char === "\n" || char === "\r") return undefined;
+    if (char === '"' || char === "'") {
+      return index === quoteIndex + 1 ? undefined : text.slice(quoteIndex + 1, index);
+    }
+  }
+  return undefined;
+}
+
+function staticImportQuoteIndex(text: string, start: number): number | undefined {
+  for (let index = start + 1; index < text.length - "from".length; index += 1) {
+    if (!/[ \t]/u.test(text.charAt(index - 1)) || !text.startsWith("from", index)) continue;
+    const afterKeyword = index + "from".length;
+    if (!/[ \t]/u.test(text.charAt(afterKeyword))) continue;
+    let quoteIndex = afterKeyword + 1;
+    while (/[ \t]/u.test(text.charAt(quoteIndex))) quoteIndex += 1;
+    if (text.charAt(quoteIndex) === '"' || text.charAt(quoteIndex) === "'") return quoteIndex;
+  }
+  return undefined;
+}
+
+function polyglotStaticImportSpecifier(line: string): string | undefined {
+  const text = line.trimStart();
+  if (!text.startsWith("import")) return undefined;
+  const afterKeyword = "import".length;
+  if (!/[ \t]/u.test(text.charAt(afterKeyword))) return undefined;
+  let clauseStart = afterKeyword;
+  while (/[ \t]/u.test(text.charAt(clauseStart))) clauseStart += 1;
+  if (text.charAt(clauseStart) === '"' || text.charAt(clauseStart) === "'") {
+    return quotedImportSpecifier(text, clauseStart);
+  }
+  const quoteIndex = staticImportQuoteIndex(text, clauseStart);
+  return quoteIndex === undefined ? undefined : quotedImportSpecifier(text, quoteIndex);
+}
+
 function collectImportEdges(
   file: SourceFile,
   pathSet: ReadonlySet<string>,
@@ -1053,8 +1092,9 @@ function collectImportEdges(
       } satisfies Omit<CodeImportEdge, "targetPath" | "confidence">;
       edges.push({ ...partial, ...resolveImportTarget(partial, pathSet, resolver) });
     };
+    const staticImport = polyglotStaticImportSpecifier(line);
+    if (staticImport !== undefined) emit("import", staticImport);
     for (const pattern of [
-      /^\s*import(?:[ \t]+\S+(?:[ \t]+\S+)*[ \t]+from)?\s+["']([^"'\n]+)["']/u,
       /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/u,
       /\brequire\s*\(\s*["']([^"'\n]+)["']\s*\)/u,
     ]) {
@@ -1290,7 +1330,7 @@ function collectPythonImportListBindings(
 ): readonly CodeImportBinding[] {
   const bindings: CodeImportBinding[] = [];
   for (const part of importList.split(",")) {
-    const importMatch = /^\s*([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/u.exec(part);
+    const importMatch = /^\s*([A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?\s*$/u.exec(part);
     if (importMatch?.[1] === undefined) {
       continue;
     }
@@ -2087,7 +2127,7 @@ function declarationFieldNames(
     csharpPropertyFieldName(declarationLine),
   ].filter((name): name is string => name !== undefined);
   if (language !== "go" || !insideBlock) return names;
-  const goStructField = /^\s*([A-Za-z_][\w]*)\s+[^\s`{]+(?:\s+`([^`]*)`)?/u.exec(line);
+  const goStructField = /^\s*([A-Za-z_]\w*)\s+[^\s`{]+(?:\s+`([^`]*)`)?/u.exec(line);
   const goName = fieldNameFromGoStructTag(goStructField?.[2]) ?? goStructField?.[1];
   return goName === undefined || NON_FIELD_COMPONENT_NAMES.has(goName.toLowerCase())
     ? names
@@ -2136,19 +2176,13 @@ function collectSymbols(file: SourceFile): readonly CodeSymbol[] {
       [/\b(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)\b/u, "interface"],
       [/\b(?:export\s+)?type\s+([A-Za-z_$][\w$]*)\b/u, "type"],
       [/\b(?:export\s+)?enum\s+([A-Za-z_$][\w$]*)\b/u, "enum"],
-      [
-        /\b(?:(?:public|private|protected|internal|abstract|final|sealed|data|open)\s+)*class\s+([A-Za-z_$][\w$]*)\b\s*(?:\(([^)]*)\))?/u,
-        "class",
-      ],
+      [/\bclass\s+([A-Za-z_$][\w$]*)\b\s*(?:\(([^)]*)\))?/u, "class"],
       [/\b(?:public\s+|private\s+|protected\s+)*interface\s+([A-Za-z_$][\w$]*)\b/u, "interface"],
-      [
-        /\b(?:(?:public|private|protected|internal|sealed|abstract|partial|readonly)\s+)*record\s+(?:class\s+|struct\s+)?([A-Za-z_$][\w$]*)\s*(?:\(([^)]*)\))?/u,
-        "record",
-      ],
+      [/\brecord\s+(?:class\s+|struct\s+)?([A-Za-z_$][\w$]*)\s*(?:\(([^)]*)\))?/u, "record"],
       [/\b(?:public\s+|private\s+|protected\s+)*enum\s+([A-Za-z_$][\w$]*)\b/u, "enum"],
       [/\bfun\s+([A-Za-z_$][\w$]*)\s*\(/u, "function"],
       [/\bdef\s+([A-Za-z_$][\w$]*)\s*\(/u, "function"],
-      [/\bclass\s+([A-Za-z_$][\w$]*)\s*(?:\(|:)?/u, "class"],
+      [/\bclass\s+([A-Za-z_$][\w$]*)\s*[(:]?/u, "class"],
       [/\bfunc\s+(?:\([^)]+\)\s*)?([A-Za-z_$][\w$]*)\s*\(/u, "function"],
       [/\btype\s+([A-Za-z_$][\w$]*)\s+(?:struct|interface)\b/u, "struct"],
       [/\bfn\s+([A-Za-z_$][\w$]*)\s*\(/u, "function"],
@@ -3091,7 +3125,7 @@ function springMappingMethod(composedMethod: string | undefined, args: string | 
 }
 
 function parseDotNetRouteAttribute(line: string): DotNetRouteAttribute | undefined {
-  const attr = /^\s*\[([A-Za-z_][\w]*?)(?:Attribute)?(?:\((.*)\))?\]\s*$/u.exec(line);
+  const attr = /^\s*\[([A-Za-z_]\w*?)(?:Attribute)?(?:\((.*)\))?\]\s*$/u.exec(line);
   const rawName = attr?.[1]?.toLowerCase();
   if (rawName === undefined) {
     return undefined;
@@ -3108,9 +3142,48 @@ function dotNetControllerRouteToken(className: string): string {
   return className.replace(/Controller$/u, "").toLowerCase();
 }
 
+const DOT_NET_TYPE_PUNCTUATION: ReadonlySet<string> = new Set([
+  "$",
+  "<",
+  ">",
+  ",",
+  ".",
+  "[",
+  "]",
+  "?",
+]);
+
+function dotNetTokenStartsIdentifier(token: string): boolean {
+  return /[A-Za-z_$]/u.test(token.charAt(0));
+}
+
+function dotNetTypeToken(token: string): boolean {
+  if (!dotNetTokenStartsIdentifier(token)) return false;
+  for (const char of token.slice(1)) {
+    if (!/\w/u.test(char) && !DOT_NET_TYPE_PUNCTUATION.has(char)) return false;
+  }
+  return true;
+}
+
+function dotNetNameToken(token: string): boolean {
+  if (!dotNetTokenStartsIdentifier(token)) return false;
+  for (const char of token.slice(1)) {
+    if (!/[\w$]/u.test(char)) return false;
+  }
+  return true;
+}
+
 function dotNetMethodDeclaration(line: string): boolean {
-  return /^\s*(?:(?:public|private|protected|internal|static|async|virtual|override|sealed|partial)\s+)*(?:[A-Za-z_$][\w$<>,.[\]?]*\s+)+[A-Za-z_$][\w$]*\s*\(/u.test(
-    line,
+  const openingParen = line.indexOf("(");
+  if (openingParen === -1) return false;
+  const tokens = line.slice(0, openingParen).trim().split(/\s+/u);
+  const name = tokens.at(-1);
+  const typeTokens = tokens.slice(0, -1);
+  return (
+    name !== undefined &&
+    typeTokens.length > 0 &&
+    dotNetNameToken(name) &&
+    typeTokens.every(dotNetTypeToken)
   );
 }
 
@@ -3144,19 +3217,24 @@ function nestHttpMethod(method: string): string {
   return method.toLowerCase() === "all" ? "ANY" : method.toUpperCase();
 }
 
+const AXIOS_CREATE_PREFIX =
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*axios\.create\s*\(\s*\{/gu;
+const AXIOS_BASE_URL_SUFFIX = /^[\s\S]*?\bbaseURL\s*:\s*(["'`])([^"'`]+)\1[\s\S]*?\}\s*\)/u;
+
 function collectAxiosBasePaths(scan: EndpointScanText): ReadonlyMap<string, string> {
   const bases = new Map<string, string>();
-  for (const match of scan.text.matchAll(
-    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*axios\.create\s*\(\s*\{[\s\S]*?\bbaseURL\s*:\s*(["'`])([^"'`]+)\2[\s\S]*?\}\s*\)/gu,
-  )) {
-    if (!matchStartsInCode(scan, match)) {
-      continue;
+  AXIOS_CREATE_PREFIX.lastIndex = 0;
+  let prefix: RegExpExecArray | null = AXIOS_CREATE_PREFIX.exec(scan.text);
+  while (prefix !== null) {
+    if (matchStartsInCode(scan, prefix)) {
+      const suffix = AXIOS_BASE_URL_SUFFIX.exec(scan.text.slice(prefix.index + prefix[0].length));
+      const variableName = prefix[1];
+      const basePath = suffix?.[2];
+      if (variableName !== undefined && basePath !== undefined) {
+        bases.set(variableName, basePath);
+      }
     }
-    const variableName = match[1];
-    const basePath = match[3];
-    if (variableName !== undefined && basePath !== undefined) {
-      bases.set(variableName, basePath);
-    }
+    prefix = AXIOS_CREATE_PREFIX.exec(scan.text);
   }
   return bases;
 }
@@ -3267,6 +3345,11 @@ interface OpenApiYamlEndpointState {
   currentPathLine: number;
 }
 
+type OpenApiYamlLineResult =
+  | { readonly kind: "continue" }
+  | { readonly kind: "done" }
+  | { readonly kind: "endpoint"; readonly endpoint: ApiEndpoint };
+
 function openApiPathFromLine(trimmed: string): string | undefined {
   if (!trimmed.endsWith(":")) return undefined;
   const rawCandidate = trimmed.slice(0, -1).trim();
@@ -3282,36 +3365,39 @@ function openApiYamlEndpointForLine(
   state: OpenApiYamlEndpointState,
   line: string,
   lineNumber: number,
-): ApiEndpoint | "done" | undefined {
+): OpenApiYamlLineResult {
   const trimmed = line.trim();
-  if (trimmed.length === 0 || trimmed.startsWith("#")) return undefined;
+  if (trimmed.length === 0 || trimmed.startsWith("#")) return { kind: "continue" };
   const indent = line.length - line.trimStart().length;
   if (!state.inPaths) {
     if (/^paths\s*:\s*$/u.test(trimmed)) {
       state.inPaths = true;
       state.pathsIndent = indent;
     }
-    return undefined;
+    return { kind: "continue" };
   }
-  if (indent <= state.pathsIndent && !trimmed.startsWith("/")) return "done";
+  if (indent <= state.pathsIndent && !trimmed.startsWith("/")) return { kind: "done" };
   const path = openApiPathFromLine(trimmed);
   if (path !== undefined) {
     state.currentPath = path;
     state.currentPathLine = lineNumber;
-    return undefined;
+    return { kind: "continue" };
   }
   const method = /^([A-Za-z]+)\s*:\s*$/u.exec(trimmed)?.[1]?.toLowerCase();
   if (state.currentPath === undefined || method === undefined || !HTTP_METHODS.has(method)) {
-    return undefined;
+    return { kind: "continue" };
   }
   return {
-    role: "server",
-    method: method.toUpperCase(),
-    path: normalizeRoutePath(state.currentPath),
-    scopePath: file.scopePath,
-    lineRange: lineRange(state.currentPathLine),
-    language: file.language,
-    parser: "polyglot-regex",
+    kind: "endpoint",
+    endpoint: {
+      role: "server",
+      method: method.toUpperCase(),
+      path: normalizeRoutePath(state.currentPath),
+      scopePath: file.scopePath,
+      lineRange: lineRange(state.currentPathLine),
+      language: file.language,
+      parser: "polyglot-regex",
+    },
   };
 }
 
@@ -3401,7 +3487,7 @@ function firstGraphqlSelectionField(operationText: string): string | undefined {
     return undefined;
   }
   const selection = operationText.slice(selectionStart + 1).replace(/#[^\n]*/gu, " ");
-  return /\b([A-Za-z_][\w]*)\s*(?:\([^)]*\))?/u.exec(selection)?.[1];
+  return /\b([A-Za-z_]\w*)\s*(?:\([^)]*\))?/u.exec(selection)?.[1];
 }
 
 // A GraphQL operation keyword starts a *new* operation only when there is a line break between
@@ -3550,18 +3636,13 @@ function collectProtobufServiceEndpoints(file: SourceFile): readonly ApiEndpoint
   lines.forEach((line, index) => {
     const lineNo = index + 1;
     const lineOffset = scan.lineOffsets[index] ?? 0;
-    const serviceMatch = firstCodeMatch(
-      line,
-      /\bservice\s+([A-Za-z_][\w]*)\s*\{/u,
-      scan,
-      lineOffset,
-    );
+    const serviceMatch = firstCodeMatch(line, /\bservice\s+([A-Za-z_]\w*)\s*\{/u, scan, lineOffset);
     if (serviceMatch?.[1] !== undefined) {
       currentService = serviceMatch[1];
       serviceBraceDepth = braceDelta(line);
     }
     if (currentService !== undefined) {
-      const rpcMatch = firstCodeMatch(line, /\brpc\s+([A-Za-z_][\w]*)\s*\(/u, scan, lineOffset);
+      const rpcMatch = firstCodeMatch(line, /\brpc\s+([A-Za-z_]\w*)\s*\(/u, scan, lineOffset);
       if (rpcMatch?.[1] !== undefined) {
         endpoints.push(protobufEndpoint(file, "server", currentService, rpcMatch[1], lineNo));
       }
@@ -3588,7 +3669,7 @@ function collectProtobufClientEndpoints(
     const lineNo = index + 1;
     const lineOffset = scan.lineOffsets[index] ?? 0;
     for (const declaration of line.matchAll(
-      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+([A-Za-z_][\w]*?)(?:Client)?\s*\(/gu,
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+([A-Za-z_]\w*?)(?:Client)?\s*\(/gu,
     )) {
       if (!scan.isCodeAt(lineOffset + declaration.index)) {
         continue;
@@ -3660,9 +3741,9 @@ function collectOpenApiYamlEndpoints(file: SourceFile): readonly ApiEndpoint[] {
     currentPathLine: 1,
   };
   for (let index = 0; index < lines.length; index += 1) {
-    const endpoint = openApiYamlEndpointForLine(file, state, lines[index] ?? "", index + 1);
-    if (endpoint === "done") break;
-    if (endpoint !== undefined) endpoints.push(endpoint);
+    const result = openApiYamlEndpointForLine(file, state, lines[index] ?? "", index + 1);
+    if (result.kind === "done") break;
+    if (result.kind === "endpoint") endpoints.push(result.endpoint);
   }
   return endpoints;
 }
@@ -3763,7 +3844,7 @@ function detectEndpointClassDeclarations(context: EndpointLineContext): void {
     state.pendingNestClassPrefix = undefined;
     state.nestClassBraceDepth = 0;
   }
-  const className = firstCodeMatch(line, /\bclass\s+([A-Za-z_][\w]*)/u, scan, lineOffset)?.[1];
+  const className = firstCodeMatch(line, /\bclass\s+([A-Za-z_]\w*)/u, scan, lineOffset)?.[1];
   if (state.pendingDotNetClassRoute !== undefined && className !== undefined) {
     state.dotNetClassPrefix = replaceDotNetRouteTokens(state.pendingDotNetClassRoute, className);
     state.dotNetClassName = className;
@@ -3878,7 +3959,7 @@ function collectExpressLineEndpoints(context: EndpointLineContext): void {
   const { line, lineOffset, scan, expressRouterMounts } = context;
   const direct = firstCodeMatch(
     line,
-    /\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete|head|options)\s*\(\s*["']([^"']+)["']/iu,
+    /\b([A-Z_$][\w$]*)\.(get|post|put|patch|delete|head|options)\s*\(\s*["']([^"']+)["']/iu,
     scan,
     lineOffset,
   );
@@ -3890,7 +3971,7 @@ function collectExpressLineEndpoints(context: EndpointLineContext): void {
   }
   const chained = firstCodeMatch(
     line,
-    /\b([A-Za-z_$][\w$]*)\.route\s*\(\s*(["'`])([^"'`]+)\2\s*\)\s*\.\s*(get|post|put|patch|delete|head|options)\b/iu,
+    /\b([A-Z_$][\w$]*)\.route\s*\(\s*(["'`])([^"'`]+)\2\s*\)\s*\.\s*(get|post|put|patch|delete|head|options)\b/iu,
     scan,
     lineOffset,
   );
@@ -3902,25 +3983,34 @@ function collectExpressLineEndpoints(context: EndpointLineContext): void {
   }
 }
 
+const PYTHON_ROUTE_RE = /@([A-Z_]\w*(?:\.[A-Z_]\w*)*)\.route\s*\(\s*["']([^"']+)["']/iu;
+const PYTHON_ROUTE_METHOD_RE = /methods\s*=\s*\[["']([A-Z]+)["']/giu;
+
+function pythonRouteMethod(line: string, route: RegExpExecArray): string {
+  const afterRoute = line.slice(route.index + route[0].length);
+  const closeParen = afterRoute.indexOf(")");
+  const argsTail = closeParen === -1 ? afterRoute : afterRoute.slice(0, closeParen);
+  let method = "ANY";
+  for (const match of argsTail.matchAll(PYTHON_ROUTE_METHOD_RE)) {
+    method = match[1] ?? method;
+  }
+  return method;
+}
+
 function collectPythonLineEndpoints(context: EndpointLineContext): void {
   const { file, line, lineOffset, scan, pythonRoutePrefixes } = context;
-  const route = firstCodeMatch(
-    line,
-    /@([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\.route\s*\(\s*["']([^"']+)["'](?:[^)]*methods\s*=\s*\[["']([A-Z]+)["'])?/iu,
-    scan,
-    lineOffset,
-  );
+  const route = firstCodeMatch(line, PYTHON_ROUTE_RE, scan, lineOffset);
   if (route?.[1] !== undefined && route[2] !== undefined) {
     emitEndpoint(
       context,
       "server",
-      route[3] ?? "ANY",
+      pythonRouteMethod(line, route),
       combineRoutePath(pythonRoutePrefixes.get(route[1]), route[2]),
     );
   }
   const methodRoute = firstCodeMatch(
     line,
-    /@([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\.(get|post|put|patch|delete|head|options)\s*\(\s*["']([^"']+)["']/iu,
+    /@([A-Z_]\w*(?:\.[A-Z_]\w*)*)\.(get|post|put|patch|delete|head|options)\s*\(\s*["']([^"']+)["']/iu,
     scan,
     lineOffset,
   );
@@ -3958,7 +4048,7 @@ function collectGoLineEndpoints(context: EndpointLineContext): void {
   if (standard?.[1] !== undefined) emitEndpoint(context, "server", "ANY", standard[1]);
   const methodRoute = firstCodeMatch(
     line,
-    /\b[A-Za-z_][\w]*\.(Get|Post|Put|Patch|Delete|Head|Options)\s*\(\s*(["'`])([^"'`]+)\2/iu,
+    /\b[A-Z_]\w*\.(Get|Post|Put|Patch|Delete|Head|Options)\s*\(\s*(["'`])([^"'`]+)\2/iu,
     scan,
     lineOffset,
   );
@@ -3967,7 +4057,7 @@ function collectGoLineEndpoints(context: EndpointLineContext): void {
   }
   const handleFunc = firstCodeMatch(
     line,
-    /\b[A-Za-z_][\w]*\.HandleFunc\s*\(\s*(["'`])([^"'`]+)\1[^)]*\)(?:\.Methods\s*\(([^)]*)\))?/u,
+    /\b[A-Za-z_]\w*\.HandleFunc\s*\(\s*(["'`])([^"'`]+)\1[^)]*\)(?:\.Methods\s*\(([^)]*)\))?/u,
     scan,
     lineOffset,
   );
@@ -3997,7 +4087,7 @@ function collectAxiosLineEndpoints(context: EndpointLineContext): void {
   const { line, lineOffset, scan, axiosBasePaths } = context;
   const call = firstCodeMatch(
     line,
-    /\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete)\s*\(\s*(["'`])([^"'`]+)\3/iu,
+    /\b([A-Z_$][\w$]*)\.(get|post|put|patch|delete)\s*\(\s*(["'`])([^"'`]+)\3/iu,
     scan,
     lineOffset,
   );

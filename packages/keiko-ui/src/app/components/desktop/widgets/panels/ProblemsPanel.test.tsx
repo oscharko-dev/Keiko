@@ -92,6 +92,15 @@ describe("ProblemsPanel", () => {
     );
   });
 
+  it("interpolates every named value in problem summaries", () => {
+    expect(translateProblems("en", "problems.truncated", { shown: 25, total: 80 })).toBe(
+      "Showing 25 of 80.",
+    );
+    expect(translateProblems("de", "problems.jumpTo", { file: "src/app.ts", line: 7 })).toBe(
+      "src/app.ts in Zeile 7 öffnen",
+    );
+  });
+
   it("aggregates open-file diagnostics into a sorted list", () => {
     setPaneDiagnostics("/ws", "window-a", "src/a.ts", [
       diagnostic("warning", 4),

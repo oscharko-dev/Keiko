@@ -3324,6 +3324,33 @@ describe("normalizeDiscoveryPayload", () => {
     });
   });
 
+  it("infers image-input support from every supported model-id family", () => {
+    const imageInputModelIds = [
+      "vision-chat",
+      "multimodal-chat",
+      "multi-modal-chat",
+      "llava-13b",
+      "pixtral-large",
+      "omni-chat",
+      "gpt-4o",
+      "vendor-vl",
+      "qwen-vl",
+      "qwen2-vl",
+      "qwen2.5-vl",
+      "qwen3-vl",
+    ];
+    const payload = {
+      data: [
+        ...imageInputModelIds.map((model_name) => ({ model_name, model_info: { mode: "chat" } })),
+        { model_name: "evolution-chat", model_info: { mode: "chat" } },
+      ],
+    };
+
+    expect(normalizeDiscoveryPayloadForSetup(payload).imageInputModelIds).toEqual(
+      imageInputModelIds,
+    );
+  });
+
   it("keeps LiteLLM embedding params but drops unsupported non-chat modes", () => {
     const payload = {
       data: [

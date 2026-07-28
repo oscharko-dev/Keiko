@@ -615,15 +615,34 @@ function styleNumFmtId(styleIndex: string | undefined, styles: XlsxStyles): numb
   return styles.cellFormatNumFmtIds[index];
 }
 
+function removeBracketedNumberFormatSections(value: string): string {
+  const retained: string[] = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    const open = value.indexOf("[", cursor);
+    if (open < 0) {
+      retained.push(value.slice(cursor));
+      break;
+    }
+    const close = value.indexOf("]", open + 1);
+    if (close < 0) {
+      retained.push(value.slice(cursor));
+      break;
+    }
+    retained.push(value.slice(cursor, open));
+    cursor = close + 1;
+  }
+  return retained.join("");
+}
+
 function isDateNumFmt(numFmtId: number | undefined, styles: XlsxStyles): boolean {
   if (numFmtId === undefined) return false;
   if (BUILT_IN_DATE_NUM_FORMATS.has(numFmtId)) return true;
   const custom = styles.customNumFmts.get(numFmtId);
   if (custom === undefined) return false;
-  const stripped = custom
-    .replaceAll(/"[^"]*"/g, "")
-    .replaceAll(/\[[^\]]*]/g, "")
-    .replaceAll(/\\./g, "");
+  const stripped = removeBracketedNumberFormatSections(
+    custom.replaceAll(/"[^"]*"/g, ""),
+  ).replaceAll(/\\./g, "");
   return /[ymdhHs]/.test(stripped);
 }
 

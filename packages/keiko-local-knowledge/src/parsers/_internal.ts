@@ -217,7 +217,7 @@ function decodeNumericCharacterReference(body: string): string | undefined {
   const isHex = body.startsWith("x") || body.startsWith("X");
   const digits = isHex ? body.slice(1) : body;
   if (digits.length === 0) return undefined;
-  if (!(isHex ? /^[0-9a-fA-F]+$/ : /^[0-9]+$/).test(digits)) return undefined;
+  if (!(isHex ? /^[0-9a-fA-F]+$/ : /^\d+$/).test(digits)) return undefined;
   const codePoint = Number.parseInt(digits, isHex ? 16 : 10);
   return isValidScalarCodePoint(codePoint) ? String.fromCodePoint(codePoint) : undefined;
 }

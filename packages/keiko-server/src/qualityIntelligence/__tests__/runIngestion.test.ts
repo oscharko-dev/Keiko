@@ -278,6 +278,30 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     expect(result.ingestedAtoms[0]?.atom.kind).toBe("code-fragment");
   });
 
+  it.each(["service.cjs", "service.java", "service.hpp", "service.SQL"])(
+    "keeps %s in the supported code-extension set",
+    (name) => {
+      const dir = makeDir();
+      const path = writeFile(dir, name, "The service must validate every transfer.\n");
+      const result = ingest(input([fileSource("Service", path)]));
+      expect(result.ingestedAtoms[0]?.atom.kind).toBe("code-fragment");
+    },
+  );
+
+  it.each([
+    "spec.markdown",
+    "spec.asciidoc",
+    "spec.yaml",
+    "spec.html",
+    "spec.properties",
+    "spec.ORG",
+  ])("keeps %s in the supported document-extension set", (name) => {
+    const dir = makeDir();
+    const path = writeFile(dir, name, "The system must validate every transfer.\n");
+    const result = ingest(input([fileSource("Specification", path)]));
+    expect(result.ingestedAtoms[0]?.atom.kind).toBe("document-excerpt");
+  });
+
   it("ingests a supported nested absolute file path", () => {
     const dir = makeDir();
     const docsDir = join(dir, "docs");
@@ -744,6 +768,17 @@ describe("ingestInlineSources — label sanitisation", () => {
   it("falls back to 'Untitled source' when label is empty after trimming", () => {
     const result = ingestInlineSources(input([requirementsSource("   ", VALID_TEXT)]));
     expect(result.envelopes[0]?.displayLabel).toBe("Untitled source");
+  });
+
+  it("redacts a fine-grained GitHub token with an underscore in its suffix from a label", () => {
+    const token = ["github", "_pat_", "AbCdEfGhIj_KlMnOpQrStUv"].join("");
+    const result = ingestInlineSources(
+      input([requirementsSource(`Spec ${token} notes`, VALID_TEXT)]),
+    );
+    const label = result.envelopes[0]?.displayLabel ?? "";
+    expect(label).not.toContain(token);
+    expect(label).toContain("Spec");
+    expect(label).toContain("notes");
   });
 
   it("truncates a label longer than 120 chars with an ellipsis", () => {

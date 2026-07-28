@@ -191,6 +191,18 @@ describe("buildMatcher definition intent scoring", () => {
     ).toBeGreaterThan(reference);
   });
 
+  it("boosts declarations behind the complete supported modifier chain", () => {
+    const matcher = buildMatcher(nlq("Where is PaymentService defined?"));
+    const reference = matcher.match("PaymentService registry entry");
+
+    expect(
+      matcher.match("export default declare readonly static class PaymentService {"),
+    ).toBeGreaterThan(reference);
+    expect(
+      matcher.match("private protected async const PaymentService = create();"),
+    ).toBeGreaterThan(reference);
+  });
+
   it("boosts Python, Go, and Rust function/type declarations over plain references", () => {
     const matcher = buildMatcher(nlq("Where is reconcileOrder defined?"));
     const reference = matcher.match("reconcileOrder appears in a comment");

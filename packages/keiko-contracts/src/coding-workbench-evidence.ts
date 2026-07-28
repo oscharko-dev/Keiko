@@ -56,13 +56,12 @@ const URL_DETECTION_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/\S+/u;
 const REDACTED_SUMMARY_PATTERN =
   /^(?:redacted-(?:url|path|command-log|content|auth|credential))(?:-(?:redacted-(?:url|path|command-log|content|auth|credential)))*$/u;
 const SECRET_PATTERN =
-  /\b(?:api[_-]?key|password|secret|token|sk-[A-Za-z0-9_-]{8,}|gh[opusr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})\b/iu;
+  /\b(?:api[_-]?key|password|secret|token|sk-[\w-]{8,}|gh[opusr]_\w{8,}|github_pat_\w{8,})\b/iu;
 const BEARER_CREDENTIAL_DETECTION_PATTERN = /\bBearer\s+[^\s"'`<>]+/iu;
 const AUTHORIZATION_BEARER_DETECTION_PATTERN = /\bauthorization\s*[:=]\s*bearer\s+[^\s"'`<>]+/iu;
 const KEY_VALUE_SECRET_DETECTION_PATTERN =
   /\b(?:api[_-]?key|password|secret|token)\b\s*[:=]\s*[^\s"'`<>]+/iu;
-const SECRET_TOKEN_DETECTION_PATTERN =
-  /\b(?:sk-[A-Za-z0-9_-]{8,}|gh[opusr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})\b/iu;
+const SECRET_TOKEN_DETECTION_PATTERN = /\b(?:sk-[\w-]{8,}|gh[opusr]_\w{8,}|github_pat_\w{8,})\b/iu;
 const COMMAND_LOG_PATTERN = /(?:^|\s)(?:npm|pnpm|yarn|npx|git|bash|zsh|node)\s+[^\n\r]+/iu;
 const DIFF_PATTERN = /(?:^diff --git\s|^@@\s|^\+\+\+\s|^---\s)/mu;
 const REDACTED_URL_TOKEN = "redacted-url";
@@ -415,9 +414,7 @@ function isKnownRedactionSummary(value: string): boolean {
 }
 
 function isApprovedEvidenceToken(token: string): boolean {
-  return (
-    APPROVED_EVIDENCE_TOKENS.has(token) || /^[0-9]+$/u.test(token) || /^[A-Z]{2,8}$/u.test(token)
-  );
+  return APPROVED_EVIDENCE_TOKENS.has(token) || /^\d+$/u.test(token) || /^[A-Z]{2,8}$/u.test(token);
 }
 
 function isApprovedEvidenceLabel(value: string): boolean {

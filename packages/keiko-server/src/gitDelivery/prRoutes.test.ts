@@ -273,6 +273,24 @@ describe("pr preview — read-only metadata + readiness (AC1/AC2/AC3)", () => {
       (await handler(ctxFor(PREVIEW, createBody({ headBranchName: "a:b" })), deps())).status,
     ).toBe(400);
     expect((await handler(ctxFor(PREVIEW, createBody({ title: "" })), deps())).status).toBe(400);
+    expect(
+      (
+        await handler(
+          ctxFor(PREVIEW, {
+            schemaVersion: "1",
+            projectId,
+            kind: "pr-update",
+            ownerAndRepo: "oscharko-dev/Keiko",
+            prExternalId: "１２",
+            headBranchName: "claude/issue-477-github-pr-command-center",
+            baseBranchName: "dev",
+            title: "feat: updated title",
+            body: "Updated body",
+          }),
+          deps(),
+        )
+      ).status,
+    ).toBe(400);
   });
 
   it("400s a credential-shaped body", async () => {

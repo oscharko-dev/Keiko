@@ -10,7 +10,7 @@ import {
   type WorkspaceSearchRequest,
   type WorkspaceSymbolSearchRequest,
 } from "./index.js";
-import { hasDangerousGroupOrClassRepetition } from "./workspace-search.js";
+import { hasDangerousGroupOrClassRepetition, regexSafetyIssue } from "./workspace-search.js";
 
 function expectInvalidWithReason(result: ValidationResult, fragment: string): void {
   expect(result.ok).toBe(false);
@@ -275,5 +275,15 @@ describe("hasDangerousGroupOrClassRepetition", () => {
     const elapsedMs = Date.now() - start;
     expect(elapsedMs).toBeLessThan(1000);
     expect(result).toBe(false);
+  });
+});
+
+describe("regexSafetyIssue adjacent quantified atoms", () => {
+  it.each(["a+a+", "a{2}b*", String.raw`\d+\w*`, String.raw`\++a*`])("rejects %s", (source) => {
+    expect(regexSafetyIssue(source)).toBe("query regex unsafe");
+  });
+
+  it.each(["a+b", "a{2}b", String.raw`\+a*`])("preserves safe pattern %s", (source) => {
+    expect(regexSafetyIssue(source)).toBeUndefined();
   });
 });

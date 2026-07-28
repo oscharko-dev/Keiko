@@ -19,9 +19,9 @@ export interface UserErrorNotice {
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{12,}\b/g,
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}\b/gi,
-  /\bgho_[A-Za-z0-9_]{12,}\b/g,
-  /\bghp_[A-Za-z0-9_]{12,}\b/g,
+  /\bBearer\s+[\w.~+/=-]{12,}\b/gi,
+  /\bgho_\w{12,}\b/g,
+  /\bghp_\w{12,}\b/g,
 ];
 
 function sanitizeMessage(message: string): string {

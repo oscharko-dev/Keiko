@@ -76,7 +76,7 @@ export interface GitDeliveryPrRouteOptions {
 }
 
 const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
-const PR_NUMBER_RE = /^[1-9][0-9]{0,9}$/;
+const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
 
 function isOwnerAndRepo(value: unknown): value is string {
   return typeof value === "string" && OWNER_REPO_RE.test(value);

@@ -951,7 +951,7 @@ function AppShellInner(): ReactNode {
   useEffect(() => {
     if (deepLinkHandled.current || ws.wins === null) return;
     deepLinkHandled.current = true;
-    const path = window.location.pathname.replace(/\/+$/u, "");
+    const path = stripTrailingSlashRun(window.location.pathname);
     const deepLinkTool = deepLinkToolFor(path);
     if (deepLinkTool === null) return;
     if (!ws.wins.some((w) => w.type === deepLinkTool)) onTool(deepLinkTool);

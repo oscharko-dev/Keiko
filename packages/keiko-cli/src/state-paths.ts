@@ -156,7 +156,7 @@ const EVIDENCE_LOCK_SUFFIX = ".lock"; // keiko-evidence/src/store.ts
 const TOOL_RESULT_ARTIFACT_SUFFIX = ".tool-result.txt"; // keiko-evidence tool-result-artifact-store.ts
 const PRODUCER_TEMP_SUFFIX = ".tmp"; // atomic-save temp files (`<target>.<random>.tmp`)
 const PRODUCER_TEMP_TOKEN = /^[A-Za-z0-9._-]{8,}$/u;
-const SECRET_VAULT_TEMP_FILE = /^\.secret-vault\.[1-9][0-9]*\.[0-9a-f]{16}\.tmp$/u;
+const SECRET_VAULT_TEMP_FILE = /^\.secret-vault\.[1-9]\d*\.[0-9a-f]{16}\.tmp$/u;
 const QI_OWNED_SUFFIXES = [
   ".qi.json", // keiko-evidence/src/qualityIntelligence/store.ts
   ".candidates.json", // keiko-evidence/src/qualityIntelligence/candidatesArtifact.ts

@@ -127,8 +127,7 @@ export const WORKSPACE_SEARCH_MAX_RESULTS = 200;
 export const WORKSPACE_REPLACE_MAX_FILES = 200;
 const TEXT_ENCODER = new TextEncoder();
 const SHA256_HEX = /^[a-f0-9]{64}$/u;
-const ADJACENT_QUANTIFIED_ATOMS =
-  /(?:\\.|[^\\()[\]{}+*?|])(?:[+*]|\{\d+(?:,\d*)?\})(?:\\.|[^\\()[\]{}+*?|])(?:[+*]|\{\d+(?:,\d*)?\})/;
+const REGEX_META_CHARS = new Set(["\\", "(", ")", "[", "]", "{", "}", "+", "*", "?", "|"]);
 const GROUP_OR_CLASS_QUANTIFIER_CHARS = new Set(["+", "*", "{"]);
 
 /**
@@ -168,6 +167,59 @@ export function hasDangerousGroupOrClassRepetition(source: string): boolean {
   );
 }
 
+function atomEnd(source: string, start: number): number | undefined {
+  const char = source[start];
+  if (char === "\\") {
+    const escaped = source[start + 1];
+    if (
+      escaped === undefined ||
+      escaped === "\n" ||
+      escaped === "\r" ||
+      escaped === "\u2028" ||
+      escaped === "\u2029"
+    ) {
+      return undefined;
+    }
+    return start + 2;
+  }
+  return char === undefined || REGEX_META_CHARS.has(char) ? undefined : start + 1;
+}
+
+function isAsciiDigit(char: string | undefined): boolean {
+  return char !== undefined && char >= "0" && char <= "9";
+}
+
+function boundedQuantifierEnd(source: string, start: number): number | undefined {
+  let cursor = start + 1;
+  const digitStart = cursor;
+  while (isAsciiDigit(source[cursor])) cursor += 1;
+  if (cursor === digitStart) return undefined;
+  if (source[cursor] === ",") {
+    cursor += 1;
+    while (isAsciiDigit(source[cursor])) cursor += 1;
+  }
+  return source[cursor] === "}" ? cursor + 1 : undefined;
+}
+
+function quantifierEnd(source: string, start: number): number | undefined {
+  const char = source[start];
+  if (char === "+" || char === "*") return start + 1;
+  return char === "{" ? boundedQuantifierEnd(source, start) : undefined;
+}
+
+function hasAdjacentQuantifiedAtoms(source: string): boolean {
+  for (let start = 0; start < source.length; start += 1) {
+    const firstAtomEnd = atomEnd(source, start);
+    if (firstAtomEnd === undefined) continue;
+    const firstQuantifierEnd = quantifierEnd(source, firstAtomEnd);
+    if (firstQuantifierEnd === undefined) continue;
+    const secondAtomEnd = atomEnd(source, firstQuantifierEnd);
+    if (secondAtomEnd === undefined) continue;
+    if (quantifierEnd(source, secondAtomEnd) !== undefined) return true;
+  }
+  return false;
+}
+
 function buildResult(reasons: readonly string[]): ValidationResult {
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
@@ -197,7 +249,7 @@ function utf8ByteLength(value: string): number {
 export function regexSafetyIssue(source: string): string | undefined {
   if (source.length > MAX_QUERY_LENGTH) return "query regex too long";
   if (hasDangerousGroupOrClassRepetition(source)) return "query regex unsafe";
-  if (ADJACENT_QUANTIFIED_ATOMS.test(source)) return "query regex unsafe";
+  if (hasAdjacentQuantifiedAtoms(source)) return "query regex unsafe";
   try {
     new RegExp(source);
   } catch {

@@ -185,6 +185,30 @@ describe("release-impact release notes", () => {
     expect(result.notes).not.toContain("internal-build-refactor");
   });
 
+  it("extracts URL, issue, PR, and bare-number trace references in source order", () => {
+    const result = renderReleaseImpactNotes(
+      catalog([
+        entry({
+          id: "trace-reference-forms",
+          releaseNoteBullets: [
+            "Improves tracing https://github.com/oscharko-dev/Keiko/issues/1701, issue #1702, pull request #1703, and #1704.",
+          ],
+        }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(result.ok).toBe(true);
+    const sources = [
+      "source:https://github.com/oscharko-dev/Keiko/issues/1701",
+      "source:issue #1702",
+      "source:pull request #1703",
+      "source:#1704",
+    ];
+    const sourceIndexes = sources.map((source) => indexOfNeedle(result.notes, source));
+    expect(sourceIndexes).toEqual([...sourceIndexes].sort((left, right) => left - right));
+  });
+
   it("renders observable internal-only entries when default patch notes explicitly include them", () => {
     const result = renderReleaseImpactNotes(
       catalog([
@@ -256,6 +280,28 @@ describe("release-impact release notes", () => {
     expect(pathResult.failures.join("\n")).toContain("absolute local filesystem path");
     expect(secretResult.ok).toBe(false);
     expect(secretResult.failures.join("\n")).toContain("secret-like token");
+  });
+
+  it.each([
+    ["OpenAI-style", ["sk", "-live_", "123456789"].join("")],
+    ["GitHub classic", ["ghp", "_AbCdEfGhIjKlMnOp"].join("")],
+    ["GitHub fine-grained", ["github", "_pat_", "AbCdEfGhIj_KlMn"].join("")],
+    ["npm", ["npm", "_AbCdEfGhIjKlMnOp"].join("")],
+    ["Slack", ["xoxb", "-AbCdEfGhIjKlMnOp"].join("")],
+    ["AWS", ["AKIA", "1234567890ABCDEF"].join("")],
+  ])("fails closed for the %s secret-token family", (_family, secret) => {
+    const result = renderReleaseImpactNotes(
+      catalog([
+        entry({
+          id: "secret-family-leak",
+          releaseNoteBullets: [`Rotates ${secret} before release.`],
+        }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.failures.join("\n")).toContain("secret-like token");
   });
 
   it("sanitizes a large non-matching whitespace run in a bullet without superlinear backtracking", () => {

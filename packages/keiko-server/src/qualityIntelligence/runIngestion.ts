@@ -145,7 +145,7 @@ export interface QiIngestionResult {
 // field; localRef/origin/integrityHash are server-built and hash-derived).
 const CREDENTIAL_LABEL_SHAPES: readonly RegExp[] = [
   /AKIA[0-9A-Z]{12,}/gu,
-  /(?:ghp_|gho_|github_pat_)[A-Za-z0-9_]{20,}/gu,
+  /(?:ghp_|gho_|github_pat_)\w{20,}/gu,
   /xox[baprs]-[A-Za-z0-9-]{10,}/gu,
   /sk-[A-Za-z0-9]{16,}/gu,
   /\bBearer\s+\S+/giu,
@@ -471,12 +471,17 @@ function ingestRequirements(
 
 const WORKSPACE_BUDGET_BYTES = 196_608;
 const WORKSPACE_MAX_BYTES_PER_FILE = 16_384;
-const CODE_EXTENSION =
-  /\.(?:ts|tsx|js|jsx|mjs|cjs|py|java|go|rb|rs|cs|cpp|cc|c|h|hpp|kt|swift|php|scala|sql)$/iu;
+const CODE_EXTENSION_PATTERNS: readonly RegExp[] = [
+  /\.(?:ts|tsx|js|jsx|mjs|cjs|py|java|go|rb|rs|cs)$/iu,
+  /\.(?:cpp|cc|c|h|hpp|kt|swift|php|scala|sql)$/iu,
+];
 const REQUIREMENT_TEXT_EXTENSION = /\.(?:md|markdown|txt|text|rst|adoc|asciidoc|org)$/iu;
 
+const hasCodeExtension = (path: string): boolean =>
+  CODE_EXTENSION_PATTERNS.some((pattern) => pattern.test(path));
+
 const atomKindForPath = (path: string): "code-fragment" | "document-excerpt" =>
-  CODE_EXTENSION.test(path) ? "code-fragment" : "document-excerpt";
+  hasCodeExtension(path) ? "code-fragment" : "document-excerpt";
 
 const workspaceAtom = (
   entry: { readonly path: string; readonly excerpt: string },
@@ -620,22 +625,27 @@ const SINGLE_FILE_MAX_BYTES = WORKSPACE_BUDGET_BYTES;
 const DOCUMENT_FILE_MAX_BYTES = 2 * 1024 * 1024;
 
 // Text-like single-file documents share the strict NUL-byte check because they are expected to be
-// ordinary UTF-8-ish text. Code files reuse the shared CODE_EXTENSION set above.
-const DOC_TEXT_EXTENSION =
-  /\.(?:md|markdown|txt|text|rst|adoc|asciidoc|json|ya?ml|xml|html?|csv|tsv|ini|toml|cfg|conf|properties|tex|org)$/iu;
+// ordinary UTF-8-ish text. Code files reuse the shared code-extension patterns above.
+const DOC_TEXT_EXTENSION_PATTERNS: readonly RegExp[] = [
+  /\.(?:md|markdown|txt|text|rst|adoc|asciidoc|json|ya?ml|xml)$/iu,
+  /\.(?:html?|csv|tsv|ini|toml|cfg|conf|properties|tex|org)$/iu,
+];
 
 // PDF and DOCX are recognised as document formats, but they must go through an explicit text
 // extractor. The workspace reader's UTF-8 best-effort text is not truthful for compressed PDF/DOCX
 // bodies and must never be treated as the document prose.
 const BEST_EFFORT_DOCUMENT_EXTENSION = /\.(?:pdf|docx)$/iu;
 
+const hasDocumentTextExtension = (path: string): boolean =>
+  DOC_TEXT_EXTENSION_PATTERNS.some((pattern) => pattern.test(path));
+
 const isSupportedFilePath = (path: string): boolean =>
-  CODE_EXTENSION.test(path) ||
-  DOC_TEXT_EXTENSION.test(path) ||
+  hasCodeExtension(path) ||
+  hasDocumentTextExtension(path) ||
   BEST_EFFORT_DOCUMENT_EXTENSION.test(path);
 
 const requiresStrictTextGuard = (path: string): boolean =>
-  CODE_EXTENSION.test(path) || DOC_TEXT_EXTENSION.test(path);
+  hasCodeExtension(path) || hasDocumentTextExtension(path);
 
 const documentFormatLabel = (path: string): string => (/\.pdf$/iu.test(path) ? "PDF" : "Word");
 
@@ -669,8 +679,7 @@ function extractedSingleFileText(
     maxExtractedBytes: byteBudget,
     ...(signal === undefined ? {} : { signal }),
   });
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  if (typeof extracted === "object" && extracted !== null && "then" in extracted) {
+  if (typeof extracted === "object" && "then" in extracted) {
     throw unsupportedDocumentTextError(absFile, label);
   }
   const safeText = redact(stripUnsafeFormatChars(typeof extracted === "string" ? extracted : ""));

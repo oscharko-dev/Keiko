@@ -871,13 +871,17 @@ describe("auditLocalState — secret-shape detection", () => {
   it.each([
     ["openai", fake("sk-", "proj-abcdefghijklmnop0123456789")],
     ["github-oauth", fake("gho", "_abcdefghijklmnopqrstuvwxyz0123456789")],
+    ["github-fine-grained", fake("github", "_pat_", "AbCdEfGhIj_KlMnOpQrStUv")],
     ["google", fake("AIza", "SyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456")],
     ["stripe", fake("sk", "_live_", "abcdefghijklmnop0123456789")],
     ["bearer", `Bearer ${fake("tok.", "abcdefghijklmnop0123456789")}`],
     ["basic", `Basic ${fake("YWJj", "ZGVmZ2hpamtsbW5vcA==")}`],
     ["x-api-key-header", `x-api-key: ${fake("secret", "abcdefghijklmnop")}`],
     ["api-key-assignment", `api_key=${fake("secret", "abcdefghijklmnop")}`],
+    ["password-assignment", `password=${fake("secret", "abcdefghijklmnop")}`],
     ["secret-key-assignment", `refresh_token=${fake("secret", "abcdefghijklmnop")}`],
+    ["private-key-assignment", `private_key=${fake("secret", "abcdefghijklmnop")}`],
+    ["connection-assignment", `connection_string=${fake("secret", "abcdefghijklmnop")}`],
     ["url-credentials", `https://${fake("user", "name")}:${fake("pass", "word123")}@example.com`],
   ])("flags a leaked %s key in an evidence artifact", (_label, secret) => {
     const stateDir = freshStateDir(`secret-${_label}`);

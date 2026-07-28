@@ -146,8 +146,8 @@ const TARGETED_CODE_PATTERNS: readonly IntentPattern[] = [
   // many `\b`-satisfying start positions the input contains. 300 characters per run (600+ for the
   // whole identifier) is far beyond any realistic source-code identifier, so no legitimate match is
   // lost; it only removes the unbounded blow-up on adversarial input.
-  { term: "identifier", pattern: /\b[A-Za-z_$][a-z0-9_$]{0,300}[A-Z][A-Za-z0-9_$]{0,300}\b/u },
-  { term: "symbol", pattern: /\b(function|class|interface|type|const|let|var)\s+[A-Za-z_]/iu },
+  { term: "identifier", pattern: /\b[A-Za-z_$][a-z0-9_$]{0,300}[A-Z][\w$]{0,300}\b/u },
+  { term: "symbol", pattern: /\b(function|class|interface|type|const|let|var)\s+[A-Z_]/iu },
 ];
 
 function normalizeQueryText(queryText: string): string {

@@ -27,17 +27,22 @@ import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
+  containsNegation,
   normaliseCandidateText,
   normaliseGermanComparisonText,
   normaliseText,
+  stripFirstNegation,
 } from "./assertions.js";
 
-const NEGATION_PATTERN =
-  /\b(not|never|no longer|cannot|isn't|aren't|won't|doesn't|do not|nicht|kein(?:e|en|em|er|es)?|niemals|nie|ohne)\b/iu;
 const GENERIC_EXPECTED_RESULT_PATTERN =
   /\b(all requirements satisfied|behaviou?r matches the cited evidence|expected result|erwartetes ergebnis|funktioniert korrekt|verhalten entspricht(?: der)? evidenz|wie erwartet)\b/iu;
-const NUMERIC_THRESHOLD_PATTERN =
-  /\b\d+(?:[.\s]\d{3})*(?:[.,]\d+)?\s*(?:eur|euro|€|%|prozent|ms|millisekunden|sekunden|sek|minuten|min|stunden|h)\b/giu;
+const NUMBER_SOURCE = String.raw`\d+(?:[.\s]\d{3})*(?:[.,]\d+)?`;
+const MEASURABLE_UNIT_SOURCE =
+  "eur|euro|€|%|prozent|ms|millisekunden|sekunden|sek|minuten|min|stunden|h";
+const NUMERIC_THRESHOLD_PATTERN = new RegExp(
+  String.raw`\b${NUMBER_SOURCE}\s*(?:${MEASURABLE_UNIT_SOURCE})\b`,
+  "giu",
+);
 const ANY_NUMBER_PATTERN = /\b\d+(?:[.\s]\d{3})*(?:[.,]\d+)?\b/gu;
 const ANY_NUMBER_TEST_PATTERN = /\b\d+(?:[.\s]\d{3})*(?:[.,]\d+)?\b/u;
 const BOUNDARY_SIGNAL_PATTERN =
@@ -69,7 +74,7 @@ const canonicaliseLine = (value: string): string =>
   collapseWhitespace(normaliseGermanComparisonText(normaliseCandidateText(value)));
 
 const stripNegation = (value: string): string =>
-  value.replace(NEGATION_PATTERN, " ").replace(/\s+/gu, " ").trim();
+  stripFirstNegation(value).replace(/\s+/gu, " ").trim();
 
 interface NegationComparableLine {
   readonly core: string;
@@ -80,7 +85,7 @@ const toNegationComparableLine = (value: string): NegationComparableLine | undef
   const canonical = canonicaliseLine(value);
   const core = stripNegation(canonical);
   if (core.length === 0) return undefined;
-  return { core, negated: NEGATION_PATTERN.test(canonical) };
+  return { core, negated: containsNegation(canonical) };
 };
 
 const toNegationComparableLines = (
