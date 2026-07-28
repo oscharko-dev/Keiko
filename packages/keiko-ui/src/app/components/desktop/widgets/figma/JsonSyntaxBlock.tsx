@@ -22,17 +22,15 @@ function isAsciiWordCode(code: number): boolean {
 }
 
 function keywordAt(text: string, index: number): string | null {
-  if (index > 0 && isAsciiWordCode(text.charCodeAt(index - 1))) return null;
-  const keyword = text.startsWith("true", index)
-    ? "true"
-    : text.startsWith("false", index)
-      ? "false"
-      : text.startsWith("null", index)
-        ? "null"
-        : null;
+  if (index > 0 && isAsciiWordCode(text.codePointAt(index - 1) ?? -1)) return null;
+  let keyword: string | null = null;
+  if (text.startsWith("true", index)) keyword = "true";
+  else if (text.startsWith("false", index)) keyword = "false";
+  else if (text.startsWith("null", index)) keyword = "null";
   if (keyword === null) return null;
   const nextIndex = index + keyword.length;
-  return nextIndex < text.length && isAsciiWordCode(text.charCodeAt(nextIndex)) ? null : keyword;
+  if (nextIndex < text.length && isAsciiWordCode(text.codePointAt(nextIndex) ?? -1)) return null;
+  return keyword;
 }
 
 function punctuationAt(text: string, index: number): string | null {
