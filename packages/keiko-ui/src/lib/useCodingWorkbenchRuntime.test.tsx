@@ -257,6 +257,43 @@ describe("useCodingWorkbenchRuntime", () => {
     view.unmount();
   });
 
+  it("retains terminal run truth and activity after global status becomes idle", async () => {
+    const running = snapshot({ state: "running", pendingPermission: undefined });
+    const terminal = snapshot({ state: "succeeded", revision: 5, pendingPermission: undefined });
+    installBootstrap(running, terminal);
+    const activeWorkspace = workspace();
+    const view = renderHook(() => useCodingWorkbenchRuntime({ workspace: activeWorkspace }));
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => {
+      FakeEventSource.instances[0]?.dispatch(
+        "status",
+        JSON.stringify({ ...event(1), state: "succeeded", revision: 5 }),
+      );
+    });
+    await waitFor(() => expect(view.result.current.state.run.value).toEqual(terminal));
+    const terminalEvents = view.result.current.state.events;
+    expect(terminalEvents).toHaveLength(1);
+
+    vi.mocked(getCodingWorkbenchRuntimeStatus).mockResolvedValue(
+      snapshot({
+        state: "idle",
+        revision: 0,
+        runId: undefined,
+        pendingPermission: undefined,
+      }),
+    );
+    await act(async () => view.result.current.actions.refreshRun());
+
+    expect(view.result.current.state.run).toEqual({
+      status: "ready",
+      value: terminal,
+      error: null,
+    });
+    expect(view.result.current.state.events).toEqual(terminalEvents);
+    view.unmount();
+  });
+
   it("commits observations at no more than 10Hz even when status facts are interleaved", () => {
     vi.useFakeTimers();
     const observationCommitTimes: number[] = [];

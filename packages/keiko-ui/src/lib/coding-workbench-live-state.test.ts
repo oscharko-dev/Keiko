@@ -178,6 +178,56 @@ describe("Coding Workbench live state", () => {
     expect(next.stream).toMatchObject({ status: "idle", value: null });
   });
 
+  it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
+    "retains a concrete %s run when global runtime status returns to idle",
+    (terminalState) => {
+      let state = codingWorkbenchRuntimeReducer(readyState(), {
+        kind: "run-set",
+        snapshot: snapshot({
+          state: terminalState,
+          pendingPermission: undefined,
+        }),
+      });
+      state = codingWorkbenchRuntimeReducer(state, {
+        kind: "events-received",
+        events: [event(1)],
+      });
+      state = codingWorkbenchRuntimeReducer(state, {
+        kind: "resource-loading",
+        resource: "run",
+      });
+
+      const next = codingWorkbenchRuntimeReducer(state, {
+        kind: "run-set",
+        snapshot: snapshot({
+          state: "idle",
+          revision: 0,
+          runId: undefined,
+          pendingPermission: undefined,
+        }),
+      });
+
+      expect(next.run).toMatchObject({
+        status: "ready",
+        value: { runId: "run-1", state: terminalState, revision: 4 },
+      });
+      expect(next.events).toEqual([event(1)]);
+      expect(next.canStart).toBe(true);
+
+      const replaced = codingWorkbenchRuntimeReducer(next, {
+        kind: "run-set",
+        snapshot: snapshot({
+          state: "starting",
+          revision: 1,
+          runId: "run-2",
+          pendingPermission: undefined,
+        }),
+      });
+      expect(replaced.run.value).toMatchObject({ runId: "run-2", state: "starting", revision: 1 });
+      expect(replaced.events).toEqual([]);
+    },
+  );
+
   it("enables recovery Retry only after a server-confirmed acknowledgement", () => {
     const unacknowledged = codingWorkbenchRuntimeReducer(readyState(), {
       kind: "run-set",

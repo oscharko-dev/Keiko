@@ -186,6 +186,18 @@ const STARTABLE_RUN_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new S
   "taken-over",
 ]);
 
+function isConcreteTerminalRun(snapshot: CodingWorkbenchRuntimeSnapshot): boolean {
+  return (
+    snapshot.runId !== undefined &&
+    snapshot.state !== "idle" &&
+    STARTABLE_RUN_STATES.has(snapshot.state)
+  );
+}
+
+function isUnboundIdle(snapshot: CodingWorkbenchRuntimeSnapshot): boolean {
+  return snapshot.runId === undefined && snapshot.state === "idle";
+}
+
 function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
   const runtime = state.runtime.value;
   const sourceReady =
@@ -273,6 +285,9 @@ function acceptSnapshot(
   snapshot: CodingWorkbenchRuntimeSnapshot,
 ): CodingWorkbenchRuntimeState {
   const current = state.run.value;
+  if (current !== null && isConcreteTerminalRun(current) && isUnboundIdle(snapshot)) {
+    return projectReadiness({ ...state, run: ready(current) });
+  }
   if (
     current !== null &&
     current.runId === snapshot.runId &&
