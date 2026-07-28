@@ -56,6 +56,14 @@ describe("isMainModule", () => {
 // entirely in-process (no subprocess, whose coverage this test runner would not capture).
 // process.exit is stubbed to throw instead of killing the worker, in case any target's CLI
 // entry takes a real failure path in this environment.
+//
+// The import MUST use the plain pathToFileURL(absolutePath).href with no query/hash
+// suffix: isMainModule compares import.meta.url against that exact same canonical form, so
+// any decoration would make the guard permanently false and this test prove nothing (caught
+// in review — an earlier version of this file used a "?cache-busting" query for exactly
+// that mistaken reason). Freshness across the 8 cases instead relies on each of these 8
+// paths being imported nowhere else in this file and Vitest giving each test FILE its own
+// isolated module registry, so this is each path's first, real evaluation.
 describe("isMainModule call sites actually fire their CLI entry on direct execution", () => {
   const realArgv1 = process.argv[1];
 
@@ -79,20 +87,29 @@ describe("isMainModule call sites actually fire their CLI entry on direct execut
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
       throw new Error(`process.exit(${String(code)}) blocked in test`);
     });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let threw = false;
     try {
-      // Cache-busting query so a module already imported (by an earlier test in this suite,
-      // via another test file, or by this same file's own static import above) re-evaluates
-      // its top-level `if (isMainModule(...))` guard against the argv1 set above, rather than
-      // returning the cached module record from its first, unrelated evaluation.
-      await import(`${pathToFileURL(absolutePath).href}?main-module-coverage=${relativePath}`);
-    } catch (caught) {
-      // Several of these exit non-zero or throw for an unmet real-environment precondition
-      // (a missing SONAR_TOKEN, an unresolved git ref, no changed files) when driven outside
-      // their real CI invocation. That is expected and fine here: the guard line and the
-      // start of the guarded call are what this test proves execute, not that every target
-      // succeeds when run with no setup.
-      expect(caught).toBeDefined();
+      await import(pathToFileURL(absolutePath).href);
+    } catch {
+      // check-ui-static-js-compat.mjs and transpile-ui-static-js.mjs both call
+      // rejectUiStaticRootCliOverride(args[0]) before printing anything; with no real CLI
+      // args in this worker's process.argv, that throws synchronously before either spy
+      // below could fire. That thrown error IS this target's observable proof the guarded
+      // call ran (still target-specific: only the guarded call site can throw it, per its
+      // own source above), not a "some error, who knows why" empty catch.
+      threw = true;
     }
-    exitSpy.mockRestore();
+    // The guarded CLI entry always does at least one of: print a result (console.log),
+    // print a failure (console.error), set/throw an exit code, or throw synchronously —
+    // proving isMainModule returned true and the guarded call actually ran, not merely that
+    // the import resolved.
+    expect(
+      logSpy.mock.calls.length > 0 ||
+        errorSpy.mock.calls.length > 0 ||
+        exitSpy.mock.calls.length > 0 ||
+        threw,
+    ).toBe(true);
   });
 });
