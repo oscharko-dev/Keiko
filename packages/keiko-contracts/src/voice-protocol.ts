@@ -417,6 +417,9 @@ export interface VoicePolicyDecisionMessage extends VoiceControlEnvelope<"policy
 
 export interface VoiceErrorMessage extends VoiceControlEnvelope<"error"> {
   readonly code: VoiceProtocolErrorCode;
+  // Optional content-free support token. Server-side operator diagnostics use the same value so an
+  // opaque UI failure can be correlated without exposing provider, SDP, audio, or transcript data.
+  readonly correlationId?: string | undefined;
 }
 
 export type VoiceControlMessage =

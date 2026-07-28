@@ -947,7 +947,11 @@ describe("useDictation — realtime live dictation (P3)", () => {
 
   it("retry falls back to the batch STT path after live negotiation fails", async () => {
     const fakes = makeRealtimeDictationFakes({
-      negotiateError: new VoiceLiveDictationControlError("negotiation-failed", "failed"),
+      negotiateError: new VoiceLiveDictationControlError(
+        "negotiation-failed",
+        "failed",
+        "dictation-corr-2806",
+      ),
     });
     const recorder = makeRecorder({});
     const transcribe = vi.fn(async (): Promise<VoiceTranscriptionResult> => ({
@@ -969,7 +973,11 @@ describe("useDictation — realtime live dictation (P3)", () => {
 
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe("error"));
-    expect(result.current.error?.reason).toBe("transcribe-failed");
+    expect(result.current.error).toEqual({
+      reason: "negotiation-failed",
+      message: "Live dictation could not start. Try again to use standard dictation.",
+      correlationId: "dictation-corr-2806",
+    });
     expect(fakes.closeSession).toHaveBeenCalledTimes(1);
     expect(fakes.closeControl).toHaveBeenCalledTimes(1);
 

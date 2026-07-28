@@ -96,6 +96,8 @@ export interface RealtimeNegotiationRequest {
   // auth: Keiko must never assume an OpenAI-specific model name exists on Azure/customer providers.
   readonly transcriptionModel?: string | undefined;
   readonly transcriptionLanguage?: string | undefined;
+  // Compatibility only. The realtime WebRTC client-secret/calls contract does not accept the
+  // dedicated transcription-session `delay` field, so productive negotiation never forwards it.
   readonly transcriptionDelay?: RealtimeTranscriptionDelay | undefined;
   readonly turnDetection?: Readonly<Record<string, unknown>> | undefined;
   // Published 0.2.15 request fields retained for source compatibility. The canonical Twin pipeline
@@ -385,21 +387,26 @@ function buildMediaTranscriptionClientSecretSession(
   return session;
 }
 
-function buildTranscriptionClientSecretSession(
+function buildLiveDictationRealtimeSession(
   request: RealtimeNegotiationRequest,
 ): Record<string, unknown> {
   const transcription: Record<string, unknown> = {
     model: request.transcriptionModel,
-    delay: request.transcriptionDelay ?? DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
   };
   if (nonEmptyString(request.transcriptionLanguage)) {
     transcription.language = request.transcriptionLanguage;
   }
   return {
-    type: "transcription",
+    type: "realtime",
     model: request.modelId,
+    // Some compatible providers require an output modality in the realtime session schema even
+    // though Keiko grants this path no assistant-output authority. The browser media direction,
+    // absent output consumer, null endpointing, and command allowlist keep it input-only.
+    output_modalities: ["audio"],
     audio: {
-      input: { transcription },
+      // Dictation commits the input buffer explicitly. Null endpointing prevents provider-native
+      // response creation while retaining the realtime WebRTC session accepted by client_secrets.
+      input: { turn_detection: null, transcription },
     },
   };
 }
@@ -410,7 +417,7 @@ function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
 
 function buildRealtimeSession(request: RealtimeNegotiationRequest): Record<string, unknown> {
   return request.sessionType === "transcription"
-    ? buildTranscriptionClientSecretSession(request)
+    ? buildLiveDictationRealtimeSession(request)
     : buildMediaTranscriptionClientSecretSession(request);
 }
 

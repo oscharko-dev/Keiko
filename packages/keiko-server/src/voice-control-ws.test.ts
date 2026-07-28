@@ -12,13 +12,13 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { WebSocket } from "ws";
 import { createUiServer, UI_HOST } from "./server.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { MAX_VOICE_CONTROL_FRAME_BYTES } from "./voice-realtime.js";
 import { VOICE_LIVE_TRANSCRIBE_PATH } from "./voice-live-dictation.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { Chat } from "./store/index.js";
 import {
-  DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
   type GatewayConfig,
   type RealtimeNegotiationRequest,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -439,13 +439,68 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
       sessionType: "transcription",
       transcriptionModel: "configured-realtime-transcription",
       transcriptionLanguage: "en",
-      transcriptionDelay: DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
       offerSdp: OFFER_SDP,
       timeoutMs: 12_000,
     });
     expectNoRealtimeAssistantAuthority(seenRequest);
+    expect(seenRequest?.transcriptionDelay).toBeUndefined();
     expect(seenRequest?.safetyIdentifier).toBeUndefined();
     expect(seenRequest?.egress).toEqual(egress);
+    socket.close();
+  });
+
+  it("correlates a provider negotiation failure with a body-free operator diagnostic", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const port = await boot(
+      depsWith({
+        config: voiceConfig(true, { apiKey: "provider-secret-never-diagnosed" }),
+        configPresent: true,
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+        voiceRealtimeNegotiationRequest: () => Promise.resolve({ ok: false, kind: "wrong-header" }),
+      }),
+    );
+    const { ws: socket, next } = expectOpen(
+      await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+    );
+    socket.send(liveSessionCreate());
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-live-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+
+    await next(); // media.track.state negotiating
+    const failure = await next();
+    expect(failure).toMatchObject({
+      kind: "error",
+      code: "negotiation-failed",
+    });
+    expect(failure.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(await next()).toMatchObject({
+      kind: "media.track.state",
+      track: "audio-in",
+      state: "ended",
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId: failure.correlationId,
+      operation: "voice.live-dictation.negotiate",
+      source: "voice.live-dictation",
+      errorClass: "LiveDictationNegotiationError",
+      code: "wrong-header",
+      message: "server-operation-failed",
+    });
+    const serialized = JSON.stringify(diagnostics);
+    expect(serialized).not.toContain("provider-secret-never-diagnosed");
+    expect(serialized).not.toContain(OFFER_SDP);
+    expect(serialized).not.toContain("realtime.example.com");
     socket.close();
   });
 

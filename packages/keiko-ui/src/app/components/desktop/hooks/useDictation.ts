@@ -62,13 +62,22 @@ type DictationMode = "batch" | "realtime";
 export type DictationErrorReason =
   | DictationStartFailure // permission-denied | no-microphone | unsupported | capture-failed
   | "unavailable" // the BFF reports speech-to-text is not available (VOICE_UNAVAILABLE)
+  | "negotiation-failed" // the provider rejected or could not complete the WebRTC handshake
+  | "connection-failed" // the live-control or WebRTC connection was interrupted
   | "transcribe-failed"; // the provider could not transcribe (rate-limited / timeout / provider error)
+
+export interface DictationError {
+  readonly reason: DictationErrorReason;
+  readonly message: string;
+  readonly correlationId?: string | undefined;
+}
 
 interface DictationState {
   readonly phase: DictationPhase;
   readonly transcript: string;
   readonly errorReason: DictationErrorReason | undefined;
   readonly errorMessage: string | undefined;
+  readonly errorCorrelationId: string | undefined;
   readonly audioLevel: number;
   readonly heardSpeech: boolean;
   // True once the capture pipeline is verified live (MediaRecorder started AND the analyser produced a
@@ -85,6 +94,7 @@ const INITIAL_STATE: DictationState = {
   transcript: "",
   errorReason: undefined,
   errorMessage: undefined,
+  errorCorrelationId: undefined,
   audioLevel: 0,
   heardSpeech: false,
   micReady: false,
@@ -108,7 +118,7 @@ type DictationAction =
       readonly note?: string | undefined;
     }
   | { readonly type: "editTranscript"; readonly value: string }
-  | { readonly type: "error"; readonly reason: DictationErrorReason; readonly message: string }
+  | ({ readonly type: "error" } & DictationError)
   | { readonly type: "reset" };
 
 // Pure transition function — no side effects, fully unit-testable. Each case is linear so the
@@ -154,6 +164,7 @@ function dictationReducer(state: DictationState, action: DictationAction): Dicta
         phase: "error",
         errorReason: action.reason,
         errorMessage: action.message,
+        errorCorrelationId: action.correlationId,
       };
     case "reset":
       return INITIAL_STATE;
@@ -194,7 +205,7 @@ export interface DictationController {
   readonly transcript: string;
   readonly liveTranscript: string;
   readonly finalizationNote: string | undefined;
-  readonly error: { readonly reason: DictationErrorReason; readonly message: string } | undefined;
+  readonly error: DictationError | undefined;
   readonly audioLevel: number;
   readonly heardSpeech: boolean;
   // True once capture is verified live; drives the "Preparing mic" → "Listening" handoff.
@@ -211,7 +222,7 @@ export interface DictationController {
 }
 
 // Maps a thrown error from the capture or transcription step to a non-blocking error phase.
-function classifyError(error: unknown): { reason: DictationErrorReason; message: string } {
+function classifyError(error: unknown): DictationError {
   if (error instanceof DictationRecorderError) {
     return { reason: error.reason, message: error.message };
   }
@@ -225,7 +236,7 @@ function classifyError(error: unknown): { reason: DictationErrorReason; message:
   return { reason: "capture-failed", message: "Dictation could not be completed." };
 }
 
-function classifyRealtimeError(error: unknown): { reason: DictationErrorReason; message: string } {
+function classifyRealtimeError(error: unknown): DictationError {
   if (error instanceof Error && error.message === REALTIME_TRANSCRIPT_LIMIT_MESSAGE) {
     return { reason: "transcribe-failed", message: REALTIME_TRANSCRIPT_LIMIT_MESSAGE };
   }
@@ -233,15 +244,19 @@ function classifyRealtimeError(error: unknown): { reason: DictationErrorReason; 
     const reason: DictationErrorReason =
       error.reason === "permission-denied" ||
       error.reason === "no-microphone" ||
-      error.reason === "unsupported"
+      error.reason === "unsupported" ||
+      error.reason === "negotiation-failed" ||
+      error.reason === "connection-failed"
         ? error.reason
         : "transcribe-failed";
     return { reason, message: error.message };
   }
   if (error instanceof VoiceLiveDictationControlError) {
-    const reason: DictationErrorReason =
-      error.reason === "unavailable" ? "unavailable" : "transcribe-failed";
-    return { reason, message: error.message };
+    return {
+      reason: error.reason,
+      message: error.message,
+      ...(error.correlationId === undefined ? {} : { correlationId: error.correlationId }),
+    };
   }
   return { reason: "transcribe-failed", message: "Live dictation could not be completed." };
 }
@@ -508,8 +523,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
       })
       .catch((error: unknown) => {
         if (!mountedRef.current) return;
-        const { reason, message } = classifyError(error);
-        dispatch({ type: "error", reason, message });
+        dispatch({ type: "error", ...classifyError(error) });
       })
       .finally(() => {
         stoppingRef.current = false;
@@ -551,8 +565,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
       })
       .catch((error: unknown) => {
         if (!mountedRef.current) return;
-        const { reason, message } = classifyRealtimeError(error);
-        dispatch({ type: "error", reason, message });
+        dispatch({ type: "error", ...classifyRealtimeError(error) });
       })
       .finally(() => {
         cleanupRealtime();
@@ -637,8 +650,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
         (error: unknown) => {
           startingRef.current = false;
           if (!mountedRef.current) return;
-          const { reason, message } = classifyError(error);
-          dispatch({ type: "error", reason, message });
+          dispatch({ type: "error", ...classifyError(error) });
         },
       );
   }, [latency, recorderFactory, stopBatch, vad]);
@@ -691,7 +703,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
           if (mountedRef.current && !cancelledRef.current && !stoppingRef.current) {
             dispatch({
               type: "error",
-              reason: "transcribe-failed",
+              reason: "connection-failed",
               message: "Live dictation connection was lost.",
             });
           }
@@ -737,15 +749,15 @@ export function useDictation(options: UseDictationOptions): DictationController 
       cleanupRealtime();
       if (!mountedRef.current || cancelledRef.current) return;
       if (shouldFallbackToBatch) {
+        const classified = classifyRealtimeError(error);
         dispatch({
           type: "error",
-          reason: "transcribe-failed",
+          ...classified,
           message: "Live dictation could not start. Try again to use standard dictation.",
         });
         return;
       }
-      const { reason, message } = classifyRealtimeError(error);
-      dispatch({ type: "error", reason, message });
+      dispatch({ type: "error", ...classifyRealtimeError(error) });
     });
   }, [
     cleanupRealtime,
@@ -829,7 +841,13 @@ export function useDictation(options: UseDictationOptions): DictationController 
     finalizationNote: state.finalizationNote,
     error:
       state.errorReason !== undefined && state.errorMessage !== undefined
-        ? { reason: state.errorReason, message: state.errorMessage }
+        ? {
+            reason: state.errorReason,
+            message: state.errorMessage,
+            ...(state.errorCorrelationId === undefined
+              ? {}
+              : { correlationId: state.errorCorrelationId }),
+          }
         : undefined,
     audioLevel: state.audioLevel,
     heardSpeech: state.heardSpeech,
