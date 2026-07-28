@@ -11,8 +11,8 @@ import { fileURLToPath, URL } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const uiDir = join(repoRoot, "packages", "keiko-ui");
-const requireFromRepo = createRequire(join(repoRoot, "package.json"));
 const requireFromUi = createRequire(join(uiDir, "package.json"));
+const tscBin = join(repoRoot, "node_modules", "@typescript", "native", "bin", "tsc");
 
 const host = "127.0.0.1";
 const publicBrowserHost = "localhost";
@@ -22,7 +22,6 @@ const nextPort = Number(process.env.KEIKO_DEV_NEXT_PORT ?? "3000");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
 const pidFile = resolve(process.env.KEIKO_DEV_PID_FILE ?? join(stateDir, "dev-ui.pid.json"));
 const bffScript = join(repoRoot, "scripts", "dev-bff.mjs");
-const tscBin = requireFromRepo.resolve("typescript/bin/tsc");
 const nextBin = requireFromUi.resolve("next/dist/bin/next");
 const children = new Map();
 const restartCounts = new Map();
@@ -338,7 +337,7 @@ export function bffProcessArgs(scriptPath, watchEnabled) {
   return watchEnabled ? ["--watch", "--watch-preserve-output", scriptPath] : [scriptPath];
 }
 
-function packageBuildWatchArgs() {
+export function packageBuildWatchArgs() {
   return [tscBin, "-b", "tsconfig.packages.json", "--watch", "--preserveWatchOutput"];
 }
 
