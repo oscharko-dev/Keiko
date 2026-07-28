@@ -277,15 +277,15 @@ describe("useCodingWorkbenchRuntime", () => {
         JSON.stringify({ ...event(1), state: "succeeded", revision: 5 }),
       );
     });
-    await waitFor(() => expect(view.result.current.state.run.value).toEqual(terminal));
+    await waitFor(() =>
+      expect(view.result.current.state.run).toEqual({
+        status: "ready",
+        value: terminal,
+        error: null,
+      }),
+    );
     const terminalEvents = view.result.current.state.events;
     expect(terminalEvents).toHaveLength(1);
-
-    expect(view.result.current.state.run).toEqual({
-      status: "ready",
-      value: terminal,
-      error: null,
-    });
     expect(view.result.current.state.events).toEqual(terminalEvents);
     view.unmount();
   });
