@@ -2,20 +2,16 @@
   "issue": 1300,
   "epic": 1290,
   "surface": "editor",
-  "postCssSha256": "2b66cef5514fef2950fcb01a905bf25bccc640ce9b3546538df8abfd67d2d91c",
-  "referenceFiles": [
-    "keiko-tokens.css",
-    "keiko-semantic-tokens.css",
-    "keiko-editor-tokens.css"
-  ],
+  "postCssSha256": "715f9e6019b53e74752849b959849fefe9ce262cbc43ff3d310e29fa22a25d6a",
+  "referenceFiles": ["keiko-tokens.css", "keiko-semantic-tokens.css", "keiko-editor-tokens.css"],
   "referenceFileSha256": {
-    "keiko-tokens.css": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76",
+    "keiko-tokens.css": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d",
     "keiko-semantic-tokens.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
     "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-07-13T09:02:03.751Z",
-    "repoHeadSha": "8eccb225128195f7e3e7c288dc185109ef18f885"
+    "generatedAt": "2026-07-28T15:55:26.076Z",
+    "repoHeadSha": "edab4b20df5b824cb794af6fb0fa5c85551b6da0"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {
@@ -57,12 +53,7 @@
   },
   "accentDerived": {
     "description": "Recorded, not gated. Accent-derived editor tokens resolve through --accent (product hex #4eba87 vs reference oklch(0.72 0.124 160), ~1.5% pre-existing primitive delta). Identical chain.",
-    "tokens": [
-      "--ed-statusbar-accent",
-      "--ed-selection",
-      "--ed-agent-line",
-      "--ed-focus"
-    ],
+    "tokens": ["--ed-statusbar-accent", "--ed-selection", "--ed-agent-line", "--ed-focus"],
     "diffs": [
       "[01-dark] --ed-statusbar-accent { ref=\"82,188,138,255\" product=\"78,186,135,255\" }",
       "[01-dark] --ed-selection { ref=\"81,189,139,66\" product=\"77,185,135,66\" }",
@@ -78,15 +69,8 @@
   },
   "referenceOnly": {
     "description": "Recorded carried-forward variance: 0.4.0 editor reference tokens NOT yet declared by the product. These cover inlay hints, git blame and fold placeholders — editor surfaces owned by the editor epics #1373 / #1390, outside the DS epic #1290 token migration. Tracked for adoption there; not a #1300 regression. Product falls back to --ed-fg until adopted.",
-    "ownerEpics": [
-      "#1373",
-      "#1390"
-    ],
-    "tokens": [
-      "--ed-inlay-fg",
-      "--ed-blame-fg",
-      "--ed-fold-placeholder"
-    ]
+    "ownerEpics": ["#1373", "#1390"],
+    "tokens": ["--ed-inlay-fg", "--ed-blame-fg", "--ed-fold-placeholder"]
   },
   "tokenRecord": {
     "01-dark": {
@@ -646,10 +630,7 @@
   ],
   "runningEditorEvidence": {
     "note": "Real Monaco / tabs / diagnostics / find / ghost-text / agent-prompt captures are produced by the executable e2e suites and committed under the #1295/#1296 evidence dirs.",
-    "suites": [
-      "npm run test:e2e:editor-fidelity-1295",
-      "npm run test:e2e:editor-fidelity-1296"
-    ],
+    "suites": ["npm run test:e2e:editor-fidelity-1295", "npm run test:e2e:editor-fidelity-1296"],
     "captures": [
       "docs/design-system/evidence/1295/editor/",
       "docs/design-system/evidence/1296/editor/"

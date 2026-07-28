@@ -813,6 +813,10 @@ describe("Quality Intelligence source-type picker", () => {
     expect(optionBlock).toContain("align-items: center");
     expect(optionBlock).toContain("color: var(--text-secondary)");
     expect(optionBlock).toContain("line-height: 1");
+    expect(optionBlock).toContain("font: inherit");
+    expect(optionBlock.indexOf("font: inherit")).toBeLessThan(
+      optionBlock.indexOf("line-height: 1"),
+    );
   });
 
   it("prevents source-type labels from overflowing compact buttons", () => {
@@ -2518,10 +2522,7 @@ describe("Issue #1292 — new Tier-1 primitives across every mode", () => {
 });
 
 describe("Issue #1292 — full [data-hc] hook (previously editor-only)", () => {
-  it("steps the product palette on the in-app [data-hc] override, not just --ed-* tokens", () => {
-    // The first [data-hc="more"] block in the file is the product palette; the
-    // editor block (which sets --ed-* tokens) comes later. Asserting surface,
-    // text, status and focus declarations proves the non-editor hook now exists.
+  it("steps the complete product and editor palette in one in-app [data-hc] rule", () => {
     const block = cssRule('[data-hc="more"] {');
     expect(block).toContain("--bg: oklch(0.11 0.004 160)");
     expect(block).toContain("--line: oklch(0.62 0.006 160)");
@@ -2529,7 +2530,7 @@ describe("Issue #1292 — full [data-hc] hook (previously editor-only)", () => {
     expect(block).toContain("--warn: oklch(0.88 0.14 80)");
     expect(block).toContain("--grid-dot: oklch(0.52 0.006 160)");
     expect(block).toContain("--focus-w: 3px");
-    expect(block, "neutral block must not be the editor block").not.toContain("--ed-");
+    expect(block).toContain("--ed-fg: #ffffff");
   });
 
   it("steps the product palette for the light + in-app high-contrast pairing", () => {
@@ -2540,7 +2541,15 @@ describe("Issue #1292 — full [data-hc] hook (previously editor-only)", () => {
     expect(block).toContain("--warn: oklch(0.38 0.14 75)");
     expect(block).toContain("--grid-dot: oklch(0.6 0.01 160)");
     expect(block).toContain("--focus-w: 3px");
-    expect(block).not.toContain("--ed-");
+    expect(block).toContain("--ed-fg: #000000");
+  });
+
+  it("keeps each product-wide theme selector in one canonical top-level rule", () => {
+    expect(css.match(/^:root \{$/gm)).toHaveLength(1);
+    expect(css.match(/^\[data-theme="light"\] \{$/gm)).toHaveLength(1);
+    expect(css.match(/^\[data-hc="more"\] \{$/gm)).toHaveLength(1);
+    expect(css.match(/^\[data-hc="more"\]\[data-theme="light"\] \{$/gm)).toHaveLength(1);
+    expect(css.match(/^@media \(prefers-contrast: more\) \{$/gm)).toHaveLength(1);
   });
 });
 
@@ -2622,27 +2631,58 @@ describe("Issue #1292 — design-system token drift gate", () => {
   });
 
   it("matches the design-system high-contrast primitive values for OS prefers-contrast", () => {
-    const reference = referenceCss("../../../../design-system/keiko-tokens.css");
-    const referenceMedia = cssRuleFrom(reference, "@media (prefers-contrast: more) {");
+    const primitiveReference = referenceCss("../../../../design-system/keiko-tokens.css");
+    const editorReference = referenceCss("../../../../design-system/keiko-editor-tokens.css");
+    const primitiveMedia = cssRuleFrom(primitiveReference, "@media (prefers-contrast: more) {");
+    const editorMedia = cssRuleFrom(editorReference, "@media (prefers-contrast: more) {");
     const productMedia = cssRule("@media (prefers-contrast: more) {");
 
-    expect(declarationMap(productMedia, ":root {")).toEqual(
-      declarationMap(referenceMedia, ":root {"),
-    );
-    expect(declarationMap(productMedia, '[data-theme="light"] {')).toEqual(
-      declarationMap(referenceMedia, '[data-theme="light"] {'),
-    );
+    const referenceDark = {
+      ...declarationMap(primitiveMedia, ":root {"),
+      ...declarationMap(editorMedia, ":root {"),
+      "--ed-scrollbar-track": "transparent",
+      "--ed-scrollbar-thumb": "color-mix(in oklch, var(--ed-fg) 52%, transparent)",
+      "--ed-scrollbar-thumb-hover": "color-mix(in oklch, var(--ed-fg) 68%, transparent)",
+    };
+    const referenceLight = {
+      ...declarationMap(primitiveMedia, '[data-theme="light"] {'),
+      ...declarationMap(editorMedia, '[data-theme="light"] {'),
+      "--ed-scrollbar-track": "transparent",
+      "--ed-scrollbar-thumb": "color-mix(in oklch, var(--ed-fg) 48%, transparent)",
+      "--ed-scrollbar-thumb-hover": "color-mix(in oklch, var(--ed-fg) 62%, transparent)",
+    };
+    expect(declarationMap(productMedia, ":root {")).toEqual(referenceDark);
+    expect(declarationMap(productMedia, '[data-theme="light"] {')).toEqual(referenceLight);
   });
 
   it("matches the design-system high-contrast primitive values for the in-app [data-hc] hook", () => {
-    const reference = referenceCss("../../../../design-system/keiko-tokens.css");
+    const primitiveReference = referenceCss("../../../../design-system/keiko-tokens.css");
+    const editorReference = referenceCss("../../../../design-system/keiko-editor-tokens.css");
+    const referenceDark = {
+      ...declarationMap(primitiveReference, '[data-hc="more"] {'),
+      ...declarationMap(editorReference, '[data-hc="more"] {'),
+      "--ed-scrollbar-track": "transparent",
+      "--ed-scrollbar-thumb": "color-mix(in oklch, var(--ed-fg) 52%, transparent)",
+      "--ed-scrollbar-thumb-hover": "color-mix(in oklch, var(--ed-fg) 68%, transparent)",
+    };
+    const referenceLight = {
+      ...declarationMap(primitiveReference, '[data-hc="more"][data-theme="light"] {'),
+      ...declarationMap(editorReference, '[data-hc="more"][data-theme="light"] {'),
+      "--ed-scrollbar-track": "transparent",
+      "--ed-scrollbar-thumb": "color-mix(in oklch, var(--ed-fg) 48%, transparent)",
+      "--ed-scrollbar-thumb-hover": "color-mix(in oklch, var(--ed-fg) 62%, transparent)",
+    };
+    expect(declarationMap(css, '[data-hc="more"] {')).toEqual(referenceDark);
+    expect(declarationMap(css, '[data-hc="more"][data-theme="light"] {')).toEqual(referenceLight);
+  });
+});
 
-    expect(declarationMap(css, '[data-hc="more"] {')).toEqual(
-      declarationMap(reference, '[data-hc="more"] {'),
-    );
-    expect(declarationMap(css, '[data-hc="more"][data-theme="light"] {')).toEqual(
-      declarationMap(reference, '[data-hc="more"][data-theme="light"] {'),
-    );
+describe("Issue #2798 — consolidated selector behavior", () => {
+  it("keeps the CTA border-color transition out of the later generic tool override", () => {
+    const cta = cssBlock(".hd-tool-cta {");
+    expect(cta).toContain("border-color var(--dur-fast)");
+    expect(css).toContain(".hd-tool:not(.hd-tool-cta),");
+    expect(css).not.toContain(".hd-tool,\n.tb-btn,");
   });
 });
 
@@ -3169,6 +3209,23 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
     expect(markdownRoot).toContain("min-width: 0");
     expect(markdownRoot).toContain("max-width: 100%");
     expect(markdownRoot).toContain("overflow-wrap: anywhere");
+  });
+
+  it("uses the standards-based emergency-wrap pair on every long-content surface", () => {
+    for (const selector of [
+      ".chat-msg-bubble",
+      ".mc-meta-value",
+      ".mc-body-text",
+      ".sm-root",
+      ".repo-ref-link",
+    ]) {
+      const block = cssBlock(`\n${selector} {`);
+      expect(block, `${selector} must retain normal word-breaking`).toContain("word-break: normal");
+      expect(block, `${selector} must allow emergency wrapping`).toContain(
+        "overflow-wrap: anywhere",
+      );
+    }
+    expect(css).not.toContain("word-break: break-word");
   });
 
   it("keeps the question map wave to length-only marker changes", () => {
@@ -4530,6 +4587,8 @@ interface Issue1300A11yProof {
   >;
 }
 interface Issue1300BrowserManifest {
+  readonly postCssSha256: string;
+  readonly renderedCssBundleSha256: string;
   readonly shotCount: number;
   readonly modes: readonly string[];
   readonly viewports: readonly string[];
@@ -4545,6 +4604,10 @@ interface Issue1300BrowserManifest {
     readonly requiredSelectors: readonly string[];
     readonly hasShell: boolean;
     readonly windowCount: number;
+    readonly visibleErrorNoticeCount: number;
+    readonly crashedWindowBodyCount: number;
+    readonly unexpectedApiRequestCount: number;
+    readonly unavailableTrustStateCount: number;
     readonly missingRequiredSelectors: readonly string[];
     readonly pageErrors: readonly string[];
   }[];
@@ -4725,6 +4788,11 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
   });
 
   it("the running-app browser bundle covers shell plus seeded high-traffic workspace windows", () => {
+    expect(
+      browserManifest.postCssSha256,
+      "running-app captures must pin the current globals.css",
+    ).toBe(currentCssSha256);
+    expect(browserManifest.renderedCssBundleSha256).toMatch(/^[a-f0-9]{64}$/u);
     expect(browserManifest.modes).toEqual([
       "dark",
       "light",
@@ -4782,6 +4850,22 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
         shot.pageErrors,
         `${shot.viewport}/${shot.mode}/${shot.scenario} must have no page errors`,
       ).toEqual([]);
+      expect(
+        shot.visibleErrorNoticeCount,
+        `${shot.viewport}/${shot.mode}/${shot.scenario} must not render an error notice`,
+      ).toBe(0);
+      expect(
+        shot.crashedWindowBodyCount,
+        `${shot.viewport}/${shot.mode}/${shot.scenario} must not render a crashed window body`,
+      ).toBe(0);
+      expect(
+        shot.unexpectedApiRequestCount,
+        `${shot.viewport}/${shot.mode}/${shot.scenario} must not call an unmodeled API`,
+      ).toBe(0);
+      expect(
+        shot.unavailableTrustStateCount,
+        `${shot.viewport}/${shot.mode}/${shot.scenario} must not render unavailable workspace trust`,
+      ).toBe(0);
       expect(
         shot.missingRequiredSelectors,
         `${shot.viewport}/${shot.mode}/${shot.scenario} must render every required selector`,

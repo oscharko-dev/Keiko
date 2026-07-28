@@ -14,8 +14,7 @@ From the repo root, after `npm ci` and `npx playwright install chromium`:
 # 1. Component reference fidelity + accessibility smoke + performance smoke (0-diff gate, dark+light)
 node docs/design-system/evidence/1300/equivalence-harness.mjs
 
-# 2. Running-app cross-theme / cross-viewport screenshot bundle (rebuild the static export first)
-npm run build --workspace @oscharko-dev/keiko-ui
+# 2. Running-app cross-theme / cross-viewport screenshot bundle (builds its exact static export)
 node docs/design-system/evidence/1300/browser/capture.mjs
 
 # 3. Editor matrix: token-tier fidelity (0-diff gate) + the seven editor reference pages
@@ -28,16 +27,18 @@ node docs/design-system/evidence/1300/a11y/axe-proof.mjs
 
 Each script exits non-zero on a gate failure. The component harness also fails on missing selector probes,
 stale CSS hashes, a non-scrollable bounded-row smoke, scroll-position failure, or sticky-header drift. The
-browser harness serves the static export through a realpath-confined loopback server, blocks non-loopback
-outbound requests, and fails on page errors or missing required selectors in any scenario. The editor harness
-fails unless all 14 expected reference-page captures are present and error-free. The running editor (Monaco
-registration, tabs/splits, diagnostics, find/replace, ghost text, agent prompts) is proven by
+browser harness rebuilds the static export, records a digest of its emitted CSS, serves it through a
+realpath-confined loopback server, blocks non-loopback outbound requests, and fails on page errors, missing
+required selectors, visible error notices, crashed window bodies, unexpected API requests, or unavailable
+workspace trust in any scenario. The editor harness fails unless all 14 expected reference-page captures are
+present and error-free. The running editor (Monaco registration, tabs/splits, diagnostics, find/replace,
+ghost text, agent prompts) is proven by
 `npm run test:e2e:editor-fidelity-1295` and `-1296`, whose captures are committed under
 [`../1295/editor/`](../1295/editor/) and [`../1296/editor/`](../1296/editor/).
 
 ## Environment
 
-- Headless Chromium via Playwright (`chromium`), node 22.
+- Headless Chromium via Playwright 1.61.1 (`chromium`), Node 24.18.0 and npm 11.16.0.
 - Fidelity gates use `page.setContent` / `file://` (no server — CodeQL-safe); the running-app capture serves
   `packages/keiko-ui/out` over a realpath-confined loopback server and stubs same-origin API responses with
   deterministic `keiko.workspace.v4` workspace-window state.
@@ -52,15 +53,15 @@ registration, tabs/splits, diagnostics, find/replace, ghost text, agent prompts)
 
 ## Artifact index
 
-| File                                                                                         | What                                                                                             |
-| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `consolidated-fidelity-proof.json`                                                           | component reference fidelity (427 probes, 0 gated diffs), a11y smoke, perf smoke, accent record  |
-| `01-dark.png` … `07-reduced-motion.png`                                                      | component union rendered in the 7 modes                                                          |
-| `08-compact-density.png`, `09-responsive.png`, `10-focus-visible.png`, `11-bounded-rows.png` | density / responsive / focus / perf-smoke renders                                                |
-| `browser/manifest.json` + `browser/{desktop,tablet,mobile}__{shell,workspace-*}__*.png`      | running-app shell + seeded high-traffic surfaces, 4 scenarios × 6 modes × 3 viewports (72 shots) |
-| `editor/editor-fidelity-proof.json`                                                          | editor token fidelity (160 gated probes, 0 diffs) + accent + reference-only buckets              |
-| `editor/ref-editor-*-{dark,light}.png`                                                       | the 7 editor reference pages (14 shots)                                                          |
-| `a11y/a11y-proof.json`                                                                       | axe-core results per mode (0 serious/critical, 40 passes/mode)                                   |
+| File                                                                                         | What                                                                                              |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `consolidated-fidelity-proof.json`                                                           | component reference fidelity (427 probes, 0 gated diffs), a11y smoke, perf smoke, accent record   |
+| `01-dark.png` … `07-reduced-motion.png`                                                      | component union rendered in the 7 modes                                                           |
+| `08-compact-density.png`, `09-responsive.png`, `10-focus-visible.png`, `11-bounded-rows.png` | density / responsive / focus / perf-smoke renders                                                 |
+| `browser/manifest.json` + `browser/{desktop,tablet,mobile}__*__*.png`                        | running-app shell + seeded high-traffic surfaces, 6 scenarios × 6 modes × 3 viewports (108 shots) |
+| `editor/editor-fidelity-proof.json`                                                          | editor token fidelity (160 gated probes, 0 diffs) + accent + reference-only buckets               |
+| `editor/ref-editor-*-{dark,light}.png`                                                       | the 7 editor reference pages (14 shots)                                                           |
+| `a11y/a11y-proof.json`                                                                       | axe-core results per mode (0 serious/critical, 40 passes/mode)                                    |
 
 ## Results (committed run)
 
@@ -69,6 +70,7 @@ registration, tabs/splits, diagnostics, find/replace, ghost text, agent prompts)
 - Accessibility: axe-core 4.12.0, **0 serious/critical** in all 7 modes (40 passes/mode); unresolved
   incomplete findings are 0 after the checked-in `color-contrast` disposition. `PASS`.
 - Performance smoke: 250-row bounded table, ~0.1 ms, sticky-header delta 0 px. `PASS`.
-- Running-app bundle: **72 shots** (shell plus chat/Quality Intelligence/Local Knowledge,
-  MemoriaViva/Relationships, and Files/Editor seeded workspaces), shell present in every mode/viewport,
-  required selectors present, 0 page errors.
+- Running-app bundle: **108 shots** (shell plus chat/Quality Intelligence/Local Knowledge,
+  MemoriaViva/Relationships, Files/Editor, and desktop/constrained Git-client scenarios), shell present
+  in every mode/viewport, required selectors present, and 0 page errors, visible error notices, crashed
+  window bodies, unexpected API requests, or unavailable workspace-trust states.
